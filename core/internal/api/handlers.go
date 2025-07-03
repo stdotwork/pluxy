@@ -407,7 +407,7 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 		cliClient.RequestMutex.Lock()
 	}
 
-	log.Debugf("Request use account: %s", cliClient.Email)
+	log.Debugf("Request use account: %s, project id: %s", cliClient.Email, cliClient.ProjectID)
 	jsonTemplate := `{"id":"","object":"chat.completion","created":123456,"model":"model","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
 	respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, contents, tools)
 	for {
@@ -429,8 +429,8 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 			}
 		case err, okError := <-errChan:
 			if okError {
-				c.Status(http.StatusInternalServerError)
-				_, _ = fmt.Fprint(c.Writer, err.Error())
+				c.Status(err.StatusCode)
+				_, _ = fmt.Fprint(c.Writer, err.Error.Error())
 				flusher.Flush()
 				// c.JSON(http.StatusInternalServerError, ErrorResponse{
 				// 	Error: ErrorDetail{
@@ -501,7 +501,7 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 		cliClient.RequestMutex.Lock()
 	}
 
-	log.Debugf("Request use account: %s", cliClient.Email)
+	log.Debugf("Request use account: %s, project id: %s", cliClient.Email, cliClient.ProjectID)
 	respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, contents, tools)
 	for {
 		select {
@@ -526,8 +526,8 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 			}
 		case err, okError := <-errChan:
 			if okError {
-				c.Status(http.StatusInternalServerError)
-				_, _ = fmt.Fprint(c.Writer, err.Error())
+				c.Status(err.StatusCode)
+				_, _ = fmt.Fprint(c.Writer, err.Error.Error())
 				flusher.Flush()
 				// c.JSON(http.StatusInternalServerError, ErrorResponse{
 				// 	Error: ErrorDetail{

@@ -39,6 +39,7 @@ type TokenStorage struct {
 	Token     any    `json:"token"`
 	ProjectID string `json:"project_id"`
 	Email     string `json:"email"`
+	Auto      bool   `json:"auto"`
 }
 
 // GetAuthenticatedClient configures and returns an HTTP client with OAuth2 tokens.
@@ -95,11 +96,12 @@ func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.C
 		if err != nil {
 			return nil, fmt.Errorf("failed to get token from web: %w", err)
 		}
-		ts, err = saveTokenToFile(ctx, conf, token, ts.ProjectID, cfg.AuthDir)
-		if err != nil {
-			// Log the error but proceed, as we have a valid token for the session.
+		newTs, errSaveTokenToFile := saveTokenToFile(ctx, conf, token, ts.ProjectID, cfg.AuthDir)
+		if errSaveTokenToFile != nil {
 			log.Errorf("Warning: failed to save token to file: %v", err)
+			return nil, errSaveTokenToFile
 		}
+		*ts = *newTs
 	}
 	tsToken, _ := json.Marshal(ts.Token)
 	if err = json.Unmarshal(tsToken, &token); err != nil {
@@ -139,19 +141,6 @@ func saveTokenToFile(ctx context.Context, config *oauth2.Config, token *oauth2.T
 		log.Info("Failed to get user email from token")
 	}
 
-	log.Infof("Saving credentials to %s", filepath.Join(authDir, fmt.Sprintf("%s.json", emailResult.String())))
-	if err = os.MkdirAll(authDir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	f, err := os.Create(filepath.Join(authDir, fmt.Sprintf("%s.json", emailResult.String())))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create token file: %w", err)
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
 	var ifToken map[string]any
 	jsonData, _ := json.Marshal(token)
 	err = json.Unmarshal(jsonData, &ifToken)
@@ -171,10 +160,44 @@ func saveTokenToFile(ctx context.Context, config *oauth2.Config, token *oauth2.T
 		Email:     emailResult.String(),
 	}
 
-	if err = json.NewEncoder(f).Encode(ts); err != nil {
-		return nil, fmt.Errorf("failed to write token to file: %w", err)
+	if err = os.MkdirAll(authDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	if projectID != "" {
+		log.Infof("Saving credentials to %s", filepath.Join(authDir, fmt.Sprintf("%s-%s.json", emailResult.String(), projectID)))
+
+		f, errCreate := os.Create(filepath.Join(authDir, fmt.Sprintf("%s-%s.json", emailResult.String(), projectID)))
+		if errCreate != nil {
+			return nil, fmt.Errorf("failed to create token file: %w", errCreate)
+		}
+		defer func() {
+			_ = f.Close()
+		}()
+
+		if err = json.NewEncoder(f).Encode(ts); err != nil {
+			return nil, fmt.Errorf("failed to write token to file: %w", err)
+		}
 	}
 	return &ts, nil
+}
+
+func SaveTokenToFile(ts *TokenStorage, cfg *config.Config, auto bool) error {
+	ts.Auto = auto
+	fileName := filepath.Join(cfg.AuthDir, fmt.Sprintf("%s-%s.json", ts.Email, ts.ProjectID))
+	log.Infof("Saving credentials to %s", fileName)
+	f, err := os.Create(fileName)
+	if err != nil {
+		return fmt.Errorf("failed to create token file: %w", err)
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+
+	if err = json.NewEncoder(f).Encode(ts); err != nil {
+		return fmt.Errorf("failed to write token to file: %w", err)
+	}
+	return nil
 }
 
 // getTokenFromWeb starts a local server to handle the OAuth2 flow.

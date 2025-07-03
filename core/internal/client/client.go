@@ -25,6 +25,11 @@ const (
 	pluginVersion      = "1.0.0"
 )
 
+type ErrorMessage struct {
+	StatusCode int
+	Error      error
+}
+
 type GCPProject struct {
 	Projects []GCPProjectProjects `json:"projects"`
 }
@@ -100,7 +105,7 @@ type ToolDeclaration struct {
 // Client is the main client for interacting with the CLI API.
 type Client struct {
 	httpClient   *http.Client
-	projectID    string
+	ProjectID    string
 	RequestMutex sync.Mutex
 	Email        string
 }
@@ -113,7 +118,7 @@ func NewClient(httpClient *http.Client) *Client {
 }
 
 // SetupUser performs the initial user onboarding and setup.
-func (c *Client) SetupUser(ctx context.Context, email, projectID string) error {
+func (c *Client) SetupUser(ctx context.Context, email, projectID string, auto bool) (string, error) {
 	c.Email = email
 	log.Info("Performing user onboarding...")
 
@@ -128,10 +133,13 @@ func (c *Client) SetupUser(ctx context.Context, email, projectID string) error {
 	var loadAssistResp map[string]interface{}
 	err := c.makeAPIRequest(ctx, "loadCodeAssist", "POST", loadAssistReqBody, &loadAssistResp)
 	if err != nil {
-		return fmt.Errorf("failed to load code assist: %w", err)
+		return projectID, fmt.Errorf("failed to load code assist: %w", err)
 	}
 
 	// a, _ := json.Marshal(&loadAssistResp)
+	// log.Debug(string(a))
+	//
+	// a, _ = json.Marshal(loadAssistReqBody)
 	// log.Debug(string(a))
 
 	// 2. OnboardUser
@@ -161,13 +169,13 @@ func (c *Client) SetupUser(ctx context.Context, email, projectID string) error {
 	if onboardProjectID != "" {
 		onboardReqBody["cloudaicompanionProject"] = onboardProjectID
 	} else {
-		return fmt.Errorf("failed to start user onboarding, need define a project id")
+		return projectID, fmt.Errorf("failed to start user onboarding, need define a project id")
 	}
 
 	var lroResp map[string]interface{}
 	err = c.makeAPIRequest(ctx, "onboardUser", "POST", onboardReqBody, &lroResp)
 	if err != nil {
-		return fmt.Errorf("failed to start user onboarding: %w", err)
+		return projectID, fmt.Errorf("failed to start user onboarding: %w", err)
 	}
 
 	// a, _ = json.Marshal(&lroResp)
@@ -176,12 +184,17 @@ func (c *Client) SetupUser(ctx context.Context, email, projectID string) error {
 	// 3. Poll Long-Running Operation (LRO)
 	if done, doneOk := lroResp["done"].(bool); doneOk && done {
 		if project, projectOk := lroResp["response"].(map[string]interface{})["cloudaicompanionProject"].(map[string]interface{}); projectOk {
-			c.projectID = project["id"].(string)
-			log.Infof("Onboarding complete. Using Project ID: %s", c.projectID)
-			return nil
+			if projectID != "" && !auto {
+				c.ProjectID = projectID
+				log.Infof("Onboarding complete. Project ID: %s is being enforced. Maybe you need to enable 'Gemini for Google Cloud' once in Google Cloud Console.", c.ProjectID)
+			} else {
+				c.ProjectID = project["id"].(string)
+				log.Infof("Onboarding complete. Using Project ID: %s", c.ProjectID)
+			}
+			return c.ProjectID, nil
 		}
 	}
-	return fmt.Errorf("failed to get operation name from onboarding response: %v", lroResp)
+	return projectID, fmt.Errorf("failed to get operation name from onboarding response: %v", lroResp)
 }
 
 // makeAPIRequest handles making requests to the CLI API endpoints.
@@ -240,7 +253,7 @@ func (c *Client) makeAPIRequest(ctx context.Context, endpoint, method string, bo
 }
 
 // StreamAPIRequest handles making streaming requests to the CLI API endpoints.
-func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body interface{}) (io.ReadCloser, error) {
+func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body interface{}) (io.ReadCloser, *ErrorMessage) {
 	var jsonBody []byte
 	var err error
 	if byteBody, ok := body.([]byte); ok {
@@ -248,7 +261,7 @@ func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body int
 	} else {
 		jsonBody, err = json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+			return nil, &ErrorMessage{500, fmt.Errorf("failed to marshal request body: %w", err)}
 		}
 	}
 	// log.Debug(string(jsonBody))
@@ -259,12 +272,12 @@ func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body int
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to create request: %w", err)}
 	}
 
 	token, err := c.httpClient.Transport.(*oauth2.Transport).Source.Token()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get token: %w", err)
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to get token: %w", err)}
 	}
 
 	// Set headers
@@ -276,7 +289,7 @@ func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body int
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to execute request: %w", err)}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -285,7 +298,7 @@ func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body int
 		}()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 
-		return nil, fmt.Errorf(string(bodyBytes))
+		return nil, &ErrorMessage{resp.StatusCode, fmt.Errorf(string(bodyBytes))}
 		// return nil, fmt.Errorf("api streaming request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -293,9 +306,9 @@ func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body int
 }
 
 // SendMessageStream handles a single conversational turn, including tool calls.
-func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model string, contents []Content, tools []ToolDeclaration) (<-chan []byte, <-chan error) {
+func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model string, contents []Content, tools []ToolDeclaration) (<-chan []byte, <-chan *ErrorMessage) {
 	dataTag := []byte("data: ")
-	errChan := make(chan error)
+	errChan := make(chan *ErrorMessage)
 	dataChan := make(chan []byte)
 	go func() {
 		defer close(errChan)
@@ -312,7 +325,7 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 		request.Tools = tools
 
 		requestBody := map[string]interface{}{
-			"project": c.projectID, // Assuming ProjectID is available
+			"project": c.ProjectID, // Assuming ProjectID is available
 			"request": request,
 			"model":   model,
 		}
@@ -370,9 +383,9 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 			}
 		}
 
-		if err = scanner.Err(); err != nil {
+		if errScanner := scanner.Err(); errScanner != nil {
 			// log.Println(err)
-			errChan <- err
+			errChan <- &ErrorMessage{500, errScanner}
 			_ = stream.Close()
 			return
 		}
