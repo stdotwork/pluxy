@@ -8,10 +8,11 @@ import (
 
 // Config represents the application's configuration
 type Config struct {
-	Port    int      `yaml:"port"`
-	AuthDir string   `yaml:"auth_dir"`
-	Debug   bool     `yaml:"debug"`
-	ApiKeys []string `yaml:"api_keys"`
+	Port     int      `yaml:"port"`
+	AuthDir  string   `yaml:"auth_dir"`
+	Debug    bool     `yaml:"debug"`
+	ProxyUrl string   `yaml:"proxy-url"`
+	ApiKeys  []string `yaml:"api_keys"`
 }
 
 // / LoadConfig loads the configuration from the specified file

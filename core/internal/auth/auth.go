@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+	"golang.org/x/net/proxy"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -39,7 +43,42 @@ type TokenStorage struct {
 
 // GetAuthenticatedClient configures and returns an HTTP client with OAuth2 tokens.
 // It handles the entire flow: loading, refreshing, and fetching new tokens.
-func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, authDir string) (*http.Client, error) {
+func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.Config) (*http.Client, error) {
+	proxyURL, err := url.Parse(cfg.ProxyUrl)
+	if err == nil {
+		if proxyURL.Scheme == "socks5" {
+			username := proxyURL.User.Username()
+			password, _ := proxyURL.User.Password()
+			auth := &proxy.Auth{
+				User:     username,
+				Password: password,
+			}
+			dialer, errSOCKS5 := proxy.SOCKS5("tcp", proxyURL.Host, auth, proxy.Direct)
+			if errSOCKS5 != nil {
+				log.Fatalf("create SOCKS5 dialer failed: %v", errSOCKS5)
+			}
+
+			transport := &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (c net.Conn, err error) {
+					return dialer.Dial(network, addr)
+				},
+			}
+			proxyClient := &http.Client{
+				Transport: transport,
+			}
+
+			ctx = context.WithValue(ctx, oauth2.HTTPClient, proxyClient)
+		} else if proxyURL.Scheme == "http" || proxyURL.Scheme == "https" {
+			transport := &http.Transport{
+				Proxy: http.ProxyURL(proxyURL),
+			}
+			proxyClient := &http.Client{
+				Transport: transport,
+			}
+			ctx = context.WithValue(ctx, oauth2.HTTPClient, proxyClient)
+		}
+	}
+
 	conf := &oauth2.Config{
 		ClientID:     oauthClientID,
 		ClientSecret: oauthClientSecret,
@@ -49,7 +88,6 @@ func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, authDir strin
 	}
 
 	var token *oauth2.Token
-	var err error
 
 	if ts.Token == nil {
 		log.Info("Could not load token from file, starting OAuth flow.")
@@ -57,7 +95,7 @@ func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, authDir strin
 		if err != nil {
 			return nil, fmt.Errorf("failed to get token from web: %w", err)
 		}
-		ts, err = saveTokenToFile(ctx, conf, token, ts.ProjectID, authDir)
+		ts, err = saveTokenToFile(ctx, conf, token, ts.ProjectID, cfg.AuthDir)
 		if err != nil {
 			// Log the error but proceed, as we have a valid token for the session.
 			log.Errorf("Warning: failed to save token to file: %v", err)

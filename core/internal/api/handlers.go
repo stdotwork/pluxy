@@ -429,12 +429,15 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 			}
 		case err, okError := <-errChan:
 			if okError {
-				c.JSON(http.StatusInternalServerError, ErrorResponse{
-					Error: ErrorDetail{
-						Message: err.Error(),
-						Type:    "server_error",
-					},
-				})
+				c.Status(http.StatusInternalServerError)
+				_, _ = fmt.Fprint(c.Writer, err.Error())
+				flusher.Flush()
+				// c.JSON(http.StatusInternalServerError, ErrorResponse{
+				// 	Error: ErrorDetail{
+				// 		Message: err.Error(),
+				// 		Type:    "server_error",
+				// 	},
+				// })
 				cliCancel()
 				return
 			}
@@ -523,12 +526,15 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 			}
 		case err, okError := <-errChan:
 			if okError {
-				c.JSON(http.StatusInternalServerError, ErrorResponse{
-					Error: ErrorDetail{
-						Message: err.Error(),
-						Type:    "server_error",
-					},
-				})
+				c.Status(http.StatusInternalServerError)
+				_, _ = fmt.Fprint(c.Writer, err.Error())
+				flusher.Flush()
+				// c.JSON(http.StatusInternalServerError, ErrorResponse{
+				// 	Error: ErrorDetail{
+				// 		Message: err.Error(),
+				// 		Type:    "server_error",
+				// 	},
+				// })
 				cliCancel()
 				return
 			}

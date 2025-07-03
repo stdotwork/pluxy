@@ -284,7 +284,9 @@ func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body int
 			_ = resp.Body.Close()
 		}()
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("api streaming request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+
+		return nil, fmt.Errorf(string(bodyBytes))
+		// return nil, fmt.Errorf("api streaming request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	return resp.Body, nil
