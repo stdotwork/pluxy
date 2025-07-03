@@ -13,8 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/skratchdot/open-golang/open"
@@ -40,6 +38,7 @@ type TokenStorage struct {
 	ProjectID string `json:"project_id"`
 	Email     string `json:"email"`
 	Auto      bool   `json:"auto"`
+	Checked   bool   `json:"checked"`
 }
 
 // GetAuthenticatedClient configures and returns an HTTP client with OAuth2 tokens.
@@ -96,7 +95,7 @@ func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.C
 		if err != nil {
 			return nil, fmt.Errorf("failed to get token from web: %w", err)
 		}
-		newTs, errSaveTokenToFile := saveTokenToFile(ctx, conf, token, ts.ProjectID, cfg.AuthDir)
+		newTs, errSaveTokenToFile := createTokenStorage(ctx, conf, token, ts.ProjectID)
 		if errSaveTokenToFile != nil {
 			log.Errorf("Warning: failed to save token to file: %v", err)
 			return nil, errSaveTokenToFile
@@ -111,8 +110,8 @@ func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.C
 	return conf.Client(ctx, token), nil
 }
 
-// saveTokenToFile saves a token to the local credentials file.
-func saveTokenToFile(ctx context.Context, config *oauth2.Config, token *oauth2.Token, projectID, authDir string) (*TokenStorage, error) {
+// createTokenStorage creates a token storage.
+func createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth2.Token, projectID string) (*TokenStorage, error) {
 	httpClient := config.Client(ctx, token)
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v1/userinfo?alt=json", nil)
 	if err != nil {
@@ -160,44 +159,7 @@ func saveTokenToFile(ctx context.Context, config *oauth2.Config, token *oauth2.T
 		Email:     emailResult.String(),
 	}
 
-	if err = os.MkdirAll(authDir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	if projectID != "" {
-		log.Infof("Saving credentials to %s", filepath.Join(authDir, fmt.Sprintf("%s-%s.json", emailResult.String(), projectID)))
-
-		f, errCreate := os.Create(filepath.Join(authDir, fmt.Sprintf("%s-%s.json", emailResult.String(), projectID)))
-		if errCreate != nil {
-			return nil, fmt.Errorf("failed to create token file: %w", errCreate)
-		}
-		defer func() {
-			_ = f.Close()
-		}()
-
-		if err = json.NewEncoder(f).Encode(ts); err != nil {
-			return nil, fmt.Errorf("failed to write token to file: %w", err)
-		}
-	}
 	return &ts, nil
-}
-
-func SaveTokenToFile(ts *TokenStorage, cfg *config.Config, auto bool) error {
-	ts.Auto = auto
-	fileName := filepath.Join(cfg.AuthDir, fmt.Sprintf("%s-%s.json", ts.Email, ts.ProjectID))
-	log.Infof("Saving credentials to %s", fileName)
-	f, err := os.Create(fileName)
-	if err != nil {
-		return fmt.Errorf("failed to create token file: %w", err)
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	if err = json.NewEncoder(f).Encode(ts); err != nil {
-		return fmt.Errorf("failed to write token to file: %w", err)
-	}
-	return nil
 }
 
 // getTokenFromWeb starts a local server to handle the OAuth2 flow.
@@ -235,7 +197,7 @@ func getTokenFromWeb(ctx context.Context, config *oauth2.Config) (*oauth2.Token,
 
 	// Open the authorization URL in the user's browser.
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
-	log.Debugf("CLI login required.\nAttempting to open authentication page in your browser.\nIf it does not open, please navigate to this URL:\n\n%s\n\n", authURL)
+	log.Debugf("CLI login required.\nAttempting to open authentication page in your browser.\nIf it does not open, please navigate to this URL:\n\n%s\n", authURL)
 
 	err := open.Run(authURL)
 	if err != nil {

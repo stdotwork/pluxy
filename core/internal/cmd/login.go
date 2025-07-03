@@ -28,8 +28,8 @@ func DoLogin(cfg *config.Config, projectID string) {
 	log.Info("Authentication successful.")
 
 	// 3. Initialize CLI Client
-	cliClient := client.NewClient(httpClient)
-	projectID, err = cliClient.SetupUser(clientCtx, ts.Email, projectID, ts.Auto)
+	cliClient := client.NewClient(httpClient, &ts, cfg)
+	projectID, err = cliClient.SetupUser(clientCtx, ts.Email, projectID)
 	if err != nil {
 		if err.Error() == "failed to start user onboarding, need define a project id" {
 			log.Error("failed to start user onboarding")
@@ -53,10 +53,26 @@ func DoLogin(cfg *config.Config, projectID string) {
 		}
 	} else {
 		auto := ts.ProjectID == ""
-		ts.ProjectID = projectID
-		err = auth.SaveTokenToFile(&ts, cfg, auto)
+		cliClient.SetProjectID(projectID)
+		cliClient.SetIsAuto(auto)
+
+		if !cliClient.IsChecked() && !cliClient.IsAuto() {
+			isChecked, checkErr := cliClient.CheckCloudAPIIsEnabled()
+			if checkErr != nil {
+				log.Fatalf("failed to check cloud api is enabled: %v", checkErr)
+				return
+			}
+			cliClient.SetIsChecked(isChecked)
+		}
+
+		if !cliClient.IsChecked() && !cliClient.IsAuto() {
+			return
+		}
+
+		err = cliClient.SaveTokenToFile()
 		if err != nil {
 			log.Fatal(err)
+			return
 		}
 	}
 }

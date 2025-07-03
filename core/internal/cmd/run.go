@@ -33,7 +33,7 @@ func StartService(cfg *config.Config) {
 		}
 
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
-			log.Debugf(path)
+			log.Debugf("Loading token from: %s", path)
 			f, errOpen := os.Open(path)
 			if errOpen != nil {
 				return errOpen
@@ -56,8 +56,8 @@ func StartService(cfg *config.Config) {
 				log.Info("Authentication successful.")
 
 				// 3. Initialize CLI Client
-				cliClient := client.NewClient(httpClient)
-				if _, err = cliClient.SetupUser(clientCtx, ts.Email, ts.ProjectID, ts.Auto); err != nil {
+				cliClient := client.NewClient(httpClient, &ts, cfg)
+				if _, err = cliClient.SetupUser(clientCtx, ts.Email, ts.ProjectID); err != nil {
 					if err.Error() == "failed to start user onboarding, need define a project id" {
 						log.Error("failed to start user onboarding")
 						project, errGetProjectList := cliClient.GetProjectList(clientCtx)
