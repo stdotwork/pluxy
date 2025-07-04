@@ -9,3 +9,9 @@ builds:
       - arm64
     main: ./cmd/server/
     binary: cli-proxy-api
+archives:
+  - id: "cli-proxy-api"
+    files:
+      - LICENSE
+      - README.md
+      - config.yaml
