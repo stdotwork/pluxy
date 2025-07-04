@@ -243,8 +243,18 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 	}
 
 	log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
-	jsonTemplate := `{"id":"","object":"chat.completion","created":123456,"model":"model","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
-	respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, contents, tools)
+
+	respChan := make(chan []byte)
+	errChan := make(chan *client.ErrorMessage)
+	go func() {
+		resp, err := cliClient.SendMessage(cliCtx, rawJson, modelName, contents, tools)
+		if err != nil {
+			errChan <- err
+		} else {
+			respChan <- resp
+		}
+	}()
+
 	for {
 		select {
 		case <-c.Request.Context().Done():
@@ -253,23 +263,20 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 				cliCancel()
 				return
 			}
-		case chunk, okStream := <-respChan:
-			if !okStream {
-				_, _ = fmt.Fprint(c.Writer, jsonTemplate)
+		case respBody := <-respChan:
+			openAIFormat := translator.ConvertCliToOpenAINonStream(respBody)
+			if openAIFormat != "" {
+				_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
 				flusher.Flush()
-				cliCancel()
-				return
-			} else {
-				jsonTemplate = translator.ConvertCliToOpenAINonStream(jsonTemplate, chunk)
 			}
-		case err, okError := <-errChan:
-			if okError {
-				c.Status(err.StatusCode)
-				_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-				flusher.Flush()
-				cliCancel()
-				return
-			}
+			cliCancel()
+			return
+		case err := <-errChan:
+			c.Status(err.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+			flusher.Flush()
+			cliCancel()
+			return
 		case <-time.After(500 * time.Millisecond):
 			_, _ = c.Writer.Write([]byte("\n"))
 			flusher.Flush()
