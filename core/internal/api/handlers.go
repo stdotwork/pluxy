@@ -62,7 +62,7 @@ func (h *APIHandlers) Models(c *gin.Context) {
 				"id":                    "gemini-2.5-pro-preview-06-05",
 				"object":                "model",
 				"version":               "2.5-preview-06-05",
-				"name":                  "Gemini 2.5 Pro Preview",
+				"name":                  "Gemini 2.5 Pro Preview 06-05",
 				"description":           "Preview release (June 5th, 2025) of Gemini 2.5 Pro",
 				"context_length":        1048576,
 				"max_completion_tokens": 65536,
