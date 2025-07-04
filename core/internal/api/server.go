@@ -11,7 +11,8 @@ import (
 	"strings"
 )
 
-// Server represents the API server
+// Server represents the main API server.
+// It encapsulates the Gin engine, HTTP server, handlers, and configuration.
 type Server struct {
 	engine   *gin.Engine
 	server   *http.Server
@@ -19,14 +20,18 @@ type Server struct {
 	cfg      *ServerConfig
 }
 
-// ServerConfig contains configuration for the API server
+// ServerConfig contains the configuration for the API server.
 type ServerConfig struct {
-	Port    string
-	Debug   bool
+	// Port is the port number the server will listen on.
+	Port string
+	// Debug enables or disables debug mode for the server and Gin.
+	Debug bool
+	// ApiKeys is a list of valid API keys for authentication.
 	ApiKeys []string
 }
 
-// NewServer creates a new API server instance
+// NewServer creates and initializes a new API server instance.
+// It sets up the Gin engine, middleware, routes, and handlers.
 func NewServer(config *ServerConfig, cliClients []*client.Client) *Server {
 	// Set gin mode
 	if !config.Debug {
@@ -63,7 +68,8 @@ func NewServer(config *ServerConfig, cliClients []*client.Client) *Server {
 	return s
 }
 
-// setupRoutes configures the API routes
+// setupRoutes configures the API routes for the server.
+// It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
@@ -86,11 +92,12 @@ func (s *Server) setupRoutes() {
 	})
 }
 
-// Start starts the API server
+// Start begins listening for and serving HTTP requests.
+// It's a blocking call and will only return on an unrecoverable error.
 func (s *Server) Start() error {
 	log.Debugf("Starting API server on %s", s.server.Addr)
 
-	// Start the HTTP server
+	// Start the HTTP server.
 	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("failed to start HTTP server: %v", err)
 	}
@@ -98,11 +105,12 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop gracefully stops the API server
+// Stop gracefully shuts down the API server without interrupting any
+// active connections.
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
 
-	// Shutdown the HTTP server
+	// Shutdown the HTTP server.
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
 	}
@@ -111,7 +119,8 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-// corsMiddleware adds CORS headers
+// corsMiddleware returns a Gin middleware handler that adds CORS headers
+// to every response, allowing cross-origin requests.
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
@@ -127,7 +136,8 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
-// AuthMiddleware authenticates requests using API keys
+// AuthMiddleware returns a Gin middleware handler that authenticates requests
+// using API keys. If no API keys are configured, it allows all requests.
 func AuthMiddleware(cfg *ServerConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if len(cfg.ApiKeys) == 0 {

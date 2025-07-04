@@ -1,5 +1,7 @@
-package api
+package translator
 
+// MimeTypes is a comprehensive map of file extensions to their corresponding MIME types.
+// This is used to identify the type of file being uploaded or processed.
 var MimeTypes = map[string]string{
 	"ez":          "application/andrew-inset",
 	"aw":          "application/applixware",

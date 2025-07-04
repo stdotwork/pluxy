@@ -6,33 +6,35 @@ import (
 	"os"
 )
 
-// Config represents the application's configuration
+// Config represents the application's configuration, loaded from a YAML file.
 type Config struct {
-	Port     int      `yaml:"port"`
-	AuthDir  string   `yaml:"auth_dir"`
-	Debug    bool     `yaml:"debug"`
-	ProxyUrl string   `yaml:"proxy-url"`
-	ApiKeys  []string `yaml:"api_keys"`
+	// Port is the network port on which the API server will listen.
+	Port int `yaml:"port"`
+	// AuthDir is the directory where authentication token files are stored.
+	AuthDir string `yaml:"auth_dir"`
+	// Debug enables or disables debug-level logging and other debug features.
+	Debug bool `yaml:"debug"`
+	// ProxyUrl is the URL of an optional proxy server to use for outbound requests.
+	ProxyUrl string `yaml:"proxy-url"`
+	// ApiKeys is a list of keys for authenticating clients to this proxy server.
+	ApiKeys []string `yaml:"api_keys"`
 }
 
-// / LoadConfig loads the configuration from the specified file
+// LoadConfig reads a YAML configuration file from the given path,
+// unmarshals it into a Config struct, and returns it.
 func LoadConfig(configFile string) (*Config, error) {
-	// Read the configuration file
+	// Read the entire configuration file into memory.
 	data, err := os.ReadFile(configFile)
-	// If reading the file fails
 	if err != nil {
-		// Return an error
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// Parse the YAML data
+	// Unmarshal the YAML data into the Config struct.
 	var config Config
-	// If parsing the YAML data fails
 	if err = yaml.Unmarshal(data, &config); err != nil {
-		// Return an error
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Return the configuration
+	// Return the populated configuration struct.
 	return &config, nil
 }

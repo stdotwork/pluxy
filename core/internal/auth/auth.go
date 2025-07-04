@@ -5,16 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	log "github.com/sirupsen/logrus"
-	"github.com/skratchdot/open-golang/open"
-	"github.com/tidwall/gjson"
-	"golang.org/x/net/proxy"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/luispater/CLIProxyAPI/internal/config"
+	log "github.com/sirupsen/logrus"
+	"github.com/skratchdot/open-golang/open"
+	"github.com/tidwall/gjson"
+	"golang.org/x/net/proxy"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -33,76 +34,78 @@ var (
 	}
 )
 
-// GetAuthenticatedClient configures and returns an HTTP client with OAuth2 tokens.
-// It handles the entire flow: loading, refreshing, and fetching new tokens.
+// GetAuthenticatedClient configures and returns an HTTP client ready for making authenticated API calls.
+// It manages the entire OAuth2 flow, including handling proxies, loading existing tokens,
+// initiating a new web-based OAuth flow if necessary, and refreshing tokens.
 func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.Config) (*http.Client, error) {
+	// Configure proxy settings for the HTTP client if a proxy URL is provided.
 	proxyURL, err := url.Parse(cfg.ProxyUrl)
 	if err == nil {
+		var transport *http.Transport
 		if proxyURL.Scheme == "socks5" {
+			// Handle SOCKS5 proxy.
 			username := proxyURL.User.Username()
 			password, _ := proxyURL.User.Password()
-			auth := &proxy.Auth{
-				User:     username,
-				Password: password,
-			}
+			auth := &proxy.Auth{User: username, Password: password}
 			dialer, errSOCKS5 := proxy.SOCKS5("tcp", proxyURL.Host, auth, proxy.Direct)
 			if errSOCKS5 != nil {
 				log.Fatalf("create SOCKS5 dialer failed: %v", errSOCKS5)
 			}
-
-			transport := &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (c net.Conn, err error) {
+			transport = &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 					return dialer.Dial(network, addr)
 				},
 			}
-			proxyClient := &http.Client{
-				Transport: transport,
-			}
-
-			ctx = context.WithValue(ctx, oauth2.HTTPClient, proxyClient)
 		} else if proxyURL.Scheme == "http" || proxyURL.Scheme == "https" {
-			transport := &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			}
-			proxyClient := &http.Client{
-				Transport: transport,
-			}
+			// Handle HTTP/HTTPS proxy.
+			transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		}
+
+		if transport != nil {
+			proxyClient := &http.Client{Transport: transport}
 			ctx = context.WithValue(ctx, oauth2.HTTPClient, proxyClient)
 		}
 	}
 
+	// Configure the OAuth2 client.
 	conf := &oauth2.Config{
 		ClientID:     oauthClientID,
 		ClientSecret: oauthClientSecret,
-		RedirectURL:  "http://localhost:8085/oauth2callback", // Placeholder, will be updated
+		RedirectURL:  "http://localhost:8085/oauth2callback", // This will be used by the local server.
 		Scopes:       oauthScopes,
 		Endpoint:     google.Endpoint,
 	}
 
 	var token *oauth2.Token
 
+	// If no token is found in storage, initiate the web-based OAuth flow.
 	if ts.Token == nil {
 		log.Info("Could not load token from file, starting OAuth flow.")
 		token, err = getTokenFromWeb(ctx, conf)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get token from web: %w", err)
 		}
-		newTs, errSaveTokenToFile := createTokenStorage(ctx, conf, token, ts.ProjectID)
-		if errSaveTokenToFile != nil {
-			log.Errorf("Warning: failed to save token to file: %v", err)
-			return nil, errSaveTokenToFile
+		// After getting a new token, create a new token storage object with user info.
+		newTs, errCreateTokenStorage := createTokenStorage(ctx, conf, token, ts.ProjectID)
+		if errCreateTokenStorage != nil {
+			log.Errorf("Warning: failed to create token storage: %v", errCreateTokenStorage)
+			return nil, errCreateTokenStorage
 		}
 		*ts = *newTs
 	}
+
+	// Unmarshal the stored token into an oauth2.Token object.
 	tsToken, _ := json.Marshal(ts.Token)
 	if err = json.Unmarshal(tsToken, &token); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal token: %w", err)
 	}
 
+	// Return an HTTP client that automatically handles token refreshing.
 	return conf.Client(ctx, token), nil
 }
 
-// createTokenStorage creates a token storage.
+// createTokenStorage creates a new TokenStorage object. It fetches the user's email
+// using the provided token and populates the storage structure.
 func createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth2.Token, projectID string) (*TokenStorage, error) {
 	httpClient := config.Client(ctx, token)
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v1/userinfo?alt=json", nil)
@@ -117,7 +120,9 @@ func createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		if err = resp.Body.Close(); err != nil {
+			log.Printf("warn: failed to close response body: %v", err)
+		}
 	}()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
@@ -154,7 +159,10 @@ func createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth
 	return &ts, nil
 }
 
-// getTokenFromWeb starts a local server to handle the OAuth2 flow.
+// getTokenFromWeb initiates the web-based OAuth2 authorization flow.
+// It starts a local HTTP server to listen for the callback from Google's auth server,
+// opens the user's browser to the authorization URL, and exchanges the received
+// authorization code for an access token.
 func getTokenFromWeb(ctx context.Context, config *oauth2.Config) (*oauth2.Token, error) {
 	// Use a channel to pass the authorization code from the HTTP handler to the main function.
 	codeChan := make(chan string)

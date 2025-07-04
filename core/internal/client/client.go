@@ -6,12 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/luispater/CLIProxyAPI/internal/auth"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
-	"golang.org/x/oauth2"
 	"io"
 	"net/http"
 	"os"
@@ -20,6 +14,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/luispater/CLIProxyAPI/internal/auth"
+	"github.com/luispater/CLIProxyAPI/internal/config"
+	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -194,7 +195,9 @@ func (c *Client) makeAPIRequest(ctx context.Context, endpoint, method string, bo
 		return fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		if err = resp.Body.Close(); err != nil {
+			log.Printf("warn: failed to close response body: %v", err)
+		}
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -253,7 +256,9 @@ func (c *Client) StreamAPIRequest(ctx context.Context, endpoint string, body int
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer func() {
-			_ = resp.Body.Close()
+			if err = resp.Body.Close(); err != nil {
+				log.Printf("warn: failed to close response body: %v", err)
+			}
 		}()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 
@@ -355,6 +360,9 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 	return dataChan, errChan
 }
 
+// CheckCloudAPIIsEnabled sends a simple test request to the API to verify
+// that the Cloud AI API is enabled for the user's project. It provides
+// an activation URL if the API is disabled.
 func (c *Client) CheckCloudAPIIsEnabled() (bool, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
@@ -363,79 +371,78 @@ func (c *Client) CheckCloudAPIIsEnabled() (bool, error) {
 	}()
 	c.RequestMutex.Lock()
 
-	requestBody := `{"project":"%s","request":{"contents":[{"role":"user","parts":[{"text":"Be concise. What is the capital of France?"}]}],"generationConfig":{"thinkingConfig":{"include_thoughts":false,"thinkingBudget":0}}},"model":"gemini-2.5-flash"}`
-	requestBody = fmt.Sprintf(requestBody, c.tokenStorage.ProjectID)
-	// log.Debug(requestBody)
+	// A simple request to test the API endpoint.
+	requestBody := fmt.Sprintf(`{"project":"%s","request":{"contents":[{"role":"user","parts":[{"text":"Be concise. What is the capital of France?"}]}],"generationConfig":{"thinkingConfig":{"include_thoughts":false,"thinkingBudget":0}}},"model":"gemini-2.5-flash"}`, c.tokenStorage.ProjectID)
+
 	stream, err := c.StreamAPIRequest(ctx, "streamGenerateContent", []byte(requestBody))
 	if err != nil {
+		// If a 403 Forbidden error occurs, it likely means the API is not enabled.
 		if err.StatusCode == 403 {
 			errJson := err.Error.Error()
-			codeResult := gjson.Get(errJson, "error.code")
-			if codeResult.Exists() && codeResult.Type == gjson.Number {
-				if codeResult.Int() == 403 {
-					activationUrlResult := gjson.Get(errJson, "error.details.0.metadata.activationUrl")
-					if activationUrlResult.Exists() {
-						log.Warnf(
-							"\n\nPlease activate your account with this url:\n\n%s\n And execute this command again:\n%s --login --project_id %s",
-							activationUrlResult.String(),
-							os.Args[0],
-							c.tokenStorage.ProjectID,
-						)
-					}
+			// Check for a specific error code and extract the activation URL.
+			if gjson.Get(errJson, "error.code").Int() == 403 {
+				activationUrl := gjson.Get(errJson, "error.details.0.metadata.activationUrl").String()
+				if activationUrl != "" {
+					log.Warnf(
+						"\n\nPlease activate your account with this url:\n\n%s\n And execute this command again:\n%s --login --project_id %s",
+						activationUrl,
+						os.Args[0],
+						c.tokenStorage.ProjectID,
+					)
 				}
 			}
 			return false, nil
 		}
 		return false, err.Error
 	}
+	defer func() {
+		_ = stream.Close()
+	}()
 
+	// We only need to know if the request was successful, so we can drain the stream.
 	scanner := bufio.NewScanner(stream)
 	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
+		// Do nothing, just consume the stream.
 	}
 
-	if scannerErr := scanner.Err(); scannerErr != nil {
-		_ = stream.Close()
-	} else {
-		_ = stream.Close()
-	}
-
-	return true, nil
+	return scanner.Err() == nil, scanner.Err()
 }
 
+// GetProjectList fetches a list of Google Cloud projects accessible by the user.
 func (c *Client) GetProjectList(ctx context.Context) (*GCPProject, error) {
 	token, err := c.httpClient.Transport.(*oauth2.Transport).Source.Token()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token: %w", err)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://cloudresourcemanager.googleapis.com/v1/projects", nil)
 	if err != nil {
-		return nil, fmt.Errorf("could not get project list: %v", err)
+		return nil, fmt.Errorf("could not create project list request: %v", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
+		return nil, fmt.Errorf("failed to execute project list request: %w", err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("get user info request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("project list request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var project GCPProject
-	err = json.Unmarshal(bodyBytes, &project)
-	if err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&project); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal project list: %w", err)
 	}
 	return &project, nil
 }
 
+// SaveTokenToFile serializes the client's current token storage to a JSON file.
+// The filename is constructed from the user's email and project ID.
 func (c *Client) SaveTokenToFile() error {
 	if err := os.MkdirAll(c.cfg.AuthDir, 0700); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
@@ -457,7 +464,8 @@ func (c *Client) SaveTokenToFile() error {
 	return nil
 }
 
-// getClientMetadata returns metadata about the client environment.
+// getClientMetadata returns a map of metadata about the client environment,
+// such as IDE type, platform, and plugin version.
 func getClientMetadata() map[string]string {
 	return map[string]string{
 		"ideType":       "IDE_UNSPECIFIED",
@@ -467,7 +475,8 @@ func getClientMetadata() map[string]string {
 	}
 }
 
-// getClientMetadataString returns the metadata as a comma-separated string.
+// getClientMetadataString returns the client metadata as a single,
+// comma-separated string, which is required for the 'Client-Metadata' header.
 func getClientMetadataString() string {
 	md := getClientMetadata()
 	parts := make([]string, 0, len(md))
@@ -477,11 +486,13 @@ func getClientMetadataString() string {
 	return strings.Join(parts, ",")
 }
 
+// getUserAgent constructs the User-Agent string for HTTP requests.
 func getUserAgent() string {
-	return fmt.Sprintf(fmt.Sprintf("GeminiCLI/%s (%s; %s)", pluginVersion, runtime.GOOS, runtime.GOARCH))
+	return fmt.Sprintf("GeminiCLI/%s (%s; %s)", pluginVersion, runtime.GOOS, runtime.GOARCH)
 }
 
-// getPlatform returns the OS and architecture in the format expected by the API.
+// getPlatform determines the operating system and architecture and formats
+// it into a string expected by the backend API.
 func getPlatform() string {
 	goOS := runtime.GOOS
 	arch := runtime.GOARCH

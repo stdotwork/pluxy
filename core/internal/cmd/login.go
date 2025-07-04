@@ -9,6 +9,9 @@ import (
 	"os"
 )
 
+// DoLogin handles the entire user login and setup process.
+// It authenticates the user, sets up the user's project, checks API enablement,
+// and saves the token for future use.
 func DoLogin(cfg *config.Config, projectID string) {
 	var err error
 	var ts auth.TokenStorage
@@ -16,9 +19,8 @@ func DoLogin(cfg *config.Config, projectID string) {
 		ts.ProjectID = projectID
 	}
 
-	// 2. Initialize authenticated HTTP Client
+	// Initialize an authenticated HTTP client. This will trigger the OAuth flow if necessary.
 	clientCtx := context.Background()
-
 	log.Info("Initializing authentication...")
 	httpClient, errGetClient := auth.GetAuthenticatedClient(clientCtx, &ts, cfg)
 	if errGetClient != nil {
@@ -27,51 +29,57 @@ func DoLogin(cfg *config.Config, projectID string) {
 	}
 	log.Info("Authentication successful.")
 
-	// 3. Initialize CLI Client
+	// Initialize the API client.
 	cliClient := client.NewClient(httpClient, &ts, cfg)
+
+	// Perform the user setup process.
 	err = cliClient.SetupUser(clientCtx, ts.Email, projectID)
 	if err != nil {
+		// Handle the specific case where a project ID is required but not provided.
 		if err.Error() == "failed to start user onboarding, need define a project id" {
-			log.Error("failed to start user onboarding")
+			log.Error("Failed to start user onboarding: A project ID is required.")
+			// Fetch and display the user's available projects to help them choose one.
 			project, errGetProjectList := cliClient.GetProjectList(clientCtx)
 			if errGetProjectList != nil {
-				log.Fatalf("failed to complete user setup: %v", err)
+				log.Fatalf("Failed to get project list: %v", err)
 			} else {
-				log.Infof("Your account %s needs specify a project id.", ts.Email)
+				log.Infof("Your account %s needs to specify a project ID.", ts.Email)
 				log.Info("========================================================================")
-				for i := 0; i < len(project.Projects); i++ {
-					log.Infof("Project ID: %s", project.Projects[i].ProjectID)
-					log.Infof("Project Name: %s", project.Projects[i].Name)
-					log.Info("========================================================================")
+				for _, p := range project.Projects {
+					log.Infof("Project ID: %s", p.ProjectID)
+					log.Infof("Project Name: %s", p.Name)
+					log.Info("------------------------------------------------------------------------")
 				}
-				log.Infof("Please run this command to login again:\n\n%s --login --project_id <project_id>\n", os.Args[0])
+				log.Infof("Please run this command to login again with a specific project:\n\n%s --login --project_id <project_id>\n", os.Args[0])
 			}
 		} else {
-			// Log as a warning because in some cases, the CLI might still be usable
-			// or the user might want to retry setup later.
-			log.Fatalf("failed to complete user setup: %v", err)
+			log.Fatalf("Failed to complete user setup: %v", err)
 		}
-	} else {
-		auto := projectID == ""
-		cliClient.SetIsAuto(auto)
+		return // Exit after handling the error.
+	}
 
-		if !cliClient.IsChecked() && !cliClient.IsAuto() {
-			isChecked, checkErr := cliClient.CheckCloudAPIIsEnabled()
-			if checkErr != nil {
-				log.Fatalf("failed to check cloud api is enabled: %v", checkErr)
-				return
-			}
-			cliClient.SetIsChecked(isChecked)
-		}
+	// If setup is successful, proceed to check API status and save the token.
+	auto := projectID == ""
+	cliClient.SetIsAuto(auto)
 
-		if !cliClient.IsChecked() && !cliClient.IsAuto() {
+	// If the project was not automatically selected, check if the Cloud AI API is enabled.
+	if !cliClient.IsChecked() && !cliClient.IsAuto() {
+		isChecked, checkErr := cliClient.CheckCloudAPIIsEnabled()
+		if checkErr != nil {
+			log.Fatalf("Failed to check if Cloud AI API is enabled: %v", checkErr)
 			return
 		}
-
-		err = cliClient.SaveTokenToFile()
-		if err != nil {
-			log.Fatal(err)
+		cliClient.SetIsChecked(isChecked)
+		// If the check fails (returns false), the CheckCloudAPIIsEnabled function
+		// will have already printed instructions, so we can just exit.
+		if !isChecked {
 			return
 		}
+	}
+
+	// Save the successfully obtained and verified token to a file.
+	err = cliClient.SaveTokenToFile()
+	if err != nil {
+		log.Fatalf("Failed to save token to file: %v", err)
 	}
 }

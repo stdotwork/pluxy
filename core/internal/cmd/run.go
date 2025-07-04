@@ -18,20 +18,25 @@ import (
 	"time"
 )
 
+// StartService initializes and starts the main API proxy service.
+// It loads all available authentication tokens, creates a pool of clients,
+// starts the API server, and handles graceful shutdown signals.
 func StartService(cfg *config.Config) {
-	// Create API server configuration
+	// Configure the API server based on the main application config.
 	apiConfig := &api.ServerConfig{
 		Port:    fmt.Sprintf("%d", cfg.Port),
 		Debug:   cfg.Debug,
 		ApiKeys: cfg.ApiKeys,
 	}
 
+	// Create a pool of API clients, one for each token file found.
 	cliClients := make([]*client.Client, 0)
 	err := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
+		// Process only JSON files in the auth directory.
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
 			log.Debugf("Loading token from: %s", path)
 			f, errOpen := os.Open(path)
@@ -42,58 +47,62 @@ func StartService(cfg *config.Config) {
 				_ = f.Close()
 			}()
 
+			// Decode the token storage file.
 			var ts auth.TokenStorage
 			if err = json.NewDecoder(f).Decode(&ts); err == nil {
-				// 2. Initialize authenticated HTTP Client
+				// For each valid token, create an authenticated client.
 				clientCtx := context.Background()
-
-				log.Info("Initializing authentication...")
+				log.Info("Initializing authentication for token...")
 				httpClient, errGetClient := auth.GetAuthenticatedClient(clientCtx, &ts, cfg)
 				if errGetClient != nil {
-					log.Fatalf("failed to get authenticated client: %v", errGetClient)
+					// Log fatal will exit, but we return the error for completeness.
+					log.Fatalf("failed to get authenticated client for token %s: %v", path, errGetClient)
 					return errGetClient
 				}
 				log.Info("Authentication successful.")
 
-				// 3. Initialize CLI Client
+				// Add the new client to the pool.
 				cliClient := client.NewClient(httpClient, &ts, cfg)
 				cliClients = append(cliClients, cliClient)
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		log.Fatalf("Error walking auth directory: %v", err)
+	}
 
-	// Create API server
+	// Create and start the API server with the pool of clients.
 	apiServer := api.NewServer(apiConfig, cliClients)
 	log.Infof("Starting API server on port %s", apiConfig.Port)
 	if err = apiServer.Start(); err != nil {
 		log.Fatalf("API server failed to start: %v", err)
-		return
 	}
 
-	// Set up graceful shutdown
+	// Set up a channel to listen for OS signals for graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Main loop to wait for shutdown signal.
 	for {
 		select {
 		case <-sigChan:
 			log.Debugf("Received shutdown signal. Cleaning up...")
 
-			// Create shutdown context
+			// Create a context with a timeout for the shutdown process.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_ = ctx // Mark ctx as used to avoid error, as apiServer.Stop(ctx) is commented out
+			_ = cancel
 
-			// Stop API server
+			// Stop the API server gracefully.
 			if err = apiServer.Stop(ctx); err != nil {
 				log.Debugf("Error stopping API server: %v", err)
 			}
-			cancel()
 
 			log.Debugf("Cleanup completed. Exiting...")
 			os.Exit(0)
 		case <-time.After(5 * time.Second):
-
+			// This case is currently empty and acts as a periodic check.
+			// It could be used for periodic tasks in the future.
 		}
 	}
 }
