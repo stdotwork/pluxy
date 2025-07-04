@@ -29,7 +29,7 @@ func DoLogin(cfg *config.Config, projectID string) {
 
 	// 3. Initialize CLI Client
 	cliClient := client.NewClient(httpClient, &ts, cfg)
-	projectID, err = cliClient.SetupUser(clientCtx, ts.Email, projectID)
+	err = cliClient.SetupUser(clientCtx, ts.Email, projectID)
 	if err != nil {
 		if err.Error() == "failed to start user onboarding, need define a project id" {
 			log.Error("failed to start user onboarding")
@@ -52,8 +52,7 @@ func DoLogin(cfg *config.Config, projectID string) {
 			log.Fatalf("failed to complete user setup: %v", err)
 		}
 	} else {
-		auto := ts.ProjectID == ""
-		cliClient.SetProjectID(projectID)
+		auto := projectID == ""
 		cliClient.SetIsAuto(auto)
 
 		if !cliClient.IsChecked() && !cliClient.IsAuto() {

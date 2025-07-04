@@ -57,30 +57,7 @@ func StartService(cfg *config.Config) {
 
 				// 3. Initialize CLI Client
 				cliClient := client.NewClient(httpClient, &ts, cfg)
-				if _, err = cliClient.SetupUser(clientCtx, ts.Email, ts.ProjectID); err != nil {
-					if err.Error() == "failed to start user onboarding, need define a project id" {
-						log.Error("failed to start user onboarding")
-						project, errGetProjectList := cliClient.GetProjectList(clientCtx)
-						if errGetProjectList != nil {
-							log.Fatalf("failed to complete user setup: %v", err)
-						} else {
-							log.Infof("Your account %s needs specify a project id.", ts.Email)
-							log.Info("========================================================================")
-							for i := 0; i < len(project.Projects); i++ {
-								log.Infof("Project ID: %s", project.Projects[i].ProjectID)
-								log.Infof("Project Name: %s", project.Projects[i].Name)
-								log.Info("========================================================================")
-							}
-							log.Infof("Please run this command to login again:\n\n%s --login --project_id <project_id>\n", os.Args[0])
-						}
-					} else {
-						// Log as a warning because in some cases, the CLI might still be usable
-						// or the user might want to retry setup later.
-						log.Fatalf("failed to complete user setup: %v", err)
-					}
-				} else {
-					cliClients = append(cliClients, cliClient)
-				}
+				cliClients = append(cliClients, cliClient)
 			}
 		}
 		return nil

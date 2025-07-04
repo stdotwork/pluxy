@@ -407,7 +407,7 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 		cliClient.RequestMutex.Lock()
 	}
 
-	log.Debugf("Request use account: %s, project id: %s", cliClient.Email, cliClient.ProjectID)
+	log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 	jsonTemplate := `{"id":"","object":"chat.completion","created":123456,"model":"model","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
 	respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, contents, tools)
 	for {
@@ -501,7 +501,7 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 		cliClient.RequestMutex.Lock()
 	}
 
-	log.Debugf("Request use account: %s, project id: %s", cliClient.Email, cliClient.ProjectID)
+	log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 	respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, contents, tools)
 	for {
 		select {

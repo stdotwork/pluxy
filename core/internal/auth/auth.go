@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
+	"github.com/skratchdot/open-golang/open"
 	"github.com/tidwall/gjson"
 	"golang.org/x/net/proxy"
 	"io"
@@ -15,7 +16,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/skratchdot/open-golang/open"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -32,14 +32,6 @@ var (
 		"https://www.googleapis.com/auth/userinfo.profile",
 	}
 )
-
-type TokenStorage struct {
-	Token     any    `json:"token"`
-	ProjectID string `json:"project_id"`
-	Email     string `json:"email"`
-	Auto      bool   `json:"auto"`
-	Checked   bool   `json:"checked"`
-}
 
 // GetAuthenticatedClient configures and returns an HTTP client with OAuth2 tokens.
 // It handles the entire flow: loading, refreshing, and fetching new tokens.
@@ -199,7 +191,8 @@ func getTokenFromWeb(ctx context.Context, config *oauth2.Config) (*oauth2.Token,
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
 	log.Debugf("CLI login required.\nAttempting to open authentication page in your browser.\nIf it does not open, please navigate to this URL:\n\n%s\n", authURL)
 
-	err := open.Run(authURL)
+	var err error
+	err = open.Run(authURL)
 	if err != nil {
 		log.Errorf("Failed to open browser: %v. Please open the URL manually.", err)
 	}

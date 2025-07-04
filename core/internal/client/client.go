@@ -22,96 +22,16 @@ import (
 	"time"
 )
 
-// --- Constants ---
 const (
 	codeAssistEndpoint = "https://cloudcode-pa.googleapis.com"
 	apiVersion         = "v1internal"
-	pluginVersion      = "1.0.0"
+	pluginVersion      = "0.1.9"
 )
-
-type ErrorMessage struct {
-	StatusCode int
-	Error      error
-}
-
-type GCPProject struct {
-	Projects []GCPProjectProjects `json:"projects"`
-}
-type GCPProjectLabels struct {
-	GenerativeLanguage string `json:"generative-language"`
-}
-type GCPProjectProjects struct {
-	ProjectNumber  string           `json:"projectNumber"`
-	ProjectID      string           `json:"projectId"`
-	LifecycleState string           `json:"lifecycleState"`
-	Name           string           `json:"name"`
-	Labels         GCPProjectLabels `json:"labels"`
-	CreateTime     time.Time        `json:"createTime"`
-}
-
-type Content struct {
-	Role  string `json:"role"`
-	Parts []Part `json:"parts"`
-}
-
-// Part represents a single part of a message's content.
-type Part struct {
-	Text             string            `json:"text,omitempty"`
-	InlineData       *InlineData       `json:"inlineData,omitempty"`
-	FunctionCall     *FunctionCall     `json:"functionCall,omitempty"`
-	FunctionResponse *FunctionResponse `json:"functionResponse,omitempty"`
-}
-
-type InlineData struct {
-	MimeType string `json:"mime_type,omitempty"`
-	Data     string `json:"data,omitempty"`
-}
-
-// FunctionCall represents a tool call requested by the model.
-type FunctionCall struct {
-	Name string                 `json:"name"`
-	Args map[string]interface{} `json:"args"`
-}
-
-// FunctionResponse represents the result of a tool execution.
-type FunctionResponse struct {
-	Name     string                 `json:"name"`
-	Response map[string]interface{} `json:"response"`
-}
-
-// GenerateContentRequest is the request payload for the streamGenerateContent endpoint.
-type GenerateContentRequest struct {
-	Contents         []Content         `json:"contents"`
-	Tools            []ToolDeclaration `json:"tools,omitempty"`
-	GenerationConfig `json:"generationConfig"`
-}
-
-// GenerationConfig defines model generation parameters.
-type GenerationConfig struct {
-	ThinkingConfig GenerationConfigThinkingConfig `json:"thinkingConfig,omitempty"`
-	Temperature    float64                        `json:"temperature,omitempty"`
-	TopP           float64                        `json:"topP,omitempty"`
-	TopK           float64                        `json:"topK,omitempty"`
-	// Temperature, TopP, TopK, etc. can be added here.
-}
-
-type GenerationConfigThinkingConfig struct {
-	IncludeThoughts bool `json:"include_thoughts,omitempty"`
-}
-
-// ToolDeclaration is the structure for declaring tools to the API.
-// For now, we'll assume a simple structure. A more complete implementation
-// would mirror the OpenAPI schema definition.
-type ToolDeclaration struct {
-	FunctionDeclarations []interface{} `json:"functionDeclarations"`
-}
 
 // Client is the main client for interacting with the CLI API.
 type Client struct {
 	httpClient   *http.Client
-	ProjectID    string
 	RequestMutex sync.Mutex
-	Email        string
 	tokenStorage *auth.TokenStorage
 	cfg          *config.Config
 }
@@ -145,9 +65,17 @@ func (c *Client) IsAuto() bool {
 	return c.tokenStorage.Auto
 }
 
+func (c *Client) GetEmail() string {
+	return c.tokenStorage.Email
+}
+
+func (c *Client) GetProjectID() string {
+	return c.tokenStorage.ProjectID
+}
+
 // SetupUser performs the initial user onboarding and setup.
-func (c *Client) SetupUser(ctx context.Context, email, projectID string) (string, error) {
-	c.Email = email
+func (c *Client) SetupUser(ctx context.Context, email, projectID string) error {
+	c.tokenStorage.Email = email
 	log.Info("Performing user onboarding...")
 
 	// 1. LoadCodeAssist
@@ -161,7 +89,7 @@ func (c *Client) SetupUser(ctx context.Context, email, projectID string) (string
 	var loadAssistResp map[string]interface{}
 	err := c.makeAPIRequest(ctx, "loadCodeAssist", "POST", loadAssistReqBody, &loadAssistResp)
 	if err != nil {
-		return projectID, fmt.Errorf("failed to load code assist: %w", err)
+		return fmt.Errorf("failed to load code assist: %w", err)
 	}
 
 	// a, _ := json.Marshal(&loadAssistResp)
@@ -197,14 +125,14 @@ func (c *Client) SetupUser(ctx context.Context, email, projectID string) (string
 	if onboardProjectID != "" {
 		onboardReqBody["cloudaicompanionProject"] = onboardProjectID
 	} else {
-		return projectID, fmt.Errorf("failed to start user onboarding, need define a project id")
+		return fmt.Errorf("failed to start user onboarding, need define a project id")
 	}
 
 	for {
 		var lroResp map[string]interface{}
 		err = c.makeAPIRequest(ctx, "onboardUser", "POST", onboardReqBody, &lroResp)
 		if err != nil {
-			return projectID, fmt.Errorf("failed to start user onboarding: %w", err)
+			return fmt.Errorf("failed to start user onboarding: %w", err)
 		}
 		// a, _ := json.Marshal(&lroResp)
 		// log.Debug(string(a))
@@ -214,12 +142,12 @@ func (c *Client) SetupUser(ctx context.Context, email, projectID string) (string
 		if doneOk && done {
 			if project, projectOk := lroResp["response"].(map[string]interface{})["cloudaicompanionProject"].(map[string]interface{}); projectOk {
 				if projectID != "" {
-					c.ProjectID = projectID
+					c.tokenStorage.ProjectID = projectID
 				} else {
-					c.ProjectID = project["id"].(string)
+					c.tokenStorage.ProjectID = project["id"].(string)
 				}
-				log.Infof("Onboarding complete. Using Project ID: %s", c.ProjectID)
-				return c.ProjectID, nil
+				log.Infof("Onboarding complete. Using Project ID: %s", c.tokenStorage.ProjectID)
+				return nil
 			}
 		} else {
 			log.Println("Onboarding in progress, waiting 5 seconds...")
@@ -356,7 +284,7 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 		request.Tools = tools
 
 		requestBody := map[string]interface{}{
-			"project": c.ProjectID, // Assuming ProjectID is available
+			"project": c.tokenStorage.ProjectID, // Assuming ProjectID is available
 			"request": request,
 			"model":   model,
 		}
