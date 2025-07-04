@@ -11,13 +11,22 @@ type Config struct {
 	// Port is the network port on which the API server will listen.
 	Port int `yaml:"port"`
 	// AuthDir is the directory where authentication token files are stored.
-	AuthDir string `yaml:"auth_dir"`
+	AuthDir string `yaml:"auth-dir"`
 	// Debug enables or disables debug-level logging and other debug features.
 	Debug bool `yaml:"debug"`
 	// ProxyUrl is the URL of an optional proxy server to use for outbound requests.
 	ProxyUrl string `yaml:"proxy-url"`
 	// ApiKeys is a list of keys for authenticating clients to this proxy server.
-	ApiKeys []string `yaml:"api_keys"`
+	ApiKeys []string `yaml:"api-keys"`
+	// QuotaExceeded defines the behavior when a quota is exceeded.
+	QuotaExceeded ConfigQuotaExceeded `yaml:"quota-exceeded"`
+}
+
+type ConfigQuotaExceeded struct {
+	// SwitchProject indicates whether to automatically switch to another project when a quota is exceeded.
+	SwitchProject bool `yaml:"switch-project"`
+	// SwitchPreviewModel indicates whether to automatically switch to a preview model when a quota is exceeded.
+	SwitchPreviewModel bool `yaml:"switch-preview-model"`
 }
 
 // LoadConfig reads a YAML configuration file from the given path,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/luispater/CLIProxyAPI/internal/client"
+	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
 	"net/http"
 	"strings"
@@ -17,29 +18,19 @@ type Server struct {
 	engine   *gin.Engine
 	server   *http.Server
 	handlers *APIHandlers
-	cfg      *ServerConfig
-}
-
-// ServerConfig contains the configuration for the API server.
-type ServerConfig struct {
-	// Port is the port number the server will listen on.
-	Port string
-	// Debug enables or disables debug mode for the server and Gin.
-	Debug bool
-	// ApiKeys is a list of valid API keys for authentication.
-	ApiKeys []string
+	cfg      *config.Config
 }
 
 // NewServer creates and initializes a new API server instance.
 // It sets up the Gin engine, middleware, routes, and handlers.
-func NewServer(config *ServerConfig, cliClients []*client.Client) *Server {
+func NewServer(cfg *config.Config, cliClients []*client.Client) *Server {
 	// Set gin mode
-	if !config.Debug {
+	if !cfg.Debug {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	// Create handlers
-	handlers := NewAPIHandlers(cliClients, config.Debug)
+	handlers := NewAPIHandlers(cliClients, cfg)
 
 	// Create gin engine
 	engine := gin.New()
@@ -53,7 +44,7 @@ func NewServer(config *ServerConfig, cliClients []*client.Client) *Server {
 	s := &Server{
 		engine:   engine,
 		handlers: handlers,
-		cfg:      config,
+		cfg:      cfg,
 	}
 
 	// Setup routes
@@ -61,7 +52,7 @@ func NewServer(config *ServerConfig, cliClients []*client.Client) *Server {
 
 	// Create HTTP server
 	s.server = &http.Server{
-		Addr:    ":" + config.Port,
+		Addr:    fmt.Sprintf(":%d", cfg.Port),
 		Handler: engine,
 	}
 
@@ -138,7 +129,7 @@ func corsMiddleware() gin.HandlerFunc {
 
 // AuthMiddleware returns a Gin middleware handler that authenticates requests
 // using API keys. If no API keys are configured, it allows all requests.
-func AuthMiddleware(cfg *ServerConfig) gin.HandlerFunc {
+func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if len(cfg.ApiKeys) == 0 {
 			c.Next()

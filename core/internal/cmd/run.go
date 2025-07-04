@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/luispater/CLIProxyAPI/internal/api"
 	"github.com/luispater/CLIProxyAPI/internal/auth"
 	"github.com/luispater/CLIProxyAPI/internal/client"
@@ -22,13 +21,6 @@ import (
 // It loads all available authentication tokens, creates a pool of clients,
 // starts the API server, and handles graceful shutdown signals.
 func StartService(cfg *config.Config) {
-	// Configure the API server based on the main application config.
-	apiConfig := &api.ServerConfig{
-		Port:    fmt.Sprintf("%d", cfg.Port),
-		Debug:   cfg.Debug,
-		ApiKeys: cfg.ApiKeys,
-	}
-
 	// Create a pool of API clients, one for each token file found.
 	cliClients := make([]*client.Client, 0)
 	err := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
@@ -73,8 +65,8 @@ func StartService(cfg *config.Config) {
 	}
 
 	// Create and start the API server with the pool of clients.
-	apiServer := api.NewServer(apiConfig, cliClients)
-	log.Infof("Starting API server on port %s", apiConfig.Port)
+	apiServer := api.NewServer(cfg, cliClients)
+	log.Infof("Starting API server on port %d", cfg.Port)
 	if err = apiServer.Start(); err != nil {
 		log.Fatalf("API server failed to start: %v", err)
 	}

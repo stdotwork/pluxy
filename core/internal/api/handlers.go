@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/luispater/CLIProxyAPI/internal/api/translator"
 	"github.com/luispater/CLIProxyAPI/internal/client"
+	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"net/http"
@@ -23,15 +24,15 @@ var (
 // It holds a pool of clients to interact with the backend service.
 type APIHandlers struct {
 	cliClients []*client.Client
-	debug      bool
+	cfg        *config.Config
 }
 
 // NewAPIHandlers creates a new API handlers instance.
 // It takes a slice of clients and a debug flag as input.
-func NewAPIHandlers(cliClients []*client.Client, debug bool) *APIHandlers {
+func NewAPIHandlers(cliClients []*client.Client, cfg *config.Config) *APIHandlers {
 	return &APIHandlers{
 		cliClients: cliClients,
-		debug:      debug,
+		cfg:        cfg,
 	}
 }
 
@@ -216,47 +217,69 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 		}
 	}()
 
-	// Lock the mutex to update the last used page index
-	mutex.Lock()
-	startIndex := lastUsedClientIndex
-	currentIndex := (startIndex + 1) % len(h.cliClients)
-	lastUsedClientIndex = currentIndex
-	mutex.Unlock()
+	for {
+		// Lock the mutex to update the last used client index
+		mutex.Lock()
+		startIndex := lastUsedClientIndex
+		currentIndex := (startIndex + 1) % len(h.cliClients)
+		lastUsedClientIndex = currentIndex
+		mutex.Unlock()
 
-	// Reorder the pages to start from the last used index
-	reorderedPages := make([]*client.Client, len(h.cliClients))
-	for i := 0; i < len(h.cliClients); i++ {
-		reorderedPages[i] = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
-	}
+		// Reorder the client to start from the last used index
+		reorderedClients := make([]*client.Client, 0)
+		for i := 0; i < len(h.cliClients); i++ {
+			cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
+			if cliClient.IsModelQuotaExceeded(modelName) {
+				log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
+				cliClient = nil
+				continue
+			}
+			reorderedClients = append(reorderedClients, cliClient)
+		}
 
-	locked := false
-	for i := 0; i < len(reorderedPages); i++ {
-		cliClient = reorderedPages[i]
-		if cliClient.RequestMutex.TryLock() {
-			locked = true
+		if len(reorderedClients) == 0 {
+			c.Status(429)
+			_, _ = fmt.Fprint(c.Writer, fmt.Sprintf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName))
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		locked := false
+		for i := 0; i < len(reorderedClients); i++ {
+			cliClient = reorderedClients[i]
+			if cliClient.RequestMutex.TryLock() {
+				locked = true
+				break
+			}
+		}
+		if !locked {
+			cliClient = h.cliClients[0]
+			cliClient.RequestMutex.Lock()
+		}
+
+		log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
+
+		resp, err := cliClient.SendMessage(cliCtx, rawJson, modelName, contents, tools)
+		if err != nil {
+			if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+				continue
+			} else {
+				c.Status(err.StatusCode)
+				_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+				flusher.Flush()
+				cliCancel()
+			}
+			break
+		} else {
+			openAIFormat := translator.ConvertCliToOpenAINonStream(resp)
+			if openAIFormat != "" {
+				_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
+				flusher.Flush()
+			}
+			cliCancel()
 			break
 		}
-	}
-	if !locked {
-		cliClient = h.cliClients[0]
-		cliClient.RequestMutex.Lock()
-	}
-
-	log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
-
-	resp, err := cliClient.SendMessage(cliCtx, rawJson, modelName, contents, tools)
-	if err != nil {
-		c.Status(err.StatusCode)
-		_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-		flusher.Flush()
-		cliCancel()
-	} else {
-		openAIFormat := translator.ConvertCliToOpenAINonStream(resp)
-		if openAIFormat != "" {
-			_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
-			flusher.Flush()
-		}
-		cliCancel()
 	}
 }
 
@@ -290,78 +313,97 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 		}
 	}()
 
-	// Use a round-robin approach to select the next available client.
-	// This distributes the load among the available clients.
-	mutex.Lock()
-	startIndex := lastUsedClientIndex
-	currentIndex := (startIndex + 1) % len(h.cliClients)
-	lastUsedClientIndex = currentIndex
-	mutex.Unlock()
-
-	// Reorder the clients to start from the next client in the rotation.
-	reorderedPages := make([]*client.Client, len(h.cliClients))
-	for i := 0; i < len(h.cliClients); i++ {
-		reorderedPages[i] = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
-	}
-
-	// Attempt to lock a client for the request.
-	locked := false
-	for i := 0; i < len(reorderedPages); i++ {
-		cliClient = reorderedPages[i]
-		if cliClient.RequestMutex.TryLock() {
-			locked = true
-			break
-		}
-	}
-	// If no client is available, block and wait for the first client.
-	if !locked {
-		cliClient = h.cliClients[0]
-		cliClient.RequestMutex.Lock()
-	}
-	log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
-	// Send the message and receive response chunks and errors via channels.
-	respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, contents, tools)
-	hasFirstResponse := false
+outLoop:
 	for {
-		select {
-		// Handle client disconnection.
-		case <-c.Request.Context().Done():
-			if c.Request.Context().Err().Error() == "context canceled" {
-				log.Debugf("Client disconnected: %v", c.Request.Context().Err())
-				cliCancel() // Cancel the backend request.
-				return
+		// Lock the mutex to update the last used client index
+		mutex.Lock()
+		startIndex := lastUsedClientIndex
+		currentIndex := (startIndex + 1) % len(h.cliClients)
+		lastUsedClientIndex = currentIndex
+		mutex.Unlock()
+
+		// Reorder the client to start from the last used index
+		reorderedClients := make([]*client.Client, 0)
+		for i := 0; i < len(h.cliClients); i++ {
+			cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
+			if cliClient.IsModelQuotaExceeded(modelName) {
+				log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
+				cliClient = nil
+				continue
 			}
-		// Process incoming response chunks.
-		case chunk, okStream := <-respChan:
-			if !okStream {
-				// Stream is closed, send the final [DONE] message.
-				_, _ = fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
-				flusher.Flush()
-				cliCancel()
-				return
-			} else {
-				// Convert the chunk to OpenAI format and send it to the client.
-				hasFirstResponse = true
-				openAIFormat := translator.ConvertCliToOpenAI(chunk)
-				if openAIFormat != "" {
-					_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
+			reorderedClients = append(reorderedClients, cliClient)
+		}
+
+		if len(reorderedClients) == 0 {
+			c.Status(429)
+			_, _ = fmt.Fprint(c.Writer, fmt.Sprintf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName))
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		locked := false
+		for i := 0; i < len(reorderedClients); i++ {
+			cliClient = reorderedClients[i]
+			if cliClient.RequestMutex.TryLock() {
+				locked = true
+				break
+			}
+		}
+		if !locked {
+			cliClient = h.cliClients[0]
+			cliClient.RequestMutex.Lock()
+		}
+
+		log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
+		// Send the message and receive response chunks and errors via channels.
+		respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, contents, tools)
+		hasFirstResponse := false
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("Client disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					// Stream is closed, send the final [DONE] message.
+					_, _ = fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+					flusher.Flush()
+					cliCancel()
+					return
+				} else {
+					// Convert the chunk to OpenAI format and send it to the client.
+					hasFirstResponse = true
+					openAIFormat := translator.ConvertCliToOpenAI(chunk)
+					if openAIFormat != "" {
+						_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
+						flusher.Flush()
+					}
+				}
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						flusher.Flush()
+						cliCancel()
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
+				if hasFirstResponse {
+					_, _ = c.Writer.Write([]byte(": CLI-PROXY-API PROCESSING\n\n"))
 					flusher.Flush()
 				}
-			}
-		// Handle errors from the backend.
-		case err, okError := <-errChan:
-			if okError {
-				c.Status(err.StatusCode)
-				_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-				flusher.Flush()
-				cliCancel()
-				return
-			}
-		// Send a keep-alive signal to the client.
-		case <-time.After(500 * time.Millisecond):
-			if hasFirstResponse {
-				_, _ = c.Writer.Write([]byte(": CLI-PROXY-API PROCESSING\n\n"))
-				flusher.Flush()
 			}
 		}
 	}
