@@ -10,7 +10,11 @@ import (
 // ConvertCliToOpenAI translates a single chunk of a streaming response from the
 // backend client format to the OpenAI Server-Sent Events (SSE) format.
 // It returns an empty string if the chunk contains no useful data.
-func ConvertCliToOpenAI(rawJson []byte) string {
+func ConvertCliToOpenAI(rawJson []byte, unixTimestamp int64, isGlAPIKey bool) string {
+	if isGlAPIKey {
+		rawJson, _ = sjson.SetRawBytes(rawJson, "response", rawJson)
+	}
+
 	// Initialize the OpenAI SSE template.
 	template := `{"id":"","object":"chat.completion.chunk","created":12345,"model":"model","choices":[{"index":0,"delta":{"role":null,"content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
 
@@ -22,10 +26,11 @@ func ConvertCliToOpenAI(rawJson []byte) string {
 	// Extract and set the creation timestamp.
 	if createTimeResult := gjson.GetBytes(rawJson, "response.createTime"); createTimeResult.Exists() {
 		t, err := time.Parse(time.RFC3339Nano, createTimeResult.String())
-		unixTimestamp := time.Now().Unix()
 		if err == nil {
 			unixTimestamp = t.Unix()
 		}
+		template, _ = sjson.Set(template, "created", unixTimestamp)
+	} else {
 		template, _ = sjson.Set(template, "created", unixTimestamp)
 	}
 
@@ -90,19 +95,25 @@ func ConvertCliToOpenAI(rawJson []byte) string {
 
 // ConvertCliToOpenAINonStream aggregates response from the backend client
 // convert a single, non-streaming OpenAI-compatible JSON response.
-func ConvertCliToOpenAINonStream(rawJson []byte) string {
+func ConvertCliToOpenAINonStream(rawJson []byte, unixTimestamp int64, isGlAPIKey bool) string {
+	if isGlAPIKey {
+		rawJson, _ = sjson.SetRawBytes(rawJson, "response", rawJson)
+	}
 	template := `{"id":"","object":"chat.completion","created":123456,"model":"model","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
 	if modelVersionResult := gjson.GetBytes(rawJson, "response.modelVersion"); modelVersionResult.Exists() {
 		template, _ = sjson.Set(template, "model", modelVersionResult.String())
 	}
+
 	if createTimeResult := gjson.GetBytes(rawJson, "response.createTime"); createTimeResult.Exists() {
 		t, err := time.Parse(time.RFC3339Nano, createTimeResult.String())
-		unixTimestamp := time.Now().Unix()
 		if err == nil {
 			unixTimestamp = t.Unix()
 		}
 		template, _ = sjson.Set(template, "created", unixTimestamp)
+	} else {
+		template, _ = sjson.Set(template, "created", unixTimestamp)
 	}
+
 	if responseIdResult := gjson.GetBytes(rawJson, "response.responseId"); responseIdResult.Exists() {
 		template, _ = sjson.Set(template, "id", responseIdResult.String())
 	}

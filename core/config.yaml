@@ -8,3 +8,8 @@ quota-exceeded:
 api-keys:
   - "12345"
   - "23456"
+generative-language-api-key:
+  - "AIzaSy...01"
+  - "AIzaSy...02"
+  - "AIzaSy...03"
+  - "AIzaSy...04"

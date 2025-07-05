@@ -258,7 +258,13 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 			cliClient.RequestMutex.Lock()
 		}
 
-		log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
+		isGlAPIKey := false
+		if glAPIKey := cliClient.GetGenerativeLanguageAPIKey(); glAPIKey != "" {
+			log.Debugf("Request use generative language API Key: %s", glAPIKey)
+			isGlAPIKey = true
+		} else {
+			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
+		}
 
 		resp, err := cliClient.SendMessage(cliCtx, rawJson, modelName, contents, tools)
 		if err != nil {
@@ -272,7 +278,7 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 			}
 			break
 		} else {
-			openAIFormat := translator.ConvertCliToOpenAINonStream(resp)
+			openAIFormat := translator.ConvertCliToOpenAINonStream(resp, time.Now().Unix(), isGlAPIKey)
 			if openAIFormat != "" {
 				_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
 				flusher.Flush()
@@ -355,7 +361,13 @@ outLoop:
 			cliClient.RequestMutex.Lock()
 		}
 
-		log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
+		isGlAPIKey := false
+		if glAPIKey := cliClient.GetGenerativeLanguageAPIKey(); glAPIKey != "" {
+			log.Debugf("Request use generative language API Key: %s", glAPIKey)
+			isGlAPIKey = true
+		} else {
+			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
+		}
 		// Send the message and receive response chunks and errors via channels.
 		respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, contents, tools)
 		hasFirstResponse := false
@@ -379,7 +391,7 @@ outLoop:
 				} else {
 					// Convert the chunk to OpenAI format and send it to the client.
 					hasFirstResponse = true
-					openAIFormat := translator.ConvertCliToOpenAI(chunk)
+					openAIFormat := translator.ConvertCliToOpenAI(chunk, time.Now().Unix(), isGlAPIKey)
 					if openAIFormat != "" {
 						_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
 						flusher.Flush()

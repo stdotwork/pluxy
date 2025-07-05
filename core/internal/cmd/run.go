@@ -8,7 +8,11 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/net/proxy"
 	"io/fs"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -62,6 +66,40 @@ func StartService(cfg *config.Config) {
 	})
 	if err != nil {
 		log.Fatalf("Error walking auth directory: %v", err)
+	}
+
+	if len(cfg.GlAPIKey) > 0 {
+		var transport *http.Transport
+		proxyURL, errParse := url.Parse(cfg.ProxyUrl)
+		if errParse == nil {
+			if proxyURL.Scheme == "socks5" {
+				username := proxyURL.User.Username()
+				password, _ := proxyURL.User.Password()
+				proxyAuth := &proxy.Auth{User: username, Password: password}
+				dialer, errSOCKS5 := proxy.SOCKS5("tcp", proxyURL.Host, proxyAuth, proxy.Direct)
+				if errSOCKS5 != nil {
+					log.Fatalf("create SOCKS5 dialer failed: %v", errSOCKS5)
+				}
+				transport = &http.Transport{
+					DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+						return dialer.Dial(network, addr)
+					},
+				}
+			} else if proxyURL.Scheme == "http" || proxyURL.Scheme == "https" {
+				// Handle HTTP/HTTPS proxy.
+				transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+			}
+		}
+
+		for i := 0; i < len(cfg.GlAPIKey); i++ {
+			httpClient := &http.Client{}
+			if transport != nil {
+				httpClient.Transport = transport
+			}
+			log.Debug("Initializing with Generative Language API key...")
+			cliClient := client.NewClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
+			cliClients = append(cliClients, cliClient)
+		}
 	}
 
 	// Create and start the API server with the pool of clients.

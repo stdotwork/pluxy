@@ -20,6 +20,8 @@ type Config struct {
 	ApiKeys []string `yaml:"api-keys"`
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded ConfigQuotaExceeded `yaml:"quota-exceeded"`
+	// GlAPIKey is the API key for the generative language API.
+	GlAPIKey []string `yaml:"generative-language-api-key"`
 }
 
 type ConfigQuotaExceeded struct {

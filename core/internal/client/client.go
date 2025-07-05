@@ -27,6 +27,9 @@ const (
 	codeAssistEndpoint = "https://cloudcode-pa.googleapis.com"
 	apiVersion         = "v1internal"
 	pluginVersion      = "0.1.9"
+
+	glEndPoint   = "https://generativelanguage.googleapis.com/"
+	glApiVersion = "v1beta"
 )
 
 var (
@@ -43,15 +46,21 @@ type Client struct {
 	tokenStorage       *auth.TokenStorage
 	cfg                *config.Config
 	modelQuotaExceeded map[string]*time.Time
+	glAPIKey           string
 }
 
 // NewClient creates a new CLI API client.
-func NewClient(httpClient *http.Client, ts *auth.TokenStorage, cfg *config.Config) *Client {
+func NewClient(httpClient *http.Client, ts *auth.TokenStorage, cfg *config.Config, glAPIKey ...string) *Client {
+	var glKey string
+	if len(glAPIKey) > 0 {
+		glKey = glAPIKey[0]
+	}
 	return &Client{
 		httpClient:         httpClient,
 		tokenStorage:       ts,
 		cfg:                cfg,
 		modelQuotaExceeded: make(map[string]*time.Time),
+		glAPIKey:           glKey,
 	}
 }
 
@@ -80,7 +89,14 @@ func (c *Client) GetEmail() string {
 }
 
 func (c *Client) GetProjectID() string {
-	return c.tokenStorage.ProjectID
+	if c.tokenStorage != nil {
+		return c.tokenStorage.ProjectID
+	}
+	return ""
+}
+
+func (c *Client) GetGenerativeLanguageAPIKey() string {
+	return c.glAPIKey
 }
 
 // SetupUser performs the initial user onboarding and setup.
@@ -235,35 +251,49 @@ func (c *Client) APIRequest(ctx context.Context, endpoint string, body interface
 			return nil, &ErrorMessage{500, fmt.Errorf("failed to marshal request body: %w", err)}
 		}
 	}
+
+	var url string
+	if c.glAPIKey == "" {
+		// Add alt=sse for streaming
+		url = fmt.Sprintf("%s/%s:%s", codeAssistEndpoint, apiVersion, endpoint)
+		if stream {
+			url = url + "?alt=sse"
+		}
+	} else {
+		modelResult := gjson.GetBytes(jsonBody, "model")
+		url = fmt.Sprintf("%s/%s/models/%s:%s", glEndPoint, glApiVersion, modelResult.String(), endpoint)
+		if stream {
+			url = url + "?alt=sse"
+		}
+		jsonBody = []byte(gjson.GetBytes(jsonBody, "request").Raw)
+	}
+
 	// log.Debug(string(jsonBody))
 	reqBody := bytes.NewBuffer(jsonBody)
 
-	// Add alt=sse for streaming
-	url := fmt.Sprintf("%s/%s:%s", codeAssistEndpoint, apiVersion, endpoint)
-	if stream {
-		url = url + "?alt=sse"
-	}
-
 	req, err := http.NewRequestWithContext(ctx, "POST", url, reqBody)
 	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to create request: %w", err)}
-	}
-
-	token, err := c.httpClient.Transport.(*oauth2.Transport).Source.Token()
-	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to get token: %w", err)}
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to create request: %v", err)}
 	}
 
 	// Set headers
 	metadataStr := getClientMetadataString()
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", getUserAgent())
-	req.Header.Set("Client-Metadata", metadataStr)
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
+	if c.glAPIKey == "" {
+		token, errToken := c.httpClient.Transport.(*oauth2.Transport).Source.Token()
+		if errToken != nil {
+			return nil, &ErrorMessage{500, fmt.Errorf("failed to get token: %v", errToken)}
+		}
+		req.Header.Set("User-Agent", getUserAgent())
+		req.Header.Set("Client-Metadata", metadataStr)
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
+	} else {
+		req.Header.Set("x-goog-api-key", c.glAPIKey)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to execute request: %w", err)}
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to execute request: %v", err)}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -293,7 +323,7 @@ func (c *Client) SendMessage(ctx context.Context, rawJson []byte, model string, 
 	request.Tools = tools
 
 	requestBody := map[string]interface{}{
-		"project": c.tokenStorage.ProjectID, // Assuming ProjectID is available
+		"project": c.GetProjectID(), // Assuming ProjectID is available
 		"request": request,
 		"model":   model,
 	}
@@ -337,7 +367,7 @@ func (c *Client) SendMessage(ctx context.Context, rawJson []byte, model string, 
 	// log.Debug(string(byteRequestBody))
 	for {
 		if c.isModelQuotaExceeded(modelName) {
-			if c.cfg.QuotaExceeded.SwitchPreviewModel {
+			if c.cfg.QuotaExceeded.SwitchPreviewModel && c.glAPIKey == "" {
 				modelName = c.getPreviewModel(model)
 				if modelName != "" {
 					log.Debugf("Model %s is quota exceeded. Switch to preview model %s", model, modelName)
@@ -356,7 +386,7 @@ func (c *Client) SendMessage(ctx context.Context, rawJson []byte, model string, 
 			if err.StatusCode == 429 {
 				now := time.Now()
 				c.modelQuotaExceeded[modelName] = &now
-				if c.cfg.QuotaExceeded.SwitchPreviewModel {
+				if c.cfg.QuotaExceeded.SwitchPreviewModel && c.glAPIKey == "" {
 					continue
 				}
 			}
@@ -391,7 +421,7 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 		request.Tools = tools
 
 		requestBody := map[string]interface{}{
-			"project": c.tokenStorage.ProjectID, // Assuming ProjectID is available
+			"project": c.GetProjectID(), // Assuming ProjectID is available
 			"request": request,
 			"model":   model,
 		}
@@ -436,7 +466,7 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 		var stream io.ReadCloser
 		for {
 			if c.isModelQuotaExceeded(modelName) {
-				if c.cfg.QuotaExceeded.SwitchPreviewModel {
+				if c.cfg.QuotaExceeded.SwitchPreviewModel && c.glAPIKey == "" {
 					modelName = c.getPreviewModel(model)
 					if modelName != "" {
 						log.Debugf("Model %s is quota exceeded. Switch to preview model %s", model, modelName)
@@ -456,7 +486,7 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 				if err.StatusCode == 429 {
 					now := time.Now()
 					c.modelQuotaExceeded[modelName] = &now
-					if c.cfg.QuotaExceeded.SwitchPreviewModel {
+					if c.cfg.QuotaExceeded.SwitchPreviewModel && c.glAPIKey == "" {
 						continue
 					}
 				}
