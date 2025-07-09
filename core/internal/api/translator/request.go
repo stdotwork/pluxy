@@ -12,7 +12,7 @@ import (
 // PrepareRequest translates a raw JSON request from an OpenAI-compatible format
 // to the internal format expected by the backend client. It parses messages,
 // roles, content types (text, image, file), and tool calls.
-func PrepareRequest(rawJson []byte) (string, []client.Content, []client.ToolDeclaration) {
+func PrepareRequest(rawJson []byte) (string, *client.Content, []client.Content, []client.ToolDeclaration) {
 	// Extract the model name from the request, defaulting to "gemini-2.5-pro".
 	modelName := "gemini-2.5-pro"
 	modelResult := gjson.GetBytes(rawJson, "model")
@@ -22,6 +22,7 @@ func PrepareRequest(rawJson []byte) (string, []client.Content, []client.ToolDecl
 
 	// Process the array of messages.
 	contents := make([]client.Content, 0)
+	var systemInstruction *client.Content
 	messagesResult := gjson.GetBytes(rawJson, "messages")
 	if messagesResult.IsArray() {
 		messagesResults := messagesResult.Array()
@@ -37,13 +38,11 @@ func PrepareRequest(rawJson []byte) (string, []client.Content, []client.ToolDecl
 			// System messages are converted to a user message followed by a model's acknowledgment.
 			case "system":
 				if contentResult.Type == gjson.String {
-					contents = append(contents, client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.String()}}})
-					contents = append(contents, client.Content{Role: "model", Parts: []client.Part{{Text: "Understood. I will follow these instructions and use my tools to assist you."}}})
+					systemInstruction = &client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.String()}}}
 				} else if contentResult.IsObject() {
 					// Handle object-based system messages.
 					if contentResult.Get("type").String() == "text" {
-						contents = append(contents, client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.Get("text").String()}}})
-						contents = append(contents, client.Content{Role: "model", Parts: []client.Part{{Text: "Understood. I will follow these instructions and use my tools to assist you."}}})
+						systemInstruction = &client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.Get("text").String()}}}
 					}
 				}
 			// User messages can contain simple text or a multi-part body.
@@ -159,5 +158,5 @@ func PrepareRequest(rawJson []byte) (string, []client.Content, []client.ToolDecl
 		tools = make([]client.ToolDeclaration, 0)
 	}
 
-	return modelName, contents, tools
+	return modelName, systemInstruction, contents, tools
 }

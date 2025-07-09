@@ -64,9 +64,10 @@ type FunctionResponse struct {
 
 // GenerateContentRequest is the top-level request structure for the streamGenerateContent endpoint.
 type GenerateContentRequest struct {
-	Contents         []Content         `json:"contents"`
-	Tools            []ToolDeclaration `json:"tools,omitempty"`
-	GenerationConfig `json:"generationConfig"`
+	SystemInstruction *Content          `json:"systemInstruction,omitempty"`
+	Contents          []Content         `json:"contents"`
+	Tools             []ToolDeclaration `json:"tools,omitempty"`
+	GenerationConfig  `json:"generationConfig"`
 }
 
 // GenerationConfig defines parameters that control the model's generation behavior.
