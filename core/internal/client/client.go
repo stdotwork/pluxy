@@ -212,6 +212,7 @@ func (c *Client) makeAPIRequest(ctx context.Context, endpoint, method string, bo
 	metadataStr := getClientMetadataString()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", getUserAgent())
+	req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
 	req.Header.Set("Client-Metadata", metadataStr)
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
 
@@ -291,6 +292,7 @@ func (c *Client) APIRequest(ctx context.Context, endpoint string, body interface
 			return nil, &ErrorMessage{500, fmt.Errorf("failed to get token: %v", errToken)}
 		}
 		req.Header.Set("User-Agent", getUserAgent())
+		req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
 		req.Header.Set("Client-Metadata", metadataStr)
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
 	} else {
@@ -781,10 +783,10 @@ func (c *Client) SaveTokenToFile() error {
 // such as IDE type, platform, and plugin version.
 func getClientMetadata() map[string]string {
 	return map[string]string{
-		"ideType":       "IDE_UNSPECIFIED",
-		"platform":      getPlatform(),
-		"pluginType":    "GEMINI",
-		"pluginVersion": pluginVersion,
+		"ideType":    "IDE_UNSPECIFIED",
+		"platform":   "PLATFORM_UNSPECIFIED",
+		"pluginType": "GEMINI",
+		// "pluginVersion": pluginVersion,
 	}
 }
 
@@ -801,7 +803,8 @@ func getClientMetadataString() string {
 
 // getUserAgent constructs the User-Agent string for HTTP requests.
 func getUserAgent() string {
-	return fmt.Sprintf("GeminiCLI/%s (%s; %s)", pluginVersion, runtime.GOOS, runtime.GOARCH)
+	// return fmt.Sprintf("GeminiCLI/%s (%s; %s)", pluginVersion, runtime.GOOS, runtime.GOARCH)
+	return "google-api-nodejs-client/9.15.1"
 }
 
 // getPlatform determines the operating system and architecture and formats
