@@ -24,6 +24,39 @@ func PrepareRequest(rawJson []byte) (string, *client.Content, []client.Content, 
 	contents := make([]client.Content, 0)
 	var systemInstruction *client.Content
 	messagesResult := gjson.GetBytes(rawJson, "messages")
+
+	toolItems := make(map[string]*client.FunctionResponse)
+	if messagesResult.IsArray() {
+		messagesResults := messagesResult.Array()
+		for i := 0; i < len(messagesResults); i++ {
+			messageResult := messagesResults[i]
+			roleResult := messageResult.Get("role")
+			if roleResult.Type != gjson.String {
+				continue
+			}
+			contentResult := messageResult.Get("content")
+			if roleResult.String() == "tool" {
+				toolCallID := messageResult.Get("tool_call_id").String()
+				if toolCallID != "" {
+					var responseData string
+					if contentResult.Type == gjson.String {
+						responseData = contentResult.String()
+					} else if contentResult.IsObject() && contentResult.Get("type").String() == "text" {
+						responseData = contentResult.Get("text").String()
+					}
+
+					// drop the timestamp from the tool call ID
+					toolCallIDs := strings.Split(toolCallID, "-")
+					strings.Join(toolCallIDs, "-")
+					newToolCallID := strings.Join(toolCallIDs[:len(toolCallIDs)-1], "-")
+
+					functionResponse := client.FunctionResponse{Name: newToolCallID, Response: map[string]interface{}{"result": responseData}}
+					toolItems[toolCallID] = &functionResponse
+				}
+			}
+		}
+	}
+
 	if messagesResult.IsArray() {
 		messagesResults := messagesResult.Array()
 		for i := 0; i < len(messagesResults); i++ {
@@ -97,39 +130,43 @@ func PrepareRequest(rawJson []byte) (string, *client.Content, []client.Content, 
 					contents = append(contents, client.Content{Role: "model", Parts: []client.Part{{Text: contentResult.String()}}})
 				} else if !contentResult.Exists() || contentResult.Type == gjson.Null {
 					// Handle tool calls made by the assistant.
+					functionIDs := make([]string, 0)
 					toolCallsResult := messageResult.Get("tool_calls")
 					if toolCallsResult.IsArray() {
+						parts := make([]client.Part, 0)
 						tcsResult := toolCallsResult.Array()
 						for j := 0; j < len(tcsResult); j++ {
 							tcResult := tcsResult[j]
+
+							functionID := tcResult.Get("id").String()
+							functionIDs = append(functionIDs, functionID)
+
 							functionName := tcResult.Get("function.name").String()
 							functionArgs := tcResult.Get("function.arguments").String()
 							var args map[string]any
 							if err := json.Unmarshal([]byte(functionArgs), &args); err == nil {
-								contents = append(contents, client.Content{
-									Role: "model", Parts: []client.Part{{
-										FunctionCall: &client.FunctionCall{
-											Name: functionName,
-											Args: args,
-										},
-									}},
+								parts = append(parts, client.Part{
+									FunctionCall: &client.FunctionCall{
+										Name: functionName,
+										Args: args,
+									},
 								})
 							}
 						}
+						if len(parts) > 0 {
+							contents = append(contents, client.Content{
+								Role: "model", Parts: parts,
+							})
+
+							toolParts := make([]client.Part, 0)
+							for _, functionID := range functionIDs {
+								if functionResponse, ok := toolItems[functionID]; ok {
+									toolParts = append(toolParts, client.Part{FunctionResponse: functionResponse})
+								}
+							}
+							contents = append(contents, client.Content{Role: "tool", Parts: toolParts})
+						}
 					}
-				}
-			// Tool messages contain the output of a tool call.
-			case "tool":
-				toolCallID := messageResult.Get("tool_call_id").String()
-				if toolCallID != "" {
-					var responseData string
-					if contentResult.Type == gjson.String {
-						responseData = contentResult.String()
-					} else if contentResult.IsObject() && contentResult.Get("type").String() == "text" {
-						responseData = contentResult.Get("text").String()
-					}
-					functionResponse := client.FunctionResponse{Name: toolCallID, Response: map[string]interface{}{"result": responseData}}
-					contents = append(contents, client.Content{Role: "tool", Parts: []client.Part{{FunctionResponse: &functionResponse}}})
 				}
 			}
 		}

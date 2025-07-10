@@ -1,6 +1,7 @@
 package translator
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -62,32 +63,40 @@ func ConvertCliToOpenAI(rawJson []byte, unixTimestamp int64, isGlAPIKey bool) st
 	}
 
 	// Process the main content part of the response.
-	partResult := gjson.GetBytes(rawJson, "response.candidates.0.content.parts.0")
-	partTextResult := partResult.Get("text")
-	functionCallResult := partResult.Get("functionCall")
+	partsResult := gjson.GetBytes(rawJson, "response.candidates.0.content.parts")
+	if partsResult.IsArray() {
+		partResults := partsResult.Array()
+		for i := 0; i < len(partResults); i++ {
+			partResult := partResults[i]
+			partTextResult := partResult.Get("text")
+			functionCallResult := partResult.Get("functionCall")
 
-	if partTextResult.Exists() {
-		// Handle text content, distinguishing between regular content and reasoning/thoughts.
-		if partResult.Get("thought").Bool() {
-			template, _ = sjson.Set(template, "choices.0.delta.reasoning_content", partTextResult.String())
-		} else {
-			template, _ = sjson.Set(template, "choices.0.delta.content", partTextResult.String())
+			if partTextResult.Exists() {
+				// Handle text content, distinguishing between regular content and reasoning/thoughts.
+				if partResult.Get("thought").Bool() {
+					template, _ = sjson.Set(template, "choices.0.delta.reasoning_content", partTextResult.String())
+				} else {
+					template, _ = sjson.Set(template, "choices.0.delta.content", partTextResult.String())
+				}
+				template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
+			} else if functionCallResult.Exists() {
+				// Handle function call content.
+				toolCallsResult := gjson.Get(template, "choices.0.delta.tool_calls")
+				if !toolCallsResult.Exists() || !toolCallsResult.IsArray() {
+					template, _ = sjson.SetRaw(template, "choices.0.delta.tool_calls", `[]`)
+				}
+
+				functionCallTemplate := `{"id": "","type": "function","function": {"name": "","arguments": ""}}`
+				fcName := functionCallResult.Get("name").String()
+				functionCallTemplate, _ = sjson.Set(functionCallTemplate, "id", fmt.Sprintf("%s-%d", fcName, time.Now().UnixNano()))
+				functionCallTemplate, _ = sjson.Set(functionCallTemplate, "function.name", fcName)
+				if fcArgsResult := functionCallResult.Get("args"); fcArgsResult.Exists() {
+					functionCallTemplate, _ = sjson.Set(functionCallTemplate, "function.arguments", fcArgsResult.Raw)
+				}
+				template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
+				template, _ = sjson.SetRaw(template, "choices.0.message.tool_calls.-1", functionCallTemplate)
+			}
 		}
-		template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
-	} else if functionCallResult.Exists() {
-		// Handle function call content.
-		functionCallTemplate := `[{"id": "","type": "function","function": {"name": "","arguments": ""}}]`
-		fcName := functionCallResult.Get("name").String()
-		functionCallTemplate, _ = sjson.Set(functionCallTemplate, "0.id", fcName)
-		functionCallTemplate, _ = sjson.Set(functionCallTemplate, "0.function.name", fcName)
-		if fcArgsResult := functionCallResult.Get("args"); fcArgsResult.Exists() {
-			functionCallTemplate, _ = sjson.Set(functionCallTemplate, "0.function.arguments", fcArgsResult.Raw)
-		}
-		template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
-		template, _ = sjson.SetRaw(template, "choices.0.delta.tool_calls", functionCallTemplate)
-	} else {
-		// If no usable content is found, return an empty string.
-		return ""
 	}
 
 	return template
@@ -163,7 +172,7 @@ func ConvertCliToOpenAINonStream(rawJson []byte, unixTimestamp int64, isGlAPIKey
 				}
 				functionCallItemTemplate := `{"id": "","type": "function","function": {"name": "","arguments": ""}}`
 				fcName := functionCallResult.Get("name").String()
-				functionCallItemTemplate, _ = sjson.Set(functionCallItemTemplate, "id", fcName)
+				functionCallItemTemplate, _ = sjson.Set(functionCallItemTemplate, "id", fmt.Sprintf("%s-%d", fcName, time.Now().UnixNano()))
 				functionCallItemTemplate, _ = sjson.Set(functionCallItemTemplate, "function.name", fcName)
 				if fcArgsResult := functionCallResult.Get("args"); fcArgsResult.Exists() {
 					functionCallItemTemplate, _ = sjson.Set(functionCallItemTemplate, "function.arguments", fcArgsResult.Raw)
