@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"github.com/luispater/CLIProxyAPI/internal/api/translator"
@@ -9,12 +8,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
-	"golang.org/x/net/proxy"
-	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"sync"
 	"time"
 
@@ -171,6 +165,48 @@ func (h *APIHandlers) Models(c *gin.Context) {
 	})
 }
 
+func (h *APIHandlers) getClient(modelName string) (*client.Client, *client.ErrorMessage) {
+	var cliClient *client.Client
+
+	// Lock the mutex to update the last used client index
+	mutex.Lock()
+	startIndex := lastUsedClientIndex
+	currentIndex := (startIndex + 1) % len(h.cliClients)
+	lastUsedClientIndex = currentIndex
+	mutex.Unlock()
+
+	// Reorder the client to start from the last used index
+	reorderedClients := make([]*client.Client, 0)
+	for i := 0; i < len(h.cliClients); i++ {
+		cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
+		if cliClient.IsModelQuotaExceeded(modelName) {
+			log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
+			cliClient = nil
+			continue
+		}
+		reorderedClients = append(reorderedClients, cliClient)
+	}
+
+	if len(reorderedClients) == 0 {
+		return nil, &client.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName)}
+	}
+
+	locked := false
+	for i := 0; i < len(reorderedClients); i++ {
+		cliClient = reorderedClients[i]
+		if cliClient.RequestMutex.TryLock() {
+			locked = true
+			break
+		}
+	}
+	if !locked {
+		cliClient = h.cliClients[0]
+		cliClient.RequestMutex.Lock()
+	}
+
+	return cliClient, nil
+}
+
 // ChatCompletions handles the /v1/chat/completions endpoint.
 // It determines whether the request is for a streaming or non-streaming response
 // and calls the appropriate handler.
@@ -212,43 +248,13 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 	}()
 
 	for {
-		// Lock the mutex to update the last used client index
-		mutex.Lock()
-		startIndex := lastUsedClientIndex
-		currentIndex := (startIndex + 1) % len(h.cliClients)
-		lastUsedClientIndex = currentIndex
-		mutex.Unlock()
-
-		// Reorder the client to start from the last used index
-		reorderedClients := make([]*client.Client, 0)
-		for i := 0; i < len(h.cliClients); i++ {
-			cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
-			if cliClient.IsModelQuotaExceeded(modelName) {
-				log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
-				cliClient = nil
-				continue
-			}
-			reorderedClients = append(reorderedClients, cliClient)
-		}
-
-		if len(reorderedClients) == 0 {
-			c.Status(429)
-			_, _ = c.Writer.Write([]byte(fmt.Sprintf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName)))
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.getClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
 			cliCancel()
 			return
-		}
-
-		locked := false
-		for i := 0; i < len(reorderedClients); i++ {
-			cliClient = reorderedClients[i]
-			if cliClient.RequestMutex.TryLock() {
-				locked = true
-				break
-			}
-		}
-		if !locked {
-			cliClient = h.cliClients[0]
-			cliClient.RequestMutex.Lock()
 		}
 
 		isGlAPIKey := false
@@ -312,44 +318,14 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 
 outLoop:
 	for {
-		// Lock the mutex to update the last used client index
-		mutex.Lock()
-		startIndex := lastUsedClientIndex
-		currentIndex := (startIndex + 1) % len(h.cliClients)
-		lastUsedClientIndex = currentIndex
-		mutex.Unlock()
-
-		// Reorder the client to start from the last used index
-		reorderedClients := make([]*client.Client, 0)
-		for i := 0; i < len(h.cliClients); i++ {
-			cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
-			if cliClient.IsModelQuotaExceeded(modelName) {
-				log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
-				cliClient = nil
-				continue
-			}
-			reorderedClients = append(reorderedClients, cliClient)
-		}
-
-		if len(reorderedClients) == 0 {
-			c.Status(429)
-			_, _ = fmt.Fprint(c.Writer, fmt.Sprintf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName))
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.getClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
 			flusher.Flush()
 			cliCancel()
 			return
-		}
-
-		locked := false
-		for i := 0; i < len(reorderedClients); i++ {
-			cliClient = reorderedClients[i]
-			if cliClient.RequestMutex.TryLock() {
-				locked = true
-				break
-			}
-		}
-		if !locked {
-			cliClient = h.cliClients[0]
-			cliClient.RequestMutex.Lock()
 		}
 
 		isGlAPIKey := false
@@ -408,298 +384,6 @@ outLoop:
 					flusher.Flush()
 				}
 			}
-		}
-	}
-}
-
-func (h *APIHandlers) Internal(c *gin.Context) {
-	rawJson, _ := c.GetRawData()
-	requestRawURI := c.Request.URL.Path
-	if requestRawURI == "/v1internal:generateContent" {
-		h.internalGenerateContent(c, rawJson)
-	} else if requestRawURI == "/v1internal:streamGenerateContent" {
-		h.internalStreamGenerateContent(c, rawJson)
-	} else {
-		reqBody := bytes.NewBuffer(rawJson)
-		req, err := http.NewRequest("POST", fmt.Sprintf("https://cloudcode-pa.googleapis.com%s", c.Request.URL.RequestURI()), reqBody)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error: ErrorDetail{
-					Message: fmt.Sprintf("Invalid request: %v", err),
-					Type:    "invalid_request_error",
-				},
-			})
-			return
-		}
-		for key, value := range c.Request.Header {
-			req.Header[key] = value
-		}
-
-		var transport *http.Transport
-		proxyURL, errParse := url.Parse(h.cfg.ProxyUrl)
-		if errParse == nil {
-			if proxyURL.Scheme == "socks5" {
-				username := proxyURL.User.Username()
-				password, _ := proxyURL.User.Password()
-				proxyAuth := &proxy.Auth{User: username, Password: password}
-				dialer, errSOCKS5 := proxy.SOCKS5("tcp", proxyURL.Host, proxyAuth, proxy.Direct)
-				if errSOCKS5 != nil {
-					log.Fatalf("create SOCKS5 dialer failed: %v", errSOCKS5)
-				}
-				transport = &http.Transport{
-					DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-						return dialer.Dial(network, addr)
-					},
-				}
-			} else if proxyURL.Scheme == "http" || proxyURL.Scheme == "https" {
-				transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
-			}
-		}
-		httpClient := &http.Client{}
-		if transport != nil {
-			httpClient.Transport = transport
-		}
-
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error: ErrorDetail{
-					Message: fmt.Sprintf("Invalid request: %v", err),
-					Type:    "invalid_request_error",
-				},
-			})
-			return
-		}
-
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			defer func() {
-				if err = resp.Body.Close(); err != nil {
-					log.Printf("warn: failed to close response body: %v", err)
-				}
-			}()
-			bodyBytes, _ := io.ReadAll(resp.Body)
-
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Error: ErrorDetail{
-					Message: string(bodyBytes),
-					Type:    "invalid_request_error",
-				},
-			})
-			return
-		}
-
-		defer func() {
-			_ = resp.Body.Close()
-		}()
-
-		for key, value := range resp.Header {
-			c.Header(key, value[0])
-		}
-		output, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Errorf("Failed to read response body: %v", err)
-			return
-		}
-		_, _ = c.Writer.Write(output)
-	}
-}
-
-func (h *APIHandlers) internalStreamGenerateContent(c *gin.Context, rawJson []byte) {
-	// Get the http.Flusher interface to manually flush the response.
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error: ErrorDetail{
-				Message: "Streaming not supported",
-				Type:    "server_error",
-			},
-		})
-		return
-	}
-
-	modelResult := gjson.GetBytes(rawJson, "model")
-	modelName := modelResult.String()
-
-	cliCtx, cliCancel := context.WithCancel(context.Background())
-	var cliClient *client.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		if cliClient != nil {
-			cliClient.RequestMutex.Unlock()
-		}
-	}()
-
-outLoop:
-	for {
-		// Lock the mutex to update the last used client index
-		mutex.Lock()
-		startIndex := lastUsedClientIndex
-		currentIndex := (startIndex + 1) % len(h.cliClients)
-		lastUsedClientIndex = currentIndex
-		mutex.Unlock()
-
-		// Reorder the client to start from the last used index
-		reorderedClients := make([]*client.Client, 0)
-		for i := 0; i < len(h.cliClients); i++ {
-			cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
-			if cliClient.IsModelQuotaExceeded(modelName) {
-				log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
-				cliClient = nil
-				continue
-			}
-			reorderedClients = append(reorderedClients, cliClient)
-		}
-
-		if len(reorderedClients) == 0 {
-			c.Status(429)
-			_, _ = fmt.Fprint(c.Writer, fmt.Sprintf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName))
-			flusher.Flush()
-			cliCancel()
-			return
-		}
-
-		locked := false
-		for i := 0; i < len(reorderedClients); i++ {
-			cliClient = reorderedClients[i]
-			if cliClient.RequestMutex.TryLock() {
-				locked = true
-				break
-			}
-		}
-		if !locked {
-			cliClient = h.cliClients[0]
-			cliClient.RequestMutex.Lock()
-		}
-
-		if glAPIKey := cliClient.GetGenerativeLanguageAPIKey(); glAPIKey != "" {
-			log.Debugf("Request use generative language API Key: %s", glAPIKey)
-		} else {
-			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
-		}
-		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJson)
-		hasFirstResponse := false
-		for {
-			select {
-			// Handle client disconnection.
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("Client disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request.
-					return
-				}
-			// Process incoming response chunks.
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					cliCancel()
-					return
-				} else {
-					hasFirstResponse = true
-					if cliClient.GetGenerativeLanguageAPIKey() != "" {
-						chunk, _ = sjson.SetRawBytes(chunk, "response", chunk)
-					}
-					_, _ = c.Writer.Write([]byte("data: "))
-					_, _ = c.Writer.Write(chunk)
-					_, _ = c.Writer.Write([]byte("\n\n"))
-					flusher.Flush()
-				}
-			// Handle errors from the backend.
-			case err, okError := <-errChan:
-				if okError {
-					if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
-						continue outLoop
-					} else {
-						c.Status(err.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						flusher.Flush()
-						cliCancel()
-					}
-					return
-				}
-			// Send a keep-alive signal to the client.
-			case <-time.After(500 * time.Millisecond):
-				if hasFirstResponse {
-					_, _ = c.Writer.Write([]byte("\n"))
-					flusher.Flush()
-				}
-			}
-		}
-	}
-}
-
-func (h *APIHandlers) internalGenerateContent(c *gin.Context, rawJson []byte) {
-	c.Header("Content-Type", "application/json")
-
-	modelResult := gjson.GetBytes(rawJson, "model")
-	modelName := modelResult.String()
-	cliCtx, cliCancel := context.WithCancel(context.Background())
-	var cliClient *client.Client
-	defer func() {
-		if cliClient != nil {
-			cliClient.RequestMutex.Unlock()
-		}
-	}()
-
-	for {
-		// Lock the mutex to update the last used client index
-		mutex.Lock()
-		startIndex := lastUsedClientIndex
-		currentIndex := (startIndex + 1) % len(h.cliClients)
-		lastUsedClientIndex = currentIndex
-		mutex.Unlock()
-
-		// Reorder the client to start from the last used index
-		reorderedClients := make([]*client.Client, 0)
-		for i := 0; i < len(h.cliClients); i++ {
-			cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
-			if cliClient.IsModelQuotaExceeded(modelName) {
-				log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
-				cliClient = nil
-				continue
-			}
-			reorderedClients = append(reorderedClients, cliClient)
-		}
-
-		if len(reorderedClients) == 0 {
-			c.Status(429)
-			_, _ = c.Writer.Write([]byte(fmt.Sprintf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName)))
-			cliCancel()
-			return
-		}
-
-		locked := false
-		for i := 0; i < len(reorderedClients); i++ {
-			cliClient = reorderedClients[i]
-			if cliClient.RequestMutex.TryLock() {
-				locked = true
-				break
-			}
-		}
-		if !locked {
-			cliClient = h.cliClients[0]
-			cliClient.RequestMutex.Lock()
-		}
-
-		if glAPIKey := cliClient.GetGenerativeLanguageAPIKey(); glAPIKey != "" {
-			log.Debugf("Request use generative language API Key: %s", glAPIKey)
-		} else {
-			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
-		}
-
-		resp, err := cliClient.SendRawMessage(cliCtx, rawJson)
-		if err != nil {
-			if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
-				continue
-			} else {
-				c.Status(err.StatusCode)
-				_, _ = c.Writer.Write([]byte(err.Error.Error()))
-				cliCancel()
-			}
-			break
-		} else {
-			_, _ = c.Writer.Write(resp)
-			cliCancel()
-			break
 		}
 	}
 }

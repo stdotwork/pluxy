@@ -81,7 +81,7 @@ func (s *Server) setupRoutes() {
 			},
 		})
 	})
-	s.engine.POST("/v1internal:method", s.handlers.Internal)
+	s.engine.POST("/v1internal:method", s.handlers.CLIHandler)
 
 }
 
