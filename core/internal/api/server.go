@@ -70,6 +70,14 @@ func (s *Server) setupRoutes() {
 		v1.POST("/chat/completions", s.handlers.ChatCompletions)
 	}
 
+	// Gemini compatible API routes
+	v1beta := s.engine.Group("/v1beta")
+	v1beta.Use(AuthMiddleware(s.cfg))
+	{
+		v1beta.GET("/models", s.handlers.Models)
+		v1beta.POST("/models/:action", s.handlers.GeminiHandler)
+	}
+
 	// Root endpoint
 	s.engine.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -140,7 +148,8 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 
 		// Get the Authorization header
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		authHeaderGoogle := c.GetHeader("X-Goog-Api-Key")
+		if authHeader == "" && authHeaderGoogle == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "Missing API key",
 			})
@@ -159,7 +168,7 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		// Find the API key in the in-memory list
 		var foundKey string
 		for i := range cfg.ApiKeys {
-			if cfg.ApiKeys[i] == apiKey {
+			if cfg.ApiKeys[i] == apiKey || cfg.ApiKeys[i] == authHeaderGoogle {
 				foundKey = cfg.ApiKeys[i]
 				break
 			}

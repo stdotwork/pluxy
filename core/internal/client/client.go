@@ -311,6 +311,7 @@ func (c *Client) APIRequest(ctx context.Context, endpoint string, body interface
 			}
 		}()
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		// log.Debug(string(jsonBody))
 		return nil, &ErrorMessage{resp.StatusCode, fmt.Errorf(string(bodyBytes))}
 	}
 
@@ -534,7 +535,9 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 
 // SendRawMessage handles a single conversational turn, including tool calls.
 func (c *Client) SendRawMessage(ctx context.Context, rawJson []byte) ([]byte, *ErrorMessage) {
-	rawJson, _ = sjson.SetBytes(rawJson, "project", c.GetProjectID())
+	if c.glAPIKey == "" {
+		rawJson, _ = sjson.SetBytes(rawJson, "project", c.GetProjectID())
+	}
 
 	modelResult := gjson.GetBytes(rawJson, "model")
 	model := modelResult.String()
@@ -584,7 +587,9 @@ func (c *Client) SendRawMessageStream(ctx context.Context, rawJson []byte) (<-ch
 		defer close(errChan)
 		defer close(dataChan)
 
-		rawJson, _ = sjson.SetBytes(rawJson, "project", c.GetProjectID())
+		if c.glAPIKey == "" {
+			rawJson, _ = sjson.SetBytes(rawJson, "project", c.GetProjectID())
+		}
 
 		modelResult := gjson.GetBytes(rawJson, "model")
 		model := modelResult.String()
