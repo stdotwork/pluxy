@@ -12,10 +12,21 @@ import (
 	"github.com/tidwall/sjson"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
 func (h *APIHandlers) CLIHandler(c *gin.Context) {
+	if !strings.HasPrefix(c.Request.RemoteAddr, "127.0.0.1:") {
+		c.JSON(http.StatusForbidden, ErrorResponse{
+			Error: ErrorDetail{
+				Message: "CLI reply only allow local access",
+				Type:    "forbidden",
+			},
+		})
+		return
+	}
+
 	rawJson, _ := c.GetRawData()
 	requestRawURI := c.Request.URL.Path
 	if requestRawURI == "/v1internal:generateContent" {
