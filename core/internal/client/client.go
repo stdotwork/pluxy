@@ -412,124 +412,184 @@ func (c *Client) SendMessage(ctx context.Context, rawJson []byte, model string, 
 	}
 }
 
-// SendMessageStream handles a single conversational turn, including tool calls.
-func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model string, systemInstruction *Content, contents []Content, tools []ToolDeclaration) (<-chan []byte, <-chan *ErrorMessage) {
+// SendMessageStream handles streaming conversational turns with comprehensive parameter management.
+// This function implements a sophisticated streaming system that supports tool calls, reasoning modes,
+// quota management, and automatic model fallback. It returns two channels for asynchronous communication:
+// one for streaming response data and another for error handling.
+func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model string, systemInstruction *Content, contents []Content, tools []ToolDeclaration, includeThoughts ...bool) (<-chan []byte, <-chan *ErrorMessage) {
+	// Define the data prefix used in Server-Sent Events streaming format
 	dataTag := []byte("data: ")
+
+	// Create channels for asynchronous communication
+	// errChan: delivers error messages during streaming
+	// dataChan: delivers response data chunks
 	errChan := make(chan *ErrorMessage)
 	dataChan := make(chan []byte)
+
+	// Launch a goroutine to handle the streaming process asynchronously
+	// This allows the function to return immediately while processing continues in the background
 	go func() {
+		// Ensure channels are properly closed when the goroutine exits
 		defer close(errChan)
 		defer close(dataChan)
 
+		// Configure thinking/reasoning capabilities
+		// Default to including thoughts unless explicitly disabled
+		includeThoughtsFlag := true
+		if len(includeThoughts) > 0 {
+			includeThoughtsFlag = includeThoughts[0]
+		}
+
+		// Build the base request structure for the Gemini API
+		// This includes conversation contents and generation configuration
 		request := GenerateContentRequest{
 			Contents: contents,
 			GenerationConfig: GenerationConfig{
 				ThinkingConfig: GenerationConfigThinkingConfig{
-					IncludeThoughts: true,
+					IncludeThoughts: includeThoughtsFlag,
 				},
 			},
 		}
 
+		// Add system instructions if provided
+		// System instructions guide the AI's behavior and response style
 		request.SystemInstruction = systemInstruction
 
+		// Add available tools for function calling capabilities
+		// Tools allow the AI to perform actions beyond text generation
 		request.Tools = tools
 
+		// Construct the complete request body with project context
+		// The project ID is essential for proper API routing and billing
 		requestBody := map[string]interface{}{
-			"project": c.GetProjectID(), // Assuming ProjectID is available
+			"project": c.GetProjectID(), // Project ID for API routing and quota management
 			"request": request,
 			"model":   model,
 		}
 
+		// Serialize the request body to JSON for API transmission
 		byteRequestBody, _ := json.Marshal(requestBody)
 
-		// log.Debug(string(byteRequestBody))
-
+		// Parse and configure reasoning effort levels from the original request
+		// This maps Claude-style reasoning effort parameters to Gemini's thinking budget system
 		reasoningEffortResult := gjson.GetBytes(rawJson, "reasoning_effort")
 		if reasoningEffortResult.String() == "none" {
+			// Disable thinking entirely for fastest responses
 			byteRequestBody, _ = sjson.DeleteBytes(byteRequestBody, "request.generationConfig.thinkingConfig.include_thoughts")
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.thinkingConfig.thinkingBudget", 0)
 		} else if reasoningEffortResult.String() == "auto" {
+			// Let the model decide the appropriate thinking budget automatically
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
 		} else if reasoningEffortResult.String() == "low" {
+			// Minimal thinking for simple tasks (1KB thinking budget)
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.thinkingConfig.thinkingBudget", 1024)
 		} else if reasoningEffortResult.String() == "medium" {
+			// Moderate thinking for complex tasks (8KB thinking budget)
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.thinkingConfig.thinkingBudget", 8192)
 		} else if reasoningEffortResult.String() == "high" {
+			// Maximum thinking for very complex tasks (24KB thinking budget)
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.thinkingConfig.thinkingBudget", 24576)
 		} else {
+			// Default to automatic thinking budget if no specific level is provided
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
 		}
 
+		// Configure temperature parameter for response randomness control
+		// Temperature affects the creativity vs consistency trade-off in responses
 		temperatureResult := gjson.GetBytes(rawJson, "temperature")
 		if temperatureResult.Exists() && temperatureResult.Type == gjson.Number {
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.temperature", temperatureResult.Num)
 		}
 
+		// Configure top-p parameter for nucleus sampling
+		// Controls the cumulative probability threshold for token selection
 		topPResult := gjson.GetBytes(rawJson, "top_p")
 		if topPResult.Exists() && topPResult.Type == gjson.Number {
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.topP", topPResult.Num)
 		}
 
+		// Configure top-k parameter for limiting token candidates
+		// Restricts the model to consider only the top K most likely tokens
 		topKResult := gjson.GetBytes(rawJson, "top_k")
 		if topKResult.Exists() && topKResult.Type == gjson.Number {
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.topK", topKResult.Num)
 		}
 
-		// log.Debug(string(byteRequestBody))
+		// Initialize model name for quota management and potential fallback
 		modelName := model
 		var stream io.ReadCloser
+
+		// Quota management and model fallback loop
+		// This loop handles quota exceeded scenarios and automatic model switching
 		for {
+			// Check if the current model has exceeded its quota
 			if c.isModelQuotaExceeded(modelName) {
+				// Attempt to switch to a preview model if configured and using account auth
 				if c.cfg.QuotaExceeded.SwitchPreviewModel && c.glAPIKey == "" {
 					modelName = c.getPreviewModel(model)
 					if modelName != "" {
 						log.Debugf("Model %s is quota exceeded. Switch to preview model %s", model, modelName)
+						// Update the request body with the new model name
 						byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "model", modelName)
-						continue
+						continue // Retry with the preview model
 					}
 				}
+				// If no fallback is available, return a quota exceeded error
 				errChan <- &ErrorMessage{
 					StatusCode: 429,
 					Error:      fmt.Errorf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, model),
 				}
 				return
 			}
+
+			// Attempt to establish a streaming connection with the API
 			var err *ErrorMessage
 			stream, err = c.APIRequest(ctx, "streamGenerateContent", byteRequestBody, true)
 			if err != nil {
+				// Handle quota exceeded errors by marking the model and potentially retrying
 				if err.StatusCode == 429 {
 					now := time.Now()
-					c.modelQuotaExceeded[modelName] = &now
+					c.modelQuotaExceeded[modelName] = &now // Mark model as quota exceeded
+					// If preview model switching is enabled, retry the loop
 					if c.cfg.QuotaExceeded.SwitchPreviewModel && c.glAPIKey == "" {
 						continue
 					}
 				}
+				// Forward other errors to the error channel
 				errChan <- err
 				return
 			}
+			// Clear any previous quota exceeded status for this model
 			delete(c.modelQuotaExceeded, modelName)
-			break
+			break // Successfully established connection, exit the retry loop
 		}
 
+		// Process the streaming response using a scanner
+		// This handles the Server-Sent Events format from the API
 		scanner := bufio.NewScanner(stream)
 		for scanner.Scan() {
 			line := scanner.Bytes()
-			// log.Printf("Received stream chunk: %s", line)
+			// Filter and forward only data lines (those prefixed with "data: ")
+			// This extracts the actual JSON content from the SSE format
 			if bytes.HasPrefix(line, dataTag) {
-				dataChan <- line[6:]
+				dataChan <- line[6:] // Remove "data: " prefix and send the JSON content
 			}
 		}
 
+		// Handle any scanning errors that occurred during stream processing
 		if errScanner := scanner.Err(); errScanner != nil {
-			// log.Println(err)
+			// Send a 500 Internal Server Error for scanning failures
 			errChan <- &ErrorMessage{500, errScanner}
 			_ = stream.Close()
 			return
 		}
 
+		// Ensure the stream is properly closed to prevent resource leaks
 		_ = stream.Close()
 	}()
 
+	// Return the channels immediately for asynchronous communication
+	// The caller can read from these channels while the goroutine processes the request
 	return dataChan, errChan
 }
 

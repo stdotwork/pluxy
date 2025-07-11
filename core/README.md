@@ -1,10 +1,10 @@
 # CLI Proxy API
 
-A proxy server that provides an OpenAI-compatible/Gemini-compatible API interface for CLI. This allows you to use CLI models with tools and libraries designed for the OpenAI/Gemini API.
+A proxy server that provides an OpenAI/Gemini/Claude compatible API interface for CLI. This allows you to use CLI models with tools and libraries designed for the OpenAI/Gemini/Claude API.
 
 ## Features
 
-- OpenAI/Gemini compatible API endpoints for CLI models
+- OpenAI/Gemini/Claude compatible API endpoints for CLI models
 - Support for both streaming and non-streaming responses
 - Function calling/tools support
 - Multimodal input support (text and images)
@@ -136,7 +136,7 @@ console.log(response.choices[0].message.content);
 
 - gemini-2.5-pro
 - gemini-2.5-flash
-- And various preview versions
+- And it automates switching to various preview versions
 
 ## Configuration
 

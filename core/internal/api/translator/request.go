@@ -1,6 +1,7 @@
 package translator
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/tidwall/sjson"
@@ -22,11 +23,15 @@ func PrepareRequest(rawJson []byte) (string, *client.Content, []client.Content, 
 		modelName = modelResult.String()
 	}
 
-	// Process the array of messages.
+	// Initialize data structures for processing conversation messages
+	// contents: stores the processed conversation history
+	// systemInstruction: stores system-level instructions separate from conversation
 	contents := make([]client.Content, 0)
 	var systemInstruction *client.Content
 	messagesResult := gjson.GetBytes(rawJson, "messages")
 
+	// Pre-process tool responses to create a lookup map
+	// This first pass collects all tool responses so they can be matched with their corresponding calls
 	toolItems := make(map[string]*client.FunctionResponse)
 	if messagesResult.IsArray() {
 		messagesResults := messagesResult.Array()
@@ -37,21 +42,26 @@ func PrepareRequest(rawJson []byte) (string, *client.Content, []client.Content, 
 				continue
 			}
 			contentResult := messageResult.Get("content")
+
+			// Extract tool responses for later matching with function calls
 			if roleResult.String() == "tool" {
 				toolCallID := messageResult.Get("tool_call_id").String()
 				if toolCallID != "" {
 					var responseData string
+					// Handle both string and object-based tool response formats
 					if contentResult.Type == gjson.String {
 						responseData = contentResult.String()
 					} else if contentResult.IsObject() && contentResult.Get("type").String() == "text" {
 						responseData = contentResult.Get("text").String()
 					}
 
-					// drop the timestamp from the tool call ID
+					// Clean up tool call ID by removing timestamp suffix
+					// This normalizes IDs for consistent matching between calls and responses
 					toolCallIDs := strings.Split(toolCallID, "-")
 					strings.Join(toolCallIDs, "-")
 					newToolCallID := strings.Join(toolCallIDs[:len(toolCallIDs)-1], "-")
 
+					// Create function response object with normalized ID and response data
 					functionResponse := client.FunctionResponse{Name: newToolCallID, Response: map[string]interface{}{"result": responseData}}
 					toolItems[toolCallID] = &functionResponse
 				}
@@ -126,25 +136,33 @@ func PrepareRequest(rawJson []byte) (string, *client.Content, []client.Content, 
 					}
 					contents = append(contents, client.Content{Role: "user", Parts: parts})
 				}
-			// Assistant messages can contain text or tool calls.
+			// Assistant messages can contain text responses or tool calls
+			// In the internal format, assistant messages are converted to "model" role
 			case "assistant":
 				if contentResult.Type == gjson.String {
+					// Simple text response from the assistant
 					contents = append(contents, client.Content{Role: "model", Parts: []client.Part{{Text: contentResult.String()}}})
 				} else if !contentResult.Exists() || contentResult.Type == gjson.Null {
-					// Handle tool calls made by the assistant.
+					// Handle complex tool calls made by the assistant
+					// This processes function calls and matches them with their responses
 					functionIDs := make([]string, 0)
 					toolCallsResult := messageResult.Get("tool_calls")
 					if toolCallsResult.IsArray() {
 						parts := make([]client.Part, 0)
 						tcsResult := toolCallsResult.Array()
+
+						// Process each tool call in the assistant's message
 						for j := 0; j < len(tcsResult); j++ {
 							tcResult := tcsResult[j]
 
+							// Extract function call details
 							functionID := tcResult.Get("id").String()
 							functionIDs = append(functionIDs, functionID)
 
 							functionName := tcResult.Get("function.name").String()
 							functionArgs := tcResult.Get("function.arguments").String()
+
+							// Parse function arguments from JSON string to map
 							var args map[string]any
 							if err := json.Unmarshal([]byte(functionArgs), &args); err == nil {
 								parts = append(parts, client.Part{
@@ -155,17 +173,22 @@ func PrepareRequest(rawJson []byte) (string, *client.Content, []client.Content, 
 								})
 							}
 						}
+
+						// Add the model's function calls to the conversation
 						if len(parts) > 0 {
 							contents = append(contents, client.Content{
 								Role: "model", Parts: parts,
 							})
 
+							// Create a separate tool response message with the collected responses
+							// This matches function calls with their corresponding responses
 							toolParts := make([]client.Part, 0)
 							for _, functionID := range functionIDs {
 								if functionResponse, ok := toolItems[functionID]; ok {
 									toolParts = append(toolParts, client.Part{FunctionResponse: functionResponse})
 								}
 							}
+							// Add the tool responses as a separate message in the conversation
 							contents = append(contents, client.Content{Role: "tool", Parts: toolParts})
 						}
 					}
@@ -207,23 +230,28 @@ type FunctionCallGroup struct {
 	ResponsesNeeded int
 }
 
-// FixCLIToolResponse converts the format from 1.json to 2.json
-// It groups function calls with their corresponding responses
+// FixCLIToolResponse performs sophisticated tool response format conversion and grouping.
+// This function transforms the CLI tool response format by intelligently grouping function calls
+// with their corresponding responses, ensuring proper conversation flow and API compatibility.
+// It converts from a linear format (1.json) to a grouped format (2.json) where function calls
+// and their responses are properly associated and structured.
 func FixCLIToolResponse(input string) (string, error) {
-	// Parse the input JSON
+	// Parse the input JSON to extract the conversation structure
 	parsed := gjson.Parse(input)
 
-	// Get the contents array
+	// Extract the contents array which contains the conversation messages
 	contents := parsed.Get("request.contents")
 	if !contents.Exists() {
 		return input, fmt.Errorf("contents not found in input")
 	}
 
-	var newContents []interface{}
-	var pendingGroups []*FunctionCallGroup
-	var collectedResponses []gjson.Result
+	// Initialize data structures for processing and grouping
+	var newContents []interface{}          // Final processed contents array
+	var pendingGroups []*FunctionCallGroup // Groups awaiting completion with responses
+	var collectedResponses []gjson.Result  // Standalone responses to be matched
 
-	// Process each content object
+	// Process each content object in the conversation
+	// This iterates through messages and groups function calls with their responses
 	contents.ForEach(func(key, value gjson.Result) bool {
 		role := value.Get("role").String()
 		parts := value.Get("parts")
@@ -362,4 +390,155 @@ func FixCLIToolResponse(input string) (string, error) {
 	result, _ = sjson.Set(result, "request.contents", json.RawMessage(newContentsJSON))
 
 	return result, nil
+}
+
+func PrepareClaudeRequest(rawJson []byte) (string, *client.Content, []client.Content, []client.ToolDeclaration) {
+	var pathsToDelete []string
+	root := gjson.ParseBytes(rawJson)
+	walk(root, "", "additionalProperties", &pathsToDelete)
+	walk(root, "", "$schema", &pathsToDelete)
+
+	var err error
+	for _, p := range pathsToDelete {
+		rawJson, err = sjson.DeleteBytes(rawJson, p)
+		if err != nil {
+			continue
+		}
+	}
+	rawJson = bytes.Replace(rawJson, []byte(`"url":{"type":"string","format":"uri",`), []byte(`"url":{"type":"string",`), -1)
+
+	// log.Debug(string(rawJson))
+	modelName := "gemini-2.5-pro"
+	modelResult := gjson.GetBytes(rawJson, "model")
+	if modelResult.Type == gjson.String {
+		modelName = modelResult.String()
+	}
+
+	contents := make([]client.Content, 0)
+
+	var systemInstruction *client.Content
+
+	systemResult := gjson.GetBytes(rawJson, "system")
+	if systemResult.IsArray() {
+		systemResults := systemResult.Array()
+		systemInstruction = &client.Content{Role: "user", Parts: []client.Part{}}
+		for i := 0; i < len(systemResults); i++ {
+			systemPromptResult := systemResults[i]
+			systemTypePromptResult := systemPromptResult.Get("type")
+			if systemTypePromptResult.Type == gjson.String && systemTypePromptResult.String() == "text" {
+				systemPrompt := systemPromptResult.Get("text").String()
+				systemPart := client.Part{Text: systemPrompt}
+				systemInstruction.Parts = append(systemInstruction.Parts, systemPart)
+			}
+		}
+		if len(systemInstruction.Parts) == 0 {
+			systemInstruction = nil
+		}
+	}
+
+	messagesResult := gjson.GetBytes(rawJson, "messages")
+	if messagesResult.IsArray() {
+		messageResults := messagesResult.Array()
+		for i := 0; i < len(messageResults); i++ {
+			messageResult := messageResults[i]
+			roleResult := messageResult.Get("role")
+			if roleResult.Type != gjson.String {
+				continue
+			}
+			role := roleResult.String()
+			if role == "assistant" {
+				role = "model"
+			}
+			clientContent := client.Content{Role: role, Parts: []client.Part{}}
+
+			contentsResult := messageResult.Get("content")
+			if contentsResult.IsArray() {
+				contentResults := contentsResult.Array()
+				for j := 0; j < len(contentResults); j++ {
+					contentResult := contentResults[j]
+					contentTypeResult := contentResult.Get("type")
+					if contentTypeResult.Type == gjson.String && contentTypeResult.String() == "text" {
+						prompt := contentResult.Get("text").String()
+						clientContent.Parts = append(clientContent.Parts, client.Part{Text: prompt})
+					} else if contentTypeResult.Type == gjson.String && contentTypeResult.String() == "tool_use" {
+						functionName := contentResult.Get("name").String()
+						functionArgs := contentResult.Get("input").String()
+						var args map[string]any
+						if err = json.Unmarshal([]byte(functionArgs), &args); err == nil {
+							clientContent.Parts = append(clientContent.Parts, client.Part{
+								FunctionCall: &client.FunctionCall{
+									Name: functionName,
+									Args: args,
+								},
+							})
+						}
+					} else if contentTypeResult.Type == gjson.String && contentTypeResult.String() == "tool_result" {
+						toolCallID := contentResult.Get("tool_use_id").String()
+						if toolCallID != "" {
+							funcName := toolCallID
+							toolCallIDs := strings.Split(toolCallID, "-")
+							if len(toolCallIDs) > 1 {
+								funcName = strings.Join(toolCallIDs[0:len(toolCallIDs)-1], "-")
+							}
+							responseData := contentResult.Get("content").String()
+							functionResponse := client.FunctionResponse{Name: funcName, Response: map[string]interface{}{"result": responseData}}
+							clientContent.Parts = append(clientContent.Parts, client.Part{FunctionResponse: &functionResponse})
+						}
+					}
+				}
+				contents = append(contents, clientContent)
+			} else if contentsResult.Type == gjson.String {
+				prompt := contentsResult.String()
+				contents = append(contents, client.Content{Role: role, Parts: []client.Part{{Text: prompt}}})
+			}
+		}
+	}
+
+	var tools []client.ToolDeclaration
+	toolsResult := gjson.GetBytes(rawJson, "tools")
+	if toolsResult.IsArray() {
+		tools = make([]client.ToolDeclaration, 1)
+		tools[0].FunctionDeclarations = make([]any, 0)
+		toolsResults := toolsResult.Array()
+		for i := 0; i < len(toolsResults); i++ {
+			toolResult := toolsResults[i]
+			inputSchemaResult := toolResult.Get("input_schema")
+			if inputSchemaResult.Exists() && inputSchemaResult.IsObject() {
+				inputSchema := inputSchemaResult.Raw
+				inputSchema, _ = sjson.Delete(inputSchema, "additionalProperties")
+				inputSchema, _ = sjson.Delete(inputSchema, "$schema")
+
+				tool, _ := sjson.Delete(toolResult.Raw, "input_schema")
+				tool, _ = sjson.SetRaw(tool, "parameters", inputSchema)
+				var toolDeclaration any
+				if err = json.Unmarshal([]byte(tool), &toolDeclaration); err == nil {
+					tools[0].FunctionDeclarations = append(tools[0].FunctionDeclarations, toolDeclaration)
+				}
+			}
+		}
+	} else {
+		tools = make([]client.ToolDeclaration, 0)
+	}
+
+	return modelName, systemInstruction, contents, tools
+}
+
+func walk(value gjson.Result, path, field string, pathsToDelete *[]string) {
+	switch value.Type {
+	case gjson.JSON:
+		value.ForEach(func(key, val gjson.Result) bool {
+			var childPath string
+			if path == "" {
+				childPath = key.String()
+			} else {
+				childPath = path + "." + key.String()
+			}
+			if key.String() == field {
+				*pathsToDelete = append(*pathsToDelete, childPath)
+			}
+			walk(val, childPath, field, pathsToDelete)
+			return true
+		})
+	case gjson.String, gjson.Number, gjson.True, gjson.False, gjson.Null:
+	}
 }
