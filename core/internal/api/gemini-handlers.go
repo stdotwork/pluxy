@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/luispater/CLIProxyAPI/internal/api/translator"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -90,6 +91,19 @@ outLoop:
 		template, _ = sjson.SetRaw(template, "request", string(rawJson))
 		template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
 		template, _ = sjson.Delete(template, "request.model")
+
+		template, errFixCLIToolResponse := translator.FixCLIToolResponse(template)
+		if errFixCLIToolResponse != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{
+				Error: ErrorDetail{
+					Message: errFixCLIToolResponse.Error(),
+					Type:    "server_error",
+				},
+			})
+			cliCancel()
+			return
+		}
+
 		systemInstructionResult := gjson.Get(template, "request.system_instruction")
 		if systemInstructionResult.Exists() {
 			template, _ = sjson.SetRaw(template, "request.systemInstruction", systemInstructionResult.Raw)
@@ -178,6 +192,19 @@ func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 		template, _ = sjson.SetRaw(template, "request", string(rawJson))
 		template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
 		template, _ = sjson.Delete(template, "request.model")
+
+		template, errFixCLIToolResponse := translator.FixCLIToolResponse(template)
+		if errFixCLIToolResponse != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{
+				Error: ErrorDetail{
+					Message: errFixCLIToolResponse.Error(),
+					Type:    "server_error",
+				},
+			})
+			cliCancel()
+			return
+		}
+
 		systemInstructionResult := gjson.Get(template, "request.system_instruction")
 		if systemInstructionResult.Exists() {
 			template, _ = sjson.SetRaw(template, "request.systemInstruction", systemInstructionResult.Raw)
