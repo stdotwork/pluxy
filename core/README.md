@@ -212,6 +212,20 @@ The server will relay the `loadCodeAssist`, `onboardUser`, and `countTokens` req
 > This feature only allows local access because I couldn't find a way to authenticate the requests.   
 > I hardcoded `127.0.0.1` into the load balancing.
 
+## Run with Docker
+
+Run the following command to login: 
+
+```bash
+docker run --rm -p 8085:8085 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --login
+```
+
+Run the following command to start the server:
+
+```bash
+docker run --rm -p 8317:8317 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest
+```
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
