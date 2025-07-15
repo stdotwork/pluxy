@@ -86,6 +86,10 @@ func (h *APIHandlers) Models(c *gin.Context) {
 }
 
 func (h *APIHandlers) getClient(modelName string) (*client.Client, *client.ErrorMessage) {
+	if len(h.cliClients) == 0 {
+		return nil, &client.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("no clients available")}
+	}
+
 	var cliClient *client.Client
 
 	// Lock the mutex to update the last used client index

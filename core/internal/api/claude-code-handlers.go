@@ -78,60 +78,14 @@ func (h *APIHandlers) ClaudeMessages(c *gin.Context) {
 	// This loop implements a sophisticated load balancing and failover mechanism
 outLoop:
 	for {
-		// Thread-safe client index rotation to distribute load evenly
-		// This ensures fair usage across all available clients
-		mutex.Lock()
-		startIndex := lastUsedClientIndex
-		currentIndex := (startIndex + 1) % len(h.cliClients)
-		lastUsedClientIndex = currentIndex
-		mutex.Unlock()
-
-		// Build a list of available clients, starting from the next client in rotation
-		// This implements round-robin load balancing while filtering out quota-exceeded clients
-		reorderedClients := make([]*client.Client, 0)
-		for i := 0; i < len(h.cliClients); i++ {
-			cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
-
-			// Skip clients that have exceeded their quota for the requested model
-			if cliClient.IsModelQuotaExceeded(modelName) {
-				// Log different messages based on authentication method (API key vs account)
-				if cliClient.GetGenerativeLanguageAPIKey() == "" {
-					log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
-				} else {
-					log.Debugf("Model %s is quota exceeded for generative language API Key: %s", modelName, cliClient.GetGenerativeLanguageAPIKey())
-				}
-
-				cliClient = nil
-				continue
-			}
-			reorderedClients = append(reorderedClients, cliClient)
-		}
-
-		// If all clients have exceeded quota, return a 429 Too Many Requests error
-		if len(reorderedClients) == 0 {
-			c.Status(429)
-			_, _ = fmt.Fprint(c.Writer, fmt.Sprintf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName))
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.getClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
 			flusher.Flush()
 			cliCancel()
 			return
-		}
-
-		// Attempt to acquire a lock on an available client using non-blocking TryLock
-		// This prevents blocking when a client is busy with another request
-		locked := false
-		for i := 0; i < len(reorderedClients); i++ {
-			cliClient = reorderedClients[i]
-			if cliClient.RequestMutex.TryLock() {
-				locked = true
-				break
-			}
-		}
-
-		// If no client is immediately available, fall back to blocking on the first client
-		// This ensures the request will eventually be processed
-		if !locked {
-			cliClient = h.cliClients[0]
-			cliClient.RequestMutex.Lock()
 		}
 
 		// Determine the authentication method being used by the selected client

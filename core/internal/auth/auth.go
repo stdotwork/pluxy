@@ -169,7 +169,7 @@ func getTokenFromWeb(ctx context.Context, config *oauth2.Config) (*oauth2.Token,
 	errChan := make(chan error)
 
 	// Create a new HTTP server.
-	server := &http.Server{Addr: "localhost:8085"}
+	server := &http.Server{Addr: ":8085"}
 	config.RedirectURL = "http://localhost:8085/oauth2callback"
 
 	http.HandleFunc("/oauth2callback", func(w http.ResponseWriter, r *http.Request) {
