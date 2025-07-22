@@ -168,11 +168,12 @@ func getTokenFromWeb(ctx context.Context, config *oauth2.Config) (*oauth2.Token,
 	codeChan := make(chan string)
 	errChan := make(chan error)
 
-	// Create a new HTTP server.
-	server := &http.Server{Addr: ":8085"}
+	// Create a new HTTP server with its own multiplexer.
+	mux := http.NewServeMux()
+	server := &http.Server{Addr: ":8085", Handler: mux}
 	config.RedirectURL = "http://localhost:8085/oauth2callback"
 
-	http.HandleFunc("/oauth2callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/oauth2callback", func(w http.ResponseWriter, r *http.Request) {
 		if err := r.URL.Query().Get("error"); err != "" {
 			_, _ = fmt.Fprintf(w, "Authentication failed: %s", err)
 			errChan <- fmt.Errorf("authentication failed via callback: %s", err)
