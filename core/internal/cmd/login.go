@@ -73,6 +73,7 @@ func DoLogin(cfg *config.Config, projectID string) {
 		// If the check fails (returns false), the CheckCloudAPIIsEnabled function
 		// will have already printed instructions, so we can just exit.
 		if !isChecked {
+			log.Fatal("Failed to check if Cloud AI API is enabled. If you encounter an error message, please create an issue.")
 			return
 		}
 	}

@@ -771,6 +771,7 @@ func (c *Client) CheckCloudAPIIsEnabled() (bool, error) {
 					)
 				}
 			}
+			log.Warnf("\n\nPlease copy this message and create an issue.\n\n%s\n\n", errJson)
 			return false, nil
 		}
 		return false, err.Error
