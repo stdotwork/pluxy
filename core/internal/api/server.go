@@ -75,7 +75,7 @@ func (s *Server) setupRoutes() {
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.cfg))
 	{
-		v1beta.GET("/models", s.handlers.Models)
+		v1beta.GET("/models", s.handlers.GeminiModels)
 		v1beta.POST("/models/:action", s.handlers.GeminiHandler)
 	}
 
@@ -151,7 +151,11 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		authHeader := c.GetHeader("Authorization")
 		authHeaderGoogle := c.GetHeader("X-Goog-Api-Key")
 		authHeaderAnthropic := c.GetHeader("X-Api-Key")
-		if authHeader == "" && authHeaderGoogle == "" && authHeaderAnthropic == "" {
+
+		// Get the API key from the query parameter
+		apiKeyQuery, _ := c.GetQuery("key")
+
+		if authHeader == "" && authHeaderGoogle == "" && authHeaderAnthropic == "" && apiKeyQuery == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "Missing API key",
 			})
@@ -170,7 +174,7 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		// Find the API key in the in-memory list
 		var foundKey string
 		for i := range cfg.ApiKeys {
-			if cfg.ApiKeys[i] == apiKey || cfg.ApiKeys[i] == authHeaderGoogle || cfg.ApiKeys[i] == authHeaderAnthropic {
+			if cfg.ApiKeys[i] == apiKey || cfg.ApiKeys[i] == authHeaderGoogle || cfg.ApiKeys[i] == authHeaderAnthropic || cfg.ApiKeys[i] == apiKeyQuery {
 				foundKey = cfg.ApiKeys[i]
 				break
 			}
