@@ -141,7 +141,7 @@ outLoop:
 			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 		}
 		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJson)
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJson, "")
 		hasFirstResponse := false
 		for {
 			select {
@@ -220,7 +220,7 @@ func (h *APIHandlers) internalGenerateContent(c *gin.Context, rawJson []byte) {
 			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 		}
 
-		resp, err := cliClient.SendRawMessage(cliCtx, rawJson)
+		resp, err := cliClient.SendRawMessage(cliCtx, rawJson, "")
 		if err != nil {
 			if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
 				continue

@@ -15,7 +15,7 @@ import (
 )
 
 func (h *APIHandlers) GeminiModels(c *gin.Context) {
-	c.Status(200)
+	c.Status(http.StatusOK)
 	c.Header("Content-Type", "application/json; charset=UTF-8")
 	_, _ = c.Writer.Write([]byte(`{"models":[{"name":"models/gemini-2.5-flash","version":"001","displayName":"Gemini `))
 	_, _ = c.Writer.Write([]byte(`2.5 Flash","description":"Stable version of Gemini 2.5 Flash, our mid-size multimod`))
@@ -30,11 +30,11 @@ func (h *APIHandlers) GeminiModels(c *gin.Context) {
 	_, _ = c.Writer.Write([]byte(`e":2,"thinking":true}],"nextPageToken":""}`))
 }
 
-func (h *APIHandlers) GeminiHandler(c *gin.Context) {
-	var person struct {
+func (h *APIHandlers) GeminiGetHandler(c *gin.Context) {
+	var request struct {
 		Action string `uri:"action" binding:"required"`
 	}
-	if err := c.ShouldBindUri(&person); err != nil {
+	if err := c.ShouldBindUri(&request); err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{
 			Error: ErrorDetail{
 				Message: fmt.Sprintf("Invalid request: %v", err),
@@ -43,7 +43,45 @@ func (h *APIHandlers) GeminiHandler(c *gin.Context) {
 		})
 		return
 	}
-	action := strings.Split(person.Action, ":")
+	if request.Action == "gemini-2.5-pro" {
+		c.Status(http.StatusOK)
+		c.Header("Content-Type", "application/json; charset=UTF-8")
+		_, _ = c.Writer.Write([]byte(`{"name":"models/gemini-2.5-pro","version":"2.5","displayName":"Gemini 2.5 Pro",`))
+		_, _ = c.Writer.Write([]byte(`"description":"Stable release (June 17th, 2025) of Gemini 2.5 Pro","inputTokenL`))
+		_, _ = c.Writer.Write([]byte(`imit":1048576,"outputTokenLimit":65536,"supportedGenerationMethods":["generateC`))
+		_, _ = c.Writer.Write([]byte(`ontent","countTokens","createCachedContent","batchGenerateContent"],"temperatur`))
+		_, _ = c.Writer.Write([]byte(`e":1,"topP":0.95,"topK":64,"maxTemperature":2,"thinking":true}`))
+	} else if request.Action == "gemini-2.5-flash" {
+		c.Status(http.StatusOK)
+		c.Header("Content-Type", "application/json; charset=UTF-8")
+		_, _ = c.Writer.Write([]byte(`{"name":"models/gemini-2.5-flash","version":"001","displayName":"Gemini 2.5 Fla`))
+		_, _ = c.Writer.Write([]byte(`sh","description":"Stable version of Gemini 2.5 Flash, our mid-size multimodal `))
+		_, _ = c.Writer.Write([]byte(`model that supports up to 1 million tokens, released in June of 2025.","inputTo`))
+		_, _ = c.Writer.Write([]byte(`kenLimit":1048576,"outputTokenLimit":65536,"supportedGenerationMethods":["gener`))
+		_, _ = c.Writer.Write([]byte(`ateContent","countTokens","createCachedContent","batchGenerateContent"],"temper`))
+		_, _ = c.Writer.Write([]byte(`ature":1,"topP":0.95,"topK":64,"maxTemperature":2,"thinking":true}`))
+	} else {
+		c.Status(http.StatusNotFound)
+		_, _ = c.Writer.Write([]byte(
+			`{"error":{"message":"Not Found","code":404,"status":"NOT_FOUND"}}`,
+		))
+	}
+}
+
+func (h *APIHandlers) GeminiHandler(c *gin.Context) {
+	var request struct {
+		Action string `uri:"action" binding:"required"`
+	}
+	if err := c.ShouldBindUri(&request); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error: ErrorDetail{
+				Message: fmt.Sprintf("Invalid request: %v", err),
+				Type:    "invalid_request_error",
+			},
+		})
+		return
+	}
+	action := strings.Split(request.Action, ":")
 	if len(action) != 2 {
 		c.JSON(http.StatusNotFound, ErrorResponse{
 			Error: ErrorDetail{
@@ -63,6 +101,8 @@ func (h *APIHandlers) GeminiHandler(c *gin.Context) {
 		h.geminiGenerateContent(c, rawJson)
 	} else if method == "streamGenerateContent" {
 		h.geminiStreamGenerateContent(c, rawJson)
+	} else if method == "countTokens" {
+		h.geminiCountTokens(c, rawJson)
 	}
 }
 
@@ -81,6 +121,8 @@ func (h *APIHandlers) geminiStreamGenerateContent(c *gin.Context, rawJson []byte
 
 	modelResult := gjson.GetBytes(rawJson, "model")
 	modelName := modelResult.String()
+
+	alt := h.getAlt(c)
 
 	cliCtx, cliCancel := context.WithCancel(context.Background())
 	var cliClient *client.Client
@@ -134,7 +176,7 @@ outLoop:
 		}
 
 		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJson)
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJson, alt)
 		for {
 			select {
 			// Handle client disconnection.
@@ -151,14 +193,33 @@ outLoop:
 					return
 				} else {
 					if cliClient.GetGenerativeLanguageAPIKey() == "" {
-						responseResult := gjson.GetBytes(chunk, "response")
-						if responseResult.Exists() {
-							chunk = []byte(responseResult.Raw)
+						if alt == "" {
+							responseResult := gjson.GetBytes(chunk, "response")
+							if responseResult.Exists() {
+								chunk = []byte(responseResult.Raw)
+							}
+						} else {
+							chunkTemplate := "[]"
+							responseResult := gjson.ParseBytes(chunk)
+							if responseResult.IsArray() {
+								responseResultItems := responseResult.Array()
+								for i := 0; i < len(responseResultItems); i++ {
+									responseResultItem := responseResultItems[i]
+									if responseResultItem.Get("response").Exists() {
+										chunkTemplate, _ = sjson.SetRaw(chunkTemplate, "-1", responseResultItem.Get("response").Raw)
+									}
+								}
+							}
+							chunk = []byte(chunkTemplate)
 						}
 					}
-					_, _ = c.Writer.Write([]byte("data: "))
-					_, _ = c.Writer.Write(chunk)
-					_, _ = c.Writer.Write([]byte("\n\n"))
+					if alt == "" {
+						_, _ = c.Writer.Write([]byte("data: "))
+						_, _ = c.Writer.Write(chunk)
+						_, _ = c.Writer.Write([]byte("\n\n"))
+					} else {
+						_, _ = c.Writer.Write(chunk)
+					}
 					flusher.Flush()
 				}
 			// Handle errors from the backend.
@@ -181,8 +242,70 @@ outLoop:
 	}
 }
 
+func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
+	c.Header("Content-Type", "application/json")
+
+	alt := h.getAlt(c)
+
+	modelResult := gjson.GetBytes(rawJson, "model")
+	modelName := modelResult.String()
+	cliCtx, cliCancel := context.WithCancel(context.Background())
+	var cliClient *client.Client
+	defer func() {
+		if cliClient != nil {
+			cliClient.RequestMutex.Unlock()
+		}
+	}()
+
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.getClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			cliCancel()
+			return
+		}
+
+		if glAPIKey := cliClient.GetGenerativeLanguageAPIKey(); glAPIKey != "" {
+			log.Debugf("Request use generative language API Key: %s", glAPIKey)
+		} else {
+			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
+
+			template := `{"request":{}}`
+			template, _ = sjson.SetRaw(template, "request", gjson.GetBytes(rawJson, "generateContentRequest").Raw)
+			template, _ = sjson.Delete(template, "generateContentRequest")
+			rawJson = []byte(template)
+		}
+
+		resp, err := cliClient.SendRawTokenCount(cliCtx, rawJson, alt)
+		if err != nil {
+			if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+				continue
+			} else {
+				c.Status(err.StatusCode)
+				_, _ = c.Writer.Write([]byte(err.Error.Error()))
+				cliCancel()
+			}
+			break
+		} else {
+			if cliClient.GetGenerativeLanguageAPIKey() == "" {
+				responseResult := gjson.GetBytes(resp, "response")
+				if responseResult.Exists() {
+					resp = []byte(responseResult.Raw)
+				}
+			}
+			_, _ = c.Writer.Write(resp)
+			cliCancel()
+			break
+		}
+	}
+}
+
 func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 	c.Header("Content-Type", "application/json")
+
+	alt := h.getAlt(c)
 
 	modelResult := gjson.GetBytes(rawJson, "model")
 	modelName := modelResult.String()
@@ -233,7 +356,7 @@ func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 		} else {
 			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 		}
-		resp, err := cliClient.SendRawMessage(cliCtx, rawJson)
+		resp, err := cliClient.SendRawMessage(cliCtx, rawJson, alt)
 		if err != nil {
 			if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
 				continue
@@ -255,4 +378,17 @@ func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 			break
 		}
 	}
+}
+
+func (h *APIHandlers) getAlt(c *gin.Context) string {
+	var alt string
+	var hasAlt bool
+	alt, hasAlt = c.GetQuery("alt")
+	if !hasAlt {
+		alt, _ = c.GetQuery("$alt")
+	}
+	if alt == "sse" {
+		return ""
+	}
+	return alt
 }

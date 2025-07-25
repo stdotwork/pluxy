@@ -77,6 +77,7 @@ func (s *Server) setupRoutes() {
 	{
 		v1beta.GET("/models", s.handlers.GeminiModels)
 		v1beta.POST("/models/:action", s.handlers.GeminiHandler)
+		v1beta.GET("/models/:action", s.handlers.GeminiGetHandler)
 	}
 
 	// Root endpoint
