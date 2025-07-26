@@ -107,6 +107,15 @@ func (h *APIHandlers) GeminiHandler(c *gin.Context) {
 }
 
 func (h *APIHandlers) geminiStreamGenerateContent(c *gin.Context, rawJson []byte) {
+	alt := h.getAlt(c)
+
+	if alt == "" {
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.Header("Access-Control-Allow-Origin", "*")
+	}
+
 	// Get the http.Flusher interface to manually flush the response.
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
@@ -121,8 +130,6 @@ func (h *APIHandlers) geminiStreamGenerateContent(c *gin.Context, rawJson []byte
 
 	modelResult := gjson.GetBytes(rawJson, "model")
 	modelName := modelResult.String()
-
-	alt := h.getAlt(c)
 
 	cliCtx, cliCancel := context.WithCancel(context.Background())
 	var cliClient *client.Client
