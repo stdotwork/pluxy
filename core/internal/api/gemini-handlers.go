@@ -246,7 +246,7 @@ func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
 	c.Header("Content-Type", "application/json")
 
 	alt := h.getAlt(c)
-
+	// orgRawJson := rawJson
 	modelResult := gjson.GetBytes(rawJson, "model")
 	modelName := modelResult.String()
 	cliCtx, cliCancel := context.WithCancel(context.Background())
@@ -273,8 +273,13 @@ func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
 			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 
 			template := `{"request":{}}`
-			template, _ = sjson.SetRaw(template, "request", gjson.GetBytes(rawJson, "generateContentRequest").Raw)
-			template, _ = sjson.Delete(template, "generateContentRequest")
+			if gjson.GetBytes(rawJson, "generateContentRequest").Exists() {
+				template, _ = sjson.SetRaw(template, "request", gjson.GetBytes(rawJson, "generateContentRequest").Raw)
+				template, _ = sjson.Delete(template, "generateContentRequest")
+			} else if gjson.GetBytes(rawJson, "contents").Exists() {
+				template, _ = sjson.SetRaw(template, "request.contents", gjson.GetBytes(rawJson, "contents").Raw)
+				template, _ = sjson.Delete(template, "contents")
+			}
 			rawJson = []byte(template)
 		}
 
@@ -286,6 +291,9 @@ func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
 				c.Status(err.StatusCode)
 				_, _ = c.Writer.Write([]byte(err.Error.Error()))
 				cliCancel()
+				// log.Debugf(err.Error.Error())
+				// log.Debugf(string(rawJson))
+				// log.Debugf(string(orgRawJson))
 			}
 			break
 		} else {
