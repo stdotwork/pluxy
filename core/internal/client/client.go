@@ -260,7 +260,9 @@ func (c *Client) APIRequest(ctx context.Context, endpoint string, body interface
 		if alt == "" && stream {
 			url = url + "?alt=sse"
 		} else {
-			url = url + fmt.Sprintf("?$alt=%s", alt)
+			if alt != "" {
+				url = url + fmt.Sprintf("?$alt=%s", alt)
+			}
 		}
 	} else {
 		if endpoint == "countTokens" {
@@ -272,7 +274,9 @@ func (c *Client) APIRequest(ctx context.Context, endpoint string, body interface
 			if alt == "" && stream {
 				url = url + "?alt=sse"
 			} else {
-				url = url + fmt.Sprintf("?$alt=%s", alt)
+				if alt != "" {
+					url = url + fmt.Sprintf("?$alt=%s", alt)
+				}
 			}
 			jsonBody = []byte(gjson.GetBytes(jsonBody, "request").Raw)
 			systemInstructionResult := gjson.GetBytes(jsonBody, "systemInstruction")
@@ -285,6 +289,7 @@ func (c *Client) APIRequest(ctx context.Context, endpoint string, body interface
 	}
 
 	// log.Debug(string(jsonBody))
+	// log.Debug(url)
 	reqBody := bytes.NewBuffer(jsonBody)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, reqBody)
