@@ -266,7 +266,7 @@ func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
 
 	for {
 		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.getClient(modelName)
+		cliClient, errorResponse = h.getClient(modelName, false)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
 			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)

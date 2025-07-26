@@ -85,7 +85,7 @@ func (h *APIHandlers) Models(c *gin.Context) {
 	})
 }
 
-func (h *APIHandlers) getClient(modelName string) (*client.Client, *client.ErrorMessage) {
+func (h *APIHandlers) getClient(modelName string, isGenerateContent ...bool) (*client.Client, *client.ErrorMessage) {
 	if len(h.cliClients) == 0 {
 		return nil, &client.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("no clients available")}
 	}
@@ -95,8 +95,10 @@ func (h *APIHandlers) getClient(modelName string) (*client.Client, *client.Error
 	// Lock the mutex to update the last used client index
 	mutex.Lock()
 	startIndex := lastUsedClientIndex
-	currentIndex := (startIndex + 1) % len(h.cliClients)
-	lastUsedClientIndex = currentIndex
+	if (len(isGenerateContent) > 0 && isGenerateContent[0]) || len(isGenerateContent) == 0 {
+		currentIndex := (startIndex + 1) % len(h.cliClients)
+		lastUsedClientIndex = currentIndex
+	}
 	mutex.Unlock()
 
 	// Reorder the client to start from the last used index
