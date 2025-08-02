@@ -36,6 +36,12 @@ func NewAPIHandlers(cliClients []*client.Client, cfg *config.Config) *APIHandler
 	}
 }
 
+// UpdateClients updates the handlers' client list and configuration
+func (h *APIHandlers) UpdateClients(clients []*client.Client, cfg *config.Config) {
+	h.cliClients = clients
+	h.cfg = cfg
+}
+
 // Models handles the /v1/models endpoint.
 // It returns a hardcoded list of available AI models.
 func (h *APIHandlers) Models(c *gin.Context) {

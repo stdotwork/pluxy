@@ -63,14 +63,17 @@ func main() {
 	var wd string
 
 	// Load configuration from the specified path or the default path.
+	var configFilePath string
 	if configPath != "" {
+		configFilePath = configPath
 		cfg, err = config.LoadConfig(configPath)
 	} else {
 		wd, err = os.Getwd()
 		if err != nil {
 			log.Fatalf("failed to get working directory: %v", err)
 		}
-		cfg, err = config.LoadConfig(path.Join(wd, "config.yaml"))
+		configFilePath = path.Join(wd, "config.yaml")
+		cfg, err = config.LoadConfig(configFilePath)
 	}
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -102,6 +105,6 @@ func main() {
 	if login {
 		cmd.DoLogin(cfg, projectID)
 	} else {
-		cmd.StartService(cfg)
+		cmd.StartService(cfg, configFilePath)
 	}
 }

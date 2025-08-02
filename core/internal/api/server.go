@@ -139,6 +139,13 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
+// UpdateClients updates the server's client list and configuration
+func (s *Server) UpdateClients(clients []*client.Client, cfg *config.Config) {
+	s.cfg = cfg
+	s.handlers.UpdateClients(clients, cfg)
+	log.Infof("server clients and configuration updated: %d clients", len(clients))
+}
+
 // AuthMiddleware returns a Gin middleware handler that authenticates requests
 // using API keys. If no API keys are configured, it allows all requests.
 func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {

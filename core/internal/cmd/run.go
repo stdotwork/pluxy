@@ -8,6 +8,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	"github.com/luispater/CLIProxyAPI/internal/util"
+	"github.com/luispater/CLIProxyAPI/internal/watcher"
 	log "github.com/sirupsen/logrus"
 	"io/fs"
 	"net/http"
@@ -22,7 +23,7 @@ import (
 // StartService initializes and starts the main API proxy service.
 // It loads all available authentication tokens, creates a pool of clients,
 // starts the API server, and handles graceful shutdown signals.
-func StartService(cfg *config.Config) {
+func StartService(cfg *config.Config, configPath string) {
 	// Create a pool of API clients, one for each token file found.
 	cliClients := make([]*client.Client, 0)
 	err := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
@@ -82,9 +83,45 @@ func StartService(cfg *config.Config) {
 	// Create and start the API server with the pool of clients.
 	apiServer := api.NewServer(cfg, cliClients)
 	log.Infof("Starting API server on port %d", cfg.Port)
-	if err = apiServer.Start(); err != nil {
-		log.Fatalf("API server failed to start: %v", err)
+
+	// Start the API server in a goroutine so it doesn't block the main thread
+	go func() {
+		if err = apiServer.Start(); err != nil {
+			log.Fatalf("API server failed to start: %v", err)
+		}
+	}()
+
+	// Give the server a moment to start up
+	time.Sleep(100 * time.Millisecond)
+	log.Info("API server started successfully")
+
+	// Setup file watcher for config and auth directory changes
+	fileWatcher, errNewWatcher := watcher.NewWatcher(configPath, cfg.AuthDir, func(newClients []*client.Client, newCfg *config.Config) {
+		// Update the API server with new clients and configuration
+		apiServer.UpdateClients(newClients, newCfg)
+	})
+	if errNewWatcher != nil {
+		log.Fatalf("failed to create file watcher: %v", errNewWatcher)
 	}
+
+	// Set initial state for the watcher
+	fileWatcher.SetConfig(cfg)
+	fileWatcher.SetClients(cliClients)
+
+	// Start the file watcher
+	watcherCtx, watcherCancel := context.WithCancel(context.Background())
+	if errStartWatcher := fileWatcher.Start(watcherCtx); errStartWatcher != nil {
+		log.Fatalf("failed to start file watcher: %v", errStartWatcher)
+	}
+	log.Info("file watcher started for config and auth directory changes")
+
+	defer func() {
+		watcherCancel()
+		errStopWatcher := fileWatcher.Stop()
+		if errStopWatcher != nil {
+			log.Errorf("error stopping file watcher: %v", errStopWatcher)
+		}
+	}()
 
 	// Set up a channel to listen for OS signals for graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
