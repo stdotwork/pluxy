@@ -152,10 +152,17 @@ outLoop:
 			return
 		}
 
-		template := `{"project":"","request":{},"model":""}`
-		template, _ = sjson.SetRaw(template, "request", string(rawJson))
-		template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
-		template, _ = sjson.Delete(template, "request.model")
+		template := ""
+		parsed := gjson.Parse(string(rawJson))
+		contents := parsed.Get("request.contents")
+		if contents.Exists() {
+			template = string(rawJson)
+		} else {
+			template = `{"project":"","request":{},"model":""}`
+			template, _ = sjson.SetRaw(template, "request", string(rawJson))
+			template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
+			template, _ = sjson.Delete(template, "request.model")
+		}
 
 		template, errFixCLIToolResponse := translator.FixCLIToolResponse(template)
 		if errFixCLIToolResponse != nil {
@@ -233,8 +240,10 @@ outLoop:
 			case err, okError := <-errChan:
 				if okError {
 					if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+						log.Debugf("quota exceeded, switch client")
 						continue outLoop
 					} else {
+						log.Debugf("error code :%d, error: %v", err.StatusCode, err.Error.Error())
 						c.Status(err.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
 						flusher.Flush()
@@ -342,10 +351,17 @@ func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 			return
 		}
 
-		template := `{"project":"","request":{},"model":""}`
-		template, _ = sjson.SetRaw(template, "request", string(rawJson))
-		template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
-		template, _ = sjson.Delete(template, "request.model")
+		template := ""
+		parsed := gjson.Parse(string(rawJson))
+		contents := parsed.Get("request.contents")
+		if contents.Exists() {
+			template = string(rawJson)
+		} else {
+			template = `{"project":"","request":{},"model":""}`
+			template, _ = sjson.SetRaw(template, "request", string(rawJson))
+			template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
+			template, _ = sjson.Delete(template, "request.model")
+		}
 
 		template, errFixCLIToolResponse := translator.FixCLIToolResponse(template)
 		if errFixCLIToolResponse != nil {

@@ -242,6 +242,7 @@ func FixCLIToolResponse(input string) (string, error) {
 	// Extract the contents array which contains the conversation messages
 	contents := parsed.Get("request.contents")
 	if !contents.Exists() {
+		// log.Debugf(input)
 		return input, fmt.Errorf("contents not found in input")
 	}
 
