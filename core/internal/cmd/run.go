@@ -1,3 +1,8 @@
+// Package cmd provides the main service execution functionality for the CLIProxyAPI.
+// It contains the core logic for starting and managing the API proxy service,
+// including authentication client management, server initialization, and graceful shutdown handling.
+// The package handles loading authentication tokens, creating client pools, starting the API server,
+// and monitoring configuration changes through file watchers.
 package cmd
 
 import (

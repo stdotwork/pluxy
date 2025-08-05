@@ -1,3 +1,6 @@
+// Package auth provides OAuth2 authentication functionality for Google Cloud APIs.
+// It handles the complete OAuth2 flow including token storage, web-based authentication,
+// proxy support, and automatic token refresh. The package supports both SOCKS5 and HTTP/HTTPS proxies.
 package auth
 
 import (
@@ -39,7 +42,7 @@ var (
 // initiating a new web-based OAuth flow if necessary, and refreshing tokens.
 func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.Config) (*http.Client, error) {
 	// Configure proxy settings for the HTTP client if a proxy URL is provided.
-	proxyURL, err := url.Parse(cfg.ProxyUrl)
+	proxyURL, err := url.Parse(cfg.ProxyURL)
 	if err == nil {
 		var transport *http.Transport
 		if proxyURL.Scheme == "socks5" {

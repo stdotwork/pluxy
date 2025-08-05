@@ -1,3 +1,6 @@
+// Package translator provides data translation and format conversion utilities
+// for the CLI Proxy API. It includes MIME type mappings and other translation
+// functions used across different API endpoints.
 package translator
 
 // MimeTypes is a comprehensive map of file extensions to their corresponding MIME types.

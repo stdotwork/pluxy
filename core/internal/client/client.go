@@ -1,3 +1,7 @@
+// Package client provides HTTP client functionality for interacting with Google Cloud AI APIs.
+// It handles OAuth2 authentication, token management, request/response processing,
+// streaming communication, quota management, and automatic model fallback.
+// The package supports both direct API key authentication and OAuth2 flows.
 package client
 
 import (
@@ -29,7 +33,7 @@ const (
 	pluginVersion      = "0.1.9"
 
 	glEndPoint   = "https://generativelanguage.googleapis.com"
-	glApiVersion = "v1beta"
+	glAPIVersion = "v1beta"
 )
 
 var (
@@ -64,30 +68,37 @@ func NewClient(httpClient *http.Client, ts *auth.TokenStorage, cfg *config.Confi
 	}
 }
 
+// SetProjectID updates the project ID for the client's token storage.
 func (c *Client) SetProjectID(projectID string) {
 	c.tokenStorage.ProjectID = projectID
 }
 
+// SetIsAuto configures whether the client should operate in automatic mode.
 func (c *Client) SetIsAuto(auto bool) {
 	c.tokenStorage.Auto = auto
 }
 
+// SetIsChecked sets the checked status for the client's token storage.
 func (c *Client) SetIsChecked(checked bool) {
 	c.tokenStorage.Checked = checked
 }
 
+// IsChecked returns whether the client's token storage has been checked.
 func (c *Client) IsChecked() bool {
 	return c.tokenStorage.Checked
 }
 
+// IsAuto returns whether the client is operating in automatic mode.
 func (c *Client) IsAuto() bool {
 	return c.tokenStorage.Auto
 }
 
+// GetEmail returns the email address associated with the client's token storage.
 func (c *Client) GetEmail() string {
 	return c.tokenStorage.Email
 }
 
+// GetProjectID returns the Google Cloud project ID from the client's token storage.
 func (c *Client) GetProjectID() string {
 	if c.tokenStorage != nil {
 		return c.tokenStorage.ProjectID
@@ -95,6 +106,7 @@ func (c *Client) GetProjectID() string {
 	return ""
 }
 
+// GetGenerativeLanguageAPIKey returns the generative language API key if configured.
 func (c *Client) GetGenerativeLanguageAPIKey() string {
 	return c.glAPIKey
 }
@@ -267,10 +279,10 @@ func (c *Client) APIRequest(ctx context.Context, endpoint string, body interface
 	} else {
 		if endpoint == "countTokens" {
 			modelResult := gjson.GetBytes(jsonBody, "model")
-			url = fmt.Sprintf("%s/%s/models/%s:%s", glEndPoint, glApiVersion, modelResult.String(), endpoint)
+			url = fmt.Sprintf("%s/%s/models/%s:%s", glEndPoint, glAPIVersion, modelResult.String(), endpoint)
 		} else {
 			modelResult := gjson.GetBytes(jsonBody, "model")
-			url = fmt.Sprintf("%s/%s/models/%s:%s", glEndPoint, glApiVersion, modelResult.String(), endpoint)
+			url = fmt.Sprintf("%s/%s/models/%s:%s", glEndPoint, glAPIVersion, modelResult.String(), endpoint)
 			if alt == "" && stream {
 				url = url + "?alt=sse"
 			} else {
@@ -333,7 +345,7 @@ func (c *Client) APIRequest(ctx context.Context, endpoint string, body interface
 }
 
 // SendMessage handles a single conversational turn, including tool calls.
-func (c *Client) SendMessage(ctx context.Context, rawJson []byte, model string, systemInstruction *Content, contents []Content, tools []ToolDeclaration) ([]byte, *ErrorMessage) {
+func (c *Client) SendMessage(ctx context.Context, rawJSON []byte, model string, systemInstruction *Content, contents []Content, tools []ToolDeclaration) ([]byte, *ErrorMessage) {
 	request := GenerateContentRequest{
 		Contents: contents,
 		GenerationConfig: GenerationConfig{
@@ -357,7 +369,7 @@ func (c *Client) SendMessage(ctx context.Context, rawJson []byte, model string, 
 
 	// log.Debug(string(byteRequestBody))
 
-	reasoningEffortResult := gjson.GetBytes(rawJson, "reasoning_effort")
+	reasoningEffortResult := gjson.GetBytes(rawJSON, "reasoning_effort")
 	if reasoningEffortResult.String() == "none" {
 		byteRequestBody, _ = sjson.DeleteBytes(byteRequestBody, "request.generationConfig.thinkingConfig.include_thoughts")
 		byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.thinkingConfig.thinkingBudget", 0)
@@ -373,17 +385,17 @@ func (c *Client) SendMessage(ctx context.Context, rawJson []byte, model string, 
 		byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
 	}
 
-	temperatureResult := gjson.GetBytes(rawJson, "temperature")
+	temperatureResult := gjson.GetBytes(rawJSON, "temperature")
 	if temperatureResult.Exists() && temperatureResult.Type == gjson.Number {
 		byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.temperature", temperatureResult.Num)
 	}
 
-	topPResult := gjson.GetBytes(rawJson, "top_p")
+	topPResult := gjson.GetBytes(rawJSON, "top_p")
 	if topPResult.Exists() && topPResult.Type == gjson.Number {
 		byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.topP", topPResult.Num)
 	}
 
-	topKResult := gjson.GetBytes(rawJson, "top_k")
+	topKResult := gjson.GetBytes(rawJSON, "top_k")
 	if topKResult.Exists() && topKResult.Type == gjson.Number {
 		byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.topK", topKResult.Num)
 	}
@@ -430,7 +442,7 @@ func (c *Client) SendMessage(ctx context.Context, rawJson []byte, model string, 
 // This function implements a sophisticated streaming system that supports tool calls, reasoning modes,
 // quota management, and automatic model fallback. It returns two channels for asynchronous communication:
 // one for streaming response data and another for error handling.
-func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model string, systemInstruction *Content, contents []Content, tools []ToolDeclaration, includeThoughts ...bool) (<-chan []byte, <-chan *ErrorMessage) {
+func (c *Client) SendMessageStream(ctx context.Context, rawJSON []byte, model string, systemInstruction *Content, contents []Content, tools []ToolDeclaration, includeThoughts ...bool) (<-chan []byte, <-chan *ErrorMessage) {
 	// Define the data prefix used in Server-Sent Events streaming format
 	dataTag := []byte("data: ")
 
@@ -486,7 +498,7 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 
 		// Parse and configure reasoning effort levels from the original request
 		// This maps Claude-style reasoning effort parameters to Gemini's thinking budget system
-		reasoningEffortResult := gjson.GetBytes(rawJson, "reasoning_effort")
+		reasoningEffortResult := gjson.GetBytes(rawJSON, "reasoning_effort")
 		if reasoningEffortResult.String() == "none" {
 			// Disable thinking entirely for fastest responses
 			byteRequestBody, _ = sjson.DeleteBytes(byteRequestBody, "request.generationConfig.thinkingConfig.include_thoughts")
@@ -510,21 +522,21 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 
 		// Configure temperature parameter for response randomness control
 		// Temperature affects the creativity vs consistency trade-off in responses
-		temperatureResult := gjson.GetBytes(rawJson, "temperature")
+		temperatureResult := gjson.GetBytes(rawJSON, "temperature")
 		if temperatureResult.Exists() && temperatureResult.Type == gjson.Number {
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.temperature", temperatureResult.Num)
 		}
 
 		// Configure top-p parameter for nucleus sampling
 		// Controls the cumulative probability threshold for token selection
-		topPResult := gjson.GetBytes(rawJson, "top_p")
+		topPResult := gjson.GetBytes(rawJSON, "top_p")
 		if topPResult.Exists() && topPResult.Type == gjson.Number {
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.topP", topPResult.Num)
 		}
 
 		// Configure top-k parameter for limiting token candidates
 		// Restricts the model to consider only the top K most likely tokens
-		topKResult := gjson.GetBytes(rawJson, "top_k")
+		topKResult := gjson.GetBytes(rawJSON, "top_k")
 		if topKResult.Exists() && topKResult.Type == gjson.Number {
 			byteRequestBody, _ = sjson.SetBytes(byteRequestBody, "request.generationConfig.topK", topKResult.Num)
 		}
@@ -608,8 +620,8 @@ func (c *Client) SendMessageStream(ctx context.Context, rawJson []byte, model st
 }
 
 // SendRawTokenCount handles a token count.
-func (c *Client) SendRawTokenCount(ctx context.Context, rawJson []byte, alt string) ([]byte, *ErrorMessage) {
-	modelResult := gjson.GetBytes(rawJson, "model")
+func (c *Client) SendRawTokenCount(ctx context.Context, rawJSON []byte, alt string) ([]byte, *ErrorMessage) {
+	modelResult := gjson.GetBytes(rawJSON, "model")
 	model := modelResult.String()
 	modelName := model
 	for {
@@ -618,7 +630,7 @@ func (c *Client) SendRawTokenCount(ctx context.Context, rawJson []byte, alt stri
 				modelName = c.getPreviewModel(model)
 				if modelName != "" {
 					log.Debugf("Model %s is quota exceeded. Switch to preview model %s", model, modelName)
-					rawJson, _ = sjson.SetBytes(rawJson, "model", modelName)
+					rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelName)
 					continue
 				}
 			}
@@ -628,7 +640,7 @@ func (c *Client) SendRawTokenCount(ctx context.Context, rawJson []byte, alt stri
 			}
 		}
 
-		respBody, err := c.APIRequest(ctx, "countTokens", rawJson, alt, false)
+		respBody, err := c.APIRequest(ctx, "countTokens", rawJSON, alt, false)
 		if err != nil {
 			if err.StatusCode == 429 {
 				now := time.Now()
@@ -649,12 +661,12 @@ func (c *Client) SendRawTokenCount(ctx context.Context, rawJson []byte, alt stri
 }
 
 // SendRawMessage handles a single conversational turn, including tool calls.
-func (c *Client) SendRawMessage(ctx context.Context, rawJson []byte, alt string) ([]byte, *ErrorMessage) {
+func (c *Client) SendRawMessage(ctx context.Context, rawJSON []byte, alt string) ([]byte, *ErrorMessage) {
 	if c.glAPIKey == "" {
-		rawJson, _ = sjson.SetBytes(rawJson, "project", c.GetProjectID())
+		rawJSON, _ = sjson.SetBytes(rawJSON, "project", c.GetProjectID())
 	}
 
-	modelResult := gjson.GetBytes(rawJson, "model")
+	modelResult := gjson.GetBytes(rawJSON, "model")
 	model := modelResult.String()
 	modelName := model
 	for {
@@ -663,7 +675,7 @@ func (c *Client) SendRawMessage(ctx context.Context, rawJson []byte, alt string)
 				modelName = c.getPreviewModel(model)
 				if modelName != "" {
 					log.Debugf("Model %s is quota exceeded. Switch to preview model %s", model, modelName)
-					rawJson, _ = sjson.SetBytes(rawJson, "model", modelName)
+					rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelName)
 					continue
 				}
 			}
@@ -673,7 +685,7 @@ func (c *Client) SendRawMessage(ctx context.Context, rawJson []byte, alt string)
 			}
 		}
 
-		respBody, err := c.APIRequest(ctx, "generateContent", rawJson, alt, false)
+		respBody, err := c.APIRequest(ctx, "generateContent", rawJSON, alt, false)
 		if err != nil {
 			if err.StatusCode == 429 {
 				now := time.Now()
@@ -694,7 +706,7 @@ func (c *Client) SendRawMessage(ctx context.Context, rawJson []byte, alt string)
 }
 
 // SendRawMessageStream handles a single conversational turn, including tool calls.
-func (c *Client) SendRawMessageStream(ctx context.Context, rawJson []byte, alt string) (<-chan []byte, <-chan *ErrorMessage) {
+func (c *Client) SendRawMessageStream(ctx context.Context, rawJSON []byte, alt string) (<-chan []byte, <-chan *ErrorMessage) {
 	dataTag := []byte("data: ")
 	errChan := make(chan *ErrorMessage)
 	dataChan := make(chan []byte)
@@ -703,10 +715,10 @@ func (c *Client) SendRawMessageStream(ctx context.Context, rawJson []byte, alt s
 		defer close(dataChan)
 
 		if c.glAPIKey == "" {
-			rawJson, _ = sjson.SetBytes(rawJson, "project", c.GetProjectID())
+			rawJSON, _ = sjson.SetBytes(rawJSON, "project", c.GetProjectID())
 		}
 
-		modelResult := gjson.GetBytes(rawJson, "model")
+		modelResult := gjson.GetBytes(rawJSON, "model")
 		model := modelResult.String()
 		modelName := model
 		var stream io.ReadCloser
@@ -716,7 +728,7 @@ func (c *Client) SendRawMessageStream(ctx context.Context, rawJson []byte, alt s
 					modelName = c.getPreviewModel(model)
 					if modelName != "" {
 						log.Debugf("Model %s is quota exceeded. Switch to preview model %s", model, modelName)
-						rawJson, _ = sjson.SetBytes(rawJson, "model", modelName)
+						rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelName)
 						continue
 					}
 				}
@@ -727,7 +739,7 @@ func (c *Client) SendRawMessageStream(ctx context.Context, rawJson []byte, alt s
 				return
 			}
 			var err *ErrorMessage
-			stream, err = c.APIRequest(ctx, "streamGenerateContent", rawJson, alt, true)
+			stream, err = c.APIRequest(ctx, "streamGenerateContent", rawJSON, alt, true)
 			if err != nil {
 				if err.StatusCode == 429 {
 					now := time.Now()
@@ -774,6 +786,8 @@ func (c *Client) SendRawMessageStream(ctx context.Context, rawJson []byte, alt s
 	return dataChan, errChan
 }
 
+// isModelQuotaExceeded checks if the specified model has exceeded its quota
+// within the last 30 minutes.
 func (c *Client) isModelQuotaExceeded(model string) bool {
 	if lastExceededTime, hasKey := c.modelQuotaExceeded[model]; hasKey {
 		duration := time.Now().Sub(*lastExceededTime)
@@ -785,6 +799,8 @@ func (c *Client) isModelQuotaExceeded(model string) bool {
 	return false
 }
 
+// getPreviewModel returns an available preview model for the given base model,
+// or an empty string if no preview models are available or all are quota exceeded.
 func (c *Client) getPreviewModel(model string) string {
 	if models, hasKey := previewModels[model]; hasKey {
 		for i := 0; i < len(models); i++ {
@@ -796,6 +812,8 @@ func (c *Client) getPreviewModel(model string) string {
 	return ""
 }
 
+// IsModelQuotaExceeded returns true if the specified model has exceeded its quota
+// and no fallback options are available.
 func (c *Client) IsModelQuotaExceeded(model string) bool {
 	if c.isModelQuotaExceeded(model) {
 		if c.cfg.QuotaExceeded.SwitchPreviewModel {
@@ -824,20 +842,20 @@ func (c *Client) CheckCloudAPIIsEnabled() (bool, error) {
 	if err != nil {
 		// If a 403 Forbidden error occurs, it likely means the API is not enabled.
 		if err.StatusCode == 403 {
-			errJson := err.Error.Error()
+			errJSON := err.Error.Error()
 			// Check for a specific error code and extract the activation URL.
-			if gjson.Get(errJson, "error.code").Int() == 403 {
-				activationUrl := gjson.Get(errJson, "error.details.0.metadata.activationUrl").String()
-				if activationUrl != "" {
+			if gjson.Get(errJSON, "error.code").Int() == 403 {
+				activationURL := gjson.Get(errJSON, "error.details.0.metadata.activationUrl").String()
+				if activationURL != "" {
 					log.Warnf(
 						"\n\nPlease activate your account with this url:\n\n%s\n And execute this command again:\n%s --login --project_id %s",
-						activationUrl,
+						activationURL,
 						os.Args[0],
 						c.tokenStorage.ProjectID,
 					)
 				}
 			}
-			log.Warnf("\n\nPlease copy this message and create an issue.\n\n%s\n\n", errJson)
+			log.Warnf("\n\nPlease copy this message and create an issue.\n\n%s\n\n", errJSON)
 			return false, nil
 		}
 		return false, err.Error

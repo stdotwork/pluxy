@@ -1,50 +1,42 @@
-package api
+// Package openai provides HTTP handlers for OpenAI API endpoints.
+// This package implements the OpenAI-compatible API interface, including model listing
+// and chat completion functionality. It supports both streaming and non-streaming responses,
+// and manages a pool of clients to interact with backend services.
+// The handlers translate OpenAI API requests to the appropriate backend format and
+// convert responses back to OpenAI-compatible format.
+package openai
 
 import (
 	"context"
 	"fmt"
-	"github.com/luispater/CLIProxyAPI/internal/api/translator"
+	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
+	"github.com/luispater/CLIProxyAPI/internal/api/translator/openai"
 	"github.com/luispater/CLIProxyAPI/internal/client"
-	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-var (
-	mutex               = &sync.Mutex{}
-	lastUsedClientIndex = 0
-)
-
-// APIHandlers contains the handlers for API endpoints.
+// OpenAIAPIHandlers contains the handlers for OpenAI API endpoints.
 // It holds a pool of clients to interact with the backend service.
-type APIHandlers struct {
-	cliClients []*client.Client
-	cfg        *config.Config
+type OpenAIAPIHandlers struct {
+	*handlers.APIHandlers
 }
 
-// NewAPIHandlers creates a new API handlers instance.
-// It takes a slice of clients and a debug flag as input.
-func NewAPIHandlers(cliClients []*client.Client, cfg *config.Config) *APIHandlers {
-	return &APIHandlers{
-		cliClients: cliClients,
-		cfg:        cfg,
+// NewOpenAIAPIHandlers creates a new OpenAI API handlers instance.
+// It takes an APIHandlers instance as input and returns an OpenAIAPIHandlers.
+func NewOpenAIAPIHandlers(apiHandlers *handlers.APIHandlers) *OpenAIAPIHandlers {
+	return &OpenAIAPIHandlers{
+		APIHandlers: apiHandlers,
 	}
-}
-
-// UpdateClients updates the handlers' client list and configuration
-func (h *APIHandlers) UpdateClients(clients []*client.Client, cfg *config.Config) {
-	h.cliClients = clients
-	h.cfg = cfg
 }
 
 // Models handles the /v1/models endpoint.
 // It returns a hardcoded list of available AI models.
-func (h *APIHandlers) Models(c *gin.Context) {
+func (h *OpenAIAPIHandlers) Models(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"data": []map[string]any{
 			{
@@ -91,63 +83,15 @@ func (h *APIHandlers) Models(c *gin.Context) {
 	})
 }
 
-func (h *APIHandlers) getClient(modelName string, isGenerateContent ...bool) (*client.Client, *client.ErrorMessage) {
-	if len(h.cliClients) == 0 {
-		return nil, &client.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("no clients available")}
-	}
-
-	var cliClient *client.Client
-
-	// Lock the mutex to update the last used client index
-	mutex.Lock()
-	startIndex := lastUsedClientIndex
-	if (len(isGenerateContent) > 0 && isGenerateContent[0]) || len(isGenerateContent) == 0 {
-		currentIndex := (startIndex + 1) % len(h.cliClients)
-		lastUsedClientIndex = currentIndex
-	}
-	mutex.Unlock()
-
-	// Reorder the client to start from the last used index
-	reorderedClients := make([]*client.Client, 0)
-	for i := 0; i < len(h.cliClients); i++ {
-		cliClient = h.cliClients[(startIndex+1+i)%len(h.cliClients)]
-		if cliClient.IsModelQuotaExceeded(modelName) {
-			log.Debugf("Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.GetProjectID())
-			cliClient = nil
-			continue
-		}
-		reorderedClients = append(reorderedClients, cliClient)
-	}
-
-	if len(reorderedClients) == 0 {
-		return nil, &client.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName)}
-	}
-
-	locked := false
-	for i := 0; i < len(reorderedClients); i++ {
-		cliClient = reorderedClients[i]
-		if cliClient.RequestMutex.TryLock() {
-			locked = true
-			break
-		}
-	}
-	if !locked {
-		cliClient = h.cliClients[0]
-		cliClient.RequestMutex.Lock()
-	}
-
-	return cliClient, nil
-}
-
 // ChatCompletions handles the /v1/chat/completions endpoint.
 // It determines whether the request is for a streaming or non-streaming response
 // and calls the appropriate handler.
-func (h *APIHandlers) ChatCompletions(c *gin.Context) {
-	rawJson, err := c.GetRawData()
+func (h *OpenAIAPIHandlers) ChatCompletions(c *gin.Context) {
+	rawJSON, err := c.GetRawData()
 	// If data retrieval fails, return a 400 Bad Request error.
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error: ErrorDetail{
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
 				Message: fmt.Sprintf("Invalid request: %v", err),
 				Type:    "invalid_request_error",
 			},
@@ -156,21 +100,21 @@ func (h *APIHandlers) ChatCompletions(c *gin.Context) {
 	}
 
 	// Check if the client requested a streaming response.
-	streamResult := gjson.GetBytes(rawJson, "stream")
+	streamResult := gjson.GetBytes(rawJSON, "stream")
 	if streamResult.Type == gjson.True {
-		h.handleStreamingResponse(c, rawJson)
+		h.handleStreamingResponse(c, rawJSON)
 	} else {
-		h.handleNonStreamingResponse(c, rawJson)
+		h.handleNonStreamingResponse(c, rawJSON)
 	}
 }
 
 // handleNonStreamingResponse handles non-streaming chat completion responses.
 // It selects a client from the pool, sends the request, and aggregates the response
 // before sending it back to the client.
-func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte) {
+func (h *OpenAIAPIHandlers) handleNonStreamingResponse(c *gin.Context, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
 
-	modelName, systemInstruction, contents, tools := translator.PrepareRequest(rawJson)
+	modelName, systemInstruction, contents, tools := openai.PrepareRequest(rawJSON)
 	cliCtx, cliCancel := context.WithCancel(context.Background())
 	var cliClient *client.Client
 	defer func() {
@@ -181,7 +125,7 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 
 	for {
 		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.getClient(modelName)
+		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
 			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
@@ -197,9 +141,9 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 		}
 
-		resp, err := cliClient.SendMessage(cliCtx, rawJson, modelName, systemInstruction, contents, tools)
+		resp, err := cliClient.SendMessage(cliCtx, rawJSON, modelName, systemInstruction, contents, tools)
 		if err != nil {
-			if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
 				continue
 			} else {
 				c.Status(err.StatusCode)
@@ -208,7 +152,7 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 			}
 			break
 		} else {
-			openAIFormat := translator.ConvertCliToOpenAINonStream(resp, time.Now().Unix(), isGlAPIKey)
+			openAIFormat := openai.ConvertCliToOpenAINonStream(resp, time.Now().Unix(), isGlAPIKey)
 			if openAIFormat != "" {
 				_, _ = c.Writer.Write([]byte(openAIFormat))
 			}
@@ -219,7 +163,7 @@ func (h *APIHandlers) handleNonStreamingResponse(c *gin.Context, rawJson []byte)
 }
 
 // handleStreamingResponse handles streaming responses
-func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
+func (h *OpenAIAPIHandlers) handleStreamingResponse(c *gin.Context, rawJSON []byte) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -228,8 +172,8 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 	// Get the http.Flusher interface to manually flush the response.
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error: ErrorDetail{
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
 				Message: "Streaming not supported",
 				Type:    "server_error",
 			},
@@ -238,7 +182,7 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 	}
 
 	// Prepare the request for the backend client.
-	modelName, systemInstruction, contents, tools := translator.PrepareRequest(rawJson)
+	modelName, systemInstruction, contents, tools := openai.PrepareRequest(rawJSON)
 	cliCtx, cliCancel := context.WithCancel(context.Background())
 	var cliClient *client.Client
 	defer func() {
@@ -251,7 +195,7 @@ func (h *APIHandlers) handleStreamingResponse(c *gin.Context, rawJson []byte) {
 outLoop:
 	for {
 		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.getClient(modelName)
+		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
 			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
@@ -268,7 +212,7 @@ outLoop:
 			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 		}
 		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJson, modelName, systemInstruction, contents, tools)
+		respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJSON, modelName, systemInstruction, contents, tools)
 		hasFirstResponse := false
 		for {
 			select {
@@ -287,19 +231,18 @@ outLoop:
 					flusher.Flush()
 					cliCancel()
 					return
-				} else {
-					// Convert the chunk to OpenAI format and send it to the client.
-					hasFirstResponse = true
-					openAIFormat := translator.ConvertCliToOpenAI(chunk, time.Now().Unix(), isGlAPIKey)
-					if openAIFormat != "" {
-						_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
-						flusher.Flush()
-					}
+				}
+				// Convert the chunk to OpenAI format and send it to the client.
+				hasFirstResponse = true
+				openAIFormat := openai.ConvertCliToOpenAI(chunk, time.Now().Unix(), isGlAPIKey)
+				if openAIFormat != "" {
+					_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
+					flusher.Flush()
 				}
 			// Handle errors from the backend.
 			case err, okError := <-errChan:
 				if okError {
-					if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
 						continue outLoop
 					} else {
 						c.Status(err.StatusCode)

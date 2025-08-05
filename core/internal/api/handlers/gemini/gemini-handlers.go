@@ -1,10 +1,16 @@
-package api
+// Package gemini provides HTTP handlers for Gemini API endpoints.
+// This package implements handlers for managing Gemini model operations including
+// model listing, content generation, streaming content generation, and token counting.
+// It serves as a proxy layer between clients and the Gemini backend service,
+// handling request translation, client management, and response processing.
+package gemini
 
 import (
 	"context"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/internal/api/translator"
+	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
+	"github.com/luispater/CLIProxyAPI/internal/api/translator/gemini/cli"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -14,7 +20,23 @@ import (
 	"time"
 )
 
-func (h *APIHandlers) GeminiModels(c *gin.Context) {
+// GeminiAPIHandlers contains the handlers for Gemini API endpoints.
+// It holds a pool of clients to interact with the backend service.
+type GeminiAPIHandlers struct {
+	*handlers.APIHandlers
+}
+
+// NewGeminiAPIHandlers creates a new Gemini API handlers instance.
+// It takes an APIHandlers instance as input and returns a GeminiAPIHandlers.
+func NewGeminiAPIHandlers(apiHandlers *handlers.APIHandlers) *GeminiAPIHandlers {
+	return &GeminiAPIHandlers{
+		APIHandlers: apiHandlers,
+	}
+}
+
+// GeminiModels handles the Gemini models listing endpoint.
+// It returns a JSON response containing available Gemini models and their specifications.
+func (h *GeminiAPIHandlers) GeminiModels(c *gin.Context) {
 	c.Status(http.StatusOK)
 	c.Header("Content-Type", "application/json; charset=UTF-8")
 	_, _ = c.Writer.Write([]byte(`{"models":[{"name":"models/gemini-2.5-flash","version":"001","displayName":"Gemini `))
@@ -30,13 +52,15 @@ func (h *APIHandlers) GeminiModels(c *gin.Context) {
 	_, _ = c.Writer.Write([]byte(`e":2,"thinking":true}],"nextPageToken":""}`))
 }
 
-func (h *APIHandlers) GeminiGetHandler(c *gin.Context) {
+// GeminiGetHandler handles GET requests for specific Gemini model information.
+// It returns detailed information about a specific Gemini model based on the action parameter.
+func (h *GeminiAPIHandlers) GeminiGetHandler(c *gin.Context) {
 	var request struct {
 		Action string `uri:"action" binding:"required"`
 	}
 	if err := c.ShouldBindUri(&request); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error: ErrorDetail{
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
 				Message: fmt.Sprintf("Invalid request: %v", err),
 				Type:    "invalid_request_error",
 			},
@@ -68,13 +92,15 @@ func (h *APIHandlers) GeminiGetHandler(c *gin.Context) {
 	}
 }
 
-func (h *APIHandlers) GeminiHandler(c *gin.Context) {
+// GeminiHandler handles POST requests for Gemini API operations.
+// It routes requests to appropriate handlers based on the action parameter (model:method format).
+func (h *GeminiAPIHandlers) GeminiHandler(c *gin.Context) {
 	var request struct {
 		Action string `uri:"action" binding:"required"`
 	}
 	if err := c.ShouldBindUri(&request); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error: ErrorDetail{
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
 				Message: fmt.Sprintf("Invalid request: %v", err),
 				Type:    "invalid_request_error",
 			},
@@ -83,8 +109,8 @@ func (h *APIHandlers) GeminiHandler(c *gin.Context) {
 	}
 	action := strings.Split(request.Action, ":")
 	if len(action) != 2 {
-		c.JSON(http.StatusNotFound, ErrorResponse{
-			Error: ErrorDetail{
+		c.JSON(http.StatusNotFound, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
 				Message: fmt.Sprintf("%s not found.", c.Request.URL.Path),
 				Type:    "invalid_request_error",
 			},
@@ -94,20 +120,20 @@ func (h *APIHandlers) GeminiHandler(c *gin.Context) {
 
 	modelName := action[0]
 	method := action[1]
-	rawJson, _ := c.GetRawData()
-	rawJson, _ = sjson.SetBytes(rawJson, "model", []byte(modelName))
+	rawJSON, _ := c.GetRawData()
+	rawJSON, _ = sjson.SetBytes(rawJSON, "model", []byte(modelName))
 
 	if method == "generateContent" {
-		h.geminiGenerateContent(c, rawJson)
+		h.geminiGenerateContent(c, rawJSON)
 	} else if method == "streamGenerateContent" {
-		h.geminiStreamGenerateContent(c, rawJson)
+		h.geminiStreamGenerateContent(c, rawJSON)
 	} else if method == "countTokens" {
-		h.geminiCountTokens(c, rawJson)
+		h.geminiCountTokens(c, rawJSON)
 	}
 }
 
-func (h *APIHandlers) geminiStreamGenerateContent(c *gin.Context, rawJson []byte) {
-	alt := h.getAlt(c)
+func (h *GeminiAPIHandlers) geminiStreamGenerateContent(c *gin.Context, rawJSON []byte) {
+	alt := h.GetAlt(c)
 
 	if alt == "" {
 		c.Header("Content-Type", "text/event-stream")
@@ -119,8 +145,8 @@ func (h *APIHandlers) geminiStreamGenerateContent(c *gin.Context, rawJson []byte
 	// Get the http.Flusher interface to manually flush the response.
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error: ErrorDetail{
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
 				Message: "Streaming not supported",
 				Type:    "server_error",
 			},
@@ -128,7 +154,7 @@ func (h *APIHandlers) geminiStreamGenerateContent(c *gin.Context, rawJson []byte
 		return
 	}
 
-	modelResult := gjson.GetBytes(rawJson, "model")
+	modelResult := gjson.GetBytes(rawJSON, "model")
 	modelName := modelResult.String()
 
 	cliCtx, cliCancel := context.WithCancel(context.Background())
@@ -143,7 +169,7 @@ func (h *APIHandlers) geminiStreamGenerateContent(c *gin.Context, rawJson []byte
 outLoop:
 	for {
 		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.getClient(modelName)
+		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
 			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
@@ -153,21 +179,21 @@ outLoop:
 		}
 
 		template := ""
-		parsed := gjson.Parse(string(rawJson))
+		parsed := gjson.Parse(string(rawJSON))
 		contents := parsed.Get("request.contents")
 		if contents.Exists() {
-			template = string(rawJson)
+			template = string(rawJSON)
 		} else {
 			template = `{"project":"","request":{},"model":""}`
-			template, _ = sjson.SetRaw(template, "request", string(rawJson))
+			template, _ = sjson.SetRaw(template, "request", string(rawJSON))
 			template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
 			template, _ = sjson.Delete(template, "request.model")
 		}
 
-		template, errFixCLIToolResponse := translator.FixCLIToolResponse(template)
+		template, errFixCLIToolResponse := cli.FixCLIToolResponse(template)
 		if errFixCLIToolResponse != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Error: ErrorDetail{
+			c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+				Error: handlers.ErrorDetail{
 					Message: errFixCLIToolResponse.Error(),
 					Type:    "server_error",
 				},
@@ -181,7 +207,7 @@ outLoop:
 			template, _ = sjson.SetRaw(template, "request.systemInstruction", systemInstructionResult.Raw)
 			template, _ = sjson.Delete(template, "request.system_instruction")
 		}
-		rawJson = []byte(template)
+		rawJSON = []byte(template)
 
 		if glAPIKey := cliClient.GetGenerativeLanguageAPIKey(); glAPIKey != "" {
 			log.Debugf("Request use generative language API Key: %s", glAPIKey)
@@ -190,7 +216,7 @@ outLoop:
 		}
 
 		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJson, alt)
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJSON, alt)
 		for {
 			select {
 			// Handle client disconnection.
@@ -205,41 +231,40 @@ outLoop:
 				if !okStream {
 					cliCancel()
 					return
-				} else {
-					if cliClient.GetGenerativeLanguageAPIKey() == "" {
-						if alt == "" {
-							responseResult := gjson.GetBytes(chunk, "response")
-							if responseResult.Exists() {
-								chunk = []byte(responseResult.Raw)
-							}
-						} else {
-							chunkTemplate := "[]"
-							responseResult := gjson.ParseBytes(chunk)
-							if responseResult.IsArray() {
-								responseResultItems := responseResult.Array()
-								for i := 0; i < len(responseResultItems); i++ {
-									responseResultItem := responseResultItems[i]
-									if responseResultItem.Get("response").Exists() {
-										chunkTemplate, _ = sjson.SetRaw(chunkTemplate, "-1", responseResultItem.Get("response").Raw)
-									}
+				}
+				if cliClient.GetGenerativeLanguageAPIKey() == "" {
+					if alt == "" {
+						responseResult := gjson.GetBytes(chunk, "response")
+						if responseResult.Exists() {
+							chunk = []byte(responseResult.Raw)
+						}
+					} else {
+						chunkTemplate := "[]"
+						responseResult := gjson.ParseBytes(chunk)
+						if responseResult.IsArray() {
+							responseResultItems := responseResult.Array()
+							for i := 0; i < len(responseResultItems); i++ {
+								responseResultItem := responseResultItems[i]
+								if responseResultItem.Get("response").Exists() {
+									chunkTemplate, _ = sjson.SetRaw(chunkTemplate, "-1", responseResultItem.Get("response").Raw)
 								}
 							}
-							chunk = []byte(chunkTemplate)
 						}
+						chunk = []byte(chunkTemplate)
 					}
-					if alt == "" {
-						_, _ = c.Writer.Write([]byte("data: "))
-						_, _ = c.Writer.Write(chunk)
-						_, _ = c.Writer.Write([]byte("\n\n"))
-					} else {
-						_, _ = c.Writer.Write(chunk)
-					}
-					flusher.Flush()
 				}
+				if alt == "" {
+					_, _ = c.Writer.Write([]byte("data: "))
+					_, _ = c.Writer.Write(chunk)
+					_, _ = c.Writer.Write([]byte("\n\n"))
+				} else {
+					_, _ = c.Writer.Write(chunk)
+				}
+				flusher.Flush()
 			// Handle errors from the backend.
 			case err, okError := <-errChan:
 				if okError {
-					if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
 						log.Debugf("quota exceeded, switch client")
 						continue outLoop
 					} else {
@@ -258,12 +283,12 @@ outLoop:
 	}
 }
 
-func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
+func (h *GeminiAPIHandlers) geminiCountTokens(c *gin.Context, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
 
-	alt := h.getAlt(c)
-	// orgRawJson := rawJson
-	modelResult := gjson.GetBytes(rawJson, "model")
+	alt := h.GetAlt(c)
+	// orgrawJSON := rawJSON
+	modelResult := gjson.GetBytes(rawJSON, "model")
 	modelName := modelResult.String()
 	cliCtx, cliCancel := context.WithCancel(context.Background())
 	var cliClient *client.Client
@@ -275,7 +300,7 @@ func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
 
 	for {
 		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.getClient(modelName, false)
+		cliClient, errorResponse = h.GetClient(modelName, false)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
 			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
@@ -289,27 +314,27 @@ func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
 			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 
 			template := `{"request":{}}`
-			if gjson.GetBytes(rawJson, "generateContentRequest").Exists() {
-				template, _ = sjson.SetRaw(template, "request", gjson.GetBytes(rawJson, "generateContentRequest").Raw)
+			if gjson.GetBytes(rawJSON, "generateContentRequest").Exists() {
+				template, _ = sjson.SetRaw(template, "request", gjson.GetBytes(rawJSON, "generateContentRequest").Raw)
 				template, _ = sjson.Delete(template, "generateContentRequest")
-			} else if gjson.GetBytes(rawJson, "contents").Exists() {
-				template, _ = sjson.SetRaw(template, "request.contents", gjson.GetBytes(rawJson, "contents").Raw)
+			} else if gjson.GetBytes(rawJSON, "contents").Exists() {
+				template, _ = sjson.SetRaw(template, "request.contents", gjson.GetBytes(rawJSON, "contents").Raw)
 				template, _ = sjson.Delete(template, "contents")
 			}
-			rawJson = []byte(template)
+			rawJSON = []byte(template)
 		}
 
-		resp, err := cliClient.SendRawTokenCount(cliCtx, rawJson, alt)
+		resp, err := cliClient.SendRawTokenCount(cliCtx, rawJSON, alt)
 		if err != nil {
-			if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
 				continue
 			} else {
 				c.Status(err.StatusCode)
 				_, _ = c.Writer.Write([]byte(err.Error.Error()))
 				cliCancel()
 				// log.Debugf(err.Error.Error())
-				// log.Debugf(string(rawJson))
-				// log.Debugf(string(orgRawJson))
+				// log.Debugf(string(rawJSON))
+				// log.Debugf(string(orgrawJSON))
 			}
 			break
 		} else {
@@ -326,12 +351,12 @@ func (h *APIHandlers) geminiCountTokens(c *gin.Context, rawJson []byte) {
 	}
 }
 
-func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
+func (h *GeminiAPIHandlers) geminiGenerateContent(c *gin.Context, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
 
-	alt := h.getAlt(c)
+	alt := h.GetAlt(c)
 
-	modelResult := gjson.GetBytes(rawJson, "model")
+	modelResult := gjson.GetBytes(rawJSON, "model")
 	modelName := modelResult.String()
 	cliCtx, cliCancel := context.WithCancel(context.Background())
 	var cliClient *client.Client
@@ -343,7 +368,7 @@ func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 
 	for {
 		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.getClient(modelName)
+		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
 			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
@@ -352,21 +377,21 @@ func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 		}
 
 		template := ""
-		parsed := gjson.Parse(string(rawJson))
+		parsed := gjson.Parse(string(rawJSON))
 		contents := parsed.Get("request.contents")
 		if contents.Exists() {
-			template = string(rawJson)
+			template = string(rawJSON)
 		} else {
 			template = `{"project":"","request":{},"model":""}`
-			template, _ = sjson.SetRaw(template, "request", string(rawJson))
+			template, _ = sjson.SetRaw(template, "request", string(rawJSON))
 			template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
 			template, _ = sjson.Delete(template, "request.model")
 		}
 
-		template, errFixCLIToolResponse := translator.FixCLIToolResponse(template)
+		template, errFixCLIToolResponse := cli.FixCLIToolResponse(template)
 		if errFixCLIToolResponse != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{
-				Error: ErrorDetail{
+			c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+				Error: handlers.ErrorDetail{
 					Message: errFixCLIToolResponse.Error(),
 					Type:    "server_error",
 				},
@@ -380,16 +405,16 @@ func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 			template, _ = sjson.SetRaw(template, "request.systemInstruction", systemInstructionResult.Raw)
 			template, _ = sjson.Delete(template, "request.system_instruction")
 		}
-		rawJson = []byte(template)
+		rawJSON = []byte(template)
 
 		if glAPIKey := cliClient.GetGenerativeLanguageAPIKey(); glAPIKey != "" {
 			log.Debugf("Request use generative language API Key: %s", glAPIKey)
 		} else {
 			log.Debugf("Request use account: %s, project id: %s", cliClient.GetEmail(), cliClient.GetProjectID())
 		}
-		resp, err := cliClient.SendRawMessage(cliCtx, rawJson, alt)
+		resp, err := cliClient.SendRawMessage(cliCtx, rawJSON, alt)
 		if err != nil {
-			if err.StatusCode == 429 && h.cfg.QuotaExceeded.SwitchProject {
+			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
 				continue
 			} else {
 				c.Status(err.StatusCode)
@@ -409,17 +434,4 @@ func (h *APIHandlers) geminiGenerateContent(c *gin.Context, rawJson []byte) {
 			break
 		}
 	}
-}
-
-func (h *APIHandlers) getAlt(c *gin.Context) string {
-	var alt string
-	var hasAlt bool
-	alt, hasAlt = c.GetQuery("alt")
-	if !hasAlt {
-		alt, _ = c.GetQuery("$alt")
-	}
-	if alt == "sse" {
-		return ""
-	}
-	return alt
 }

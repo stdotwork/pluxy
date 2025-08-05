@@ -1,3 +1,7 @@
+// Package api provides the HTTP API server implementation for the CLI Proxy API.
+// It includes the main server struct, routing setup, middleware for CORS and authentication,
+// and integration with various AI API handlers (OpenAI, Claude, Gemini).
+// The server supports hot-reloading of clients and configuration.
 package api
 
 import (
@@ -5,6 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
+	"github.com/luispater/CLIProxyAPI/internal/api/handlers/claude"
+	"github.com/luispater/CLIProxyAPI/internal/api/handlers/gemini"
+	"github.com/luispater/CLIProxyAPI/internal/api/handlers/gemini/cli"
+	"github.com/luispater/CLIProxyAPI/internal/api/handlers/openai"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
@@ -17,7 +26,7 @@ import (
 type Server struct {
 	engine   *gin.Engine
 	server   *http.Server
-	handlers *APIHandlers
+	handlers *handlers.APIHandlers
 	cfg      *config.Config
 }
 
@@ -28,9 +37,6 @@ func NewServer(cfg *config.Config, cliClients []*client.Client) *Server {
 	if !cfg.Debug {
 		gin.SetMode(gin.ReleaseMode)
 	}
-
-	// Create handlers
-	handlers := NewAPIHandlers(cliClients, cfg)
 
 	// Create gin engine
 	engine := gin.New()
@@ -43,7 +49,7 @@ func NewServer(cfg *config.Config, cliClients []*client.Client) *Server {
 	// Create server instance
 	s := &Server{
 		engine:   engine,
-		handlers: handlers,
+		handlers: handlers.NewAPIHandlers(cliClients, cfg),
 		cfg:      cfg,
 	}
 
@@ -62,22 +68,27 @@ func NewServer(cfg *config.Config, cliClients []*client.Client) *Server {
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
+	openaiHandlers := openai.NewOpenAIAPIHandlers(s.handlers)
+	geminiHandlers := gemini.NewGeminiAPIHandlers(s.handlers)
+	geminiCLIHandlers := cli.NewGeminiCLIAPIHandlers(s.handlers)
+	claudeCodeHandlers := claude.NewClaudeCodeAPIHandlers(s.handlers)
+
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
 	v1.Use(AuthMiddleware(s.cfg))
 	{
-		v1.GET("/models", s.handlers.Models)
-		v1.POST("/chat/completions", s.handlers.ChatCompletions)
-		v1.POST("/messages", s.handlers.ClaudeMessages)
+		v1.GET("/models", openaiHandlers.Models)
+		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
+		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 	}
 
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.cfg))
 	{
-		v1beta.GET("/models", s.handlers.GeminiModels)
-		v1beta.POST("/models/:action", s.handlers.GeminiHandler)
-		v1beta.GET("/models/:action", s.handlers.GeminiGetHandler)
+		v1beta.GET("/models", geminiHandlers.GeminiModels)
+		v1beta.POST("/models/:action", geminiHandlers.GeminiHandler)
+		v1beta.GET("/models/:action", geminiHandlers.GeminiGetHandler)
 	}
 
 	// Root endpoint
@@ -91,7 +102,7 @@ func (s *Server) setupRoutes() {
 			},
 		})
 	})
-	s.engine.POST("/v1internal:method", s.handlers.CLIHandler)
+	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
 
 }
 
@@ -150,7 +161,7 @@ func (s *Server) UpdateClients(clients []*client.Client, cfg *config.Config) {
 // using API keys. If no API keys are configured, it allows all requests.
 func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if len(cfg.ApiKeys) == 0 {
+		if len(cfg.APIKeys) == 0 {
 			c.Next()
 			return
 		}
@@ -181,9 +192,9 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 
 		// Find the API key in the in-memory list
 		var foundKey string
-		for i := range cfg.ApiKeys {
-			if cfg.ApiKeys[i] == apiKey || cfg.ApiKeys[i] == authHeaderGoogle || cfg.ApiKeys[i] == authHeaderAnthropic || cfg.ApiKeys[i] == apiKeyQuery {
-				foundKey = cfg.ApiKeys[i]
+		for i := range cfg.APIKeys {
+			if cfg.APIKeys[i] == apiKey || cfg.APIKeys[i] == authHeaderGoogle || cfg.APIKeys[i] == authHeaderAnthropic || cfg.APIKeys[i] == apiKeyQuery {
+				foundKey = cfg.APIKeys[i]
 				break
 			}
 		}

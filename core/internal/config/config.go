@@ -1,3 +1,7 @@
+// Package config provides configuration management for the CLI Proxy API server.
+// It handles loading and parsing YAML configuration files, and provides structured
+// access to application settings including server port, authentication directory,
+// debug settings, proxy configuration, and API keys.
 package config
 
 import (
@@ -14,17 +18,19 @@ type Config struct {
 	AuthDir string `yaml:"auth-dir"`
 	// Debug enables or disables debug-level logging and other debug features.
 	Debug bool `yaml:"debug"`
-	// ProxyUrl is the URL of an optional proxy server to use for outbound requests.
-	ProxyUrl string `yaml:"proxy-url"`
-	// ApiKeys is a list of keys for authenticating clients to this proxy server.
-	ApiKeys []string `yaml:"api-keys"`
+	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
+	ProxyURL string `yaml:"proxy-url"`
+	// APIKeys is a list of keys for authenticating clients to this proxy server.
+	APIKeys []string `yaml:"api-keys"`
 	// QuotaExceeded defines the behavior when a quota is exceeded.
-	QuotaExceeded ConfigQuotaExceeded `yaml:"quota-exceeded"`
+	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded"`
 	// GlAPIKey is the API key for the generative language API.
 	GlAPIKey []string `yaml:"generative-language-api-key"`
 }
 
-type ConfigQuotaExceeded struct {
+// QuotaExceeded defines the behavior when API quota limits are exceeded.
+// It provides configuration options for automatic failover mechanisms.
+type QuotaExceeded struct {
 	// SwitchProject indicates whether to automatically switch to another project when a quota is exceeded.
 	SwitchProject bool `yaml:"switch-project"`
 	// SwitchPreviewModel indicates whether to automatically switch to a preview model when a quota is exceeded.

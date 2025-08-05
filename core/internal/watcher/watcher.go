@@ -1,3 +1,7 @@
+// Package watcher provides file system monitoring functionality for the CLI Proxy API.
+// It watches configuration files and authentication directories for changes,
+// automatically reloading clients and configuration when files are modified.
+// The package handles cross-platform file system events and supports hot-reloading.
 package watcher
 
 import (
@@ -156,11 +160,11 @@ func (w *Watcher) reloadConfig() {
 		if oldConfig.Debug != newConfig.Debug {
 			log.Debugf("  debug: %t -> %t", oldConfig.Debug, newConfig.Debug)
 		}
-		if oldConfig.ProxyUrl != newConfig.ProxyUrl {
-			log.Debugf("  proxy-url: %s -> %s", oldConfig.ProxyUrl, newConfig.ProxyUrl)
+		if oldConfig.ProxyURL != newConfig.ProxyURL {
+			log.Debugf("  proxy-url: %s -> %s", oldConfig.ProxyURL, newConfig.ProxyURL)
 		}
-		if len(oldConfig.ApiKeys) != len(newConfig.ApiKeys) {
-			log.Debugf("  api-keys count: %d -> %d", len(oldConfig.ApiKeys), len(newConfig.ApiKeys))
+		if len(oldConfig.APIKeys) != len(newConfig.APIKeys) {
+			log.Debugf("  api-keys count: %d -> %d", len(oldConfig.APIKeys), len(newConfig.APIKeys))
 		}
 		if len(oldConfig.GlAPIKey) != len(newConfig.GlAPIKey) {
 			log.Debugf("  generative-language-api-key count: %d -> %d", len(oldConfig.GlAPIKey), len(newConfig.GlAPIKey))
@@ -248,7 +252,7 @@ func (w *Watcher) reloadClients() {
 	log.Debugf("auth directory scan complete - found %d .json files, %d successful authentications", authFileCount, successfulAuthCount)
 
 	// Add clients for Generative Language API keys if configured
-	glApiKeyCount := 0
+	glAPIKeyCount := 0
 	if len(cfg.GlAPIKey) > 0 {
 		log.Debugf("processing %d Generative Language API keys", len(cfg.GlAPIKey))
 		for i := 0; i < len(cfg.GlAPIKey); i++ {
@@ -261,9 +265,9 @@ func (w *Watcher) reloadClients() {
 			log.Debugf("  initializing with Generative Language API key %d...", i+1)
 			cliClient := client.NewClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
 			newClients = append(newClients, cliClient)
-			glApiKeyCount++
+			glAPIKeyCount++
 		}
-		log.Debugf("successfully initialized %d Generative Language API key clients", glApiKeyCount)
+		log.Debugf("successfully initialized %d Generative Language API key clients", glAPIKeyCount)
 	}
 
 	// Update the client list
@@ -272,7 +276,7 @@ func (w *Watcher) reloadClients() {
 	w.clientsMutex.Unlock()
 
 	log.Infof("client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys)",
-		oldClientCount, len(newClients), successfulAuthCount, glApiKeyCount)
+		oldClientCount, len(newClients), successfulAuthCount, glAPIKeyCount)
 
 	// Trigger the callback to update the server
 	if w.reloadCallback != nil {

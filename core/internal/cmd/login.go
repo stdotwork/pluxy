@@ -1,3 +1,6 @@
+// Package cmd provides command-line interface functionality for the CLI Proxy API.
+// It implements the main application commands including login/authentication
+// and server startup, handling the complete user onboarding and service lifecycle.
 package cmd
 
 import (

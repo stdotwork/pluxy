@@ -1,3 +1,6 @@
+// Package util provides utility functions for the CLI Proxy API server.
+// It includes helper functions for proxy configuration, HTTP client setup,
+// and other common operations used across the application.
 package util
 
 import (
@@ -9,9 +12,12 @@ import (
 	"net/url"
 )
 
+// SetProxy configures the provided HTTP client with proxy settings from the configuration.
+// It supports SOCKS5, HTTP, and HTTPS proxies. The function modifies the client's transport
+// to route requests through the configured proxy server.
 func SetProxy(cfg *config.Config, httpClient *http.Client) (*http.Client, error) {
 	var transport *http.Transport
-	proxyURL, errParse := url.Parse(cfg.ProxyUrl)
+	proxyURL, errParse := url.Parse(cfg.ProxyURL)
 	if errParse == nil {
 		if proxyURL.Scheme == "socks5" {
 			username := proxyURL.User.Username()
