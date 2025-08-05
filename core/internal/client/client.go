@@ -844,11 +844,11 @@ func (c *Client) CheckCloudAPIIsEnabled() (bool, error) {
 		if err.StatusCode == 403 {
 			errJSON := err.Error.Error()
 			// Check for a specific error code and extract the activation URL.
-			if gjson.Get(errJSON, "error.code").Int() == 403 {
-				activationURL := gjson.Get(errJSON, "error.details.0.metadata.activationUrl").String()
+			if gjson.Get(errJSON, "0.error.code").Int() == 403 {
+				activationURL := gjson.Get(errJSON, "0.error.details.0.metadata.activationUrl").String()
 				if activationURL != "" {
 					log.Warnf(
-						"\n\nPlease activate your account with this url:\n\n%s\n And execute this command again:\n%s --login --project_id %s",
+						"\n\nPlease activate your account with this url:\n\n%s\n\n And execute this command again:\n%s --login --project_id %s",
 						activationURL,
 						os.Args[0],
 						c.tokenStorage.ProjectID,
