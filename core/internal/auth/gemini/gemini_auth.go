@@ -1,7 +1,7 @@
 // Package auth provides OAuth2 authentication functionality for Google Cloud APIs.
 // It handles the complete OAuth2 flow including token storage, web-based authentication,
 // proxy support, and automatic token refresh. The package supports both SOCKS5 and HTTP/HTTPS proxies.
-package auth
+package gemini
 
 import (
 	"context"
@@ -14,9 +14,10 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/luispater/CLIProxyAPI/internal/auth/codex"
+	"github.com/luispater/CLIProxyAPI/internal/browser"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
-	"github.com/skratchdot/open-golang/open"
 	"github.com/tidwall/gjson"
 	"golang.org/x/net/proxy"
 
@@ -25,22 +26,29 @@ import (
 )
 
 const (
-	oauthClientID     = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-	oauthClientSecret = "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"
+	geminiOauthClientID     = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+	geminiOauthClientSecret = "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"
 )
 
 var (
-	oauthScopes = []string{
+	geminiOauthScopes = []string{
 		"https://www.googleapis.com/auth/cloud-platform",
 		"https://www.googleapis.com/auth/userinfo.email",
 		"https://www.googleapis.com/auth/userinfo.profile",
 	}
 )
 
+type GeminiAuth struct {
+}
+
+func NewGeminiAuth() *GeminiAuth {
+	return &GeminiAuth{}
+}
+
 // GetAuthenticatedClient configures and returns an HTTP client ready for making authenticated API calls.
 // It manages the entire OAuth2 flow, including handling proxies, loading existing tokens,
 // initiating a new web-based OAuth flow if necessary, and refreshing tokens.
-func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.Config) (*http.Client, error) {
+func (g *GeminiAuth) GetAuthenticatedClient(ctx context.Context, ts *GeminiTokenStorage, cfg *config.Config, noBrowser ...bool) (*http.Client, error) {
 	// Configure proxy settings for the HTTP client if a proxy URL is provided.
 	proxyURL, err := url.Parse(cfg.ProxyURL)
 	if err == nil {
@@ -72,10 +80,10 @@ func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.C
 
 	// Configure the OAuth2 client.
 	conf := &oauth2.Config{
-		ClientID:     oauthClientID,
-		ClientSecret: oauthClientSecret,
+		ClientID:     geminiOauthClientID,
+		ClientSecret: geminiOauthClientSecret,
 		RedirectURL:  "http://localhost:8085/oauth2callback", // This will be used by the local server.
-		Scopes:       oauthScopes,
+		Scopes:       geminiOauthScopes,
 		Endpoint:     google.Endpoint,
 	}
 
@@ -84,12 +92,12 @@ func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.C
 	// If no token is found in storage, initiate the web-based OAuth flow.
 	if ts.Token == nil {
 		log.Info("Could not load token from file, starting OAuth flow.")
-		token, err = getTokenFromWeb(ctx, conf)
+		token, err = g.getTokenFromWeb(ctx, conf, noBrowser...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get token from web: %w", err)
 		}
 		// After getting a new token, create a new token storage object with user info.
-		newTs, errCreateTokenStorage := createTokenStorage(ctx, conf, token, ts.ProjectID)
+		newTs, errCreateTokenStorage := g.createTokenStorage(ctx, conf, token, ts.ProjectID)
 		if errCreateTokenStorage != nil {
 			log.Errorf("Warning: failed to create token storage: %v", errCreateTokenStorage)
 			return nil, errCreateTokenStorage
@@ -107,9 +115,9 @@ func GetAuthenticatedClient(ctx context.Context, ts *TokenStorage, cfg *config.C
 	return conf.Client(ctx, token), nil
 }
 
-// createTokenStorage creates a new TokenStorage object. It fetches the user's email
+// createTokenStorage creates a new GeminiTokenStorage object. It fetches the user's email
 // using the provided token and populates the storage structure.
-func createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth2.Token, projectID string) (*TokenStorage, error) {
+func (g *GeminiAuth) createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth2.Token, projectID string) (*GeminiTokenStorage, error) {
 	httpClient := config.Client(ctx, token)
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v1/userinfo?alt=json", nil)
 	if err != nil {
@@ -148,12 +156,12 @@ func createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth
 	}
 
 	ifToken["token_uri"] = "https://oauth2.googleapis.com/token"
-	ifToken["client_id"] = oauthClientID
-	ifToken["client_secret"] = oauthClientSecret
-	ifToken["scopes"] = oauthScopes
+	ifToken["client_id"] = geminiOauthClientID
+	ifToken["client_secret"] = geminiOauthClientSecret
+	ifToken["scopes"] = geminiOauthScopes
 	ifToken["universe_domain"] = "googleapis.com"
 
-	ts := TokenStorage{
+	ts := GeminiTokenStorage{
 		Token:     ifToken,
 		ProjectID: projectID,
 		Email:     emailResult.String(),
@@ -166,7 +174,7 @@ func createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth
 // It starts a local HTTP server to listen for the callback from Google's auth server,
 // opens the user's browser to the authorization URL, and exchanges the received
 // authorization code for an access token.
-func getTokenFromWeb(ctx context.Context, config *oauth2.Config) (*oauth2.Token, error) {
+func (g *GeminiAuth) getTokenFromWeb(ctx context.Context, config *oauth2.Config, noBrowser ...bool) (*oauth2.Token, error) {
 	// Use a channel to pass the authorization code from the HTTP handler to the main function.
 	codeChan := make(chan string)
 	errChan := make(chan error)
@@ -201,27 +209,46 @@ func getTokenFromWeb(ctx context.Context, config *oauth2.Config) (*oauth2.Token,
 
 	// Open the authorization URL in the user's browser.
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
-	log.Debugf("CLI login required.\nAttempting to open authentication page in your browser.\nIf it does not open, please navigate to this URL:\n\n%s\n", authURL)
 
-	var err error
-	err = open.Run(authURL)
-	if err != nil {
-		log.Errorf("Failed to open browser: %v. Please open the URL manually.", err)
+	if len(noBrowser) == 1 && !noBrowser[0] {
+		log.Info("Opening browser for authentication...")
+
+		// Check if browser is available
+		if !browser.IsAvailable() {
+			log.Warn("No browser available on this system")
+			log.Infof("Please manually open this URL in your browser:\n\n%s\n", authURL)
+		} else {
+			if err := browser.OpenURL(authURL); err != nil {
+				authErr := codex.NewAuthenticationError(codex.ErrBrowserOpenFailed, err)
+				log.Warn(codex.GetUserFriendlyMessage(authErr))
+				log.Infof("Please manually open this URL in your browser:\n\n%s\n", authURL)
+
+				// Log platform info for debugging
+				platformInfo := browser.GetPlatformInfo()
+				log.Debugf("Browser platform info: %+v", platformInfo)
+			} else {
+				log.Debug("Browser opened successfully")
+			}
+		}
+	} else {
+		log.Infof("Please open this URL in your browser:\n\n%s\n", authURL)
 	}
+
+	log.Info("Waiting for authentication callback...")
 
 	// Wait for the authorization code or an error.
 	var authCode string
 	select {
 	case code := <-codeChan:
 		authCode = code
-	case err = <-errChan:
+	case err := <-errChan:
 		return nil, err
 	case <-time.After(5 * time.Minute): // Timeout
 		return nil, fmt.Errorf("oauth flow timed out")
 	}
 
 	// Shutdown the server.
-	if err = server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(ctx); err != nil {
 		log.Errorf("Failed to shut down server: %v", err)
 	}
 

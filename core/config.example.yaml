@@ -1,13 +1,20 @@
+# Server configuration
 port: 8317
 auth-dir: "~/.cli-proxy-api"
 debug: true
 proxy-url: ""
+
+# Quota exceeded behavior
 quota-exceeded:
   switch-project: true
   switch-preview-model: true
+
+# API keys for client authentication
 api-keys:
   - "12345"
   - "23456"
+
+# Generative language API keys
 generative-language-api-key:
   - "AIzaSy...01"
   - "AIzaSy...02"

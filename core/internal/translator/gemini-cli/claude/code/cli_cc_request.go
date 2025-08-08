@@ -8,16 +8,17 @@ package code
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
+
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
-	"strings"
 )
 
-// PrepareClaudeRequest parses and transforms a Claude API request into internal client format.
+// ConvertClaudeCodeRequestToCli parses and transforms a Claude API request into internal client format.
 // It extracts the model name, system instruction, message contents, and tool declarations
 // from the raw JSON request and returns them in the format expected by the internal client.
-func PrepareClaudeRequest(rawJSON []byte) (string, *client.Content, []client.Content, []client.ToolDeclaration) {
+func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []client.Content, []client.ToolDeclaration) {
 	var pathsToDelete []string
 	root := gjson.ParseBytes(rawJSON)
 	walk(root, "", "additionalProperties", &pathsToDelete)

@@ -7,12 +7,6 @@ package watcher
 import (
 	"context"
 	"encoding/json"
-	"github.com/fsnotify/fsnotify"
-	"github.com/luispater/CLIProxyAPI/internal/auth"
-	"github.com/luispater/CLIProxyAPI/internal/client"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	"github.com/luispater/CLIProxyAPI/internal/util"
-	log "github.com/sirupsen/logrus"
 	"io/fs"
 	"net/http"
 	"os"
@@ -20,6 +14,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/luispater/CLIProxyAPI/internal/auth/codex"
+	"github.com/luispater/CLIProxyAPI/internal/auth/gemini"
+	"github.com/luispater/CLIProxyAPI/internal/client"
+	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/util"
+	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // Watcher manages file watching for configuration and authentication files
@@ -27,14 +30,14 @@ type Watcher struct {
 	configPath     string
 	authDir        string
 	config         *config.Config
-	clients        []*client.Client
+	clients        []client.Client
 	clientsMutex   sync.RWMutex
-	reloadCallback func([]*client.Client, *config.Config)
+	reloadCallback func([]client.Client, *config.Config)
 	watcher        *fsnotify.Watcher
 }
 
 // NewWatcher creates a new file watcher instance
-func NewWatcher(configPath, authDir string, reloadCallback func([]*client.Client, *config.Config)) (*Watcher, error) {
+func NewWatcher(configPath, authDir string, reloadCallback func([]client.Client, *config.Config)) (*Watcher, error) {
 	watcher, errNewWatcher := fsnotify.NewWatcher()
 	if errNewWatcher != nil {
 		return nil, errNewWatcher
@@ -83,7 +86,7 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 }
 
 // SetClients updates the current client list
-func (w *Watcher) SetClients(clients []*client.Client) {
+func (w *Watcher) SetClients(clients []client.Client) {
 	w.clientsMutex.Lock()
 	defer w.clientsMutex.Unlock()
 	w.clients = clients
@@ -193,7 +196,7 @@ func (w *Watcher) reloadClients() {
 	log.Debugf("scanning auth directory: %s", cfg.AuthDir)
 
 	// Create new client list
-	newClients := make([]*client.Client, 0)
+	newClients := make([]client.Client, 0)
 	authFileCount := 0
 	successfulAuthCount := 0
 
@@ -209,37 +212,57 @@ func (w *Watcher) reloadClients() {
 			authFileCount++
 			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
 
-			f, errOpen := os.Open(path)
-			if errOpen != nil {
-				log.Errorf("failed to open token file %s: %v", path, errOpen)
-				return nil // Continue processing other files
+			data, errReadFile := os.ReadFile(path)
+			if errReadFile != nil {
+				return errReadFile
 			}
-			defer func() {
-				errClose := f.Close()
-				if errClose != nil {
-					log.Errorf("failed to close token file %s: %v", path, errClose)
-				}
-			}()
+
+			tokenType := "gemini"
+			typeResult := gjson.GetBytes(data, "type")
+			if typeResult.Exists() {
+				tokenType = typeResult.String()
+			}
 
 			// Decode the token storage file
-			var ts auth.TokenStorage
-			if errDecode := json.NewDecoder(f).Decode(&ts); errDecode == nil {
-				// For each valid token, create an authenticated client
-				clientCtx := context.Background()
-				log.Debugf("  initializing authentication for token from %s...", filepath.Base(path))
-				httpClient, errGetClient := auth.GetAuthenticatedClient(clientCtx, &ts, cfg)
-				if errGetClient != nil {
-					log.Errorf("  failed to get authenticated client for token %s: %v", path, errGetClient)
-					return nil // Continue processing other files
-				}
-				log.Debugf("  authentication successful for token from %s", filepath.Base(path))
+			if tokenType == "gemini" {
+				var ts gemini.GeminiTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					// For each valid token, create an authenticated client
+					clientCtx := context.Background()
+					log.Debugf("  initializing gemini authentication for token from %s...", filepath.Base(path))
+					geminiAuth := gemini.NewGeminiAuth()
+					httpClient, errGetClient := geminiAuth.GetAuthenticatedClient(clientCtx, &ts, cfg)
+					if errGetClient != nil {
+						log.Errorf("  failed to get authenticated client for token %s: %v", path, errGetClient)
+						return nil // Continue processing other files
+					}
+					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
 
-				// Add the new client to the pool
-				cliClient := client.NewClient(httpClient, &ts, cfg)
-				newClients = append(newClients, cliClient)
-				successfulAuthCount++
-			} else {
-				log.Errorf("  failed to decode token file %s: %v", path, errDecode)
+					// Add the new client to the pool
+					cliClient := client.NewGeminiClient(httpClient, &ts, cfg)
+					newClients = append(newClients, cliClient)
+					successfulAuthCount++
+				} else {
+					log.Errorf("  failed to decode token file %s: %v", path, err)
+				}
+			} else if tokenType == "codex" {
+				var ts codex.CodexTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					// For each valid token, create an authenticated client
+					log.Debugf("  initializing codex authentication for token from %s...", filepath.Base(path))
+					codexClient, errGetClient := client.NewCodexClient(cfg, &ts)
+					if errGetClient != nil {
+						log.Errorf("  failed to get authenticated client for token %s: %v", path, errGetClient)
+						return nil // Continue processing other files
+					}
+					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
+
+					// Add the new client to the pool
+					newClients = append(newClients, codexClient)
+					successfulAuthCount++
+				} else {
+					log.Errorf("  failed to decode token file %s: %v", path, err)
+				}
 			}
 		}
 		return nil
@@ -256,14 +279,10 @@ func (w *Watcher) reloadClients() {
 	if len(cfg.GlAPIKey) > 0 {
 		log.Debugf("processing %d Generative Language API keys", len(cfg.GlAPIKey))
 		for i := 0; i < len(cfg.GlAPIKey); i++ {
-			httpClient, errSetProxy := util.SetProxy(cfg, &http.Client{})
-			if errSetProxy != nil {
-				log.Errorf("set proxy failed for GL API key %d: %v", i+1, errSetProxy)
-				continue
-			}
+			httpClient := util.SetProxy(cfg, &http.Client{})
 
 			log.Debugf("  initializing with Generative Language API key %d...", i+1)
-			cliClient := client.NewClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
+			cliClient := client.NewGeminiClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
 			newClients = append(newClients, cliClient)
 			glAPIKeyCount++
 		}

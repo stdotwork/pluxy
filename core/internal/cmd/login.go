@@ -5,27 +5,33 @@ package cmd
 
 import (
 	"context"
-	"github.com/luispater/CLIProxyAPI/internal/auth"
+	"os"
+
+	"github.com/luispater/CLIProxyAPI/internal/auth/gemini"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
-	"os"
 )
 
 // DoLogin handles the entire user login and setup process.
 // It authenticates the user, sets up the user's project, checks API enablement,
 // and saves the token for future use.
-func DoLogin(cfg *config.Config, projectID string) {
+func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
+	if options == nil {
+		options = &LoginOptions{}
+	}
+
 	var err error
-	var ts auth.TokenStorage
+	var ts gemini.GeminiTokenStorage
 	if projectID != "" {
 		ts.ProjectID = projectID
 	}
 
 	// Initialize an authenticated HTTP client. This will trigger the OAuth flow if necessary.
 	clientCtx := context.Background()
-	log.Info("Initializing authentication...")
-	httpClient, errGetClient := auth.GetAuthenticatedClient(clientCtx, &ts, cfg)
+	log.Info("Initializing Google authentication...")
+	geminiAuth := gemini.NewGeminiAuth()
+	httpClient, errGetClient := geminiAuth.GetAuthenticatedClient(clientCtx, &ts, cfg, options.NoBrowser)
 	if errGetClient != nil {
 		log.Fatalf("failed to get authenticated client: %v", errGetClient)
 		return
@@ -33,7 +39,7 @@ func DoLogin(cfg *config.Config, projectID string) {
 	log.Info("Authentication successful.")
 
 	// Initialize the API client.
-	cliClient := client.NewClient(httpClient, &ts, cfg)
+	cliClient := client.NewGeminiClient(httpClient, &ts, cfg)
 
 	// Perform the user setup process.
 	err = cliClient.SetupUser(clientCtx, ts.Email, projectID)

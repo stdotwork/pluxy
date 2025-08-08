@@ -1,0 +1,227 @@
+// Package codex provides utilities to translate OpenAI Chat Completions
+// request JSON into OpenAI Responses API request JSON using gjson/sjson.
+// It supports tools, multimodal text/image inputs, and Structured Outputs.
+package openai
+
+import (
+	"github.com/luispater/CLIProxyAPI/internal/misc"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+)
+
+// ConvertOpenAIChatRequestToCodex converts an OpenAI Chat Completions request JSON
+// into an OpenAI Responses API request JSON. The transformation follows the
+// examples defined in docs/2.md exactly, including tools, multi-turn dialog,
+// multimodal text/image handling, and Structured Outputs mapping.
+func ConvertOpenAIChatRequestToCodex(rawJSON []byte) string {
+	// Start with empty JSON object
+	out := `{}`
+	store := false
+
+	// Stream must be set to true
+	if v := gjson.GetBytes(rawJSON, "stream"); v.Exists() {
+		out, _ = sjson.Set(out, "stream", true)
+	}
+
+	// Codex not support temperature, top_p, top_k, max_output_tokens, so comment them
+	// if v := gjson.GetBytes(rawJSON, "temperature"); v.Exists() {
+	// 	out, _ = sjson.Set(out, "temperature", v.Value())
+	// }
+	// if v := gjson.GetBytes(rawJSON, "top_p"); v.Exists() {
+	// 	out, _ = sjson.Set(out, "top_p", v.Value())
+	// }
+	// if v := gjson.GetBytes(rawJSON, "top_k"); v.Exists() {
+	// 	out, _ = sjson.Set(out, "top_k", v.Value())
+	// }
+
+	// Map token limits
+	// if v := gjson.GetBytes(rawJSON, "max_tokens"); v.Exists() {
+	// 	out, _ = sjson.Set(out, "max_output_tokens", v.Value())
+	// }
+	// if v := gjson.GetBytes(rawJSON, "max_completion_tokens"); v.Exists() {
+	// 	out, _ = sjson.Set(out, "max_output_tokens", v.Value())
+	// }
+
+	// Map reasoning effort
+	if v := gjson.GetBytes(rawJSON, "reasoning_effort"); v.Exists() {
+		out, _ = sjson.Set(out, "reasoning.effort", v.Value())
+		out, _ = sjson.Set(out, "reasoning.summary", "auto")
+	}
+
+	// Model
+	if v := gjson.GetBytes(rawJSON, "model"); v.Exists() {
+		out, _ = sjson.Set(out, "model", v.Value())
+	}
+
+	// Extract system instructions from first system message (string or text object)
+	messages := gjson.GetBytes(rawJSON, "messages")
+	instructions := misc.CodexInstructions
+	out, _ = sjson.SetRaw(out, "instructions", instructions)
+	// if messages.IsArray() {
+	// 	arr := messages.Array()
+	// 	for i := 0; i < len(arr); i++ {
+	// 		m := arr[i]
+	// 		if m.Get("role").String() == "system" {
+	// 			c := m.Get("content")
+	// 			if c.Type == gjson.String {
+	// 				out, _ = sjson.Set(out, "instructions", c.String())
+	// 			} else if c.IsObject() && c.Get("type").String() == "text" {
+	// 				out, _ = sjson.Set(out, "instructions", c.Get("text").String())
+	// 			}
+	// 			break
+	// 		}
+	// 	}
+	// }
+
+	// Build input from messages, skipping system/tool roles
+	out, _ = sjson.SetRaw(out, "input", `[]`)
+	if messages.IsArray() {
+		arr := messages.Array()
+		for i := 0; i < len(arr); i++ {
+			m := arr[i]
+			role := m.Get("role").String()
+			if role == "tool" || role == "function" {
+				continue
+			}
+
+			// Prepare message object
+			msg := `{}`
+			if role == "system" {
+				msg, _ = sjson.Set(msg, "role", "user")
+			} else {
+				msg, _ = sjson.Set(msg, "role", role)
+			}
+
+			msg, _ = sjson.SetRaw(msg, "content", `[]`)
+
+			c := m.Get("content")
+			if c.Type == gjson.String {
+				// Single string content
+				partType := "input_text"
+				if role == "assistant" {
+					partType = "output_text"
+				}
+				part := `{}`
+				part, _ = sjson.Set(part, "type", partType)
+				part, _ = sjson.Set(part, "text", c.String())
+				msg, _ = sjson.SetRaw(msg, "content.-1", part)
+			} else if c.IsArray() {
+				items := c.Array()
+				for j := 0; j < len(items); j++ {
+					it := items[j]
+					t := it.Get("type").String()
+					switch t {
+					case "text":
+						partType := "input_text"
+						if role == "assistant" {
+							partType = "output_text"
+						}
+						part := `{}`
+						part, _ = sjson.Set(part, "type", partType)
+						part, _ = sjson.Set(part, "text", it.Get("text").String())
+						msg, _ = sjson.SetRaw(msg, "content.-1", part)
+					case "image_url":
+						// Map image inputs to input_image for Responses API
+						if role == "user" {
+							part := `{}`
+							part, _ = sjson.Set(part, "type", "input_image")
+							if u := it.Get("image_url.url"); u.Exists() {
+								part, _ = sjson.Set(part, "image_url", u.String())
+							}
+							msg, _ = sjson.SetRaw(msg, "content.-1", part)
+						}
+					case "file":
+						// Files are not specified in examples; skip for now
+					}
+				}
+			}
+
+			out, _ = sjson.SetRaw(out, "input.-1", msg)
+		}
+	}
+
+	// Map response_format and text settings to Responses API text.format
+	rf := gjson.GetBytes(rawJSON, "response_format")
+	text := gjson.GetBytes(rawJSON, "text")
+	if rf.Exists() {
+		// Always create text object when response_format provided
+		if !gjson.Get(out, "text").Exists() {
+			out, _ = sjson.SetRaw(out, "text", `{}`)
+		}
+
+		rft := rf.Get("type").String()
+		switch rft {
+		case "text":
+			out, _ = sjson.Set(out, "text.format.type", "text")
+		case "json_schema":
+			js := rf.Get("json_schema")
+			if js.Exists() {
+				out, _ = sjson.Set(out, "text.format.type", "json_schema")
+				if v := js.Get("name"); v.Exists() {
+					out, _ = sjson.Set(out, "text.format.name", v.Value())
+				}
+				if v := js.Get("strict"); v.Exists() {
+					out, _ = sjson.Set(out, "text.format.strict", v.Value())
+				}
+				if v := js.Get("schema"); v.Exists() {
+					out, _ = sjson.SetRaw(out, "text.format.schema", v.Raw)
+				}
+			}
+		}
+
+		// Map verbosity if provided
+		if text.Exists() {
+			if v := text.Get("verbosity"); v.Exists() {
+				out, _ = sjson.Set(out, "text.verbosity", v.Value())
+			}
+		}
+
+		// The examples include store: true when response_format is provided
+		store = true
+	} else if text.Exists() {
+		// If only text.verbosity present (no response_format), map verbosity
+		if v := text.Get("verbosity"); v.Exists() {
+			if !gjson.Get(out, "text").Exists() {
+				out, _ = sjson.SetRaw(out, "text", `{}`)
+			}
+			out, _ = sjson.Set(out, "text.verbosity", v.Value())
+		}
+	}
+
+	// Map tools (flatten function fields)
+	tools := gjson.GetBytes(rawJSON, "tools")
+	if tools.IsArray() {
+		out, _ = sjson.SetRaw(out, "tools", `[]`)
+		arr := tools.Array()
+		for i := 0; i < len(arr); i++ {
+			t := arr[i]
+			if t.Get("type").String() == "function" {
+				item := `{}`
+				item, _ = sjson.Set(item, "type", "function")
+				fn := t.Get("function")
+				if fn.Exists() {
+					if v := fn.Get("name"); v.Exists() {
+						item, _ = sjson.Set(item, "name", v.Value())
+					}
+					if v := fn.Get("description"); v.Exists() {
+						item, _ = sjson.Set(item, "description", v.Value())
+					}
+					if v := fn.Get("parameters"); v.Exists() {
+						item, _ = sjson.SetRaw(item, "parameters", v.Raw)
+					}
+					if v := fn.Get("strict"); v.Exists() {
+						item, _ = sjson.Set(item, "strict", v.Value())
+					}
+				}
+				out, _ = sjson.SetRaw(out, "tools.-1", item)
+			}
+		}
+		// The examples include store: true when tools and formatting are used; be conservative
+		if rf.Exists() {
+			store = true
+		}
+	}
+
+	out, _ = sjson.Set(out, "store", store)
+	return out
+}

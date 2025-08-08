@@ -2,25 +2,31 @@
 
 English | [中文](README_CN.md)
 
-A proxy server that provides an OpenAI/Gemini/Claude compatible API interface for CLI. This allows you to use CLI models with tools and libraries designed for the OpenAI/Gemini/Claude API.
+A proxy server that provides OpenAI/Gemini/Claude compatible API interfaces for CLI. 
+
+It now also supports OpenAI Codex (GPT models) via OAuth.
+
+so you can use local or multi‑account CLI access with OpenAI‑compatible clients and SDKs.
 
 ## Features
 
 - OpenAI/Gemini/Claude compatible API endpoints for CLI models
-- Support for both streaming and non-streaming responses
+- OpenAI Codex support (GPT models) via OAuth login
+- Streaming and non-streaming responses
 - Function calling/tools support
 - Multimodal input support (text and images)
-- Multiple account support with load balancing
-- Simple CLI authentication flow
-- Support for Generative Language API Key
-- Support Gemini CLI with multiple account load balancing
+- Multiple accounts with round‑robin load balancing (Gemini and OpenAI)
+- Simple CLI authentication flows (Gemini and OpenAI)
+- Generative Language API Key support
+- Gemini CLI multi‑account load balancing
 
 ## Installation
 
 ### Prerequisites
 
 - Go 1.24 or higher
-- A Google account with access to CLI models
+- A Google account with access to Gemini CLI models (optional)
+- An OpenAI account for Codex/GPT access (optional)
 
 ### Building from Source
 
@@ -39,17 +45,23 @@ A proxy server that provides an OpenAI/Gemini/Claude compatible API interface fo
 
 ### Authentication
 
-Before using the API, you need to authenticate with your Google account:
+You can authenticate for Gemini and/or OpenAI. Both can coexist in the same `auth-dir` and will be load balanced.
 
-```bash
-./cli-proxy-api --login
-```
+- Gemini (Google):
+  ```bash
+  ./cli-proxy-api --login
+  ```
+  If you are an old gemini code user, you may need to specify a project ID:
+  ```bash
+  ./cli-proxy-api --login --project_id <your_project_id>
+  ```
+  The local OAuth callback uses port `8085`.
 
-If you are an old gemini code user, you may need to specify a project ID:
-
-```bash
-./cli-proxy-api --login --project_id <your_project_id>
-```
+- OpenAI (Codex/GPT via OAuth):
+  ```bash
+  ./cli-proxy-api --codex-login
+  ```
+  Options: add `--no-browser` to print the login URL instead of opening a browser. The local OAuth callback uses port `1455`.
 
 ### Starting the Server
 
@@ -90,6 +102,15 @@ Request body example:
 }
 ```
 
+Notes:
+- Use a `gemini-*` model for Gemini (e.g., `gemini-2.5-pro`) or a `gpt-*` model for OpenAI (e.g., `gpt-5`). The proxy will route to the correct provider automatically.
+
+#### Claude Messages (SSE-compatible)
+
+```
+POST http://localhost:8317/v1/messages
+```
+
 ### Using with OpenAI Libraries
 
 You can use this proxy with any OpenAI-compatible library by setting the base URL to your local server:
@@ -104,14 +125,19 @@ client = OpenAI(
     base_url="http://localhost:8317/v1"
 )
 
-response = client.chat.completions.create(
+# Gemini example
+gemini = client.chat.completions.create(
     model="gemini-2.5-pro",
-    messages=[
-        {"role": "user", "content": "Hello, how are you?"}
-    ]
+    messages=[{"role": "user", "content": "Hello, how are you?"}]
 )
 
-print(response.choices[0].message.content)
+# Codex/GPT example
+gpt = client.chat.completions.create(
+    model="gpt-5",
+    messages=[{"role": "user", "content": "Summarize this project in one sentence."}]
+)
+print(gemini.choices[0].message.content)
+print(gpt.choices[0].message.content)
 ```
 
 #### JavaScript/TypeScript
@@ -124,28 +150,35 @@ const openai = new OpenAI({
   baseURL: 'http://localhost:8317/v1',
 });
 
-const response = await openai.chat.completions.create({
+// Gemini
+const gemini = await openai.chat.completions.create({
   model: 'gemini-2.5-pro',
-  messages: [
-    { role: 'user', content: 'Hello, how are you?' }
-  ],
+  messages: [{ role: 'user', content: 'Hello, how are you?' }],
 });
 
-console.log(response.choices[0].message.content);
+// Codex/GPT
+const gpt = await openai.chat.completions.create({
+  model: 'gpt-5',
+  messages: [{ role: 'user', content: 'Summarize this project in one sentence.' }],
+});
+
+console.log(gemini.choices[0].message.content);
+console.log(gpt.choices[0].message.content);
 ```
 
 ## Supported Models
 
 - gemini-2.5-pro
 - gemini-2.5-flash
-- And it automates switching to various preview versions
+- gpt-5
+- Gemini models auto‑switch to preview variants when needed
 
 ## Configuration
 
 The server uses a YAML configuration file (`config.yaml`) located in the project root directory by default. You can specify a different configuration file path using the `--config` flag:
 
 ```bash
-./cli-proxy --config /path/to/your/config.yaml
+./cli-proxy-api --config /path/to/your/config.yaml
 ```
 
 ### Configuration Options
@@ -211,6 +244,10 @@ Authorization: Bearer your-api-key-1
 
 The `generative-language-api-key` parameter allows you to define a list of API keys that can be used to authenticate requests to the official Generative Language API.
 
+## Hot Reloading
+
+The server watches the config file and the `auth-dir` for changes and reloads clients and settings automatically. You can add or remove Gemini/OpenAI token JSON files while the server is running; no restart is required.
+
 ## Gemini CLI with multiple account load balancing
 
 Start CLI Proxy API server, and then set the `CODE_ASSIST_ENDPOINT` environment variable to the URL of the CLI Proxy API server.
@@ -227,10 +264,16 @@ The server will relay the `loadCodeAssist`, `onboardUser`, and `countTokens` req
 
 ## Run with Docker
 
-Run the following command to login: 
+Run the following command to login (Gemini OAuth on port 8085): 
 
 ```bash
 docker run --rm -p 8085:8085 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --login
+```
+
+Run the following command to login (OpenAI OAuth on port 1455):
+
+```bash
+docker run --rm -p 1455:1455 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --codex-login
 ```
 
 Run the following command to start the server:

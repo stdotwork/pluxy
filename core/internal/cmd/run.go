@@ -8,29 +8,37 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"github.com/luispater/CLIProxyAPI/internal/api"
-	"github.com/luispater/CLIProxyAPI/internal/auth"
-	"github.com/luispater/CLIProxyAPI/internal/client"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	"github.com/luispater/CLIProxyAPI/internal/util"
-	"github.com/luispater/CLIProxyAPI/internal/watcher"
-	log "github.com/sirupsen/logrus"
 	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/luispater/CLIProxyAPI/internal/api"
+	"github.com/luispater/CLIProxyAPI/internal/auth/codex"
+	"github.com/luispater/CLIProxyAPI/internal/auth/gemini"
+	"github.com/luispater/CLIProxyAPI/internal/client"
+	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/util"
+	"github.com/luispater/CLIProxyAPI/internal/watcher"
+	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 )
 
 // StartService initializes and starts the main API proxy service.
 // It loads all available authentication tokens, creates a pool of clients,
 // starts the API server, and handles graceful shutdown signals.
+//
+// Parameters:
+//   - cfg: The application configuration
+//   - configPath: The path to the configuration file
 func StartService(cfg *config.Config, configPath string) {
 	// Create a pool of API clients, one for each token file found.
-	cliClients := make([]*client.Client, 0)
+	cliClients := make([]client.Client, 0)
 	err := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -39,31 +47,51 @@ func StartService(cfg *config.Config, configPath string) {
 		// Process only JSON files in the auth directory.
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
 			log.Debugf("Loading token from: %s", path)
-			f, errOpen := os.Open(path)
-			if errOpen != nil {
-				return errOpen
+			data, errReadFile := os.ReadFile(path)
+			if errReadFile != nil {
+				return errReadFile
 			}
-			defer func() {
-				_ = f.Close()
-			}()
 
-			// Decode the token storage file.
-			var ts auth.TokenStorage
-			if err = json.NewDecoder(f).Decode(&ts); err == nil {
-				// For each valid token, create an authenticated client.
-				clientCtx := context.Background()
-				log.Info("Initializing authentication for token...")
-				httpClient, errGetClient := auth.GetAuthenticatedClient(clientCtx, &ts, cfg)
-				if errGetClient != nil {
-					// Log fatal will exit, but we return the error for completeness.
-					log.Fatalf("failed to get authenticated client for token %s: %v", path, errGetClient)
-					return errGetClient
+			tokenType := "gemini"
+			typeResult := gjson.GetBytes(data, "type")
+			if typeResult.Exists() {
+				tokenType = typeResult.String()
+			}
+
+			clientCtx := context.Background()
+
+			if tokenType == "gemini" {
+				var ts gemini.GeminiTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					// For each valid token, create an authenticated client.
+					log.Info("Initializing gemini authentication for token...")
+					geminiAuth := gemini.NewGeminiAuth()
+					httpClient, errGetClient := geminiAuth.GetAuthenticatedClient(clientCtx, &ts, cfg)
+					if errGetClient != nil {
+						// Log fatal will exit, but we return the error for completeness.
+						log.Fatalf("failed to get authenticated client for token %s: %v", path, errGetClient)
+						return errGetClient
+					}
+					log.Info("Authentication successful.")
+
+					// Add the new client to the pool.
+					cliClient := client.NewGeminiClient(httpClient, &ts, cfg)
+					cliClients = append(cliClients, cliClient)
 				}
-				log.Info("Authentication successful.")
-
-				// Add the new client to the pool.
-				cliClient := client.NewClient(httpClient, &ts, cfg)
-				cliClients = append(cliClients, cliClient)
+			} else if tokenType == "codex" {
+				var ts codex.CodexTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					// For each valid token, create an authenticated client.
+					log.Info("Initializing codex authentication for token...")
+					codexClient, errGetClient := client.NewCodexClient(cfg, &ts)
+					if errGetClient != nil {
+						// Log fatal will exit, but we return the error for completeness.
+						log.Fatalf("failed to get authenticated client for token %s: %v", path, errGetClient)
+						return errGetClient
+					}
+					log.Info("Authentication successful.")
+					cliClients = append(cliClients, codexClient)
+				}
 			}
 		}
 		return nil
@@ -74,13 +102,10 @@ func StartService(cfg *config.Config, configPath string) {
 
 	if len(cfg.GlAPIKey) > 0 {
 		for i := 0; i < len(cfg.GlAPIKey); i++ {
-			httpClient, errSetProxy := util.SetProxy(cfg, &http.Client{})
-			if errSetProxy != nil {
-				log.Fatalf("set proxy failed: %v", errSetProxy)
-			}
+			httpClient := util.SetProxy(cfg, &http.Client{})
 
 			log.Debug("Initializing with Generative Language API key...")
-			cliClient := client.NewClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
+			cliClient := client.NewGeminiClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
 			cliClients = append(cliClients, cliClient)
 		}
 	}
@@ -101,7 +126,7 @@ func StartService(cfg *config.Config, configPath string) {
 	log.Info("API server started successfully")
 
 	// Setup file watcher for config and auth directory changes
-	fileWatcher, errNewWatcher := watcher.NewWatcher(configPath, cfg.AuthDir, func(newClients []*client.Client, newCfg *config.Config) {
+	fileWatcher, errNewWatcher := watcher.NewWatcher(configPath, cfg.AuthDir, func(newClients []client.Client, newCfg *config.Config) {
 		// Update the API server with new clients and configuration
 		apiServer.UpdateClients(newClients, newCfg)
 	})
@@ -132,11 +157,49 @@ func StartService(cfg *config.Config, configPath string) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Background token refresh ticker for Codex clients
+	ctxRefresh, cancelRefresh := context.WithCancel(context.Background())
+	var wgRefresh sync.WaitGroup
+	wgRefresh.Add(1)
+	go func() {
+		defer wgRefresh.Done()
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		checkAndRefresh := func() {
+			for i := 0; i < len(cliClients); i++ {
+				if codexCli, ok := cliClients[i].(*client.CodexClient); ok {
+					ts := codexCli.TokenStorage().(*codex.CodexTokenStorage)
+					if ts != nil && ts.Expire != "" {
+						if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
+							if time.Until(expTime) <= 5*24*time.Hour {
+								log.Debugf("refreshing codex tokens for %s", codexCli.GetEmail())
+								_ = codexCli.RefreshTokens(ctxRefresh)
+							}
+						}
+					}
+				}
+			}
+		}
+		// Initial check on start
+		checkAndRefresh()
+		for {
+			select {
+			case <-ctxRefresh.Done():
+				return
+			case <-ticker.C:
+				checkAndRefresh()
+			}
+		}
+	}()
+
 	// Main loop to wait for shutdown signal.
 	for {
 		select {
 		case <-sigChan:
 			log.Debugf("Received shutdown signal. Cleaning up...")
+
+			cancelRefresh()
+			wgRefresh.Wait()
 
 			// Create a context with a timeout for the shutdown process.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -150,8 +213,6 @@ func StartService(cfg *config.Config, configPath string) {
 			log.Debugf("Cleanup completed. Exiting...")
 			os.Exit(0)
 		case <-time.After(5 * time.Second):
-			// This case is currently empty and acts as a periodic check.
-			// It could be used for periodic tasks in the future.
 		}
 	}
 }

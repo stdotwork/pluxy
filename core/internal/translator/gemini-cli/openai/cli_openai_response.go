@@ -15,10 +15,10 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// ConvertCliToOpenAI translates a single chunk of a streaming response from the
+// ConvertCliResponseToOpenAIChat translates a single chunk of a streaming response from the
 // backend client format to the OpenAI Server-Sent Events (SSE) format.
 // It returns an empty string if the chunk contains no useful data.
-func ConvertCliToOpenAI(rawJSON []byte, unixTimestamp int64, isGlAPIKey bool) string {
+func ConvertCliResponseToOpenAIChat(rawJSON []byte, unixTimestamp int64, isGlAPIKey bool) string {
 	if isGlAPIKey {
 		rawJSON, _ = sjson.SetRawBytes(rawJSON, "response", rawJSON)
 	}
@@ -109,9 +109,9 @@ func ConvertCliToOpenAI(rawJSON []byte, unixTimestamp int64, isGlAPIKey bool) st
 	return template
 }
 
-// ConvertCliToOpenAINonStream aggregates response from the backend client
+// ConvertCliResponseToOpenAIChatNonStream aggregates response from the backend client
 // convert a single, non-streaming OpenAI-compatible JSON response.
-func ConvertCliToOpenAINonStream(rawJSON []byte, unixTimestamp int64, isGlAPIKey bool) string {
+func ConvertCliResponseToOpenAIChatNonStream(rawJSON []byte, unixTimestamp int64, isGlAPIKey bool) string {
 	if isGlAPIKey {
 		rawJSON, _ = sjson.SetRawBytes(rawJSON, "response", rawJSON)
 	}

@@ -8,31 +8,48 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/claude"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/gemini"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/gemini/cli"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/openai"
+	"github.com/luispater/CLIProxyAPI/internal/api/middleware"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/logging"
 	log "github.com/sirupsen/logrus"
-	"net/http"
-	"strings"
 )
 
 // Server represents the main API server.
 // It encapsulates the Gin engine, HTTP server, handlers, and configuration.
 type Server struct {
-	engine   *gin.Engine
-	server   *http.Server
+	// engine is the Gin web framework engine instance.
+	engine *gin.Engine
+
+	// server is the underlying HTTP server.
+	server *http.Server
+
+	// handlers contains the API handlers for processing requests.
 	handlers *handlers.APIHandlers
-	cfg      *config.Config
+
+	// cfg holds the current server configuration.
+	cfg *config.Config
 }
 
 // NewServer creates and initializes a new API server instance.
 // It sets up the Gin engine, middleware, routes, and handlers.
-func NewServer(cfg *config.Config, cliClients []*client.Client) *Server {
+//
+// Parameters:
+//   - cfg: The server configuration
+//   - cliClients: A slice of AI service clients
+//
+// Returns:
+//   - *Server: A new server instance
+func NewServer(cfg *config.Config, cliClients []client.Client) *Server {
 	// Set gin mode
 	if !cfg.Debug {
 		gin.SetMode(gin.ReleaseMode)
@@ -44,6 +61,11 @@ func NewServer(cfg *config.Config, cliClients []*client.Client) *Server {
 	// Add middleware
 	engine.Use(gin.Logger())
 	engine.Use(gin.Recovery())
+
+	// Add request logging middleware (positioned after recovery, before auth)
+	requestLogger := logging.NewFileRequestLogger(cfg.RequestLog, "logs")
+	engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
+
 	engine.Use(corsMiddleware())
 
 	// Create server instance
@@ -103,11 +125,13 @@ func (s *Server) setupRoutes() {
 		})
 	})
 	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
-
 }
 
 // Start begins listening for and serving HTTP requests.
 // It's a blocking call and will only return on an unrecoverable error.
+//
+// Returns:
+//   - error: An error if the server fails to start
 func (s *Server) Start() error {
 	log.Debugf("Starting API server on %s", s.server.Addr)
 
@@ -121,6 +145,12 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the API server without interrupting any
 // active connections.
+//
+// Parameters:
+//   - ctx: The context for graceful shutdown
+//
+// Returns:
+//   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
 
@@ -135,6 +165,9 @@ func (s *Server) Stop(ctx context.Context) error {
 
 // corsMiddleware returns a Gin middleware handler that adds CORS headers
 // to every response, allowing cross-origin requests.
+//
+// Returns:
+//   - gin.HandlerFunc: The CORS middleware handler
 func corsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
@@ -150,8 +183,13 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
-// UpdateClients updates the server's client list and configuration
-func (s *Server) UpdateClients(clients []*client.Client, cfg *config.Config) {
+// UpdateClients updates the server's client list and configuration.
+// This method is called when the configuration or authentication tokens change.
+//
+// Parameters:
+//   - clients: The new slice of AI service clients
+//   - cfg: The new application configuration
+func (s *Server) UpdateClients(clients []client.Client, cfg *config.Config) {
 	s.cfg = cfg
 	s.handlers.UpdateClients(clients, cfg)
 	log.Infof("server clients and configuration updated: %d clients", len(clients))
@@ -159,6 +197,12 @@ func (s *Server) UpdateClients(clients []*client.Client, cfg *config.Config) {
 
 // AuthMiddleware returns a Gin middleware handler that authenticates requests
 // using API keys. If no API keys are configured, it allows all requests.
+//
+// Parameters:
+//   - cfg: The server configuration containing API keys
+//
+// Returns:
+//   - gin.HandlerFunc: The authentication middleware handler
 func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if len(cfg.APIKeys) == 0 {

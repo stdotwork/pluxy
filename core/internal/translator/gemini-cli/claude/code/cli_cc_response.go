@@ -9,19 +9,20 @@ package code
 import (
 	"bytes"
 	"fmt"
+	"time"
+
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
-	"time"
 )
 
-// ConvertCliToClaude performs sophisticated streaming response format conversion.
+// ConvertCliResponseToClaudeCode performs sophisticated streaming response format conversion.
 // This function implements a complex state machine that translates backend client responses
 // into Claude-compatible Server-Sent Events (SSE) format. It manages different response types
 // and handles state transitions between content blocks, thinking processes, and function calls.
 //
 // Response type states: 0=none, 1=content, 2=thinking, 3=function
 // The function maintains state across multiple calls to ensure proper SSE event sequencing.
-func ConvertCliToClaude(rawJSON []byte, isGlAPIKey, hasFirstResponse bool, responseType, responseIndex *int) string {
+func ConvertCliResponseToClaudeCode(rawJSON []byte, isGlAPIKey, hasFirstResponse bool, responseType, responseIndex *int) string {
 	// Normalize the response format for different API key types
 	// Generative Language API keys have a different response structure
 	if isGlAPIKey {

@@ -1,0 +1,506 @@
+// Package openai provides HTTP handlers for OpenAI API endpoints.
+// This package implements the OpenAI-compatible API interface, including model listing
+// and chat completion functionality. It supports both streaming and non-streaming responses,
+// and manages a pool of clients to interact with backend services.
+// The handlers translate OpenAI API requests to the appropriate backend format and
+// convert responses back to OpenAI-compatible format.
+package openai
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
+	"github.com/luispater/CLIProxyAPI/internal/client"
+	translatorOpenAIToCodex "github.com/luispater/CLIProxyAPI/internal/translator/codex/openai"
+	translatorOpenAIToGeminiCli "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/openai"
+	"github.com/luispater/CLIProxyAPI/internal/util"
+	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
+
+	"github.com/gin-gonic/gin"
+)
+
+// OpenAIAPIHandlers contains the handlers for OpenAI API endpoints.
+// It holds a pool of clients to interact with the backend service.
+type OpenAIAPIHandlers struct {
+	*handlers.APIHandlers
+}
+
+// NewOpenAIAPIHandlers creates a new OpenAI API handlers instance.
+// It takes an APIHandlers instance as input and returns an OpenAIAPIHandlers.
+//
+// Parameters:
+//   - apiHandlers: The base API handlers instance
+//
+// Returns:
+//   - *OpenAIAPIHandlers: A new OpenAI API handlers instance
+func NewOpenAIAPIHandlers(apiHandlers *handlers.APIHandlers) *OpenAIAPIHandlers {
+	return &OpenAIAPIHandlers{
+		APIHandlers: apiHandlers,
+	}
+}
+
+// Models handles the /v1/models endpoint.
+// It returns a hardcoded list of available AI models with their capabilities
+// and specifications in OpenAI-compatible format.
+func (h *OpenAIAPIHandlers) Models(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"data": []map[string]any{
+			{
+				"id":                    "gemini-2.5-pro",
+				"object":                "model",
+				"version":               "2.5",
+				"name":                  "Gemini 2.5 Pro",
+				"description":           "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+				"context_length":        1_048_576,
+				"max_completion_tokens": 65_536,
+				"supported_parameters": []string{
+					"tools",
+					"temperature",
+					"top_p",
+					"top_k",
+				},
+				"temperature":    1,
+				"topP":           0.95,
+				"topK":           64,
+				"maxTemperature": 2,
+				"thinking":       true,
+			},
+			{
+				"id":                    "gemini-2.5-flash",
+				"object":                "model",
+				"version":               "001",
+				"name":                  "Gemini 2.5 Flash",
+				"description":           "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+				"context_length":        1_048_576,
+				"max_completion_tokens": 65_536,
+				"supported_parameters": []string{
+					"tools",
+					"temperature",
+					"top_p",
+					"top_k",
+				},
+				"temperature":    1,
+				"topP":           0.95,
+				"topK":           64,
+				"maxTemperature": 2,
+				"thinking":       true,
+			},
+			{
+				"id":                    "gpt-5",
+				"object":                "model",
+				"version":               "gpt-5-2025-08-07",
+				"name":                  "GPT 5",
+				"description":           "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
+				"context_length":        400_000,
+				"max_completion_tokens": 128_000,
+				"supported_parameters": []string{
+					"tools",
+				},
+				"temperature":    1,
+				"topP":           0.95,
+				"topK":           64,
+				"maxTemperature": 2,
+				"thinking":       true,
+			},
+		},
+	})
+}
+
+// ChatCompletions handles the /v1/chat/completions endpoint.
+// It determines whether the request is for a streaming or non-streaming response
+// and calls the appropriate handler based on the model provider.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+func (h *OpenAIAPIHandlers) ChatCompletions(c *gin.Context) {
+	rawJSON, err := c.GetRawData()
+	// If data retrieval fails, return a 400 Bad Request error.
+	if err != nil {
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: fmt.Sprintf("Invalid request: %v", err),
+				Type:    "invalid_request_error",
+			},
+		})
+		return
+	}
+
+	// Check if the client requested a streaming response.
+	streamResult := gjson.GetBytes(rawJSON, "stream")
+	modelName := gjson.GetBytes(rawJSON, "model")
+	provider := util.GetProviderName(modelName.String())
+	if provider == "gemini" {
+		if streamResult.Type == gjson.True {
+			h.handleGeminiStreamingResponse(c, rawJSON)
+		} else {
+			h.handleGeminiNonStreamingResponse(c, rawJSON)
+		}
+	} else if provider == "gpt" {
+		if streamResult.Type == gjson.True {
+			h.handleCodexStreamingResponse(c, rawJSON)
+		} else {
+			h.handleCodexNonStreamingResponse(c, rawJSON)
+		}
+	}
+}
+
+// handleGeminiNonStreamingResponse handles non-streaming chat completion responses
+// for Gemini models. It selects a client from the pool, sends the request, and
+// aggregates the response before sending it back to the client in OpenAI format.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+func (h *OpenAIAPIHandlers) handleGeminiNonStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "application/json")
+
+	modelName, systemInstruction, contents, tools := translatorOpenAIToGeminiCli.ConvertOpenAIChatRequestToCli(rawJSON)
+	cliCtx, cliCancel := context.WithCancel(context.Background())
+	var cliClient client.Client
+	defer func() {
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			cliCancel()
+			return
+		}
+
+		isGlAPIKey := false
+		if glAPIKey := cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey(); glAPIKey != "" {
+			log.Debugf("Request use generative language API Key: %s", glAPIKey)
+			isGlAPIKey = true
+		} else {
+			log.Debugf("Request cli use account: %s, project id: %s", cliClient.(*client.GeminiClient).GetEmail(), cliClient.(*client.GeminiClient).GetProjectID())
+		}
+
+		resp, err := cliClient.SendMessage(cliCtx, rawJSON, modelName, systemInstruction, contents, tools)
+		if err != nil {
+			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+				continue
+			} else {
+				c.Status(err.StatusCode)
+				_, _ = c.Writer.Write([]byte(err.Error.Error()))
+				cliCancel()
+			}
+			break
+		} else {
+			openAIFormat := translatorOpenAIToGeminiCli.ConvertCliResponseToOpenAIChatNonStream(resp, time.Now().Unix(), isGlAPIKey)
+			if openAIFormat != "" {
+				_, _ = c.Writer.Write([]byte(openAIFormat))
+			}
+			cliCancel()
+			break
+		}
+	}
+}
+
+// handleGeminiStreamingResponse handles streaming responses for Gemini models.
+// It establishes a streaming connection with the backend service and forwards
+// the response chunks to the client in real-time using Server-Sent Events.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+func (h *OpenAIAPIHandlers) handleGeminiStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	// Get the http.Flusher interface to manually flush the response.
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Streaming not supported",
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	// Prepare the request for the backend client.
+	modelName, systemInstruction, contents, tools := translatorOpenAIToGeminiCli.ConvertOpenAIChatRequestToCli(rawJSON)
+	cliCtx, cliCancel := context.WithCancel(context.Background())
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		isGlAPIKey := false
+		if glAPIKey := cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey(); glAPIKey != "" {
+			log.Debugf("Request use generative language API Key: %s", glAPIKey)
+			isGlAPIKey = true
+		} else {
+			log.Debugf("Request cli use account: %s, project id: %s", cliClient.GetEmail(), cliClient.(*client.GeminiClient).GetProjectID())
+		}
+		// Send the message and receive response chunks and errors via channels.
+		respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJSON, modelName, systemInstruction, contents, tools)
+		hasFirstResponse := false
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("GeminiClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					// Stream is closed, send the final [DONE] message.
+					_, _ = fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+					flusher.Flush()
+					cliCancel()
+					return
+				}
+				// Convert the chunk to OpenAI format and send it to the client.
+				hasFirstResponse = true
+				openAIFormat := translatorOpenAIToGeminiCli.ConvertCliResponseToOpenAIChat(chunk, time.Now().Unix(), isGlAPIKey)
+				if openAIFormat != "" {
+					_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormat)
+					flusher.Flush()
+				}
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						flusher.Flush()
+						cliCancel()
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
+				if hasFirstResponse {
+					_, _ = c.Writer.Write([]byte(": CLI-PROXY-API PROCESSING\n\n"))
+					flusher.Flush()
+				}
+			}
+		}
+	}
+}
+
+// handleCodexNonStreamingResponse handles non-streaming chat completion responses
+// for OpenAI models. It selects a client from the pool, sends the request, and
+// aggregates the response before sending it back to the client in OpenAI format.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+func (h *OpenAIAPIHandlers) handleCodexNonStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "application/json")
+
+	newRequestJSON := translatorOpenAIToCodex.ConvertOpenAIChatRequestToCodex(rawJSON)
+	modelName := gjson.GetBytes(rawJSON, "model")
+	cliCtx, cliCancel := context.WithCancel(context.Background())
+	var cliClient client.Client
+	defer func() {
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName.String())
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = c.Writer.Write([]byte(errorResponse.Error.Error()))
+			cliCancel()
+			return
+		}
+
+		log.Debugf("Request codex use account: %s", cliClient.GetEmail())
+
+		// Send the message and receive response chunks and errors via channels.
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					cliCancel()
+					return
+				}
+				if bytes.HasPrefix(chunk, []byte("data: ")) {
+					jsonData := chunk[6:]
+					data := gjson.ParseBytes(jsonData)
+					typeResult := data.Get("type")
+					if typeResult.String() == "response.completed" {
+						responseResult := data.Get("response")
+						openaiStr := translatorOpenAIToCodex.ConvertCodexResponseToOpenAIChatNonStream(responseResult.Raw, time.Now().Unix())
+						_, _ = c.Writer.Write([]byte(openaiStr))
+					}
+				}
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = c.Writer.Write([]byte(err.Error.Error()))
+						cliCancel()
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+}
+
+// handleCodexStreamingResponse handles streaming responses for OpenAI models.
+// It establishes a streaming connection with the backend service and forwards
+// the response chunks to the client in real-time using Server-Sent Events.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+func (h *OpenAIAPIHandlers) handleCodexStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	// Get the http.Flusher interface to manually flush the response.
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Streaming not supported",
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	// Prepare the request for the backend client.
+	newRequestJSON := translatorOpenAIToCodex.ConvertOpenAIChatRequestToCodex(rawJSON)
+	// log.Debugf("Request: %s", newRequestJSON)
+
+	modelName := gjson.GetBytes(rawJSON, "model")
+
+	cliCtx, cliCancel := context.WithCancel(context.Background())
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName.String())
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		log.Debugf("Request codex use account: %s", cliClient.GetEmail())
+
+		// Send the message and receive response chunks and errors via channels.
+		var params *translatorOpenAIToCodex.ConvertCliToOpenAIParams
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					_, _ = c.Writer.Write([]byte("[done]\n\n"))
+					flusher.Flush()
+					cliCancel()
+					return
+				}
+				// log.Debugf("Response: %s\n", string(chunk))
+				// Convert the chunk to OpenAI format and send it to the client.
+				if bytes.HasPrefix(chunk, []byte("data: ")) {
+					jsonData := chunk[6:]
+					data := gjson.ParseBytes(jsonData)
+					typeResult := data.Get("type")
+					if typeResult.String() != "" {
+						var openaiStr string
+						params, openaiStr = translatorOpenAIToCodex.ConvertCodexResponseToOpenAIChat(jsonData, params)
+						if openaiStr != "" {
+							_, _ = c.Writer.Write([]byte("data: "))
+							_, _ = c.Writer.Write([]byte(openaiStr))
+							_, _ = c.Writer.Write([]byte("\n\n"))
+						}
+					}
+					// log.Debugf(string(jsonData))
+				}
+				flusher.Flush()
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						flusher.Flush()
+						cliCancel()
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+}

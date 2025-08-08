@@ -7,19 +7,23 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/luispater/CLIProxyAPI/internal/cmd"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	log "github.com/sirupsen/logrus"
 	"os"
 	"path"
 	"strings"
+
+	"github.com/luispater/CLIProxyAPI/internal/cmd"
+	"github.com/luispater/CLIProxyAPI/internal/config"
+	log "github.com/sirupsen/logrus"
 )
 
 // LogFormatter defines a custom log format for logrus.
+// This formatter adds timestamp, log level, and source location information
+// to each log entry for better debugging and monitoring.
 type LogFormatter struct {
 }
 
-// Format renders a single log entry.
+// Format renders a single log entry with custom formatting.
+// It includes timestamp, log level, source file and line number, and the log message.
 func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 	var b *bytes.Buffer
 	if entry.Buffer != nil {
@@ -38,6 +42,8 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 }
 
 // init initializes the logger configuration.
+// It sets up the custom log formatter, enables caller reporting,
+// and configures the log output destination.
 func init() {
 	// Set logger output to standard output.
 	log.SetOutput(os.Stdout)
@@ -48,14 +54,20 @@ func init() {
 }
 
 // main is the entry point of the application.
+// It parses command-line flags, loads configuration, and starts the appropriate
+// service based on the provided flags (login, codex-login, or server mode).
 func main() {
 	var login bool
+	var codexLogin bool
+	var noBrowser bool
 	var projectID string
 	var configPath string
 
-	// Define command-line flags.
+	// Define command-line flags for different operation modes.
 	flag.BoolVar(&login, "login", false, "Login Google Account")
-	flag.StringVar(&projectID, "project_id", "", "Project ID")
+	flag.BoolVar(&codexLogin, "codex-login", false, "Login to Codex using OAuth")
+	flag.BoolVar(&noBrowser, "no-browser", false, "Don't open browser automatically for OAuth")
+	flag.StringVar(&projectID, "project_id", "", "Project ID (Gemini only, not required)")
 	flag.StringVar(&configPath, "config", "", "Configure File Path")
 
 	// Parse the command-line flags.
@@ -104,10 +116,19 @@ func main() {
 		}
 	}
 
-	// Either perform login or start the service based on the 'login' flag.
+	// Handle different command modes based on the provided flags.
+	options := &cmd.LoginOptions{
+		NoBrowser: noBrowser,
+	}
+
 	if login {
-		cmd.DoLogin(cfg, projectID)
+		// Handle Google/Gemini login
+		cmd.DoLogin(cfg, projectID, options)
+	} else if codexLogin {
+		// Handle Codex login
+		cmd.DoCodexLogin(cfg, options)
 	} else {
+		// Start the main proxy service
 		cmd.StartService(cfg, configFilePath)
 	}
 }

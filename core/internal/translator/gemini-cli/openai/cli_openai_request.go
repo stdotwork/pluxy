@@ -6,18 +6,31 @@ package openai
 
 import (
 	"encoding/json"
-	"github.com/luispater/CLIProxyAPI/internal/api/translator"
 	"strings"
 
 	"github.com/luispater/CLIProxyAPI/internal/client"
+	"github.com/luispater/CLIProxyAPI/internal/misc"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
-// PrepareRequest translates a raw JSON request from an OpenAI-compatible format
+// ConvertOpenAIChatRequestToCli translates a raw JSON request from an OpenAI-compatible format
 // to the internal format expected by the backend client. It parses messages,
 // roles, content types (text, image, file), and tool calls.
-func PrepareRequest(rawJSON []byte) (string, *client.Content, []client.Content, []client.ToolDeclaration) {
+//
+// This function handles the complex task of converting between the OpenAI message
+// format and the internal format used by the Gemini client. It processes different
+// message types (system, user, assistant, tool) and content types (text, images, files).
+//
+// Parameters:
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+//
+// Returns:
+//   - string: The model name to use
+//   - *client.Content: System instruction content (if any)
+//   - []client.Content: The conversation contents in internal format
+//   - []client.ToolDeclaration: Tool declarations from the request
+func ConvertOpenAIChatRequestToCli(rawJSON []byte) (string, *client.Content, []client.Content, []client.ToolDeclaration) {
 	// Extract the model name from the request, defaulting to "gemini-2.5-pro".
 	modelName := "gemini-2.5-pro"
 	modelResult := gjson.GetBytes(rawJSON, "model")
@@ -126,7 +139,7 @@ func PrepareRequest(rawJSON []byte) (string, *client.Content, []client.Content, 
 							if split := strings.Split(filename, "."); len(split) > 1 {
 								ext = split[len(split)-1]
 							}
-							if mimeType, ok := translator.MimeTypes[ext]; ok {
+							if mimeType, ok := misc.MimeTypes[ext]; ok {
 								parts = append(parts, client.Part{InlineData: &client.InlineData{
 									MimeType: mimeType,
 									Data:     fileData,

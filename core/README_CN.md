@@ -2,16 +2,21 @@
 
 [English](README.md) | 中文
 
-一个为 CLI 提供 OpenAI/Gemini/Claude 兼容 API 接口的代理服务器。这让您可以摆脱终端界面的束缚，将 Gemini 的强大能力以 API 的形式轻松接入到任何您喜爱的客户端或应用中。
+一个为 CLI 提供 OpenAI/Gemini/Claude 兼容 API 接口的代理服务器。
+
+现已支持通过 OAuth 登录接入 OpenAI Codex（GPT 系列）。
+
+可与本地或多账户方式配合，使用任何 OpenAI 兼容的客户端与 SDK。
 
 ## 功能特性
 
 - 为 CLI 模型提供 OpenAI/Gemini/Claude 兼容的 API 端点
-- 支持流式和非流式响应
+- 新增 OpenAI Codex（GPT 系列）支持（OAuth 登录）
+- 支持流式与非流式响应
 - 函数调用/工具支持
-- 多模态输入支持（文本和图像）
-- 多账户支持与负载均衡
-- 简单的 CLI 身份验证流程
+- 多模态输入（文本、图片）
+- 多账户支持与轮询负载均衡（Gemini 与 OpenAI）
+- 简单的 CLI 身份验证流程（Gemini 与 OpenAI）
 - 支持 Gemini AIStudio API 密钥
 - 支持 Gemini CLI 多账户轮询
 
@@ -20,7 +25,8 @@
 ### 前置要求
 
 - Go 1.24 或更高版本
-- 有权访问 CLI 模型的 Google 账户
+- 有权访问 Gemini CLI 模型的 Google 账户（可选）
+- 有权访问 OpenAI Codex/GPT 的 OpenAI 账户（可选）
 
 ### 从源码构建
 
@@ -39,17 +45,23 @@
 
 ### 身份验证
 
-在使用 API 之前，您需要使用 Google 账户进行身份验证：
+您可以分别为 Gemini 和 OpenAI 进行身份验证，二者可同时存在于同一个 `auth-dir` 中并参与负载均衡。
 
-```bash
-./cli-proxy-api --login
-```
+- Gemini（Google）：
+  ```bash
+  ./cli-proxy-api --login
+  ```
+  如果您是旧版 gemini code 用户，可能需要指定项目 ID：
+  ```bash
+  ./cli-proxy-api --login --project_id <your_project_id>
+  ```
+  本地 OAuth 回调端口为 `8085`。
 
-如果您是旧版 gemini code 用户，可能需要指定项目 ID：
-
-```bash
-./cli-proxy-api --login --project_id <your_project_id>
-```
+- OpenAI（Codex/GPT，OAuth）：
+  ```bash
+  ./cli-proxy-api --codex-login
+  ```
+  选项：加上 `--no-browser` 可打印登录地址而不自动打开浏览器。本地 OAuth 回调端口为 `1455`。
 
 ### 启动服务器
 
@@ -90,6 +102,15 @@ POST http://localhost:8317/v1/chat/completions
 }
 ```
 
+说明：
+- 使用 `gemini-*` 模型（如 `gemini-2.5-pro`）走 Gemini，使用 `gpt-*` 模型（如 `gpt-5`）走 OpenAI，服务会自动路由到对应提供商。
+
+#### Claude 消息（SSE 兼容）
+
+```
+POST http://localhost:8317/v1/messages
+```
+
 ### 与 OpenAI 库一起使用
 
 您可以通过将基础 URL 设置为本地服务器来将此代理与任何 OpenAI 兼容的库一起使用：
@@ -104,14 +125,20 @@ client = OpenAI(
     base_url="http://localhost:8317/v1"
 )
 
-response = client.chat.completions.create(
+# Gemini 示例
+gemini = client.chat.completions.create(
     model="gemini-2.5-pro",
-    messages=[
-        {"role": "user", "content": "你好，你好吗？"}
-    ]
+    messages=[{"role": "user", "content": "你好，你好吗？"}]
 )
 
-print(response.choices[0].message.content)
+# Codex/GPT 示例
+gpt = client.chat.completions.create(
+    model="gpt-5",
+    messages=[{"role": "user", "content": "用一句话总结这个项目"}]
+)
+
+print(gemini.choices[0].message.content)
+print(gpt.choices[0].message.content)
 ```
 
 #### JavaScript/TypeScript
@@ -124,28 +151,35 @@ const openai = new OpenAI({
   baseURL: 'http://localhost:8317/v1',
 });
 
-const response = await openai.chat.completions.create({
+// Gemini
+const gemini = await openai.chat.completions.create({
   model: 'gemini-2.5-pro',
-  messages: [
-    { role: 'user', content: '你好，你好吗？' }
-  ],
+  messages: [{ role: 'user', content: '你好，你好吗？' }],
 });
 
-console.log(response.choices[0].message.content);
+// Codex/GPT
+const gpt = await openai.chat.completions.create({
+  model: 'gpt-5',
+  messages: [{ role: 'user', content: '用一句话总结这个项目' }],
+});
+
+console.log(gemini.choices[0].message.content);
+console.log(gpt.choices[0].message.content);
 ```
 
 ## 支持的模型
 
 - gemini-2.5-pro
 - gemini-2.5-flash
-- 并且自动切换到之前的预览版本
+- gpt-5
+- Gemini 模型在需要时自动切换到对应的 preview 版本
 
 ## 配置
 
 服务器默认使用位于项目根目录的 YAML 配置文件（`config.yaml`）。您可以使用 `--config` 标志指定不同的配置文件路径：
 
 ```bash
-./cli-proxy --config /path/to/your/config.yaml
+./cli-proxy-api --config /path/to/your/config.yaml
 ```
 
 ### 配置选项
@@ -211,6 +245,10 @@ Authorization: Bearer your-api-key-1
 
 `generative-language-api-key` 参数允许您定义可用于验证对官方 AIStudio Gemini API 请求的 API 密钥列表。
 
+## 热更新
+
+服务会监听配置文件与 `auth-dir` 目录的变化并自动重新加载客户端与配置。您可以在运行中新增/移除 Gemini/OpenAI 的令牌 JSON 文件，无需重启服务。
+
 ## Gemini CLI 多账户负载均衡
 
 启动 CLI 代理 API 服务器，然后将 `CODE_ASSIST_ENDPOINT` 环境变量设置为 CLI 代理 API 服务器的 URL。
@@ -227,10 +265,16 @@ export CODE_ASSIST_ENDPOINT="http://127.0.0.1:8317"
 
 ## 使用 Docker 运行
 
-运行以下命令进行登录：
+运行以下命令进行登录（Gemini OAuth，端口 8085）：
 
 ```bash
 docker run --rm -p 8085:8085 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --login
+```
+
+运行以下命令进行登录（OpenAI OAuth，端口 1455）：
+
+```bash
+docker run --rm -p 1455:1455 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --codex-login
 ```
 
 运行以下命令启动服务器：

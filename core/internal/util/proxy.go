@@ -5,17 +5,19 @@ package util
 
 import (
 	"context"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	"golang.org/x/net/proxy"
 	"net"
 	"net/http"
 	"net/url"
+
+	"github.com/luispater/CLIProxyAPI/internal/config"
+	log "github.com/sirupsen/logrus"
+	"golang.org/x/net/proxy"
 )
 
 // SetProxy configures the provided HTTP client with proxy settings from the configuration.
 // It supports SOCKS5, HTTP, and HTTPS proxies. The function modifies the client's transport
 // to route requests through the configured proxy server.
-func SetProxy(cfg *config.Config, httpClient *http.Client) (*http.Client, error) {
+func SetProxy(cfg *config.Config, httpClient *http.Client) *http.Client {
 	var transport *http.Transport
 	proxyURL, errParse := url.Parse(cfg.ProxyURL)
 	if errParse == nil {
@@ -25,7 +27,8 @@ func SetProxy(cfg *config.Config, httpClient *http.Client) (*http.Client, error)
 			proxyAuth := &proxy.Auth{User: username, Password: password}
 			dialer, errSOCKS5 := proxy.SOCKS5("tcp", proxyURL.Host, proxyAuth, proxy.Direct)
 			if errSOCKS5 != nil {
-				return nil, errSOCKS5
+				log.Errorf("create SOCKS5 dialer failed: %v", errSOCKS5)
+				return httpClient
 			}
 			transport = &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -39,5 +42,5 @@ func SetProxy(cfg *config.Config, httpClient *http.Client) (*http.Client, error)
 	if transport != nil {
 		httpClient.Transport = transport
 	}
-	return httpClient, nil
+	return httpClient
 }
