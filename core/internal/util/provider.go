@@ -19,6 +19,8 @@ func GetProviderName(modelName string) string {
 		return "gemini"
 	} else if strings.Contains(modelName, "gpt") {
 		return "gpt"
+	} else if strings.Contains(modelName, "codex") {
+		return "gpt"
 	}
 	return "unknow"
 }
