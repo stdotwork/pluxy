@@ -108,7 +108,9 @@ func (h *ClaudeCodeAPIHandlers) handleGeminiStreamingResponse(c *gin.Context, ra
 
 	// Create a cancellable context for the backend client request
 	// This allows proper cleanup and cancellation of ongoing requests
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	cliClient = client.NewGeminiClient(nil, nil, nil)
 	defer func() {
@@ -157,6 +159,7 @@ outLoop:
 		responseType := 0
 		responseIndex := 0
 
+		apiResponseData := make([]byte, 0)
 		// Main streaming loop - handles multiple concurrent events using Go channels
 		// This select statement manages four different types of events simultaneously
 		for {
@@ -166,6 +169,7 @@ outLoop:
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
 					log.Debugf("GeminiClient disconnected: %v", c.Request.Context().Err())
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel() // Cancel the backend request to prevent resource leaks
 					return
 				}
@@ -182,9 +186,12 @@ outLoop:
 					_, _ = c.Writer.Write([]byte("\n\n\n"))
 
 					flusher.Flush()
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel()
 					return
 				}
+
+				apiResponseData = append(apiResponseData, chunk...)
 				// Convert the backend response to Claude-compatible format
 				// This translation layer ensures API compatibility
 				claudeFormat := translatorClaudeCodeToGeminiCli.ConvertCliResponseToClaudeCode(chunk, isGlAPIKey, hasFirstResponse, &responseType, &responseIndex)
@@ -207,6 +214,7 @@ outLoop:
 						c.Status(errInfo.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, errInfo.Error.Error())
 						flusher.Flush()
+						c.Set("API_RESPONSE", []byte(errInfo.Error.Error()))
 						cliCancel()
 					}
 					return
@@ -272,7 +280,9 @@ func (h *ClaudeCodeAPIHandlers) handleCodexStreamingResponse(c *gin.Context, raw
 	// return
 	// Create a cancellable context for the backend client request
 	// This allows proper cleanup and cancellation of ongoing requests
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
@@ -306,6 +316,7 @@ outLoop:
 		hasFirstResponse := false
 		hasToolCall := false
 
+		apiResponseData := make([]byte, 0)
 		// Main streaming loop - handles multiple concurrent events using Go channels
 		// This select statement manages four different types of events simultaneously
 		for {
@@ -315,6 +326,7 @@ outLoop:
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
 					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel() // Cancel the backend request to prevent resource leaks
 					return
 				}
@@ -324,9 +336,11 @@ outLoop:
 			case chunk, okStream := <-respChan:
 				if !okStream {
 					flusher.Flush()
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel()
 					return
 				}
+				apiResponseData = append(apiResponseData, chunk...)
 				// Convert the backend response to Claude-compatible format
 				// This translation layer ensures API compatibility
 				if bytes.HasPrefix(chunk, []byte("data: ")) {
@@ -357,6 +371,7 @@ outLoop:
 						// Forward other errors directly to the client
 						c.Status(errInfo.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, errInfo.Error.Error())
+						c.Set("API_RESPONSE", []byte(errInfo.Error.Error()))
 						flusher.Flush()
 						cliCancel()
 					}

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	geminiAuth "github.com/luispater/CLIProxyAPI/internal/auth/gemini"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	log "github.com/sirupsen/logrus"
@@ -196,8 +197,10 @@ func (c *GeminiClient) SetupUser(ctx context.Context, email, projectID string) e
 // makeAPIRequest handles making requests to the CLI API endpoints.
 func (c *GeminiClient) makeAPIRequest(ctx context.Context, endpoint, method string, body interface{}, result interface{}) error {
 	var reqBody io.Reader
+	var jsonBody []byte
+	var err error
 	if body != nil {
-		jsonBody, err := json.Marshal(body)
+		jsonBody, err = json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("failed to marshal request body: %w", err)
 		}
@@ -226,6 +229,10 @@ func (c *GeminiClient) makeAPIRequest(ctx context.Context, endpoint, method stri
 	req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
 	req.Header.Set("Client-Metadata", metadataStr)
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
+
+	if ginContext, ok := ctx.Value("gin").(*gin.Context); ok {
+		ginContext.Set("API_REQUEST", jsonBody)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -322,6 +329,10 @@ func (c *GeminiClient) APIRequest(ctx context.Context, endpoint string, body int
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
 	} else {
 		req.Header.Set("x-goog-api-key", c.glAPIKey)
+	}
+
+	if ginContext, ok := ctx.Value("gin").(*gin.Context); ok {
+		ginContext.Set("API_REQUEST", jsonBody)
 	}
 
 	resp, err := c.httpClient.Do(req)

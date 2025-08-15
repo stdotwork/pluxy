@@ -160,7 +160,9 @@ func (h *OpenAIAPIHandlers) handleGeminiNonStreamingResponse(c *gin.Context, raw
 	c.Header("Content-Type", "application/json")
 
 	modelName, systemInstruction, contents, tools := translatorOpenAIToGeminiCli.ConvertOpenAIChatRequestToCli(rawJSON)
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		if cliClient != nil {
@@ -193,6 +195,7 @@ func (h *OpenAIAPIHandlers) handleGeminiNonStreamingResponse(c *gin.Context, raw
 			} else {
 				c.Status(err.StatusCode)
 				_, _ = c.Writer.Write([]byte(err.Error.Error()))
+				c.Set("API_RESPONSE", []byte(err.Error.Error()))
 				cliCancel()
 			}
 			break
@@ -201,6 +204,7 @@ func (h *OpenAIAPIHandlers) handleGeminiNonStreamingResponse(c *gin.Context, raw
 			if openAIFormat != "" {
 				_, _ = c.Writer.Write([]byte(openAIFormat))
 			}
+			c.Set("API_RESPONSE", resp)
 			cliCancel()
 			break
 		}
@@ -234,7 +238,9 @@ func (h *OpenAIAPIHandlers) handleGeminiStreamingResponse(c *gin.Context, rawJSO
 
 	// Prepare the request for the backend client.
 	modelName, systemInstruction, contents, tools := translatorOpenAIToGeminiCli.ConvertOpenAIChatRequestToCli(rawJSON)
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
@@ -264,6 +270,8 @@ outLoop:
 		}
 		// Send the message and receive response chunks and errors via channels.
 		respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJSON, modelName, systemInstruction, contents, tools)
+		apiResponseData := make([]byte, 0)
+
 		hasFirstResponse := false
 		for {
 			select {
@@ -271,6 +279,7 @@ outLoop:
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
 					log.Debugf("GeminiClient disconnected: %v", c.Request.Context().Err())
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel() // Cancel the backend request.
 					return
 				}
@@ -280,9 +289,11 @@ outLoop:
 					// Stream is closed, send the final [DONE] message.
 					_, _ = fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 					flusher.Flush()
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel()
 					return
 				}
+				apiResponseData = append(apiResponseData, chunk...)
 				// Convert the chunk to OpenAI format and send it to the client.
 				hasFirstResponse = true
 				openAIFormat := translatorOpenAIToGeminiCli.ConvertCliResponseToOpenAIChat(chunk, time.Now().Unix(), isGlAPIKey)
@@ -299,6 +310,7 @@ outLoop:
 						c.Status(err.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
 						flusher.Flush()
+						c.Set("API_RESPONSE", []byte(err.Error.Error()))
 						cliCancel()
 					}
 					return
@@ -326,7 +338,9 @@ func (h *OpenAIAPIHandlers) handleCodexNonStreamingResponse(c *gin.Context, rawJ
 
 	newRequestJSON := translatorOpenAIToCodex.ConvertOpenAIChatRequestToCodex(rawJSON)
 	modelName := gjson.GetBytes(rawJSON, "model")
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		if cliClient != nil {
@@ -349,21 +363,25 @@ outLoop:
 
 		// Send the message and receive response chunks and errors via channels.
 		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+		apiResponseData := make([]byte, 0)
 		for {
 			select {
 			// Handle client disconnection.
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
 					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel() // Cancel the backend request.
 					return
 				}
 			// Process incoming response chunks.
 			case chunk, okStream := <-respChan:
 				if !okStream {
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel()
 					return
 				}
+				apiResponseData = append(apiResponseData, chunk...)
 				if bytes.HasPrefix(chunk, []byte("data: ")) {
 					jsonData := chunk[6:]
 					data := gjson.ParseBytes(jsonData)
@@ -382,6 +400,7 @@ outLoop:
 					} else {
 						c.Status(err.StatusCode)
 						_, _ = c.Writer.Write([]byte(err.Error.Error()))
+						c.Set("API_RESPONSE", []byte(err.Error.Error()))
 						cliCancel()
 					}
 					return
@@ -424,7 +443,9 @@ func (h *OpenAIAPIHandlers) handleCodexStreamingResponse(c *gin.Context, rawJSON
 
 	modelName := gjson.GetBytes(rawJSON, "model")
 
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
@@ -450,12 +471,14 @@ outLoop:
 		// Send the message and receive response chunks and errors via channels.
 		var params *translatorOpenAIToCodex.ConvertCliToOpenAIParams
 		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+		apiResponseData := make([]byte, 0)
 		for {
 			select {
 			// Handle client disconnection.
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
 					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel() // Cancel the backend request.
 					return
 				}
@@ -464,9 +487,11 @@ outLoop:
 				if !okStream {
 					_, _ = c.Writer.Write([]byte("[done]\n\n"))
 					flusher.Flush()
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel()
 					return
 				}
+				apiResponseData = append(apiResponseData, chunk...)
 				// log.Debugf("Response: %s\n", string(chunk))
 				// Convert the chunk to OpenAI format and send it to the client.
 				if bytes.HasPrefix(chunk, []byte("data: ")) {
@@ -493,6 +518,7 @@ outLoop:
 					} else {
 						c.Status(err.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						c.Set("API_RESPONSE", []byte(err.Error.Error()))
 						flusher.Flush()
 						cliCancel()
 					}

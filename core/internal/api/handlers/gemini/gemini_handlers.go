@@ -267,7 +267,9 @@ func (h *GeminiAPIHandlers) handleGeminiStreamGenerateContent(c *gin.Context, ra
 	modelResult := gjson.GetBytes(rawJSON, "model")
 	modelName := modelResult.String()
 
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
@@ -327,21 +329,26 @@ outLoop:
 
 		// Send the message and receive response chunks and errors via channels.
 		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJSON, alt)
+		apiResponseData := make([]byte, 0)
 		for {
 			select {
 			// Handle client disconnection.
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
 					log.Debugf("GeminiClient disconnected: %v", c.Request.Context().Err())
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel() // Cancel the backend request.
 					return
 				}
 			// Process incoming response chunks.
 			case chunk, okStream := <-respChan:
 				if !okStream {
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel()
 					return
 				}
+				apiResponseData = append(apiResponseData, chunk...)
+
 				if cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey() == "" {
 					if alt == "" {
 						responseResult := gjson.GetBytes(chunk, "response")
@@ -382,6 +389,7 @@ outLoop:
 						c.Status(err.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
 						flusher.Flush()
+						c.Set("API_RESPONSE", []byte(err.Error.Error()))
 						cliCancel()
 					}
 					return
@@ -400,7 +408,9 @@ func (h *GeminiAPIHandlers) handleGeminiCountTokens(c *gin.Context, rawJSON []by
 	// orgrawJSON := rawJSON
 	modelResult := gjson.GetBytes(rawJSON, "model")
 	modelName := modelResult.String()
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		if cliClient != nil {
@@ -441,6 +451,7 @@ func (h *GeminiAPIHandlers) handleGeminiCountTokens(c *gin.Context, rawJSON []by
 			} else {
 				c.Status(err.StatusCode)
 				_, _ = c.Writer.Write([]byte(err.Error.Error()))
+				c.Set("API_RESPONSE", []byte(err.Error.Error()))
 				cliCancel()
 				// log.Debugf(err.Error.Error())
 				// log.Debugf(string(rawJSON))
@@ -455,6 +466,7 @@ func (h *GeminiAPIHandlers) handleGeminiCountTokens(c *gin.Context, rawJSON []by
 				}
 			}
 			_, _ = c.Writer.Write(resp)
+			c.Set("API_RESPONSE", resp)
 			cliCancel()
 			break
 		}
@@ -468,7 +480,9 @@ func (h *GeminiAPIHandlers) handleGeminiGenerateContent(c *gin.Context, rawJSON 
 
 	modelResult := gjson.GetBytes(rawJSON, "model")
 	modelName := modelResult.String()
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		if cliClient != nil {
@@ -529,6 +543,7 @@ func (h *GeminiAPIHandlers) handleGeminiGenerateContent(c *gin.Context, rawJSON 
 			} else {
 				c.Status(err.StatusCode)
 				_, _ = c.Writer.Write([]byte(err.Error.Error()))
+				c.Set("API_RESPONSE", []byte(err.Error.Error()))
 				cliCancel()
 			}
 			break
@@ -540,6 +555,7 @@ func (h *GeminiAPIHandlers) handleGeminiGenerateContent(c *gin.Context, rawJSON 
 				}
 			}
 			_, _ = c.Writer.Write(resp)
+			c.Set("API_RESPONSE", resp)
 			cliCancel()
 			break
 		}
@@ -570,7 +586,9 @@ func (h *GeminiAPIHandlers) handleCodexStreamGenerateContent(c *gin.Context, raw
 
 	modelName := gjson.GetBytes(rawJSON, "model")
 
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
@@ -595,6 +613,9 @@ outLoop:
 
 		// Send the message and receive response chunks and errors via channels.
 		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+
+		apiResponseData := make([]byte, 0)
+
 		params := &translatorGeminiToCodex.ConvertCodexResponseToGeminiParams{
 			Model:             modelName.String(),
 			CreatedAt:         0,
@@ -607,15 +628,18 @@ outLoop:
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
 					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel() // Cancel the backend request.
 					return
 				}
 			// Process incoming response chunks.
 			case chunk, okStream := <-respChan:
 				if !okStream {
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel()
 					return
 				}
+				apiResponseData = append(apiResponseData, chunk...)
 
 				if bytes.HasPrefix(chunk, []byte("data: ")) {
 					jsonData := chunk[6:]
@@ -643,6 +667,7 @@ outLoop:
 						c.Status(err.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
 						flusher.Flush()
+						c.Set("API_RESPONSE", []byte(err.Error.Error()))
 						cliCancel()
 					}
 					return
@@ -663,7 +688,9 @@ func (h *GeminiAPIHandlers) handleCodexGenerateContent(c *gin.Context, rawJSON [
 
 	modelName := gjson.GetBytes(rawJSON, "model")
 
-	cliCtx, cliCancel := context.WithCancel(context.Background())
+	backgroundCtx, cliCancel := context.WithCancel(context.Background())
+	cliCtx := context.WithValue(backgroundCtx, "gin", c)
+
 	var cliClient client.Client
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
@@ -687,21 +714,25 @@ outLoop:
 
 		// Send the message and receive response chunks and errors via channels.
 		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+		apiResponseData := make([]byte, 0)
 		for {
 			select {
 			// Handle client disconnection.
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
 					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel() // Cancel the backend request.
 					return
 				}
 			// Process incoming response chunks.
 			case chunk, okStream := <-respChan:
 				if !okStream {
+					c.Set("API_RESPONSE", apiResponseData)
 					cliCancel()
 					return
 				}
+				apiResponseData = append(apiResponseData, chunk...)
 
 				if bytes.HasPrefix(chunk, []byte("data: ")) {
 					jsonData := chunk[6:]
@@ -723,6 +754,7 @@ outLoop:
 					} else {
 						c.Status(err.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						c.Set("API_RESPONSE", []byte(err.Error.Error()))
 						cliCancel()
 					}
 					return

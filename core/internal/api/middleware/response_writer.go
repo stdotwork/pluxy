@@ -134,7 +134,7 @@ func (w *ResponseWriterWrapper) processStreamingChunks() {
 }
 
 // Finalize completes the logging process for the response.
-func (w *ResponseWriterWrapper) Finalize() error {
+func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 	if !w.logger.IsEnabled() {
 		return nil
 	}
@@ -171,6 +171,26 @@ func (w *ResponseWriterWrapper) Finalize() error {
 			finalHeaders[key] = values
 		}
 
+		var apiRequestBody []byte
+		apiRequest, isExist := c.Get("API_REQUEST")
+		if isExist {
+			var ok bool
+			apiRequestBody, ok = apiRequest.([]byte)
+			if !ok {
+				apiRequestBody = nil
+			}
+		}
+
+		var apiResponseBody []byte
+		apiResponse, isExist := c.Get("API_RESPONSE")
+		if isExist {
+			var ok bool
+			apiResponseBody, ok = apiResponse.([]byte)
+			if !ok {
+				apiResponseBody = nil
+			}
+		}
+
 		// Log complete non-streaming response
 		return w.logger.LogRequest(
 			w.requestInfo.URL,
@@ -180,6 +200,8 @@ func (w *ResponseWriterWrapper) Finalize() error {
 			finalStatusCode,
 			finalHeaders,
 			w.body.Bytes(),
+			apiRequestBody,
+			apiResponseBody,
 		)
 	}
 

@@ -19,7 +19,7 @@ import (
 // RequestLogger defines the interface for logging HTTP requests and responses.
 type RequestLogger interface {
 	// LogRequest logs a complete non-streaming request/response cycle
-	LogRequest(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response []byte) error
+	LogRequest(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response, apiRequest, apiResponse []byte) error
 
 	// LogStreamingRequest initiates logging for a streaming request and returns a writer for chunks
 	LogStreamingRequest(url, method string, headers map[string][]string, body []byte) (StreamingLogWriter, error)
@@ -60,7 +60,7 @@ func (l *FileRequestLogger) IsEnabled() bool {
 }
 
 // LogRequest logs a complete non-streaming request/response cycle to a file.
-func (l *FileRequestLogger) LogRequest(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response []byte) error {
+func (l *FileRequestLogger) LogRequest(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response, apiRequest, apiResponse []byte) error {
 	if !l.enabled {
 		return nil
 	}
@@ -82,7 +82,7 @@ func (l *FileRequestLogger) LogRequest(url, method string, requestHeaders map[st
 	}
 
 	// Create log content
-	content := l.formatLogContent(url, method, requestHeaders, body, decompressedResponse, statusCode, responseHeaders)
+	content := l.formatLogContent(url, method, requestHeaders, body, apiRequest, apiResponse, decompressedResponse, statusCode, responseHeaders)
 
 	// Write to file
 	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
@@ -192,14 +192,21 @@ func (l *FileRequestLogger) sanitizeForFilename(path string) string {
 }
 
 // formatLogContent creates the complete log content for non-streaming requests.
-func (l *FileRequestLogger) formatLogContent(url, method string, headers map[string][]string, body []byte, response []byte, status int, responseHeaders map[string][]string) string {
+func (l *FileRequestLogger) formatLogContent(url, method string, headers map[string][]string, body, apiRequest, apiResponse, response []byte, status int, responseHeaders map[string][]string) string {
 	var content strings.Builder
 
 	// Request info
 	content.WriteString(l.formatRequestInfo(url, method, headers, body))
 
+	content.WriteString("=== API REQUEST ===\n")
+	content.Write(apiRequest)
+	content.WriteString("\n\n")
+
+	content.WriteString("=== API RESPONSE ===\n")
+	content.Write(apiResponse)
+	content.WriteString("\n\n")
+
 	// Response section
-	content.WriteString("========================================\n")
 	content.WriteString("=== RESPONSE ===\n")
 	content.WriteString(fmt.Sprintf("Status: %d\n", status))
 
