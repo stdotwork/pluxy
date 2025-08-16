@@ -42,20 +42,19 @@ func NewGeminiAPIHandlers(apiHandlers *handlers.APIHandlers) *GeminiAPIHandlers 
 // It returns a JSON response containing available Gemini models and their specifications.
 func (h *GeminiAPIHandlers) GeminiModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"data": []map[string]any{
+		"models": []map[string]any{
 			{
-				"id":                    "gemini-2.5-flash",
-				"object":                "model",
-				"version":               "001",
-				"name":                  "Gemini 2.5 Flash",
-				"description":           "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-				"context_length":        1_048_576,
-				"max_completion_tokens": 65_536,
-				"supported_parameters": []string{
-					"tools",
-					"temperature",
-					"top_p",
-					"top_k",
+				"name":             "models/gemini-2.5-flash",
+				"version":          "001",
+				"displayName":      "Gemini 2.5 Flash",
+				"description":      "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+				"inputTokenLimit":  1048576,
+				"outputTokenLimit": 65536,
+				"supportedGenerationMethods": []string{
+					"generateContent",
+					"countTokens",
+					"createCachedContent",
+					"batchGenerateContent",
 				},
 				"temperature":    1,
 				"topP":           0.95,
@@ -64,18 +63,17 @@ func (h *GeminiAPIHandlers) GeminiModels(c *gin.Context) {
 				"thinking":       true,
 			},
 			{
-				"id":                    "gemini-2.5-pro",
-				"object":                "model",
-				"version":               "2.5",
-				"name":                  "Gemini 2.5 Pro",
-				"description":           "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-				"context_length":        1_048_576,
-				"max_completion_tokens": 65_536,
-				"supported_parameters": []string{
-					"tools",
-					"temperature",
-					"top_p",
-					"top_k",
+				"name":             "models/gemini-2.5-pro",
+				"version":          "2.5",
+				"displayName":      "Gemini 2.5 Pro",
+				"description":      "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+				"inputTokenLimit":  1048576,
+				"outputTokenLimit": 65536,
+				"supportedGenerationMethods": []string{
+					"generateContent",
+					"countTokens",
+					"createCachedContent",
+					"batchGenerateContent",
 				},
 				"temperature":    1,
 				"topP":           0.95,
@@ -84,15 +82,14 @@ func (h *GeminiAPIHandlers) GeminiModels(c *gin.Context) {
 				"thinking":       true,
 			},
 			{
-				"id":                    "gpt-5",
-				"object":                "model",
-				"version":               "gpt-5-2025-08-07",
-				"name":                  "GPT 5",
-				"description":           "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
-				"context_length":        400_000,
-				"max_completion_tokens": 128_000,
-				"supported_parameters": []string{
-					"tools",
+				"name":             "gpt-5",
+				"version":          "001",
+				"displayName":      "GPT 5",
+				"description":      "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
+				"inputTokenLimit":  400000,
+				"outputTokenLimit": 128000,
+				"supportedGenerationMethods": []string{
+					"generateContent",
 				},
 				"temperature":    1,
 				"topP":           0.95,
@@ -122,39 +119,38 @@ func (h *GeminiAPIHandlers) GeminiGetHandler(c *gin.Context) {
 	switch request.Action {
 	case "gemini-2.5-pro":
 		c.JSON(http.StatusOK, gin.H{
-			"id":                    "gemini-2.5-pro",
-			"object":                "model",
-			"version":               "2.5",
-			"name":                  "Gemini 2.5 Pro",
-			"description":           "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-			"context_length":        1_048_576,
-			"max_completion_tokens": 65_536,
-			"supported_parameters": []string{
-				"tools",
-				"temperature",
-				"top_p",
-				"top_k",
+			"name":             "models/gemini-2.5-pro",
+			"version":          "2.5",
+			"displayName":      "Gemini 2.5 Pro",
+			"description":      "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+			"inputTokenLimit":  1048576,
+			"outputTokenLimit": 65536,
+			"supportedGenerationMethods": []string{
+				"generateContent",
+				"countTokens",
+				"createCachedContent",
+				"batchGenerateContent",
 			},
 			"temperature":    1,
 			"topP":           0.95,
 			"topK":           64,
 			"maxTemperature": 2,
 			"thinking":       true,
-		})
+		},
+		)
 	case "gemini-2.5-flash":
 		c.JSON(http.StatusOK, gin.H{
-			"id":                    "gemini-2.5-flash",
-			"object":                "model",
-			"version":               "001",
-			"name":                  "Gemini 2.5 Flash",
-			"description":           "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-			"context_length":        1_048_576,
-			"max_completion_tokens": 65_536,
-			"supported_parameters": []string{
-				"tools",
-				"temperature",
-				"top_p",
-				"top_k",
+			"name":             "models/gemini-2.5-flash",
+			"version":          "001",
+			"displayName":      "Gemini 2.5 Flash",
+			"description":      "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+			"inputTokenLimit":  1048576,
+			"outputTokenLimit": 65536,
+			"supportedGenerationMethods": []string{
+				"generateContent",
+				"countTokens",
+				"createCachedContent",
+				"batchGenerateContent",
 			},
 			"temperature":    1,
 			"topP":           0.95,
@@ -164,15 +160,14 @@ func (h *GeminiAPIHandlers) GeminiGetHandler(c *gin.Context) {
 		})
 	case "gpt-5":
 		c.JSON(http.StatusOK, gin.H{
-			"id":                    "gpt-5",
-			"object":                "model",
-			"version":               "gpt-5-2025-08-07",
-			"name":                  "GPT 5",
-			"description":           "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
-			"context_length":        400_000,
-			"max_completion_tokens": 128_000,
-			"supported_parameters": []string{
-				"tools",
+			"name":             "gpt-5",
+			"version":          "001",
+			"displayName":      "GPT 5",
+			"description":      "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
+			"inputTokenLimit":  400000,
+			"outputTokenLimit": 128000,
+			"supportedGenerationMethods": []string{
+				"generateContent",
 			},
 			"temperature":    1,
 			"topP":           0.95,
