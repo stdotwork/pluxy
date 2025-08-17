@@ -85,7 +85,7 @@ func (l *FileRequestLogger) LogRequest(url, method string, requestHeaders map[st
 	content := l.formatLogContent(url, method, requestHeaders, body, apiRequest, apiResponse, decompressedResponse, statusCode, responseHeaders)
 
 	// Write to file
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+	if err = os.WriteFile(filePath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write log file: %w", err)
 	}
 
@@ -115,7 +115,7 @@ func (l *FileRequestLogger) LogStreamingRequest(url, method string, headers map[
 
 	// Write initial request information
 	requestInfo := l.formatRequestInfo(url, method, headers, body)
-	if _, err := file.WriteString(requestInfo); err != nil {
+	if _, err = file.WriteString(requestInfo); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("failed to write request info: %w", err)
 	}
@@ -257,7 +257,9 @@ func (l *FileRequestLogger) decompressGzip(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
 	}
-	defer reader.Close()
+	defer func() {
+		_ = reader.Close()
+	}()
 
 	decompressed, err := io.ReadAll(reader)
 	if err != nil {
@@ -270,7 +272,9 @@ func (l *FileRequestLogger) decompressGzip(data []byte) ([]byte, error) {
 // decompressDeflate decompresses deflate-encoded data.
 func (l *FileRequestLogger) decompressDeflate(data []byte) ([]byte, error) {
 	reader := flate.NewReader(bytes.NewReader(data))
-	defer reader.Close()
+	defer func() {
+		_ = reader.Close()
+	}()
 
 	decompressed, err := io.ReadAll(reader)
 	if err != nil {

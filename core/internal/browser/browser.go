@@ -105,7 +105,7 @@ func GetPlatformInfo() map[string]interface{} {
 		info["default_command"] = "rundll32"
 	case "linux":
 		browsers := []string{"xdg-open", "x-www-browser", "www-browser", "firefox", "chromium", "google-chrome"}
-		availableBrowsers := []string{}
+		var availableBrowsers []string
 		for _, browser := range browsers {
 			if _, err := exec.LookPath(browser); err == nil {
 				availableBrowsers = append(availableBrowsers, browser)

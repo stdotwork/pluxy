@@ -12,6 +12,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/net/context"
 )
 
 // ErrorResponse represents a standard error response format for the API.
@@ -50,6 +51,9 @@ type APIHandlers struct {
 	// LastUsedClientIndex tracks the last used client index for each provider
 	// to implement round-robin load balancing.
 	LastUsedClientIndex map[string]int
+
+	// apiResponseData recording provider api response data
+	apiResponseData map[*gin.Context][]byte
 }
 
 // NewAPIHandlers creates a new API handlers instance.
@@ -67,6 +71,7 @@ func NewAPIHandlers(cliClients []client.Client, cfg *config.Config) *APIHandlers
 		Cfg:                 cfg,
 		Mutex:               &sync.Mutex{},
 		LastUsedClientIndex: make(map[string]int),
+		apiResponseData:     make(map[*gin.Context][]byte),
 	}
 }
 
@@ -185,3 +190,43 @@ func (h *APIHandlers) GetAlt(c *gin.Context) string {
 	}
 	return alt
 }
+
+func (h *APIHandlers) GetContextWithCancel(c *gin.Context, ctx context.Context) (context.Context, APIHandlerCancelFunc) {
+	newCtx, cancel := context.WithCancel(ctx)
+	newCtx = context.WithValue(newCtx, "gin", c)
+	return newCtx, func(params ...interface{}) {
+		if h.Cfg.RequestLog {
+			if len(params) == 1 {
+				data := params[0]
+				switch data.(type) {
+				case []byte:
+					c.Set("API_RESPONSE", data.([]byte))
+				case error:
+					c.Set("API_RESPONSE", []byte(data.(error).Error()))
+				case string:
+					c.Set("API_RESPONSE", []byte(data.(string)))
+				case bool:
+				case nil:
+				}
+			} else {
+				if _, hasKey := h.apiResponseData[c]; hasKey {
+					c.Set("API_RESPONSE", h.apiResponseData[c])
+					delete(h.apiResponseData, c)
+				}
+			}
+		}
+
+		cancel()
+	}
+}
+
+func (h *APIHandlers) AddAPIResponseData(c *gin.Context, data []byte) {
+	if h.Cfg.RequestLog {
+		if _, hasKey := h.apiResponseData[c]; !hasKey {
+			h.apiResponseData[c] = make([]byte, 0)
+		}
+		h.apiResponseData[c] = append(h.apiResponseData[c], data...)
+	}
+}
+
+type APIHandlerCancelFunc func(params ...interface{})
