@@ -21,6 +21,8 @@ func GetProviderName(modelName string) string {
 		return "gpt"
 	} else if strings.Contains(modelName, "codex") {
 		return "gpt"
+	} else if strings.HasPrefix(modelName, "claude") {
+		return "claude"
 	}
 	return "unknow"
 }

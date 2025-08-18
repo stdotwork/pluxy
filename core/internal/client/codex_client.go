@@ -139,7 +139,7 @@ func (c *CodexClient) SendRawMessageStream(ctx context.Context, rawJSON []byte, 
 		}
 
 		if errScanner := scanner.Err(); errScanner != nil {
-			errChan <- &ErrorMessage{500, errScanner}
+			errChan <- &ErrorMessage{500, errScanner, nil}
 			_ = stream.Close()
 			return
 		}
@@ -197,7 +197,7 @@ func (c *CodexClient) APIRequest(ctx context.Context, endpoint string, body inte
 	} else {
 		jsonBody, err = json.Marshal(body)
 		if err != nil {
-			return nil, &ErrorMessage{500, fmt.Errorf("failed to marshal request body: %w", err)}
+			return nil, &ErrorMessage{500, fmt.Errorf("failed to marshal request body: %w", err), nil}
 		}
 	}
 
@@ -217,8 +217,10 @@ func (c *CodexClient) APIRequest(ctx context.Context, endpoint string, body inte
 		}
 		jsonBody, _ = sjson.SetRawBytes(jsonBody, "input", []byte(newInput))
 	}
+	// Stream must be set to true
+	jsonBody, _ = sjson.SetBytes(jsonBody, "stream", true)
 
-	url := fmt.Sprintf("%s/%s", chatGPTEndpoint, endpoint)
+	url := fmt.Sprintf("%s%s", chatGPTEndpoint, endpoint)
 
 	// log.Debug(string(jsonBody))
 	// log.Debug(url)
@@ -226,7 +228,7 @@ func (c *CodexClient) APIRequest(ctx context.Context, endpoint string, body inte
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, reqBody)
 	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to create request: %v", err)}
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to create request: %v", err), nil}
 	}
 
 	sessionID := uuid.New().String()
@@ -246,7 +248,7 @@ func (c *CodexClient) APIRequest(ctx context.Context, endpoint string, body inte
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to execute request: %v", err)}
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to execute request: %v", err), nil}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -257,7 +259,7 @@ func (c *CodexClient) APIRequest(ctx context.Context, endpoint string, body inte
 		}()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		// log.Debug(string(jsonBody))
-		return nil, &ErrorMessage{resp.StatusCode, fmt.Errorf(string(bodyBytes))}
+		return nil, &ErrorMessage{resp.StatusCode, fmt.Errorf(string(bodyBytes)), nil}
 	}
 
 	return resp.Body, nil

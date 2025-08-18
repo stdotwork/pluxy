@@ -47,6 +47,10 @@ func NewResponseWriterWrapper(w gin.ResponseWriter, logger logging.RequestLogger
 // Write intercepts response data while maintaining normal Gin functionality.
 // CRITICAL: This method prioritizes client response (zero-latency) over logging operations.
 func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
+	// Ensure headers are captured before first write
+	// This is critical because Write() may trigger WriteHeader() internally
+	w.ensureHeadersCaptured()
+
 	// CRITICAL: Write to client first (zero latency)
 	n, err := w.ResponseWriter.Write(data)
 
@@ -71,10 +75,8 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 
-	// Capture response headers
-	for key, values := range w.ResponseWriter.Header() {
-		w.headers[key] = values
-	}
+	// Capture response headers using the new method
+	w.captureCurrentHeaders()
 
 	// Detect streaming based on Content-Type
 	contentType := w.ResponseWriter.Header().Get("Content-Type")
@@ -102,6 +104,29 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 
 	// Call original WriteHeader
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+// ensureHeadersCaptured ensures that response headers are captured at the right time.
+// This method can be called multiple times safely and will always capture the latest headers.
+func (w *ResponseWriterWrapper) ensureHeadersCaptured() {
+	// Always capture the current headers to ensure we have the latest state
+	w.captureCurrentHeaders()
+}
+
+// captureCurrentHeaders captures the current response headers from the underlying ResponseWriter.
+func (w *ResponseWriterWrapper) captureCurrentHeaders() {
+	// Initialize headers map if needed
+	if w.headers == nil {
+		w.headers = make(map[string][]string)
+	}
+
+	// Capture all current headers from the underlying ResponseWriter
+	for key, values := range w.ResponseWriter.Header() {
+		// Make a copy of the values slice to avoid reference issues
+		headerValues := make([]string, len(values))
+		copy(headerValues, values)
+		w.headers[key] = headerValues
+	}
 }
 
 // detectStreaming determines if the response is streaming based on Content-Type and request analysis.
@@ -161,14 +186,16 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 			}
 		}
 
-		// Capture final headers
+		// Ensure we have the latest headers before finalizing
+		w.ensureHeadersCaptured()
+
+		// Use the captured headers as the final headers
 		finalHeaders := make(map[string][]string)
-		for key, values := range w.ResponseWriter.Header() {
-			finalHeaders[key] = values
-		}
-		// Merge with any headers we captured earlier
 		for key, values := range w.headers {
-			finalHeaders[key] = values
+			// Make a copy of the values slice to avoid reference issues
+			headerValues := make([]string, len(values))
+			copy(headerValues, values)
+			finalHeaders[key] = headerValues
 		}
 
 		var apiRequestBody []byte

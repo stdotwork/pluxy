@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/luispater/CLIProxyAPI/internal/auth/claude"
 	"github.com/luispater/CLIProxyAPI/internal/auth/codex"
 	"github.com/luispater/CLIProxyAPI/internal/auth/gemini"
 	"github.com/luispater/CLIProxyAPI/internal/client"
@@ -172,6 +173,9 @@ func (w *Watcher) reloadConfig() {
 		if len(oldConfig.GlAPIKey) != len(newConfig.GlAPIKey) {
 			log.Debugf("  generative-language-api-key count: %d -> %d", len(oldConfig.GlAPIKey), len(newConfig.GlAPIKey))
 		}
+		if len(oldConfig.ClaudeKey) != len(newConfig.ClaudeKey) {
+			log.Debugf("  claude-api-key count: %d -> %d", len(oldConfig.ClaudeKey), len(newConfig.ClaudeKey))
+		}
 	}
 
 	log.Infof("config successfully reloaded, triggering client reload")
@@ -263,6 +267,20 @@ func (w *Watcher) reloadClients() {
 				} else {
 					log.Errorf("  failed to decode token file %s: %v", path, err)
 				}
+			} else if tokenType == "claude" {
+				var ts claude.ClaudeTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					// For each valid token, create an authenticated client
+					log.Debugf("  initializing claude authentication for token from %s...", filepath.Base(path))
+					claudeClient := client.NewClaudeClient(cfg, &ts)
+					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
+
+					// Add the new client to the pool
+					newClients = append(newClients, claudeClient)
+					successfulAuthCount++
+				} else {
+					log.Errorf("  failed to decode token file %s: %v", path, err)
+				}
 			}
 		}
 		return nil
@@ -277,16 +295,28 @@ func (w *Watcher) reloadClients() {
 	// Add clients for Generative Language API keys if configured
 	glAPIKeyCount := 0
 	if len(cfg.GlAPIKey) > 0 {
-		log.Debugf("processing %d Generative Language API keys", len(cfg.GlAPIKey))
+		log.Debugf("processing %d Generative Language API Keys", len(cfg.GlAPIKey))
 		for i := 0; i < len(cfg.GlAPIKey); i++ {
 			httpClient := util.SetProxy(cfg, &http.Client{})
 
-			log.Debugf("  initializing with Generative Language API key %d...", i+1)
+			log.Debugf("Initializing with Generative Language API Key %d...", i+1)
 			cliClient := client.NewGeminiClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
 			newClients = append(newClients, cliClient)
 			glAPIKeyCount++
 		}
-		log.Debugf("successfully initialized %d Generative Language API key clients", glAPIKeyCount)
+		log.Debugf("Successfully initialized %d Generative Language API Key clients", glAPIKeyCount)
+	}
+
+	claudeAPIKeyCount := 0
+	if len(cfg.ClaudeKey) > 0 {
+		log.Debugf("processing %d Claude API Keys", len(cfg.GlAPIKey))
+		for i := 0; i < len(cfg.ClaudeKey); i++ {
+			log.Debugf("Initializing with Claude API Key %d...", i+1)
+			cliClient := client.NewClaudeClientWithKey(cfg, i)
+			newClients = append(newClients, cliClient)
+			claudeAPIKeyCount++
+		}
+		log.Debugf("Successfully initialized %d Claude API Key clients", glAPIKeyCount)
 	}
 
 	// Update the client list
@@ -294,8 +324,13 @@ func (w *Watcher) reloadClients() {
 	w.clients = newClients
 	w.clientsMutex.Unlock()
 
-	log.Infof("client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys)",
-		oldClientCount, len(newClients), successfulAuthCount, glAPIKeyCount)
+	log.Infof("client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys)",
+		oldClientCount,
+		len(newClients),
+		successfulAuthCount,
+		glAPIKeyCount,
+		claudeAPIKeyCount,
+	)
 
 	// Trigger the callback to update the server
 	if w.reloadCallback != nil {

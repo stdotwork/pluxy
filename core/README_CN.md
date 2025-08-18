@@ -4,7 +4,7 @@
 
 一个为 CLI 提供 OpenAI/Gemini/Claude 兼容 API 接口的代理服务器。
 
-现已支持通过 OAuth 登录接入 OpenAI Codex（GPT 系列）。
+现已支持通过 OAuth 登录接入 OpenAI Codex（GPT 系列）和 Claude Code。
 
 可与本地或多账户方式配合，使用任何 OpenAI 兼容的客户端与 SDK。
 
@@ -12,13 +12,15 @@
 
 - 为 CLI 模型提供 OpenAI/Gemini/Claude 兼容的 API 端点
 - 新增 OpenAI Codex（GPT 系列）支持（OAuth 登录）
+- 新增 Claude Code 支持（OAuth 登录）
 - 支持流式与非流式响应
 - 函数调用/工具支持
 - 多模态输入（文本、图片）
-- 多账户支持与轮询负载均衡（Gemini 与 OpenAI）
-- 简单的 CLI 身份验证流程（Gemini 与 OpenAI）
+- 多账户支持与轮询负载均衡（Gemini、OpenAI 与 Claude）
+- 简单的 CLI 身份验证流程（Gemini、OpenAI 与 Claude）
 - 支持 Gemini AIStudio API 密钥
 - 支持 Gemini CLI 多账户轮询
+- 支持 Claude Code 多账户轮询
 
 ## 安装
 
@@ -27,6 +29,7 @@
 - Go 1.24 或更高版本
 - 有权访问 Gemini CLI 模型的 Google 账户（可选）
 - 有权访问 OpenAI Codex/GPT 的 OpenAI 账户（可选）
+- 有权访问 Claude Code 的 Anthropic 账户（可选）
 
 ### 从源码构建
 
@@ -45,7 +48,7 @@
 
 ### 身份验证
 
-您可以分别为 Gemini 和 OpenAI 进行身份验证，二者可同时存在于同一个 `auth-dir` 中并参与负载均衡。
+您可以分别为 Gemini、OpenAI 和 Claude 进行身份验证，三者可同时存在于同一个 `auth-dir` 中并参与负载均衡。
 
 - Gemini（Google）：
   ```bash
@@ -62,6 +65,12 @@
   ./cli-proxy-api --codex-login
   ```
   选项：加上 `--no-browser` 可打印登录地址而不自动打开浏览器。本地 OAuth 回调端口为 `1455`。
+
+- Claude（Anthropic，OAuth）：
+  ```bash
+  ./cli-proxy-api --claude-login
+  ```
+  选项：加上 `--no-browser` 可打印登录地址而不自动打开浏览器。本地 OAuth 回调端口为 `54545`。
 
 ### 启动服务器
 
@@ -103,7 +112,7 @@ POST http://localhost:8317/v1/chat/completions
 ```
 
 说明：
-- 使用 `gemini-*` 模型（如 `gemini-2.5-pro`）走 Gemini，使用 `gpt-*` 模型（如 `gpt-5`）走 OpenAI，服务会自动路由到对应提供商。
+- 使用 `gemini-*` 模型（如 `gemini-2.5-pro`）走 Gemini，使用 `gpt-*` 模型（如 `gpt-5`）走 OpenAI，使用 `claude-*` 模型（如 `claude-3-5-sonnet-20241022`）走 Claude，服务会自动路由到对应提供商。
 
 #### Claude 消息（SSE 兼容）
 
@@ -137,8 +146,20 @@ gpt = client.chat.completions.create(
     messages=[{"role": "user", "content": "用一句话总结这个项目"}]
 )
 
+# Claude 示例（使用 messages 端点）
+import requests
+claude_response = requests.post(
+    "http://localhost:8317/v1/messages",
+    json={
+        "model": "claude-3-5-sonnet-20241022",
+        "messages": [{"role": "user", "content": "用一句话总结这个项目"}],
+        "max_tokens": 1000
+    }
+)
+
 print(gemini.choices[0].message.content)
 print(gpt.choices[0].message.content)
+print(claude_response.json())
 ```
 
 #### JavaScript/TypeScript
@@ -163,8 +184,20 @@ const gpt = await openai.chat.completions.create({
   messages: [{ role: 'user', content: '用一句话总结这个项目' }],
 });
 
+// Claude 示例（使用 messages 端点）
+const claudeResponse = await fetch('http://localhost:8317/v1/messages', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    model: 'claude-3-5-sonnet-20241022',
+    messages: [{ role: 'user', content: '用一句话总结这个项目' }],
+    max_tokens: 1000
+  })
+});
+
 console.log(gemini.choices[0].message.content);
 console.log(gpt.choices[0].message.content);
+console.log(await claudeResponse.json());
 ```
 
 ## 支持的模型
@@ -172,6 +205,11 @@ console.log(gpt.choices[0].message.content);
 - gemini-2.5-pro
 - gemini-2.5-flash
 - gpt-5
+- claude-opus-4-1-20250805
+- claude-opus-4-20250514
+- claude-sonnet-4-20250514
+- claude-3-7-sonnet-20250219
+- claude-3-5-haiku-20241022
 - Gemini 模型在需要时自动切换到对应的 preview 版本
 
 ## 配置
@@ -195,6 +233,9 @@ console.log(gpt.choices[0].message.content);
 | `debug`                               | boolean  | false              | 启用调试模式以进行详细日志记录                                                        |
 | `api-keys`                            | string[] | []                 | 可用于验证请求的 API 密钥列表                                                      |
 | `generative-language-api-key`         | string[] | []                 | 生成式语言 API 密钥列表                                                         |
+| `claude-api-key`                      | object   | {}                 | Claude API 密钥列表                                                        |
+| `claude-api-key.api-key`              | string   | ""                 | Claude API 密钥                                                          |
+| `claude-api-key.base-url`             | string   | ""                 | 自定义 Claude API 端点（如果你使用的是第三方 Claude API 端点）                            |
 
 ### 配置文件示例
 
@@ -227,6 +268,12 @@ generative-language-api-key:
   - "AIzaSy...02"
   - "AIzaSy...03"
   - "AIzaSy...04"
+
+# Claude API keys
+claude-api-key:
+  - api-key: "sk-atSM..." # use the official claude API key, no need to set the base url
+  - api-key: "sk-atSM..."
+    base-url: "https://www.example.com" # use the custom claude API endpoint
 ```
 
 ### 身份验证目录
@@ -267,6 +314,7 @@ export CODE_ASSIST_ENDPOINT="http://127.0.0.1:8317"
 
 启动 CLI Proxy API 服务器, 设置如下系统环境变量 `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`
 
+使用 Gemini 模型：
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
@@ -274,13 +322,20 @@ export ANTHROPIC_MODEL=gemini-2.5-pro
 export ANTHROPIC_SMALL_FAST_MODEL=gemini-2.5-flash
 ```
 
-或者
-
+使用 OpenAI 模型：
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 export ANTHROPIC_MODEL=gpt-5
 export ANTHROPIC_SMALL_FAST_MODEL=codex-mini-latest
+```
+
+使用 Claude 模型：
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_AUTH_TOKEN=sk-dummy
+export ANTHROPIC_MODEL=claude-sonnet-4-20250514
+export ANTHROPIC_SMALL_FAST_MODEL=claude-3-5-haiku-20241022
 ```
 
 
@@ -296,6 +351,12 @@ docker run --rm -p 8085:8085 -v /path/to/your/config.yaml:/CLIProxyAPI/config.ya
 
 ```bash
 docker run --rm -p 1455:1455 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --codex-login
+```
+
+运行以下命令进行登录（Claude OAuth，端口 54545）：
+
+```bash
+docker run --rm -p 54545:54545 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --claude-login
 ```
 
 运行以下命令启动服务器：

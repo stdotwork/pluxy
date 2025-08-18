@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
 	"github.com/luispater/CLIProxyAPI/internal/client"
+	translatorGeminiToClaude "github.com/luispater/CLIProxyAPI/internal/translator/claude/gemini"
 	translatorGeminiToCodex "github.com/luispater/CLIProxyAPI/internal/translator/codex/gemini"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -61,12 +62,16 @@ func (h *GeminiCLIAPIHandlers) CLIHandler(c *gin.Context) {
 			h.handleInternalGenerateContent(c, rawJSON)
 		} else if provider == "gpt" {
 			h.handleCodexInternalGenerateContent(c, rawJSON)
+		} else if provider == "claude" {
+			h.handleClaudeInternalGenerateContent(c, rawJSON)
 		}
 	} else if requestRawURI == "/v1internal:streamGenerateContent" {
 		if provider == "gemini" || provider == "unknow" {
 			h.handleInternalStreamGenerateContent(c, rawJSON)
 		} else if provider == "gpt" {
 			h.handleCodexInternalStreamGenerateContent(c, rawJSON)
+		} else if provider == "claude" {
+			h.handleClaudeInternalStreamGenerateContent(c, rawJSON)
 		}
 	} else {
 		reqBody := bytes.NewBuffer(rawJSON)
@@ -172,7 +177,7 @@ outLoop:
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			flusher.Flush()
 			cliCancel()
 			return
@@ -204,6 +209,7 @@ outLoop:
 				}
 
 				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
 
 				hasFirstResponse = true
 				if cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey() != "" {
@@ -258,7 +264,7 @@ func (h *GeminiCLIAPIHandlers) handleInternalGenerateContent(c *gin.Context, raw
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			cliCancel()
 			return
 		}
@@ -276,7 +282,7 @@ func (h *GeminiCLIAPIHandlers) handleInternalGenerateContent(c *gin.Context, raw
 			} else {
 				c.Status(err.StatusCode)
 				_, _ = c.Writer.Write([]byte(err.Error.Error()))
-				log.Debugf("code: %d, error: %s", err.StatusCode, err.Error.Error())
+				// log.Debugf("code: %d, error: %s", err.StatusCode, err.Error.Error())
 				cliCancel(err.Error)
 			}
 			break
@@ -337,7 +343,7 @@ outLoop:
 		cliClient, errorResponse = h.GetClient(modelName.String())
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			flusher.Flush()
 			cliCancel()
 			return
@@ -373,6 +379,7 @@ outLoop:
 				// _, _ = logFile.Write(chunk)
 				// _, _ = logFile.Write([]byte("\n"))
 				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
 
 				if bytes.HasPrefix(chunk, []byte("data: ")) {
 					jsonData := chunk[6:]
@@ -397,7 +404,7 @@ outLoop:
 					if errMessage.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
 						continue outLoop
 					} else {
-						log.Debugf("code: %d, error: %s", errMessage.StatusCode, errMessage.Error.Error())
+						// log.Debugf("code: %d, error: %s", errMessage.StatusCode, errMessage.Error.Error())
 						c.Status(errMessage.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, errMessage.Error.Error())
 						flusher.Flush()
@@ -414,7 +421,7 @@ outLoop:
 
 func (h *GeminiCLIAPIHandlers) handleCodexInternalGenerateContent(c *gin.Context, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
-	orgRawJSON := rawJSON
+	// orgRawJSON := rawJSON
 	modelResult := gjson.GetBytes(rawJSON, "model")
 	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)
 	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelResult.String())
@@ -443,7 +450,7 @@ outLoop:
 		cliClient, errorResponse = h.GetClient(modelName.String())
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			cliCancel()
 			return
 		}
@@ -469,6 +476,7 @@ outLoop:
 				}
 
 				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
 
 				if bytes.HasPrefix(chunk, []byte("data: ")) {
 					jsonData := chunk[6:]
@@ -490,9 +498,231 @@ outLoop:
 					} else {
 						c.Status(err.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						log.Debugf("org: %s", string(orgRawJSON))
-						log.Debugf("raw: %s", string(rawJSON))
-						log.Debugf("newRequestJSON: %s", newRequestJSON)
+						// log.Debugf("org: %s", string(orgRawJSON))
+						// log.Debugf("raw: %s", string(rawJSON))
+						// log.Debugf("newRequestJSON: %s", newRequestJSON)
+						cliCancel(err.Error)
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+}
+
+func (h *GeminiCLIAPIHandlers) handleClaudeInternalStreamGenerateContent(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	// Get the http.Flusher interface to manually flush the response.
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Streaming not supported",
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	modelResult := gjson.GetBytes(rawJSON, "model")
+	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)
+	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelResult.String())
+	rawJSON, _ = sjson.SetRawBytes(rawJSON, "system_instruction", []byte(gjson.GetBytes(rawJSON, "systemInstruction").Raw))
+	rawJSON, _ = sjson.DeleteBytes(rawJSON, "systemInstruction")
+
+	// Prepare the request for the backend client.
+	newRequestJSON := translatorGeminiToClaude.ConvertGeminiRequestToAnthropic(rawJSON)
+	newRequestJSON, _ = sjson.Set(newRequestJSON, "stream", true)
+
+	modelName := gjson.GetBytes(rawJSON, "model")
+
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName.String())
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		if apiKey := cliClient.(*client.ClaudeClient).GetAPIKey(); apiKey != "" {
+			log.Debugf("Request claude use API Key: %s", apiKey)
+		} else {
+			log.Debugf("Request claude use account: %s", cliClient.(*client.ClaudeClient).GetEmail())
+		}
+
+		// Send the message and receive response chunks and errors via channels.
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+
+		params := &translatorGeminiToClaude.ConvertAnthropicResponseToGeminiParams{
+			Model:      modelName.String(),
+			CreatedAt:  0,
+			ResponseID: "",
+		}
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					cliCancel()
+					return
+				}
+
+				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
+
+				if bytes.HasPrefix(chunk, []byte("data: ")) {
+					jsonData := chunk[6:]
+					data := gjson.ParseBytes(jsonData)
+					typeResult := data.Get("type")
+					if typeResult.String() != "" {
+						// log.Debugf(string(jsonData))
+						outputs := translatorGeminiToClaude.ConvertAnthropicResponseToGemini(jsonData, params)
+						if len(outputs) > 0 {
+							for i := 0; i < len(outputs); i++ {
+								outputs[i], _ = sjson.SetRaw("{}", "response", outputs[i])
+								_, _ = c.Writer.Write([]byte("data: "))
+								_, _ = c.Writer.Write([]byte(outputs[i]))
+								_, _ = c.Writer.Write([]byte("\n\n"))
+							}
+						}
+					}
+					// log.Debugf(string(jsonData))
+				}
+				flusher.Flush()
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						flusher.Flush()
+						cliCancel(err.Error)
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+}
+
+func (h *GeminiCLIAPIHandlers) handleClaudeInternalGenerateContent(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "application/json")
+
+	modelResult := gjson.GetBytes(rawJSON, "model")
+	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)
+	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelResult.String())
+	rawJSON, _ = sjson.SetRawBytes(rawJSON, "system_instruction", []byte(gjson.GetBytes(rawJSON, "systemInstruction").Raw))
+	rawJSON, _ = sjson.DeleteBytes(rawJSON, "systemInstruction")
+
+	// Prepare the request for the backend client.
+	newRequestJSON := translatorGeminiToClaude.ConvertGeminiRequestToAnthropic(rawJSON)
+	// log.Debugf("Request: %s", newRequestJSON)
+	newRequestJSON, _ = sjson.Set(newRequestJSON, "stream", true)
+
+	modelName := gjson.GetBytes(rawJSON, "model")
+
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName.String())
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			cliCancel()
+			return
+		}
+
+		if apiKey := cliClient.(*client.ClaudeClient).GetAPIKey(); apiKey != "" {
+			log.Debugf("Request claude use API Key: %s", apiKey)
+		} else {
+			log.Debugf("Request claude use account: %s", cliClient.(*client.ClaudeClient).GetEmail())
+		}
+
+		// Send the message and receive response chunks and errors via channels.
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+
+		var allChunks [][]byte
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					if len(allChunks) > 0 {
+						// Use the last chunk which should contain the complete message
+						finalResponseStr := translatorGeminiToClaude.ConvertAnthropicResponseToGeminiNonStream(allChunks, modelName.String())
+						finalResponse := []byte(finalResponseStr)
+						_, _ = c.Writer.Write(finalResponse)
+					}
+
+					cliCancel()
+					return
+				}
+
+				// Store chunk for building final response
+				if bytes.HasPrefix(chunk, []byte("data: ")) {
+					jsonData := chunk[6:]
+					allChunks = append(allChunks, jsonData)
+				}
+
+				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
+
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
 						cliCancel(err.Error)
 					}
 					return

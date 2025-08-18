@@ -78,9 +78,9 @@ func ConvertCliResponseToClaudeCode(rawJSON []byte, isGlAPIKey, hasFirstResponse
 						// First, close any existing content block
 						if *responseType != 0 {
 							if *responseType == 2 {
-								output = output + "event: content_block_delta\n"
-								output = output + fmt.Sprintf(`data: {"type":"content_block_delta","index":%d,"delta":{"type":"signature_delta","signature":null}}`, *responseIndex)
-								output = output + "\n\n\n"
+								// output = output + "event: content_block_delta\n"
+								// output = output + fmt.Sprintf(`data: {"type":"content_block_delta","index":%d,"delta":{"type":"signature_delta","signature":null}}`, *responseIndex)
+								// output = output + "\n\n\n"
 							}
 							output = output + "event: content_block_stop\n"
 							output = output + fmt.Sprintf(`data: {"type":"content_block_stop","index":%d}`, *responseIndex)
@@ -109,9 +109,9 @@ func ConvertCliResponseToClaudeCode(rawJSON []byte, isGlAPIKey, hasFirstResponse
 						// First, close any existing content block
 						if *responseType != 0 {
 							if *responseType == 2 {
-								output = output + "event: content_block_delta\n"
-								output = output + fmt.Sprintf(`data: {"type":"content_block_delta","index":%d,"delta":{"type":"signature_delta","signature":null}}`, *responseIndex)
-								output = output + "\n\n\n"
+								// output = output + "event: content_block_delta\n"
+								// output = output + fmt.Sprintf(`data: {"type":"content_block_delta","index":%d,"delta":{"type":"signature_delta","signature":null}}`, *responseIndex)
+								// output = output + "\n\n\n"
 							}
 							output = output + "event: content_block_stop\n"
 							output = output + fmt.Sprintf(`data: {"type":"content_block_stop","index":%d}`, *responseIndex)
@@ -147,9 +147,9 @@ func ConvertCliResponseToClaudeCode(rawJSON []byte, isGlAPIKey, hasFirstResponse
 
 				// Special handling for thinking state transition
 				if *responseType == 2 {
-					output = output + "event: content_block_delta\n"
-					output = output + fmt.Sprintf(`data: {"type":"content_block_delta","index":%d,"delta":{"type":"signature_delta","signature":null}}`, *responseIndex)
-					output = output + "\n\n\n"
+					// output = output + "event: content_block_delta\n"
+					// output = output + fmt.Sprintf(`data: {"type":"content_block_delta","index":%d,"delta":{"type":"signature_delta","signature":null}}`, *responseIndex)
+					// output = output + "\n\n\n"
 				}
 
 				// Close any other existing content block

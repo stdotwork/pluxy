@@ -20,3 +20,9 @@ generative-language-api-key:
   - "AIzaSy...02"
   - "AIzaSy...03"
   - "AIzaSy...04"
+
+# Claude API keys
+claude-api-key:
+  - api-key: "sk-atSM..." # use the official claude API key, no need to set the base url
+  - api-key: "sk-atSM..."
+    base-url: "https://www.example.com" # use the custom claude API endpoint

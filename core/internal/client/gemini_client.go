@@ -267,7 +267,7 @@ func (c *GeminiClient) APIRequest(ctx context.Context, endpoint string, body int
 	} else {
 		jsonBody, err = json.Marshal(body)
 		if err != nil {
-			return nil, &ErrorMessage{500, fmt.Errorf("failed to marshal request body: %w", err)}
+			return nil, &ErrorMessage{500, fmt.Errorf("failed to marshal request body: %w", err), nil}
 		}
 	}
 
@@ -312,7 +312,7 @@ func (c *GeminiClient) APIRequest(ctx context.Context, endpoint string, body int
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, reqBody)
 	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to create request: %v", err)}
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to create request: %v", err), nil}
 	}
 
 	// Set headers
@@ -321,7 +321,7 @@ func (c *GeminiClient) APIRequest(ctx context.Context, endpoint string, body int
 	if c.glAPIKey == "" {
 		token, errToken := c.httpClient.Transport.(*oauth2.Transport).Source.Token()
 		if errToken != nil {
-			return nil, &ErrorMessage{500, fmt.Errorf("failed to get token: %v", errToken)}
+			return nil, &ErrorMessage{500, fmt.Errorf("failed to get token: %v", errToken), nil}
 		}
 		req.Header.Set("User-Agent", c.GetUserAgent())
 		req.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
@@ -337,7 +337,7 @@ func (c *GeminiClient) APIRequest(ctx context.Context, endpoint string, body int
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to execute request: %v", err)}
+		return nil, &ErrorMessage{500, fmt.Errorf("failed to execute request: %v", err), nil}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -348,7 +348,7 @@ func (c *GeminiClient) APIRequest(ctx context.Context, endpoint string, body int
 		}()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		// log.Debug(string(jsonBody))
-		return nil, &ErrorMessage{resp.StatusCode, fmt.Errorf(string(bodyBytes))}
+		return nil, &ErrorMessage{resp.StatusCode, fmt.Errorf(string(bodyBytes)), nil}
 	}
 
 	return resp.Body, nil
@@ -615,7 +615,7 @@ func (c *GeminiClient) SendMessageStream(ctx context.Context, rawJSON []byte, mo
 		// Handle any scanning errors that occurred during stream processing
 		if errScanner := scanner.Err(); errScanner != nil {
 			// Send a 500 Internal Server Error for scanning failures
-			errChan <- &ErrorMessage{500, errScanner}
+			errChan <- &ErrorMessage{500, errScanner, nil}
 			_ = stream.Close()
 			return
 		}
@@ -775,7 +775,7 @@ func (c *GeminiClient) SendRawMessageStream(ctx context.Context, rawJSON []byte,
 			}
 
 			if errScanner := scanner.Err(); errScanner != nil {
-				errChan <- &ErrorMessage{500, errScanner}
+				errChan <- &ErrorMessage{500, errScanner, nil}
 				_ = stream.Close()
 				return
 			}
@@ -783,7 +783,7 @@ func (c *GeminiClient) SendRawMessageStream(ctx context.Context, rawJSON []byte,
 		} else {
 			data, err := io.ReadAll(stream)
 			if err != nil {
-				errChan <- &ErrorMessage{500, err}
+				errChan <- &ErrorMessage{500, err, nil}
 				_ = stream.Close()
 				return
 			}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/luispater/CLIProxyAPI/internal/api"
+	"github.com/luispater/CLIProxyAPI/internal/auth/claude"
 	"github.com/luispater/CLIProxyAPI/internal/auth/codex"
 	"github.com/luispater/CLIProxyAPI/internal/auth/gemini"
 	"github.com/luispater/CLIProxyAPI/internal/client"
@@ -92,6 +93,15 @@ func StartService(cfg *config.Config, configPath string) {
 					log.Info("Authentication successful.")
 					cliClients = append(cliClients, codexClient)
 				}
+			} else if tokenType == "claude" {
+				var ts claude.ClaudeTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					// For each valid token, create an authenticated client.
+					log.Info("Initializing claude authentication for token...")
+					claudeClient := client.NewClaudeClient(cfg, &ts)
+					log.Info("Authentication successful.")
+					cliClients = append(cliClients, claudeClient)
+				}
 			}
 		}
 		return nil
@@ -104,8 +114,16 @@ func StartService(cfg *config.Config, configPath string) {
 		for i := 0; i < len(cfg.GlAPIKey); i++ {
 			httpClient := util.SetProxy(cfg, &http.Client{})
 
-			log.Debug("Initializing with Generative Language API key...")
+			log.Debug("Initializing with Generative Language API Key...")
 			cliClient := client.NewGeminiClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
+			cliClients = append(cliClients, cliClient)
+		}
+	}
+
+	if len(cfg.ClaudeKey) > 0 {
+		for i := 0; i < len(cfg.ClaudeKey); i++ {
+			log.Debug("Initializing with Claude API Key...")
+			cliClient := client.NewClaudeClientWithKey(cfg, i)
 			cliClients = append(cliClients, cliClient)
 		}
 	}
@@ -174,6 +192,17 @@ func StartService(cfg *config.Config, configPath string) {
 							if time.Until(expTime) <= 5*24*time.Hour {
 								log.Debugf("refreshing codex tokens for %s", codexCli.GetEmail())
 								_ = codexCli.RefreshTokens(ctxRefresh)
+							}
+						}
+					}
+				} else if claudeCli, isOK := cliClients[i].(*client.ClaudeClient); isOK {
+					if ts, isCluadeTS := claudeCli.TokenStorage().(*claude.ClaudeTokenStorage); isCluadeTS {
+						if ts != nil && ts.Expire != "" {
+							if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
+								if time.Until(expTime) <= 4*time.Hour {
+									log.Debugf("refreshing codex tokens for %s", claudeCli.GetEmail())
+									_ = claudeCli.RefreshTokens(ctxRefresh)
+								}
 							}
 						}
 					}

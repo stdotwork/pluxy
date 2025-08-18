@@ -2,9 +2,9 @@
 
 English | [中文](README_CN.md)
 
-A proxy server that provides OpenAI/Gemini/Claude compatible API interfaces for CLI. 
+A proxy server that provides OpenAI/Gemini/Claude compatible API interfaces for CLI.
 
-It now also supports OpenAI Codex (GPT models) via OAuth.
+It now also supports OpenAI Codex (GPT models) and Claude Code via OAuth.
 
 so you can use local or multi‑account CLI access with OpenAI‑compatible clients and SDKs.
 
@@ -12,13 +12,15 @@ so you can use local or multi‑account CLI access with OpenAI‑compatible clie
 
 - OpenAI/Gemini/Claude compatible API endpoints for CLI models
 - OpenAI Codex support (GPT models) via OAuth login
+- Claude Code support via OAuth login
 - Streaming and non-streaming responses
 - Function calling/tools support
 - Multimodal input support (text and images)
-- Multiple accounts with round‑robin load balancing (Gemini and OpenAI)
-- Simple CLI authentication flows (Gemini and OpenAI)
+- Multiple accounts with round‑robin load balancing (Gemini, OpenAI, and Claude)
+- Simple CLI authentication flows (Gemini, OpenAI, and Claude)
 - Generative Language API Key support
 - Gemini CLI multi‑account load balancing
+- Claude Code multi‑account load balancing
 
 ## Installation
 
@@ -27,6 +29,7 @@ so you can use local or multi‑account CLI access with OpenAI‑compatible clie
 - Go 1.24 or higher
 - A Google account with access to Gemini CLI models (optional)
 - An OpenAI account for Codex/GPT access (optional)
+- An Anthropic account for Claude Code access (optional)
 
 ### Building from Source
 
@@ -45,7 +48,7 @@ so you can use local or multi‑account CLI access with OpenAI‑compatible clie
 
 ### Authentication
 
-You can authenticate for Gemini and/or OpenAI. Both can coexist in the same `auth-dir` and will be load balanced.
+You can authenticate for Gemini, OpenAI, and/or Claude. All can coexist in the same `auth-dir` and will be load balanced.
 
 - Gemini (Google):
   ```bash
@@ -62,6 +65,12 @@ You can authenticate for Gemini and/or OpenAI. Both can coexist in the same `aut
   ./cli-proxy-api --codex-login
   ```
   Options: add `--no-browser` to print the login URL instead of opening a browser. The local OAuth callback uses port `1455`.
+
+- Claude (Anthropic via OAuth):
+  ```bash
+  ./cli-proxy-api --claude-login
+  ```
+  Options: add `--no-browser` to print the login URL instead of opening a browser. The local OAuth callback uses port `54545`.
 
 ### Starting the Server
 
@@ -103,7 +112,7 @@ Request body example:
 ```
 
 Notes:
-- Use a `gemini-*` model for Gemini (e.g., `gemini-2.5-pro`) or a `gpt-*` model for OpenAI (e.g., `gpt-5`). The proxy will route to the correct provider automatically.
+- Use a `gemini-*` model for Gemini (e.g., `gemini-2.5-pro`), a `gpt-*` model for OpenAI (e.g., `gpt-5`), or a `claude-*` model for Claude (e.g., `claude-3-5-sonnet-20241022`). The proxy will route to the correct provider automatically.
 
 #### Claude Messages (SSE-compatible)
 
@@ -136,8 +145,21 @@ gpt = client.chat.completions.create(
     model="gpt-5",
     messages=[{"role": "user", "content": "Summarize this project in one sentence."}]
 )
+
+# Claude example (using messages endpoint)
+import requests
+claude_response = requests.post(
+    "http://localhost:8317/v1/messages",
+    json={
+        "model": "claude-3-5-sonnet-20241022",
+        "messages": [{"role": "user", "content": "Summarize this project in one sentence."}],
+        "max_tokens": 1000
+    }
+)
+
 print(gemini.choices[0].message.content)
 print(gpt.choices[0].message.content)
+print(claude_response.json())
 ```
 
 #### JavaScript/TypeScript
@@ -162,8 +184,20 @@ const gpt = await openai.chat.completions.create({
   messages: [{ role: 'user', content: 'Summarize this project in one sentence.' }],
 });
 
+// Claude example (using messages endpoint)
+const claudeResponse = await fetch('http://localhost:8317/v1/messages', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    model: 'claude-3-5-sonnet-20241022',
+    messages: [{ role: 'user', content: 'Summarize this project in one sentence.' }],
+    max_tokens: 1000
+  })
+});
+
 console.log(gemini.choices[0].message.content);
 console.log(gpt.choices[0].message.content);
+console.log(await claudeResponse.json());
 ```
 
 ## Supported Models
@@ -171,6 +205,11 @@ console.log(gpt.choices[0].message.content);
 - gemini-2.5-pro
 - gemini-2.5-flash
 - gpt-5
+- claude-opus-4-1-20250805
+- claude-opus-4-20250514
+- claude-sonnet-4-20250514
+- claude-3-7-sonnet-20250219
+- claude-3-5-haiku-20241022
 - Gemini models auto‑switch to preview variants when needed
 
 ## Configuration
@@ -194,6 +233,9 @@ The server uses a YAML configuration file (`config.yaml`) located in the project
 | `debug`                               | boolean  | false              | Enable debug mode for verbose logging                                                        |
 | `api-keys`                            | string[] | []                 | List of API keys that can be used to authenticate requests                                   |
 | `generative-language-api-key`         | string[] | []                 | List of Generative Language API keys                                                         |
+| `claude-api-key`                      | object   | {}                 | List of Claude API keys                                                                      |
+| `claude-api-key.api-key`              | string   | ""                 | Claude API key                                                                               |
+| `claude-api-key.base-url`             | string   | ""                 | Custom Claude API endpoint, if you use the third party API endpoint                          |
 
 ### Example Configuration File
 
@@ -226,6 +268,12 @@ generative-language-api-key:
   - "AIzaSy...02"
   - "AIzaSy...03"
   - "AIzaSy...04"
+  
+# Claude API keys
+claude-api-key:
+  - api-key: "sk-atSM..." # use the official claude API key, no need to set the base url
+  - api-key: "sk-atSM..."
+    base-url: "https://www.example.com" # use the custom claude API endpoint
 ```
 
 ### Authentication Directory
@@ -266,6 +314,7 @@ The server will relay the `loadCodeAssist`, `onboardUser`, and `countTokens` req
 
 Start CLI Proxy API server, and then set the `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` environment variables.
 
+Using Gemini models:
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
@@ -273,13 +322,20 @@ export ANTHROPIC_MODEL=gemini-2.5-pro
 export ANTHROPIC_SMALL_FAST_MODEL=gemini-2.5-flash
 ```
 
-or
-
+Using OpenAI models:
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 export ANTHROPIC_MODEL=gpt-5
 export ANTHROPIC_SMALL_FAST_MODEL=codex-mini-latest
+```
+
+Using Claude models:
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_AUTH_TOKEN=sk-dummy
+export ANTHROPIC_MODEL=claude-sonnet-4-20250514
+export ANTHROPIC_SMALL_FAST_MODEL=claude-3-5-haiku-20241022
 ```
 
 ## Run with Docker
@@ -294,6 +350,12 @@ Run the following command to login (OpenAI OAuth on port 1455):
 
 ```bash
 docker run --rm -p 1455:1455 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --codex-login
+```
+
+Run the following command to login (Claude OAuth on port 54545):
+
+```bash
+docker run --rm -p 54545:54545 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest /CLIProxyAPI/CLIProxyAPI --claude-login
 ```
 
 Run the following command to start the server:

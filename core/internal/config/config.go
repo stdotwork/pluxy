@@ -36,6 +36,8 @@ type Config struct {
 
 	// RequestLog enables or disables detailed request logging functionality.
 	RequestLog bool `yaml:"request-log"`
+
+	ClaudeKey []ClaudeKey `yaml:"claude-api-key"`
 }
 
 // QuotaExceeded defines the behavior when API quota limits are exceeded.
@@ -46,6 +48,11 @@ type QuotaExceeded struct {
 
 	// SwitchPreviewModel indicates whether to automatically switch to a preview model when a quota is exceeded.
 	SwitchPreviewModel bool `yaml:"switch-preview-model"`
+}
+
+type ClaudeKey struct {
+	APIKey  string `yaml:"api-key"`
+	BaseURL string `yaml:"base-url"`
 }
 
 // LoadConfig reads a YAML configuration file from the given path,

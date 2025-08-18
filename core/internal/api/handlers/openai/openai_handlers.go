@@ -15,11 +15,13 @@ import (
 
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
 	"github.com/luispater/CLIProxyAPI/internal/client"
+	translatorOpenAIToClaude "github.com/luispater/CLIProxyAPI/internal/translator/claude/openai"
 	translatorOpenAIToCodex "github.com/luispater/CLIProxyAPI/internal/translator/codex/openai"
 	translatorOpenAIToGeminiCli "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/openai"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -107,6 +109,23 @@ func (h *OpenAIAPIHandlers) Models(c *gin.Context) {
 				"maxTemperature": 2,
 				"thinking":       true,
 			},
+			{
+				"id":                    "claude-opus-4-1-20250805",
+				"object":                "model",
+				"version":               "claude-opus-4-1-20250805",
+				"name":                  "Claude Opus 4.1",
+				"description":           "Anthropic's most capable model.",
+				"context_length":        200_000,
+				"max_completion_tokens": 32_000,
+				"supported_parameters": []string{
+					"tools",
+				},
+				"temperature":    1,
+				"topP":           0.95,
+				"topK":           64,
+				"maxTemperature": 2,
+				"thinking":       true,
+			},
 		},
 	})
 }
@@ -146,6 +165,12 @@ func (h *OpenAIAPIHandlers) ChatCompletions(c *gin.Context) {
 		} else {
 			h.handleCodexNonStreamingResponse(c, rawJSON)
 		}
+	} else if provider == "claude" {
+		if streamResult.Type == gjson.True {
+			h.handleClaudeStreamingResponse(c, rawJSON)
+		} else {
+			h.handleClaudeNonStreamingResponse(c, rawJSON)
+		}
 	}
 }
 
@@ -174,7 +199,7 @@ func (h *OpenAIAPIHandlers) handleGeminiNonStreamingResponse(c *gin.Context, raw
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			cliCancel()
 			return
 		}
@@ -251,7 +276,7 @@ outLoop:
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			flusher.Flush()
 			cliCancel()
 			return
@@ -288,6 +313,7 @@ outLoop:
 				}
 
 				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
 
 				// Convert the chunk to OpenAI format and send it to the client.
 				hasFirstResponse = true
@@ -374,6 +400,7 @@ outLoop:
 				}
 
 				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
 
 				if bytes.HasPrefix(chunk, []byte("data: ")) {
 					jsonData := chunk[6:]
@@ -451,7 +478,7 @@ outLoop:
 		cliClient, errorResponse = h.GetClient(modelName.String())
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			flusher.Flush()
 			cliCancel()
 			return
@@ -481,6 +508,7 @@ outLoop:
 				}
 
 				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
 
 				// log.Debugf("Response: %s\n", string(chunk))
 				// Convert the chunk to OpenAI format and send it to the client.
@@ -515,6 +543,220 @@ outLoop:
 				}
 			// Send a keep-alive signal to the client.
 			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+}
+
+// handleClaudeNonStreamingResponse handles non-streaming chat completion responses
+// for anthropic models. It uses the streaming interface internally but aggregates
+// all responses before sending back a complete non-streaming response in OpenAI format.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+func (h *OpenAIAPIHandlers) handleClaudeNonStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "application/json")
+
+	// Force streaming in the request to use the streaming interface
+	newRequestJSON := translatorOpenAIToClaude.ConvertOpenAIRequestToAnthropic(rawJSON)
+	// Ensure stream is set to true for the backend request
+	newRequestJSON, _ = sjson.Set(newRequestJSON, "stream", true)
+
+	modelName := gjson.GetBytes(rawJSON, "model")
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName.String())
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			cliCancel()
+			return
+		}
+
+		if apiKey := cliClient.(*client.ClaudeClient).GetAPIKey(); apiKey != "" {
+			log.Debugf("Request claude use API Key: %s", apiKey)
+		} else {
+			log.Debugf("Request claude use account: %s", cliClient.(*client.ClaudeClient).GetEmail())
+		}
+
+		// Use streaming interface but collect all responses
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+
+		// Collect all streaming chunks to build the final response
+		var allChunks [][]byte
+
+		for {
+			select {
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("Client disconnected: %v", c.Request.Context().Err())
+					cliCancel()
+					return
+				}
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					// All chunks received, now build the final non-streaming response
+					if len(allChunks) > 0 {
+						// Use the last chunk which should contain the complete message
+						finalResponseStr := translatorOpenAIToClaude.ConvertAnthropicStreamingResponseToOpenAINonStream(allChunks)
+						finalResponse := []byte(finalResponseStr)
+						_, _ = c.Writer.Write(finalResponse)
+					}
+					cliCancel()
+					return
+				}
+
+				// Store chunk for building final response
+				if bytes.HasPrefix(chunk, []byte("data: ")) {
+					jsonData := chunk[6:]
+					allChunks = append(allChunks, jsonData)
+				}
+
+				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
+
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						cliCancel(err.Error)
+					}
+					return
+				}
+			case <-time.After(30 * time.Second):
+			}
+		}
+	}
+}
+
+// handleClaudeStreamingResponse handles streaming responses for anthropic models.
+// It establishes a streaming connection with the backend service and forwards
+// the response chunks to the client in real-time using Server-Sent Events.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+func (h *OpenAIAPIHandlers) handleClaudeStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	// Get the http.Flusher interface to manually flush the response.
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Streaming not supported",
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	// Prepare the request for the backend client.
+	newRequestJSON := translatorOpenAIToClaude.ConvertOpenAIRequestToAnthropic(rawJSON)
+	modelName := gjson.GetBytes(rawJSON, "model")
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName.String())
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		if apiKey := cliClient.(*client.ClaudeClient).GetAPIKey(); apiKey != "" {
+			log.Debugf("Request claude use API Key: %s", apiKey)
+		} else {
+			log.Debugf("Request claude use account: %s", cliClient.(*client.ClaudeClient).GetEmail())
+		}
+
+		// Send the message and receive response chunks and errors via channels.
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+		params := &translatorOpenAIToClaude.ConvertAnthropicResponseToOpenAIParams{
+			CreatedAt:    0,
+			ResponseID:   "",
+			FinishReason: "",
+		}
+
+		hasFirstResponse := false
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("GeminiClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					flusher.Flush()
+					cliCancel()
+					return
+				}
+
+				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
+
+				if bytes.HasPrefix(chunk, []byte("data: ")) {
+					jsonData := chunk[6:]
+					// Convert the chunk to OpenAI format and send it to the client.
+					hasFirstResponse = true
+					openAIFormats := translatorOpenAIToClaude.ConvertAnthropicResponseToOpenAI(jsonData, params)
+					for i := 0; i < len(openAIFormats); i++ {
+						_, _ = fmt.Fprintf(c.Writer, "data: %s\n\n", openAIFormats[i])
+						flusher.Flush()
+					}
+				}
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						flusher.Flush()
+						cliCancel(err.Error)
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
+				if hasFirstResponse {
+					_, _ = c.Writer.Write([]byte(": CLI-PROXY-API PROCESSING\n\n"))
+					flusher.Flush()
+				}
 			}
 		}
 	}

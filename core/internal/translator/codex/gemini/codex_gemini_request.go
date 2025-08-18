@@ -7,10 +7,12 @@ package code
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math/big"
 	"strings"
 
 	"github.com/luispater/CLIProxyAPI/internal/misc"
+	"github.com/luispater/CLIProxyAPI/internal/util"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -194,6 +196,14 @@ func ConvertGeminiRequestToCodex(rawJSON []byte) string {
 	out, _ = sjson.Set(out, "stream", true)
 	out, _ = sjson.Set(out, "store", false)
 	out, _ = sjson.Set(out, "include", []string{"reasoning.encrypted_content"})
+
+	var pathsToLower []string
+	toolsResult := gjson.Get(out, "tools")
+	util.Walk(toolsResult, "", "type", &pathsToLower)
+	for _, p := range pathsToLower {
+		fullPath := fmt.Sprintf("tools.%s", p)
+		out, _ = sjson.Set(out, fullPath, strings.ToLower(gjson.Get(out, fullPath).String()))
+	}
 
 	return out
 }

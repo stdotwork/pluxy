@@ -73,70 +73,104 @@ func ConvertOpenAIChatRequestToCodex(rawJSON []byte) string {
 	// 	}
 	// }
 
-	// Build input from messages, skipping system/tool roles
+	// Build input from messages, handling all message types including tool calls
 	out, _ = sjson.SetRaw(out, "input", `[]`)
 	if messages.IsArray() {
 		arr := messages.Array()
 		for i := 0; i < len(arr); i++ {
 			m := arr[i]
 			role := m.Get("role").String()
-			if role == "tool" || role == "function" {
-				continue
-			}
 
-			// Prepare message object
-			msg := `{}`
-			if role == "system" {
-				msg, _ = sjson.Set(msg, "role", "user")
-			} else {
-				msg, _ = sjson.Set(msg, "role", role)
-			}
+			switch role {
+			case "tool":
+				// Handle tool response messages as top-level function_call_output objects
+				toolCallID := m.Get("tool_call_id").String()
+				content := m.Get("content").String()
 
-			msg, _ = sjson.SetRaw(msg, "content", `[]`)
+				// Create function_call_output object
+				funcOutput := `{}`
+				funcOutput, _ = sjson.Set(funcOutput, "type", "function_call_output")
+				funcOutput, _ = sjson.Set(funcOutput, "call_id", toolCallID)
+				funcOutput, _ = sjson.Set(funcOutput, "output", content)
+				out, _ = sjson.SetRaw(out, "input.-1", funcOutput)
 
-			c := m.Get("content")
-			if c.Type == gjson.String {
-				// Single string content
-				partType := "input_text"
-				if role == "assistant" {
-					partType = "output_text"
+			default:
+				// Handle regular messages
+				msg := `{}`
+				msg, _ = sjson.Set(msg, "type", "message")
+				if role == "system" {
+					msg, _ = sjson.Set(msg, "role", "user")
+				} else {
+					msg, _ = sjson.Set(msg, "role", role)
 				}
-				part := `{}`
-				part, _ = sjson.Set(part, "type", partType)
-				part, _ = sjson.Set(part, "text", c.String())
-				msg, _ = sjson.SetRaw(msg, "content.-1", part)
-			} else if c.IsArray() {
-				items := c.Array()
-				for j := 0; j < len(items); j++ {
-					it := items[j]
-					t := it.Get("type").String()
-					switch t {
-					case "text":
-						partType := "input_text"
-						if role == "assistant" {
-							partType = "output_text"
-						}
-						part := `{}`
-						part, _ = sjson.Set(part, "type", partType)
-						part, _ = sjson.Set(part, "text", it.Get("text").String())
-						msg, _ = sjson.SetRaw(msg, "content.-1", part)
-					case "image_url":
-						// Map image inputs to input_image for Responses API
-						if role == "user" {
-							part := `{}`
-							part, _ = sjson.Set(part, "type", "input_image")
-							if u := it.Get("image_url.url"); u.Exists() {
-								part, _ = sjson.Set(part, "image_url", u.String())
+
+				msg, _ = sjson.SetRaw(msg, "content", `[]`)
+
+				// Handle regular content
+				c := m.Get("content")
+				if c.Exists() && c.Type == gjson.String && c.String() != "" {
+					// Single string content
+					partType := "input_text"
+					if role == "assistant" {
+						partType = "output_text"
+					}
+					part := `{}`
+					part, _ = sjson.Set(part, "type", partType)
+					part, _ = sjson.Set(part, "text", c.String())
+					msg, _ = sjson.SetRaw(msg, "content.-1", part)
+				} else if c.Exists() && c.IsArray() {
+					items := c.Array()
+					for j := 0; j < len(items); j++ {
+						it := items[j]
+						t := it.Get("type").String()
+						switch t {
+						case "text":
+							partType := "input_text"
+							if role == "assistant" {
+								partType = "output_text"
 							}
+							part := `{}`
+							part, _ = sjson.Set(part, "type", partType)
+							part, _ = sjson.Set(part, "text", it.Get("text").String())
 							msg, _ = sjson.SetRaw(msg, "content.-1", part)
+						case "image_url":
+							// Map image inputs to input_image for Responses API
+							if role == "user" {
+								part := `{}`
+								part, _ = sjson.Set(part, "type", "input_image")
+								if u := it.Get("image_url.url"); u.Exists() {
+									part, _ = sjson.Set(part, "image_url", u.String())
+								}
+								msg, _ = sjson.SetRaw(msg, "content.-1", part)
+							}
+						case "file":
+							// Files are not specified in examples; skip for now
 						}
-					case "file":
-						// Files are not specified in examples; skip for now
+					}
+				}
+
+				out, _ = sjson.SetRaw(out, "input.-1", msg)
+
+				// Handle tool calls for assistant messages as separate top-level objects
+				if role == "assistant" {
+					toolCalls := m.Get("tool_calls")
+					if toolCalls.Exists() && toolCalls.IsArray() {
+						toolCallsArr := toolCalls.Array()
+						for j := 0; j < len(toolCallsArr); j++ {
+							tc := toolCallsArr[j]
+							if tc.Get("type").String() == "function" {
+								// Create function_call as top-level object
+								funcCall := `{}`
+								funcCall, _ = sjson.Set(funcCall, "type", "function_call")
+								funcCall, _ = sjson.Set(funcCall, "call_id", tc.Get("id").String())
+								funcCall, _ = sjson.Set(funcCall, "name", tc.Get("function.name").String())
+								funcCall, _ = sjson.Set(funcCall, "arguments", tc.Get("function.arguments").String())
+								out, _ = sjson.SetRaw(out, "input.-1", funcCall)
+							}
+						}
 					}
 				}
 			}
-
-			out, _ = sjson.SetRaw(out, "input.-1", msg)
 		}
 	}
 

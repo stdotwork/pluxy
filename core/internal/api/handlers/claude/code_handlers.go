@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -60,10 +59,19 @@ func (h *ClaudeCodeAPIHandlers) ClaudeMessages(c *gin.Context) {
 	// h.handleCodexStreamingResponse(c, rawJSON)
 	modelName := gjson.GetBytes(rawJSON, "model")
 	provider := util.GetProviderName(modelName.String())
+
+	// Check if the client requested a streaming response.
+	streamResult := gjson.GetBytes(rawJSON, "stream")
+	if streamResult.Type == gjson.False {
+		return
+	}
+
 	if provider == "gemini" {
 		h.handleGeminiStreamingResponse(c, rawJSON)
 	} else if provider == "gpt" {
 		h.handleCodexStreamingResponse(c, rawJSON)
+	} else if provider == "claude" {
+		h.handleClaudeStreamingResponse(c, rawJSON)
 	} else {
 		h.handleGeminiStreamingResponse(c, rawJSON)
 	}
@@ -98,14 +106,6 @@ func (h *ClaudeCodeAPIHandlers) handleGeminiStreamingResponse(c *gin.Context, ra
 	// conversation contents, and available tools from the raw JSON
 	modelName, systemInstruction, contents, tools := translatorClaudeCodeToGeminiCli.ConvertClaudeCodeRequestToCli(rawJSON)
 
-	// Map Claude model names to corresponding Gemini models
-	// This allows the proxy to handle Claude API calls using Gemini backend
-	if modelName == "claude-sonnet-4-20250514" {
-		modelName = "gemini-2.5-pro"
-	} else if modelName == "claude-3-5-haiku-20241022" {
-		modelName = "gemini-2.5-flash"
-	}
-
 	// Create a cancellable context for the backend client request
 	// This allows proper cleanup and cancellation of ongoing requests
 	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
@@ -128,7 +128,7 @@ outLoop:
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			flusher.Flush()
 			cliCancel()
 			return
@@ -146,12 +146,7 @@ outLoop:
 		// Initiate streaming communication with the backend client
 		// This returns two channels: one for response chunks and one for errors
 
-		includeThoughts := false
-		if userAgent, hasKey := c.Request.Header["User-Agent"]; hasKey {
-			includeThoughts = !strings.Contains(userAgent[0], "claude-cli")
-		}
-
-		respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJSON, modelName, systemInstruction, contents, tools, includeThoughts)
+		respChan, errChan := cliClient.SendMessageStream(cliCtx, rawJSON, modelName, systemInstruction, contents, tools, true)
 
 		// Track response state for proper Claude format conversion
 		hasFirstResponse := false
@@ -188,6 +183,7 @@ outLoop:
 				}
 
 				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
 				// Convert the backend response to Claude-compatible format
 				// This translation layer ensures API compatibility
 				claudeFormat := translatorClaudeCodeToGeminiCli.ConvertCliResponseToClaudeCode(chunk, isGlAPIKey, hasFirstResponse, &responseType, &responseIndex)
@@ -221,12 +217,12 @@ outLoop:
 				if hasFirstResponse {
 					// Send a ping event to maintain the connection
 					// This is especially important for slow AI model responses
-					output := "event: ping\n"
-					output = output + `data: {"type": "ping"}`
-					output = output + "\n\n\n"
-					_, _ = c.Writer.Write([]byte(output))
-
-					flusher.Flush()
+					// output := "event: ping\n"
+					// output = output + `data: {"type": "ping"}`
+					// output = output + "\n\n\n"
+					// _, _ = c.Writer.Write([]byte(output))
+					//
+					// flusher.Flush()
 				}
 			}
 		}
@@ -262,13 +258,7 @@ func (h *ClaudeCodeAPIHandlers) handleCodexStreamingResponse(c *gin.Context, raw
 	// conversation contents, and available tools from the raw JSON
 	newRequestJSON := translatorClaudeCodeToCodex.ConvertClaudeCodeRequestToCodex(rawJSON)
 	modelName := gjson.GetBytes(rawJSON, "model").String()
-	// Map Claude model names to corresponding Gemini models
-	// This allows the proxy to handle Claude API calls using Gemini backend
-	if modelName == "claude-sonnet-4-20250514" {
-		modelName = "gpt-5"
-	} else if modelName == "claude-3-5-haiku-20241022" {
-		modelName = "gpt-5"
-	}
+
 	newRequestJSON, _ = sjson.Set(newRequestJSON, "model", modelName)
 	// log.Debugf(string(rawJSON))
 	// log.Debugf(newRequestJSON)
@@ -294,7 +284,7 @@ outLoop:
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
 			flusher.Flush()
 			cliCancel()
 			return
@@ -307,7 +297,7 @@ outLoop:
 		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
 
 		// Track response state for proper Claude format conversion
-		hasFirstResponse := false
+		// hasFirstResponse := false
 		hasToolCall := false
 
 		// Main streaming loop - handles multiple concurrent events using Go channels
@@ -333,6 +323,7 @@ outLoop:
 				}
 
 				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
 
 				// Convert the backend response to Claude-compatible format
 				// This translation layer ensures API compatibility
@@ -346,7 +337,7 @@ outLoop:
 						_, _ = c.Writer.Write([]byte("\n"))
 					}
 					flusher.Flush() // Immediately send the chunk to the client
-					hasFirstResponse = true
+					// hasFirstResponse = true
 				} else {
 					// log.Debugf("chunk: %s", string(chunk))
 				}
@@ -373,16 +364,156 @@ outLoop:
 			// Case 4: Send periodic keep-alive signals
 			// Prevents connection timeouts during long-running requests
 			case <-time.After(3000 * time.Millisecond):
-				if hasFirstResponse {
-					// Send a ping event to maintain the connection
-					// This is especially important for slow AI model responses
-					output := "event: ping\n"
-					output = output + `data: {"type": "ping"}`
-					output = output + "\n\n"
-					_, _ = c.Writer.Write([]byte(output))
+				// if hasFirstResponse {
+				// 	// Send a ping event to maintain the connection
+				// 	// This is especially important for slow AI model responses
+				// 	output := "event: ping\n"
+				// 	output = output + `data: {"type": "ping"}`
+				// 	output = output + "\n\n"
+				// 	_, _ = c.Writer.Write([]byte(output))
+				//
+				// 	flusher.Flush()
+				// }
+			}
+		}
+	}
+}
 
-					flusher.Flush()
+// handleClaudeStreamingResponse streams Claude-compatible responses backed by OpenAI.
+// It converts the Claude request into OpenAI responses format, establishes SSE,
+// and translates streaming chunks back into Claude Code events.
+func (h *ClaudeCodeAPIHandlers) handleClaudeStreamingResponse(c *gin.Context, rawJSON []byte) {
+
+	// Get the http.Flusher interface to manually flush the response.
+	// This is crucial for streaming as it allows immediate sending of data chunks
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Streaming not supported",
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	modelName := gjson.GetBytes(rawJSON, "model").String()
+
+	// Create a cancellable context for the backend client request
+	// This allows proper cleanup and cancellation of ongoing requests
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		// This prevents deadlocks and ensures proper resource cleanup
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+	// Main client rotation loop with quota management
+	// This loop implements a sophisticated load balancing and failover mechanism
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName)
+		if errorResponse != nil {
+
+			if errorResponse.StatusCode == 429 {
+				c.Header("Content-Type", "application/json")
+				c.Header("Content-Length", fmt.Sprintf("%d", len(errorResponse.Error.Error())))
+			}
+			c.Status(errorResponse.StatusCode)
+
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			flusher.Flush()
+			cliCancel()
+
+			return
+		}
+
+		if apiKey := cliClient.(*client.ClaudeClient).GetAPIKey(); apiKey != "" {
+			log.Debugf("Request claude use API Key: %s", apiKey)
+		} else {
+			log.Debugf("Request claude use account: %s", cliClient.(*client.ClaudeClient).GetEmail())
+		}
+
+		// Initiate streaming communication with the backend client
+		// This returns two channels: one for response chunks and one for errors
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJSON, "")
+
+		hasFirstResponse := false
+		// Main streaming loop - handles multiple concurrent events using Go channels
+		// This select statement manages four different types of events simultaneously
+		for {
+			select {
+			// Case 1: Handle client disconnection
+			// Detects when the HTTP client has disconnected and cleans up resources
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("ClaudeClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request to prevent resource leaks
+					return
 				}
+
+			// Case 2: Process incoming response chunks from the backend
+			// This handles the actual streaming data from the AI model
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					flusher.Flush()
+					cliCancel()
+					return
+				}
+				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
+
+				if !hasFirstResponse {
+					// Set up Server-Sent Events (SSE) headers for streaming response
+					// These headers are essential for maintaining a persistent connection
+					// and enabling real-time streaming of chat completions
+					c.Header("Content-Type", "text/event-stream")
+					c.Header("Cache-Control", "no-cache")
+					c.Header("Connection", "keep-alive")
+					c.Header("Access-Control-Allow-Origin", "*")
+					hasFirstResponse = true
+				}
+
+				_, _ = c.Writer.Write(chunk)
+				_, _ = c.Writer.Write([]byte("\n"))
+				flusher.Flush()
+
+			// Case 3: Handle errors from the backend
+			// This manages various error conditions and implements retry logic
+			case errInfo, okError := <-errChan:
+				if okError {
+					// log.Debugf("Code: %d, Error: %v", errInfo.StatusCode, errInfo.Error)
+					// Special handling for quota exceeded errors
+					// If configured, attempt to switch to a different project/client
+					// if errInfo.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+					if errInfo.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						log.Debugf("quota exceeded, switch client")
+						continue outLoop // Restart the client selection process
+					} else {
+						// Forward other errors directly to the client
+						if errInfo.Addon != nil {
+							for key, val := range errInfo.Addon {
+								c.Header(key, val[0])
+							}
+						}
+
+						c.Status(errInfo.StatusCode)
+
+						_, _ = fmt.Fprint(c.Writer, errInfo.Error.Error())
+						flusher.Flush()
+						cliCancel(errInfo.Error)
+					}
+					return
+				}
+
+			// Case 4: Send periodic keep-alive signals
+			// Prevents connection timeouts during long-running requests
+			case <-time.After(3000 * time.Millisecond):
 			}
 		}
 	}

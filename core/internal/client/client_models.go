@@ -3,7 +3,10 @@
 // and configuration parameters used when communicating with various AI services.
 package client
 
-import "time"
+import (
+	"net/http"
+	"time"
+)
 
 // ErrorMessage encapsulates an error with an associated HTTP status code.
 // This structure is used to provide detailed error information including
@@ -14,6 +17,9 @@ type ErrorMessage struct {
 
 	// Error is the underlying error that occurred.
 	Error error
+
+	// Addon is the additional headers to be added to the response
+	Addon http.Header
 }
 
 // GCPProject represents the response structure for a Google Cloud project list request.

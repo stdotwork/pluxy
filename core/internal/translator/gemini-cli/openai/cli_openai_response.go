@@ -101,7 +101,7 @@ func ConvertCliResponseToOpenAIChat(rawJSON []byte, unixTimestamp int64, isGlAPI
 					functionCallTemplate, _ = sjson.Set(functionCallTemplate, "function.arguments", fcArgsResult.Raw)
 				}
 				template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
-				template, _ = sjson.SetRaw(template, "choices.0.message.tool_calls.-1", functionCallTemplate)
+				template, _ = sjson.SetRaw(template, "choices.0.delta.tool_calls.-1", functionCallTemplate)
 			}
 		}
 	}

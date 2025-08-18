@@ -112,6 +112,12 @@ func (h *APIHandlers) GetClient(modelName string, isGenerateContent ...bool) (cl
 				clients = append(clients, cli)
 			}
 		}
+	} else if provider == "claude" {
+		for i := 0; i < len(h.CliClients); i++ {
+			if cli, ok := h.CliClients[i].(*client.ClaudeClient); ok {
+				clients = append(clients, cli)
+			}
+		}
 	}
 
 	if _, hasKey := h.LastUsedClientIndex[provider]; !hasKey {
@@ -142,6 +148,8 @@ func (h *APIHandlers) GetClient(modelName string, isGenerateContent ...bool) (cl
 				log.Debugf("Gemini Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.(*client.GeminiClient).GetProjectID())
 			} else if provider == "gpt" {
 				log.Debugf("Codex Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
+			} else if provider == "claude" {
+				log.Debugf("Claude Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
 			}
 			cliClient = nil
 			continue
@@ -151,6 +159,10 @@ func (h *APIHandlers) GetClient(modelName string, isGenerateContent ...bool) (cl
 	}
 
 	if len(reorderedClients) == 0 {
+		if provider == "claude" {
+			// log.Debugf("Claude Model %s is quota exceeded for all accounts", modelName)
+			return nil, &client.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`)}
+		}
 		return nil, &client.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName)}
 	}
 

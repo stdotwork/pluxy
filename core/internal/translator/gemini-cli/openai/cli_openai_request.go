@@ -45,11 +45,40 @@ func ConvertOpenAIChatRequestToCli(rawJSON []byte) (string, *client.Content, []c
 	var systemInstruction *client.Content
 	messagesResult := gjson.GetBytes(rawJSON, "messages")
 
-	// Pre-process tool responses to create a lookup map
-	// This first pass collects all tool responses so they can be matched with their corresponding calls
+	// Pre-process messages to create mappings for tool calls and responses
+	// First pass: collect function call ID to function name mappings
+	toolCallToFunctionName := make(map[string]string)
 	toolItems := make(map[string]*client.FunctionResponse)
+
 	if messagesResult.IsArray() {
 		messagesResults := messagesResult.Array()
+
+		// First pass: collect function call mappings
+		for i := 0; i < len(messagesResults); i++ {
+			messageResult := messagesResults[i]
+			roleResult := messageResult.Get("role")
+			if roleResult.Type != gjson.String {
+				continue
+			}
+
+			// Extract function call ID to function name mappings
+			if roleResult.String() == "assistant" {
+				toolCallsResult := messageResult.Get("tool_calls")
+				if toolCallsResult.Exists() && toolCallsResult.IsArray() {
+					tcsResult := toolCallsResult.Array()
+					for j := 0; j < len(tcsResult); j++ {
+						tcResult := tcsResult[j]
+						if tcResult.Get("type").String() == "function" {
+							functionID := tcResult.Get("id").String()
+							functionName := tcResult.Get("function.name").String()
+							toolCallToFunctionName[functionID] = functionName
+						}
+					}
+				}
+			}
+		}
+
+		// Second pass: collect tool responses with correct function names
 		for i := 0; i < len(messagesResults); i++ {
 			messageResult := messagesResults[i]
 			roleResult := messageResult.Get("role")
@@ -70,14 +99,15 @@ func ConvertOpenAIChatRequestToCli(rawJSON []byte) (string, *client.Content, []c
 						responseData = contentResult.Get("text").String()
 					}
 
-					// Clean up tool call ID by removing timestamp suffix
-					// This normalizes IDs for consistent matching between calls and responses
-					toolCallIDs := strings.Split(toolCallID, "-")
-					strings.Join(toolCallIDs, "-")
-					newToolCallID := strings.Join(toolCallIDs[:len(toolCallIDs)-1], "-")
+					// Get the correct function name from the mapping
+					functionName := toolCallToFunctionName[toolCallID]
+					if functionName == "" {
+						// Fallback: use tool call ID if function name not found
+						functionName = toolCallID
+					}
 
-					// Create function response object with normalized ID and response data
-					functionResponse := client.FunctionResponse{Name: newToolCallID, Response: map[string]interface{}{"result": responseData}}
+					// Create function response object with correct function name
+					functionResponse := client.FunctionResponse{Name: functionName, Response: map[string]interface{}{"result": responseData}}
 					toolItems[toolCallID] = &functionResponse
 				}
 			}
@@ -94,9 +124,10 @@ func ConvertOpenAIChatRequestToCli(rawJSON []byte) (string, *client.Content, []c
 				continue
 			}
 
-			switch roleResult.String() {
-			// System messages are converted to a user message followed by a model's acknowledgment.
-			case "system":
+			role := roleResult.String()
+
+			if role == "system" && len(messagesResults) > 1 {
+				// System messages are converted to a user message followed by a model's acknowledgment.
 				if contentResult.Type == gjson.String {
 					systemInstruction = &client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.String()}}}
 				} else if contentResult.IsObject() {
@@ -105,8 +136,8 @@ func ConvertOpenAIChatRequestToCli(rawJSON []byte) (string, *client.Content, []c
 						systemInstruction = &client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.Get("text").String()}}}
 					}
 				}
-			// User messages can contain simple text or a multi-part body.
-			case "user":
+			} else if role == "user" || (role == "system" && len(messagesResults) == 1) { // If there's only a system message, treat it as a user message.
+				// User messages can contain simple text or a multi-part body.
 				if contentResult.Type == gjson.String {
 					contents = append(contents, client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.String()}}})
 				} else if contentResult.IsArray() {
@@ -151,9 +182,10 @@ func ConvertOpenAIChatRequestToCli(rawJSON []byte) (string, *client.Content, []c
 					}
 					contents = append(contents, client.Content{Role: "user", Parts: parts})
 				}
-			// Assistant messages can contain text responses or tool calls
-			// In the internal format, assistant messages are converted to "model" role
-			case "assistant":
+			} else if role == "assistant" {
+				// Assistant messages can contain text responses or tool calls
+				// In the internal format, assistant messages are converted to "model" role
+
 				if contentResult.Type == gjson.String {
 					// Simple text response from the assistant
 					contents = append(contents, client.Content{Role: "model", Parts: []client.Part{{Text: contentResult.String()}}})
