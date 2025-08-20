@@ -19,6 +19,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/auth/claude"
 	"github.com/luispater/CLIProxyAPI/internal/auth/codex"
 	"github.com/luispater/CLIProxyAPI/internal/auth/gemini"
+	"github.com/luispater/CLIProxyAPI/internal/auth/qwen"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	"github.com/luispater/CLIProxyAPI/internal/util"
@@ -277,6 +278,20 @@ func (w *Watcher) reloadClients() {
 
 					// Add the new client to the pool
 					newClients = append(newClients, claudeClient)
+					successfulAuthCount++
+				} else {
+					log.Errorf("  failed to decode token file %s: %v", path, err)
+				}
+			} else if tokenType == "qwen" {
+				var ts qwen.QwenTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					// For each valid token, create an authenticated client
+					log.Debugf("  initializing qwen authentication for token from %s...", filepath.Base(path))
+					qwenClient := client.NewQwenClient(cfg, &ts)
+					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
+
+					// Add the new client to the pool
+					newClients = append(newClients, qwenClient)
 					successfulAuthCount++
 				} else {
 					log.Errorf("  failed to decode token file %s: %v", path, err)

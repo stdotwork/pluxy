@@ -66,7 +66,7 @@ func NewServer(cfg *config.Config, cliClients []client.Client) *Server {
 	requestLogger := logging.NewFileRequestLogger(cfg.RequestLog, "logs")
 	engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
 
-	// engine.Use(corsMiddleware())
+	engine.Use(corsMiddleware())
 
 	// Create server instance
 	s := &Server{

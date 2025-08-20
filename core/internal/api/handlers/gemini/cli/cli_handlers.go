@@ -18,6 +18,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	translatorGeminiToClaude "github.com/luispater/CLIProxyAPI/internal/translator/claude/gemini"
 	translatorGeminiToCodex "github.com/luispater/CLIProxyAPI/internal/translator/codex/gemini"
+	translatorGeminiToQwen "github.com/luispater/CLIProxyAPI/internal/translator/openai/gemini"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -64,6 +65,8 @@ func (h *GeminiCLIAPIHandlers) CLIHandler(c *gin.Context) {
 			h.handleCodexInternalGenerateContent(c, rawJSON)
 		} else if provider == "claude" {
 			h.handleClaudeInternalGenerateContent(c, rawJSON)
+		} else if provider == "qwen" {
+			h.handleQwenInternalGenerateContent(c, rawJSON)
 		}
 	} else if requestRawURI == "/v1internal:streamGenerateContent" {
 		if provider == "gemini" || provider == "unknow" {
@@ -72,6 +75,8 @@ func (h *GeminiCLIAPIHandlers) CLIHandler(c *gin.Context) {
 			h.handleCodexInternalStreamGenerateContent(c, rawJSON)
 		} else if provider == "claude" {
 			h.handleClaudeInternalStreamGenerateContent(c, rawJSON)
+		} else if provider == "qwen" {
+			h.handleQwenInternalStreamGenerateContent(c, rawJSON)
 		}
 	} else {
 		reqBody := bytes.NewBuffer(rawJSON)
@@ -730,6 +735,183 @@ outLoop:
 			// Send a keep-alive signal to the client.
 			case <-time.After(500 * time.Millisecond):
 			}
+		}
+	}
+}
+
+func (h *GeminiCLIAPIHandlers) handleQwenInternalStreamGenerateContent(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	// Get the http.Flusher interface to manually flush the response.
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Streaming not supported",
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	modelResult := gjson.GetBytes(rawJSON, "model")
+	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)
+	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelResult.String())
+	rawJSON, _ = sjson.SetRawBytes(rawJSON, "system_instruction", []byte(gjson.GetBytes(rawJSON, "systemInstruction").Raw))
+	rawJSON, _ = sjson.DeleteBytes(rawJSON, "systemInstruction")
+
+	// Prepare the request for the backend client.
+	newRequestJSON := translatorGeminiToQwen.ConvertGeminiRequestToOpenAI(rawJSON)
+	newRequestJSON, _ = sjson.Set(newRequestJSON, "stream", true)
+
+	// log.Debugf("Request: %s", string(rawJSON))
+	// return
+
+	modelName := gjson.GetBytes(rawJSON, "model")
+
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName.String())
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		log.Debugf("Request qwen use account: %s", cliClient.(*client.QwenClient).GetEmail())
+
+		// Send the message and receive response chunks and errors via channels.
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+
+		params := &translatorGeminiToQwen.ConvertOpenAIResponseToGeminiParams{
+			ToolCallsAccumulator: nil,
+			ContentAccumulator:   strings.Builder{},
+			IsFirstChunk:         false,
+		}
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					cliCancel()
+					return
+				}
+
+				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n\n"))
+
+				if bytes.HasPrefix(chunk, []byte("data: ")) {
+					jsonData := chunk[6:]
+					// log.Debugf(string(jsonData))
+					outputs := translatorGeminiToQwen.ConvertOpenAIResponseToGemini(jsonData, params)
+					if len(outputs) > 0 {
+						for i := 0; i < len(outputs); i++ {
+							outputs[i], _ = sjson.SetRaw("{}", "response", outputs[i])
+							_, _ = c.Writer.Write([]byte("data: "))
+							_, _ = c.Writer.Write([]byte(outputs[i]))
+							_, _ = c.Writer.Write([]byte("\n\n"))
+						}
+					}
+					// log.Debugf(string(jsonData))
+				}
+				flusher.Flush()
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						flusher.Flush()
+						cliCancel(err.Error)
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+}
+
+func (h *GeminiCLIAPIHandlers) handleQwenInternalGenerateContent(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "application/json")
+
+	modelResult := gjson.GetBytes(rawJSON, "model")
+	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)
+	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelResult.String())
+	rawJSON, _ = sjson.SetRawBytes(rawJSON, "system_instruction", []byte(gjson.GetBytes(rawJSON, "systemInstruction").Raw))
+	rawJSON, _ = sjson.DeleteBytes(rawJSON, "systemInstruction")
+
+	// Prepare the request for the backend client.
+	newRequestJSON := translatorGeminiToQwen.ConvertGeminiRequestToOpenAI(rawJSON)
+	// log.Debugf("Request: %s", newRequestJSON)
+
+	modelName := gjson.GetBytes(rawJSON, "model")
+
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName.String())
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			cliCancel()
+			return
+		}
+
+		log.Debugf("Request use qwen account: %s", cliClient.GetEmail())
+
+		resp, err := cliClient.SendRawMessage(cliCtx, []byte(newRequestJSON), "")
+		if err != nil {
+			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+				continue
+			} else {
+				c.Status(err.StatusCode)
+				_, _ = c.Writer.Write([]byte(err.Error.Error()))
+				cliCancel(err.Error)
+			}
+			break
+		} else {
+			h.AddAPIResponseData(c, resp)
+			h.AddAPIResponseData(c, []byte("\n"))
+
+			newResp := translatorGeminiToQwen.ConvertOpenAINonStreamResponseToGemini(resp)
+			_, _ = c.Writer.Write([]byte(newResp))
+			cliCancel(resp)
+			break
 		}
 	}
 }

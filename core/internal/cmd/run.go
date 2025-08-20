@@ -22,6 +22,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/auth/claude"
 	"github.com/luispater/CLIProxyAPI/internal/auth/codex"
 	"github.com/luispater/CLIProxyAPI/internal/auth/gemini"
+	"github.com/luispater/CLIProxyAPI/internal/auth/qwen"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	"github.com/luispater/CLIProxyAPI/internal/util"
@@ -101,6 +102,15 @@ func StartService(cfg *config.Config, configPath string) {
 					claudeClient := client.NewClaudeClient(cfg, &ts)
 					log.Info("Authentication successful.")
 					cliClients = append(cliClients, claudeClient)
+				}
+			} else if tokenType == "qwen" {
+				var ts qwen.QwenTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					// For each valid token, create an authenticated client.
+					log.Info("Initializing qwen authentication for token...")
+					qwenClient := client.NewQwenClient(cfg, &ts)
+					log.Info("Authentication successful.")
+					cliClients = append(cliClients, qwenClient)
 				}
 			}
 		}
@@ -200,8 +210,19 @@ func StartService(cfg *config.Config, configPath string) {
 						if ts != nil && ts.Expire != "" {
 							if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
 								if time.Until(expTime) <= 4*time.Hour {
-									log.Debugf("refreshing codex tokens for %s", claudeCli.GetEmail())
+									log.Debugf("refreshing claude tokens for %s", claudeCli.GetEmail())
 									_ = claudeCli.RefreshTokens(ctxRefresh)
+								}
+							}
+						}
+					}
+				} else if qwenCli, isQwenOK := cliClients[i].(*client.QwenClient); isQwenOK {
+					if ts, isQwenTS := qwenCli.TokenStorage().(*qwen.QwenTokenStorage); isQwenTS {
+						if ts != nil && ts.Expire != "" {
+							if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
+								if time.Until(expTime) <= 3*time.Hour {
+									log.Debugf("refreshing qwen tokens for %s", qwenCli.GetEmail())
+									_ = qwenCli.RefreshTokens(ctxRefresh)
 								}
 							}
 						}

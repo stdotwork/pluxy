@@ -1,0 +1,85 @@
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/luispater/CLIProxyAPI/internal/auth/qwen"
+	"github.com/luispater/CLIProxyAPI/internal/browser"
+	"github.com/luispater/CLIProxyAPI/internal/client"
+	"github.com/luispater/CLIProxyAPI/internal/config"
+	log "github.com/sirupsen/logrus"
+)
+
+// DoQwenLogin handles the Qwen OAuth login process
+func DoQwenLogin(cfg *config.Config, options *LoginOptions) {
+	if options == nil {
+		options = &LoginOptions{}
+	}
+
+	ctx := context.Background()
+
+	log.Info("Initializing Qwen authentication...")
+
+	// Initialize Qwen auth service
+	qwenAuth := qwen.NewQwenAuth(cfg)
+
+	// Generate authorization URL
+	deviceFlow, err := qwenAuth.InitiateDeviceFlow(ctx)
+	if err != nil {
+		log.Fatalf("Failed to generate authorization URL: %v", err)
+		return
+	}
+	authURL := deviceFlow.VerificationURIComplete
+
+	// Open browser or display URL
+	if !options.NoBrowser {
+		log.Info("Opening browser for authentication...")
+
+		// Check if browser is available
+		if !browser.IsAvailable() {
+			log.Warn("No browser available on this system")
+			log.Infof("Please manually open this URL in your browser:\n\n%s\n", authURL)
+		} else {
+			if err = browser.OpenURL(authURL); err != nil {
+				log.Infof("Please manually open this URL in your browser:\n\n%s\n", authURL)
+
+				// Log platform info for debugging
+				platformInfo := browser.GetPlatformInfo()
+				log.Debugf("Browser platform info: %+v", platformInfo)
+			} else {
+				log.Debug("Browser opened successfully")
+			}
+		}
+	} else {
+		log.Infof("Please open this URL in your browser:\n\n%s\n", authURL)
+	}
+
+	log.Info("Waiting for authentication...")
+	tokenData, err := qwenAuth.PollForToken(deviceFlow.DeviceCode, deviceFlow.CodeVerifier)
+	if err != nil {
+		fmt.Printf("Authentication failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create token storage
+	tokenStorage := qwenAuth.CreateTokenStorage(tokenData)
+
+	// Initialize Qwen client
+	qwenClient := client.NewQwenClient(cfg, tokenStorage)
+
+	fmt.Println("\nPlease input your email address or any alias:")
+	var email string
+	_, _ = fmt.Scanln(&email)
+	tokenStorage.Email = email
+
+	// Save token storage
+	if err = qwenClient.SaveTokenToFile(); err != nil {
+		log.Fatalf("Failed to save authentication tokens: %v", err)
+		return
+	}
+
+	log.Info("Authentication successful!")
+	log.Info("You can now use Qwen services through this CLI")
+}

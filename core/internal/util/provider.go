@@ -23,6 +23,8 @@ func GetProviderName(modelName string) string {
 		return "gpt"
 	} else if strings.HasPrefix(modelName, "claude") {
 		return "claude"
+	} else if strings.HasPrefix(modelName, "qwen") {
+		return "qwen"
 	}
 	return "unknow"
 }

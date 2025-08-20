@@ -171,6 +171,13 @@ func (h *OpenAIAPIHandlers) ChatCompletions(c *gin.Context) {
 		} else {
 			h.handleClaudeNonStreamingResponse(c, rawJSON)
 		}
+	} else if provider == "qwen" {
+		// qwen3-coder-plus / qwen3-coder-flash
+		if streamResult.Type == gjson.True {
+			h.handleQwenStreamingResponse(c, rawJSON)
+		} else {
+			h.handleQwenNonStreamingResponse(c, rawJSON)
+		}
 	}
 }
 
@@ -757,6 +764,158 @@ outLoop:
 					_, _ = c.Writer.Write([]byte(": CLI-PROXY-API PROCESSING\n\n"))
 					flusher.Flush()
 				}
+			}
+		}
+	}
+}
+
+// handleQwenNonStreamingResponse handles non-streaming chat completion responses
+// for Qwen models. It selects a client from the pool, sends the request, and
+// aggregates the response before sending it back to the client in OpenAI format.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+func (h *OpenAIAPIHandlers) handleQwenNonStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "application/json")
+
+	modelResult := gjson.GetBytes(rawJSON, "model")
+	modelName := modelResult.String()
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			cliCancel()
+			return
+		}
+
+		log.Debugf("Request qwen use account: %s", cliClient.(*client.QwenClient).GetEmail())
+
+		resp, err := cliClient.SendRawMessage(cliCtx, rawJSON, modelName)
+		if err != nil {
+			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+				continue
+			} else {
+				c.Status(err.StatusCode)
+				_, _ = c.Writer.Write([]byte(err.Error.Error()))
+				cliCancel(err.Error)
+			}
+			break
+		} else {
+			_, _ = c.Writer.Write(resp)
+			cliCancel(resp)
+			break
+		}
+	}
+}
+
+// handleQwenStreamingResponse handles streaming responses for Qwen models.
+// It establishes a streaming connection with the backend service and forwards
+// the response chunks to the client in real-time using Server-Sent Events.
+//
+// Parameters:
+//   - c: The Gin context containing the HTTP request and response
+//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+func (h *OpenAIAPIHandlers) handleQwenStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	// Get the http.Flusher interface to manually flush the response.
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Streaming not supported",
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	// Prepare the request for the backend client.
+	modelResult := gjson.GetBytes(rawJSON, "model")
+	modelName := modelResult.String()
+
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		log.Debugf("Request qwen use account: %s", cliClient.(*client.QwenClient).GetEmail())
+
+		// Send the message and receive response chunks and errors via channels.
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJSON, modelName)
+
+		for {
+			select {
+			// Handle client disconnection.
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("GeminiClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request.
+					return
+				}
+			// Process incoming response chunks.
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					flusher.Flush()
+					cliCancel()
+					return
+				}
+
+				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n"))
+
+				// Convert the chunk to OpenAI format and send it to the client.
+				_, _ = c.Writer.Write(chunk)
+				_, _ = c.Writer.Write([]byte("\n"))
+
+				flusher.Flush()
+			// Handle errors from the backend.
+			case err, okError := <-errChan:
+				if okError {
+					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						continue outLoop
+					} else {
+						c.Status(err.StatusCode)
+						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
+						flusher.Flush()
+						cliCancel(err.Error)
+					}
+					return
+				}
+			// Send a keep-alive signal to the client.
+			case <-time.After(500 * time.Millisecond):
 			}
 		}
 	}

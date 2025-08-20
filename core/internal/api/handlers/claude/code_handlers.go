@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	translatorClaudeCodeToCodex "github.com/luispater/CLIProxyAPI/internal/translator/codex/claude/code"
 	translatorClaudeCodeToGeminiCli "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/claude/code"
+	translatorClaudeCodeToQwen "github.com/luispater/CLIProxyAPI/internal/translator/openai/claude"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -62,7 +64,7 @@ func (h *ClaudeCodeAPIHandlers) ClaudeMessages(c *gin.Context) {
 
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
-	if streamResult.Type == gjson.False {
+	if !streamResult.Exists() || streamResult.Type == gjson.False {
 		return
 	}
 
@@ -72,6 +74,8 @@ func (h *ClaudeCodeAPIHandlers) ClaudeMessages(c *gin.Context) {
 		h.handleCodexStreamingResponse(c, rawJSON)
 	} else if provider == "claude" {
 		h.handleClaudeStreamingResponse(c, rawJSON)
+	} else if provider == "qwen" {
+		h.handleQwenStreamingResponse(c, rawJSON)
 	} else {
 		h.handleGeminiStreamingResponse(c, rawJSON)
 	}
@@ -504,6 +508,152 @@ outLoop:
 
 						c.Status(errInfo.StatusCode)
 
+						_, _ = fmt.Fprint(c.Writer, errInfo.Error.Error())
+						flusher.Flush()
+						cliCancel(errInfo.Error)
+					}
+					return
+				}
+
+			// Case 4: Send periodic keep-alive signals
+			// Prevents connection timeouts during long-running requests
+			case <-time.After(3000 * time.Millisecond):
+			}
+		}
+	}
+}
+
+// handleQwenStreamingResponse streams Claude-compatible responses backed by OpenAI.
+// It converts the Claude request into Qwen responses format, establishes SSE,
+// and translates streaming chunks back into Claude Code events.
+func (h *ClaudeCodeAPIHandlers) handleQwenStreamingResponse(c *gin.Context, rawJSON []byte) {
+	// Set up Server-Sent Events (SSE) headers for streaming response
+	// These headers are essential for maintaining a persistent connection
+	// and enabling real-time streaming of chat completions
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	// Get the http.Flusher interface to manually flush the response.
+	// This is crucial for streaming as it allows immediate sending of data chunks
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "Streaming not supported",
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	// Parse and prepare the Claude request, extracting model name, system instructions,
+	// conversation contents, and available tools from the raw JSON
+	newRequestJSON := translatorClaudeCodeToQwen.ConvertAnthropicRequestToOpenAI(rawJSON)
+	modelName := gjson.GetBytes(rawJSON, "model").String()
+
+	newRequestJSON, _ = sjson.Set(newRequestJSON, "model", modelName)
+	// log.Debugf(string(rawJSON))
+	// log.Debugf(newRequestJSON)
+	// return
+	// Create a cancellable context for the backend client request
+	// This allows proper cleanup and cancellation of ongoing requests
+	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+
+	var cliClient client.Client
+	defer func() {
+		// Ensure the client's mutex is unlocked on function exit.
+		// This prevents deadlocks and ensures proper resource cleanup
+		if cliClient != nil {
+			cliClient.GetRequestMutex().Unlock()
+		}
+	}()
+
+	// Main client rotation loop with quota management
+	// This loop implements a sophisticated load balancing and failover mechanism
+outLoop:
+	for {
+		var errorResponse *client.ErrorMessage
+		cliClient, errorResponse = h.GetClient(modelName)
+		if errorResponse != nil {
+			c.Status(errorResponse.StatusCode)
+			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+			flusher.Flush()
+			cliCancel()
+			return
+		}
+
+		log.Debugf("Request use qwen account: %s", cliClient.GetEmail())
+
+		// Initiate streaming communication with the backend client
+		// This returns two channels: one for response chunks and one for errors
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
+
+		// Track response state for proper Claude format conversion
+
+		params := &translatorClaudeCodeToQwen.ConvertOpenAIResponseToAnthropicParams{
+			MessageID:            "",
+			Model:                "",
+			CreatedAt:            0,
+			ContentAccumulator:   strings.Builder{},
+			ToolCallsAccumulator: nil,
+		}
+
+		// Main streaming loop - handles multiple concurrent events using Go channels
+		// This select statement manages four different types of events simultaneously
+		for {
+			select {
+			// Case 1: Handle client disconnection
+			// Detects when the HTTP client has disconnected and cleans up resources
+			case <-c.Request.Context().Done():
+				if c.Request.Context().Err().Error() == "context canceled" {
+					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
+					cliCancel() // Cancel the backend request to prevent resource leaks
+					return
+				}
+
+			// Case 2: Process incoming response chunks from the backend
+			// This handles the actual streaming data from the AI model
+			case chunk, okStream := <-respChan:
+				if !okStream {
+					flusher.Flush()
+					cliCancel()
+					return
+				}
+
+				h.AddAPIResponseData(c, chunk)
+				h.AddAPIResponseData(c, []byte("\n"))
+
+				// Convert the backend response to Claude-compatible format
+				// This translation layer ensures API compatibility
+				if bytes.HasPrefix(chunk, []byte("data: ")) {
+					jsonData := chunk[6:]
+					outputs := translatorClaudeCodeToQwen.ConvertOpenAIResponseToAnthropic(jsonData, params)
+					if len(outputs) > 0 {
+						for i := 0; i < len(outputs); i++ {
+							_, _ = c.Writer.Write([]byte("data: "))
+							_, _ = c.Writer.Write([]byte(outputs[i]))
+						}
+					}
+					flusher.Flush() // Immediately send the chunk to the client
+					// hasFirstResponse = true
+				} else {
+					// log.Debugf("chunk: %s", string(chunk))
+				}
+			// Case 3: Handle errors from the backend
+			// This manages various error conditions and implements retry logic
+			case errInfo, okError := <-errChan:
+				if okError {
+					// log.Debugf("Code: %d, Error: %v", errInfo.StatusCode, errInfo.Error)
+					// Special handling for quota exceeded errors
+					// If configured, attempt to switch to a different project/client
+					if errInfo.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+						log.Debugf("quota exceeded, switch client")
+						continue outLoop // Restart the client selection process
+					} else {
+						// Forward other errors directly to the client
+						c.Status(errInfo.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, errInfo.Error.Error())
 						flusher.Flush()
 						cliCancel(errInfo.Error)

@@ -118,6 +118,12 @@ func (h *APIHandlers) GetClient(modelName string, isGenerateContent ...bool) (cl
 				clients = append(clients, cli)
 			}
 		}
+	} else if provider == "qwen" {
+		for i := 0; i < len(h.CliClients); i++ {
+			if cli, ok := h.CliClients[i].(*client.QwenClient); ok {
+				clients = append(clients, cli)
+			}
+		}
 	}
 
 	if _, hasKey := h.LastUsedClientIndex[provider]; !hasKey {
@@ -150,6 +156,8 @@ func (h *APIHandlers) GetClient(modelName string, isGenerateContent ...bool) (cl
 				log.Debugf("Codex Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
 			} else if provider == "claude" {
 				log.Debugf("Claude Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
+			} else if provider == "qwen" {
+				log.Debugf("Qwen Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
 			}
 			cliClient = nil
 			continue
