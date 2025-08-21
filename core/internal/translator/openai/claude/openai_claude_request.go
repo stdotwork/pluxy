@@ -13,20 +13,17 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// ConvertAnthropicRequestToOpenAI parses and transforms an Anthropic API request into OpenAI Chat Completions API format.
+// ConvertClaudeRequestToOpenAI parses and transforms an Anthropic API request into OpenAI Chat Completions API format.
 // It extracts the model name, system instruction, message contents, and tool declarations
 // from the raw JSON request and returns them in the format expected by the OpenAI API.
-func ConvertAnthropicRequestToOpenAI(rawJSON []byte) string {
+func ConvertClaudeRequestToOpenAI(modelName string, rawJSON []byte, stream bool) []byte {
 	// Base OpenAI Chat Completions API template
 	out := `{"model":"","messages":[]}`
 
 	root := gjson.ParseBytes(rawJSON)
 
 	// Model mapping
-	if model := root.Get("model"); model.Exists() {
-		modelStr := model.String()
-		out, _ = sjson.Set(out, "model", modelStr)
-	}
+	out, _ = sjson.Set(out, "model", modelName)
 
 	// Max tokens
 	if maxTokens := root.Get("max_tokens"); maxTokens.Exists() {
@@ -62,21 +59,30 @@ func ConvertAnthropicRequestToOpenAI(rawJSON []byte) string {
 	}
 
 	// Stream
-	if stream := root.Get("stream"); stream.Exists() {
-		out, _ = sjson.Set(out, "stream", stream.Bool())
-	}
+	out, _ = sjson.Set(out, "stream", stream)
 
 	// Process messages and system
-	var openAIMessages []interface{}
+	var messagesJSON = "[]"
 
 	// Handle system message first
-	if system := root.Get("system"); system.Exists() && system.String() != "" {
-		systemMsg := map[string]interface{}{
-			"role":    "system",
-			"content": system.String(),
+	systemMsgJSON := `{"role":"system","content":[{"type":"text","text":"Use ANY tool, the parameters MUST accord with RFC 8259 (The JavaScript Object Notation (JSON) Data Interchange Format), the keys and value MUST be enclosed in double quotes."}]}`
+	if system := root.Get("system"); system.Exists() {
+		if system.Type == gjson.String {
+			if system.String() != "" {
+				oldSystem := `{"type":"text","text":""}`
+				oldSystem, _ = sjson.Set(oldSystem, "text", system.String())
+				systemMsgJSON, _ = sjson.SetRaw(systemMsgJSON, "content.-1", oldSystem)
+			}
+		} else if system.Type == gjson.JSON {
+			if system.IsArray() {
+				systemResults := system.Array()
+				for i := 0; i < len(systemResults); i++ {
+					systemMsgJSON, _ = sjson.SetRaw(systemMsgJSON, "content.-1", systemResults[i].Raw)
+				}
+			}
 		}
-		openAIMessages = append(openAIMessages, systemMsg)
 	}
+	messagesJSON, _ = sjson.SetRaw(messagesJSON, "-1", systemMsgJSON)
 
 	// Process Anthropic messages
 	if messages := root.Get("messages"); messages.Exists() && messages.IsArray() {
@@ -84,15 +90,10 @@ func ConvertAnthropicRequestToOpenAI(rawJSON []byte) string {
 			role := message.Get("role").String()
 			contentResult := message.Get("content")
 
-			msg := map[string]interface{}{
-				"role": role,
-			}
-
 			// Handle content
 			if contentResult.Exists() && contentResult.IsArray() {
 				var textParts []string
 				var toolCalls []interface{}
-				var toolResults []interface{}
 
 				contentResult.ForEach(func(_, part gjson.Result) bool {
 					partType := part.Get("type").String()
@@ -118,68 +119,62 @@ func ConvertAnthropicRequestToOpenAI(rawJSON []byte) string {
 
 					case "tool_use":
 						// Convert to OpenAI tool call format
-						toolCall := map[string]interface{}{
-							"id":   part.Get("id").String(),
-							"type": "function",
-							"function": map[string]interface{}{
-								"name": part.Get("name").String(),
-							},
-						}
+						toolCallJSON := `{"id":"","type":"function","function":{"name":"","arguments":""}}`
+						toolCallJSON, _ = sjson.Set(toolCallJSON, "id", part.Get("id").String())
+						toolCallJSON, _ = sjson.Set(toolCallJSON, "function.name", part.Get("name").String())
 
 						// Convert input to arguments JSON string
 						if input := part.Get("input"); input.Exists() {
 							if inputJSON, err := json.Marshal(input.Value()); err == nil {
-								if function, ok := toolCall["function"].(map[string]interface{}); ok {
-									function["arguments"] = string(inputJSON)
-								}
+								toolCallJSON, _ = sjson.Set(toolCallJSON, "function.arguments", string(inputJSON))
 							} else {
-								if function, ok := toolCall["function"].(map[string]interface{}); ok {
-									function["arguments"] = "{}"
-								}
+								toolCallJSON, _ = sjson.Set(toolCallJSON, "function.arguments", "{}")
 							}
 						} else {
-							if function, ok := toolCall["function"].(map[string]interface{}); ok {
-								function["arguments"] = "{}"
-							}
+							toolCallJSON, _ = sjson.Set(toolCallJSON, "function.arguments", "{}")
 						}
 
-						toolCalls = append(toolCalls, toolCall)
+						toolCalls = append(toolCalls, gjson.Parse(toolCallJSON).Value())
 
 					case "tool_result":
-						// Convert to OpenAI tool message format
-						toolResult := map[string]interface{}{
-							"role":         "tool",
-							"tool_call_id": part.Get("tool_use_id").String(),
-							"content":      part.Get("content").String(),
-						}
-						toolResults = append(toolResults, toolResult)
+						// Convert to OpenAI tool message format and add immediately to preserve order
+						toolResultJSON := `{"role":"tool","tool_call_id":"","content":""}`
+						toolResultJSON, _ = sjson.Set(toolResultJSON, "tool_call_id", part.Get("tool_use_id").String())
+						toolResultJSON, _ = sjson.Set(toolResultJSON, "content", part.Get("content").String())
+						messagesJSON, _ = sjson.Set(messagesJSON, "-1", gjson.Parse(toolResultJSON).Value())
 					}
 					return true
 				})
 
-				// Set content
-				if len(textParts) > 0 {
-					msg["content"] = strings.Join(textParts, "")
-				} else {
-					msg["content"] = ""
-				}
+				// Create main message if there's text content or tool calls
+				if len(textParts) > 0 || len(toolCalls) > 0 {
+					msgJSON := `{"role":"","content":""}`
+					msgJSON, _ = sjson.Set(msgJSON, "role", role)
 
-				// Set tool calls for assistant messages
-				if role == "assistant" && len(toolCalls) > 0 {
-					msg["tool_calls"] = toolCalls
-				}
+					// Set content
+					if len(textParts) > 0 {
+						msgJSON, _ = sjson.Set(msgJSON, "content", strings.Join(textParts, ""))
+					} else {
+						msgJSON, _ = sjson.Set(msgJSON, "content", "")
+					}
 
-				openAIMessages = append(openAIMessages, msg)
+					// Set tool calls for assistant messages
+					if role == "assistant" && len(toolCalls) > 0 {
+						toolCallsJSON, _ := json.Marshal(toolCalls)
+						msgJSON, _ = sjson.SetRaw(msgJSON, "tool_calls", string(toolCallsJSON))
+					}
 
-				// Add tool result messages separately
-				for _, toolResult := range toolResults {
-					openAIMessages = append(openAIMessages, toolResult)
+					if gjson.Get(msgJSON, "content").String() != "" || len(toolCalls) != 0 {
+						messagesJSON, _ = sjson.Set(messagesJSON, "-1", gjson.Parse(msgJSON).Value())
+					}
 				}
 
 			} else if contentResult.Exists() && contentResult.Type == gjson.String {
 				// Simple string content
-				msg["content"] = contentResult.String()
-				openAIMessages = append(openAIMessages, msg)
+				msgJSON := `{"role":"","content":""}`
+				msgJSON, _ = sjson.Set(msgJSON, "role", role)
+				msgJSON, _ = sjson.Set(msgJSON, "content", contentResult.String())
+				messagesJSON, _ = sjson.Set(messagesJSON, "-1", gjson.Parse(msgJSON).Value())
 			}
 
 			return true
@@ -187,38 +182,30 @@ func ConvertAnthropicRequestToOpenAI(rawJSON []byte) string {
 	}
 
 	// Set messages
-	if len(openAIMessages) > 0 {
-		messagesJSON, _ := json.Marshal(openAIMessages)
-		out, _ = sjson.SetRaw(out, "messages", string(messagesJSON))
+	if gjson.Parse(messagesJSON).IsArray() && len(gjson.Parse(messagesJSON).Array()) > 0 {
+		out, _ = sjson.SetRaw(out, "messages", messagesJSON)
 	}
 
 	// Process tools - convert Anthropic tools to OpenAI functions
 	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() {
-		var openAITools []interface{}
+		var toolsJSON = "[]"
 
 		tools.ForEach(func(_, tool gjson.Result) bool {
-			openAITool := map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name":        tool.Get("name").String(),
-					"description": tool.Get("description").String(),
-				},
-			}
+			openAIToolJSON := `{"type":"function","function":{"name":"","description":""}}`
+			openAIToolJSON, _ = sjson.Set(openAIToolJSON, "function.name", tool.Get("name").String())
+			openAIToolJSON, _ = sjson.Set(openAIToolJSON, "function.description", tool.Get("description").String())
 
 			// Convert Anthropic input_schema to OpenAI function parameters
 			if inputSchema := tool.Get("input_schema"); inputSchema.Exists() {
-				if function, ok := openAITool["function"].(map[string]interface{}); ok {
-					function["parameters"] = inputSchema.Value()
-				}
+				openAIToolJSON, _ = sjson.Set(openAIToolJSON, "function.parameters", inputSchema.Value())
 			}
 
-			openAITools = append(openAITools, openAITool)
+			toolsJSON, _ = sjson.Set(toolsJSON, "-1", gjson.Parse(openAIToolJSON).Value())
 			return true
 		})
 
-		if len(openAITools) > 0 {
-			toolsJSON, _ := json.Marshal(openAITools)
-			out, _ = sjson.SetRaw(out, "tools", string(toolsJSON))
+		if gjson.Parse(toolsJSON).IsArray() && len(gjson.Parse(toolsJSON).Array()) > 0 {
+			out, _ = sjson.SetRaw(out, "tools", toolsJSON)
 		}
 	}
 
@@ -232,12 +219,9 @@ func ConvertAnthropicRequestToOpenAI(rawJSON []byte) string {
 		case "tool":
 			// Specific tool choice
 			toolName := toolChoice.Get("name").String()
-			out, _ = sjson.Set(out, "tool_choice", map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name": toolName,
-				},
-			})
+			toolChoiceJSON := `{"type":"function","function":{"name":""}}`
+			toolChoiceJSON, _ = sjson.Set(toolChoiceJSON, "function.name", toolName)
+			out, _ = sjson.SetRaw(out, "tool_choice", toolChoiceJSON)
 		default:
 			// Default to auto if not specified
 			out, _ = sjson.Set(out, "tool_choice", "auto")
@@ -249,5 +233,5 @@ func ConvertAnthropicRequestToOpenAI(rawJSON []byte) string {
 		out, _ = sjson.Set(out, "user", user.String())
 	}
 
-	return out
+	return []byte(out)
 }

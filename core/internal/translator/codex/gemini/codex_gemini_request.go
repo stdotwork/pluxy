@@ -1,9 +1,9 @@
-// Package code provides request translation functionality for Claude API.
-// It handles parsing and transforming Claude API requests into the internal client format,
+// Package gemini provides request translation functionality for Codex to Gemini API compatibility.
+// It handles parsing and transforming Codex API requests into Gemini API format,
 // extracting model information, system instructions, message contents, and tool declarations.
-// The package also performs JSON data cleaning and transformation to ensure compatibility
-// between Claude API format and the internal client's expected format.
-package code
+// The package performs JSON data transformation to ensure compatibility
+// between Codex API format and Gemini API's expected format.
+package gemini
 
 import (
 	"crypto/rand"
@@ -17,10 +17,24 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// PrepareClaudeRequest parses and transforms a Claude API request into internal client format.
+// ConvertGeminiRequestToCodex parses and transforms a Gemini API request into Codex API format.
 // It extracts the model name, system instruction, message contents, and tool declarations
-// from the raw JSON request and returns them in the format expected by the internal client.
-func ConvertGeminiRequestToCodex(rawJSON []byte) string {
+// from the raw JSON request and returns them in the format expected by the Codex API.
+// The function performs comprehensive transformation including:
+// 1. Model name mapping and generation configuration extraction
+// 2. System instruction conversion to Codex format
+// 3. Message content conversion with proper role mapping
+// 4. Tool call and tool result handling with FIFO queue for ID matching
+// 5. Tool declaration and tool choice configuration mapping
+//
+// Parameters:
+//   - modelName: The name of the model to use for the request
+//   - rawJSON: The raw JSON request data from the Gemini API
+//   - stream: A boolean indicating if the request is for a streaming response (unused in current implementation)
+//
+// Returns:
+//   - []byte: The transformed request data in Codex API format
+func ConvertGeminiRequestToCodex(modelName string, rawJSON []byte, _ bool) []byte {
 	// Base template
 	out := `{"model":"","instructions":"","input":[]}`
 
@@ -49,9 +63,7 @@ func ConvertGeminiRequestToCodex(rawJSON []byte) string {
 	}
 
 	// Model
-	if v := root.Get("model"); v.Exists() {
-		out, _ = sjson.Set(out, "model", v.Value())
-	}
+	out, _ = sjson.Set(out, "model", modelName)
 
 	// System instruction -> as a user message with input_text parts
 	sysParts := root.Get("system_instruction.parts")
@@ -182,6 +194,12 @@ func ConvertGeminiRequestToCodex(rawJSON []byte) string {
 					cleaned, _ = sjson.Delete(cleaned, "$schema")
 					cleaned, _ = sjson.Set(cleaned, "additionalProperties", false)
 					tool, _ = sjson.SetRaw(tool, "parameters", cleaned)
+				} else if prm = fn.Get("parametersJsonSchema"); prm.Exists() {
+					// Remove optional $schema field if present
+					cleaned := prm.Raw
+					cleaned, _ = sjson.Delete(cleaned, "$schema")
+					cleaned, _ = sjson.Set(cleaned, "additionalProperties", false)
+					tool, _ = sjson.SetRaw(tool, "parameters", cleaned)
 				}
 				tool, _ = sjson.Set(tool, "strict", false)
 				out, _ = sjson.SetRaw(out, "tools.-1", tool)
@@ -205,5 +223,5 @@ func ConvertGeminiRequestToCodex(rawJSON []byte) string {
 		out, _ = sjson.Set(out, fullPath, strings.ToLower(gjson.Get(out, fullPath).String()))
 	}
 
-	return out
+	return []byte(out)
 }

@@ -1,3 +1,6 @@
+// Package cmd provides command-line interface functionality for the CLI Proxy API.
+// It implements the main application commands including login/authentication
+// and server startup, handling the complete user onboarding and service lifecycle.
 package cmd
 
 import (
@@ -15,7 +18,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// DoClaudeLogin handles the Claude OAuth login process
+// DoClaudeLogin handles the Claude OAuth login process for Anthropic Claude services.
+// It initializes the OAuth flow, opens the user's browser for authentication,
+// waits for the callback, exchanges the authorization code for tokens,
+// and saves the authentication information to a file.
+//
+// Parameters:
+//   - cfg: The application configuration
+//   - options: The login options containing browser preferences
 func DoClaudeLogin(cfg *config.Config, options *LoginOptions) {
 	if options == nil {
 		options = &LoginOptions{}
@@ -43,7 +53,7 @@ func DoClaudeLogin(cfg *config.Config, options *LoginOptions) {
 	oauthServer := claude.NewOAuthServer(54545)
 
 	// Start OAuth callback server
-	if err = oauthServer.Start(ctx); err != nil {
+	if err = oauthServer.Start(); err != nil {
 		if strings.Contains(err.Error(), "already in use") {
 			authErr := claude.NewAuthenticationError(claude.ErrPortInUse, err)
 			log.Error(claude.GetUserFriendlyMessage(authErr))

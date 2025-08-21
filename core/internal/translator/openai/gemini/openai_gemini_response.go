@@ -6,6 +6,7 @@
 package gemini
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -33,7 +34,24 @@ type ToolCallAccumulator struct {
 // ConvertOpenAIResponseToGemini converts OpenAI Chat Completions streaming response format to Gemini API format.
 // This function processes OpenAI streaming chunks and transforms them into Gemini-compatible JSON responses.
 // It handles text content, tool calls, and usage metadata, outputting responses that match the Gemini API format.
-func ConvertOpenAIResponseToGemini(rawJSON []byte, param *ConvertOpenAIResponseToGeminiParams) []string {
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - modelName: The name of the model.
+//   - rawJSON: The raw JSON response from the OpenAI API.
+//   - param: A pointer to a parameter object for the conversion.
+//
+// Returns:
+//   - []string: A slice of strings, each containing a Gemini-compatible JSON response.
+func ConvertOpenAIResponseToGemini(_ context.Context, _ string, rawJSON []byte, param *any) []string {
+	if *param == nil {
+		*param = &ConvertOpenAIResponseToGeminiParams{
+			ToolCallsAccumulator: nil,
+			ContentAccumulator:   strings.Builder{},
+			IsFirstChunk:         false,
+		}
+	}
+
 	// Handle [DONE] marker
 	if strings.TrimSpace(string(rawJSON)) == "[DONE]" {
 		return []string{}
@@ -42,8 +60,8 @@ func ConvertOpenAIResponseToGemini(rawJSON []byte, param *ConvertOpenAIResponseT
 	root := gjson.ParseBytes(rawJSON)
 
 	// Initialize accumulators if needed
-	if param.ToolCallsAccumulator == nil {
-		param.ToolCallsAccumulator = make(map[int]*ToolCallAccumulator)
+	if (*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator == nil {
+		(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator = make(map[int]*ToolCallAccumulator)
 	}
 
 	// Process choices
@@ -85,12 +103,12 @@ func ConvertOpenAIResponseToGemini(rawJSON []byte, param *ConvertOpenAIResponseT
 			delta := choice.Get("delta")
 
 			// Handle role (only in first chunk)
-			if role := delta.Get("role"); role.Exists() && param.IsFirstChunk {
+			if role := delta.Get("role"); role.Exists() && (*param).(*ConvertOpenAIResponseToGeminiParams).IsFirstChunk {
 				// OpenAI assistant -> Gemini model
 				if role.String() == "assistant" {
 					template, _ = sjson.Set(template, "candidates.0.content.role", "model")
 				}
-				param.IsFirstChunk = false
+				(*param).(*ConvertOpenAIResponseToGeminiParams).IsFirstChunk = false
 				results = append(results, template)
 				return true
 			}
@@ -98,7 +116,7 @@ func ConvertOpenAIResponseToGemini(rawJSON []byte, param *ConvertOpenAIResponseT
 			// Handle content delta
 			if content := delta.Get("content"); content.Exists() && content.String() != "" {
 				contentText := content.String()
-				param.ContentAccumulator.WriteString(contentText)
+				(*param).(*ConvertOpenAIResponseToGeminiParams).ContentAccumulator.WriteString(contentText)
 
 				// Create text part for this delta
 				parts := []interface{}{
@@ -124,8 +142,8 @@ func ConvertOpenAIResponseToGemini(rawJSON []byte, param *ConvertOpenAIResponseT
 						functionArgs := function.Get("arguments").String()
 
 						// Initialize accumulator if needed
-						if _, exists := param.ToolCallsAccumulator[toolIndex]; !exists {
-							param.ToolCallsAccumulator[toolIndex] = &ToolCallAccumulator{
+						if _, exists := (*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator[toolIndex]; !exists {
+							(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator[toolIndex] = &ToolCallAccumulator{
 								ID:   toolID,
 								Name: functionName,
 							}
@@ -133,17 +151,17 @@ func ConvertOpenAIResponseToGemini(rawJSON []byte, param *ConvertOpenAIResponseT
 
 						// Update ID if provided
 						if toolID != "" {
-							param.ToolCallsAccumulator[toolIndex].ID = toolID
+							(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator[toolIndex].ID = toolID
 						}
 
 						// Update name if provided
 						if functionName != "" {
-							param.ToolCallsAccumulator[toolIndex].Name = functionName
+							(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator[toolIndex].Name = functionName
 						}
 
 						// Accumulate arguments
 						if functionArgs != "" {
-							param.ToolCallsAccumulator[toolIndex].Arguments.WriteString(functionArgs)
+							(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator[toolIndex].Arguments.WriteString(functionArgs)
 						}
 					}
 					return true
@@ -159,9 +177,9 @@ func ConvertOpenAIResponseToGemini(rawJSON []byte, param *ConvertOpenAIResponseT
 				template, _ = sjson.Set(template, "candidates.0.finishReason", geminiFinishReason)
 
 				// If we have accumulated tool calls, output them now
-				if len(param.ToolCallsAccumulator) > 0 {
+				if len((*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator) > 0 {
 					var parts []interface{}
-					for _, accumulator := range param.ToolCallsAccumulator {
+					for _, accumulator := range (*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator {
 						argsStr := accumulator.Arguments.String()
 						var argsMap map[string]interface{}
 
@@ -201,7 +219,7 @@ func ConvertOpenAIResponseToGemini(rawJSON []byte, param *ConvertOpenAIResponseT
 					}
 
 					// Clear accumulators
-					param.ToolCallsAccumulator = make(map[int]*ToolCallAccumulator)
+					(*param).(*ConvertOpenAIResponseToGeminiParams).ToolCallsAccumulator = make(map[int]*ToolCallAccumulator)
 				}
 
 				results = append(results, template)
@@ -243,8 +261,17 @@ func mapOpenAIFinishReasonToGemini(openAIReason string) string {
 	}
 }
 
-// ConvertOpenAINonStreamResponseToGemini converts OpenAI non-streaming response to Gemini format
-func ConvertOpenAINonStreamResponseToGemini(rawJSON []byte) string {
+// ConvertOpenAIResponseToGeminiNonStream converts a non-streaming OpenAI response to a non-streaming Gemini response.
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - modelName: The name of the model.
+//   - rawJSON: The raw JSON response from the OpenAI API.
+//   - param: A pointer to a parameter object for the conversion.
+//
+// Returns:
+//   - string: A Gemini-compatible JSON response.
+func ConvertOpenAIResponseToGeminiNonStream(_ context.Context, _ string, rawJSON []byte, _ *any) string {
 	root := gjson.ParseBytes(rawJSON)
 
 	// Base Gemini response template

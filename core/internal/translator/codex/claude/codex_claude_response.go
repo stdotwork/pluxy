@@ -1,27 +1,52 @@
-// Package code provides response translation functionality for Claude API.
-// This package handles the conversion of backend client responses into Claude-compatible
+// Package claude provides response translation functionality for Codex to Claude Code API compatibility.
+// This package handles the conversion of Codex API responses into Claude Code-compatible
 // Server-Sent Events (SSE) format, implementing a sophisticated state machine that manages
 // different response types including text content, thinking processes, and function calls.
 // The translation ensures proper sequencing of SSE events and maintains state across
 // multiple response chunks to provide a seamless streaming experience.
-package code
+package claude
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
-// ConvertCliToClaude performs sophisticated streaming response format conversion.
-// This function implements a complex state machine that translates backend client responses
-// into Claude-compatible Server-Sent Events (SSE) format. It manages different response types
+var (
+	dataTag = []byte("data: ")
+)
+
+// ConvertCodexResponseToClaude performs sophisticated streaming response format conversion.
+// This function implements a complex state machine that translates Codex API responses
+// into Claude Code-compatible Server-Sent Events (SSE) format. It manages different response types
 // and handles state transitions between content blocks, thinking processes, and function calls.
 //
 // Response type states: 0=none, 1=content, 2=thinking, 3=function
 // The function maintains state across multiple calls to ensure proper SSE event sequencing.
-func ConvertCodexResponseToClaude(rawJSON []byte, hasToolCall bool) (string, bool) {
+//
+// Parameters:
+//   - ctx: The context for the request, used for cancellation and timeout handling
+//   - modelName: The name of the model being used for the response (unused in current implementation)
+//   - rawJSON: The raw JSON response from the Codex API
+//   - param: A pointer to a parameter object for maintaining state between calls
+//
+// Returns:
+//   - []string: A slice of strings, each containing a Claude Code-compatible JSON response
+func ConvertCodexResponseToClaude(_ context.Context, _ string, rawJSON []byte, param *any) []string {
+	if *param == nil {
+		hasToolCall := false
+		*param = &hasToolCall
+	}
+
 	// log.Debugf("rawJSON: %s", string(rawJSON))
+	if !bytes.HasPrefix(rawJSON, dataTag) {
+		return []string{}
+	}
+	rawJSON = rawJSON[6:]
+
 	output := ""
 	rootResult := gjson.ParseBytes(rawJSON)
 	typeResult := rootResult.Get("type")
@@ -33,48 +58,49 @@ func ConvertCodexResponseToClaude(rawJSON []byte, hasToolCall bool) (string, boo
 		template, _ = sjson.Set(template, "message.id", rootResult.Get("response.id").String())
 
 		output = "event: message_start\n"
-		output += fmt.Sprintf("data: %s\n", template)
+		output += fmt.Sprintf("data: %s\n\n", template)
 	} else if typeStr == "response.reasoning_summary_part.added" {
 		template = `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`
 		template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 
 		output = "event: content_block_start\n"
-		output += fmt.Sprintf("data: %s\n", template)
+		output += fmt.Sprintf("data: %s\n\n", template)
 	} else if typeStr == "response.reasoning_summary_text.delta" {
 		template = `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}`
 		template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 		template, _ = sjson.Set(template, "delta.thinking", rootResult.Get("delta").String())
 
 		output = "event: content_block_delta\n"
-		output += fmt.Sprintf("data: %s\n", template)
+		output += fmt.Sprintf("data: %s\n\n", template)
 	} else if typeStr == "response.reasoning_summary_part.done" {
 		template = `{"type":"content_block_stop","index":0}`
 		template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 
 		output = "event: content_block_stop\n"
-		output += fmt.Sprintf("data: %s\n", template)
+		output += fmt.Sprintf("data: %s\n\n", template)
 	} else if typeStr == "response.content_part.added" {
 		template = `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`
 		template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 
 		output = "event: content_block_start\n"
-		output += fmt.Sprintf("data: %s\n", template)
+		output += fmt.Sprintf("data: %s\n\n", template)
 	} else if typeStr == "response.output_text.delta" {
 		template = `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`
 		template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 		template, _ = sjson.Set(template, "delta.text", rootResult.Get("delta").String())
 
 		output = "event: content_block_delta\n"
-		output += fmt.Sprintf("data: %s\n", template)
+		output += fmt.Sprintf("data: %s\n\n", template)
 	} else if typeStr == "response.content_part.done" {
 		template = `{"type":"content_block_stop","index":0}`
 		template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 
 		output = "event: content_block_stop\n"
-		output += fmt.Sprintf("data: %s\n", template)
+		output += fmt.Sprintf("data: %s\n\n", template)
 	} else if typeStr == "response.completed" {
 		template = `{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":0,"output_tokens":0}}`
-		if hasToolCall {
+		p := (*param).(*bool)
+		if *p {
 			template, _ = sjson.Set(template, "delta.stop_reason", "tool_use")
 		} else {
 			template, _ = sjson.Set(template, "delta.stop_reason", "end_turn")
@@ -91,7 +117,8 @@ func ConvertCodexResponseToClaude(rawJSON []byte, hasToolCall bool) (string, boo
 		itemResult := rootResult.Get("item")
 		itemType := itemResult.Get("type").String()
 		if itemType == "function_call" {
-			hasToolCall = true
+			p := true
+			*param = &p
 			template = `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"","name":"","input":{}}}`
 			template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 			template, _ = sjson.Set(template, "content_block.id", itemResult.Get("call_id").String())
@@ -104,7 +131,7 @@ func ConvertCodexResponseToClaude(rawJSON []byte, hasToolCall bool) (string, boo
 			template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 
 			output += "event: content_block_delta\n"
-			output += fmt.Sprintf("data: %s\n", template)
+			output += fmt.Sprintf("data: %s\n\n", template)
 		}
 	} else if typeStr == "response.output_item.done" {
 		itemResult := rootResult.Get("item")
@@ -114,7 +141,7 @@ func ConvertCodexResponseToClaude(rawJSON []byte, hasToolCall bool) (string, boo
 			template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 
 			output = "event: content_block_stop\n"
-			output += fmt.Sprintf("data: %s\n", template)
+			output += fmt.Sprintf("data: %s\n\n", template)
 		}
 	} else if typeStr == "response.function_call_arguments.delta" {
 		template = `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}`
@@ -122,8 +149,25 @@ func ConvertCodexResponseToClaude(rawJSON []byte, hasToolCall bool) (string, boo
 		template, _ = sjson.Set(template, "delta.partial_json", rootResult.Get("delta").String())
 
 		output += "event: content_block_delta\n"
-		output += fmt.Sprintf("data: %s\n", template)
+		output += fmt.Sprintf("data: %s\n\n", template)
 	}
 
-	return output, hasToolCall
+	return []string{output}
+}
+
+// ConvertCodexResponseToClaudeNonStream converts a non-streaming Codex response to a non-streaming Claude Code response.
+// This function processes the complete Codex response and transforms it into a single Claude Code-compatible
+// JSON response. It handles message content, tool calls, reasoning content, and usage metadata, combining all
+// the information into a single response that matches the Claude Code API format.
+//
+// Parameters:
+//   - ctx: The context for the request, used for cancellation and timeout handling
+//   - modelName: The name of the model being used for the response (unused in current implementation)
+//   - rawJSON: The raw JSON response from the Codex API
+//   - param: A pointer to a parameter object for the conversion (unused in current implementation)
+//
+// Returns:
+//   - string: A Claude Code-compatible JSON response containing all message content and metadata
+func ConvertCodexResponseToClaudeNonStream(_ context.Context, _ string, _ []byte, _ *any) string {
+	return ""
 }

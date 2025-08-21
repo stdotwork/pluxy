@@ -340,7 +340,7 @@ export ANTHROPIC_SMALL_FAST_MODEL=gemini-2.5-flash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
 export ANTHROPIC_AUTH_TOKEN=sk-dummy
 export ANTHROPIC_MODEL=gpt-5
-export ANTHROPIC_SMALL_FAST_MODEL=codex-mini-latest
+export ANTHROPIC_SMALL_FAST_MODEL=gpt-5-nano
 ```
 
 使用 Claude 模型：

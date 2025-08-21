@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
@@ -35,12 +36,12 @@ type ErrorDetail struct {
 	Code string `json:"code,omitempty"`
 }
 
-// APIHandlers contains the handlers for API endpoints.
+// BaseAPIHandler contains the handlers for API endpoints.
 // It holds a pool of clients to interact with the backend service and manages
 // load balancing, client selection, and configuration.
-type APIHandlers struct {
+type BaseAPIHandler struct {
 	// CliClients is the pool of available AI service clients.
-	CliClients []client.Client
+	CliClients []interfaces.Client
 
 	// Cfg holds the current application configuration.
 	Cfg *config.Config
@@ -51,12 +52,9 @@ type APIHandlers struct {
 	// LastUsedClientIndex tracks the last used client index for each provider
 	// to implement round-robin load balancing.
 	LastUsedClientIndex map[string]int
-
-	// apiResponseData recording provider api response data
-	apiResponseData map[*gin.Context][]byte
 }
 
-// NewAPIHandlers creates a new API handlers instance.
+// NewBaseAPIHandlers creates a new API handlers instance.
 // It takes a slice of clients and configuration as input.
 //
 // Parameters:
@@ -64,14 +62,13 @@ type APIHandlers struct {
 //   - cfg: The application configuration
 //
 // Returns:
-//   - *APIHandlers: A new API handlers instance
-func NewAPIHandlers(cliClients []client.Client, cfg *config.Config) *APIHandlers {
-	return &APIHandlers{
+//   - *BaseAPIHandler: A new API handlers instance
+func NewBaseAPIHandlers(cliClients []interfaces.Client, cfg *config.Config) *BaseAPIHandler {
+	return &BaseAPIHandler{
 		CliClients:          cliClients,
 		Cfg:                 cfg,
 		Mutex:               &sync.Mutex{},
 		LastUsedClientIndex: make(map[string]int),
-		apiResponseData:     make(map[*gin.Context][]byte),
 	}
 }
 
@@ -81,7 +78,7 @@ func NewAPIHandlers(cliClients []client.Client, cfg *config.Config) *APIHandlers
 // Parameters:
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
-func (h *APIHandlers) UpdateClients(clients []client.Client, cfg *config.Config) {
+func (h *BaseAPIHandler) UpdateClients(clients []interfaces.Client, cfg *config.Config) {
 	h.CliClients = clients
 	h.Cfg = cfg
 }
@@ -97,66 +94,47 @@ func (h *APIHandlers) UpdateClients(clients []client.Client, cfg *config.Config)
 // Returns:
 //   - client.Client: An available client for the requested model
 //   - *client.ErrorMessage: An error message if no client is available
-func (h *APIHandlers) GetClient(modelName string, isGenerateContent ...bool) (client.Client, *client.ErrorMessage) {
-	provider := util.GetProviderName(modelName)
-	clients := make([]client.Client, 0)
-	if provider == "gemini" {
-		for i := 0; i < len(h.CliClients); i++ {
-			if cli, ok := h.CliClients[i].(*client.GeminiClient); ok {
-				clients = append(clients, cli)
-			}
-		}
-	} else if provider == "gpt" {
-		for i := 0; i < len(h.CliClients); i++ {
-			if cli, ok := h.CliClients[i].(*client.CodexClient); ok {
-				clients = append(clients, cli)
-			}
-		}
-	} else if provider == "claude" {
-		for i := 0; i < len(h.CliClients); i++ {
-			if cli, ok := h.CliClients[i].(*client.ClaudeClient); ok {
-				clients = append(clients, cli)
-			}
-		}
-	} else if provider == "qwen" {
-		for i := 0; i < len(h.CliClients); i++ {
-			if cli, ok := h.CliClients[i].(*client.QwenClient); ok {
-				clients = append(clients, cli)
-			}
+func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) (interfaces.Client, *interfaces.ErrorMessage) {
+	clients := make([]interfaces.Client, 0)
+	for i := 0; i < len(h.CliClients); i++ {
+		if h.CliClients[i].CanProvideModel(modelName) {
+			clients = append(clients, h.CliClients[i])
 		}
 	}
 
-	if _, hasKey := h.LastUsedClientIndex[provider]; !hasKey {
-		h.LastUsedClientIndex[provider] = 0
+	if _, hasKey := h.LastUsedClientIndex[modelName]; !hasKey {
+		h.LastUsedClientIndex[modelName] = 0
 	}
 
 	if len(clients) == 0 {
-		return nil, &client.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("no clients available")}
+		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("no clients available")}
 	}
 
-	var cliClient client.Client
+	var cliClient interfaces.Client
 
 	// Lock the mutex to update the last used client index
 	h.Mutex.Lock()
-	startIndex := h.LastUsedClientIndex[provider]
+	startIndex := h.LastUsedClientIndex[modelName]
 	if (len(isGenerateContent) > 0 && isGenerateContent[0]) || len(isGenerateContent) == 0 {
 		currentIndex := (startIndex + 1) % len(clients)
-		h.LastUsedClientIndex[provider] = currentIndex
+		h.LastUsedClientIndex[modelName] = currentIndex
 	}
 	h.Mutex.Unlock()
 
 	// Reorder the client to start from the last used index
-	reorderedClients := make([]client.Client, 0)
+	reorderedClients := make([]interfaces.Client, 0)
 	for i := 0; i < len(clients); i++ {
 		cliClient = clients[(startIndex+1+i)%len(clients)]
 		if cliClient.IsModelQuotaExceeded(modelName) {
-			if provider == "gemini" {
-				log.Debugf("Gemini Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.(*client.GeminiClient).GetProjectID())
-			} else if provider == "gpt" {
+			if cliClient.Provider() == "gemini-cli" {
+				log.Debugf("Gemini Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.(*client.GeminiCLIClient).GetProjectID())
+			} else if cliClient.Provider() == "gemini" {
+				log.Debugf("Gemini Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
+			} else if cliClient.Provider() == "codex" {
 				log.Debugf("Codex Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
-			} else if provider == "claude" {
+			} else if cliClient.Provider() == "claude" {
 				log.Debugf("Claude Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
-			} else if provider == "qwen" {
+			} else if cliClient.Provider() == "qwen" {
 				log.Debugf("Qwen Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
 			}
 			cliClient = nil
@@ -167,11 +145,11 @@ func (h *APIHandlers) GetClient(modelName string, isGenerateContent ...bool) (cl
 	}
 
 	if len(reorderedClients) == 0 {
-		if provider == "claude" {
+		if util.GetProviderName(modelName) == "claude" {
 			// log.Debugf("Claude Model %s is quota exceeded for all accounts", modelName)
-			return nil, &client.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`)}
+			return nil, &interfaces.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`)}
 		}
-		return nil, &client.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName)}
+		return nil, &interfaces.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName)}
 	}
 
 	locked := false
@@ -198,7 +176,7 @@ func (h *APIHandlers) GetClient(modelName string, isGenerateContent ...bool) (cl
 //
 // Returns:
 //   - string: The alt parameter value, or empty string if it's "sse"
-func (h *APIHandlers) GetAlt(c *gin.Context) string {
+func (h *BaseAPIHandler) GetAlt(c *gin.Context) string {
 	var alt string
 	var hasAlt bool
 	alt, hasAlt = c.GetQuery("alt")
@@ -211,9 +189,22 @@ func (h *APIHandlers) GetAlt(c *gin.Context) string {
 	return alt
 }
 
-func (h *APIHandlers) GetContextWithCancel(c *gin.Context, ctx context.Context) (context.Context, APIHandlerCancelFunc) {
+// GetContextWithCancel creates a new context with cancellation capabilities.
+// It embeds the Gin context and the API handler into the new context for later use.
+// The returned cancel function also handles logging the API response if request logging is enabled.
+//
+// Parameters:
+//   - handler: The API handler associated with the request.
+//   - c: The Gin context of the current request.
+//   - ctx: The parent context.
+//
+// Returns:
+//   - context.Context: The new context with cancellation and embedded values.
+//   - APIHandlerCancelFunc: A function to cancel the context and log the response.
+func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *gin.Context, ctx context.Context) (context.Context, APIHandlerCancelFunc) {
 	newCtx, cancel := context.WithCancel(ctx)
 	newCtx = context.WithValue(newCtx, "gin", c)
+	newCtx = context.WithValue(newCtx, "handler", handler)
 	return newCtx, func(params ...interface{}) {
 		if h.Cfg.RequestLog {
 			if len(params) == 1 {
@@ -228,11 +219,6 @@ func (h *APIHandlers) GetContextWithCancel(c *gin.Context, ctx context.Context) 
 				case bool:
 				case nil:
 				}
-			} else {
-				if _, hasKey := h.apiResponseData[c]; hasKey {
-					c.Set("API_RESPONSE", h.apiResponseData[c])
-					delete(h.apiResponseData, c)
-				}
 			}
 		}
 
@@ -240,13 +226,6 @@ func (h *APIHandlers) GetContextWithCancel(c *gin.Context, ctx context.Context) 
 	}
 }
 
-func (h *APIHandlers) AddAPIResponseData(c *gin.Context, data []byte) {
-	if h.Cfg.RequestLog {
-		if _, hasKey := h.apiResponseData[c]; !hasKey {
-			h.apiResponseData[c] = make([]byte, 0)
-		}
-		h.apiResponseData[c] = append(h.apiResponseData[c], data...)
-	}
-}
-
+// APIHandlerCancelFunc is a function type for canceling an API handler's context.
+// It can optionally accept parameters, which are used for logging the response.
 type APIHandlerCancelFunc func(params ...interface{})

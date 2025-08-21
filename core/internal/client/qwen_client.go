@@ -1,3 +1,6 @@
+// Package client defines the interface and base structure for AI API clients.
+// It provides a common interface that all supported AI service clients must implement,
+// including methods for sending messages, handling streams, and managing authentication.
 package client
 
 import (
@@ -17,6 +20,9 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/auth"
 	"github.com/luispater/CLIProxyAPI/internal/auth/qwen"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	. "github.com/luispater/CLIProxyAPI/internal/constant"
+	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/translator/translator"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -34,6 +40,13 @@ type QwenClient struct {
 }
 
 // NewQwenClient creates a new OpenAI client instance
+//
+// Parameters:
+//   - cfg: The application configuration.
+//   - ts: The token storage for Qwen authentication.
+//
+// Returns:
+//   - *QwenClient: A new Qwen client instance.
 func NewQwenClient(cfg *config.Config, ts *qwen.QwenTokenStorage) *QwenClient {
 	httpClient := util.SetProxy(cfg, &http.Client{})
 	client := &QwenClient{
@@ -50,43 +63,58 @@ func NewQwenClient(cfg *config.Config, ts *qwen.QwenTokenStorage) *QwenClient {
 	return client
 }
 
+// Type returns the client type
+func (c *QwenClient) Type() string {
+	return OPENAI
+}
+
+// Provider returns the provider name for this client.
+func (c *QwenClient) Provider() string {
+	return "qwen"
+}
+
+// CanProvideModel checks if this client can provide the specified model.
+//
+// Parameters:
+//   - modelName: The name of the model to check.
+//
+// Returns:
+//   - bool: True if the model is supported, false otherwise.
+func (c *QwenClient) CanProvideModel(modelName string) bool {
+	models := []string{
+		"qwen3-coder-plus",
+		"qwen3-coder-flash",
+	}
+	return util.InArray(models, modelName)
+}
+
 // GetUserAgent returns the user agent string for OpenAI API requests
 func (c *QwenClient) GetUserAgent() string {
 	return "google-api-nodejs-client/9.15.1"
 }
 
+// TokenStorage returns the token storage for this client.
 func (c *QwenClient) TokenStorage() auth.TokenStorage {
 	return c.tokenStorage
 }
 
-// SendMessage sends a message to OpenAI API (non-streaming)
-func (c *QwenClient) SendMessage(_ context.Context, _ []byte, _ string, _ *Content, _ []Content, _ []ToolDeclaration) ([]byte, *ErrorMessage) {
-	// For now, return an error as OpenAI integration is not fully implemented
-	return nil, &ErrorMessage{
-		StatusCode: http.StatusNotImplemented,
-		Error:      fmt.Errorf("qwen message sending not yet implemented"),
-	}
-}
-
-// SendMessageStream sends a streaming message to OpenAI API
-func (c *QwenClient) SendMessageStream(_ context.Context, _ []byte, _ string, _ *Content, _ []Content, _ []ToolDeclaration, _ ...bool) (<-chan []byte, <-chan *ErrorMessage) {
-	errChan := make(chan *ErrorMessage, 1)
-	errChan <- &ErrorMessage{
-		StatusCode: http.StatusNotImplemented,
-		Error:      fmt.Errorf("qwen streaming not yet implemented"),
-	}
-	close(errChan)
-
-	return nil, errChan
-}
-
 // SendRawMessage sends a raw message to OpenAI API
-func (c *QwenClient) SendRawMessage(ctx context.Context, rawJSON []byte, alt string) ([]byte, *ErrorMessage) {
-	modelResult := gjson.GetBytes(rawJSON, "model")
-	model := modelResult.String()
-	modelName := model
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - modelName: The name of the model to use.
+//   - rawJSON: The raw JSON request body.
+//   - alt: An alternative response format parameter.
+//
+// Returns:
+//   - []byte: The response body.
+//   - *interfaces.ErrorMessage: An error message if the request fails.
+func (c *QwenClient) SendRawMessage(ctx context.Context, modelName string, rawJSON []byte, alt string) ([]byte, *interfaces.ErrorMessage) {
+	handler := ctx.Value("handler").(interfaces.APIHandler)
+	handlerType := handler.HandlerType()
+	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, false)
 
-	respBody, err := c.APIRequest(ctx, "/chat/completions", rawJSON, alt, false)
+	respBody, err := c.APIRequest(ctx, modelName, "/chat/completions", rawJSON, alt, false)
 	if err != nil {
 		if err.StatusCode == 429 {
 			now := time.Now()
@@ -97,49 +125,97 @@ func (c *QwenClient) SendRawMessage(ctx context.Context, rawJSON []byte, alt str
 	delete(c.modelQuotaExceeded, modelName)
 	bodyBytes, errReadAll := io.ReadAll(respBody)
 	if errReadAll != nil {
-		return nil, &ErrorMessage{StatusCode: 500, Error: errReadAll}
+		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
 	}
+
+	c.AddAPIResponseData(ctx, bodyBytes)
+
+	var param any
+	bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, bodyBytes, &param))
+
 	return bodyBytes, nil
 
 }
 
 // SendRawMessageStream sends a raw streaming message to OpenAI API
-func (c *QwenClient) SendRawMessageStream(ctx context.Context, rawJSON []byte, alt string) (<-chan []byte, <-chan *ErrorMessage) {
-	errChan := make(chan *ErrorMessage)
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - modelName: The name of the model to use.
+//   - rawJSON: The raw JSON request body.
+//   - alt: An alternative response format parameter.
+//
+// Returns:
+//   - <-chan []byte: A channel for receiving response data chunks.
+//   - <-chan *interfaces.ErrorMessage: A channel for receiving error messages.
+func (c *QwenClient) SendRawMessageStream(ctx context.Context, modelName string, rawJSON []byte, alt string) (<-chan []byte, <-chan *interfaces.ErrorMessage) {
+	handler := ctx.Value("handler").(interfaces.APIHandler)
+	handlerType := handler.HandlerType()
+	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, true)
+
+	dataTag := []byte("data: ")
+	doneTag := []byte("data: [DONE]")
+	errChan := make(chan *interfaces.ErrorMessage)
 	dataChan := make(chan []byte)
+
+	// log.Debugf(string(rawJSON))
+	// return dataChan, errChan
+
 	go func() {
 		defer close(errChan)
 		defer close(dataChan)
 
-		modelResult := gjson.GetBytes(rawJSON, "model")
-		model := modelResult.String()
-		modelName := model
 		var stream io.ReadCloser
-		for {
-			var err *ErrorMessage
-			stream, err = c.APIRequest(ctx, "/chat/completions", rawJSON, alt, true)
-			if err != nil {
-				if err.StatusCode == 429 {
-					now := time.Now()
-					c.modelQuotaExceeded[modelName] = &now
-				}
-				errChan <- err
-				return
+
+		if c.IsModelQuotaExceeded(modelName) {
+			errChan <- &interfaces.ErrorMessage{
+				StatusCode: 429,
+				Error:      fmt.Errorf(`{"error":{"code":429,"message":"All the models of '%s' are quota exceeded","status":"RESOURCE_EXHAUSTED"}}`, modelName),
 			}
-			delete(c.modelQuotaExceeded, modelName)
-			break
+			return
 		}
+
+		var err *interfaces.ErrorMessage
+		stream, err = c.APIRequest(ctx, modelName, "/chat/completions", rawJSON, alt, true)
+		if err != nil {
+			if err.StatusCode == 429 {
+				now := time.Now()
+				c.modelQuotaExceeded[modelName] = &now
+			}
+			errChan <- err
+			return
+		}
+		delete(c.modelQuotaExceeded, modelName)
 
 		scanner := bufio.NewScanner(stream)
 		buffer := make([]byte, 10240*1024)
 		scanner.Buffer(buffer, 10240*1024)
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			dataChan <- line
+		if translator.NeedConvert(handlerType, c.Type()) {
+			var param any
+			for scanner.Scan() {
+				line := scanner.Bytes()
+				if bytes.HasPrefix(line, dataTag) {
+					lines := translator.Response(handlerType, c.Type(), ctx, modelName, line[6:], &param)
+					for i := 0; i < len(lines); i++ {
+						dataChan <- []byte(lines[i])
+					}
+				}
+				c.AddAPIResponseData(ctx, line)
+			}
+		} else {
+			for scanner.Scan() {
+				line := scanner.Bytes()
+				if !bytes.HasPrefix(line, doneTag) {
+					if bytes.HasPrefix(line, dataTag) {
+						dataChan <- line[6:]
+					}
+				}
+				c.AddAPIResponseData(ctx, line)
+			}
 		}
 
 		if errScanner := scanner.Err(); errScanner != nil {
-			errChan <- &ErrorMessage{500, errScanner, nil}
+			errChan <- &interfaces.ErrorMessage{StatusCode: 500, Error: errScanner}
 			_ = stream.Close()
 			return
 		}
@@ -151,20 +227,39 @@ func (c *QwenClient) SendRawMessageStream(ctx context.Context, rawJSON []byte, a
 }
 
 // SendRawTokenCount sends a token count request to OpenAI API
-func (c *QwenClient) SendRawTokenCount(_ context.Context, _ []byte, _ string) ([]byte, *ErrorMessage) {
-	return nil, &ErrorMessage{
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - modelName: The name of the model to use.
+//   - rawJSON: The raw JSON request body.
+//   - alt: An alternative response format parameter.
+//
+// Returns:
+//   - []byte: Always nil for this implementation.
+//   - *interfaces.ErrorMessage: An error message indicating that the feature is not implemented.
+func (c *QwenClient) SendRawTokenCount(_ context.Context, _ string, _ []byte, _ string) ([]byte, *interfaces.ErrorMessage) {
+	return nil, &interfaces.ErrorMessage{
 		StatusCode: http.StatusNotImplemented,
 		Error:      fmt.Errorf("qwen token counting not yet implemented"),
 	}
 }
 
 // SaveTokenToFile persists the token storage to disk
+//
+// Returns:
+//   - error: An error if the save operation fails, nil otherwise.
 func (c *QwenClient) SaveTokenToFile() error {
 	fileName := filepath.Join(c.cfg.AuthDir, fmt.Sprintf("qwen-%s.json", c.tokenStorage.(*qwen.QwenTokenStorage).Email))
 	return c.tokenStorage.SaveTokenToFile(fileName)
 }
 
 // RefreshTokens refreshes the access tokens if needed
+//
+// Parameters:
+//   - ctx: The context for the request.
+//
+// Returns:
+//   - error: An error if the refresh operation fails, nil otherwise.
 func (c *QwenClient) RefreshTokens(ctx context.Context) error {
 	if c.tokenStorage == nil || c.tokenStorage.(*qwen.QwenTokenStorage).RefreshToken == "" {
 		return fmt.Errorf("no refresh token available")
@@ -189,7 +284,19 @@ func (c *QwenClient) RefreshTokens(ctx context.Context) error {
 }
 
 // APIRequest handles making requests to the CLI API endpoints.
-func (c *QwenClient) APIRequest(ctx context.Context, endpoint string, body interface{}, _ string, _ bool) (io.ReadCloser, *ErrorMessage) {
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - modelName: The name of the model to use.
+//   - endpoint: The API endpoint to call.
+//   - body: The request body.
+//   - alt: An alternative response format parameter.
+//   - stream: A boolean indicating if the request is for a streaming response.
+//
+// Returns:
+//   - io.ReadCloser: The response body reader.
+//   - *interfaces.ErrorMessage: An error message if the request fails.
+func (c *QwenClient) APIRequest(ctx context.Context, modelName, endpoint string, body interface{}, _ string, _ bool) (io.ReadCloser, *interfaces.ErrorMessage) {
 	var jsonBody []byte
 	var err error
 	if byteBody, ok := body.([]byte); ok {
@@ -197,7 +304,7 @@ func (c *QwenClient) APIRequest(ctx context.Context, endpoint string, body inter
 	} else {
 		jsonBody, err = json.Marshal(body)
 		if err != nil {
-			return nil, &ErrorMessage{500, fmt.Errorf("failed to marshal request body: %w", err), nil}
+			return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("failed to marshal request body: %w", err)}
 		}
 	}
 
@@ -219,7 +326,7 @@ func (c *QwenClient) APIRequest(ctx context.Context, endpoint string, body inter
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, reqBody)
 	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to create request: %v", err), nil}
+		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("failed to create request: %v", err)}
 	}
 
 	// Set headers
@@ -229,13 +336,17 @@ func (c *QwenClient) APIRequest(ctx context.Context, endpoint string, body inter
 	req.Header.Set("Client-Metadata", c.getClientMetadataString())
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.tokenStorage.(*qwen.QwenTokenStorage).AccessToken))
 
-	if ginContext, ok := ctx.Value("gin").(*gin.Context); ok {
-		ginContext.Set("API_REQUEST", jsonBody)
+	if c.cfg.RequestLog {
+		if ginContext, ok := ctx.Value("gin").(*gin.Context); ok {
+			ginContext.Set("API_REQUEST", jsonBody)
+		}
 	}
+
+	log.Debugf("Use Qwen Code account %s for model %s", c.GetEmail(), modelName)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &ErrorMessage{500, fmt.Errorf("failed to execute request: %v", err), nil}
+		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("failed to execute request: %v", err)}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -246,12 +357,13 @@ func (c *QwenClient) APIRequest(ctx context.Context, endpoint string, body inter
 		}()
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		// log.Debug(string(jsonBody))
-		return nil, &ErrorMessage{resp.StatusCode, fmt.Errorf(string(bodyBytes)), nil}
+		return nil, &interfaces.ErrorMessage{StatusCode: resp.StatusCode, Error: fmt.Errorf("%s", string(bodyBytes))}
 	}
 
 	return resp.Body, nil
 }
 
+// getClientMetadata returns a map of metadata about the client environment.
 func (c *QwenClient) getClientMetadata() map[string]string {
 	return map[string]string{
 		"ideType":    "IDE_UNSPECIFIED",
@@ -261,6 +373,7 @@ func (c *QwenClient) getClientMetadata() map[string]string {
 	}
 }
 
+// getClientMetadataString returns the client metadata as a single, comma-separated string.
 func (c *QwenClient) getClientMetadataString() string {
 	md := c.getClientMetadata()
 	parts := make([]string, 0, len(md))
@@ -270,12 +383,19 @@ func (c *QwenClient) getClientMetadataString() string {
 	return strings.Join(parts, ",")
 }
 
+// GetEmail returns the email associated with the client's token storage.
 func (c *QwenClient) GetEmail() string {
 	return c.tokenStorage.(*qwen.QwenTokenStorage).Email
 }
 
 // IsModelQuotaExceeded returns true if the specified model has exceeded its quota
 // and no fallback options are available.
+//
+// Parameters:
+//   - model: The name of the model to check.
+//
+// Returns:
+//   - bool: True if the model's quota is exceeded, false otherwise.
 func (c *QwenClient) IsModelQuotaExceeded(model string) bool {
 	if lastExceededTime, hasKey := c.modelQuotaExceeded[model]; hasKey {
 		duration := time.Now().Sub(*lastExceededTime)

@@ -22,6 +22,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/auth/qwen"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -32,14 +33,14 @@ type Watcher struct {
 	configPath     string
 	authDir        string
 	config         *config.Config
-	clients        []client.Client
+	clients        []interfaces.Client
 	clientsMutex   sync.RWMutex
-	reloadCallback func([]client.Client, *config.Config)
+	reloadCallback func([]interfaces.Client, *config.Config)
 	watcher        *fsnotify.Watcher
 }
 
 // NewWatcher creates a new file watcher instance
-func NewWatcher(configPath, authDir string, reloadCallback func([]client.Client, *config.Config)) (*Watcher, error) {
+func NewWatcher(configPath, authDir string, reloadCallback func([]interfaces.Client, *config.Config)) (*Watcher, error) {
 	watcher, errNewWatcher := fsnotify.NewWatcher()
 	if errNewWatcher != nil {
 		return nil, errNewWatcher
@@ -88,7 +89,7 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 }
 
 // SetClients updates the current client list
-func (w *Watcher) SetClients(clients []client.Client) {
+func (w *Watcher) SetClients(clients []interfaces.Client) {
 	w.clientsMutex.Lock()
 	defer w.clientsMutex.Unlock()
 	w.clients = clients
@@ -201,7 +202,7 @@ func (w *Watcher) reloadClients() {
 	log.Debugf("scanning auth directory: %s", cfg.AuthDir)
 
 	// Create new client list
-	newClients := make([]client.Client, 0)
+	newClients := make([]interfaces.Client, 0)
 	authFileCount := 0
 	successfulAuthCount := 0
 
@@ -244,7 +245,7 @@ func (w *Watcher) reloadClients() {
 					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
 
 					// Add the new client to the pool
-					cliClient := client.NewGeminiClient(httpClient, &ts, cfg)
+					cliClient := client.NewGeminiCLIClient(httpClient, &ts, cfg)
 					newClients = append(newClients, cliClient)
 					successfulAuthCount++
 				} else {
@@ -315,7 +316,7 @@ func (w *Watcher) reloadClients() {
 			httpClient := util.SetProxy(cfg, &http.Client{})
 
 			log.Debugf("Initializing with Generative Language API Key %d...", i+1)
-			cliClient := client.NewGeminiClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
+			cliClient := client.NewGeminiClient(httpClient, cfg, cfg.GlAPIKey[i])
 			newClients = append(newClients, cliClient)
 			glAPIKeyCount++
 		}

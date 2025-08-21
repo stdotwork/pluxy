@@ -1,3 +1,7 @@
+// Package codex provides authentication and token management for OpenAI's Codex API.
+// It handles the OAuth2 flow, including generating authorization URLs, exchanging
+// authorization codes for tokens, and refreshing expired tokens. The package also
+// defines data structures for storing and managing Codex authentication credentials.
 package codex
 
 import (
@@ -22,19 +26,24 @@ const (
 	redirectURI    = "http://localhost:1455/auth/callback"
 )
 
-// CodexAuth handles OpenAI OAuth2 authentication flow
+// CodexAuth handles the OpenAI OAuth2 authentication flow.
+// It manages the HTTP client and provides methods for generating authorization URLs,
+// exchanging authorization codes for tokens, and refreshing access tokens.
 type CodexAuth struct {
 	httpClient *http.Client
 }
 
-// NewCodexAuth creates a new OpenAI authentication service
+// NewCodexAuth creates a new CodexAuth service instance.
+// It initializes an HTTP client with proxy settings from the provided configuration.
 func NewCodexAuth(cfg *config.Config) *CodexAuth {
 	return &CodexAuth{
 		httpClient: util.SetProxy(cfg, &http.Client{}),
 	}
 }
 
-// GenerateAuthURL creates the OAuth authorization URL with PKCE
+// GenerateAuthURL creates the OAuth authorization URL with PKCE (Proof Key for Code Exchange).
+// It constructs the URL with the necessary parameters, including the client ID,
+// response type, redirect URI, scopes, and PKCE challenge.
 func (o *CodexAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string, error) {
 	if pkceCodes == nil {
 		return "", fmt.Errorf("PKCE codes are required")
@@ -57,7 +66,9 @@ func (o *CodexAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string,
 	return authURL, nil
 }
 
-// ExchangeCodeForTokens exchanges authorization code for access tokens
+// ExchangeCodeForTokens exchanges an authorization code for access and refresh tokens.
+// It performs an HTTP POST request to the OpenAI token endpoint with the provided
+// authorization code and PKCE verifier.
 func (o *CodexAuth) ExchangeCodeForTokens(ctx context.Context, code string, pkceCodes *PKCECodes) (*CodexAuthBundle, error) {
 	if pkceCodes == nil {
 		return nil, fmt.Errorf("PKCE codes are required for token exchange")
@@ -143,7 +154,9 @@ func (o *CodexAuth) ExchangeCodeForTokens(ctx context.Context, code string, pkce
 	return bundle, nil
 }
 
-// RefreshTokens refreshes the access token using the refresh token
+// RefreshTokens refreshes an access token using a refresh token.
+// This method is called when an access token has expired. It makes a request to the
+// token endpoint to obtain a new set of tokens.
 func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*CodexTokenData, error) {
 	if refreshToken == "" {
 		return nil, fmt.Errorf("refresh token is required")
@@ -216,7 +229,8 @@ func (o *CodexAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Co
 	}, nil
 }
 
-// CreateTokenStorage creates a new CodexTokenStorage from auth bundle and user info
+// CreateTokenStorage creates a new CodexTokenStorage from a CodexAuthBundle.
+// It populates the storage struct with token data, user information, and timestamps.
 func (o *CodexAuth) CreateTokenStorage(bundle *CodexAuthBundle) *CodexTokenStorage {
 	storage := &CodexTokenStorage{
 		IDToken:      bundle.TokenData.IDToken,
@@ -231,7 +245,9 @@ func (o *CodexAuth) CreateTokenStorage(bundle *CodexAuthBundle) *CodexTokenStora
 	return storage
 }
 
-// RefreshTokensWithRetry refreshes tokens with automatic retry logic
+// RefreshTokensWithRetry refreshes tokens with a built-in retry mechanism.
+// It attempts to refresh the tokens up to a specified maximum number of retries,
+// with an exponential backoff strategy to handle transient network errors.
 func (o *CodexAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken string, maxRetries int) (*CodexTokenData, error) {
 	var lastErr error
 
@@ -257,7 +273,8 @@ func (o *CodexAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken str
 	return nil, fmt.Errorf("token refresh failed after %d attempts: %w", maxRetries, lastErr)
 }
 
-// UpdateTokenStorage updates an existing token storage with new token data
+// UpdateTokenStorage updates an existing CodexTokenStorage with new token data.
+// This is typically called after a successful token refresh to persist the new credentials.
 func (o *CodexAuth) UpdateTokenStorage(storage *CodexTokenStorage, tokenData *CodexTokenData) {
 	storage.IDToken = tokenData.IDToken
 	storage.AccessToken = tokenData.AccessToken

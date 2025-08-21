@@ -13,6 +13,7 @@ import (
 
 	"github.com/luispater/CLIProxyAPI/internal/cmd"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -57,6 +58,7 @@ func init() {
 // It parses command-line flags, loads configuration, and starts the appropriate
 // service based on the provided flags (login, codex-login, or server mode).
 func main() {
+	// Command-line flags to control the application's behavior.
 	var login bool
 	var codexLogin bool
 	var claudeLogin bool
@@ -77,11 +79,14 @@ func main() {
 	// Parse the command-line flags.
 	flag.Parse()
 
+	// Core application variables.
 	var err error
 	var cfg *config.Config
 	var wd string
 
-	// Load configuration from the specified path or the default path.
+	// Determine and load the configuration file.
+	// If a config path is provided via flags, it is used directly.
+	// Otherwise, it defaults to "config.yaml" in the current working directory.
 	var configFilePath string
 	if configPath != "" {
 		configFilePath = configPath
@@ -111,19 +116,23 @@ func main() {
 		if errUserHomeDir != nil {
 			log.Fatalf("failed to get home directory: %v", errUserHomeDir)
 		}
+		// Reconstruct the path by replacing the tilde with the user's home directory.
 		parts := strings.Split(cfg.AuthDir, string(os.PathSeparator))
 		if len(parts) > 1 {
 			parts[0] = home
 			cfg.AuthDir = path.Join(parts...)
 		} else {
+			// If the path is just "~", set it to the home directory.
 			cfg.AuthDir = home
 		}
 	}
 
-	// Handle different command modes based on the provided flags.
+	// Create login options to be used in authentication flows.
 	options := &cmd.LoginOptions{
 		NoBrowser: noBrowser,
 	}
+
+	// Handle different command modes based on the provided flags.
 
 	if login {
 		// Handle Google/Gemini login

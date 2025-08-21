@@ -1,6 +1,6 @@
-// Package middleware provides HTTP middleware components for the CLI Proxy API server.
-// This includes request logging middleware and response writer wrappers that capture
-// request and response data for logging purposes while maintaining zero-latency performance.
+// Package middleware provides Gin HTTP middleware for the CLI Proxy API server.
+// It includes a sophisticated response writer wrapper designed to capture and log request and response data,
+// including support for streaming responses, without impacting latency.
 package middleware
 
 import (
@@ -11,29 +11,38 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/logging"
 )
 
-// RequestInfo holds information about the current request for logging purposes.
+// RequestInfo holds essential details of an incoming HTTP request for logging purposes.
 type RequestInfo struct {
-	URL     string
-	Method  string
-	Headers map[string][]string
-	Body    []byte
+	URL     string              // URL is the request URL.
+	Method  string              // Method is the HTTP method (e.g., GET, POST).
+	Headers map[string][]string // Headers contains the request headers.
+	Body    []byte              // Body is the raw request body.
 }
 
-// ResponseWriterWrapper wraps gin.ResponseWriter to capture response data for logging.
-// It maintains zero-latency performance by prioritizing client response over logging operations.
+// ResponseWriterWrapper wraps the standard gin.ResponseWriter to intercept and log response data.
+// It is designed to handle both standard and streaming responses, ensuring that logging operations do not block the client response.
 type ResponseWriterWrapper struct {
 	gin.ResponseWriter
-	body         *bytes.Buffer
-	isStreaming  bool
-	streamWriter logging.StreamingLogWriter
-	chunkChannel chan []byte
-	logger       logging.RequestLogger
-	requestInfo  *RequestInfo
-	statusCode   int
-	headers      map[string][]string
+	body         *bytes.Buffer              // body is a buffer to store the response body for non-streaming responses.
+	isStreaming  bool                       // isStreaming indicates whether the response is a streaming type (e.g., text/event-stream).
+	streamWriter logging.StreamingLogWriter // streamWriter is a writer for handling streaming log entries.
+	chunkChannel chan []byte                // chunkChannel is a channel for asynchronously passing response chunks to the logger.
+	logger       logging.RequestLogger      // logger is the instance of the request logger service.
+	requestInfo  *RequestInfo               // requestInfo holds the details of the original request.
+	statusCode   int                        // statusCode stores the HTTP status code of the response.
+	headers      map[string][]string        // headers stores the response headers.
 }
 
-// NewResponseWriterWrapper creates a new response writer wrapper.
+// NewResponseWriterWrapper creates and initializes a new ResponseWriterWrapper.
+// It takes the original gin.ResponseWriter, a logger instance, and request information.
+//
+// Parameters:
+//   - w: The original gin.ResponseWriter to wrap.
+//   - logger: The logging service to use for recording requests.
+//   - requestInfo: The pre-captured information about the incoming request.
+//
+// Returns:
+//   - A pointer to a new ResponseWriterWrapper.
 func NewResponseWriterWrapper(w gin.ResponseWriter, logger logging.RequestLogger, requestInfo *RequestInfo) *ResponseWriterWrapper {
 	return &ResponseWriterWrapper{
 		ResponseWriter: w,
@@ -44,8 +53,11 @@ func NewResponseWriterWrapper(w gin.ResponseWriter, logger logging.RequestLogger
 	}
 }
 
-// Write intercepts response data while maintaining normal Gin functionality.
-// CRITICAL: This method prioritizes client response (zero-latency) over logging operations.
+// Write wraps the underlying ResponseWriter's Write method to capture response data.
+// For non-streaming responses, it writes to an internal buffer. For streaming responses,
+// it sends data chunks to a non-blocking channel for asynchronous logging.
+// CRITICAL: This method prioritizes writing to the client to ensure zero latency,
+// handling logging operations subsequently.
 func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 	// Ensure headers are captured before first write
 	// This is critical because Write() may trigger WriteHeader() internally
@@ -71,7 +83,9 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 	return n, err
 }
 
-// WriteHeader captures the status code and detects streaming responses.
+// WriteHeader wraps the underlying ResponseWriter's WriteHeader method.
+// It captures the status code, detects if the response is streaming based on the Content-Type header,
+// and initializes the appropriate logging mechanism (standard or streaming).
 func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 
@@ -106,14 +120,16 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
-// ensureHeadersCaptured ensures that response headers are captured at the right time.
-// This method can be called multiple times safely and will always capture the latest headers.
+// ensureHeadersCaptured is a helper function to make sure response headers are captured.
+// It is safe to call this method multiple times; it will always refresh the headers
+// with the latest state from the underlying ResponseWriter.
 func (w *ResponseWriterWrapper) ensureHeadersCaptured() {
 	// Always capture the current headers to ensure we have the latest state
 	w.captureCurrentHeaders()
 }
 
-// captureCurrentHeaders captures the current response headers from the underlying ResponseWriter.
+// captureCurrentHeaders reads all headers from the underlying ResponseWriter and stores them
+// in the wrapper's headers map. It creates copies of the header values to prevent race conditions.
 func (w *ResponseWriterWrapper) captureCurrentHeaders() {
 	// Initialize headers map if needed
 	if w.headers == nil {
@@ -129,7 +145,9 @@ func (w *ResponseWriterWrapper) captureCurrentHeaders() {
 	}
 }
 
-// detectStreaming determines if the response is streaming based on Content-Type and request analysis.
+// detectStreaming determines if a response should be treated as a streaming response.
+// It checks for a "text/event-stream" Content-Type or a '"stream": true'
+// field in the original request body.
 func (w *ResponseWriterWrapper) detectStreaming(contentType string) bool {
 	// Check Content-Type for Server-Sent Events
 	if strings.Contains(contentType, "text/event-stream") {
@@ -147,7 +165,8 @@ func (w *ResponseWriterWrapper) detectStreaming(contentType string) bool {
 	return false
 }
 
-// processStreamingChunks handles async processing of streaming chunks.
+// processStreamingChunks runs in a separate goroutine to process response chunks from the chunkChannel.
+// It asynchronously writes each chunk to the streaming log writer.
 func (w *ResponseWriterWrapper) processStreamingChunks() {
 	if w.streamWriter == nil || w.chunkChannel == nil {
 		return
@@ -158,7 +177,10 @@ func (w *ResponseWriterWrapper) processStreamingChunks() {
 	}
 }
 
-// Finalize completes the logging process for the response.
+// Finalize completes the logging process for the request and response.
+// For streaming responses, it closes the chunk channel and the stream writer.
+// For non-streaming responses, it logs the complete request and response details,
+// including any API-specific request/response data stored in the Gin context.
 func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 	if !w.logger.IsEnabled() {
 		return nil
@@ -235,7 +257,8 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 	return nil
 }
 
-// Status returns the HTTP status code of the response.
+// Status returns the HTTP response status code captured by the wrapper.
+// It defaults to 200 if WriteHeader has not been called.
 func (w *ResponseWriterWrapper) Status() int {
 	if w.statusCode == 0 {
 		return 200 // Default status code
@@ -243,7 +266,8 @@ func (w *ResponseWriterWrapper) Status() int {
 	return w.statusCode
 }
 
-// Size returns the size of the response body.
+// Size returns the size of the response body in bytes for non-streaming responses.
+// For streaming responses, it returns -1, as the total size is unknown.
 func (w *ResponseWriterWrapper) Size() int {
 	if w.isStreaming {
 		return -1 // Unknown size for streaming responses
@@ -251,7 +275,7 @@ func (w *ResponseWriterWrapper) Size() int {
 	return w.body.Len()
 }
 
-// Written returns whether the response has been written.
+// Written returns true if the response header has been written (i.e., a status code has been set).
 func (w *ResponseWriterWrapper) Written() bool {
 	return w.statusCode != 0
 }

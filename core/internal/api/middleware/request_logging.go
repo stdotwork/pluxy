@@ -11,8 +11,10 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/logging"
 )
 
-// RequestLoggingMiddleware creates a Gin middleware function that logs HTTP requests and responses
-// when enabled through the provided logger. The middleware has zero overhead when logging is disabled.
+// RequestLoggingMiddleware creates a Gin middleware that logs HTTP requests and responses.
+// It captures detailed information about the request and response, including headers and body,
+// and uses the provided RequestLogger to record this data. If logging is disabled in the
+// logger, the middleware has minimal overhead.
 func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Early return if logging is disabled (zero overhead)
@@ -45,7 +47,9 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 	}
 }
 
-// captureRequestInfo extracts and captures request information for logging.
+// captureRequestInfo extracts relevant information from the incoming HTTP request.
+// It captures the URL, method, headers, and body. The request body is read and then
+// restored so that it can be processed by subsequent handlers.
 func captureRequestInfo(c *gin.Context) (*RequestInfo, error) {
 	// Capture URL
 	url := c.Request.URL.String()

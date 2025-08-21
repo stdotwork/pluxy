@@ -6,7 +6,6 @@
 package gemini
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -15,97 +14,101 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
-	"github.com/luispater/CLIProxyAPI/internal/client"
-	translatorGeminiToClaude "github.com/luispater/CLIProxyAPI/internal/translator/claude/gemini"
-	translatorGeminiToCodex "github.com/luispater/CLIProxyAPI/internal/translator/codex/gemini"
-	translatorGeminiToGeminiCli "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/gemini/cli"
-	translatorGeminiToQwen "github.com/luispater/CLIProxyAPI/internal/translator/openai/gemini"
-	"github.com/luispater/CLIProxyAPI/internal/util"
+	. "github.com/luispater/CLIProxyAPI/internal/constant"
+	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
-// GeminiAPIHandlers contains the handlers for Gemini API endpoints.
+// GeminiAPIHandler contains the handlers for Gemini API endpoints.
 // It holds a pool of clients to interact with the backend service.
-type GeminiAPIHandlers struct {
-	*handlers.APIHandlers
+type GeminiAPIHandler struct {
+	*handlers.BaseAPIHandler
 }
 
-// NewGeminiAPIHandlers creates a new Gemini API handlers instance.
-// It takes an APIHandlers instance as input and returns a GeminiAPIHandlers.
-func NewGeminiAPIHandlers(apiHandlers *handlers.APIHandlers) *GeminiAPIHandlers {
-	return &GeminiAPIHandlers{
-		APIHandlers: apiHandlers,
+// NewGeminiAPIHandler creates a new Gemini API handlers instance.
+// It takes an BaseAPIHandler instance as input and returns a GeminiAPIHandler.
+func NewGeminiAPIHandler(apiHandlers *handlers.BaseAPIHandler) *GeminiAPIHandler {
+	return &GeminiAPIHandler{
+		BaseAPIHandler: apiHandlers,
+	}
+}
+
+// HandlerType returns the identifier for this handler implementation.
+func (h *GeminiAPIHandler) HandlerType() string {
+	return GEMINI
+}
+
+// Models returns the Gemini-compatible model metadata supported by this handler.
+func (h *GeminiAPIHandler) Models() []map[string]any {
+	return []map[string]any{
+		{
+			"name":             "models/gemini-2.5-flash",
+			"version":          "001",
+			"displayName":      "Gemini 2.5 Flash",
+			"description":      "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+			"inputTokenLimit":  1048576,
+			"outputTokenLimit": 65536,
+			"supportedGenerationMethods": []string{
+				"generateContent",
+				"countTokens",
+				"createCachedContent",
+				"batchGenerateContent",
+			},
+			"temperature":    1,
+			"topP":           0.95,
+			"topK":           64,
+			"maxTemperature": 2,
+			"thinking":       true,
+		},
+		{
+			"name":             "models/gemini-2.5-pro",
+			"version":          "2.5",
+			"displayName":      "Gemini 2.5 Pro",
+			"description":      "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+			"inputTokenLimit":  1048576,
+			"outputTokenLimit": 65536,
+			"supportedGenerationMethods": []string{
+				"generateContent",
+				"countTokens",
+				"createCachedContent",
+				"batchGenerateContent",
+			},
+			"temperature":    1,
+			"topP":           0.95,
+			"topK":           64,
+			"maxTemperature": 2,
+			"thinking":       true,
+		},
+		{
+			"name":             "gpt-5",
+			"version":          "001",
+			"displayName":      "GPT 5",
+			"description":      "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
+			"inputTokenLimit":  400000,
+			"outputTokenLimit": 128000,
+			"supportedGenerationMethods": []string{
+				"generateContent",
+			},
+			"temperature":    1,
+			"topP":           0.95,
+			"topK":           64,
+			"maxTemperature": 2,
+			"thinking":       true,
+		},
 	}
 }
 
 // GeminiModels handles the Gemini models listing endpoint.
 // It returns a JSON response containing available Gemini models and their specifications.
-func (h *GeminiAPIHandlers) GeminiModels(c *gin.Context) {
+func (h *GeminiAPIHandler) GeminiModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"models": []map[string]any{
-			{
-				"name":             "models/gemini-2.5-flash",
-				"version":          "001",
-				"displayName":      "Gemini 2.5 Flash",
-				"description":      "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-				"inputTokenLimit":  1048576,
-				"outputTokenLimit": 65536,
-				"supportedGenerationMethods": []string{
-					"generateContent",
-					"countTokens",
-					"createCachedContent",
-					"batchGenerateContent",
-				},
-				"temperature":    1,
-				"topP":           0.95,
-				"topK":           64,
-				"maxTemperature": 2,
-				"thinking":       true,
-			},
-			{
-				"name":             "models/gemini-2.5-pro",
-				"version":          "2.5",
-				"displayName":      "Gemini 2.5 Pro",
-				"description":      "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-				"inputTokenLimit":  1048576,
-				"outputTokenLimit": 65536,
-				"supportedGenerationMethods": []string{
-					"generateContent",
-					"countTokens",
-					"createCachedContent",
-					"batchGenerateContent",
-				},
-				"temperature":    1,
-				"topP":           0.95,
-				"topK":           64,
-				"maxTemperature": 2,
-				"thinking":       true,
-			},
-			{
-				"name":             "gpt-5",
-				"version":          "001",
-				"displayName":      "GPT 5",
-				"description":      "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
-				"inputTokenLimit":  400000,
-				"outputTokenLimit": 128000,
-				"supportedGenerationMethods": []string{
-					"generateContent",
-				},
-				"temperature":    1,
-				"topP":           0.95,
-				"topK":           64,
-				"maxTemperature": 2,
-				"thinking":       true,
-			},
-		},
+		"models": h.Models(),
 	})
 }
 
 // GeminiGetHandler handles GET requests for specific Gemini model information.
 // It returns detailed information about a specific Gemini model based on the action parameter.
-func (h *GeminiAPIHandlers) GeminiGetHandler(c *gin.Context) {
+func (h *GeminiAPIHandler) GeminiGetHandler(c *gin.Context) {
 	var request struct {
 		Action string `uri:"action" binding:"required"`
 	}
@@ -189,7 +192,7 @@ func (h *GeminiAPIHandlers) GeminiGetHandler(c *gin.Context) {
 
 // GeminiHandler handles POST requests for Gemini API operations.
 // It routes requests to appropriate handlers based on the action parameter (model:method format).
-func (h *GeminiAPIHandlers) GeminiHandler(c *gin.Context) {
+func (h *GeminiAPIHandler) GeminiHandler(c *gin.Context) {
 	var request struct {
 		Action string `uri:"action" binding:"required"`
 	}
@@ -213,46 +216,29 @@ func (h *GeminiAPIHandlers) GeminiHandler(c *gin.Context) {
 		return
 	}
 
-	modelName := action[0]
 	method := action[1]
 	rawJSON, _ := c.GetRawData()
-	rawJSON, _ = sjson.SetBytes(rawJSON, "model", []byte(modelName))
 
-	provider := util.GetProviderName(modelName)
-	if provider == "gemini" || provider == "unknow" {
-		switch method {
-		case "generateContent":
-			h.handleGeminiGenerateContent(c, rawJSON)
-		case "streamGenerateContent":
-			h.handleGeminiStreamGenerateContent(c, rawJSON)
-		case "countTokens":
-			h.handleGeminiCountTokens(c, rawJSON)
-		}
-	} else if provider == "gpt" {
-		switch method {
-		case "generateContent":
-			h.handleCodexGenerateContent(c, rawJSON)
-		case "streamGenerateContent":
-			h.handleCodexStreamGenerateContent(c, rawJSON)
-		}
-	} else if provider == "claude" {
-		switch method {
-		case "generateContent":
-			h.handleClaudeGenerateContent(c, rawJSON)
-		case "streamGenerateContent":
-			h.handleClaudeStreamGenerateContent(c, rawJSON)
-		}
-	} else if provider == "qwen" {
-		switch method {
-		case "generateContent":
-			h.handleQwenGenerateContent(c, rawJSON)
-		case "streamGenerateContent":
-			h.handleQwenStreamGenerateContent(c, rawJSON)
-		}
+	switch method {
+	case "generateContent":
+		h.handleGenerateContent(c, action[0], rawJSON)
+	case "streamGenerateContent":
+		h.handleStreamGenerateContent(c, action[0], rawJSON)
+	case "countTokens":
+		h.handleCountTokens(c, action[0], rawJSON)
 	}
 }
 
-func (h *GeminiAPIHandlers) handleGeminiStreamGenerateContent(c *gin.Context, rawJSON []byte) {
+// handleStreamGenerateContent handles streaming content generation requests for Gemini models.
+// This function establishes a Server-Sent Events connection and streams the generated content
+// back to the client in real-time. It supports both SSE format and direct streaming based
+// on the 'alt' query parameter.
+//
+// Parameters:
+//   - c: The Gin context for the request
+//   - modelName: The name of the Gemini model to use for content generation
+//   - rawJSON: The raw JSON request body containing generation parameters
+func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName string, rawJSON []byte) {
 	alt := h.GetAlt(c)
 
 	if alt == "" {
@@ -274,12 +260,9 @@ func (h *GeminiAPIHandlers) handleGeminiStreamGenerateContent(c *gin.Context, ra
 		return
 	}
 
-	modelResult := gjson.GetBytes(rawJSON, "model")
-	modelName := modelResult.String()
+	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
-
-	var cliClient client.Client
+	var cliClient interfaces.Client
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
 		if cliClient != nil {
@@ -289,7 +272,7 @@ func (h *GeminiAPIHandlers) handleGeminiStreamGenerateContent(c *gin.Context, ra
 
 outLoop:
 	for {
-		var errorResponse *client.ErrorMessage
+		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -299,45 +282,8 @@ outLoop:
 			return
 		}
 
-		template := ""
-		parsed := gjson.Parse(string(rawJSON))
-		contents := parsed.Get("request.contents")
-		if contents.Exists() {
-			template = string(rawJSON)
-		} else {
-			template = `{"project":"","request":{},"model":""}`
-			template, _ = sjson.SetRaw(template, "request", string(rawJSON))
-			template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
-			template, _ = sjson.Delete(template, "request.model")
-		}
-
-		template, errFixCLIToolResponse := translatorGeminiToGeminiCli.FixCLIToolResponse(template)
-		if errFixCLIToolResponse != nil {
-			c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
-				Error: handlers.ErrorDetail{
-					Message: errFixCLIToolResponse.Error(),
-					Type:    "server_error",
-				},
-			})
-			cliCancel()
-			return
-		}
-
-		systemInstructionResult := gjson.Get(template, "request.system_instruction")
-		if systemInstructionResult.Exists() {
-			template, _ = sjson.SetRaw(template, "request.systemInstruction", systemInstructionResult.Raw)
-			template, _ = sjson.Delete(template, "request.system_instruction")
-		}
-		rawJSON = []byte(template)
-
-		if glAPIKey := cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey(); glAPIKey != "" {
-			log.Debugf("Request use generative language API Key: %s", glAPIKey)
-		} else {
-			log.Debugf("Request cli use account: %s, project id: %s", cliClient.(*client.GeminiClient).GetEmail(), cliClient.(*client.GeminiClient).GetProjectID())
-		}
-
 		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, rawJSON, alt)
+		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, modelName, rawJSON, alt)
 		for {
 			select {
 			// Handle client disconnection.
@@ -354,30 +300,6 @@ outLoop:
 					return
 				}
 
-				h.AddAPIResponseData(c, chunk)
-				h.AddAPIResponseData(c, []byte("\n\n"))
-
-				if cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey() == "" {
-					if alt == "" {
-						responseResult := gjson.GetBytes(chunk, "response")
-						if responseResult.Exists() {
-							chunk = []byte(responseResult.Raw)
-						}
-					} else {
-						chunkTemplate := "[]"
-						responseResult := gjson.ParseBytes(chunk)
-						if responseResult.IsArray() {
-							responseResultItems := responseResult.Array()
-							for i := 0; i < len(responseResultItems); i++ {
-								responseResultItem := responseResultItems[i]
-								if responseResultItem.Get("response").Exists() {
-									chunkTemplate, _ = sjson.SetRaw(chunkTemplate, "-1", responseResultItem.Get("response").Raw)
-								}
-							}
-						}
-						chunk = []byte(chunkTemplate)
-					}
-				}
 				if alt == "" {
 					_, _ = c.Writer.Write([]byte("data: "))
 					_, _ = c.Writer.Write(chunk)
@@ -408,16 +330,21 @@ outLoop:
 	}
 }
 
-func (h *GeminiAPIHandlers) handleGeminiCountTokens(c *gin.Context, rawJSON []byte) {
+// handleCountTokens handles token counting requests for Gemini models.
+// This function counts the number of tokens in the provided content without
+// generating a response. It's useful for quota management and content validation.
+//
+// Parameters:
+//   - c: The Gin context for the request
+//   - modelName: The name of the Gemini model to use for token counting
+//   - rawJSON: The raw JSON request body containing the content to count
+func (h *GeminiAPIHandler) handleCountTokens(c *gin.Context, modelName string, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
 
 	alt := h.GetAlt(c)
-	// orgrawJSON := rawJSON
-	modelResult := gjson.GetBytes(rawJSON, "model")
-	modelName := modelResult.String()
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 
-	var cliClient client.Client
+	var cliClient interfaces.Client
 	defer func() {
 		if cliClient != nil {
 			cliClient.GetRequestMutex().Unlock()
@@ -425,7 +352,7 @@ func (h *GeminiAPIHandlers) handleGeminiCountTokens(c *gin.Context, rawJSON []by
 	}()
 
 	for {
-		var errorResponse *client.ErrorMessage
+		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName, false)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -434,23 +361,7 @@ func (h *GeminiAPIHandlers) handleGeminiCountTokens(c *gin.Context, rawJSON []by
 			return
 		}
 
-		if glAPIKey := cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey(); glAPIKey != "" {
-			log.Debugf("Request use generative language API Key: %s", glAPIKey)
-		} else {
-			log.Debugf("Request cli use account: %s, project id: %s", cliClient.(*client.GeminiClient).GetEmail(), cliClient.(*client.GeminiClient).GetProjectID())
-
-			template := `{"request":{}}`
-			if gjson.GetBytes(rawJSON, "generateContentRequest").Exists() {
-				template, _ = sjson.SetRaw(template, "request", gjson.GetBytes(rawJSON, "generateContentRequest").Raw)
-				template, _ = sjson.Delete(template, "generateContentRequest")
-			} else if gjson.GetBytes(rawJSON, "contents").Exists() {
-				template, _ = sjson.SetRaw(template, "request.contents", gjson.GetBytes(rawJSON, "contents").Raw)
-				template, _ = sjson.Delete(template, "contents")
-			}
-			rawJSON = []byte(template)
-		}
-
-		resp, err := cliClient.SendRawTokenCount(cliCtx, rawJSON, alt)
+		resp, err := cliClient.SendRawTokenCount(cliCtx, modelName, rawJSON, alt)
 		if err != nil {
 			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
 				continue
@@ -458,18 +369,9 @@ func (h *GeminiAPIHandlers) handleGeminiCountTokens(c *gin.Context, rawJSON []by
 				c.Status(err.StatusCode)
 				_, _ = c.Writer.Write([]byte(err.Error.Error()))
 				cliCancel(err.Error)
-				// log.Debugf(err.Error.Error())
-				// log.Debugf(string(rawJSON))
-				// log.Debugf(string(orgrawJSON))
 			}
 			break
 		} else {
-			if cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey() == "" {
-				responseResult := gjson.GetBytes(resp, "response")
-				if responseResult.Exists() {
-					resp = []byte(responseResult.Raw)
-				}
-			}
 			_, _ = c.Writer.Write(resp)
 			cliCancel(resp)
 			break
@@ -477,16 +379,23 @@ func (h *GeminiAPIHandlers) handleGeminiCountTokens(c *gin.Context, rawJSON []by
 	}
 }
 
-func (h *GeminiAPIHandlers) handleGeminiGenerateContent(c *gin.Context, rawJSON []byte) {
+// handleGenerateContent handles non-streaming content generation requests for Gemini models.
+// This function processes the request synchronously and returns the complete generated
+// response in a single API call. It supports various generation parameters and
+// response formats.
+//
+// Parameters:
+//   - c: The Gin context for the request
+//   - modelName: The name of the Gemini model to use for content generation
+//   - rawJSON: The raw JSON request body containing generation parameters and content
+func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName string, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
 
 	alt := h.GetAlt(c)
 
-	modelResult := gjson.GetBytes(rawJSON, "model")
-	modelName := modelResult.String()
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
+	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 
-	var cliClient client.Client
+	var cliClient interfaces.Client
 	defer func() {
 		if cliClient != nil {
 			cliClient.GetRequestMutex().Unlock()
@@ -494,7 +403,7 @@ func (h *GeminiAPIHandlers) handleGeminiGenerateContent(c *gin.Context, rawJSON 
 	}()
 
 	for {
-		var errorResponse *client.ErrorMessage
+		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -503,43 +412,7 @@ func (h *GeminiAPIHandlers) handleGeminiGenerateContent(c *gin.Context, rawJSON 
 			return
 		}
 
-		template := ""
-		parsed := gjson.Parse(string(rawJSON))
-		contents := parsed.Get("request.contents")
-		if contents.Exists() {
-			template = string(rawJSON)
-		} else {
-			template = `{"project":"","request":{},"model":""}`
-			template, _ = sjson.SetRaw(template, "request", string(rawJSON))
-			template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
-			template, _ = sjson.Delete(template, "request.model")
-		}
-
-		template, errFixCLIToolResponse := translatorGeminiToGeminiCli.FixCLIToolResponse(template)
-		if errFixCLIToolResponse != nil {
-			c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
-				Error: handlers.ErrorDetail{
-					Message: errFixCLIToolResponse.Error(),
-					Type:    "server_error",
-				},
-			})
-			cliCancel()
-			return
-		}
-
-		systemInstructionResult := gjson.Get(template, "request.system_instruction")
-		if systemInstructionResult.Exists() {
-			template, _ = sjson.SetRaw(template, "request.systemInstruction", systemInstructionResult.Raw)
-			template, _ = sjson.Delete(template, "request.system_instruction")
-		}
-		rawJSON = []byte(template)
-
-		if glAPIKey := cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey(); glAPIKey != "" {
-			log.Debugf("Request use generative language API Key: %s", glAPIKey)
-		} else {
-			log.Debugf("Request cli use account: %s, project id: %s", cliClient.(*client.GeminiClient).GetEmail(), cliClient.(*client.GeminiClient).GetProjectID())
-		}
-		resp, err := cliClient.SendRawMessage(cliCtx, rawJSON, alt)
+		resp, err := cliClient.SendRawMessage(cliCtx, modelName, rawJSON, alt)
 		if err != nil {
 			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
 				continue
@@ -550,580 +423,7 @@ func (h *GeminiAPIHandlers) handleGeminiGenerateContent(c *gin.Context, rawJSON 
 			}
 			break
 		} else {
-			if cliClient.(*client.GeminiClient).GetGenerativeLanguageAPIKey() == "" {
-				responseResult := gjson.GetBytes(resp, "response")
-				if responseResult.Exists() {
-					resp = []byte(responseResult.Raw)
-				}
-			}
 			_, _ = c.Writer.Write(resp)
-			cliCancel(resp)
-			break
-		}
-	}
-}
-
-func (h *GeminiAPIHandlers) handleCodexStreamGenerateContent(c *gin.Context, rawJSON []byte) {
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-
-	// Get the http.Flusher interface to manually flush the response.
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
-			Error: handlers.ErrorDetail{
-				Message: "Streaming not supported",
-				Type:    "server_error",
-			},
-		})
-		return
-	}
-
-	// Prepare the request for the backend client.
-	newRequestJSON := translatorGeminiToCodex.ConvertGeminiRequestToCodex(rawJSON)
-	// log.Debugf("Request: %s", newRequestJSON)
-
-	modelName := gjson.GetBytes(rawJSON, "model")
-
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
-
-	var cliClient client.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
-		}
-	}()
-
-outLoop:
-	for {
-		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.GetClient(modelName.String())
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			flusher.Flush()
-			cliCancel()
-			return
-		}
-
-		log.Debugf("Request codex use account: %s", cliClient.GetEmail())
-
-		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
-
-		params := &translatorGeminiToCodex.ConvertCodexResponseToGeminiParams{
-			Model:             modelName.String(),
-			CreatedAt:         0,
-			ResponseID:        "",
-			LastStorageOutput: "",
-		}
-		for {
-			select {
-			// Handle client disconnection.
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request.
-					return
-				}
-			// Process incoming response chunks.
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					cliCancel()
-					return
-				}
-
-				h.AddAPIResponseData(c, chunk)
-				h.AddAPIResponseData(c, []byte("\n\n"))
-
-				if bytes.HasPrefix(chunk, []byte("data: ")) {
-					jsonData := chunk[6:]
-					data := gjson.ParseBytes(jsonData)
-					typeResult := data.Get("type")
-					if typeResult.String() != "" {
-						outputs := translatorGeminiToCodex.ConvertCodexResponseToGemini(jsonData, params)
-						if len(outputs) > 0 {
-							for i := 0; i < len(outputs); i++ {
-								_, _ = c.Writer.Write([]byte("data: "))
-								_, _ = c.Writer.Write([]byte(outputs[i]))
-								_, _ = c.Writer.Write([]byte("\n\n"))
-							}
-						}
-					}
-					// log.Debugf(string(jsonData))
-				}
-				flusher.Flush()
-			// Handle errors from the backend.
-			case err, okError := <-errChan:
-				if okError {
-					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
-						continue outLoop
-					} else {
-						c.Status(err.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						flusher.Flush()
-						cliCancel(err.Error)
-					}
-					return
-				}
-			// Send a keep-alive signal to the client.
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
-	}
-}
-
-func (h *GeminiAPIHandlers) handleCodexGenerateContent(c *gin.Context, rawJSON []byte) {
-	c.Header("Content-Type", "application/json")
-
-	// Prepare the request for the backend client.
-	newRequestJSON := translatorGeminiToCodex.ConvertGeminiRequestToCodex(rawJSON)
-	// log.Debugf("Request: %s", newRequestJSON)
-
-	modelName := gjson.GetBytes(rawJSON, "model")
-
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
-
-	var cliClient client.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
-		}
-	}()
-
-outLoop:
-	for {
-		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.GetClient(modelName.String())
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			cliCancel()
-			return
-		}
-
-		log.Debugf("Request codex use account: %s", cliClient.GetEmail())
-
-		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
-		for {
-			select {
-			// Handle client disconnection.
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request.
-					return
-				}
-			// Process incoming response chunks.
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					cliCancel()
-					return
-				}
-
-				h.AddAPIResponseData(c, chunk)
-				h.AddAPIResponseData(c, []byte("\n\n"))
-
-				if bytes.HasPrefix(chunk, []byte("data: ")) {
-					jsonData := chunk[6:]
-					data := gjson.ParseBytes(jsonData)
-					typeResult := data.Get("type")
-					if typeResult.String() != "" {
-						var geminiStr string
-						geminiStr = translatorGeminiToCodex.ConvertCodexResponseToGeminiNonStream(jsonData, modelName.String())
-						if geminiStr != "" {
-							_, _ = c.Writer.Write([]byte(geminiStr))
-						}
-					}
-				}
-			// Handle errors from the backend.
-			case err, okError := <-errChan:
-				if okError {
-					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
-						continue outLoop
-					} else {
-						c.Status(err.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						cliCancel(err.Error)
-					}
-					return
-				}
-			// Send a keep-alive signal to the client.
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
-	}
-}
-
-func (h *GeminiAPIHandlers) handleClaudeStreamGenerateContent(c *gin.Context, rawJSON []byte) {
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-
-	// Get the http.Flusher interface to manually flush the response.
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
-			Error: handlers.ErrorDetail{
-				Message: "Streaming not supported",
-				Type:    "server_error",
-			},
-		})
-		return
-	}
-
-	// Prepare the request for the backend client.
-	newRequestJSON := translatorGeminiToClaude.ConvertGeminiRequestToAnthropic(rawJSON)
-	newRequestJSON, _ = sjson.Set(newRequestJSON, "stream", true)
-	// log.Debugf("Request: %s", newRequestJSON)
-
-	modelName := gjson.GetBytes(rawJSON, "model")
-
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
-
-	var cliClient client.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
-		}
-	}()
-
-outLoop:
-	for {
-		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.GetClient(modelName.String())
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			flusher.Flush()
-			cliCancel()
-			return
-		}
-
-		if apiKey := cliClient.(*client.ClaudeClient).GetAPIKey(); apiKey != "" {
-			log.Debugf("Request claude use API Key: %s", apiKey)
-		} else {
-			log.Debugf("Request claude use account: %s", cliClient.(*client.ClaudeClient).GetEmail())
-		}
-
-		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
-
-		params := &translatorGeminiToClaude.ConvertAnthropicResponseToGeminiParams{
-			Model:      modelName.String(),
-			CreatedAt:  0,
-			ResponseID: "",
-		}
-		for {
-			select {
-			// Handle client disconnection.
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request.
-					return
-				}
-			// Process incoming response chunks.
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					cliCancel()
-					return
-				}
-
-				h.AddAPIResponseData(c, chunk)
-				h.AddAPIResponseData(c, []byte("\n\n"))
-
-				if bytes.HasPrefix(chunk, []byte("data: ")) {
-					jsonData := chunk[6:]
-					data := gjson.ParseBytes(jsonData)
-					typeResult := data.Get("type")
-					if typeResult.String() != "" {
-						// log.Debugf(string(jsonData))
-						outputs := translatorGeminiToClaude.ConvertAnthropicResponseToGemini(jsonData, params)
-						if len(outputs) > 0 {
-							for i := 0; i < len(outputs); i++ {
-								_, _ = c.Writer.Write([]byte("data: "))
-								_, _ = c.Writer.Write([]byte(outputs[i]))
-								_, _ = c.Writer.Write([]byte("\n\n"))
-							}
-						}
-					}
-					// log.Debugf(string(jsonData))
-				}
-				flusher.Flush()
-			// Handle errors from the backend.
-			case err, okError := <-errChan:
-				if okError {
-					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
-						continue outLoop
-					} else {
-						c.Status(err.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						flusher.Flush()
-						cliCancel(err.Error)
-					}
-					return
-				}
-			// Send a keep-alive signal to the client.
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
-	}
-}
-
-func (h *GeminiAPIHandlers) handleClaudeGenerateContent(c *gin.Context, rawJSON []byte) {
-	c.Header("Content-Type", "application/json")
-
-	// Prepare the request for the backend client.
-	newRequestJSON := translatorGeminiToClaude.ConvertGeminiRequestToAnthropic(rawJSON)
-	// log.Debugf("Request: %s", newRequestJSON)
-	newRequestJSON, _ = sjson.Set(newRequestJSON, "stream", true)
-
-	modelName := gjson.GetBytes(rawJSON, "model")
-
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
-
-	var cliClient client.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
-		}
-	}()
-
-outLoop:
-	for {
-		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.GetClient(modelName.String())
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			cliCancel()
-			return
-		}
-
-		if apiKey := cliClient.(*client.ClaudeClient).GetAPIKey(); apiKey != "" {
-			log.Debugf("Request claude use API Key: %s", apiKey)
-		} else {
-			log.Debugf("Request claude use account: %s", cliClient.(*client.ClaudeClient).GetEmail())
-		}
-
-		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
-
-		var allChunks [][]byte
-		for {
-			select {
-			// Handle client disconnection.
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request.
-					return
-				}
-			// Process incoming response chunks.
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					if len(allChunks) > 0 {
-						// Use the last chunk which should contain the complete message
-						finalResponseStr := translatorGeminiToClaude.ConvertAnthropicResponseToGeminiNonStream(allChunks, modelName.String())
-						finalResponse := []byte(finalResponseStr)
-						_, _ = c.Writer.Write(finalResponse)
-					}
-
-					cliCancel()
-					return
-				}
-
-				// Store chunk for building final response
-				if bytes.HasPrefix(chunk, []byte("data: ")) {
-					jsonData := chunk[6:]
-					allChunks = append(allChunks, jsonData)
-				}
-
-				h.AddAPIResponseData(c, chunk)
-				h.AddAPIResponseData(c, []byte("\n\n"))
-
-			// Handle errors from the backend.
-			case err, okError := <-errChan:
-				if okError {
-					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
-						continue outLoop
-					} else {
-						c.Status(err.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						cliCancel(err.Error)
-					}
-					return
-				}
-			// Send a keep-alive signal to the client.
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
-	}
-}
-
-func (h *GeminiAPIHandlers) handleQwenStreamGenerateContent(c *gin.Context, rawJSON []byte) {
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-
-	// Get the http.Flusher interface to manually flush the response.
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
-			Error: handlers.ErrorDetail{
-				Message: "Streaming not supported",
-				Type:    "server_error",
-			},
-		})
-		return
-	}
-
-	// Prepare the request for the backend client.
-	newRequestJSON := translatorGeminiToQwen.ConvertGeminiRequestToOpenAI(rawJSON)
-	newRequestJSON, _ = sjson.Set(newRequestJSON, "stream", true)
-	// log.Debugf("Request: %s", newRequestJSON)
-
-	modelName := gjson.GetBytes(rawJSON, "model")
-
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
-
-	var cliClient client.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
-		}
-	}()
-
-outLoop:
-	for {
-		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.GetClient(modelName.String())
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			flusher.Flush()
-			cliCancel()
-			return
-		}
-
-		log.Debugf("Request use qwen account: %s", cliClient.GetEmail())
-
-		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, []byte(newRequestJSON), "")
-
-		params := &translatorGeminiToQwen.ConvertOpenAIResponseToGeminiParams{
-			ToolCallsAccumulator: nil,
-			ContentAccumulator:   strings.Builder{},
-			IsFirstChunk:         false,
-		}
-		for {
-			select {
-			// Handle client disconnection.
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("CodexClient disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request.
-					return
-				}
-			// Process incoming response chunks.
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					cliCancel()
-					return
-				}
-
-				h.AddAPIResponseData(c, chunk)
-				h.AddAPIResponseData(c, []byte("\n\n"))
-				if bytes.HasPrefix(chunk, []byte("data: ")) {
-					jsonData := chunk[6:]
-					outputs := translatorGeminiToQwen.ConvertOpenAIResponseToGemini(jsonData, params)
-					if len(outputs) > 0 {
-						for i := 0; i < len(outputs); i++ {
-							_, _ = c.Writer.Write([]byte("data: "))
-							_, _ = c.Writer.Write([]byte(outputs[i]))
-							_, _ = c.Writer.Write([]byte("\n\n"))
-						}
-					}
-					// log.Debugf(string(jsonData))
-				}
-				flusher.Flush()
-			// Handle errors from the backend.
-			case err, okError := <-errChan:
-				if okError {
-					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
-						continue outLoop
-					} else {
-						c.Status(err.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						flusher.Flush()
-						cliCancel(err.Error)
-					}
-					return
-				}
-			// Send a keep-alive signal to the client.
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
-	}
-}
-
-func (h *GeminiAPIHandlers) handleQwenGenerateContent(c *gin.Context, rawJSON []byte) {
-	c.Header("Content-Type", "application/json")
-
-	// Prepare the request for the backend client.
-	newRequestJSON := translatorGeminiToQwen.ConvertGeminiRequestToOpenAI(rawJSON)
-	// log.Debugf("Request: %s", newRequestJSON)
-
-	modelName := gjson.GetBytes(rawJSON, "model")
-
-	cliCtx, cliCancel := h.GetContextWithCancel(c, context.Background())
-
-	var cliClient client.Client
-	defer func() {
-		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
-		}
-	}()
-
-	for {
-		var errorResponse *client.ErrorMessage
-		cliClient, errorResponse = h.GetClient(modelName.String())
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			cliCancel()
-			return
-		}
-
-		log.Debugf("Request use qwen account: %s", cliClient.GetEmail())
-
-		resp, err := cliClient.SendRawMessage(cliCtx, []byte(newRequestJSON), "")
-		if err != nil {
-			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
-				continue
-			} else {
-				c.Status(err.StatusCode)
-				_, _ = c.Writer.Write([]byte(err.Error.Error()))
-				cliCancel(err.Error)
-			}
-			break
-		} else {
-			h.AddAPIResponseData(c, resp)
-			h.AddAPIResponseData(c, []byte("\n"))
-
-			newResp := translatorGeminiToQwen.ConvertOpenAINonStreamResponseToGemini(resp)
-			_, _ = c.Writer.Write([]byte(newResp))
 			cliCancel(resp)
 			break
 		}

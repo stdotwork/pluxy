@@ -1,6 +1,7 @@
-// Package auth provides OAuth2 authentication functionality for Google Cloud APIs.
-// It handles the complete OAuth2 flow including token storage, web-based authentication,
-// proxy support, and automatic token refresh. The package supports both SOCKS5 and HTTP/HTTPS proxies.
+// Package gemini provides authentication and token management functionality
+// for Google's Gemini AI services. It handles OAuth2 authentication flows,
+// including obtaining tokens via web-based authorization, storing tokens,
+// and refreshing them when they expire.
 package gemini
 
 import (
@@ -38,9 +39,13 @@ var (
 	}
 )
 
+// GeminiAuth provides methods for handling the Gemini OAuth2 authentication flow.
+// It encapsulates the logic for obtaining, storing, and refreshing authentication tokens
+// for Google's Gemini AI services.
 type GeminiAuth struct {
 }
 
+// NewGeminiAuth creates a new instance of GeminiAuth.
 func NewGeminiAuth() *GeminiAuth {
 	return &GeminiAuth{}
 }
@@ -48,6 +53,16 @@ func NewGeminiAuth() *GeminiAuth {
 // GetAuthenticatedClient configures and returns an HTTP client ready for making authenticated API calls.
 // It manages the entire OAuth2 flow, including handling proxies, loading existing tokens,
 // initiating a new web-based OAuth flow if necessary, and refreshing tokens.
+//
+// Parameters:
+//   - ctx: The context for the HTTP client
+//   - ts: The Gemini token storage containing authentication tokens
+//   - cfg: The configuration containing proxy settings
+//   - noBrowser: Optional parameter to disable browser opening
+//
+// Returns:
+//   - *http.Client: An HTTP client configured with authentication
+//   - error: An error if the client configuration fails, nil otherwise
 func (g *GeminiAuth) GetAuthenticatedClient(ctx context.Context, ts *GeminiTokenStorage, cfg *config.Config, noBrowser ...bool) (*http.Client, error) {
 	// Configure proxy settings for the HTTP client if a proxy URL is provided.
 	proxyURL, err := url.Parse(cfg.ProxyURL)
@@ -117,6 +132,16 @@ func (g *GeminiAuth) GetAuthenticatedClient(ctx context.Context, ts *GeminiToken
 
 // createTokenStorage creates a new GeminiTokenStorage object. It fetches the user's email
 // using the provided token and populates the storage structure.
+//
+// Parameters:
+//   - ctx: The context for the HTTP request
+//   - config: The OAuth2 configuration
+//   - token: The OAuth2 token to use for authentication
+//   - projectID: The Google Cloud Project ID to associate with this token
+//
+// Returns:
+//   - *GeminiTokenStorage: A new token storage object with user information
+//   - error: An error if the token storage creation fails, nil otherwise
 func (g *GeminiAuth) createTokenStorage(ctx context.Context, config *oauth2.Config, token *oauth2.Token, projectID string) (*GeminiTokenStorage, error) {
 	httpClient := config.Client(ctx, token)
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v1/userinfo?alt=json", nil)
@@ -174,6 +199,15 @@ func (g *GeminiAuth) createTokenStorage(ctx context.Context, config *oauth2.Conf
 // It starts a local HTTP server to listen for the callback from Google's auth server,
 // opens the user's browser to the authorization URL, and exchanges the received
 // authorization code for an access token.
+//
+// Parameters:
+//   - ctx: The context for the HTTP client
+//   - config: The OAuth2 configuration
+//   - noBrowser: Optional parameter to disable browser opening
+//
+// Returns:
+//   - *oauth2.Token: The OAuth2 token obtained from the authorization flow
+//   - error: An error if the token acquisition fails, nil otherwise
 func (g *GeminiAuth) getTokenFromWeb(ctx context.Context, config *oauth2.Config, noBrowser ...bool) (*oauth2.Token, error) {
 	// Use a channel to pass the authorization code from the HTTP handler to the main function.
 	codeChan := make(chan string)

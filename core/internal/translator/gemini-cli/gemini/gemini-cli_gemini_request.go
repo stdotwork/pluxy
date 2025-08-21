@@ -1,10 +1,9 @@
-// Package cli provides request translation functionality for Gemini CLI API.
-// It handles the conversion and formatting of CLI tool responses, specifically
-// transforming between different JSON formats to ensure proper conversation flow
-// and API compatibility. The package focuses on intelligently grouping function
-// calls with their corresponding responses, converting from linear format to
-// grouped format where function calls and responses are properly associated.
-package cli
+// Package gemini provides request translation functionality for Gemini CLI to Gemini API compatibility.
+// It handles parsing and transforming Gemini CLI API requests into Gemini API format,
+// extracting model information, system instructions, message contents, and tool declarations.
+// The package performs JSON data transformation to ensure compatibility
+// between Gemini CLI API format and Gemini API's expected format.
+package gemini
 
 import (
 	"encoding/json"
@@ -15,6 +14,44 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// ConvertGeminiRequestToGeminiCLI parses and transforms a Gemini CLI API request into Gemini API format.
+// It extracts the model name, system instruction, message contents, and tool declarations
+// from the raw JSON request and returns them in the format expected by the Gemini API.
+// The function performs the following transformations:
+// 1. Extracts the model information from the request
+// 2. Restructures the JSON to match Gemini API format
+// 3. Converts system instructions to the expected format
+// 4. Fixes CLI tool response format and grouping
+//
+// Parameters:
+//   - modelName: The name of the model to use for the request (unused in current implementation)
+//   - rawJSON: The raw JSON request data from the Gemini CLI API
+//   - stream: A boolean indicating if the request is for a streaming response (unused in current implementation)
+//
+// Returns:
+//   - []byte: The transformed request data in Gemini API format
+func ConvertGeminiRequestToGeminiCLI(_ string, rawJSON []byte, _ bool) []byte {
+	template := ""
+	template = `{"project":"","request":{},"model":""}`
+	template, _ = sjson.SetRaw(template, "request", string(rawJSON))
+	template, _ = sjson.Set(template, "model", gjson.Get(template, "request.model").String())
+	template, _ = sjson.Delete(template, "request.model")
+
+	template, errFixCLIToolResponse := fixCLIToolResponse(template)
+	if errFixCLIToolResponse != nil {
+		return []byte{}
+	}
+
+	systemInstructionResult := gjson.Get(template, "request.system_instruction")
+	if systemInstructionResult.Exists() {
+		template, _ = sjson.SetRaw(template, "request.systemInstruction", systemInstructionResult.Raw)
+		template, _ = sjson.Delete(template, "request.system_instruction")
+	}
+	rawJSON = []byte(template)
+
+	return rawJSON
+}
+
 // FunctionCallGroup represents a group of function calls and their responses
 type FunctionCallGroup struct {
 	ModelContent    map[string]interface{}
@@ -22,12 +59,19 @@ type FunctionCallGroup struct {
 	ResponsesNeeded int
 }
 
-// FixCLIToolResponse performs sophisticated tool response format conversion and grouping.
+// fixCLIToolResponse performs sophisticated tool response format conversion and grouping.
 // This function transforms the CLI tool response format by intelligently grouping function calls
 // with their corresponding responses, ensuring proper conversation flow and API compatibility.
 // It converts from a linear format (1.json) to a grouped format (2.json) where function calls
 // and their responses are properly associated and structured.
-func FixCLIToolResponse(input string) (string, error) {
+//
+// Parameters:
+//   - input: The input JSON string to be processed
+//
+// Returns:
+//   - string: The processed JSON string with grouped function calls and responses
+//   - error: An error if the processing fails
+func fixCLIToolResponse(input string) (string, error) {
 	// Parse the input JSON to extract the conversation structure
 	parsed := gjson.Parse(input)
 

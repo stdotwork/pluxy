@@ -1,6 +1,9 @@
-// Package codex provides utilities to translate OpenAI Chat Completions
+// Package openai provides utilities to translate OpenAI Chat Completions
 // request JSON into OpenAI Responses API request JSON using gjson/sjson.
 // It supports tools, multimodal text/image inputs, and Structured Outputs.
+// The package handles the conversion of OpenAI API requests into the format
+// expected by the OpenAI Responses API, including proper mapping of messages,
+// tools, and generation parameters.
 package openai
 
 import (
@@ -9,19 +12,25 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// ConvertOpenAIChatRequestToCodex converts an OpenAI Chat Completions request JSON
+// ConvertOpenAIRequestToCodex converts an OpenAI Chat Completions request JSON
 // into an OpenAI Responses API request JSON. The transformation follows the
 // examples defined in docs/2.md exactly, including tools, multi-turn dialog,
 // multimodal text/image handling, and Structured Outputs mapping.
-func ConvertOpenAIChatRequestToCodex(rawJSON []byte) string {
+//
+// Parameters:
+//   - modelName: The name of the model to use for the request
+//   - rawJSON: The raw JSON request data from the OpenAI Chat Completions API
+//   - stream: A boolean indicating if the request is for a streaming response
+//
+// Returns:
+//   - []byte: The transformed request data in OpenAI Responses API format
+func ConvertOpenAIRequestToCodex(modelName string, rawJSON []byte, stream bool) []byte {
 	// Start with empty JSON object
 	out := `{}`
 	store := false
 
 	// Stream must be set to true
-	if v := gjson.GetBytes(rawJSON, "stream"); v.Exists() {
-		out, _ = sjson.Set(out, "stream", true)
-	}
+	out, _ = sjson.Set(out, "stream", stream)
 
 	// Codex not support temperature, top_p, top_k, max_output_tokens, so comment them
 	// if v := gjson.GetBytes(rawJSON, "temperature"); v.Exists() {
@@ -49,9 +58,7 @@ func ConvertOpenAIChatRequestToCodex(rawJSON []byte) string {
 	}
 
 	// Model
-	if v := gjson.GetBytes(rawJSON, "model"); v.Exists() {
-		out, _ = sjson.Set(out, "model", v.Value())
-	}
+	out, _ = sjson.Set(out, "model", modelName)
 
 	// Extract system instructions from first system message (string or text object)
 	messages := gjson.GetBytes(rawJSON, "messages")
@@ -257,5 +264,5 @@ func ConvertOpenAIChatRequestToCodex(rawJSON []byte) string {
 	}
 
 	out, _ = sjson.Set(out, "store", store)
-	return out
+	return []byte(out)
 }

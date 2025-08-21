@@ -1,242 +1,211 @@
-// Package openai provides request translation functionality for OpenAI API.
-// It handles the conversion of OpenAI-compatible request formats to the internal
-// format expected by the backend client, including parsing messages, roles,
-// content types (text, image, file), and tool calls.
+// Package openai provides request translation functionality for OpenAI to Gemini CLI API compatibility.
+// It converts OpenAI Chat Completions requests into Gemini CLI compatible JSON using gjson/sjson only.
 package openai
 
 import (
-	"encoding/json"
+	"fmt"
 	"strings"
 
-	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/misc"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
-// ConvertOpenAIChatRequestToCli translates a raw JSON request from an OpenAI-compatible format
-// to the internal format expected by the backend client. It parses messages,
-// roles, content types (text, image, file), and tool calls.
-//
-// This function handles the complex task of converting between the OpenAI message
-// format and the internal format used by the Gemini client. It processes different
-// message types (system, user, assistant, tool) and content types (text, images, files).
+// ConvertOpenAIRequestToGeminiCLI converts an OpenAI Chat Completions request (raw JSON)
+// into a complete Gemini CLI request JSON. All JSON construction uses sjson and lookups use gjson.
 //
 // Parameters:
-//   - rawJSON: The raw JSON bytes of the OpenAI-compatible request
+//   - modelName: The name of the model to use for the request
+//   - rawJSON: The raw JSON request data from the OpenAI API
+//   - stream: A boolean indicating if the request is for a streaming response (unused in current implementation)
 //
 // Returns:
-//   - string: The model name to use
-//   - *client.Content: System instruction content (if any)
-//   - []client.Content: The conversation contents in internal format
-//   - []client.ToolDeclaration: Tool declarations from the request
-func ConvertOpenAIChatRequestToCli(rawJSON []byte) (string, *client.Content, []client.Content, []client.ToolDeclaration) {
-	// Extract the model name from the request, defaulting to "gemini-2.5-pro".
-	modelName := "gemini-2.5-pro"
-	modelResult := gjson.GetBytes(rawJSON, "model")
-	if modelResult.Type == gjson.String {
-		modelName = modelResult.String()
+//   - []byte: The transformed request data in Gemini CLI API format
+func ConvertOpenAIRequestToGeminiCLI(modelName string, rawJSON []byte, _ bool) []byte {
+	// Base envelope
+	out := []byte(`{"project":"","request":{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}},"model":"gemini-2.5-pro"}`)
+
+	// Model
+	out, _ = sjson.SetBytes(out, "model", modelName)
+
+	// Reasoning effort -> thinkingBudget/include_thoughts
+	re := gjson.GetBytes(rawJSON, "reasoning_effort")
+	if re.Exists() {
+		switch re.String() {
+		case "none":
+			out, _ = sjson.DeleteBytes(out, "request.generationConfig.thinkingConfig.include_thoughts")
+			out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", 0)
+		case "auto":
+			out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
+		case "low":
+			out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", 1024)
+		case "medium":
+			out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", 8192)
+		case "high":
+			out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", 24576)
+		default:
+			out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
+		}
+	} else {
+		out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
 	}
 
-	// Initialize data structures for processing conversation messages
-	// contents: stores the processed conversation history
-	// systemInstruction: stores system-level instructions separate from conversation
-	contents := make([]client.Content, 0)
-	var systemInstruction *client.Content
-	messagesResult := gjson.GetBytes(rawJSON, "messages")
+	// Temperature/top_p/top_k
+	if tr := gjson.GetBytes(rawJSON, "temperature"); tr.Exists() && tr.Type == gjson.Number {
+		out, _ = sjson.SetBytes(out, "request.generationConfig.temperature", tr.Num)
+	}
+	if tpr := gjson.GetBytes(rawJSON, "top_p"); tpr.Exists() && tpr.Type == gjson.Number {
+		out, _ = sjson.SetBytes(out, "request.generationConfig.topP", tpr.Num)
+	}
+	if tkr := gjson.GetBytes(rawJSON, "top_k"); tkr.Exists() && tkr.Type == gjson.Number {
+		out, _ = sjson.SetBytes(out, "request.generationConfig.topK", tkr.Num)
+	}
 
-	// Pre-process messages to create mappings for tool calls and responses
-	// First pass: collect function call ID to function name mappings
-	toolCallToFunctionName := make(map[string]string)
-	toolItems := make(map[string]*client.FunctionResponse)
-
-	if messagesResult.IsArray() {
-		messagesResults := messagesResult.Array()
-
-		// First pass: collect function call mappings
-		for i := 0; i < len(messagesResults); i++ {
-			messageResult := messagesResults[i]
-			roleResult := messageResult.Get("role")
-			if roleResult.Type != gjson.String {
-				continue
-			}
-
-			// Extract function call ID to function name mappings
-			if roleResult.String() == "assistant" {
-				toolCallsResult := messageResult.Get("tool_calls")
-				if toolCallsResult.Exists() && toolCallsResult.IsArray() {
-					tcsResult := toolCallsResult.Array()
-					for j := 0; j < len(tcsResult); j++ {
-						tcResult := tcsResult[j]
-						if tcResult.Get("type").String() == "function" {
-							functionID := tcResult.Get("id").String()
-							functionName := tcResult.Get("function.name").String()
-							toolCallToFunctionName[functionID] = functionName
+	// messages -> systemInstruction + contents
+	messages := gjson.GetBytes(rawJSON, "messages")
+	if messages.IsArray() {
+		arr := messages.Array()
+		// First pass: assistant tool_calls id->name map
+		tcID2Name := map[string]string{}
+		for i := 0; i < len(arr); i++ {
+			m := arr[i]
+			if m.Get("role").String() == "assistant" {
+				tcs := m.Get("tool_calls")
+				if tcs.IsArray() {
+					for _, tc := range tcs.Array() {
+						if tc.Get("type").String() == "function" {
+							id := tc.Get("id").String()
+							name := tc.Get("function.name").String()
+							if id != "" && name != "" {
+								tcID2Name[id] = name
+							}
 						}
 					}
 				}
 			}
 		}
 
-		// Second pass: collect tool responses with correct function names
-		for i := 0; i < len(messagesResults); i++ {
-			messageResult := messagesResults[i]
-			roleResult := messageResult.Get("role")
-			if roleResult.Type != gjson.String {
-				continue
-			}
-			contentResult := messageResult.Get("content")
-
-			// Extract tool responses for later matching with function calls
-			if roleResult.String() == "tool" {
-				toolCallID := messageResult.Get("tool_call_id").String()
+		// Second pass build systemInstruction/tool responses cache
+		toolResponses := map[string]string{} // tool_call_id -> response text
+		for i := 0; i < len(arr); i++ {
+			m := arr[i]
+			role := m.Get("role").String()
+			if role == "tool" {
+				toolCallID := m.Get("tool_call_id").String()
 				if toolCallID != "" {
-					var responseData string
-					// Handle both string and object-based tool response formats
-					if contentResult.Type == gjson.String {
-						responseData = contentResult.String()
-					} else if contentResult.IsObject() && contentResult.Get("type").String() == "text" {
-						responseData = contentResult.Get("text").String()
+					c := m.Get("content")
+					if c.Type == gjson.String {
+						toolResponses[toolCallID] = c.String()
+					} else if c.IsObject() && c.Get("type").String() == "text" {
+						toolResponses[toolCallID] = c.Get("text").String()
 					}
-
-					// Get the correct function name from the mapping
-					functionName := toolCallToFunctionName[toolCallID]
-					if functionName == "" {
-						// Fallback: use tool call ID if function name not found
-						functionName = toolCallID
-					}
-
-					// Create function response object with correct function name
-					functionResponse := client.FunctionResponse{Name: functionName, Response: map[string]interface{}{"result": responseData}}
-					toolItems[toolCallID] = &functionResponse
 				}
 			}
 		}
-	}
 
-	if messagesResult.IsArray() {
-		messagesResults := messagesResult.Array()
-		for i := 0; i < len(messagesResults); i++ {
-			messageResult := messagesResults[i]
-			roleResult := messageResult.Get("role")
-			contentResult := messageResult.Get("content")
-			if roleResult.Type != gjson.String {
-				continue
-			}
+		for i := 0; i < len(arr); i++ {
+			m := arr[i]
+			role := m.Get("role").String()
+			content := m.Get("content")
 
-			role := roleResult.String()
-
-			if role == "system" && len(messagesResults) > 1 {
-				// System messages are converted to a user message followed by a model's acknowledgment.
-				if contentResult.Type == gjson.String {
-					systemInstruction = &client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.String()}}}
-				} else if contentResult.IsObject() {
-					// Handle object-based system messages.
-					if contentResult.Get("type").String() == "text" {
-						systemInstruction = &client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.Get("text").String()}}}
-					}
+			if role == "system" && len(arr) > 1 {
+				// system -> request.systemInstruction as a user message style
+				if content.Type == gjson.String {
+					out, _ = sjson.SetBytes(out, "request.systemInstruction.role", "user")
+					out, _ = sjson.SetBytes(out, "request.systemInstruction.parts.0.text", content.String())
+				} else if content.IsObject() && content.Get("type").String() == "text" {
+					out, _ = sjson.SetBytes(out, "request.systemInstruction.role", "user")
+					out, _ = sjson.SetBytes(out, "request.systemInstruction.parts.0.text", content.Get("text").String())
 				}
-			} else if role == "user" || (role == "system" && len(messagesResults) == 1) { // If there's only a system message, treat it as a user message.
-				// User messages can contain simple text or a multi-part body.
-				if contentResult.Type == gjson.String {
-					contents = append(contents, client.Content{Role: "user", Parts: []client.Part{{Text: contentResult.String()}}})
-				} else if contentResult.IsArray() {
-					// Handle multi-part user messages (text, images, files).
-					contentItemResults := contentResult.Array()
-					parts := make([]client.Part, 0)
-					for j := 0; j < len(contentItemResults); j++ {
-						contentItemResult := contentItemResults[j]
-						contentTypeResult := contentItemResult.Get("type")
-						switch contentTypeResult.String() {
+			} else if role == "user" || (role == "system" && len(arr) == 1) {
+				// Build single user content node to avoid splitting into multiple contents
+				node := []byte(`{"role":"user","parts":[]}`)
+				if content.Type == gjson.String {
+					node, _ = sjson.SetBytes(node, "parts.0.text", content.String())
+				} else if content.IsArray() {
+					items := content.Array()
+					p := 0
+					for _, item := range items {
+						switch item.Get("type").String() {
 						case "text":
-							parts = append(parts, client.Part{Text: contentItemResult.Get("text").String()})
+							node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".text", item.Get("text").String())
+							p++
 						case "image_url":
-							// Parse data URI for images.
-							imageURL := contentItemResult.Get("image_url.url").String()
+							imageURL := item.Get("image_url.url").String()
 							if len(imageURL) > 5 {
-								imageURLs := strings.SplitN(imageURL[5:], ";", 2)
-								if len(imageURLs) == 2 && len(imageURLs[1]) > 7 {
-									parts = append(parts, client.Part{InlineData: &client.InlineData{
-										MimeType: imageURLs[0],
-										Data:     imageURLs[1][7:],
-									}})
+								pieces := strings.SplitN(imageURL[5:], ";", 2)
+								if len(pieces) == 2 && len(pieces[1]) > 7 {
+									mime := pieces[0]
+									data := pieces[1][7:]
+									node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.mime_type", mime)
+									node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.data", data)
+									p++
 								}
 							}
 						case "file":
-							// Handle file attachments by determining MIME type from extension.
-							filename := contentItemResult.Get("file.filename").String()
-							fileData := contentItemResult.Get("file.file_data").String()
+							filename := item.Get("file.filename").String()
+							fileData := item.Get("file.file_data").String()
 							ext := ""
-							if split := strings.Split(filename, "."); len(split) > 1 {
-								ext = split[len(split)-1]
+							if sp := strings.Split(filename, "."); len(sp) > 1 {
+								ext = sp[len(sp)-1]
 							}
 							if mimeType, ok := misc.MimeTypes[ext]; ok {
-								parts = append(parts, client.Part{InlineData: &client.InlineData{
-									MimeType: mimeType,
-									Data:     fileData,
-								}})
+								node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.mime_type", mimeType)
+								node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.data", fileData)
+								p++
 							} else {
-								log.Warnf("Unknown file name extension '%s' at index %d, skipping file", ext, j)
+								log.Warnf("Unknown file name extension '%s' in user message, skip", ext)
 							}
 						}
 					}
-					contents = append(contents, client.Content{Role: "user", Parts: parts})
 				}
+				out, _ = sjson.SetRawBytes(out, "request.contents.-1", node)
 			} else if role == "assistant" {
-				// Assistant messages can contain text responses or tool calls
-				// In the internal format, assistant messages are converted to "model" role
-
-				if contentResult.Type == gjson.String {
-					// Simple text response from the assistant
-					contents = append(contents, client.Content{Role: "model", Parts: []client.Part{{Text: contentResult.String()}}})
-				} else if !contentResult.Exists() || contentResult.Type == gjson.Null {
-					// Handle complex tool calls made by the assistant
-					// This processes function calls and matches them with their responses
-					functionIDs := make([]string, 0)
-					toolCallsResult := messageResult.Get("tool_calls")
-					if toolCallsResult.IsArray() {
-						parts := make([]client.Part, 0)
-						tcsResult := toolCallsResult.Array()
-
-						// Process each tool call in the assistant's message
-						for j := 0; j < len(tcsResult); j++ {
-							tcResult := tcsResult[j]
-
-							// Extract function call details
-							functionID := tcResult.Get("id").String()
-							functionIDs = append(functionIDs, functionID)
-
-							functionName := tcResult.Get("function.name").String()
-							functionArgs := tcResult.Get("function.arguments").String()
-
-							// Parse function arguments from JSON string to map
-							var args map[string]any
-							if err := json.Unmarshal([]byte(functionArgs), &args); err == nil {
-								parts = append(parts, client.Part{
-									FunctionCall: &client.FunctionCall{
-										Name: functionName,
-										Args: args,
-									},
-								})
+				if content.Type == gjson.String {
+					// Assistant text -> single model content
+					node := []byte(`{"role":"model","parts":[{"text":""}]}`)
+					node, _ = sjson.SetBytes(node, "parts.0.text", content.String())
+					out, _ = sjson.SetRawBytes(out, "request.contents.-1", node)
+				} else if !content.Exists() || content.Type == gjson.Null {
+					// Tool calls -> single model content with functionCall parts
+					tcs := m.Get("tool_calls")
+					if tcs.IsArray() {
+						node := []byte(`{"role":"model","parts":[]}`)
+						p := 0
+						fIDs := make([]string, 0)
+						for _, tc := range tcs.Array() {
+							if tc.Get("type").String() != "function" {
+								continue
+							}
+							fid := tc.Get("id").String()
+							fname := tc.Get("function.name").String()
+							fargs := tc.Get("function.arguments").String()
+							node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".functionCall.name", fname)
+							node, _ = sjson.SetRawBytes(node, "parts."+itoa(p)+".functionCall.args", []byte(fargs))
+							p++
+							if fid != "" {
+								fIDs = append(fIDs, fid)
 							}
 						}
+						out, _ = sjson.SetRawBytes(out, "request.contents.-1", node)
 
-						// Add the model's function calls to the conversation
-						if len(parts) > 0 {
-							contents = append(contents, client.Content{
-								Role: "model", Parts: parts,
-							})
-
-							// Create a separate tool response message with the collected responses
-							// This matches function calls with their corresponding responses
-							toolParts := make([]client.Part, 0)
-							for _, functionID := range functionIDs {
-								if functionResponse, ok := toolItems[functionID]; ok {
-									toolParts = append(toolParts, client.Part{FunctionResponse: functionResponse})
+						// Append a single tool content combining name + response per function
+						toolNode := []byte(`{"role":"tool","parts":[]}`)
+						pp := 0
+						for _, fid := range fIDs {
+							if name, ok := tcID2Name[fid]; ok {
+								toolNode, _ = sjson.SetBytes(toolNode, "parts."+itoa(pp)+".functionResponse.name", name)
+								resp := toolResponses[fid]
+								if resp == "" {
+									resp = "{}"
 								}
+								toolNode, _ = sjson.SetRawBytes(toolNode, "parts."+itoa(pp)+".functionResponse.response", []byte(`{"result":`+quoteIfNeeded(resp)+`}`))
+								pp++
 							}
-							// Add the tool responses as a separate message in the conversation
-							contents = append(contents, client.Content{Role: "tool", Parts: toolParts})
+						}
+						if pp > 0 {
+							out, _ = sjson.SetRawBytes(out, "request.contents.-1", toolNode)
 						}
 					}
 				}
@@ -244,28 +213,38 @@ func ConvertOpenAIChatRequestToCli(rawJSON []byte) (string, *client.Content, []c
 		}
 	}
 
-	// Translate the tool declarations from the request.
-	var tools []client.ToolDeclaration
-	toolsResult := gjson.GetBytes(rawJSON, "tools")
-	if toolsResult.IsArray() {
-		tools = make([]client.ToolDeclaration, 1)
-		tools[0].FunctionDeclarations = make([]any, 0)
-		toolsResults := toolsResult.Array()
-		for i := 0; i < len(toolsResults); i++ {
-			toolResult := toolsResults[i]
-			if toolResult.Get("type").String() == "function" {
-				functionTypeResult := toolResult.Get("function")
-				if functionTypeResult.Exists() && functionTypeResult.IsObject() {
-					var functionDeclaration any
-					if err := json.Unmarshal([]byte(functionTypeResult.Raw), &functionDeclaration); err == nil {
-						tools[0].FunctionDeclarations = append(tools[0].FunctionDeclarations, functionDeclaration)
-					}
+	// tools -> request.tools[0].functionDeclarations
+	tools := gjson.GetBytes(rawJSON, "tools")
+	if tools.IsArray() {
+		out, _ = sjson.SetRawBytes(out, "request.tools", []byte(`[{"functionDeclarations":[]}]`))
+		fdPath := "request.tools.0.functionDeclarations"
+		for _, t := range tools.Array() {
+			if t.Get("type").String() == "function" {
+				fn := t.Get("function")
+				if fn.Exists() && fn.IsObject() {
+					out, _ = sjson.SetRawBytes(out, fdPath+".-1", []byte(fn.Raw))
 				}
 			}
 		}
-	} else {
-		tools = make([]client.ToolDeclaration, 0)
 	}
 
-	return modelName, systemInstruction, contents, tools
+	return out
+}
+
+// itoa converts int to string without strconv import for few usages.
+func itoa(i int) string { return fmt.Sprintf("%d", i) }
+
+// quoteIfNeeded ensures a string is valid JSON value (quotes plain text), pass-through for JSON objects/arrays.
+func quoteIfNeeded(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "\"\""
+	}
+	if len(s) > 0 && (s[0] == '{' || s[0] == '[') {
+		return s
+	}
+	// escape quotes minimally
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	return "\"" + s + "\""
 }

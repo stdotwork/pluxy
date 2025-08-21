@@ -1,28 +1,37 @@
-// Package code provides request translation functionality for Claude API.
+// Package claude provides request translation functionality for Claude API.
 // It handles parsing and transforming Claude API requests into the internal client format,
 // extracting model information, system instructions, message contents, and tool declarations.
 // The package also performs JSON data cleaning and transformation to ensure compatibility
 // between Claude API format and the internal client's expected format.
-package code
+package claude
 
 import (
 	"bytes"
 	"encoding/json"
 	"strings"
 
-	"github.com/luispater/CLIProxyAPI/internal/client"
+	client "github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/util"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
-// ConvertClaudeCodeRequestToCli parses and transforms a Claude API request into internal client format.
-// It extracts the model name, system instruction, message contents, and tool declarations
-// from the raw JSON request and returns them in the format expected by the internal client.
-func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []client.Content, []client.ToolDeclaration) {
+// ConvertClaudeRequestToGemini parses a Claude API request and returns a complete
+// Gemini CLI request body (as JSON bytes) ready to be sent via SendRawMessageStream.
+// All JSON transformations are performed using gjson/sjson.
+//
+// Parameters:
+//   - modelName: The name of the model.
+//   - rawJSON: The raw JSON request from the Claude API.
+//   - stream: A boolean indicating if the request is for a streaming response.
+//
+// Returns:
+//   - []byte: The transformed request in Gemini CLI format.
+func ConvertClaudeRequestToGemini(modelName string, rawJSON []byte, _ bool) []byte {
 	var pathsToDelete []string
 	root := gjson.ParseBytes(rawJSON)
-	walk(root, "", "additionalProperties", &pathsToDelete)
-	walk(root, "", "$schema", &pathsToDelete)
+	util.Walk(root, "", "additionalProperties", &pathsToDelete)
+	util.Walk(root, "", "$schema", &pathsToDelete)
 
 	var err error
 	for _, p := range pathsToDelete {
@@ -33,17 +42,8 @@ func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []c
 	}
 	rawJSON = bytes.Replace(rawJSON, []byte(`"url":{"type":"string","format":"uri",`), []byte(`"url":{"type":"string",`), -1)
 
-	// log.Debug(string(rawJSON))
-	modelName := "gemini-2.5-pro"
-	modelResult := gjson.GetBytes(rawJSON, "model")
-	if modelResult.Type == gjson.String {
-		modelName = modelResult.String()
-	}
-
-	contents := make([]client.Content, 0)
-
+	// system instruction
 	var systemInstruction *client.Content
-
 	systemResult := gjson.GetBytes(rawJSON, "system")
 	if systemResult.IsArray() {
 		systemResults := systemResult.Array()
@@ -62,6 +62,8 @@ func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []c
 		}
 	}
 
+	// contents
+	contents := make([]client.Content, 0)
 	messagesResult := gjson.GetBytes(rawJSON, "messages")
 	if messagesResult.IsArray() {
 		messageResults := messagesResult.Array()
@@ -76,7 +78,6 @@ func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []c
 				role = "model"
 			}
 			clientContent := client.Content{Role: role, Parts: []client.Part{}}
-
 			contentsResult := messageResult.Get("content")
 			if contentsResult.IsArray() {
 				contentResults := contentsResult.Array()
@@ -91,12 +92,7 @@ func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []c
 						functionArgs := contentResult.Get("input").String()
 						var args map[string]any
 						if err = json.Unmarshal([]byte(functionArgs), &args); err == nil {
-							clientContent.Parts = append(clientContent.Parts, client.Part{
-								FunctionCall: &client.FunctionCall{
-									Name: functionName,
-									Args: args,
-								},
-							})
+							clientContent.Parts = append(clientContent.Parts, client.Part{FunctionCall: &client.FunctionCall{Name: functionName, Args: args}})
 						}
 					} else if contentTypeResult.Type == gjson.String && contentTypeResult.String() == "tool_result" {
 						toolCallID := contentResult.Get("tool_use_id").String()
@@ -120,6 +116,7 @@ func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []c
 		}
 	}
 
+	// tools
 	var tools []client.ToolDeclaration
 	toolsResult := gjson.GetBytes(rawJSON, "tools")
 	if toolsResult.IsArray() {
@@ -133,7 +130,6 @@ func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []c
 				inputSchema := inputSchemaResult.Raw
 				inputSchema, _ = sjson.Delete(inputSchema, "additionalProperties")
 				inputSchema, _ = sjson.Delete(inputSchema, "$schema")
-
 				tool, _ := sjson.Delete(toolResult.Raw, "input_schema")
 				tool, _ = sjson.SetRaw(tool, "parameters", inputSchema)
 				var toolDeclaration any
@@ -146,25 +142,47 @@ func ConvertClaudeCodeRequestToCli(rawJSON []byte) (string, *client.Content, []c
 		tools = make([]client.ToolDeclaration, 0)
 	}
 
-	return modelName, systemInstruction, contents, tools
-}
-
-func walk(value gjson.Result, path, field string, pathsToDelete *[]string) {
-	switch value.Type {
-	case gjson.JSON:
-		value.ForEach(func(key, val gjson.Result) bool {
-			var childPath string
-			if path == "" {
-				childPath = key.String()
-			} else {
-				childPath = path + "." + key.String()
-			}
-			if key.String() == field {
-				*pathsToDelete = append(*pathsToDelete, childPath)
-			}
-			walk(val, childPath, field, pathsToDelete)
-			return true
-		})
-	case gjson.String, gjson.Number, gjson.True, gjson.False, gjson.Null:
+	// Build output Gemini CLI request JSON
+	out := `{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}}`
+	out, _ = sjson.Set(out, "model", modelName)
+	if systemInstruction != nil {
+		b, _ := json.Marshal(systemInstruction)
+		out, _ = sjson.SetRaw(out, "system_instruction", string(b))
 	}
+	if len(contents) > 0 {
+		b, _ := json.Marshal(contents)
+		out, _ = sjson.SetRaw(out, "contents", string(b))
+	}
+	if len(tools) > 0 && len(tools[0].FunctionDeclarations) > 0 {
+		b, _ := json.Marshal(tools)
+		out, _ = sjson.SetRaw(out, "tools", string(b))
+	}
+
+	// Map reasoning and sampling configs
+	reasoningEffortResult := gjson.GetBytes(rawJSON, "reasoning_effort")
+	if reasoningEffortResult.String() == "none" {
+		out, _ = sjson.Set(out, "generationConfig.thinkingConfig.include_thoughts", false)
+		out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 0)
+	} else if reasoningEffortResult.String() == "auto" {
+		out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", -1)
+	} else if reasoningEffortResult.String() == "low" {
+		out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 1024)
+	} else if reasoningEffortResult.String() == "medium" {
+		out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 8192)
+	} else if reasoningEffortResult.String() == "high" {
+		out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 24576)
+	} else {
+		out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", -1)
+	}
+	if v := gjson.GetBytes(rawJSON, "temperature"); v.Exists() && v.Type == gjson.Number {
+		out, _ = sjson.Set(out, "generationConfig.temperature", v.Num)
+	}
+	if v := gjson.GetBytes(rawJSON, "top_p"); v.Exists() && v.Type == gjson.Number {
+		out, _ = sjson.Set(out, "generationConfig.topP", v.Num)
+	}
+	if v := gjson.GetBytes(rawJSON, "top_k"); v.Exists() && v.Type == gjson.Number {
+		out, _ = sjson.Set(out, "generationConfig.topK", v.Num)
+	}
+
+	return []byte(out)
 }

@@ -1,11 +1,13 @@
-// Package code provides response translation functionality for Gemini API.
-// This package handles the conversion of Codex backend responses into Gemini-compatible
-// JSON format, transforming streaming events into single-line JSON responses that include
-// thinking content, regular text content, and function calls in the format expected by
-// Gemini API clients.
-package code
+// Package gemini provides response translation functionality for Codex to Gemini API compatibility.
+// This package handles the conversion of Codex API responses into Gemini-compatible
+// JSON format, transforming streaming events and non-streaming responses into the format
+// expected by Gemini API clients.
+package gemini
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"time"
 
@@ -13,6 +15,11 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+var (
+	dataTag = []byte("data: ")
+)
+
+// ConvertCodexResponseToGeminiParams holds parameters for response conversion.
 type ConvertCodexResponseToGeminiParams struct {
 	Model             string
 	CreatedAt         int64
@@ -20,28 +27,50 @@ type ConvertCodexResponseToGeminiParams struct {
 	LastStorageOutput string
 }
 
-// ConvertCodexResponseToGemini converts Codex streaming response format to Gemini single-line JSON format.
+// ConvertCodexResponseToGemini converts Codex streaming response format to Gemini format.
 // This function processes various Codex event types and transforms them into Gemini-compatible JSON responses.
-// It handles thinking content, regular text content, and function calls, outputting single-line JSON
-// that matches the Gemini API response format.
-// The lastEventType parameter tracks the previous event type to handle consecutive function calls properly.
-func ConvertCodexResponseToGemini(rawJSON []byte, param *ConvertCodexResponseToGeminiParams) []string {
+// It handles text content, tool calls, and usage metadata, outputting responses that match the Gemini API format.
+// The function maintains state across multiple calls to ensure proper response sequencing.
+//
+// Parameters:
+//   - ctx: The context for the request, used for cancellation and timeout handling
+//   - modelName: The name of the model being used for the response
+//   - rawJSON: The raw JSON response from the Codex API
+//   - param: A pointer to a parameter object for maintaining state between calls
+//
+// Returns:
+//   - []string: A slice of strings, each containing a Gemini-compatible JSON response
+func ConvertCodexResponseToGemini(_ context.Context, modelName string, rawJSON []byte, param *any) []string {
+	if *param == nil {
+		*param = &ConvertCodexResponseToGeminiParams{
+			Model:             modelName,
+			CreatedAt:         0,
+			ResponseID:        "",
+			LastStorageOutput: "",
+		}
+	}
+
+	if !bytes.HasPrefix(rawJSON, dataTag) {
+		return []string{}
+	}
+	rawJSON = rawJSON[6:]
+
 	rootResult := gjson.ParseBytes(rawJSON)
 	typeResult := rootResult.Get("type")
 	typeStr := typeResult.String()
 
 	// Base Gemini response template
 	template := `{"candidates":[{"content":{"role":"model","parts":[]}}],"usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"},"modelVersion":"gemini-2.5-pro","createTime":"2025-08-15T02:52:03.884209Z","responseId":"06CeaPH7NaCU48APvNXDyA4"}`
-	if param.LastStorageOutput != "" && typeStr == "response.output_item.done" {
-		template = param.LastStorageOutput
+	if (*param).(*ConvertCodexResponseToGeminiParams).LastStorageOutput != "" && typeStr == "response.output_item.done" {
+		template = (*param).(*ConvertCodexResponseToGeminiParams).LastStorageOutput
 	} else {
-		template, _ = sjson.Set(template, "modelVersion", param.Model)
+		template, _ = sjson.Set(template, "modelVersion", (*param).(*ConvertCodexResponseToGeminiParams).Model)
 		createdAtResult := rootResult.Get("response.created_at")
 		if createdAtResult.Exists() {
-			param.CreatedAt = createdAtResult.Int()
-			template, _ = sjson.Set(template, "createTime", time.Unix(param.CreatedAt, 0).Format(time.RFC3339Nano))
+			(*param).(*ConvertCodexResponseToGeminiParams).CreatedAt = createdAtResult.Int()
+			template, _ = sjson.Set(template, "createTime", time.Unix((*param).(*ConvertCodexResponseToGeminiParams).CreatedAt, 0).Format(time.RFC3339Nano))
 		}
-		template, _ = sjson.Set(template, "responseId", param.ResponseID)
+		template, _ = sjson.Set(template, "responseId", (*param).(*ConvertCodexResponseToGeminiParams).ResponseID)
 	}
 
 	// Handle function call completion
@@ -65,7 +94,7 @@ func ConvertCodexResponseToGemini(rawJSON []byte, param *ConvertCodexResponseToG
 			template, _ = sjson.SetRaw(template, "candidates.0.content.parts.-1", functionCall)
 			template, _ = sjson.Set(template, "candidates.0.finishReason", "STOP")
 
-			param.LastStorageOutput = template
+			(*param).(*ConvertCodexResponseToGeminiParams).LastStorageOutput = template
 
 			// Use this return to storage message
 			return []string{}
@@ -75,7 +104,7 @@ func ConvertCodexResponseToGemini(rawJSON []byte, param *ConvertCodexResponseToG
 	if typeStr == "response.created" { // Handle response creation - set model and response ID
 		template, _ = sjson.Set(template, "modelVersion", rootResult.Get("response.model").String())
 		template, _ = sjson.Set(template, "responseId", rootResult.Get("response.id").String())
-		param.ResponseID = rootResult.Get("response.id").String()
+		(*param).(*ConvertCodexResponseToGeminiParams).ResponseID = rootResult.Get("response.id").String()
 	} else if typeStr == "response.reasoning_summary_text.delta" { // Handle reasoning/thinking content delta
 		part := `{"thought":true,"text":""}`
 		part, _ = sjson.Set(part, "text", rootResult.Get("delta").String())
@@ -93,155 +122,177 @@ func ConvertCodexResponseToGemini(rawJSON []byte, param *ConvertCodexResponseToG
 		return []string{}
 	}
 
-	if param.LastStorageOutput != "" {
-		return []string{param.LastStorageOutput, template}
+	if (*param).(*ConvertCodexResponseToGeminiParams).LastStorageOutput != "" {
+		return []string{(*param).(*ConvertCodexResponseToGeminiParams).LastStorageOutput, template}
 	} else {
 		return []string{template}
 	}
 
 }
 
-// ConvertCodexResponseToGeminiNonStream converts a completed Codex response to Gemini non-streaming format.
-// This function processes the final response.completed event and transforms it into a complete
-// Gemini-compatible JSON response that includes all content parts, function calls, and usage metadata.
-func ConvertCodexResponseToGeminiNonStream(rawJSON []byte, model string) string {
-	rootResult := gjson.ParseBytes(rawJSON)
+// ConvertCodexResponseToGeminiNonStream converts a non-streaming Codex response to a non-streaming Gemini response.
+// This function processes the complete Codex response and transforms it into a single Gemini-compatible
+// JSON response. It handles message content, tool calls, reasoning content, and usage metadata, combining all
+// the information into a single response that matches the Gemini API format.
+//
+// Parameters:
+//   - ctx: The context for the request, used for cancellation and timeout handling
+//   - modelName: The name of the model being used for the response
+//   - rawJSON: The raw JSON response from the Codex API
+//   - param: A pointer to a parameter object for the conversion (unused in current implementation)
+//
+// Returns:
+//   - string: A Gemini-compatible JSON response containing all message content and metadata
+func ConvertCodexResponseToGeminiNonStream(_ context.Context, modelName string, rawJSON []byte, _ *any) string {
+	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
+	buffer := make([]byte, 10240*1024)
+	scanner.Buffer(buffer, 10240*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		// log.Debug(string(line))
+		if !bytes.HasPrefix(line, dataTag) {
+			continue
+		}
+		rawJSON = line[6:]
 
-	// Verify this is a response.completed event
-	if rootResult.Get("type").String() != "response.completed" {
-		return ""
-	}
+		rootResult := gjson.ParseBytes(rawJSON)
 
-	// Base Gemini response template for non-streaming
-	template := `{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"},"modelVersion":"","createTime":"","responseId":""}`
-
-	// Set model version
-	template, _ = sjson.Set(template, "modelVersion", model)
-
-	// Set response metadata from the completed response
-	responseData := rootResult.Get("response")
-	if responseData.Exists() {
-		// Set response ID
-		if responseId := responseData.Get("id"); responseId.Exists() {
-			template, _ = sjson.Set(template, "responseId", responseId.String())
+		// Verify this is a response.completed event
+		if rootResult.Get("type").String() != "response.completed" {
+			continue
 		}
 
-		// Set creation time
-		if createdAt := responseData.Get("created_at"); createdAt.Exists() {
-			template, _ = sjson.Set(template, "createTime", time.Unix(createdAt.Int(), 0).Format(time.RFC3339Nano))
-		}
+		// Base Gemini response template for non-streaming
+		template := `{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"},"modelVersion":"","createTime":"","responseId":""}`
 
-		// Set usage metadata
-		if usage := responseData.Get("usage"); usage.Exists() {
-			inputTokens := usage.Get("input_tokens").Int()
-			outputTokens := usage.Get("output_tokens").Int()
-			totalTokens := inputTokens + outputTokens
+		// Set model version
+		template, _ = sjson.Set(template, "modelVersion", modelName)
 
-			template, _ = sjson.Set(template, "usageMetadata.promptTokenCount", inputTokens)
-			template, _ = sjson.Set(template, "usageMetadata.candidatesTokenCount", outputTokens)
-			template, _ = sjson.Set(template, "usageMetadata.totalTokenCount", totalTokens)
-		}
-
-		// Process output content to build parts array
-		var parts []interface{}
-		hasToolCall := false
-		var pendingFunctionCalls []interface{}
-
-		flushPendingFunctionCalls := func() {
-			if len(pendingFunctionCalls) > 0 {
-				// Add all pending function calls as individual parts
-				// This maintains the original Gemini API format while ensuring consecutive calls are grouped together
-				for _, fc := range pendingFunctionCalls {
-					parts = append(parts, fc)
-				}
-				pendingFunctionCalls = nil
+		// Set response metadata from the completed response
+		responseData := rootResult.Get("response")
+		if responseData.Exists() {
+			// Set response ID
+			if responseId := responseData.Get("id"); responseId.Exists() {
+				template, _ = sjson.Set(template, "responseId", responseId.String())
 			}
-		}
 
-		if output := responseData.Get("output"); output.Exists() && output.IsArray() {
-			output.ForEach(func(key, value gjson.Result) bool {
-				itemType := value.Get("type").String()
+			// Set creation time
+			if createdAt := responseData.Get("created_at"); createdAt.Exists() {
+				template, _ = sjson.Set(template, "createTime", time.Unix(createdAt.Int(), 0).Format(time.RFC3339Nano))
+			}
 
-				switch itemType {
-				case "reasoning":
-					// Flush any pending function calls before adding non-function content
-					flushPendingFunctionCalls()
+			// Set usage metadata
+			if usage := responseData.Get("usage"); usage.Exists() {
+				inputTokens := usage.Get("input_tokens").Int()
+				outputTokens := usage.Get("output_tokens").Int()
+				totalTokens := inputTokens + outputTokens
 
-					// Add thinking content
-					if content := value.Get("content"); content.Exists() {
-						part := map[string]interface{}{
-							"thought": true,
-							"text":    content.String(),
-						}
-						parts = append(parts, part)
+				template, _ = sjson.Set(template, "usageMetadata.promptTokenCount", inputTokens)
+				template, _ = sjson.Set(template, "usageMetadata.candidatesTokenCount", outputTokens)
+				template, _ = sjson.Set(template, "usageMetadata.totalTokenCount", totalTokens)
+			}
+
+			// Process output content to build parts array
+			var parts []interface{}
+			hasToolCall := false
+			var pendingFunctionCalls []interface{}
+
+			flushPendingFunctionCalls := func() {
+				if len(pendingFunctionCalls) > 0 {
+					// Add all pending function calls as individual parts
+					// This maintains the original Gemini API format while ensuring consecutive calls are grouped together
+					for _, fc := range pendingFunctionCalls {
+						parts = append(parts, fc)
 					}
+					pendingFunctionCalls = nil
+				}
+			}
 
-				case "message":
-					// Flush any pending function calls before adding non-function content
-					flushPendingFunctionCalls()
+			if output := responseData.Get("output"); output.Exists() && output.IsArray() {
+				output.ForEach(func(key, value gjson.Result) bool {
+					itemType := value.Get("type").String()
 
-					// Add regular text content
-					if content := value.Get("content"); content.Exists() && content.IsArray() {
-						content.ForEach(func(_, contentItem gjson.Result) bool {
-							if contentItem.Get("type").String() == "output_text" {
-								if text := contentItem.Get("text"); text.Exists() {
-									part := map[string]interface{}{
-										"text": text.String(),
+					switch itemType {
+					case "reasoning":
+						// Flush any pending function calls before adding non-function content
+						flushPendingFunctionCalls()
+
+						// Add thinking content
+						if content := value.Get("content"); content.Exists() {
+							part := map[string]interface{}{
+								"thought": true,
+								"text":    content.String(),
+							}
+							parts = append(parts, part)
+						}
+
+					case "message":
+						// Flush any pending function calls before adding non-function content
+						flushPendingFunctionCalls()
+
+						// Add regular text content
+						if content := value.Get("content"); content.Exists() && content.IsArray() {
+							content.ForEach(func(_, contentItem gjson.Result) bool {
+								if contentItem.Get("type").String() == "output_text" {
+									if text := contentItem.Get("text"); text.Exists() {
+										part := map[string]interface{}{
+											"text": text.String(),
+										}
+										parts = append(parts, part)
 									}
-									parts = append(parts, part)
+								}
+								return true
+							})
+						}
+
+					case "function_call":
+						// Collect function call for potential merging with consecutive ones
+						hasToolCall = true
+						functionCall := map[string]interface{}{
+							"functionCall": map[string]interface{}{
+								"name": value.Get("name").String(),
+								"args": map[string]interface{}{},
+							},
+						}
+
+						// Parse and set arguments
+						if argsStr := value.Get("arguments").String(); argsStr != "" {
+							argsResult := gjson.Parse(argsStr)
+							if argsResult.IsObject() {
+								var args map[string]interface{}
+								if err := json.Unmarshal([]byte(argsStr), &args); err == nil {
+									functionCall["functionCall"].(map[string]interface{})["args"] = args
 								}
 							}
-							return true
-						})
-					}
-
-				case "function_call":
-					// Collect function call for potential merging with consecutive ones
-					hasToolCall = true
-					functionCall := map[string]interface{}{
-						"functionCall": map[string]interface{}{
-							"name": value.Get("name").String(),
-							"args": map[string]interface{}{},
-						},
-					}
-
-					// Parse and set arguments
-					if argsStr := value.Get("arguments").String(); argsStr != "" {
-						argsResult := gjson.Parse(argsStr)
-						if argsResult.IsObject() {
-							var args map[string]interface{}
-							if err := json.Unmarshal([]byte(argsStr), &args); err == nil {
-								functionCall["functionCall"].(map[string]interface{})["args"] = args
-							}
 						}
+
+						pendingFunctionCalls = append(pendingFunctionCalls, functionCall)
 					}
+					return true
+				})
 
-					pendingFunctionCalls = append(pendingFunctionCalls, functionCall)
-				}
-				return true
-			})
+				// Handle any remaining pending function calls at the end
+				flushPendingFunctionCalls()
+			}
 
-			// Handle any remaining pending function calls at the end
-			flushPendingFunctionCalls()
+			// Set the parts array
+			if len(parts) > 0 {
+				template, _ = sjson.SetRaw(template, "candidates.0.content.parts", mustMarshalJSON(parts))
+			}
+
+			// Set finish reason based on whether there were tool calls
+			if hasToolCall {
+				template, _ = sjson.Set(template, "candidates.0.finishReason", "STOP")
+			} else {
+				template, _ = sjson.Set(template, "candidates.0.finishReason", "STOP")
+			}
 		}
-
-		// Set the parts array
-		if len(parts) > 0 {
-			template, _ = sjson.SetRaw(template, "candidates.0.content.parts", mustMarshalJSON(parts))
-		}
-
-		// Set finish reason based on whether there were tool calls
-		if hasToolCall {
-			template, _ = sjson.Set(template, "candidates.0.finishReason", "STOP")
-		} else {
-			template, _ = sjson.Set(template, "candidates.0.finishReason", "STOP")
-		}
+		return template
 	}
-
-	return template
+	return ""
 }
 
-// mustMarshalJSON marshals data to JSON, panicking on error (should not happen with valid data)
+// mustMarshalJSON marshals a value to JSON, panicking on error.
 func mustMarshalJSON(v interface{}) string {
 	data, err := json.Marshal(v)
 	if err != nil {

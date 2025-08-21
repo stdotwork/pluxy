@@ -18,7 +18,7 @@ import (
 // ConvertGeminiRequestToOpenAI parses and transforms a Gemini API request into OpenAI Chat Completions API format.
 // It extracts the model name, generation config, message contents, and tool declarations
 // from the raw JSON request and returns them in the format expected by the OpenAI API.
-func ConvertGeminiRequestToOpenAI(rawJSON []byte) string {
+func ConvertGeminiRequestToOpenAI(modelName string, rawJSON []byte, stream bool) []byte {
 	// Base OpenAI Chat Completions API template
 	out := `{"model":"","messages":[]}`
 
@@ -37,10 +37,7 @@ func ConvertGeminiRequestToOpenAI(rawJSON []byte) string {
 	}
 
 	// Model mapping
-	if model := root.Get("model"); model.Exists() {
-		modelStr := model.String()
-		out, _ = sjson.Set(out, "model", modelStr)
-	}
+	out, _ = sjson.Set(out, "model", modelName)
 
 	// Generation config mapping
 	if genConfig := root.Get("generationConfig"); genConfig.Exists() {
@@ -79,9 +76,7 @@ func ConvertGeminiRequestToOpenAI(rawJSON []byte) string {
 	}
 
 	// Stream parameter
-	if stream := root.Get("stream"); stream.Exists() {
-		out, _ = sjson.Set(out, "stream", stream.Bool())
-	}
+	out, _ = sjson.Set(out, "stream", stream)
 
 	// Process contents (Gemini messages) -> OpenAI messages
 	var openAIMessages []interface{}
@@ -355,5 +350,5 @@ func ConvertGeminiRequestToOpenAI(rawJSON []byte) string {
 		}
 	}
 
-	return out
+	return []byte(out)
 }

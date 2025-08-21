@@ -13,9 +13,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// DoLogin handles the entire user login and setup process.
+// DoLogin handles the entire user login and setup process for Google Gemini services.
 // It authenticates the user, sets up the user's project, checks API enablement,
 // and saves the token for future use.
+//
+// Parameters:
+//   - cfg: The application configuration
+//   - projectID: The Google Cloud Project ID to use (optional)
+//   - options: The login options containing browser preferences
 func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 	if options == nil {
 		options = &LoginOptions{}
@@ -39,7 +44,7 @@ func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 	log.Info("Authentication successful.")
 
 	// Initialize the API client.
-	cliClient := client.NewGeminiClient(httpClient, &ts, cfg)
+	cliClient := client.NewGeminiCLIClient(httpClient, &ts, cfg)
 
 	// Perform the user setup process.
 	err = cliClient.SetupUser(clientCtx, ts.Email, projectID)

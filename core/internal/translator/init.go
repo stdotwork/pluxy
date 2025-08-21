@@ -1,0 +1,20 @@
+package translator
+
+import (
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/claude/gemini"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/claude/gemini-cli"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/claude/openai"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/codex/claude"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/codex/gemini"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/codex/gemini-cli"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/codex/openai"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/claude"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/gemini"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/openai"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini/claude"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini/gemini-cli"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini/openai"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/openai/claude"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/openai/gemini"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/openai/gemini-cli"
+)

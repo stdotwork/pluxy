@@ -50,8 +50,14 @@ type QuotaExceeded struct {
 	SwitchPreviewModel bool `yaml:"switch-preview-model"`
 }
 
+// ClaudeKey represents the configuration for a Claude API key,
+// including the API key itself and an optional base URL for the API endpoint.
 type ClaudeKey struct {
-	APIKey  string `yaml:"api-key"`
+	// APIKey is the authentication key for accessing Claude API services.
+	APIKey string `yaml:"api-key"`
+
+	// BaseURL is the base URL for the Claude API endpoint.
+	// If empty, the default Claude API URL will be used.
 	BaseURL string `yaml:"base-url"`
 }
 

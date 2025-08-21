@@ -1,8 +1,8 @@
-// Package cmd provides the main service execution functionality for the CLIProxyAPI.
-// It contains the core logic for starting and managing the API proxy service,
-// including authentication client management, server initialization, and graceful shutdown handling.
-// The package handles loading authentication tokens, creating client pools, starting the API server,
-// and monitoring configuration changes through file watchers.
+// Package cmd provides command-line interface functionality for the CLI Proxy API.
+// It implements the main application commands including service startup, authentication
+// client management, and graceful shutdown handling. The package handles loading
+// authentication tokens, creating client pools, starting the API server, and monitoring
+// configuration changes through file watchers.
 package cmd
 
 import (
@@ -25,6 +25,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/auth/qwen"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	"github.com/luispater/CLIProxyAPI/internal/watcher"
 	log "github.com/sirupsen/logrus"
@@ -34,19 +35,27 @@ import (
 // StartService initializes and starts the main API proxy service.
 // It loads all available authentication tokens, creates a pool of clients,
 // starts the API server, and handles graceful shutdown signals.
+// The function performs the following operations:
+// 1. Walks through the authentication directory to load all JSON token files
+// 2. Creates authenticated clients based on token types (gemini, codex, claude, qwen)
+// 3. Initializes clients with API keys if provided in configuration
+// 4. Starts the API server with the client pool
+// 5. Sets up file watching for configuration and authentication directory changes
+// 6. Implements background token refresh for Codex, Claude, and Qwen clients
+// 7. Handles graceful shutdown on SIGINT or SIGTERM signals
 //
 // Parameters:
-//   - cfg: The application configuration
-//   - configPath: The path to the configuration file
+//   - cfg: The application configuration containing settings like port, auth directory, API keys
+//   - configPath: The path to the configuration file for watching changes
 func StartService(cfg *config.Config, configPath string) {
 	// Create a pool of API clients, one for each token file found.
-	cliClients := make([]client.Client, 0)
+	cliClients := make([]interfaces.Client, 0)
 	err := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Process only JSON files in the auth directory.
+		// Process only JSON files in the auth directory to load authentication tokens.
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
 			log.Debugf("Loading token from: %s", path)
 			data, errReadFile := os.ReadFile(path)
@@ -54,6 +63,7 @@ func StartService(cfg *config.Config, configPath string) {
 				return errReadFile
 			}
 
+			// Determine token type from JSON data, defaulting to "gemini" if not specified.
 			tokenType := "gemini"
 			typeResult := gjson.GetBytes(data, "type")
 			if typeResult.Exists() {
@@ -65,7 +75,7 @@ func StartService(cfg *config.Config, configPath string) {
 			if tokenType == "gemini" {
 				var ts gemini.GeminiTokenStorage
 				if err = json.Unmarshal(data, &ts); err == nil {
-					// For each valid token, create an authenticated client.
+					// For each valid Gemini token, create an authenticated client.
 					log.Info("Initializing gemini authentication for token...")
 					geminiAuth := gemini.NewGeminiAuth()
 					httpClient, errGetClient := geminiAuth.GetAuthenticatedClient(clientCtx, &ts, cfg)
@@ -77,13 +87,13 @@ func StartService(cfg *config.Config, configPath string) {
 					log.Info("Authentication successful.")
 
 					// Add the new client to the pool.
-					cliClient := client.NewGeminiClient(httpClient, &ts, cfg)
+					cliClient := client.NewGeminiCLIClient(httpClient, &ts, cfg)
 					cliClients = append(cliClients, cliClient)
 				}
 			} else if tokenType == "codex" {
 				var ts codex.CodexTokenStorage
 				if err = json.Unmarshal(data, &ts); err == nil {
-					// For each valid token, create an authenticated client.
+					// For each valid Codex token, create an authenticated client.
 					log.Info("Initializing codex authentication for token...")
 					codexClient, errGetClient := client.NewCodexClient(cfg, &ts)
 					if errGetClient != nil {
@@ -97,7 +107,7 @@ func StartService(cfg *config.Config, configPath string) {
 			} else if tokenType == "claude" {
 				var ts claude.ClaudeTokenStorage
 				if err = json.Unmarshal(data, &ts); err == nil {
-					// For each valid token, create an authenticated client.
+					// For each valid Claude token, create an authenticated client.
 					log.Info("Initializing claude authentication for token...")
 					claudeClient := client.NewClaudeClient(cfg, &ts)
 					log.Info("Authentication successful.")
@@ -106,7 +116,7 @@ func StartService(cfg *config.Config, configPath string) {
 			} else if tokenType == "qwen" {
 				var ts qwen.QwenTokenStorage
 				if err = json.Unmarshal(data, &ts); err == nil {
-					// For each valid token, create an authenticated client.
+					// For each valid Qwen token, create an authenticated client.
 					log.Info("Initializing qwen authentication for token...")
 					qwenClient := client.NewQwenClient(cfg, &ts)
 					log.Info("Authentication successful.")
@@ -121,16 +131,18 @@ func StartService(cfg *config.Config, configPath string) {
 	}
 
 	if len(cfg.GlAPIKey) > 0 {
+		// Initialize clients with Generative Language API Keys if provided in configuration.
 		for i := 0; i < len(cfg.GlAPIKey); i++ {
 			httpClient := util.SetProxy(cfg, &http.Client{})
 
 			log.Debug("Initializing with Generative Language API Key...")
-			cliClient := client.NewGeminiClient(httpClient, nil, cfg, cfg.GlAPIKey[i])
+			cliClient := client.NewGeminiClient(httpClient, cfg, cfg.GlAPIKey[i])
 			cliClients = append(cliClients, cliClient)
 		}
 	}
 
 	if len(cfg.ClaudeKey) > 0 {
+		// Initialize clients with Claude API Keys if provided in configuration.
 		for i := 0; i < len(cfg.ClaudeKey); i++ {
 			log.Debug("Initializing with Claude API Key...")
 			cliClient := client.NewClaudeClientWithKey(cfg, i)
@@ -138,35 +150,35 @@ func StartService(cfg *config.Config, configPath string) {
 		}
 	}
 
-	// Create and start the API server with the pool of clients.
+	// Create and start the API server with the pool of clients in a separate goroutine.
 	apiServer := api.NewServer(cfg, cliClients)
 	log.Infof("Starting API server on port %d", cfg.Port)
 
-	// Start the API server in a goroutine so it doesn't block the main thread
+	// Start the API server in a goroutine so it doesn't block the main thread.
 	go func() {
 		if err = apiServer.Start(); err != nil {
 			log.Fatalf("API server failed to start: %v", err)
 		}
 	}()
 
-	// Give the server a moment to start up
+	// Give the server a moment to start up before proceeding.
 	time.Sleep(100 * time.Millisecond)
 	log.Info("API server started successfully")
 
-	// Setup file watcher for config and auth directory changes
-	fileWatcher, errNewWatcher := watcher.NewWatcher(configPath, cfg.AuthDir, func(newClients []client.Client, newCfg *config.Config) {
-		// Update the API server with new clients and configuration
+	// Setup file watcher for config and auth directory changes to enable hot-reloading.
+	fileWatcher, errNewWatcher := watcher.NewWatcher(configPath, cfg.AuthDir, func(newClients []interfaces.Client, newCfg *config.Config) {
+		// Update the API server with new clients and configuration when files change.
 		apiServer.UpdateClients(newClients, newCfg)
 	})
 	if errNewWatcher != nil {
 		log.Fatalf("failed to create file watcher: %v", errNewWatcher)
 	}
 
-	// Set initial state for the watcher
+	// Set initial state for the watcher with current configuration and clients.
 	fileWatcher.SetConfig(cfg)
 	fileWatcher.SetClients(cliClients)
 
-	// Start the file watcher
+	// Start the file watcher in a separate context.
 	watcherCtx, watcherCancel := context.WithCancel(context.Background())
 	if errStartWatcher := fileWatcher.Start(watcherCtx); errStartWatcher != nil {
 		log.Fatalf("failed to start file watcher: %v", errStartWatcher)
@@ -174,6 +186,7 @@ func StartService(cfg *config.Config, configPath string) {
 	log.Info("file watcher started for config and auth directory changes")
 
 	defer func() {
+		// Clean up file watcher resources on shutdown.
 		watcherCancel()
 		errStopWatcher := fileWatcher.Stop()
 		if errStopWatcher != nil {
@@ -185,7 +198,7 @@ func StartService(cfg *config.Config, configPath string) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Background token refresh ticker for Codex clients
+	// Background token refresh ticker for Codex, Claude, and Qwen clients to handle token expiration.
 	ctxRefresh, cancelRefresh := context.WithCancel(context.Background())
 	var wgRefresh sync.WaitGroup
 	wgRefresh.Add(1)
@@ -193,6 +206,8 @@ func StartService(cfg *config.Config, configPath string) {
 		defer wgRefresh.Done()
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
+
+		// Function to check and refresh tokens for all client types before they expire.
 		checkAndRefresh := func() {
 			for i := 0; i < len(cliClients); i++ {
 				if codexCli, ok := cliClients[i].(*client.CodexClient); ok {
@@ -230,7 +245,8 @@ func StartService(cfg *config.Config, configPath string) {
 				}
 			}
 		}
-		// Initial check on start
+
+		// Initial check on start to refresh tokens if needed.
 		checkAndRefresh()
 		for {
 			select {
@@ -242,7 +258,7 @@ func StartService(cfg *config.Config, configPath string) {
 		}
 	}()
 
-	// Main loop to wait for shutdown signal.
+	// Main loop to wait for shutdown signal or periodic checks.
 	for {
 		select {
 		case <-sigChan:
@@ -263,6 +279,7 @@ func StartService(cfg *config.Config, configPath string) {
 			log.Debugf("Cleanup completed. Exiting...")
 			os.Exit(0)
 		case <-time.After(5 * time.Second):
+			// Periodic check to keep the loop running.
 		}
 	}
 }

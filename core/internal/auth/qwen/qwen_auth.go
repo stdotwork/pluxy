@@ -19,56 +19,77 @@ import (
 )
 
 const (
-	// OAuth Configuration
+	// QwenOAuthDeviceCodeEndpoint is the URL for initiating the OAuth 2.0 device authorization flow.
 	QwenOAuthDeviceCodeEndpoint = "https://chat.qwen.ai/api/v1/oauth2/device/code"
-	QwenOAuthTokenEndpoint      = "https://chat.qwen.ai/api/v1/oauth2/token"
-	QwenOAuthClientID           = "f0304373b74a44d2b584a3fb70ca9e56"
-	QwenOAuthScope              = "openid profile email model.completion"
-	QwenOAuthGrantType          = "urn:ietf:params:oauth:grant-type:device_code"
+	// QwenOAuthTokenEndpoint is the URL for exchanging device codes or refresh tokens for access tokens.
+	QwenOAuthTokenEndpoint = "https://chat.qwen.ai/api/v1/oauth2/token"
+	// QwenOAuthClientID is the client identifier for the Qwen OAuth 2.0 application.
+	QwenOAuthClientID = "f0304373b74a44d2b584a3fb70ca9e56"
+	// QwenOAuthScope defines the permissions requested by the application.
+	QwenOAuthScope = "openid profile email model.completion"
+	// QwenOAuthGrantType specifies the grant type for the device code flow.
+	QwenOAuthGrantType = "urn:ietf:params:oauth:grant-type:device_code"
 )
 
-// QwenTokenData represents OAuth credentials
+// QwenTokenData represents the OAuth credentials, including access and refresh tokens.
 type QwenTokenData struct {
-	AccessToken  string `json:"access_token"`
+	AccessToken string `json:"access_token"`
+	// RefreshToken is used to obtain a new access token when the current one expires.
 	RefreshToken string `json:"refresh_token,omitempty"`
-	TokenType    string `json:"token_type"`
-	ResourceURL  string `json:"resource_url,omitempty"`
-	Expire       string `json:"expiry_date,omitempty"`
+	// TokenType indicates the type of token, typically "Bearer".
+	TokenType string `json:"token_type"`
+	// ResourceURL specifies the base URL of the resource server.
+	ResourceURL string `json:"resource_url,omitempty"`
+	// Expire indicates the expiration date and time of the access token.
+	Expire string `json:"expiry_date,omitempty"`
 }
 
-// DeviceFlow represents device flow response
+// DeviceFlow represents the response from the device authorization endpoint.
 type DeviceFlow struct {
-	DeviceCode              string `json:"device_code"`
-	UserCode                string `json:"user_code"`
-	VerificationURI         string `json:"verification_uri"`
+	// DeviceCode is the code that the client uses to poll for an access token.
+	DeviceCode string `json:"device_code"`
+	// UserCode is the code that the user enters at the verification URI.
+	UserCode string `json:"user_code"`
+	// VerificationURI is the URL where the user can enter the user code to authorize the device.
+	VerificationURI string `json:"verification_uri"`
+	// VerificationURIComplete is a URI that includes the user_code, which can be used to automatically
+	// fill in the code on the verification page.
 	VerificationURIComplete string `json:"verification_uri_complete"`
-	ExpiresIn               int    `json:"expires_in"`
-	Interval                int    `json:"interval"`
-	CodeVerifier            string `json:"code_verifier"`
+	// ExpiresIn is the time in seconds until the device_code and user_code expire.
+	ExpiresIn int `json:"expires_in"`
+	// Interval is the minimum time in seconds that the client should wait between polling requests.
+	Interval int `json:"interval"`
+	// CodeVerifier is the cryptographically random string used in the PKCE flow.
+	CodeVerifier string `json:"code_verifier"`
 }
 
-// QwenTokenResponse represents token response
+// QwenTokenResponse represents the successful token response from the token endpoint.
 type QwenTokenResponse struct {
-	AccessToken  string `json:"access_token"`
+	// AccessToken is the token used to access protected resources.
+	AccessToken string `json:"access_token"`
+	// RefreshToken is used to obtain a new access token.
 	RefreshToken string `json:"refresh_token,omitempty"`
-	TokenType    string `json:"token_type"`
-	ResourceURL  string `json:"resource_url,omitempty"`
-	ExpiresIn    int    `json:"expires_in"`
+	// TokenType indicates the type of token, typically "Bearer".
+	TokenType string `json:"token_type"`
+	// ResourceURL specifies the base URL of the resource server.
+	ResourceURL string `json:"resource_url,omitempty"`
+	// ExpiresIn is the time in seconds until the access token expires.
+	ExpiresIn int `json:"expires_in"`
 }
 
-// QwenAuth manages authentication and credentials
+// QwenAuth manages authentication and token handling for the Qwen API.
 type QwenAuth struct {
 	httpClient *http.Client
 }
 
-// NewQwenAuth creates a new QwenAuth
+// NewQwenAuth creates a new QwenAuth instance with a proxy-configured HTTP client.
 func NewQwenAuth(cfg *config.Config) *QwenAuth {
 	return &QwenAuth{
 		httpClient: util.SetProxy(cfg, &http.Client{}),
 	}
 }
 
-// generateCodeVerifier generates a random code verifier for PKCE
+// generateCodeVerifier generates a cryptographically random string for the PKCE code verifier.
 func (qa *QwenAuth) generateCodeVerifier() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
@@ -77,13 +98,13 @@ func (qa *QwenAuth) generateCodeVerifier() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
-// generateCodeChallenge generates a code challenge from a code verifier using SHA-256
+// generateCodeChallenge creates a SHA-256 hash of the code verifier, used as the PKCE code challenge.
 func (qa *QwenAuth) generateCodeChallenge(codeVerifier string) string {
 	hash := sha256.Sum256([]byte(codeVerifier))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
-// generatePKCEPair generates PKCE code verifier and challenge pair
+// generatePKCEPair creates a new code verifier and its corresponding code challenge for PKCE.
 func (qa *QwenAuth) generatePKCEPair() (string, string, error) {
 	codeVerifier, err := qa.generateCodeVerifier()
 	if err != nil {
@@ -93,7 +114,7 @@ func (qa *QwenAuth) generatePKCEPair() (string, string, error) {
 	return codeVerifier, codeChallenge, nil
 }
 
-// RefreshTokens refreshes the access token using refresh token
+// RefreshTokens exchanges a refresh token for a new access token.
 func (qa *QwenAuth) RefreshTokens(ctx context.Context, refreshToken string) (*QwenTokenData, error) {
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
@@ -145,7 +166,7 @@ func (qa *QwenAuth) RefreshTokens(ctx context.Context, refreshToken string) (*Qw
 	}, nil
 }
 
-// InitiateDeviceFlow initiates the OAuth device flow
+// InitiateDeviceFlow starts the OAuth 2.0 device authorization flow and returns the device flow details.
 func (qa *QwenAuth) InitiateDeviceFlow(ctx context.Context) (*DeviceFlow, error) {
 	// Generate PKCE code verifier and challenge
 	codeVerifier, codeChallenge, err := qa.generatePKCEPair()
@@ -202,7 +223,7 @@ func (qa *QwenAuth) InitiateDeviceFlow(ctx context.Context) (*DeviceFlow, error)
 	return &result, nil
 }
 
-// PollForToken polls for the access token using device code
+// PollForToken polls the token endpoint with the device code to obtain an access token.
 func (qa *QwenAuth) PollForToken(deviceCode, codeVerifier string) (*QwenTokenData, error) {
 	pollInterval := 5 * time.Second
 	maxAttempts := 60 // 5 minutes max
@@ -267,7 +288,7 @@ func (qa *QwenAuth) PollForToken(deviceCode, codeVerifier string) (*QwenTokenDat
 			// If JSON parsing fails, fall back to text response
 			return nil, fmt.Errorf("device token poll failed: %d %s. Response: %s", resp.StatusCode, resp.Status, string(body))
 		}
-		log.Debugf(string(body))
+		// log.Debugf("%s", string(body))
 		// Success - parse token data
 		var response QwenTokenResponse
 		if err = json.Unmarshal(body, &response); err != nil {
@@ -289,7 +310,7 @@ func (qa *QwenAuth) PollForToken(deviceCode, codeVerifier string) (*QwenTokenDat
 	return nil, fmt.Errorf("authentication timeout. Please restart the authentication process")
 }
 
-// RefreshTokensWithRetry refreshes tokens with automatic retry logic
+// RefreshTokensWithRetry attempts to refresh tokens with a specified number of retries upon failure.
 func (o *QwenAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken string, maxRetries int) (*QwenTokenData, error) {
 	var lastErr error
 
@@ -315,6 +336,7 @@ func (o *QwenAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken stri
 	return nil, fmt.Errorf("token refresh failed after %d attempts: %w", maxRetries, lastErr)
 }
 
+// CreateTokenStorage creates a QwenTokenStorage object from a QwenTokenData object.
 func (o *QwenAuth) CreateTokenStorage(tokenData *QwenTokenData) *QwenTokenStorage {
 	storage := &QwenTokenStorage{
 		AccessToken:  tokenData.AccessToken,

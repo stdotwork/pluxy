@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path"
+
+	log "github.com/sirupsen/logrus"
 )
 
-// GeminiTokenStorage defines the structure for storing OAuth2 token information,
-// along with associated user and project details. This data is typically
-// serialized to a JSON file for persistence.
+// GeminiTokenStorage stores OAuth2 token information for Google Gemini API authentication.
+// It maintains compatibility with the existing auth system while adding Gemini-specific fields
+// for managing access tokens, refresh tokens, and user account information.
 type GeminiTokenStorage struct {
 	// Token holds the raw OAuth2 token data, including access and refresh tokens.
 	Token any `json:"token"`
@@ -29,14 +31,13 @@ type GeminiTokenStorage struct {
 	// Checked indicates if the associated Cloud AI API has been verified as enabled.
 	Checked bool `json:"checked"`
 
-	// Type indicates the type (gemini, chatgpt, claude) of token storage.
+	// Type indicates the authentication provider type, always "gemini" for this storage.
 	Type string `json:"type"`
 }
 
-// SaveTokenToFile serializes the token storage to a JSON file.
+// SaveTokenToFile serializes the Gemini token storage to a JSON file.
 // This method creates the necessary directory structure and writes the token
-// data in JSON format to the specified file path. It ensures the file is
-// properly closed after writing.
+// data in JSON format to the specified file path for persistent storage.
 //
 // Parameters:
 //   - authFilePath: The full path where the token file should be saved
@@ -54,7 +55,9 @@ func (ts *GeminiTokenStorage) SaveTokenToFile(authFilePath string) error {
 		return fmt.Errorf("failed to create token file: %w", err)
 	}
 	defer func() {
-		_ = f.Close()
+		if errClose := f.Close(); errClose != nil {
+			log.Errorf("failed to close file: %v", errClose)
+		}
 	}()
 
 	if err = json.NewEncoder(f).Encode(ts); err != nil {

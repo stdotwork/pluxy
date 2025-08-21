@@ -19,9 +19,12 @@ import (
 // to route requests through the configured proxy server.
 func SetProxy(cfg *config.Config, httpClient *http.Client) *http.Client {
 	var transport *http.Transport
+	// Attempt to parse the proxy URL from the configuration.
 	proxyURL, errParse := url.Parse(cfg.ProxyURL)
 	if errParse == nil {
+		// Handle different proxy schemes.
 		if proxyURL.Scheme == "socks5" {
+			// Configure SOCKS5 proxy with optional authentication.
 			username := proxyURL.User.Username()
 			password, _ := proxyURL.User.Password()
 			proxyAuth := &proxy.Auth{User: username, Password: password}
@@ -30,15 +33,18 @@ func SetProxy(cfg *config.Config, httpClient *http.Client) *http.Client {
 				log.Errorf("create SOCKS5 dialer failed: %v", errSOCKS5)
 				return httpClient
 			}
+			// Set up a custom transport using the SOCKS5 dialer.
 			transport = &http.Transport{
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 					return dialer.Dial(network, addr)
 				},
 			}
 		} else if proxyURL.Scheme == "http" || proxyURL.Scheme == "https" {
+			// Configure HTTP or HTTPS proxy.
 			transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 		}
 	}
+	// If a new transport was created, apply it to the HTTP client.
 	if transport != nil {
 		httpClient.Transport = transport
 	}

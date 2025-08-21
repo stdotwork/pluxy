@@ -8,7 +8,9 @@ import (
 	"time"
 )
 
-// JWTClaims represents the claims section of a JWT token
+// JWTClaims represents the claims section of a JSON Web Token (JWT).
+// It includes standard claims like issuer, subject, and expiration time, as well as
+// custom claims specific to OpenAI's authentication.
 type JWTClaims struct {
 	AtHash        string        `json:"at_hash"`
 	Aud           []string      `json:"aud"`
@@ -25,12 +27,18 @@ type JWTClaims struct {
 	Sid           string        `json:"sid"`
 	Sub           string        `json:"sub"`
 }
+
+// Organizations defines the structure for organization details within the JWT claims.
+// It holds information about the user's organization, such as ID, role, and title.
 type Organizations struct {
 	ID        string `json:"id"`
 	IsDefault bool   `json:"is_default"`
 	Role      string `json:"role"`
 	Title     string `json:"title"`
 }
+
+// CodexAuthInfo contains authentication-related details specific to Codex.
+// This includes ChatGPT account information, subscription status, and user/organization IDs.
 type CodexAuthInfo struct {
 	ChatgptAccountID               string          `json:"chatgpt_account_id"`
 	ChatgptPlanType                string          `json:"chatgpt_plan_type"`
@@ -43,8 +51,10 @@ type CodexAuthInfo struct {
 	UserID                         string          `json:"user_id"`
 }
 
-// ParseJWTToken parses a JWT token and extracts the claims without verification
-// This is used for extracting user information from ID tokens
+// ParseJWTToken parses a JWT token string and extracts its claims without performing
+// cryptographic signature verification. This is useful for introspecting the token's
+// contents to retrieve user information from an ID token after it has been validated
+// by the authentication server.
 func ParseJWTToken(token string) (*JWTClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -65,7 +75,9 @@ func ParseJWTToken(token string) (*JWTClaims, error) {
 	return &claims, nil
 }
 
-// base64URLDecode decodes a base64 URL-encoded string with proper padding
+// base64URLDecode decodes a Base64 URL-encoded string, adding padding if necessary.
+// JWTs use a URL-safe Base64 alphabet and omit padding, so this function ensures
+// correct decoding by re-adding the padding before decoding.
 func base64URLDecode(data string) ([]byte, error) {
 	// Add padding if necessary
 	switch len(data) % 4 {
@@ -78,12 +90,13 @@ func base64URLDecode(data string) ([]byte, error) {
 	return base64.URLEncoding.DecodeString(data)
 }
 
-// GetUserEmail extracts the user email from JWT claims
+// GetUserEmail extracts the user's email address from the JWT claims.
 func (c *JWTClaims) GetUserEmail() string {
 	return c.Email
 }
 
-// GetAccountID extracts the user ID from JWT claims (subject)
+// GetAccountID extracts the user's account ID (subject) from the JWT claims.
+// It retrieves the unique identifier for the user's ChatGPT account.
 func (c *JWTClaims) GetAccountID() string {
 	return c.CodexAuthInfo.ChatgptAccountID
 }

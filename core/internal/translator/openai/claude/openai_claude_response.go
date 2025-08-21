@@ -6,9 +6,11 @@
 package claude
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
+	"github.com/luispater/CLIProxyAPI/internal/util"
 	"github.com/tidwall/gjson"
 )
 
@@ -38,14 +40,37 @@ type ToolCallAccumulator struct {
 	Arguments strings.Builder
 }
 
-// ConvertOpenAIResponseToAnthropic converts OpenAI streaming response format to Anthropic API format.
+// ConvertOpenAIResponseToClaude converts OpenAI streaming response format to Anthropic API format.
 // This function processes OpenAI streaming chunks and transforms them into Anthropic-compatible JSON responses.
 // It handles text content, tool calls, and usage metadata, outputting responses that match the Anthropic API format.
-func ConvertOpenAIResponseToAnthropic(rawJSON []byte, param *ConvertOpenAIResponseToAnthropicParams) []string {
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - modelName: The name of the model.
+//   - rawJSON: The raw JSON response from the OpenAI API.
+//   - param: A pointer to a parameter object for the conversion.
+//
+// Returns:
+//   - []string: A slice of strings, each containing an Anthropic-compatible JSON response.
+func ConvertOpenAIResponseToClaude(_ context.Context, _ string, rawJSON []byte, param *any) []string {
+	if *param == nil {
+		*param = &ConvertOpenAIResponseToAnthropicParams{
+			MessageID:               "",
+			Model:                   "",
+			CreatedAt:               0,
+			ContentAccumulator:      strings.Builder{},
+			ToolCallsAccumulator:    nil,
+			TextContentBlockStarted: false,
+			FinishReason:            "",
+			ContentBlocksStopped:    false,
+			MessageDeltaSent:        false,
+		}
+	}
+
 	// Check if this is the [DONE] marker
 	rawStr := strings.TrimSpace(string(rawJSON))
 	if rawStr == "[DONE]" {
-		return convertOpenAIDoneToAnthropic(param)
+		return convertOpenAIDoneToAnthropic((*param).(*ConvertOpenAIResponseToAnthropicParams))
 	}
 
 	root := gjson.ParseBytes(rawJSON)
@@ -55,7 +80,7 @@ func ConvertOpenAIResponseToAnthropic(rawJSON []byte, param *ConvertOpenAIRespon
 
 	if objectType == "chat.completion.chunk" {
 		// Handle streaming response
-		return convertOpenAIStreamingChunkToAnthropic(rawJSON, param)
+		return convertOpenAIStreamingChunkToAnthropic(rawJSON, (*param).(*ConvertOpenAIResponseToAnthropicParams))
 	} else if objectType == "chat.completion" {
 		// Handle non-streaming response
 		return convertOpenAINonStreamingToAnthropic(rawJSON)
@@ -164,6 +189,16 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 					if name := function.Get("name"); name.Exists() {
 						accumulator.Name = name.String()
 
+						if param.TextContentBlockStarted {
+							param.TextContentBlockStarted = false
+							contentBlockStop := map[string]interface{}{
+								"type":  "content_block_stop",
+								"index": index,
+							}
+							contentBlockStopJSON, _ := json.Marshal(contentBlockStop)
+							results = append(results, "event: content_block_stop\ndata: "+string(contentBlockStopJSON)+"\n\n")
+						}
+
 						// Send content_block_start for tool_use
 						contentBlockStart := map[string]interface{}{
 							"type":  "content_block_start",
@@ -182,19 +217,9 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 					// Handle function arguments
 					if args := function.Get("arguments"); args.Exists() {
 						argsText := args.String()
-						accumulator.Arguments.WriteString(argsText)
-
-						// Send input_json_delta
-						inputDelta := map[string]interface{}{
-							"type":  "content_block_delta",
-							"index": index + 1,
-							"delta": map[string]interface{}{
-								"type":         "input_json_delta",
-								"partial_json": argsText,
-							},
+						if argsText != "" {
+							accumulator.Arguments.WriteString(argsText)
 						}
-						inputDeltaJSON, _ := json.Marshal(inputDelta)
-						results = append(results, "event: content_block_delta\ndata: "+string(inputDeltaJSON)+"\n\n")
 					}
 				}
 
@@ -221,6 +246,22 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 		// Send content_block_stop for any tool calls
 		if !param.ContentBlocksStopped {
 			for index := range param.ToolCallsAccumulator {
+				accumulator := param.ToolCallsAccumulator[index]
+
+				// Send complete input_json_delta with all accumulated arguments
+				if accumulator.Arguments.Len() > 0 {
+					inputDelta := map[string]interface{}{
+						"type":  "content_block_delta",
+						"index": index + 1,
+						"delta": map[string]interface{}{
+							"type":         "input_json_delta",
+							"partial_json": util.FixJSON(accumulator.Arguments.String()),
+						},
+					}
+					inputDeltaJSON, _ := json.Marshal(inputDelta)
+					results = append(results, "event: content_block_delta\ndata: "+string(inputDeltaJSON)+"\n\n")
+				}
+
 				contentBlockStop := map[string]interface{}{
 					"type":  "content_block_stop",
 					"index": index + 1,
@@ -334,6 +375,7 @@ func convertOpenAINonStreamingToAnthropic(rawJSON []byte) []string {
 
 				// Parse arguments
 				argsStr := toolCall.Get("function.arguments").String()
+				argsStr = util.FixJSON(argsStr)
 				if argsStr != "" {
 					var args interface{}
 					if err := json.Unmarshal([]byte(argsStr), &args); err == nil {
@@ -386,4 +428,18 @@ func mapOpenAIFinishReasonToAnthropic(openAIReason string) string {
 	default:
 		return "end_turn"
 	}
+}
+
+// ConvertOpenAIResponseToClaudeNonStream converts a non-streaming OpenAI response to a non-streaming Anthropic response.
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - modelName: The name of the model.
+//   - rawJSON: The raw JSON response from the OpenAI API.
+//   - param: A pointer to a parameter object for the conversion.
+//
+// Returns:
+//   - string: An Anthropic-compatible JSON response.
+func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, _ []byte, _ *any) string {
+	return ""
 }

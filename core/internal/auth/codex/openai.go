@@ -1,6 +1,7 @@
 package codex
 
-// PKCECodes holds PKCE verification codes for OAuth2 PKCE flow
+// PKCECodes holds the verification codes for the OAuth2 PKCE (Proof Key for Code Exchange) flow.
+// PKCE is an extension to the Authorization Code flow to prevent CSRF and authorization code injection attacks.
 type PKCECodes struct {
 	// CodeVerifier is the cryptographically random string used to correlate
 	// the authorization request to the token request
@@ -9,7 +10,8 @@ type PKCECodes struct {
 	CodeChallenge string `json:"code_challenge"`
 }
 
-// CodexTokenData holds OAuth token information from OpenAI
+// CodexTokenData holds the OAuth token information obtained from OpenAI.
+// It includes the ID token, access token, refresh token, and associated user details.
 type CodexTokenData struct {
 	// IDToken is the JWT ID token containing user claims
 	IDToken string `json:"id_token"`
@@ -25,7 +27,8 @@ type CodexTokenData struct {
 	Expire string `json:"expired"`
 }
 
-// CodexAuthBundle aggregates authentication data after OAuth flow completion
+// CodexAuthBundle aggregates all authentication-related data after the OAuth flow is complete.
+// This includes the API key, token data, and the timestamp of the last refresh.
 type CodexAuthBundle struct {
 	// APIKey is the OpenAI API key obtained from token exchange
 	APIKey string `json:"api_key"`

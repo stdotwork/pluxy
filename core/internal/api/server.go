@@ -15,11 +15,10 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/claude"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/gemini"
-	"github.com/luispater/CLIProxyAPI/internal/api/handlers/gemini/cli"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/openai"
 	"github.com/luispater/CLIProxyAPI/internal/api/middleware"
-	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/logging"
 	log "github.com/sirupsen/logrus"
 )
@@ -34,7 +33,7 @@ type Server struct {
 	server *http.Server
 
 	// handlers contains the API handlers for processing requests.
-	handlers *handlers.APIHandlers
+	handlers *handlers.BaseAPIHandler
 
 	// cfg holds the current server configuration.
 	cfg *config.Config
@@ -49,7 +48,7 @@ type Server struct {
 //
 // Returns:
 //   - *Server: A new server instance
-func NewServer(cfg *config.Config, cliClients []client.Client) *Server {
+func NewServer(cfg *config.Config, cliClients []interfaces.Client) *Server {
 	// Set gin mode
 	if !cfg.Debug {
 		gin.SetMode(gin.ReleaseMode)
@@ -71,7 +70,7 @@ func NewServer(cfg *config.Config, cliClients []client.Client) *Server {
 	// Create server instance
 	s := &Server{
 		engine:   engine,
-		handlers: handlers.NewAPIHandlers(cliClients, cfg),
+		handlers: handlers.NewBaseAPIHandlers(cliClients, cfg),
 		cfg:      cfg,
 	}
 
@@ -90,16 +89,16 @@ func NewServer(cfg *config.Config, cliClients []client.Client) *Server {
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
-	openaiHandlers := openai.NewOpenAIAPIHandlers(s.handlers)
-	geminiHandlers := gemini.NewGeminiAPIHandlers(s.handlers)
-	geminiCLIHandlers := cli.NewGeminiCLIAPIHandlers(s.handlers)
-	claudeCodeHandlers := claude.NewClaudeCodeAPIHandlers(s.handlers)
+	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
+	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
+	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
+	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
 
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
 	v1.Use(AuthMiddleware(s.cfg))
 	{
-		v1.GET("/models", openaiHandlers.Models)
+		v1.GET("/models", openaiHandlers.OpenAIModels)
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 	}
@@ -189,7 +188,7 @@ func corsMiddleware() gin.HandlerFunc {
 // Parameters:
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
-func (s *Server) UpdateClients(clients []client.Client, cfg *config.Config) {
+func (s *Server) UpdateClients(clients []interfaces.Client, cfg *config.Config) {
 	s.cfg = cfg
 	s.handlers.UpdateClients(clients, cfg)
 	log.Infof("server clients and configuration updated: %d clients", len(clients))

@@ -1,3 +1,6 @@
+// Package claude provides OAuth2 authentication functionality for Anthropic's Claude API.
+// This package implements the complete OAuth2 flow with PKCE (Proof Key for Code Exchange)
+// for secure authentication with Claude API, including token exchange, refresh, and storage.
 package claude
 
 import (
@@ -22,7 +25,8 @@ const (
 	redirectURI       = "http://localhost:54545/callback"
 )
 
-// Parse token response
+// tokenResponse represents the response structure from Anthropic's OAuth token endpoint.
+// It contains access token, refresh token, and associated user/organization information.
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -38,19 +42,39 @@ type tokenResponse struct {
 	} `json:"account"`
 }
 
-// ClaudeAuth handles Anthropic OAuth2 authentication flow
+// ClaudeAuth handles Anthropic OAuth2 authentication flow.
+// It provides methods for generating authorization URLs, exchanging codes for tokens,
+// and refreshing expired tokens using PKCE for enhanced security.
 type ClaudeAuth struct {
 	httpClient *http.Client
 }
 
-// NewClaudeAuth creates a new Anthropic authentication service
+// NewClaudeAuth creates a new Anthropic authentication service.
+// It initializes the HTTP client with proxy settings from the configuration.
+//
+// Parameters:
+//   - cfg: The application configuration containing proxy settings
+//
+// Returns:
+//   - *ClaudeAuth: A new Claude authentication service instance
 func NewClaudeAuth(cfg *config.Config) *ClaudeAuth {
 	return &ClaudeAuth{
 		httpClient: util.SetProxy(cfg, &http.Client{}),
 	}
 }
 
-// GenerateAuthURL creates the OAuth authorization URL with PKCE
+// GenerateAuthURL creates the OAuth authorization URL with PKCE.
+// This method generates a secure authorization URL including PKCE challenge codes
+// for the OAuth2 flow with Anthropic's API.
+//
+// Parameters:
+//   - state: A random state parameter for CSRF protection
+//   - pkceCodes: The PKCE codes for secure code exchange
+//
+// Returns:
+//   - string: The complete authorization URL
+//   - string: The state parameter for verification
+//   - error: An error if PKCE codes are missing or URL generation fails
 func (o *ClaudeAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string, string, error) {
 	if pkceCodes == nil {
 		return "", "", fmt.Errorf("PKCE codes are required")
@@ -71,6 +95,15 @@ func (o *ClaudeAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string
 	return authURL, state, nil
 }
 
+// parseCodeAndState extracts the authorization code and state from the callback response.
+// It handles the parsing of the code parameter which may contain additional fragments.
+//
+// Parameters:
+//   - code: The raw code parameter from the OAuth callback
+//
+// Returns:
+//   - parsedCode: The extracted authorization code
+//   - parsedState: The extracted state parameter if present
 func (c *ClaudeAuth) parseCodeAndState(code string) (parsedCode, parsedState string) {
 	splits := strings.Split(code, "#")
 	parsedCode = splits[0]
@@ -80,7 +113,19 @@ func (c *ClaudeAuth) parseCodeAndState(code string) (parsedCode, parsedState str
 	return
 }
 
-// ExchangeCodeForTokens exchanges authorization code for access tokens
+// ExchangeCodeForTokens exchanges authorization code for access tokens.
+// This method implements the OAuth2 token exchange flow using PKCE for security.
+// It sends the authorization code along with PKCE verifier to get access and refresh tokens.
+//
+// Parameters:
+//   - ctx: The context for the request
+//   - code: The authorization code received from OAuth callback
+//   - state: The state parameter for verification
+//   - pkceCodes: The PKCE codes for secure verification
+//
+// Returns:
+//   - *ClaudeAuthBundle: The complete authentication bundle with tokens
+//   - error: An error if token exchange fails
 func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state string, pkceCodes *PKCECodes) (*ClaudeAuthBundle, error) {
 	if pkceCodes == nil {
 		return nil, fmt.Errorf("PKCE codes are required for token exchange")
@@ -121,7 +166,9 @@ func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state stri
 		return nil, fmt.Errorf("token exchange request failed: %w", err)
 	}
 	defer func() {
-		_ = resp.Body.Close()
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("failed to close response body: %v", errClose)
+		}
 	}()
 
 	body, err := io.ReadAll(resp.Body)
@@ -157,7 +204,17 @@ func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state stri
 	return bundle, nil
 }
 
-// RefreshTokens refreshes the access token using the refresh token
+// RefreshTokens refreshes the access token using the refresh token.
+// This method exchanges a valid refresh token for a new access token,
+// extending the user's authenticated session.
+//
+// Parameters:
+//   - ctx: The context for the request
+//   - refreshToken: The refresh token to use for getting new access token
+//
+// Returns:
+//   - *ClaudeTokenData: The new token data with updated access token
+//   - error: An error if token refresh fails
 func (o *ClaudeAuth) RefreshTokens(ctx context.Context, refreshToken string) (*ClaudeTokenData, error) {
 	if refreshToken == "" {
 		return nil, fmt.Errorf("refresh token is required")
@@ -215,7 +272,15 @@ func (o *ClaudeAuth) RefreshTokens(ctx context.Context, refreshToken string) (*C
 	}, nil
 }
 
-// CreateTokenStorage creates a new ClaudeTokenStorage from auth bundle and user info
+// CreateTokenStorage creates a new ClaudeTokenStorage from auth bundle and user info.
+// This method converts the authentication bundle into a token storage structure
+// suitable for persistence and later use.
+//
+// Parameters:
+//   - bundle: The authentication bundle containing token data
+//
+// Returns:
+//   - *ClaudeTokenStorage: A new token storage instance
 func (o *ClaudeAuth) CreateTokenStorage(bundle *ClaudeAuthBundle) *ClaudeTokenStorage {
 	storage := &ClaudeTokenStorage{
 		AccessToken:  bundle.TokenData.AccessToken,
@@ -228,7 +293,18 @@ func (o *ClaudeAuth) CreateTokenStorage(bundle *ClaudeAuthBundle) *ClaudeTokenSt
 	return storage
 }
 
-// RefreshTokensWithRetry refreshes tokens with automatic retry logic
+// RefreshTokensWithRetry refreshes tokens with automatic retry logic.
+// This method implements exponential backoff retry logic for token refresh operations,
+// providing resilience against temporary network or service issues.
+//
+// Parameters:
+//   - ctx: The context for the request
+//   - refreshToken: The refresh token to use
+//   - maxRetries: The maximum number of retry attempts
+//
+// Returns:
+//   - *ClaudeTokenData: The refreshed token data
+//   - error: An error if all retry attempts fail
 func (o *ClaudeAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken string, maxRetries int) (*ClaudeTokenData, error) {
 	var lastErr error
 
@@ -254,7 +330,13 @@ func (o *ClaudeAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken st
 	return nil, fmt.Errorf("token refresh failed after %d attempts: %w", maxRetries, lastErr)
 }
 
-// UpdateTokenStorage updates an existing token storage with new token data
+// UpdateTokenStorage updates an existing token storage with new token data.
+// This method refreshes the token storage with newly obtained access and refresh tokens,
+// updating timestamps and expiration information.
+//
+// Parameters:
+//   - storage: The existing token storage to update
+//   - tokenData: The new token data to apply
 func (o *ClaudeAuth) UpdateTokenStorage(storage *ClaudeTokenStorage, tokenData *ClaudeTokenData) {
 	storage.AccessToken = tokenData.AccessToken
 	storage.RefreshToken = tokenData.RefreshToken

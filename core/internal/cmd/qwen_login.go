@@ -1,3 +1,6 @@
+// Package cmd provides command-line interface functionality for the CLI Proxy API.
+// It implements the main application commands including login/authentication
+// and server startup, handling the complete user onboarding and service lifecycle.
 package cmd
 
 import (
@@ -12,7 +15,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// DoQwenLogin handles the Qwen OAuth login process
+// DoQwenLogin handles the Qwen OAuth login process for Alibaba Qwen services.
+// It initializes the OAuth flow, opens the user's browser for authentication,
+// waits for the callback, exchanges the authorization code for tokens,
+// and saves the authentication information to a file.
+//
+// Parameters:
+//   - cfg: The application configuration
+//   - options: The login options containing browser preferences
 func DoQwenLogin(cfg *config.Config, options *LoginOptions) {
 	if options == nil {
 		options = &LoginOptions{}
