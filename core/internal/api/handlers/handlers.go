@@ -136,6 +136,8 @@ func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) 
 				log.Debugf("Claude Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
 			} else if cliClient.Provider() == "qwen" {
 				log.Debugf("Qwen Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
+			} else if cliClient.Type() == "openai-compatibility" {
+				log.Debugf("OpenAI Compatibility Model %s is quota exceeded for provider %s", modelName, cliClient.Provider())
 			}
 			cliClient = nil
 			continue
@@ -145,7 +147,7 @@ func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) 
 	}
 
 	if len(reorderedClients) == 0 {
-		if util.GetProviderName(modelName) == "claude" {
+		if util.GetProviderName(modelName, h.Cfg) == "claude" {
 			// log.Debugf("Claude Model %s is quota exceeded for all accounts", modelName)
 			return nil, &interfaces.ErrorMessage{StatusCode: 429, Error: fmt.Errorf(`{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`)}
 		}

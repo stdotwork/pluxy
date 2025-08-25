@@ -148,7 +148,7 @@ outLoop:
 			// Detects when the HTTP client has disconnected and cleans up resources
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("GeminiClient disconnected: %v", c.Request.Context().Err())
+					log.Debugf("claude client disconnected: %v", c.Request.Context().Err())
 					cliCancel() // Cancel the backend request to prevent resource leaks
 					return
 				}

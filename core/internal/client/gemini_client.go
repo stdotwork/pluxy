@@ -249,6 +249,7 @@ func (c *GeminiClient) SendRawMessage(ctx context.Context, modelName string, raw
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
 	}
 
+	_ = respBody.Close()
 	c.AddAPIResponseData(ctx, bodyBytes)
 
 	var param any
@@ -301,6 +302,9 @@ func (c *GeminiClient) SendRawMessageStream(ctx context.Context, modelName strin
 			return
 		}
 		delete(c.modelQuotaExceeded, modelName)
+		defer func() {
+			_ = stream.Close()
+		}()
 
 		newCtx := context.WithValue(ctx, "alt", alt)
 		var param any

@@ -5,25 +5,33 @@ package util
 
 import (
 	"strings"
+
+	"github.com/luispater/CLIProxyAPI/internal/config"
 )
 
 // GetProviderName determines the AI service provider based on the model name.
 // It analyzes the model name string to identify which service provider it belongs to.
+// First checks for OpenAI compatibility aliases, then falls back to standard provider detection.
 //
 // Supported providers:
 //   - "gemini" for Google's Gemini models
 //   - "gpt" for OpenAI's GPT models
 //   - "claude" for Anthropic's Claude models
 //   - "qwen" for Alibaba's Qwen models
+//   - "openai-compatibility" for external OpenAI-compatible providers
 //   - "unknow" for unrecognized model names
 //
 // Parameters:
 //   - modelName: The name of the model to identify the provider for.
+//   - cfg: The application configuration containing OpenAI compatibility settings.
 //
 // Returns:
 //   - string: The name of the provider.
-func GetProviderName(modelName string) string {
-	if strings.Contains(modelName, "gemini") {
+func GetProviderName(modelName string, cfg *config.Config) string {
+	// First check if this model name is an OpenAI compatibility alias
+	if IsOpenAICompatibilityAlias(modelName, cfg) {
+		return "openai-compatibility"
+	} else if strings.Contains(modelName, "gemini") { // Fall back to standard provider detection
 		return "gemini"
 	} else if strings.Contains(modelName, "gpt") {
 		return "gpt"
@@ -35,6 +43,55 @@ func GetProviderName(modelName string) string {
 		return "qwen"
 	}
 	return "unknow"
+}
+
+// IsOpenAICompatibilityAlias checks if the given model name is an alias
+// configured for OpenAI compatibility routing.
+//
+// Parameters:
+//   - modelName: The model name to check
+//   - cfg: The application configuration containing OpenAI compatibility settings
+//
+// Returns:
+//   - bool: True if the model name is an OpenAI compatibility alias, false otherwise
+func IsOpenAICompatibilityAlias(modelName string, cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+
+	for _, compat := range cfg.OpenAICompatibility {
+		for _, model := range compat.Models {
+			if model.Alias == modelName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// GetOpenAICompatibilityConfig returns the OpenAI compatibility configuration
+// and model details for the given alias.
+//
+// Parameters:
+//   - alias: The model alias to find configuration for
+//   - cfg: The application configuration containing OpenAI compatibility settings
+//
+// Returns:
+//   - *config.OpenAICompatibility: The matching compatibility configuration, or nil if not found
+//   - *config.OpenAICompatibilityModel: The matching model configuration, or nil if not found
+func GetOpenAICompatibilityConfig(alias string, cfg *config.Config) (*config.OpenAICompatibility, *config.OpenAICompatibilityModel) {
+	if cfg == nil {
+		return nil, nil
+	}
+
+	for _, compat := range cfg.OpenAICompatibility {
+		for _, model := range compat.Models {
+			if model.Alias == alias {
+				return &compat, &model
+			}
+		}
+	}
+	return nil, nil
 }
 
 // InArray checks if a string exists in a slice of strings.

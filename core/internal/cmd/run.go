@@ -150,6 +150,18 @@ func StartService(cfg *config.Config, configPath string) {
 		}
 	}
 
+	if len(cfg.OpenAICompatibility) > 0 {
+		// Initialize clients for OpenAI compatibility configurations
+		for _, compatConfig := range cfg.OpenAICompatibility {
+			log.Debugf("Initializing OpenAI compatibility client for provider: %s", compatConfig.Name)
+			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig)
+			if errClient != nil {
+				log.Fatalf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
+			}
+			cliClients = append(cliClients, compatClient)
+		}
+	}
+
 	// Create and start the API server with the pool of clients in a separate goroutine.
 	apiServer := api.NewServer(cfg, cliClients)
 	log.Infof("Starting API server on port %d", cfg.Port)

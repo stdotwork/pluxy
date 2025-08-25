@@ -132,6 +132,7 @@ func (c *CodexClient) SendRawMessage(ctx context.Context, modelName string, rawJ
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
 	}
 
+	_ = respBody.Close()
 	c.AddAPIResponseData(ctx, bodyBytes)
 
 	var param any
@@ -188,6 +189,9 @@ func (c *CodexClient) SendRawMessageStream(ctx context.Context, modelName string
 			return
 		}
 		delete(c.modelQuotaExceeded, modelName)
+		defer func() {
+			_ = stream.Close()
+		}()
 
 		scanner := bufio.NewScanner(stream)
 		buffer := make([]byte, 10240*1024)

@@ -41,6 +41,9 @@ type Config struct {
 	RequestRetry int `yaml:"request-retry"`
 
 	ClaudeKey []ClaudeKey `yaml:"claude-api-key"`
+
+	// OpenAICompatibility defines OpenAI API compatibility configurations for external providers.
+	OpenAICompatibility []OpenAICompatibility `yaml:"openai-compatibility"`
 }
 
 // QuotaExceeded defines the behavior when API quota limits are exceeded.
@@ -62,6 +65,32 @@ type ClaudeKey struct {
 	// BaseURL is the base URL for the Claude API endpoint.
 	// If empty, the default Claude API URL will be used.
 	BaseURL string `yaml:"base-url"`
+}
+
+// OpenAICompatibility represents the configuration for OpenAI API compatibility
+// with external providers, allowing model aliases to be routed through OpenAI API format.
+type OpenAICompatibility struct {
+	// Name is the identifier for this OpenAI compatibility configuration.
+	Name string `yaml:"name"`
+
+	// BaseURL is the base URL for the external OpenAI-compatible API endpoint.
+	BaseURL string `yaml:"base-url"`
+
+	// APIKeys are the authentication keys for accessing the external API services.
+	APIKeys []string `yaml:"api-keys"`
+
+	// Models defines the model configurations including aliases for routing.
+	Models []OpenAICompatibilityModel `yaml:"models"`
+}
+
+// OpenAICompatibilityModel represents a model configuration for OpenAI compatibility,
+// including the actual model name and its alias for API routing.
+type OpenAICompatibilityModel struct {
+	// Name is the actual model name used by the external provider.
+	Name string `yaml:"name"`
+
+	// Alias is the model name alias that clients will use to reference this model.
+	Alias string `yaml:"alias"`
 }
 
 // LoadConfig reads a YAML configuration file from the given path,
