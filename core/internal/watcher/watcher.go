@@ -169,6 +169,12 @@ func (w *Watcher) reloadConfig() {
 		if oldConfig.ProxyURL != newConfig.ProxyURL {
 			log.Debugf("  proxy-url: %s -> %s", oldConfig.ProxyURL, newConfig.ProxyURL)
 		}
+		if oldConfig.RequestLog != newConfig.RequestLog {
+			log.Debugf("  request-log: %t -> %t", oldConfig.RequestLog, newConfig.RequestLog)
+		}
+		if oldConfig.RequestRetry != newConfig.RequestRetry {
+			log.Debugf("  request-retry: %d -> %d", oldConfig.RequestRetry, newConfig.RequestRetry)
+		}
 		if len(oldConfig.APIKeys) != len(newConfig.APIKeys) {
 			log.Debugf("  api-keys count: %d -> %d", len(oldConfig.APIKeys), len(newConfig.APIKeys))
 		}

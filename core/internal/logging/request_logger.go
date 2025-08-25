@@ -115,6 +115,15 @@ func (l *FileRequestLogger) IsEnabled() bool {
 	return l.enabled
 }
 
+// SetEnabled updates the request logging enabled state.
+// This method allows dynamic enabling/disabling of request logging.
+//
+// Parameters:
+//   - enabled: Whether request logging should be enabled
+func (l *FileRequestLogger) SetEnabled(enabled bool) {
+	l.enabled = enabled
+}
+
 // LogRequest logs a complete non-streaming request/response cycle to a file.
 //
 // Parameters:

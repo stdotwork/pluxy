@@ -37,6 +37,9 @@ type Server struct {
 
 	// cfg holds the current server configuration.
 	cfg *config.Config
+
+	// requestLogger is the request logger instance for dynamic configuration updates.
+	requestLogger *logging.FileRequestLogger
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -69,9 +72,10 @@ func NewServer(cfg *config.Config, cliClients []interfaces.Client) *Server {
 
 	// Create server instance
 	s := &Server{
-		engine:   engine,
-		handlers: handlers.NewBaseAPIHandlers(cliClients, cfg),
-		cfg:      cfg,
+		engine:        engine,
+		handlers:      handlers.NewBaseAPIHandlers(cliClients, cfg),
+		cfg:           cfg,
+		requestLogger: requestLogger,
 	}
 
 	// Setup routes
@@ -189,6 +193,12 @@ func corsMiddleware() gin.HandlerFunc {
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
 func (s *Server) UpdateClients(clients []interfaces.Client, cfg *config.Config) {
+	// Update request logger enabled state if it has changed
+	if s.requestLogger != nil && s.cfg.RequestLog != cfg.RequestLog {
+		s.requestLogger.SetEnabled(cfg.RequestLog)
+		log.Debugf("request logging updated from %t to %t", s.cfg.RequestLog, cfg.RequestLog)
+	}
+
 	s.cfg = cfg
 	s.handlers.UpdateClients(clients, cfg)
 	log.Infof("server clients and configuration updated: %d clients", len(clients))

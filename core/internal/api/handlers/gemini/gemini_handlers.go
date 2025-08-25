@@ -270,8 +270,9 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 		}
 	}()
 
+	retryCount := 0
 outLoop:
-	for {
+	for retryCount <= h.Cfg.RequestRetry {
 		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
@@ -311,11 +312,18 @@ outLoop:
 			// Handle errors from the backend.
 			case err, okError := <-errChan:
 				if okError {
-					if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
-						log.Debugf("quota exceeded, switch client")
+					switch err.StatusCode {
+					case 429:
+						if h.Cfg.QuotaExceeded.SwitchProject {
+							log.Debugf("quota exceeded, switch client")
+							continue outLoop // Restart the client selection process
+						}
+					case 403, 408, 500, 502, 503, 504:
+						log.Debugf("http status code %d, switch client", err.StatusCode)
+						retryCount++
 						continue outLoop
-					} else {
-						// log.Debugf("error code :%d, error: %v", err.StatusCode, err.Error.Error())
+					default:
+						// Forward other errors directly to the client
 						c.Status(err.StatusCode)
 						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
 						flusher.Flush()
@@ -402,7 +410,8 @@ func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName strin
 		}
 	}()
 
-	for {
+	retryCount := 0
+	for retryCount <= h.Cfg.RequestRetry {
 		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
@@ -414,9 +423,18 @@ func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName strin
 
 		resp, err := cliClient.SendRawMessage(cliCtx, modelName, rawJSON, alt)
 		if err != nil {
-			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
+			switch err.StatusCode {
+			case 429:
+				if h.Cfg.QuotaExceeded.SwitchProject {
+					log.Debugf("quota exceeded, switch client")
+					continue // Restart the client selection process
+				}
+			case 403, 408, 500, 502, 503, 504:
+				log.Debugf("http status code %d, switch client", err.StatusCode)
+				retryCount++
 				continue
-			} else {
+			default:
+				// Forward other errors directly to the client
 				c.Status(err.StatusCode)
 				_, _ = c.Writer.Write([]byte(err.Error.Error()))
 				cliCancel(err.Error)

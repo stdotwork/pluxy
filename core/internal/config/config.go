@@ -37,6 +37,9 @@ type Config struct {
 	// RequestLog enables or disables detailed request logging functionality.
 	RequestLog bool `yaml:"request-log"`
 
+	// RequestRetry defines the retry times when the request failed.
+	RequestRetry int `yaml:"request-retry"`
+
 	ClaudeKey []ClaudeKey `yaml:"claude-api-key"`
 }
 
