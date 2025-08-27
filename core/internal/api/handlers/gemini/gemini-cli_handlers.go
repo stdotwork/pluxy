@@ -163,7 +163,9 @@ func (h *GeminiCLIAPIHandler) handleInternalStreamGenerateContent(c *gin.Context
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 
@@ -244,7 +246,9 @@ func (h *GeminiCLIAPIHandler) handleInternalGenerateContent(c *gin.Context, rawJ
 	var cliClient interfaces.Client
 	defer func() {
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 

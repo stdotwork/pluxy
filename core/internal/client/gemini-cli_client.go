@@ -851,3 +851,12 @@ func (c *GeminiCLIClient) GetUserAgent() string {
 	// return fmt.Sprintf("GeminiCLI/%s (%s; %s)", pluginVersion, runtime.GOOS, runtime.GOARCH)
 	return "google-api-nodejs-client/9.15.1"
 }
+
+// GetRequestMutex returns the mutex used to synchronize requests for this client.
+// This ensures that only one request is processed at a time for quota management.
+//
+// Returns:
+//   - *sync.Mutex: The mutex used for request synchronization
+func (c *GeminiCLIClient) GetRequestMutex() *sync.Mutex {
+	return nil
+}

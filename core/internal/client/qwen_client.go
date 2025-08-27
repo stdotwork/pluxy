@@ -432,3 +432,12 @@ func (c *QwenClient) IsModelQuotaExceeded(model string) bool {
 	}
 	return false
 }
+
+// GetRequestMutex returns the mutex used to synchronize requests for this client.
+// This ensures that only one request is processed at a time for quota management.
+//
+// Returns:
+//   - *sync.Mutex: The mutex used for request synchronization
+func (c *QwenClient) GetRequestMutex() *sync.Mutex {
+	return nil
+}

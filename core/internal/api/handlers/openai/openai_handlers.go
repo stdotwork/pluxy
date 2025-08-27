@@ -380,7 +380,9 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 	var cliClient interfaces.Client
 	defer func() {
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 
@@ -454,7 +456,9 @@ func (h *OpenAIAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON []byt
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 
@@ -543,7 +547,9 @@ func (h *OpenAIAPIHandler) handleCompletionsNonStreamingResponse(c *gin.Context,
 	var cliClient interfaces.Client
 	defer func() {
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 
@@ -623,7 +629,9 @@ func (h *OpenAIAPIHandler) handleCompletionsStreamingResponse(c *gin.Context, ra
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 

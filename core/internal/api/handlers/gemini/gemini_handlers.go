@@ -214,7 +214,9 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 	defer func() {
 		// Ensure the client's mutex is unlocked on function exit.
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 
@@ -303,7 +305,9 @@ func (h *GeminiAPIHandler) handleCountTokens(c *gin.Context, modelName string, r
 	var cliClient interfaces.Client
 	defer func() {
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 
@@ -354,7 +358,9 @@ func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName strin
 	var cliClient interfaces.Client
 	defer func() {
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 

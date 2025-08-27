@@ -102,6 +102,8 @@ func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) 
 		}
 	}
 
+	// Lock the mutex to update the last used client index
+	h.Mutex.Lock()
 	if _, hasKey := h.LastUsedClientIndex[modelName]; !hasKey {
 		h.LastUsedClientIndex[modelName] = 0
 	}
@@ -112,8 +114,6 @@ func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) 
 
 	var cliClient interfaces.Client
 
-	// Lock the mutex to update the last used client index
-	h.Mutex.Lock()
 	startIndex := h.LastUsedClientIndex[modelName]
 	if (len(isGenerateContent) > 0 && isGenerateContent[0]) || len(isGenerateContent) == 0 {
 		currentIndex := (startIndex + 1) % len(clients)
@@ -157,14 +157,20 @@ func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) 
 	locked := false
 	for i := 0; i < len(reorderedClients); i++ {
 		cliClient = reorderedClients[i]
-		if cliClient.GetRequestMutex().TryLock() {
+		if mutex := cliClient.GetRequestMutex(); mutex != nil {
+			if mutex.TryLock() {
+				locked = true
+				break
+			}
+		} else {
 			locked = true
-			break
 		}
 	}
 	if !locked {
 		cliClient = clients[0]
-		cliClient.GetRequestMutex().Lock()
+		if mutex := cliClient.GetRequestMutex(); mutex != nil {
+			mutex.Lock()
+		}
 	}
 
 	return cliClient, nil

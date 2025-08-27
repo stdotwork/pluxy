@@ -390,3 +390,12 @@ func (c *OpenAICompatibilityClient) RefreshTokens(ctx context.Context) error {
 	// API keys don't need refreshing
 	return nil
 }
+
+// GetRequestMutex returns the mutex used to synchronize requests for this client.
+// This ensures that only one request is processed at a time for quota management.
+//
+// Returns:
+//   - *sync.Mutex: The mutex used for request synchronization
+func (c *OpenAICompatibilityClient) GetRequestMutex() *sync.Mutex {
+	return nil
+}

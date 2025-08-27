@@ -133,7 +133,9 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 		// Ensure the client's mutex is unlocked on function exit.
 		// This prevents deadlocks and ensures proper resource cleanup
 		if cliClient != nil {
-			cliClient.GetRequestMutex().Unlock()
+			if mutex := cliClient.GetRequestMutex(); mutex != nil {
+				mutex.Unlock()
+			}
 		}
 	}()
 	retryCount := 0
