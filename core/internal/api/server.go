@@ -102,7 +102,7 @@ func (s *Server) setupRoutes() {
 	v1 := s.engine.Group("/v1")
 	v1.Use(AuthMiddleware(s.cfg))
 	{
-		v1.GET("/models", openaiHandlers.OpenAIModels)
+		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 	}
@@ -128,6 +128,25 @@ func (s *Server) setupRoutes() {
 		})
 	})
 	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
+}
+
+// unifiedModelsHandler creates a unified handler for the /v1/models endpoint
+// that routes to different handlers based on the User-Agent header.
+// If User-Agent starts with "claude-cli", it routes to Claude handler,
+// otherwise it routes to OpenAI handler.
+func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userAgent := c.GetHeader("User-Agent")
+
+		// Route to Claude handler if User-Agent starts with "claude-cli"
+		if strings.HasPrefix(userAgent, "claude-cli") {
+			log.Debugf("Routing /v1/models to Claude handler for User-Agent: %s", userAgent)
+			claudeHandler.ClaudeModels(c)
+		} else {
+			log.Debugf("Routing /v1/models to OpenAI handler for User-Agent: %s", userAgent)
+			openaiHandler.OpenAIModels(c)
+		}
+	}
 }
 
 // Start begins listening for and serving HTTP requests.

@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/luispater/CLIProxyAPI/internal/auth"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 )
 
 // ClientBase provides a common base structure for all AI API clients.
@@ -34,6 +35,12 @@ type ClientBase struct {
 	// modelQuotaExceeded tracks when models have exceeded their quota.
 	// The map key is the model name, and the value is the time when the quota was exceeded.
 	modelQuotaExceeded map[string]*time.Time
+
+	// clientID is the unique identifier for this client instance.
+	clientID string
+
+	// modelRegistry is the global model registry for tracking model availability.
+	modelRegistry *registry.ModelRegistry
 }
 
 // GetRequestMutex returns the mutex used to synchronize requests for this client.
@@ -70,4 +77,51 @@ func (c *ClientBase) AddAPIResponseData(ctx context.Context, line []byte) {
 			}
 		}
 	}
+}
+
+// InitializeModelRegistry initializes the model registry for this client
+// This should be called by all client implementations during construction
+func (c *ClientBase) InitializeModelRegistry(clientID string) {
+	c.clientID = clientID
+	c.modelRegistry = registry.GetGlobalRegistry()
+}
+
+// RegisterModels registers the models that this client can provide
+// Parameters:
+//   - provider: The provider name (e.g., "gemini", "claude", "openai")
+//   - models: The list of models this client supports
+func (c *ClientBase) RegisterModels(provider string, models []*registry.ModelInfo) {
+	if c.modelRegistry != nil && c.clientID != "" {
+		c.modelRegistry.RegisterClient(c.clientID, provider, models)
+	}
+}
+
+// UnregisterClient removes this client from the model registry
+func (c *ClientBase) UnregisterClient() {
+	if c.modelRegistry != nil && c.clientID != "" {
+		c.modelRegistry.UnregisterClient(c.clientID)
+	}
+}
+
+// SetModelQuotaExceeded marks a model as quota exceeded in the registry
+// Parameters:
+//   - modelID: The model that exceeded quota
+func (c *ClientBase) SetModelQuotaExceeded(modelID string) {
+	if c.modelRegistry != nil && c.clientID != "" {
+		c.modelRegistry.SetModelQuotaExceeded(c.clientID, modelID)
+	}
+}
+
+// ClearModelQuotaExceeded clears quota exceeded status for a model
+// Parameters:
+//   - modelID: The model to clear quota status for
+func (c *ClientBase) ClearModelQuotaExceeded(modelID string) {
+	if c.modelRegistry != nil && c.clientID != "" {
+		c.modelRegistry.ClearModelQuotaExceeded(c.clientID, modelID)
+	}
+}
+
+// GetClientID returns the unique identifier for this client
+func (c *ClientBase) GetClientID() string {
+	return c.clientID
 }

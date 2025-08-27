@@ -16,6 +16,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
@@ -47,7 +48,9 @@ func (h *ClaudeCodeAPIHandler) HandlerType() string {
 
 // Models returns a list of models supported by this handler.
 func (h *ClaudeCodeAPIHandler) Models() []map[string]any {
-	return make([]map[string]any, 0)
+	// Get dynamic models from the global registry
+	modelRegistry := registry.GetGlobalRegistry()
+	return modelRegistry.GetAvailableModels("claude")
 }
 
 // ClaudeMessages handles Claude-compatible streaming chat completions.
@@ -77,6 +80,17 @@ func (h *ClaudeCodeAPIHandler) ClaudeMessages(c *gin.Context) {
 	}
 
 	h.handleStreamingResponse(c, rawJSON)
+}
+
+// ClaudeModels handles the Claude models listing endpoint.
+// It returns a JSON response containing available Claude models and their specifications.
+//
+// Parameters:
+//   - c: The Gin context for the request.
+func (h *ClaudeCodeAPIHandler) ClaudeModels(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"data": h.Models(),
+	})
 }
 
 // handleStreamingResponse streams Claude-compatible responses backed by Gemini.

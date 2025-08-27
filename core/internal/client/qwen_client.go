@@ -22,6 +22,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 	"github.com/luispater/CLIProxyAPI/internal/translator/translator"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -49,6 +50,10 @@ type QwenClient struct {
 //   - *QwenClient: A new Qwen client instance.
 func NewQwenClient(cfg *config.Config, ts *qwen.QwenTokenStorage) *QwenClient {
 	httpClient := util.SetProxy(cfg, &http.Client{})
+
+	// Generate unique client ID
+	clientID := fmt.Sprintf("qwen-%d", time.Now().UnixNano())
+
 	client := &QwenClient{
 		ClientBase: ClientBase{
 			RequestMutex:       &sync.Mutex{},
@@ -59,6 +64,10 @@ func NewQwenClient(cfg *config.Config, ts *qwen.QwenTokenStorage) *QwenClient {
 		},
 		qwenAuth: qwen.NewQwenAuth(cfg),
 	}
+
+	// Initialize model registry and register Qwen models
+	client.InitializeModelRegistry(clientID)
+	client.RegisterModels("qwen", registry.GetQwenModels())
 
 	return client
 }
@@ -119,10 +128,14 @@ func (c *QwenClient) SendRawMessage(ctx context.Context, modelName string, rawJS
 		if err.StatusCode == 429 {
 			now := time.Now()
 			c.modelQuotaExceeded[modelName] = &now
+			// Update model registry quota status
+			c.SetModelQuotaExceeded(modelName)
 		}
 		return nil, err
 	}
 	delete(c.modelQuotaExceeded, modelName)
+	// Clear quota status in model registry
+	c.ClearModelQuotaExceeded(modelName)
 	bodyBytes, errReadAll := io.ReadAll(respBody)
 	if errReadAll != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
@@ -182,11 +195,15 @@ func (c *QwenClient) SendRawMessageStream(ctx context.Context, modelName string,
 			if err.StatusCode == 429 {
 				now := time.Now()
 				c.modelQuotaExceeded[modelName] = &now
+				// Update model registry quota status
+				c.SetModelQuotaExceeded(modelName)
 			}
 			errChan <- err
 			return
 		}
 		delete(c.modelQuotaExceeded, modelName)
+		// Clear quota status in model registry
+		c.ClearModelQuotaExceeded(modelName)
 		defer func() {
 			_ = stream.Close()
 		}()

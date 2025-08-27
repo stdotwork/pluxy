@@ -22,6 +22,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 	"github.com/luispater/CLIProxyAPI/internal/translator/translator"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -57,6 +58,9 @@ type GeminiCLIClient struct {
 // Returns:
 //   - *GeminiCLIClient: A new Gemini CLI client instance.
 func NewGeminiCLIClient(httpClient *http.Client, ts *geminiAuth.GeminiTokenStorage, cfg *config.Config) *GeminiCLIClient {
+	// Generate unique client ID
+	clientID := fmt.Sprintf("gemini-cli-%d", time.Now().UnixNano())
+
 	client := &GeminiCLIClient{
 		ClientBase: ClientBase{
 			RequestMutex:       &sync.Mutex{},
@@ -66,6 +70,11 @@ func NewGeminiCLIClient(httpClient *http.Client, ts *geminiAuth.GeminiTokenStora
 			modelQuotaExceeded: make(map[string]*time.Time),
 		},
 	}
+
+	// Initialize model registry and register Gemini models
+	client.InitializeModelRegistry(clientID)
+	client.RegisterModels("gemini-cli", registry.GetGeminiModels())
+
 	return client
 }
 
@@ -426,6 +435,8 @@ func (c *GeminiCLIClient) SendRawTokenCount(ctx context.Context, modelName strin
 			if err.StatusCode == 429 {
 				now := time.Now()
 				c.modelQuotaExceeded[modelName] = &now
+				// Update model registry quota status
+				c.SetModelQuotaExceeded(modelName)
 				if c.cfg.QuotaExceeded.SwitchPreviewModel {
 					continue
 				}
@@ -433,6 +444,8 @@ func (c *GeminiCLIClient) SendRawTokenCount(ctx context.Context, modelName strin
 			return nil, err
 		}
 		delete(c.modelQuotaExceeded, modelName)
+		// Clear quota status in model registry
+		c.ClearModelQuotaExceeded(modelName)
 		bodyBytes, errReadAll := io.ReadAll(respBody)
 		if errReadAll != nil {
 			return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
@@ -485,6 +498,8 @@ func (c *GeminiCLIClient) SendRawMessage(ctx context.Context, modelName string, 
 			if err.StatusCode == 429 {
 				now := time.Now()
 				c.modelQuotaExceeded[modelName] = &now
+				// Update model registry quota status
+				c.SetModelQuotaExceeded(modelName)
 				if c.cfg.QuotaExceeded.SwitchPreviewModel {
 					continue
 				}
@@ -492,6 +507,8 @@ func (c *GeminiCLIClient) SendRawMessage(ctx context.Context, modelName string, 
 			return nil, err
 		}
 		delete(c.modelQuotaExceeded, modelName)
+		// Clear quota status in model registry
+		c.ClearModelQuotaExceeded(modelName)
 		bodyBytes, errReadAll := io.ReadAll(respBody)
 		if errReadAll != nil {
 			return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
@@ -562,6 +579,8 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 				if err.StatusCode == 429 {
 					now := time.Now()
 					c.modelQuotaExceeded[modelName] = &now
+					// Update model registry quota status
+					c.SetModelQuotaExceeded(modelName)
 					if c.cfg.QuotaExceeded.SwitchPreviewModel {
 						continue
 					}
@@ -570,6 +589,8 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 				return
 			}
 			delete(c.modelQuotaExceeded, modelName)
+			// Clear quota status in model registry
+			c.ClearModelQuotaExceeded(modelName)
 			break
 		}
 		defer func() {

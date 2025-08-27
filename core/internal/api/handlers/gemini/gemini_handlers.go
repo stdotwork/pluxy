@@ -16,6 +16,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -40,62 +41,9 @@ func (h *GeminiAPIHandler) HandlerType() string {
 
 // Models returns the Gemini-compatible model metadata supported by this handler.
 func (h *GeminiAPIHandler) Models() []map[string]any {
-	return []map[string]any{
-		{
-			"name":             "models/gemini-2.5-flash",
-			"version":          "001",
-			"displayName":      "Gemini 2.5 Flash",
-			"description":      "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-			"inputTokenLimit":  1048576,
-			"outputTokenLimit": 65536,
-			"supportedGenerationMethods": []string{
-				"generateContent",
-				"countTokens",
-				"createCachedContent",
-				"batchGenerateContent",
-			},
-			"temperature":    1,
-			"topP":           0.95,
-			"topK":           64,
-			"maxTemperature": 2,
-			"thinking":       true,
-		},
-		{
-			"name":             "models/gemini-2.5-pro",
-			"version":          "2.5",
-			"displayName":      "Gemini 2.5 Pro",
-			"description":      "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-			"inputTokenLimit":  1048576,
-			"outputTokenLimit": 65536,
-			"supportedGenerationMethods": []string{
-				"generateContent",
-				"countTokens",
-				"createCachedContent",
-				"batchGenerateContent",
-			},
-			"temperature":    1,
-			"topP":           0.95,
-			"topK":           64,
-			"maxTemperature": 2,
-			"thinking":       true,
-		},
-		{
-			"name":             "gpt-5",
-			"version":          "001",
-			"displayName":      "GPT 5",
-			"description":      "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
-			"inputTokenLimit":  400000,
-			"outputTokenLimit": 128000,
-			"supportedGenerationMethods": []string{
-				"generateContent",
-			},
-			"temperature":    1,
-			"topP":           0.95,
-			"topK":           64,
-			"maxTemperature": 2,
-			"thinking":       true,
-		},
-	}
+	// Get dynamic models from the global registry
+	modelRegistry := registry.GetGlobalRegistry()
+	return modelRegistry.GetAvailableModels("gemini")
 }
 
 // GeminiModels handles the Gemini models listing endpoint.

@@ -16,6 +16,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
@@ -47,90 +48,18 @@ func (h *OpenAIAPIHandler) HandlerType() string {
 
 // Models returns the OpenAI-compatible model metadata supported by this handler.
 func (h *OpenAIAPIHandler) Models() []map[string]any {
-	return []map[string]any{
-		{
-			"id":                    "gemini-2.5-pro",
-			"object":                "model",
-			"version":               "2.5",
-			"name":                  "Gemini 2.5 Pro",
-			"description":           "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
-			"context_length":        1_048_576,
-			"max_completion_tokens": 65_536,
-			"supported_parameters": []string{
-				"tools",
-				"temperature",
-				"top_p",
-				"top_k",
-			},
-			"temperature":    1,
-			"topP":           0.95,
-			"topK":           64,
-			"maxTemperature": 2,
-			"thinking":       true,
-		},
-		{
-			"id":                    "gemini-2.5-flash",
-			"object":                "model",
-			"version":               "001",
-			"name":                  "Gemini 2.5 Flash",
-			"description":           "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
-			"context_length":        1_048_576,
-			"max_completion_tokens": 65_536,
-			"supported_parameters": []string{
-				"tools",
-				"temperature",
-				"top_p",
-				"top_k",
-			},
-			"temperature":    1,
-			"topP":           0.95,
-			"topK":           64,
-			"maxTemperature": 2,
-			"thinking":       true,
-		},
-		{
-			"id":                    "gpt-5",
-			"object":                "model",
-			"version":               "gpt-5-2025-08-07",
-			"name":                  "GPT 5",
-			"description":           "Stable version of GPT 5, The best model for coding and agentic tasks across domains.",
-			"context_length":        400_000,
-			"max_completion_tokens": 128_000,
-			"supported_parameters": []string{
-				"tools",
-			},
-			"temperature":    1,
-			"topP":           0.95,
-			"topK":           64,
-			"maxTemperature": 2,
-			"thinking":       true,
-		},
-		{
-			"id":                    "claude-opus-4-1-20250805",
-			"object":                "model",
-			"version":               "claude-opus-4-1-20250805",
-			"name":                  "Claude Opus 4.1",
-			"description":           "Anthropic's most capable model.",
-			"context_length":        200_000,
-			"max_completion_tokens": 32_000,
-			"supported_parameters": []string{
-				"tools",
-			},
-			"temperature":    1,
-			"topP":           0.95,
-			"topK":           64,
-			"maxTemperature": 2,
-			"thinking":       true,
-		},
-	}
+	// Get dynamic models from the global registry
+	modelRegistry := registry.GetGlobalRegistry()
+	return modelRegistry.GetAvailableModels("openai")
 }
 
 // OpenAIModels handles the /v1/models endpoint.
-// It returns a hardcoded list of available AI models with their capabilities
+// It returns a list of available AI models with their capabilities
 // and specifications in OpenAI-compatible format.
 func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"data": h.Models(),
+		"object": "list",
+		"data":   h.Models(),
 	})
 }
 

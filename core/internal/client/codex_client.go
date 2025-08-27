@@ -22,6 +22,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 	"github.com/luispater/CLIProxyAPI/internal/translator/translator"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -50,6 +51,10 @@ type CodexClient struct {
 //   - error: An error if the client creation fails.
 func NewCodexClient(cfg *config.Config, ts *codex.CodexTokenStorage) (*CodexClient, error) {
 	httpClient := util.SetProxy(cfg, &http.Client{})
+
+	// Generate unique client ID
+	clientID := fmt.Sprintf("codex-%d", time.Now().UnixNano())
+
 	client := &CodexClient{
 		ClientBase: ClientBase{
 			RequestMutex:       &sync.Mutex{},
@@ -60,6 +65,10 @@ func NewCodexClient(cfg *config.Config, ts *codex.CodexTokenStorage) (*CodexClie
 		},
 		codexAuth: codex.NewCodexAuth(cfg),
 	}
+
+	// Initialize model registry and register OpenAI models
+	client.InitializeModelRegistry(clientID)
+	client.RegisterModels("codex", registry.GetOpenAIModels())
 
 	return client, nil
 }
@@ -123,10 +132,14 @@ func (c *CodexClient) SendRawMessage(ctx context.Context, modelName string, rawJ
 		if err.StatusCode == 429 {
 			now := time.Now()
 			c.modelQuotaExceeded[modelName] = &now
+			// Update model registry quota status
+			c.SetModelQuotaExceeded(modelName)
 		}
 		return nil, err
 	}
 	delete(c.modelQuotaExceeded, modelName)
+	// Clear quota status in model registry
+	c.ClearModelQuotaExceeded(modelName)
 	bodyBytes, errReadAll := io.ReadAll(respBody)
 	if errReadAll != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
@@ -184,11 +197,15 @@ func (c *CodexClient) SendRawMessageStream(ctx context.Context, modelName string
 			if err.StatusCode == 429 {
 				now := time.Now()
 				c.modelQuotaExceeded[modelName] = &now
+				// Update model registry quota status
+				c.SetModelQuotaExceeded(modelName)
 			}
 			errChan <- err
 			return
 		}
 		delete(c.modelQuotaExceeded, modelName)
+		// Clear quota status in model registry
+		c.ClearModelQuotaExceeded(modelName)
 		defer func() {
 			_ = stream.Close()
 		}()

@@ -19,6 +19,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 	"github.com/luispater/CLIProxyAPI/internal/translator/translator"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -53,6 +54,10 @@ func NewOpenAICompatibilityClient(cfg *config.Config, compatConfig *config.OpenA
 	}
 
 	httpClient := util.SetProxy(cfg, &http.Client{})
+
+	// Generate unique client ID
+	clientID := fmt.Sprintf("openai-compatibility-%s-%d", compatConfig.Name, time.Now().UnixNano())
+
 	client := &OpenAICompatibilityClient{
 		ClientBase: ClientBase{
 			RequestMutex:       &sync.Mutex{},
@@ -63,6 +68,25 @@ func NewOpenAICompatibilityClient(cfg *config.Config, compatConfig *config.OpenA
 		compatConfig:       compatConfig,
 		currentAPIKeyIndex: 0,
 	}
+
+	// Initialize model registry
+	client.InitializeModelRegistry(clientID)
+
+	// Convert compatibility models to registry models and register them
+	registryModels := make([]*registry.ModelInfo, 0, len(compatConfig.Models))
+	for _, model := range compatConfig.Models {
+		registryModel := &registry.ModelInfo{
+			ID:          model.Alias,
+			Object:      "model",
+			Created:     time.Now().Unix(),
+			OwnedBy:     compatConfig.Name,
+			Type:        "openai-compatibility",
+			DisplayName: model.Name,
+		}
+		registryModels = append(registryModels, registryModel)
+	}
+
+	client.RegisterModels(compatConfig.Name, registryModels)
 
 	return client, nil
 }
@@ -216,10 +240,14 @@ func (c *OpenAICompatibilityClient) SendRawMessage(ctx context.Context, modelNam
 		if err.StatusCode == 429 {
 			now := time.Now()
 			c.modelQuotaExceeded[modelName] = &now
+			// Update model registry quota status
+			c.SetModelQuotaExceeded(modelName)
 		}
 		return nil, err
 	}
 	delete(c.modelQuotaExceeded, modelName)
+	// Clear quota status in model registry
+	c.ClearModelQuotaExceeded(modelName)
 	bodyBytes, errReadAll := io.ReadAll(respBody)
 	if errReadAll != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
@@ -270,11 +298,15 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 			if err.StatusCode == 429 {
 				now := time.Now()
 				c.modelQuotaExceeded[modelName] = &now
+				// Update model registry quota status
+				c.SetModelQuotaExceeded(modelName)
 			}
 			errChan <- err
 			return
 		}
 		delete(c.modelQuotaExceeded, modelName)
+		// Clear quota status in model registry
+		c.ClearModelQuotaExceeded(modelName)
 		defer func() {
 			_ = stream.Close()
 		}()

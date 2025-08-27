@@ -23,6 +23,7 @@ import (
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/misc"
+	"github.com/luispater/CLIProxyAPI/internal/registry"
 	"github.com/luispater/CLIProxyAPI/internal/translator/translator"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -55,6 +56,10 @@ type ClaudeClient struct {
 //   - *ClaudeClient: A new Claude client instance.
 func NewClaudeClient(cfg *config.Config, ts *claude.ClaudeTokenStorage) *ClaudeClient {
 	httpClient := util.SetProxy(cfg, &http.Client{})
+
+	// Generate unique client ID
+	clientID := fmt.Sprintf("claude-%d", time.Now().UnixNano())
+
 	client := &ClaudeClient{
 		ClientBase: ClientBase{
 			RequestMutex:       &sync.Mutex{},
@@ -66,6 +71,10 @@ func NewClaudeClient(cfg *config.Config, ts *claude.ClaudeTokenStorage) *ClaudeC
 		claudeAuth:  claude.NewClaudeAuth(cfg),
 		apiKeyIndex: -1,
 	}
+
+	// Initialize model registry and register Claude models
+	client.InitializeModelRegistry(clientID)
+	client.RegisterModels("claude", registry.GetClaudeModels())
 
 	return client
 }
@@ -82,6 +91,10 @@ func NewClaudeClient(cfg *config.Config, ts *claude.ClaudeTokenStorage) *ClaudeC
 //   - *ClaudeClient: A new Claude client instance.
 func NewClaudeClientWithKey(cfg *config.Config, apiKeyIndex int) *ClaudeClient {
 	httpClient := util.SetProxy(cfg, &http.Client{})
+
+	// Generate unique client ID for API key client
+	clientID := fmt.Sprintf("claude-apikey-%d-%d", apiKeyIndex, time.Now().UnixNano())
+
 	client := &ClaudeClient{
 		ClientBase: ClientBase{
 			RequestMutex:       &sync.Mutex{},
@@ -93,6 +106,10 @@ func NewClaudeClientWithKey(cfg *config.Config, apiKeyIndex int) *ClaudeClient {
 		claudeAuth:  claude.NewClaudeAuth(cfg),
 		apiKeyIndex: apiKeyIndex,
 	}
+
+	// Initialize model registry and register Claude models
+	client.InitializeModelRegistry(clientID)
+	client.RegisterModels("claude", registry.GetClaudeModels())
 
 	return client
 }
@@ -174,10 +191,14 @@ func (c *ClaudeClient) SendRawMessage(ctx context.Context, modelName string, raw
 		if err.StatusCode == 429 {
 			now := time.Now()
 			c.modelQuotaExceeded[modelName] = &now
+			// Update model registry quota status
+			c.SetModelQuotaExceeded(modelName)
 		}
 		return nil, err
 	}
 	delete(c.modelQuotaExceeded, modelName)
+	// Clear quota status in model registry
+	c.ClearModelQuotaExceeded(modelName)
 	bodyBytes, errReadAll := io.ReadAll(respBody)
 	if errReadAll != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: errReadAll}
@@ -234,11 +255,15 @@ func (c *ClaudeClient) SendRawMessageStream(ctx context.Context, modelName strin
 			if err.StatusCode == 429 {
 				now := time.Now()
 				c.modelQuotaExceeded[modelName] = &now
+				// Update model registry quota status
+				c.SetModelQuotaExceeded(modelName)
 			}
 			errChan <- err
 			return
 		}
 		delete(c.modelQuotaExceeded, modelName)
+		// Clear quota status in model registry
+		c.ClearModelQuotaExceeded(modelName)
 		defer func() {
 			_ = stream.Close()
 		}()
