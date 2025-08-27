@@ -185,7 +185,7 @@ func (r *ModelRegistry) ClearModelQuotaExceeded(clientID, modelID string) {
 
 	if registration, exists := r.models[modelID]; exists {
 		delete(registration.QuotaExceededClients, clientID)
-		log.Debugf("Cleared quota exceeded status for model %s and client %s", modelID, clientID)
+		// log.Debugf("Cleared quota exceeded status for model %s and client %s", modelID, clientID)
 	}
 }
 

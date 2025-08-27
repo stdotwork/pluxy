@@ -104,6 +104,7 @@ func (s *Server) setupRoutes() {
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
+		v1.POST("/completions", openaiHandlers.Completions)
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 	}
 
@@ -123,6 +124,7 @@ func (s *Server) setupRoutes() {
 			"version": "1.0.0",
 			"endpoints": []string{
 				"POST /v1/chat/completions",
+				"POST /v1/completions",
 				"GET /v1/models",
 			},
 		})
