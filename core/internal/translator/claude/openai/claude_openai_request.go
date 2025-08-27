@@ -244,7 +244,7 @@ func ConvertOpenAIRequestToClaude(modelName string, rawJSON []byte, stream bool)
 	}
 
 	// Tools mapping: OpenAI tools -> Claude Code tools
-	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() {
+	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() && len(tools.Array()) > 0 {
 		var anthropicTools []interface{}
 		tools.ForEach(func(_, tool gjson.Result) bool {
 			if tool.Get("type").String() == "function" {

@@ -231,7 +231,7 @@ func ConvertOpenAIRequestToCodex(modelName string, rawJSON []byte, stream bool) 
 
 	// Map tools (flatten function fields)
 	tools := gjson.GetBytes(rawJSON, "tools")
-	if tools.IsArray() {
+	if tools.IsArray() && len(tools.Array()) > 0 {
 		out, _ = sjson.SetRaw(out, "tools", `[]`)
 		arr := tools.Array()
 		for i := 0; i < len(arr); i++ {

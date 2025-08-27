@@ -215,7 +215,7 @@ func ConvertOpenAIRequestToGemini(modelName string, rawJSON []byte, _ bool) []by
 
 	// tools -> tools[0].functionDeclarations
 	tools := gjson.GetBytes(rawJSON, "tools")
-	if tools.IsArray() {
+	if tools.IsArray() && len(tools.Array()) > 0 {
 		out, _ = sjson.SetRawBytes(out, "tools", []byte(`[{"functionDeclarations":[]}]`))
 		fdPath := "tools.0.functionDeclarations"
 		for _, t := range tools.Array() {

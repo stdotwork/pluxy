@@ -329,6 +329,11 @@ func (c *QwenClient) APIRequest(ctx context.Context, modelName, endpoint string,
 		}
 	}
 
+	toolsResult := gjson.GetBytes(jsonBody, "tools")
+	if toolsResult.IsArray() && len(toolsResult.Array()) == 0 {
+		jsonBody, _ = sjson.DeleteBytes(jsonBody, "tools")
+	}
+
 	streamResult := gjson.GetBytes(jsonBody, "stream")
 	if streamResult.Exists() && streamResult.Type == gjson.True {
 		jsonBody, _ = sjson.SetBytes(jsonBody, "stream_options.include_usage", true)
