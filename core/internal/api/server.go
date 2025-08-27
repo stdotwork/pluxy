@@ -233,6 +233,11 @@ func (s *Server) UpdateClients(clients []interfaces.Client, cfg *config.Config) 
 //   - gin.HandlerFunc: The authentication middleware handler
 func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if cfg.AllowLocalhostUnauthenticated && strings.HasPrefix(c.Request.RemoteAddr, "127.0.0.1:") {
+			c.Next()
+			return
+		}
+
 		if len(cfg.APIKeys) == 0 {
 			c.Next()
 			return

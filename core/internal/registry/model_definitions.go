@@ -82,6 +82,54 @@ func GetGeminiModels() []*ModelInfo {
 			OutputTokenLimit:           65536,
 			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
 		},
+		{
+			ID:                         "gemini-2.5-flash-lite",
+			Object:                     "model",
+			Created:                    time.Now().Unix(),
+			OwnedBy:                    "google",
+			Type:                       "gemini",
+			Name:                       "models/gemini-2.5-flash-lite",
+			Version:                    "2.5",
+			DisplayName:                "Gemini 2.5 Flash Lite",
+			Description:                "Stable release (June 17th, 2025) of Gemini 2.5 Flash Lite",
+			InputTokenLimit:            1048576,
+			OutputTokenLimit:           65536,
+			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
+		},
+	}
+}
+
+// GetGeminiCLIModels returns the standard Gemini model definitions
+func GetGeminiCLIModels() []*ModelInfo {
+	return []*ModelInfo{
+		{
+			ID:                         "gemini-2.5-flash",
+			Object:                     "model",
+			Created:                    time.Now().Unix(),
+			OwnedBy:                    "google",
+			Type:                       "gemini",
+			Name:                       "models/gemini-2.5-flash",
+			Version:                    "001",
+			DisplayName:                "Gemini 2.5 Flash",
+			Description:                "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+			InputTokenLimit:            1048576,
+			OutputTokenLimit:           65536,
+			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
+		},
+		{
+			ID:                         "gemini-2.5-pro",
+			Object:                     "model",
+			Created:                    time.Now().Unix(),
+			OwnedBy:                    "google",
+			Type:                       "gemini",
+			Name:                       "models/gemini-2.5-pro",
+			Version:                    "2.5",
+			DisplayName:                "Gemini 2.5 Pro",
+			Description:                "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+			InputTokenLimit:            1048576,
+			OutputTokenLimit:           65536,
+			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
+		},
 	}
 }
 

@@ -40,10 +40,14 @@ type Config struct {
 	// RequestRetry defines the retry times when the request failed.
 	RequestRetry int `yaml:"request-retry"`
 
+	// ClaudeKey defines a list of Claude API key configurations as specified in the YAML configuration file.
 	ClaudeKey []ClaudeKey `yaml:"claude-api-key"`
 
 	// OpenAICompatibility defines OpenAI API compatibility configurations for external providers.
 	OpenAICompatibility []OpenAICompatibility `yaml:"openai-compatibility"`
+
+	// AllowLocalhostUnauthenticated allows unauthenticated requests from localhost.
+	AllowLocalhostUnauthenticated bool `yaml:"allow-localhost-unauthenticated"`
 }
 
 // QuotaExceeded defines the behavior when API quota limits are exceeded.

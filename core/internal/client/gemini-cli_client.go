@@ -73,7 +73,7 @@ func NewGeminiCLIClient(httpClient *http.Client, ts *geminiAuth.GeminiTokenStora
 
 	// Initialize model registry and register Gemini models
 	client.InitializeModelRegistry(clientID)
-	client.RegisterModels("gemini-cli", registry.GetGeminiModels())
+	client.RegisterModels("gemini-cli", registry.GetGeminiCLIModels())
 
 	return client
 }
