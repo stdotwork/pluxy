@@ -535,7 +535,7 @@ func (c *ClaudeClient) GetEmail() string {
 	if ts, ok := c.tokenStorage.(*claude.ClaudeTokenStorage); ok {
 		return ts.Email
 	} else {
-		return ""
+		return c.cfg.ClaudeKey[c.apiKeyIndex].APIKey
 	}
 }
 

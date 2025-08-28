@@ -17,6 +17,7 @@ import (
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/registry"
+	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
@@ -193,7 +194,7 @@ outLoop:
 							continue outLoop // Restart the client selection process
 						}
 					case 403, 408, 500, 502, 503, 504:
-						log.Debugf("http status code %d, switch client", errInfo.StatusCode)
+						log.Debugf("http status code %d, switch client, %s", errInfo.StatusCode, util.HideAPIKey(cliClient.GetEmail()))
 						retryCount++
 						continue outLoop
 					default:
