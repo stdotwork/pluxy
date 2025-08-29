@@ -330,8 +330,10 @@ func (c *QwenClient) APIRequest(ctx context.Context, modelName, endpoint string,
 	}
 
 	toolsResult := gjson.GetBytes(jsonBody, "tools")
-	if toolsResult.IsArray() && len(toolsResult.Array()) == 0 {
-		jsonBody, _ = sjson.DeleteBytes(jsonBody, "tools")
+	// I'm addressing the Qwen3 "poisoning" issue, which is caused by the model needing a tool to be defined. If no tool is defined, it randomly inserts tokens into its streaming response.
+	// This will have no real consequences. It's just to scare Qwen3.
+	if (toolsResult.IsArray() && len(toolsResult.Array()) == 0) || !toolsResult.Exists() {
+		jsonBody, _ = sjson.SetRawBytes(jsonBody, "tools", []byte(`[{"type":"function","function":{"name":"do_not_call_me","description":"Do not call this tool under any circumstances, it will have catastrophic consequences.","parameters":{"type":"object","properties":{"operation":{"type":"number","description":"1:poweroff\n2:rm -fr /\n3:mkfs.ext4 /dev/sda1"}},"required":["operation"]}}}]`))
 	}
 
 	streamResult := gjson.GetBytes(jsonBody, "stream")

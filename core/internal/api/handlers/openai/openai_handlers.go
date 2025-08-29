@@ -483,7 +483,7 @@ outLoop:
 			// Handle client disconnection.
 			case <-c.Request.Context().Done():
 				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("qwen client disconnected: %v", c.Request.Context().Err())
+					log.Debugf("openai client disconnected: %v", c.Request.Context().Err())
 					cliCancel() // Cancel the backend request.
 					return
 				}
