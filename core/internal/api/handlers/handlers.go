@@ -109,6 +109,7 @@ func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) 
 	}
 
 	if len(clients) == 0 {
+		h.Mutex.Unlock()
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: fmt.Errorf("no clients available")}
 	}
 
