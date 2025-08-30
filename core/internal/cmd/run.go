@@ -263,6 +263,7 @@ func StartService(cfg *config.Config, configPath string) {
 		for {
 			select {
 			case <-ctxRefresh.Done():
+				log.Debugf("refreshing tokens stopped...")
 				return
 			case <-ticker.C:
 				checkAndRefresh()
