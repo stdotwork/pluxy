@@ -197,6 +197,14 @@ outLoop:
 						log.Debugf("http status code %d, switch client, %s", errInfo.StatusCode, util.HideAPIKey(cliClient.GetEmail()))
 						retryCount++
 						continue outLoop
+					case 401:
+						log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
+						err := cliClient.RefreshTokens(cliCtx)
+						if err != nil {
+							log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+						}
+						retryCount++
+						continue outLoop
 					default:
 						// Forward other errors directly to the client
 						c.Status(errInfo.StatusCode)

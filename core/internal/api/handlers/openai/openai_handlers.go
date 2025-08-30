@@ -18,6 +18,7 @@ import (
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/registry"
+	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -407,6 +408,14 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 				}
 			case 403, 408, 500, 502, 503, 504:
 				log.Debugf("http status code %d, switch client", err.StatusCode)
+				retryCount++
+				continue
+			case 401:
+				log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
+				errRefreshTokens := cliClient.RefreshTokens(cliCtx)
+				if errRefreshTokens != nil {
+					log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+				}
 				retryCount++
 				continue
 			default:

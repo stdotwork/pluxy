@@ -275,6 +275,14 @@ func (h *GeminiCLIAPIHandler) handleInternalGenerateContent(c *gin.Context, rawJ
 				log.Debugf("http status code %d, switch client", err.StatusCode)
 				retryCount++
 				continue
+			case 401:
+				log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
+				errRefreshTokens := cliClient.RefreshTokens(cliCtx)
+				if errRefreshTokens != nil {
+					log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+				}
+				retryCount++
+				continue
 			default:
 				// Forward other errors directly to the client
 				c.Status(err.StatusCode)

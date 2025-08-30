@@ -434,3 +434,8 @@ func (c *GeminiClient) GetUserAgent() string {
 func (c *GeminiClient) GetRequestMutex() *sync.Mutex {
 	return nil
 }
+
+func (c *GeminiClient) RefreshTokens(ctx context.Context) error {
+	// API keys don't need refreshing
+	return nil
+}

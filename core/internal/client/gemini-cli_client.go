@@ -860,3 +860,8 @@ func (c *GeminiCLIClient) GetUserAgent() string {
 func (c *GeminiCLIClient) GetRequestMutex() *sync.Mutex {
 	return nil
 }
+
+func (c *GeminiCLIClient) RefreshTokens(ctx context.Context) error {
+	// API keys don't need refreshing
+	return nil
+}

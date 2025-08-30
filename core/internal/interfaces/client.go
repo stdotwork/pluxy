@@ -51,4 +51,6 @@ type Client interface {
 
 	// Provider returns the name of the AI service provider (e.g., "gemini", "claude").
 	Provider() string
+
+	RefreshTokens(ctx context.Context) error
 }
