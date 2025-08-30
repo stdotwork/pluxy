@@ -93,8 +93,9 @@ func (c *CodexClient) Provider() string {
 func (c *CodexClient) CanProvideModel(modelName string) bool {
 	models := []string{
 		"gpt-5",
-		"gpt-5-mini",
-		"gpt-5-nano",
+		"gpt-5-minimal",
+		"gpt-5-low",
+		"gpt-5-medium",
 		"gpt-5-high",
 		"codex-mini-latest",
 	}
@@ -344,14 +345,14 @@ func (c *CodexClient) APIRequest(ctx context.Context, modelName, endpoint string
 	// Stream must be set to true
 	jsonBody, _ = sjson.SetBytes(jsonBody, "stream", true)
 
-	if util.InArray([]string{"gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-5-high"}, modelName) {
+	if util.InArray([]string{"gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, modelName) {
 		jsonBody, _ = sjson.SetBytes(jsonBody, "model", "gpt-5")
 		switch modelName {
-		case "gpt-5-nano":
+		case "gpt-5-minimal":
 			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "minimal")
-		case "gpt-5-mini":
+		case "gpt-5-low":
 			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "low")
-		case "gpt-5":
+		case "gpt-5-medium":
 			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "medium")
 		case "gpt-5-high":
 			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "high")
