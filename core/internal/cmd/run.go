@@ -163,7 +163,7 @@ func StartService(cfg *config.Config, configPath string) {
 	}
 
 	// Create and start the API server with the pool of clients in a separate goroutine.
-	apiServer := api.NewServer(cfg, cliClients)
+	apiServer := api.NewServer(cfg, cliClients, configPath)
 	log.Infof("Starting API server on port %d", cfg.Port)
 
 	// Start the API server in a goroutine so it doesn't block the main thread.

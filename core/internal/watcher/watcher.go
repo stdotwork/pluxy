@@ -185,6 +185,12 @@ func (w *Watcher) reloadConfig() {
 		if len(oldConfig.ClaudeKey) != len(newConfig.ClaudeKey) {
 			log.Debugf("  claude-api-key count: %d -> %d", len(oldConfig.ClaudeKey), len(newConfig.ClaudeKey))
 		}
+		if oldConfig.AllowLocalhostUnauthenticated != newConfig.AllowLocalhostUnauthenticated {
+			log.Debugf("  allow-localhost-unauthenticated: %t -> %t", oldConfig.AllowLocalhostUnauthenticated, newConfig.AllowLocalhostUnauthenticated)
+		}
+		if oldConfig.RemoteManagement.AllowRemote != newConfig.RemoteManagement.AllowRemote {
+			log.Debugf("  remote-management.allow-remote: %t -> %t", oldConfig.RemoteManagement.AllowRemote, newConfig.RemoteManagement.AllowRemote)
+		}
 	}
 
 	log.Infof("config successfully reloaded, triggering client reload")

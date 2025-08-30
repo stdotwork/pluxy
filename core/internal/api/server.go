@@ -15,6 +15,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/claude"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/gemini"
+	managementHandlers "github.com/luispater/CLIProxyAPI/internal/api/handlers/management"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/openai"
 	"github.com/luispater/CLIProxyAPI/internal/api/middleware"
 	"github.com/luispater/CLIProxyAPI/internal/config"
@@ -40,6 +41,12 @@ type Server struct {
 
 	// requestLogger is the request logger instance for dynamic configuration updates.
 	requestLogger *logging.FileRequestLogger
+
+	// configFilePath is the absolute path to the YAML config file for persistence.
+	configFilePath string
+
+	// management handler
+	mgmt *managementHandlers.Handler
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -51,7 +58,7 @@ type Server struct {
 //
 // Returns:
 //   - *Server: A new server instance
-func NewServer(cfg *config.Config, cliClients []interfaces.Client) *Server {
+func NewServer(cfg *config.Config, cliClients []interfaces.Client, configFilePath string) *Server {
 	// Set gin mode
 	if !cfg.Debug {
 		gin.SetMode(gin.ReleaseMode)
@@ -72,11 +79,14 @@ func NewServer(cfg *config.Config, cliClients []interfaces.Client) *Server {
 
 	// Create server instance
 	s := &Server{
-		engine:        engine,
-		handlers:      handlers.NewBaseAPIHandlers(cliClients, cfg),
-		cfg:           cfg,
-		requestLogger: requestLogger,
+		engine:         engine,
+		handlers:       handlers.NewBaseAPIHandlers(cliClients, cfg),
+		cfg:            cfg,
+		requestLogger:  requestLogger,
+		configFilePath: configFilePath,
 	}
+	// Initialize management handler
+	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath)
 
 	// Setup routes
 	s.setupRoutes()
@@ -130,6 +140,68 @@ func (s *Server) setupRoutes() {
 		})
 	})
 	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
+
+	// Management API routes (delegated to management handlers)
+	// New logic: if remote-management-key is empty, do not expose any management endpoint (404).
+	if s.cfg.RemoteManagement.SecretKey != "" {
+		mgmt := s.engine.Group("/v0/management")
+		mgmt.Use(s.mgmt.Middleware())
+		{
+			mgmt.GET("/debug", s.mgmt.GetDebug)
+			mgmt.PUT("/debug", s.mgmt.PutDebug)
+			mgmt.PATCH("/debug", s.mgmt.PutDebug)
+
+			mgmt.GET("/proxy-url", s.mgmt.GetProxyURL)
+			mgmt.PUT("/proxy-url", s.mgmt.PutProxyURL)
+			mgmt.PATCH("/proxy-url", s.mgmt.PutProxyURL)
+			mgmt.DELETE("/proxy-url", s.mgmt.DeleteProxyURL)
+
+			mgmt.GET("/quota-exceeded/switch-project", s.mgmt.GetSwitchProject)
+			mgmt.PUT("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
+			mgmt.PATCH("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
+
+			mgmt.GET("/quota-exceeded/switch-preview-model", s.mgmt.GetSwitchPreviewModel)
+			mgmt.PUT("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
+			mgmt.PATCH("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
+
+			mgmt.GET("/api-keys", s.mgmt.GetAPIKeys)
+			mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
+			mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
+			mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
+
+			mgmt.GET("/generative-language-api-key", s.mgmt.GetGlKeys)
+			mgmt.PUT("/generative-language-api-key", s.mgmt.PutGlKeys)
+			mgmt.PATCH("/generative-language-api-key", s.mgmt.PatchGlKeys)
+			mgmt.DELETE("/generative-language-api-key", s.mgmt.DeleteGlKeys)
+
+			mgmt.GET("/request-log", s.mgmt.GetRequestLog)
+			mgmt.PUT("/request-log", s.mgmt.PutRequestLog)
+			mgmt.PATCH("/request-log", s.mgmt.PutRequestLog)
+
+			mgmt.GET("/request-retry", s.mgmt.GetRequestRetry)
+			mgmt.PUT("/request-retry", s.mgmt.PutRequestRetry)
+			mgmt.PATCH("/request-retry", s.mgmt.PutRequestRetry)
+
+			mgmt.GET("/allow-localhost-unauthenticated", s.mgmt.GetAllowLocalhost)
+			mgmt.PUT("/allow-localhost-unauthenticated", s.mgmt.PutAllowLocalhost)
+			mgmt.PATCH("/allow-localhost-unauthenticated", s.mgmt.PutAllowLocalhost)
+
+			mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
+			mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
+			mgmt.PATCH("/claude-api-key", s.mgmt.PatchClaudeKey)
+			mgmt.DELETE("/claude-api-key", s.mgmt.DeleteClaudeKey)
+
+			mgmt.GET("/openai-compatibility", s.mgmt.GetOpenAICompat)
+			mgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
+			mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
+			mgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
+
+			mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
+			mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
+			mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
+			mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
+		}
+	}
 }
 
 // unifiedModelsHandler creates a unified handler for the /v1/models endpoint
@@ -220,10 +292,25 @@ func (s *Server) UpdateClients(clients []interfaces.Client, cfg *config.Config) 
 		log.Debugf("request logging updated from %t to %t", s.cfg.RequestLog, cfg.RequestLog)
 	}
 
+	// Update log level dynamically when debug flag changes
+	if s.cfg.Debug != cfg.Debug {
+		if cfg.Debug {
+			log.SetLevel(log.DebugLevel)
+		} else {
+			log.SetLevel(log.InfoLevel)
+		}
+		log.Debugf("debug mode updated from %t to %t", s.cfg.Debug, cfg.Debug)
+	}
+
 	s.cfg = cfg
 	s.handlers.UpdateClients(clients, cfg)
+	if s.mgmt != nil {
+		s.mgmt.SetConfig(cfg)
+	}
 	log.Infof("server clients and configuration updated: %d clients", len(clients))
 }
+
+// (management handlers moved to internal/api/handlers/management)
 
 // AuthMiddleware returns a Gin middleware handler that authenticates requests
 // using API keys. If no API keys are configured, it allows all requests.

@@ -96,6 +96,10 @@
 
 默认情况下，服务器在端口 8317 上运行。
 
+## 管理 API 文档
+
+请参见 [MANAGEMENT_API_CN.md](MANAGEMENT_API_CN.md)
+
 ### API 端点
 
 #### 列出模型
@@ -233,7 +237,7 @@ console.log(await claudeResponse.json());
 服务器默认使用位于项目根目录的 YAML 配置文件（`config.yaml`）。您可以使用 `--config` 标志指定不同的配置文件路径：
 
 ```bash
-./cli-proxy-api --config /path/to/your/config.yaml
+  ./cli-proxy-api --config /path/to/your/config.yaml
 ```
 
 ### 配置选项
@@ -244,6 +248,8 @@ console.log(await claudeResponse.json());
 | `auth-dir`                              | string   | "~/.cli-proxy-api" | 存储身份验证令牌的目录。支持使用 `~` 来表示主目录。如果你使用Windows，建议设置成`C:/cli-proxy-api/`。  |
 | `proxy-url`                             | string   | ""                 | 代理URL。支持socks5/http/https协议。例如：socks5://user:pass@192.168.1.1:1080/ |
 | `request-retry`                         | integer  | 0                  | 请求重试次数。如果HTTP响应码为403、408、500、502、503或504，将会触发重试。                    |
+| `remote-management.allow-remote`        | boolean  | false              | 是否允许远程（非localhost）访问管理接口。为false时仅允许本地访问；本地访问同样需要管理密钥。               |
+| `remote-management.secret-key`          | string   | ""                 | 管理密钥。若配置为明文，启动时会自动进行bcrypt加密并写回配置文件。若为空，管理接口整体不可用（404）。             |
 | `quota-exceeded`                        | object   | {}                 | 用于处理配额超限的配置。                                                        |
 | `quota-exceeded.switch-project`         | boolean  | true               | 当配额超限时，是否自动切换到另一个项目。                                                |
 | `quota-exceeded.switch-preview-model`   | boolean  | true               | 当配额超限时，是否自动切换到预览模型。                                                 |
@@ -266,6 +272,16 @@ console.log(await claudeResponse.json());
 ```yaml
 # 服务器端口
 port: 8317
+
+# 管理 API 设置
+remote-management:
+  # 是否允许远程（非localhost）访问管理接口。为false时仅允许本地访问（但本地访问同样需要管理密钥）。
+  allow-remote: false
+
+  # 管理密钥。若配置为明文，启动时会自动进行bcrypt加密并写回配置文件。
+  # 所有管理请求（包括本地）都需要该密钥。
+  # 若为空，/v0/management 整体处于 404（禁用）。
+  secret-key: ""
 
 # 身份验证目录（支持 ~ 表示主目录）。如果你使用Windows，建议设置成`C:/cli-proxy-api/`。
 auth-dir: "~/.cli-proxy-api"
