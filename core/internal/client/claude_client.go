@@ -343,6 +343,10 @@ func (c *ClaudeClient) SaveTokenToFile() error {
 //   - error: An error if the refresh operation fails, nil otherwise.
 func (c *ClaudeClient) RefreshTokens(ctx context.Context) error {
 	// Check if we have a valid refresh token
+	if c.apiKeyIndex != -1 {
+		return fmt.Errorf("no refresh token available")
+	}
+
 	if c.tokenStorage == nil || c.tokenStorage.(*claude.ClaudeTokenStorage).RefreshToken == "" {
 		return fmt.Errorf("no refresh token available")
 	}

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -212,6 +213,22 @@ func (w *Watcher) reloadClients() {
 	authFileCount := 0
 	successfulAuthCount := 0
 
+	if strings.HasPrefix(cfg.AuthDir, "~") {
+		home, errUserHomeDir := os.UserHomeDir()
+		if errUserHomeDir != nil {
+			log.Fatalf("failed to get home directory: %v", errUserHomeDir)
+		}
+		// Reconstruct the path by replacing the tilde with the user's home directory.
+		parts := strings.Split(cfg.AuthDir, string(os.PathSeparator))
+		if len(parts) > 1 {
+			parts[0] = home
+			cfg.AuthDir = path.Join(parts...)
+		} else {
+			// If the path is just "~", set it to the home directory.
+			cfg.AuthDir = home
+		}
+	}
+
 	// Load clients from auth directory
 	errWalk := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
@@ -331,27 +348,54 @@ func (w *Watcher) reloadClients() {
 
 	claudeAPIKeyCount := 0
 	if len(cfg.ClaudeKey) > 0 {
-		log.Debugf("processing %d Claude API Keys", len(cfg.GlAPIKey))
+		log.Debugf("processing %d Claude API Keys", len(cfg.ClaudeKey))
 		for i := 0; i < len(cfg.ClaudeKey); i++ {
 			log.Debugf("Initializing with Claude API Key %d...", i+1)
 			cliClient := client.NewClaudeClientWithKey(cfg, i)
 			newClients = append(newClients, cliClient)
 			claudeAPIKeyCount++
 		}
-		log.Debugf("Successfully initialized %d Claude API Key clients", glAPIKeyCount)
+		log.Debugf("Successfully initialized %d Claude API Key clients", claudeAPIKeyCount)
 	}
+
+	// Add clients for OpenAI compatibility providers if configured
+	openAICompatCount := 0
+	if len(cfg.OpenAICompatibility) > 0 {
+		log.Debugf("processing %d OpenAI-compatibility providers", len(cfg.OpenAICompatibility))
+		for i := 0; i < len(cfg.OpenAICompatibility); i++ {
+			compat := cfg.OpenAICompatibility[i]
+			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compat)
+			if errClient != nil {
+				log.Errorf("  failed to create OpenAI-compatibility client for %s: %v", compat.Name, errClient)
+				continue
+			}
+			newClients = append(newClients, compatClient)
+			openAICompatCount++
+		}
+		log.Debugf("Successfully initialized %d OpenAI-compatibility clients", openAICompatCount)
+	}
+
+	// Unregister old clients from the model registry if supported
+	w.clientsMutex.RLock()
+	for i := 0; i < len(w.clients); i++ {
+		if u, ok := any(w.clients[i]).(interface{ UnregisterClient() }); ok {
+			u.UnregisterClient()
+		}
+	}
+	w.clientsMutex.RUnlock()
 
 	// Update the client list
 	w.clientsMutex.Lock()
 	w.clients = newClients
 	w.clientsMutex.Unlock()
 
-	log.Infof("client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys)",
+	log.Infof("client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d OpenAI-compat)",
 		oldClientCount,
 		len(newClients),
 		successfulAuthCount,
 		glAPIKeyCount,
 		claudeAPIKeyCount,
+		openAICompatCount,
 	)
 
 	// Trigger the callback to update the server
