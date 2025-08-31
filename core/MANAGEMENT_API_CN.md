@@ -1,4 +1,4 @@
-# 管理 API（简体中文）
+# 管理 API
 
 基础路径：`http://localhost:8317/v0/management`
 
@@ -10,12 +10,11 @@
 
 ## 认证
 
-- 本地访问（`127.0.0.1`、`::1`）：无需管理密钥。
-- 远程访问：需要同时满足：
-  - 配置中 `allow-remote-management: true`
-  - 通过以下任意方式提供管理密钥（明文）：
-    - `Authorization: Bearer <plaintext-key>`
-    - `X-Management-Key: <plaintext-key>`
+- 所有请求（包括本地访问）都必须提供有效的管理密钥.
+- 远程访问需要在配置文件中开启远程访问： `allow-remote-management: true`
+- 通过以下任意方式提供管理密钥（明文）：
+  - `Authorization: Bearer <plaintext-key>`
+  - `X-Management-Key: <plaintext-key>`
 
 若在启动时检测到配置中的管理密钥为明文，会自动使用 bcrypt 加密并回写到配置文件中。
 
@@ -33,7 +32,7 @@
 - GET `/debug` — 获取当前 debug 状态
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/debug
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/debug
     ```
   - 响应：
     ```json
@@ -56,7 +55,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - GET `/proxy-url` — 获取代理 URL 字符串
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/proxy-url
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/proxy-url
     ```
   - 响应：
     ```json
@@ -84,7 +83,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - DELETE `/proxy-url` — 清空代理 URL
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE http://localhost:8317/v0/management/proxy-url
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE http://localhost:8317/v0/management/proxy-url
     ```
   - 响应：
     ```json
@@ -95,7 +94,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE http://localhost:8317
 - GET `/quota-exceeded/switch-project`
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/quota-exceeded/switch-project
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/quota-exceeded/switch-project
     ```
   - 响应：
     ```json
@@ -116,7 +115,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - GET `/quota-exceeded/switch-preview-model`
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/quota-exceeded/switch-preview-model
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/quota-exceeded/switch-preview-model
     ```
   - 响应：
     ```json
@@ -139,7 +138,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - GET `/api-keys` — 返回完整列表
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/api-keys
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/api-keys
     ```
   - 响应：
     ```json
@@ -179,11 +178,11 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - DELETE `/api-keys` — 删除其中一个（`?value=` 或 `?index=`）
   - 请求（按值删除）：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/api-keys?value=k1'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/api-keys?value=k1'
     ```
   - 请求（按索引删除）：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/api-keys?index=0'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/api-keys?index=0'
     ```
   - 响应：
     ```json
@@ -194,7 +193,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:831
 - GET `/generative-language-api-key`
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/generative-language-api-key
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/generative-language-api-key
     ```
   - 响应：
     ```json
@@ -227,7 +226,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - DELETE `/generative-language-api-key`
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/generative-language-api-key?value=AIzaSy-2'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/generative-language-api-key?value=AIzaSy-2'
     ```
   - 响应：
     ```json
@@ -238,7 +237,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:831
 - GET `/request-log` — 获取布尔值
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/request-log
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/request-log
     ```
   - 响应：
     ```json
@@ -261,7 +260,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - GET `/request-retry` — 获取整数
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/request-retry
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/request-retry
     ```
   - 响应：
     ```json
@@ -284,7 +283,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - GET `/allow-localhost-unauthenticated` — 获取布尔值
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/allow-localhost-unauthenticated
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/allow-localhost-unauthenticated
     ```
   - 响应：
     ```json
@@ -307,7 +306,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - GET `/claude-api-key` — 列出全部
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/claude-api-key
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/claude-api-key
     ```
   - 响应：
     ```json
@@ -347,11 +346,11 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - DELETE `/claude-api-key` — 删除其中一个（`?api-key=` 或 `?index=`）
   - 请求（按 api-key）：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/claude-api-key?api-key=sk-b2'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/claude-api-key?api-key=sk-b2'
     ```
   - 请求（按索引）：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/claude-api-key?index=0'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/claude-api-key?index=0'
     ```
   - 响应：
     ```json
@@ -362,7 +361,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:831
 - GET `/openai-compatibility` — 列出全部
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/openai-compatibility
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/openai-compatibility
     ```
   - 响应：
     ```json
@@ -402,11 +401,11 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - DELETE `/openai-compatibility` — 删除（`?name=` 或 `?index=`）
   - 请求（按名称）：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/openai-compatibility?name=openrouter'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/openai-compatibility?name=openrouter'
     ```
   - 请求（按索引）：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/openai-compatibility?index=0'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/openai-compatibility?index=0'
     ```
   - 响应：
     ```json
@@ -420,7 +419,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:831
 - GET `/auth-files` — 列表
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/auth-files
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/auth-files
     ```
   - 响应：
     ```json
@@ -430,7 +429,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/manage
 - GET `/auth-files/download?name=<file.json>` — 下载单个文件
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -OJ 'http://localhost:8317/v0/management/auth-files/download?name=acc1.json'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -OJ 'http://localhost:8317/v0/management/auth-files/download?name=acc1.json'
     ```
 
 - POST `/auth-files` — 上传
@@ -455,7 +454,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -OJ 'http://localhost:8317/v0/m
 - DELETE `/auth-files?name=<file.json>` — 删除单个文件
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/auth-files?name=acc1.json'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/auth-files?name=acc1.json'
     ```
   - 响应：
     ```json
@@ -465,7 +464,7 @@ curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:831
 - DELETE `/auth-files?all=true` — 删除 `auth-dir` 下所有 `.json` 文件
   - 请求：
     ```bash
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/auth-files?all=true'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/auth-files?all=true'
     ```
   - 响应：
     ```json
