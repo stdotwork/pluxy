@@ -49,6 +49,33 @@ func ConvertGeminiRequestToGeminiCLI(_ string, rawJSON []byte, _ bool) []byte {
 	}
 	rawJSON = []byte(template)
 
+	// Normalize roles in request.contents: default to valid values if missing/invalid
+	contents := gjson.GetBytes(rawJSON, "request.contents")
+	if contents.Exists() {
+		prevRole := ""
+		idx := 0
+		contents.ForEach(func(_ gjson.Result, value gjson.Result) bool {
+			role := value.Get("role").String()
+			valid := role == "user" || role == "model"
+			if role == "" || !valid {
+				var newRole string
+				if prevRole == "" {
+					newRole = "user"
+				} else if prevRole == "user" {
+					newRole = "model"
+				} else {
+					newRole = "user"
+				}
+				path := fmt.Sprintf("request.contents.%d.role", idx)
+				rawJSON, _ = sjson.SetBytes(rawJSON, path, newRole)
+				role = newRole
+			}
+			prevRole = role
+			idx++
+			return true
+		})
+	}
+
 	return rawJSON
 }
 

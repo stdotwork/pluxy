@@ -12,6 +12,7 @@ import (
 	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/gemini"
 	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/openai"
 	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini/claude"
+	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini/gemini"
 	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini/gemini-cli"
 	_ "github.com/luispater/CLIProxyAPI/internal/translator/gemini/openai"
 	_ "github.com/luispater/CLIProxyAPI/internal/translator/openai/claude"
