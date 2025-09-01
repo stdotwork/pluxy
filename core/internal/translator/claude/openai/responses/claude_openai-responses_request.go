@@ -1,5 +1,190 @@
 package responses
 
+import (
+	"crypto/rand"
+	"math/big"
+	"strings"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+)
+
+// ConvertOpenAIResponsesRequestToClaude transforms an OpenAI Responses API request
+// into a Claude Messages API request using only gjson/sjson for JSON handling.
+// It supports:
+// - instructions -> system message
+// - input[].type==message with input_text/output_text -> user/assistant messages
+// - function_call -> assistant tool_use
+// - function_call_output -> user tool_result
+// - tools[].parameters -> tools[].input_schema
+// - max_output_tokens -> max_tokens
+// - stream passthrough via parameter
 func ConvertOpenAIResponsesRequestToClaude(modelName string, rawJSON []byte, stream bool) []byte {
-	return nil
+	// Base Claude message payload
+	out := `{"model":"","max_tokens":32000,"messages":[]}`
+
+	root := gjson.ParseBytes(rawJSON)
+
+	// Helper for generating tool call IDs when missing
+	genToolCallID := func() string {
+		const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+		var b strings.Builder
+		for i := 0; i < 24; i++ {
+			n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+			b.WriteByte(letters[n.Int64()])
+		}
+		return "toolu_" + b.String()
+	}
+
+	// Model
+	out, _ = sjson.Set(out, "model", modelName)
+
+	// Max tokens
+	if mot := root.Get("max_output_tokens"); mot.Exists() {
+		out, _ = sjson.Set(out, "max_tokens", mot.Int())
+	}
+
+	// Stream
+	out, _ = sjson.Set(out, "stream", stream)
+
+	// instructions -> as a leading message (use role user for Claude API compatibility)
+	if instr := root.Get("instructions"); instr.Exists() && instr.Type == gjson.String && instr.String() != "" {
+		sysMsg := `{"role":"user","content":""}`
+		sysMsg, _ = sjson.Set(sysMsg, "content", instr.String())
+		out, _ = sjson.SetRaw(out, "messages.-1", sysMsg)
+	}
+
+	// input array processing
+	if input := root.Get("input"); input.Exists() && input.IsArray() {
+		input.ForEach(func(_, item gjson.Result) bool {
+			typ := item.Get("type").String()
+			switch typ {
+			case "message":
+				// Determine role from content type (input_text=user, output_text=assistant)
+				var role string
+				var text strings.Builder
+				if parts := item.Get("content"); parts.Exists() && parts.IsArray() {
+					parts.ForEach(func(_, part gjson.Result) bool {
+						ptype := part.Get("type").String()
+						if ptype == "input_text" || ptype == "output_text" {
+							if t := part.Get("text"); t.Exists() {
+								text.WriteString(t.String())
+							}
+							if ptype == "input_text" {
+								role = "user"
+							} else if ptype == "output_text" {
+								role = "assistant"
+							}
+						}
+						return true
+					})
+				}
+
+				// Fallback to given role if content types not decisive
+				if role == "" {
+					r := item.Get("role").String()
+					switch r {
+					case "user", "assistant", "system":
+						role = r
+					default:
+						role = "user"
+					}
+				}
+
+				if text.Len() > 0 || role == "system" {
+					msg := `{"role":"","content":""}`
+					msg, _ = sjson.Set(msg, "role", role)
+					if text.Len() > 0 {
+						msg, _ = sjson.Set(msg, "content", text.String())
+					} else {
+						msg, _ = sjson.Set(msg, "content", "")
+					}
+					out, _ = sjson.SetRaw(out, "messages.-1", msg)
+				}
+
+			case "function_call":
+				// Map to assistant tool_use
+				callID := item.Get("call_id").String()
+				if callID == "" {
+					callID = genToolCallID()
+				}
+				name := item.Get("name").String()
+				argsStr := item.Get("arguments").String()
+
+				toolUse := `{"type":"tool_use","id":"","name":"","input":{}}`
+				toolUse, _ = sjson.Set(toolUse, "id", callID)
+				toolUse, _ = sjson.Set(toolUse, "name", name)
+				if argsStr != "" && gjson.Valid(argsStr) {
+					toolUse, _ = sjson.SetRaw(toolUse, "input", argsStr)
+				}
+
+				asst := `{"role":"assistant","content":[]}`
+				asst, _ = sjson.SetRaw(asst, "content.-1", toolUse)
+				out, _ = sjson.SetRaw(out, "messages.-1", asst)
+
+			case "function_call_output":
+				// Map to user tool_result
+				callID := item.Get("call_id").String()
+				outputStr := item.Get("output").String()
+				toolResult := `{"type":"tool_result","tool_use_id":"","content":""}`
+				toolResult, _ = sjson.Set(toolResult, "tool_use_id", callID)
+				toolResult, _ = sjson.Set(toolResult, "content", outputStr)
+
+				usr := `{"role":"user","content":[]}`
+				usr, _ = sjson.SetRaw(usr, "content.-1", toolResult)
+				out, _ = sjson.SetRaw(out, "messages.-1", usr)
+			}
+			return true
+		})
+	}
+
+	// tools mapping: parameters -> input_schema
+	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() {
+		toolsJSON := "[]"
+		tools.ForEach(func(_, tool gjson.Result) bool {
+			tJSON := `{"name":"","description":"","input_schema":{}}`
+			if n := tool.Get("name"); n.Exists() {
+				tJSON, _ = sjson.Set(tJSON, "name", n.String())
+			}
+			if d := tool.Get("description"); d.Exists() {
+				tJSON, _ = sjson.Set(tJSON, "description", d.String())
+			}
+
+			if params := tool.Get("parameters"); params.Exists() {
+				tJSON, _ = sjson.SetRaw(tJSON, "input_schema", params.Raw)
+			} else if params = tool.Get("parametersJsonSchema"); params.Exists() {
+				tJSON, _ = sjson.SetRaw(tJSON, "input_schema", params.Raw)
+			}
+
+			toolsJSON, _ = sjson.SetRaw(toolsJSON, "-1", tJSON)
+			return true
+		})
+		if gjson.Parse(toolsJSON).IsArray() && len(gjson.Parse(toolsJSON).Array()) > 0 {
+			out, _ = sjson.SetRaw(out, "tools", toolsJSON)
+		}
+	}
+
+	// Map tool_choice similar to Chat Completions translator (optional in docs, safe to handle)
+	if toolChoice := root.Get("tool_choice"); toolChoice.Exists() {
+		switch toolChoice.Type {
+		case gjson.String:
+			switch toolChoice.String() {
+			case "auto":
+				out, _ = sjson.Set(out, "tool_choice", map[string]interface{}{"type": "auto"})
+			case "none":
+				// Leave unset; implies no tools
+			case "required":
+				out, _ = sjson.Set(out, "tool_choice", map[string]interface{}{"type": "any"})
+			}
+		case gjson.JSON:
+			if toolChoice.Get("type").String() == "function" {
+				fn := toolChoice.Get("function.name").String()
+				out, _ = sjson.Set(out, "tool_choice", map[string]interface{}{"type": "tool", "name": fn})
+			}
+		default:
+
+		}
+	}
+
+	return []byte(out)
 }
