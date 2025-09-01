@@ -484,6 +484,7 @@ func (c *GeminiCLIClient) SendRawMessage(ctx context.Context, modelName string, 
 				if newModelName != "" {
 					log.Debugf("Model %s is quota exceeded. Switch to preview model %s", modelName, newModelName)
 					rawJSON, _ = sjson.SetBytes(rawJSON, "model", newModelName)
+					modelName = newModelName
 					continue
 				}
 			}
@@ -563,6 +564,7 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 					if newModelName != "" {
 						log.Debugf("Model %s is quota exceeded. Switch to preview model %s", modelName, newModelName)
 						rawJSON, _ = sjson.SetBytes(rawJSON, "model", newModelName)
+						modelName = newModelName
 						continue
 					}
 				}
