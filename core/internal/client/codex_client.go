@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	chatGPTEndpoint = "https://chatgpt.com/backend-api"
+	chatGPTEndpoint = "https://chatgpt.com/backend-api/codex"
 )
 
 // CodexClient implements the Client interface for OpenAI API
@@ -128,7 +128,7 @@ func (c *CodexClient) SendRawMessage(ctx context.Context, modelName string, rawJ
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, false)
 
-	respBody, err := c.APIRequest(ctx, modelName, "/codex/responses", rawJSON, alt, false)
+	respBody, err := c.APIRequest(ctx, modelName, "/responses", rawJSON, alt, false)
 	if err != nil {
 		if err.StatusCode == 429 {
 			now := time.Now()
@@ -193,7 +193,7 @@ func (c *CodexClient) SendRawMessageStream(ctx context.Context, modelName string
 		}
 
 		var err *interfaces.ErrorMessage
-		stream, err = c.APIRequest(ctx, modelName, "/codex/responses", rawJSON, alt, true)
+		stream, err = c.APIRequest(ctx, modelName, "/responses", rawJSON, alt, true)
 		if err != nil {
 			if err.StatusCode == 429 {
 				now := time.Now()
