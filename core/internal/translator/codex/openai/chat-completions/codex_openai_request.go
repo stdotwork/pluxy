@@ -4,7 +4,7 @@
 // The package handles the conversion of OpenAI API requests into the format
 // expected by the OpenAI Responses API, including proper mapping of messages,
 // tools, and generation parameters.
-package openai
+package chat_completions
 
 import (
 	"github.com/luispater/CLIProxyAPI/internal/misc"

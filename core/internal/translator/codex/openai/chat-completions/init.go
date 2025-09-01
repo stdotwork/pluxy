@@ -1,4 +1,4 @@
-package openai
+package chat_completions
 
 import (
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
@@ -9,11 +9,11 @@ import (
 func init() {
 	translator.Register(
 		OPENAI,
-		GEMINICLI,
-		ConvertOpenAIRequestToGeminiCLI,
+		CODEX,
+		ConvertOpenAIRequestToCodex,
 		interfaces.TranslateResponse{
-			Stream:    ConvertCliResponseToOpenAI,
-			NonStream: ConvertCliResponseToOpenAINonStream,
+			Stream:    ConvertCodexResponseToOpenAI,
+			NonStream: ConvertCodexResponseToOpenAINonStream,
 		},
 	)
 }

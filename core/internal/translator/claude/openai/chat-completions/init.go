@@ -1,4 +1,4 @@
-package openai
+package chat_completions
 
 import (
 	. "github.com/luispater/CLIProxyAPI/internal/constant"

@@ -1,6 +1,6 @@
 // Package openai provides request translation functionality for OpenAI to Gemini CLI API compatibility.
 // It converts OpenAI Chat Completions requests into Gemini CLI compatible JSON using gjson/sjson only.
-package openai
+package chat_completions
 
 import (
 	"fmt"

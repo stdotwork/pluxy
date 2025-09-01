@@ -3,7 +3,7 @@
 // extracting model information, system instructions, message contents, and tool declarations.
 // The package performs JSON data transformation to ensure compatibility
 // between OpenAI API format and Claude Code API's expected format.
-package openai
+package chat_completions
 
 import (
 	"crypto/rand"

@@ -3,7 +3,7 @@
 // JSON format, transforming streaming events and non-streaming responses into the format
 // expected by OpenAI API clients. It supports both streaming and non-streaming modes,
 // handling text content, tool calls, reasoning content, and usage metadata appropriately.
-package openai
+package chat_completions
 
 import (
 	"bufio"

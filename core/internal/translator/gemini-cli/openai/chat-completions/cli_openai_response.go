@@ -3,7 +3,7 @@
 // JSON format, transforming streaming events and non-streaming responses into the format
 // expected by OpenAI API clients. It supports both streaming and non-streaming modes,
 // handling text content, tool calls, reasoning content, and usage metadata appropriately.
-package openai
+package chat_completions
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	. "github.com/luispater/CLIProxyAPI/internal/translator/gemini/openai"
+	. "github.com/luispater/CLIProxyAPI/internal/translator/gemini/openai/chat-completions"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
