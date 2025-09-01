@@ -1,6 +1,8 @@
 package responses
 
 import (
+	"bytes"
+
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -24,7 +26,8 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in OpenAI chat completions format
-func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, rawJSON []byte, stream bool) []byte {
+func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inputRawJSON []byte, stream bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
 	// Base OpenAI chat completions template with default values
 	out := `{"model":"","messages":[],"stream":false}`
 
@@ -171,6 +174,25 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, rawJ
 
 		if len(chatCompletionsTools) > 0 {
 			out, _ = sjson.Set(out, "tools", chatCompletionsTools)
+		}
+	}
+
+	if reasoningEffort := root.Get("reasoning.effort"); reasoningEffort.Exists() {
+		switch reasoningEffort.String() {
+		case "none":
+			out, _ = sjson.Set(out, "reasoning_effort", "none")
+		case "auto":
+			out, _ = sjson.Set(out, "reasoning_effort", "auto")
+		case "minimal":
+			out, _ = sjson.Set(out, "reasoning_effort", "low")
+		case "low":
+			out, _ = sjson.Set(out, "reasoning_effort", "low")
+		case "medium":
+			out, _ = sjson.Set(out, "reasoning_effort", "medium")
+		case "high":
+			out, _ = sjson.Set(out, "reasoning_effort", "high")
+		default:
+			out, _ = sjson.Set(out, "reasoning_effort", "auto")
 		}
 	}
 

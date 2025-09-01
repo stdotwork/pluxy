@@ -40,7 +40,7 @@ type ConvertCliToOpenAIParams struct {
 //
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
-func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, rawJSON []byte, param *any) []string {
+func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if *param == nil {
 		*param = &ConvertCliToOpenAIParams{
 			Model:      modelName,
@@ -145,7 +145,7 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, rawJSON [
 //
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
-func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, rawJSON []byte, _ *any) string {
+func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)

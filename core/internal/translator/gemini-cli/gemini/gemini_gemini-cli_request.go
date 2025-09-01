@@ -28,7 +28,7 @@ import (
 //
 // Returns:
 //   - []string: The transformed request data in Gemini API format
-func ConvertGeminiCliRequestToGemini(ctx context.Context, _ string, rawJSON []byte, _ *any) []string {
+func ConvertGeminiCliRequestToGemini(ctx context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) []string {
 	if alt, ok := ctx.Value("alt").(string); ok {
 		var chunk []byte
 		if alt == "" {
@@ -67,7 +67,7 @@ func ConvertGeminiCliRequestToGemini(ctx context.Context, _ string, rawJSON []by
 //
 // Returns:
 //   - string: A Gemini-compatible JSON response containing the response data
-func ConvertGeminiCliRequestToGeminiNonStream(_ context.Context, _ string, rawJSON []byte, _ *any) string {
+func ConvertGeminiCliRequestToGeminiNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		return responseResult.Raw

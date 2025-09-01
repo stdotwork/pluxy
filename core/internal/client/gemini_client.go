@@ -187,6 +187,7 @@ func (c *GeminiClient) APIRequest(ctx context.Context, modelName, endpoint strin
 //   - []byte: The response body.
 //   - *interfaces.ErrorMessage: An error message if the request fails.
 func (c *GeminiClient) SendRawTokenCount(ctx context.Context, modelName string, rawJSON []byte, alt string) ([]byte, *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
 	for {
 		if c.IsModelQuotaExceeded(modelName) {
 			return nil, &interfaces.ErrorMessage{
@@ -219,7 +220,7 @@ func (c *GeminiClient) SendRawTokenCount(ctx context.Context, modelName string, 
 
 		c.AddAPIResponseData(ctx, bodyBytes)
 		var param any
-		bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, bodyBytes, &param))
+		bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, originalRequestRawJSON, rawJSON, bodyBytes, &param))
 
 		return bodyBytes, nil
 	}
@@ -237,6 +238,8 @@ func (c *GeminiClient) SendRawTokenCount(ctx context.Context, modelName string, 
 //   - []byte: The response body.
 //   - *interfaces.ErrorMessage: An error message if the request fails.
 func (c *GeminiClient) SendRawMessage(ctx context.Context, modelName string, rawJSON []byte, alt string) ([]byte, *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
+
 	handler := ctx.Value("handler").(interfaces.APIHandler)
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, false)
@@ -268,11 +271,12 @@ func (c *GeminiClient) SendRawMessage(ctx context.Context, modelName string, raw
 
 	_ = respBody.Close()
 	c.AddAPIResponseData(ctx, bodyBytes)
+	// log.Debugf("Gemini response: %s", string(bodyBytes))
 
 	var param any
-	bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, bodyBytes, &param))
+	output := []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, originalRequestRawJSON, rawJSON, bodyBytes, &param))
 
-	return bodyBytes, nil
+	return output, nil
 }
 
 // SendRawMessageStream handles a single conversational turn, including tool calls.
@@ -287,6 +291,8 @@ func (c *GeminiClient) SendRawMessage(ctx context.Context, modelName string, raw
 //   - <-chan []byte: A channel for receiving response data chunks.
 //   - <-chan *interfaces.ErrorMessage: A channel for receiving error messages.
 func (c *GeminiClient) SendRawMessageStream(ctx context.Context, modelName string, rawJSON []byte, alt string) (<-chan []byte, <-chan *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
+
 	handler := ctx.Value("handler").(interfaces.APIHandler)
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, true)
@@ -335,7 +341,7 @@ func (c *GeminiClient) SendRawMessageStream(ctx context.Context, modelName strin
 				for scanner.Scan() {
 					line := scanner.Bytes()
 					if bytes.HasPrefix(line, dataTag) {
-						lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[6:], &param)
+						lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, line[6:], &param)
 						for i := 0; i < len(lines); i++ {
 							dataChan <- []byte(lines[i])
 						}
@@ -367,7 +373,7 @@ func (c *GeminiClient) SendRawMessageStream(ctx context.Context, modelName strin
 			}
 
 			if translator.NeedConvert(handlerType, c.Type()) {
-				lines := translator.Response(handlerType, c.Type(), newCtx, modelName, data, &param)
+				lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, data, &param)
 				for i := 0; i < len(lines); i++ {
 					dataChan <- []byte(lines[i])
 				}
@@ -379,7 +385,7 @@ func (c *GeminiClient) SendRawMessageStream(ctx context.Context, modelName strin
 		}
 
 		if translator.NeedConvert(handlerType, c.Type()) {
-			lines := translator.Response(handlerType, c.Type(), ctx, modelName, []byte("[DONE]"), &param)
+			lines := translator.Response(handlerType, c.Type(), ctx, modelName, rawJSON, originalRequestRawJSON, []byte("[DONE]"), &param)
 			for i := 0; i < len(lines); i++ {
 				dataChan <- []byte(lines[i])
 			}

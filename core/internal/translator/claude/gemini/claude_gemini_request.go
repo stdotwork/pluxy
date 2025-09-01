@@ -6,6 +6,7 @@
 package gemini
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
 	"math/big"
@@ -34,7 +35,8 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in Claude Code API format
-func ConvertGeminiRequestToClaude(modelName string, rawJSON []byte, stream bool) []byte {
+func ConvertGeminiRequestToClaude(modelName string, inputRawJSON []byte, stream bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
 	// Base Claude Code API template with default max_tokens value
 	out := `{"model":"","max_tokens":32000,"messages":[]}`
 

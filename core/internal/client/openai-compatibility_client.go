@@ -199,6 +199,12 @@ func (c *OpenAICompatibilityClient) APIRequest(ctx context.Context, modelName st
 
 	log.Debugf("OpenAI Compatibility [%s] API request: %s", c.compatConfig.Name, util.HideAPIKey(apiKey))
 
+	if c.cfg.RequestLog {
+		if ginContext, ok := ctx.Value("gin").(*gin.Context); ok {
+			ginContext.Set("API_REQUEST", modifiedJSON)
+		}
+	}
+
 	// Send the request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -231,6 +237,8 @@ func (c *OpenAICompatibilityClient) APIRequest(ctx context.Context, modelName st
 //   - []byte: The response data from the API.
 //   - *interfaces.ErrorMessage: An error message if the request fails.
 func (c *OpenAICompatibilityClient) SendRawMessage(ctx context.Context, modelName string, rawJSON []byte, alt string) ([]byte, *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
+
 	handler := ctx.Value("handler").(interfaces.APIHandler)
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, false)
@@ -257,7 +265,7 @@ func (c *OpenAICompatibilityClient) SendRawMessage(ctx context.Context, modelNam
 	c.AddAPIResponseData(ctx, bodyBytes)
 
 	var param any
-	bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, bodyBytes, &param))
+	bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, originalRequestRawJSON, rawJSON, bodyBytes, &param))
 
 	return bodyBytes, nil
 }
@@ -274,11 +282,14 @@ func (c *OpenAICompatibilityClient) SendRawMessage(ctx context.Context, modelNam
 //   - <-chan []byte: A channel that will receive response chunks.
 //   - <-chan *interfaces.ErrorMessage: A channel that will receive error messages.
 func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, modelName string, rawJSON []byte, alt string) (<-chan []byte, <-chan *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
+
 	handler := ctx.Value("handler").(interfaces.APIHandler)
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, true)
 
 	dataTag := []byte("data: ")
+	dataUglyTag := []byte("data:") // Some APIs providers don't add space after "data:", fuck for them all
 	doneTag := []byte("data: [DONE]")
 	errChan := make(chan *interfaces.ErrorMessage)
 	dataChan := make(chan []byte)
@@ -321,7 +332,33 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 					if bytes.Equal(line, doneTag) {
 						break
 					}
-					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[6:], &param)
+					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, line[6:], &param)
+					for i := 0; i < len(lines); i++ {
+						c.AddAPIResponseData(ctx, line)
+						dataChan <- []byte(lines[i])
+					}
+				} else if bytes.HasPrefix(line, dataUglyTag) {
+					if bytes.Equal(line, doneTag) {
+						break
+					}
+					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, line[5:], &param)
+					for i := 0; i < len(lines); i++ {
+						c.AddAPIResponseData(ctx, line)
+						dataChan <- []byte(lines[i])
+					}
+				} else if bytes.HasPrefix(line, dataUglyTag) {
+					if bytes.Equal(line, doneTag) {
+						break
+					}
+					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[5:], &param)
+					for i := 0; i < len(lines); i++ {
+						dataChan <- []byte(lines[i])
+					}
+				} else if bytes.HasPrefix(line, dataUglyTag) {
+					if bytes.Equal(line, doneTag) {
+						break
+					}
+					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[5:], &param)
 					for i := 0; i < len(lines); i++ {
 						dataChan <- []byte(lines[i])
 					}
@@ -337,6 +374,9 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 					}
 					c.AddAPIResponseData(newCtx, line[6:])
 					dataChan <- line[6:]
+				} else if bytes.HasPrefix(line, dataUglyTag) {
+					c.AddAPIResponseData(newCtx, line[5:])
+					dataChan <- line[5:]
 				}
 			}
 		}

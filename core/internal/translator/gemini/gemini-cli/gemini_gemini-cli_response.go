@@ -24,7 +24,7 @@ import (
 //
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini CLI-compatible JSON response.
-func ConvertGeminiResponseToGeminiCLI(_ context.Context, _ string, rawJSON []byte, _ *any) []string {
+func ConvertGeminiResponseToGeminiCLI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) []string {
 	if bytes.Equal(rawJSON, []byte("[DONE]")) {
 		return []string{}
 	}
@@ -43,7 +43,7 @@ func ConvertGeminiResponseToGeminiCLI(_ context.Context, _ string, rawJSON []byt
 //
 // Returns:
 //   - string: A Gemini CLI-compatible JSON response.
-func ConvertGeminiResponseToGeminiCLINonStream(_ context.Context, _ string, rawJSON []byte, _ *any) string {
+func ConvertGeminiResponseToGeminiCLINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	json := `{"response": {}}`
 	rawJSON, _ = sjson.SetRawBytes([]byte(json), "response", rawJSON)
 	return string(rawJSON)

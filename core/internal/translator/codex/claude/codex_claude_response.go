@@ -35,7 +35,7 @@ var (
 //
 // Returns:
 //   - []string: A slice of strings, each containing a Claude Code-compatible JSON response
-func ConvertCodexResponseToClaude(_ context.Context, _ string, rawJSON []byte, param *any) []string {
+func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if *param == nil {
 		hasToolCall := false
 		*param = &hasToolCall
@@ -168,6 +168,6 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, rawJSON []byte, p
 //
 // Returns:
 //   - string: A Claude Code-compatible JSON response containing all message content and metadata
-func ConvertCodexResponseToClaudeNonStream(_ context.Context, _ string, _ []byte, _ *any) string {
+func ConvertCodexResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
 	return ""
 }

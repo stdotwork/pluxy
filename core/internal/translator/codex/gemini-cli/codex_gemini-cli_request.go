@@ -6,6 +6,8 @@
 package geminiCLI
 
 import (
+	"bytes"
+
 	. "github.com/luispater/CLIProxyAPI/internal/translator/codex/gemini"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -27,7 +29,9 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in Codex API format
-func ConvertGeminiCLIRequestToCodex(modelName string, rawJSON []byte, stream bool) []byte {
+func ConvertGeminiCLIRequestToCodex(modelName string, inputRawJSON []byte, stream bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
+
 	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)
 	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelName)
 	if gjson.GetBytes(rawJSON, "systemInstruction").Exists() {

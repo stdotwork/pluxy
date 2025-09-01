@@ -42,16 +42,16 @@ func NeedConvert(from, to string) bool {
 	return ok
 }
 
-func Response(from, to string, ctx context.Context, modelName string, rawJSON []byte, param *any) []string {
+func Response(from, to string, ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if translator, ok := Responses[from][to]; ok {
-		return translator.Stream(ctx, modelName, rawJSON, param)
+		return translator.Stream(ctx, modelName, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 	}
 	return []string{string(rawJSON)}
 }
 
-func ResponseNonStream(from, to string, ctx context.Context, modelName string, rawJSON []byte, param *any) string {
+func ResponseNonStream(from, to string, ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
 	if translator, ok := Responses[from][to]; ok {
-		return translator.NonStream(ctx, modelName, rawJSON, param)
+		return translator.NonStream(ctx, modelName, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 	}
 	return string(rawJSON)
 }

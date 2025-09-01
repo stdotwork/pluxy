@@ -52,7 +52,7 @@ type ConvertAnthropicResponseToGeminiParams struct {
 //
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response
-func ConvertClaudeResponseToGemini(_ context.Context, modelName string, rawJSON []byte, param *any) []string {
+func ConvertClaudeResponseToGemini(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if *param == nil {
 		*param = &ConvertAnthropicResponseToGeminiParams{
 			Model:      modelName,
@@ -320,7 +320,7 @@ func convertMapToJSON(m map[string]interface{}) string {
 //
 // Returns:
 //   - string: A Gemini-compatible JSON response containing all message content and metadata
-func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string, rawJSON []byte, _ *any) string {
+func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	// Base Gemini response template for non-streaming with default values
 	template := `{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"},"modelVersion":"","createTime":"","responseId":""}`
 

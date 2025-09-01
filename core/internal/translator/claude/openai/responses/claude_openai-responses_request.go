@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"bytes"
 	"crypto/rand"
 	"math/big"
 	"strings"
@@ -19,7 +20,9 @@ import (
 // - tools[].parameters -> tools[].input_schema
 // - max_output_tokens -> max_tokens
 // - stream passthrough via parameter
-func ConvertOpenAIResponsesRequestToClaude(modelName string, rawJSON []byte, stream bool) []byte {
+func ConvertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte, stream bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
+
 	// Base Claude message payload
 	out := `{"model":"","max_tokens":32000,"messages":[]}`
 

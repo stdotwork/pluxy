@@ -3,6 +3,7 @@
 package chat_completions
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -22,7 +23,8 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in Gemini CLI API format
-func ConvertOpenAIRequestToGeminiCLI(modelName string, rawJSON []byte, _ bool) []byte {
+func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
 	// Base envelope
 	out := []byte(`{"project":"","request":{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}},"model":"gemini-2.5-pro"}`)
 

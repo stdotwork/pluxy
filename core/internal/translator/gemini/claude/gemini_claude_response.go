@@ -40,7 +40,7 @@ type Params struct {
 //
 // Returns:
 //   - []string: A slice of strings, each containing a Claude-compatible JSON response.
-func ConvertGeminiResponseToClaude(_ context.Context, _ string, rawJSON []byte, param *any) []string {
+func ConvertGeminiResponseToClaude(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if *param == nil {
 		*param = &Params{
 			IsGlAPIKey:       false,
@@ -245,6 +245,6 @@ func ConvertGeminiResponseToClaude(_ context.Context, _ string, rawJSON []byte, 
 //
 // Returns:
 //   - string: A Claude-compatible JSON response.
-func ConvertGeminiResponseToClaudeNonStream(_ context.Context, _ string, _ []byte, _ *any) string {
+func ConvertGeminiResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
 	return ""
 }
