@@ -279,6 +279,7 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, true)
 
 	dataTag := []byte("data: ")
+	dataUglyTag := []byte("data:") // Some APIs providers don't add space after "data:", fuck for them all
 	doneTag := []byte("data: [DONE]")
 	errChan := make(chan *interfaces.ErrorMessage)
 	dataChan := make(chan []byte)
@@ -325,6 +326,14 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 					for i := 0; i < len(lines); i++ {
 						dataChan <- []byte(lines[i])
 					}
+				} else if bytes.HasPrefix(line, dataUglyTag) {
+					if bytes.Equal(line, doneTag) {
+						break
+					}
+					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[5:], &param)
+					for i := 0; i < len(lines); i++ {
+						dataChan <- []byte(lines[i])
+					}
 				}
 			}
 		} else {
@@ -337,6 +346,9 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 					}
 					c.AddAPIResponseData(newCtx, line[6:])
 					dataChan <- line[6:]
+				} else if bytes.HasPrefix(line, dataUglyTag) {
+					c.AddAPIResponseData(newCtx, line[5:])
+					dataChan <- line[5:]
 				}
 			}
 		}
