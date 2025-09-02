@@ -150,6 +150,15 @@ func StartService(cfg *config.Config, configPath string) {
 		}
 	}
 
+	if len(cfg.CodexKey) > 0 {
+		// Initialize clients with Codex API Keys if provided in configuration.
+		for i := 0; i < len(cfg.CodexKey); i++ {
+			log.Debug("Initializing with Codex API Key...")
+			cliClient := client.NewCodexClientWithKey(cfg, i)
+			cliClients = append(cliClients, cliClient)
+		}
+	}
+
 	if len(cfg.OpenAICompatibility) > 0 {
 		// Initialize clients for OpenAI compatibility configurations
 		for _, compatConfig := range cfg.OpenAICompatibility {
@@ -223,12 +232,13 @@ func StartService(cfg *config.Config, configPath string) {
 		checkAndRefresh := func() {
 			for i := 0; i < len(cliClients); i++ {
 				if codexCli, ok := cliClients[i].(*client.CodexClient); ok {
-					ts := codexCli.TokenStorage().(*codex.CodexTokenStorage)
-					if ts != nil && ts.Expire != "" {
-						if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
-							if time.Until(expTime) <= 5*24*time.Hour {
-								log.Debugf("refreshing codex tokens for %s", codexCli.GetEmail())
-								_ = codexCli.RefreshTokens(ctxRefresh)
+					if ts, isCodexTS := codexCli.TokenStorage().(*claude.ClaudeTokenStorage); isCodexTS {
+						if ts != nil && ts.Expire != "" {
+							if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
+								if time.Until(expTime) <= 5*24*time.Hour {
+									log.Debugf("refreshing codex tokens for %s", codexCli.GetEmail())
+									_ = codexCli.RefreshTokens(ctxRefresh)
+								}
 							}
 						}
 					}

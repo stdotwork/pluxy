@@ -250,3 +250,77 @@ func (h *Handler) DeleteOpenAICompat(c *gin.Context) {
 	}
 	c.JSON(400, gin.H{"error": "missing name or index"})
 }
+
+// codex-api-key: []CodexKey
+func (h *Handler) GetCodexKeys(c *gin.Context) {
+	c.JSON(200, gin.H{"codex-api-key": h.cfg.CodexKey})
+}
+func (h *Handler) PutCodexKeys(c *gin.Context) {
+	data, err := c.GetRawData()
+	if err != nil {
+		c.JSON(400, gin.H{"error": "failed to read body"})
+		return
+	}
+	var arr []config.CodexKey
+	if err = json.Unmarshal(data, &arr); err != nil {
+		var obj struct {
+			Items []config.CodexKey `json:"items"`
+		}
+		if err2 := json.Unmarshal(data, &obj); err2 != nil || len(obj.Items) == 0 {
+			c.JSON(400, gin.H{"error": "invalid body"})
+			return
+		}
+		arr = obj.Items
+	}
+	h.cfg.CodexKey = arr
+	h.persist(c)
+}
+func (h *Handler) PatchCodexKey(c *gin.Context) {
+	var body struct {
+		Index *int             `json:"index"`
+		Match *string          `json:"match"`
+		Value *config.CodexKey `json:"value"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Value == nil {
+		c.JSON(400, gin.H{"error": "invalid body"})
+		return
+	}
+	if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.CodexKey) {
+		h.cfg.CodexKey[*body.Index] = *body.Value
+		h.persist(c)
+		return
+	}
+	if body.Match != nil {
+		for i := range h.cfg.CodexKey {
+			if h.cfg.CodexKey[i].APIKey == *body.Match {
+				h.cfg.CodexKey[i] = *body.Value
+				h.persist(c)
+				return
+			}
+		}
+	}
+	c.JSON(404, gin.H{"error": "item not found"})
+}
+func (h *Handler) DeleteCodexKey(c *gin.Context) {
+	if val := c.Query("api-key"); val != "" {
+		out := make([]config.CodexKey, 0, len(h.cfg.CodexKey))
+		for _, v := range h.cfg.CodexKey {
+			if v.APIKey != val {
+				out = append(out, v)
+			}
+		}
+		h.cfg.CodexKey = out
+		h.persist(c)
+		return
+	}
+	if idxStr := c.Query("index"); idxStr != "" {
+		var idx int
+		_, err := fmt.Sscanf(idxStr, "%d", &idx)
+		if err == nil && idx >= 0 && idx < len(h.cfg.CodexKey) {
+			h.cfg.CodexKey = append(h.cfg.CodexKey[:idx], h.cfg.CodexKey[idx+1:]...)
+			h.persist(c)
+			return
+		}
+	}
+	c.JSON(400, gin.H{"error": "missing api-key or index"})
+}

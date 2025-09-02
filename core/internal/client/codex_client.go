@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/luispater/CLIProxyAPI/internal/auth"
 	"github.com/luispater/CLIProxyAPI/internal/auth/codex"
+	"github.com/luispater/CLIProxyAPI/internal/auth/empty"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	. "github.com/luispater/CLIProxyAPI/internal/constant"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
@@ -38,9 +39,11 @@ const (
 type CodexClient struct {
 	ClientBase
 	codexAuth *codex.CodexAuth
+	// apiKeyIndex is the index of the API key to use from the config, -1 if not using API keys
+	apiKeyIndex int
 }
 
-// NewCodexClient creates a new OpenAI client instance
+// NewCodexClient creates a new OpenAI client instance using token-based authentication
 //
 // Parameters:
 //   - cfg: The application configuration.
@@ -63,7 +66,8 @@ func NewCodexClient(cfg *config.Config, ts *codex.CodexTokenStorage) (*CodexClie
 			modelQuotaExceeded: make(map[string]*time.Time),
 			tokenStorage:       ts,
 		},
-		codexAuth: codex.NewCodexAuth(cfg),
+		codexAuth:   codex.NewCodexAuth(cfg),
+		apiKeyIndex: -1,
 	}
 
 	// Initialize model registry and register OpenAI models
@@ -71,6 +75,41 @@ func NewCodexClient(cfg *config.Config, ts *codex.CodexTokenStorage) (*CodexClie
 	client.RegisterModels("codex", registry.GetOpenAIModels())
 
 	return client, nil
+}
+
+// NewCodexClientWithKey creates a new Codex client instance using API key authentication.
+// It initializes the client with the provided configuration and selects the API key
+// at the specified index from the configuration.
+//
+// Parameters:
+//   - cfg: The application configuration.
+//   - apiKeyIndex: The index of the API key to use from the configuration.
+//
+// Returns:
+//   - *CodexClient: A new Codex client instance.
+func NewCodexClientWithKey(cfg *config.Config, apiKeyIndex int) *CodexClient {
+	httpClient := util.SetProxy(cfg, &http.Client{})
+
+	// Generate unique client ID for API key client
+	clientID := fmt.Sprintf("codex-apikey-%d-%d", apiKeyIndex, time.Now().UnixNano())
+
+	client := &CodexClient{
+		ClientBase: ClientBase{
+			RequestMutex:       &sync.Mutex{},
+			httpClient:         httpClient,
+			cfg:                cfg,
+			modelQuotaExceeded: make(map[string]*time.Time),
+			tokenStorage:       &empty.EmptyStorage{},
+		},
+		codexAuth:   codex.NewCodexAuth(cfg),
+		apiKeyIndex: apiKeyIndex,
+	}
+
+	// Initialize model registry and register OpenAI models
+	client.InitializeModelRegistry(clientID)
+	client.RegisterModels("codex", registry.GetOpenAIModels())
+
+	return client
 }
 
 // Type returns the client type
@@ -100,6 +139,16 @@ func (c *CodexClient) CanProvideModel(modelName string) bool {
 		"codex-mini-latest",
 	}
 	return util.InArray(models, modelName)
+}
+
+// GetAPIKey returns the API key for Codex API requests.
+// If an API key index is specified, it returns the corresponding key from the configuration.
+// Otherwise, it returns an empty string, indicating token-based authentication should be used.
+func (c *CodexClient) GetAPIKey() string {
+	if c.apiKeyIndex != -1 {
+		return c.cfg.CodexKey[c.apiKeyIndex].APIKey
+	}
+	return ""
 }
 
 // GetUserAgent returns the user agent string for OpenAI API requests
@@ -283,6 +332,11 @@ func (c *CodexClient) SaveTokenToFile() error {
 // Returns:
 //   - error: An error if the refresh operation fails, nil otherwise.
 func (c *CodexClient) RefreshTokens(ctx context.Context) error {
+	// Check if we have a valid refresh token
+	if c.apiKeyIndex != -1 {
+		return fmt.Errorf("no refresh token available")
+	}
+
 	if c.tokenStorage == nil || c.tokenStorage.(*codex.CodexTokenStorage).RefreshToken == "" {
 		return fmt.Errorf("no refresh token available")
 	}
@@ -364,6 +418,18 @@ func (c *CodexClient) APIRequest(ctx context.Context, modelName, endpoint string
 	}
 
 	url := fmt.Sprintf("%s%s", chatGPTEndpoint, endpoint)
+	accessToken := ""
+
+	if c.apiKeyIndex != -1 {
+		// Using API key authentication - use configured base URL if provided
+		if c.cfg.CodexKey[c.apiKeyIndex].BaseURL != "" {
+			url = fmt.Sprintf("%s%s", c.cfg.CodexKey[c.apiKeyIndex].BaseURL, endpoint)
+		}
+		accessToken = c.cfg.CodexKey[c.apiKeyIndex].APIKey
+	} else {
+		// Using OAuth token authentication - use ChatGPT endpoint
+		accessToken = c.tokenStorage.(*codex.CodexTokenStorage).AccessToken
+	}
 
 	// log.Debug(string(jsonBody))
 	// log.Debug(url)
@@ -381,9 +447,16 @@ func (c *CodexClient) APIRequest(ctx context.Context, modelName, endpoint string
 	req.Header.Set("Openai-Beta", "responses=experimental")
 	req.Header.Set("Session_id", sessionID)
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Chatgpt-Account-Id", c.tokenStorage.(*codex.CodexTokenStorage).AccountID)
-	req.Header.Set("Originator", "codex_cli_rs")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.tokenStorage.(*codex.CodexTokenStorage).AccessToken))
+
+	if c.apiKeyIndex != -1 {
+		// Using API key authentication
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	} else {
+		// Using OAuth token authentication - include ChatGPT specific headers
+		req.Header.Set("Chatgpt-Account-Id", c.tokenStorage.(*codex.CodexTokenStorage).AccountID)
+		req.Header.Set("Originator", "codex_cli_rs")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	}
 
 	if c.cfg.RequestLog {
 		if ginContext, ok := ctx.Value("gin").(*gin.Context); ok {
@@ -391,7 +464,11 @@ func (c *CodexClient) APIRequest(ctx context.Context, modelName, endpoint string
 		}
 	}
 
-	log.Debugf("Use ChatGPT account %s for model %s", c.GetEmail(), modelName)
+	if c.apiKeyIndex != -1 {
+		log.Debugf("Use Codex API key %s for model %s", util.HideAPIKey(c.cfg.CodexKey[c.apiKeyIndex].APIKey), modelName)
+	} else {
+		log.Debugf("Use ChatGPT account %s for model %s", c.GetEmail(), modelName)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -413,7 +490,11 @@ func (c *CodexClient) APIRequest(ctx context.Context, modelName, endpoint string
 }
 
 // GetEmail returns the email associated with the client's token storage.
+// If the client is using API key authentication, it returns the API key.
 func (c *CodexClient) GetEmail() string {
+	if c.apiKeyIndex != -1 {
+		return c.cfg.CodexKey[c.apiKeyIndex].APIKey
+	}
 	return c.tokenStorage.(*codex.CodexTokenStorage).Email
 }
 

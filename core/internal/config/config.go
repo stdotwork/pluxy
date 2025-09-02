@@ -44,6 +44,9 @@ type Config struct {
 	// ClaudeKey defines a list of Claude API key configurations as specified in the YAML configuration file.
 	ClaudeKey []ClaudeKey `yaml:"claude-api-key"`
 
+	// Codex defines a list of Codex API key configurations as specified in the YAML configuration file.
+	CodexKey []CodexKey `yaml:"codex-api-key"`
+
 	// OpenAICompatibility defines OpenAI API compatibility configurations for external providers.
 	OpenAICompatibility []OpenAICompatibility `yaml:"openai-compatibility"`
 
@@ -80,6 +83,17 @@ type ClaudeKey struct {
 
 	// BaseURL is the base URL for the Claude API endpoint.
 	// If empty, the default Claude API URL will be used.
+	BaseURL string `yaml:"base-url"`
+}
+
+// CodexKey represents the configuration for a Codex API key,
+// including the API key itself and an optional base URL for the API endpoint.
+type CodexKey struct {
+	// APIKey is the authentication key for accessing Codex API services.
+	APIKey string `yaml:"api-key"`
+
+	// BaseURL is the base URL for the Codex API endpoint.
+	// If empty, the default Codex API URL will be used.
 	BaseURL string `yaml:"base-url"`
 }
 
@@ -284,58 +298,6 @@ func getOrCreateMapValue(mapNode *yaml.Node, key string) *yaml.Node {
 	val := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: ""}
 	mapNode.Content = append(mapNode.Content, val)
 	return val
-}
-
-// Helpers to update sequences in place to preserve existing comments/anchors
-func setStringListInPlace(mapNode *yaml.Node, key string, arr []string) {
-	if len(arr) == 0 {
-		setNullValue(mapNode, key)
-		return
-	}
-	v := getOrCreateMapValue(mapNode, key)
-	if v.Kind != yaml.SequenceNode {
-		v.Kind = yaml.SequenceNode
-		v.Tag = "!!seq"
-		v.Content = nil
-	}
-	// Update in place
-	oldLen := len(v.Content)
-	minLen := oldLen
-	if len(arr) < minLen {
-		minLen = len(arr)
-	}
-	for i := 0; i < minLen; i++ {
-		if v.Content[i] == nil {
-			v.Content[i] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str"}
-		}
-		v.Content[i].Kind = yaml.ScalarNode
-		v.Content[i].Tag = "!!str"
-		v.Content[i].Value = arr[i]
-	}
-	if len(arr) > oldLen {
-		for i := oldLen; i < len(arr); i++ {
-			v.Content = append(v.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: arr[i]})
-		}
-	} else if len(arr) < oldLen {
-		v.Content = v.Content[:len(arr)]
-	}
-}
-
-func setMappingScalar(mapNode *yaml.Node, key string, val string) {
-	v := getOrCreateMapValue(mapNode, key)
-	v.Kind = yaml.ScalarNode
-	v.Tag = "!!str"
-	v.Value = val
-}
-
-// setNullValue ensures a mapping key exists and is set to an explicit null scalar,
-// so that it renders as `key:` without `[]`.
-func setNullValue(mapNode *yaml.Node, key string) {
-	// Represent as YAML null scalar without explicit value so it renders as `key:`
-	v := getOrCreateMapValue(mapNode, key)
-	v.Kind = yaml.ScalarNode
-	v.Tag = "!!null"
-	v.Value = ""
 }
 
 // mergeMappingPreserve merges keys from src into dst mapping node while preserving

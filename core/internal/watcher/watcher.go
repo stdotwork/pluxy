@@ -185,6 +185,9 @@ func (w *Watcher) reloadConfig() {
 		if len(oldConfig.ClaudeKey) != len(newConfig.ClaudeKey) {
 			log.Debugf("  claude-api-key count: %d -> %d", len(oldConfig.ClaudeKey), len(newConfig.ClaudeKey))
 		}
+		if len(oldConfig.CodexKey) != len(newConfig.CodexKey) {
+			log.Debugf("  codex-api-key count: %d -> %d", len(oldConfig.CodexKey), len(newConfig.CodexKey))
+		}
 		if oldConfig.AllowLocalhostUnauthenticated != newConfig.AllowLocalhostUnauthenticated {
 			log.Debugf("  allow-localhost-unauthenticated: %t -> %t", oldConfig.AllowLocalhostUnauthenticated, newConfig.AllowLocalhostUnauthenticated)
 		}
@@ -362,6 +365,18 @@ func (w *Watcher) reloadClients() {
 			claudeAPIKeyCount++
 		}
 		log.Debugf("Successfully initialized %d Claude API Key clients", claudeAPIKeyCount)
+	}
+
+	codexAPIKeyCount := 0
+	if len(cfg.CodexKey) > 0 {
+		log.Debugf("processing %d Codex API Keys", len(cfg.CodexKey))
+		for i := 0; i < len(cfg.CodexKey); i++ {
+			log.Debugf("Initializing with Codex API Key %d...", i+1)
+			cliClient := client.NewCodexClientWithKey(cfg, i)
+			newClients = append(newClients, cliClient)
+			codexAPIKeyCount++
+		}
+		log.Debugf("Successfully initialized %d Codex API Key clients", codexAPIKeyCount)
 	}
 
 	// Add clients for OpenAI compatibility providers if configured

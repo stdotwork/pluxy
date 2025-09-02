@@ -193,6 +193,11 @@ func (s *Server) setupRoutes() {
 			mgmt.PATCH("/claude-api-key", s.mgmt.PatchClaudeKey)
 			mgmt.DELETE("/claude-api-key", s.mgmt.DeleteClaudeKey)
 
+			mgmt.GET("/codex-api-key", s.mgmt.GetCodexKeys)
+			mgmt.PUT("/codex-api-key", s.mgmt.PutCodexKeys)
+			mgmt.PATCH("/codex-api-key", s.mgmt.PatchCodexKey)
+			mgmt.DELETE("/codex-api-key", s.mgmt.DeleteCodexKey)
+
 			mgmt.GET("/openai-compatibility", s.mgmt.GetOpenAICompat)
 			mgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
 			mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
