@@ -430,6 +430,29 @@ export ANTHROPIC_MODEL=qwen3-coder-plus
 export ANTHROPIC_SMALL_FAST_MODEL=qwen3-coder-flash
 ```
 
+## Codex with multiple account load balancing
+
+Start CLI Proxy API server, and then edit the `~/.codex/config.toml` and `~/.codex/auth.json` files.
+
+config.toml:
+```toml
+model_provider = "cliproxyapi"
+model = "gpt-5" # You can use any of the models that we support.
+model_reasoning_effort = "high"
+
+[model_providers.cliproxyapi]
+name = "cliproxyapi"
+base_url = "http://127.0.0.1:8317/v1"
+wire_api = "responses"
+```
+
+auth.json:
+```json
+{
+  "OPENAI_API_KEY": "sk-dummy"
+}
+```
+
 ## Run with Docker
 
 Run the following command to login (Gemini OAuth on port 8085): 

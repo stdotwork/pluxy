@@ -10,5 +10,6 @@ import (
 func ConvertOpenAIResponsesRequestToGeminiCLI(modelName string, inputRawJSON []byte, stream bool) []byte {
 	rawJSON := bytes.Clone(inputRawJSON)
 	rawJSON = ConvertOpenAIResponsesRequestToGemini(modelName, rawJSON, stream)
+	// log.Debug(string(rawJSON))
 	return ConvertGeminiRequestToGeminiCLI(modelName, rawJSON, stream)
 }
