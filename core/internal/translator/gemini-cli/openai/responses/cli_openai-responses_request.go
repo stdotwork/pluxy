@@ -1,19 +1,14 @@
 package responses
 
 import (
+	"bytes"
+
+	. "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/gemini"
 	. "github.com/luispater/CLIProxyAPI/internal/translator/gemini/openai/responses"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
-func ConvertOpenAIResponsesRequestToGeminiCLI(modelName string, rawJSON []byte, stream bool) []byte {
-	modelResult := gjson.GetBytes(rawJSON, "model")
-	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)
-	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelResult.String())
-	if gjson.GetBytes(rawJSON, "systemInstruction").Exists() {
-		rawJSON, _ = sjson.SetRawBytes(rawJSON, "system_instruction", []byte(gjson.GetBytes(rawJSON, "systemInstruction").Raw))
-		rawJSON, _ = sjson.DeleteBytes(rawJSON, "systemInstruction")
-	}
-
-	return ConvertOpenAIResponsesRequestToGemini(modelName, rawJSON, stream)
+func ConvertOpenAIResponsesRequestToGeminiCLI(modelName string, inputRawJSON []byte, stream bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
+	rawJSON = ConvertOpenAIResponsesRequestToGemini(modelName, rawJSON, stream)
+	return ConvertGeminiRequestToGeminiCLI(modelName, rawJSON, stream)
 }

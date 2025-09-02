@@ -40,7 +40,7 @@ type ConvertCodexResponseToGeminiParams struct {
 //
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response
-func ConvertCodexResponseToGemini(_ context.Context, modelName string, rawJSON []byte, param *any) []string {
+func ConvertCodexResponseToGemini(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if *param == nil {
 		*param = &ConvertCodexResponseToGeminiParams{
 			Model:             modelName,
@@ -143,7 +143,7 @@ func ConvertCodexResponseToGemini(_ context.Context, modelName string, rawJSON [
 //
 // Returns:
 //   - string: A Gemini-compatible JSON response containing all message content and metadata
-func ConvertCodexResponseToGeminiNonStream(_ context.Context, modelName string, rawJSON []byte, _ *any) string {
+func ConvertCodexResponseToGeminiNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)

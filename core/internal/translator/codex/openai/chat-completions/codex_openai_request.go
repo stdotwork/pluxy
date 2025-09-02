@@ -7,6 +7,8 @@
 package chat_completions
 
 import (
+	"bytes"
+
 	"github.com/luispater/CLIProxyAPI/internal/misc"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -24,7 +26,8 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in OpenAI Responses API format
-func ConvertOpenAIRequestToCodex(modelName string, rawJSON []byte, stream bool) []byte {
+func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
 	// Start with empty JSON object
 	out := `{}`
 	store := false

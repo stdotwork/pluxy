@@ -24,8 +24,8 @@ import (
 //
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response.
-func ConvertOpenAIResponseToGeminiCLI(ctx context.Context, modelName string, rawJSON []byte, param *any) []string {
-	outputs := ConvertOpenAIResponseToGemini(ctx, modelName, rawJSON, param)
+func ConvertOpenAIResponseToGeminiCLI(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	outputs := ConvertOpenAIResponseToGemini(ctx, modelName, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 	newOutputs := make([]string, 0)
 	for i := 0; i < len(outputs); i++ {
 		json := `{"response": {}}`
@@ -45,8 +45,8 @@ func ConvertOpenAIResponseToGeminiCLI(ctx context.Context, modelName string, raw
 //
 // Returns:
 //   - string: A Gemini-compatible JSON response.
-func ConvertOpenAIResponseToGeminiCLINonStream(ctx context.Context, modelName string, rawJSON []byte, param *any) string {
-	strJSON := ConvertOpenAIResponseToGeminiNonStream(ctx, modelName, rawJSON, param)
+func ConvertOpenAIResponseToGeminiCLINonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
+	strJSON := ConvertOpenAIResponseToGeminiNonStream(ctx, modelName, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 	json := `{"response": {}}`
 	strJSON, _ = sjson.SetRaw(json, "response", strJSON)
 	return strJSON

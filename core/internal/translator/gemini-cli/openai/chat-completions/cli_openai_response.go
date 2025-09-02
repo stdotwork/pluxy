@@ -35,7 +35,7 @@ type convertCliResponseToOpenAIChatParams struct {
 //
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
-func ConvertCliResponseToOpenAI(_ context.Context, _ string, rawJSON []byte, param *any) []string {
+func ConvertCliResponseToOpenAI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if *param == nil {
 		*param = &convertCliResponseToOpenAIChatParams{
 			UnixTimestamp: 0,
@@ -145,10 +145,10 @@ func ConvertCliResponseToOpenAI(_ context.Context, _ string, rawJSON []byte, par
 //
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
-func ConvertCliResponseToOpenAINonStream(ctx context.Context, modelName string, rawJSON []byte, param *any) string {
+func ConvertCliResponseToOpenAINonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
-		return ConvertGeminiResponseToOpenAINonStream(ctx, modelName, []byte(responseResult.Raw), param)
+		return ConvertGeminiResponseToOpenAINonStream(ctx, modelName, originalRequestRawJSON, requestRawJSON, []byte(responseResult.Raw), param)
 	}
 	return ""
 }

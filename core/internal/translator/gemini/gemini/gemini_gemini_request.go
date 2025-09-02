@@ -4,6 +4,7 @@
 package gemini
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/tidwall/gjson"
@@ -15,7 +16,8 @@ import (
 //     The first message defaults to "user", then alternates user/model when needed.
 //
 // It keeps the payload otherwise unchanged.
-func ConvertGeminiRequestToGemini(_ string, rawJSON []byte, _ bool) []byte {
+func ConvertGeminiRequestToGemini(_ string, inputRawJSON []byte, _ bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
 	// Fast path: if no contents field, return as-is
 	contents := gjson.GetBytes(rawJSON, "contents")
 	if !contents.Exists() {

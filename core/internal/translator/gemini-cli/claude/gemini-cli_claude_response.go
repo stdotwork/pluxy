@@ -41,7 +41,7 @@ type Params struct {
 //
 // Returns:
 //   - []string: A slice of strings, each containing a Claude Code-compatible JSON response
-func ConvertGeminiCLIResponseToClaude(_ context.Context, _ string, rawJSON []byte, param *any) []string {
+func ConvertGeminiCLIResponseToClaude(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if *param == nil {
 		*param = &Params{
 			HasFirstResponse: false,
@@ -251,6 +251,6 @@ func ConvertGeminiCLIResponseToClaude(_ context.Context, _ string, rawJSON []byt
 //
 // Returns:
 //   - string: A Claude-compatible JSON response.
-func ConvertGeminiCLIResponseToClaudeNonStream(_ context.Context, _ string, _ []byte, _ *any) string {
+func ConvertGeminiCLIResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
 	return ""
 }

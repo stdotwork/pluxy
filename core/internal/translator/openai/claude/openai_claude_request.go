@@ -6,6 +6,7 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -16,7 +17,8 @@ import (
 // ConvertClaudeRequestToOpenAI parses and transforms an Anthropic API request into OpenAI Chat Completions API format.
 // It extracts the model name, system instruction, message contents, and tool declarations
 // from the raw JSON request and returns them in the format expected by the OpenAI API.
-func ConvertClaudeRequestToOpenAI(modelName string, rawJSON []byte, stream bool) []byte {
+func ConvertClaudeRequestToOpenAI(modelName string, inputRawJSON []byte, stream bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
 	// Base OpenAI Chat Completions API template
 	out := `{"model":"","messages":[]}`
 

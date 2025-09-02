@@ -43,7 +43,7 @@ type ToolCallAccumulator struct {
 //
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response.
-func ConvertOpenAIResponseToGemini(_ context.Context, _ string, rawJSON []byte, param *any) []string {
+func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
 	if *param == nil {
 		*param = &ConvertOpenAIResponseToGeminiParams{
 			ToolCallsAccumulator: nil,
@@ -271,7 +271,7 @@ func mapOpenAIFinishReasonToGemini(openAIReason string) string {
 //
 // Returns:
 //   - string: A Gemini-compatible JSON response.
-func ConvertOpenAIResponseToGeminiNonStream(_ context.Context, _ string, rawJSON []byte, _ *any) string {
+func ConvertOpenAIResponseToGeminiNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	root := gjson.ParseBytes(rawJSON)
 
 	// Base Gemini response template

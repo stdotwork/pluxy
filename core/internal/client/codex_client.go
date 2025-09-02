@@ -124,6 +124,8 @@ func (c *CodexClient) TokenStorage() auth.TokenStorage {
 //   - []byte: The response body.
 //   - *interfaces.ErrorMessage: An error message if the request fails.
 func (c *CodexClient) SendRawMessage(ctx context.Context, modelName string, rawJSON []byte, alt string) ([]byte, *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
+
 	handler := ctx.Value("handler").(interfaces.APIHandler)
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, false)
@@ -150,7 +152,7 @@ func (c *CodexClient) SendRawMessage(ctx context.Context, modelName string, rawJ
 	c.AddAPIResponseData(ctx, bodyBytes)
 
 	var param any
-	bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, bodyBytes, &param))
+	bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, originalRequestRawJSON, rawJSON, bodyBytes, &param))
 
 	return bodyBytes, nil
 
@@ -168,6 +170,8 @@ func (c *CodexClient) SendRawMessage(ctx context.Context, modelName string, rawJ
 //   - <-chan []byte: A channel for receiving response data chunks.
 //   - <-chan *interfaces.ErrorMessage: A channel for receiving error messages.
 func (c *CodexClient) SendRawMessageStream(ctx context.Context, modelName string, rawJSON []byte, alt string) (<-chan []byte, <-chan *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
+
 	handler := ctx.Value("handler").(interfaces.APIHandler)
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, true)
@@ -218,7 +222,7 @@ func (c *CodexClient) SendRawMessageStream(ctx context.Context, modelName string
 			var param any
 			for scanner.Scan() {
 				line := scanner.Bytes()
-				lines := translator.Response(handlerType, c.Type(), ctx, modelName, line, &param)
+				lines := translator.Response(handlerType, c.Type(), ctx, modelName, originalRequestRawJSON, rawJSON, line, &param)
 				for i := 0; i < len(lines); i++ {
 					dataChan <- []byte(lines[i])
 				}

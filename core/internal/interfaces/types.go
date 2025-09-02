@@ -28,7 +28,7 @@ type TranslateRequestFunc func(string, []byte, bool) []byte
 //
 // Returns:
 //   - []string: An array of translated response strings
-type TranslateResponseFunc func(ctx context.Context, modelName string, rawJSON []byte, param *any) []string
+type TranslateResponseFunc func(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string
 
 // TranslateResponseNonStreamFunc defines a function type for translating non-streaming API responses.
 // It processes response data and returns a single translated response string.
@@ -41,7 +41,7 @@ type TranslateResponseFunc func(ctx context.Context, modelName string, rawJSON [
 //
 // Returns:
 //   - string: A single translated response string
-type TranslateResponseNonStreamFunc func(ctx context.Context, modelName string, rawJSON []byte, param *any) string
+type TranslateResponseNonStreamFunc func(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string
 
 // TranslateResponse contains both streaming and non-streaming response translation functions.
 // This structure allows clients to handle both types of API responses appropriately.

@@ -6,6 +6,7 @@
 package gemini
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -30,7 +31,8 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in Gemini API format
-func ConvertGeminiRequestToGeminiCLI(_ string, rawJSON []byte, _ bool) []byte {
+func ConvertGeminiRequestToGeminiCLI(_ string, inputRawJSON []byte, _ bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
 	template := ""
 	template = `{"project":"","request":{},"model":""}`
 	template, _ = sjson.SetRaw(template, "request", string(rawJSON))

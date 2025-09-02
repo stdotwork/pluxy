@@ -1,19 +1,22 @@
 package responses
 
 import (
+	"bytes"
 	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
-func ConvertOpenAIResponsesRequestToGemini(modelName string, rawJSON []byte, stream bool) []byte {
+func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte, stream bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
+
 	// Note: modelName and stream parameters are part of the fixed method signature
 	_ = modelName // Unused but required by interface
 	_ = stream    // Unused but required by interface
 
 	// Base Gemini API template
-	out := `{"contents":[]}`
+	out := `{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}}`
 
 	root := gjson.ParseBytes(rawJSON)
 
@@ -32,42 +35,29 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, rawJSON []byte, str
 			switch itemType {
 			case "message":
 				// Handle regular messages
-				role := item.Get("role").String()
-				// Map OpenAI roles to Gemini roles
-				if role == "assistant" {
-					role = "model"
-				}
-
-				content := `{"role":"","parts":[]}`
-				content, _ = sjson.Set(content, "role", role)
-
+				// Note: In Responses format, model outputs may appear as content items with type "output_text"
+				// even when the message.role is "user". We split such items into distinct Gemini messages
+				// with roles derived from the content type to match docs/convert-2.md.
 				if contentArray := item.Get("content"); contentArray.Exists() && contentArray.IsArray() {
 					contentArray.ForEach(func(_, contentItem gjson.Result) bool {
 						contentType := contentItem.Get("type").String()
-
 						switch contentType {
-						case "input_text":
-							// Convert input_text to text part
+						case "input_text", "output_text":
 							if text := contentItem.Get("text"); text.Exists() {
+								effRole := "user"
+								if contentType == "output_text" {
+									effRole = "model"
+								}
+								one := `{"role":"","parts":[]}`
+								one, _ = sjson.Set(one, "role", effRole)
 								textPart := `{"text":""}`
 								textPart, _ = sjson.Set(textPart, "text", text.String())
-								content, _ = sjson.SetRaw(content, "parts.-1", textPart)
-							}
-						case "output_text":
-							// Convert output_text to text part (for multi-turn conversations)
-							if text := contentItem.Get("text"); text.Exists() {
-								textPart := `{"text":""}`
-								textPart, _ = sjson.Set(textPart, "text", text.String())
-								content, _ = sjson.SetRaw(content, "parts.-1", textPart)
+								one, _ = sjson.SetRaw(one, "parts.-1", textPart)
+								out, _ = sjson.SetRaw(out, "contents.-1", one)
 							}
 						}
 						return true
 					})
-				}
-
-				// Only add content if it has parts
-				if parts := gjson.Get(content, "parts"); parts.Exists() && len(parts.Array()) > 0 {
-					out, _ = sjson.SetRaw(out, "contents.-1", content)
 				}
 
 			case "function_call":
@@ -113,6 +103,8 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, rawJSON []byte, str
 				}
 
 				functionResponse, _ = sjson.Set(functionResponse, "functionResponse.name", functionName)
+				// Also set response.name to align with docs/convert-2.md
+				functionResponse, _ = sjson.Set(functionResponse, "functionResponse.response.name", functionName)
 
 				// Parse output JSON string and set as response content
 				if output != "" {
@@ -206,6 +198,26 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, rawJSON []byte, str
 			return true
 		})
 		out, _ = sjson.Set(out, "generationConfig.stopSequences", sequences)
+	}
+
+	if reasoningEffort := root.Get("reasoning.effort"); reasoningEffort.Exists() {
+		switch reasoningEffort.String() {
+		case "none":
+			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.include_thoughts", false)
+			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 0)
+		case "auto":
+			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", -1)
+		case "minimal":
+			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 1024)
+		case "low":
+			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 4096)
+		case "medium":
+			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 8192)
+		case "high":
+			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", 24576)
+		default:
+			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", -1)
+		}
 	}
 
 	return []byte(out)

@@ -6,6 +6,7 @@
 package claude
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/luispater/CLIProxyAPI/internal/misc"
@@ -31,7 +32,9 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request data in internal client format
-func ConvertClaudeRequestToCodex(modelName string, rawJSON []byte, _ bool) []byte {
+func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
+
 	template := `{"model":"","instructions":"","input":[]}`
 
 	instructions := misc.CodexInstructions

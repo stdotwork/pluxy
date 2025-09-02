@@ -407,6 +407,7 @@ func (c *GeminiCLIClient) APIRequest(ctx context.Context, modelName, endpoint st
 //   - []byte: The response body.
 //   - *interfaces.ErrorMessage: An error message if the request fails.
 func (c *GeminiCLIClient) SendRawTokenCount(ctx context.Context, modelName string, rawJSON []byte, alt string) ([]byte, *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
 	for {
 		if c.isModelQuotaExceeded(modelName) {
 			if c.cfg.QuotaExceeded.SwitchPreviewModel {
@@ -453,7 +454,7 @@ func (c *GeminiCLIClient) SendRawTokenCount(ctx context.Context, modelName strin
 
 		c.AddAPIResponseData(ctx, bodyBytes)
 		var param any
-		bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, bodyBytes, &param))
+		bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), ctx, modelName, originalRequestRawJSON, rawJSON, bodyBytes, &param))
 
 		return bodyBytes, nil
 	}
@@ -471,6 +472,8 @@ func (c *GeminiCLIClient) SendRawTokenCount(ctx context.Context, modelName strin
 //   - []byte: The response body.
 //   - *interfaces.ErrorMessage: An error message if the request fails.
 func (c *GeminiCLIClient) SendRawMessage(ctx context.Context, modelName string, rawJSON []byte, alt string) ([]byte, *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
+
 	handler := ctx.Value("handler").(interfaces.APIHandler)
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, false)
@@ -484,6 +487,7 @@ func (c *GeminiCLIClient) SendRawMessage(ctx context.Context, modelName string, 
 				if newModelName != "" {
 					log.Debugf("Model %s is quota exceeded. Switch to preview model %s", modelName, newModelName)
 					rawJSON, _ = sjson.SetBytes(rawJSON, "model", newModelName)
+					modelName = newModelName
 					continue
 				}
 			}
@@ -519,7 +523,7 @@ func (c *GeminiCLIClient) SendRawMessage(ctx context.Context, modelName string, 
 
 		newCtx := context.WithValue(ctx, "alt", alt)
 		var param any
-		bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), newCtx, modelName, bodyBytes, &param))
+		bodyBytes = []byte(translator.ResponseNonStream(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, bodyBytes, &param))
 
 		return bodyBytes, nil
 	}
@@ -537,6 +541,8 @@ func (c *GeminiCLIClient) SendRawMessage(ctx context.Context, modelName string, 
 //   - <-chan []byte: A channel for receiving response data chunks.
 //   - <-chan *interfaces.ErrorMessage: A channel for receiving error messages.
 func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName string, rawJSON []byte, alt string) (<-chan []byte, <-chan *interfaces.ErrorMessage) {
+	originalRequestRawJSON := bytes.Clone(rawJSON)
+
 	handler := ctx.Value("handler").(interfaces.APIHandler)
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, true)
@@ -563,6 +569,7 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 					if newModelName != "" {
 						log.Debugf("Model %s is quota exceeded. Switch to preview model %s", modelName, newModelName)
 						rawJSON, _ = sjson.SetBytes(rawJSON, "model", newModelName)
+						modelName = newModelName
 						continue
 					}
 				}
@@ -608,7 +615,7 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 				for scanner.Scan() {
 					line := scanner.Bytes()
 					if bytes.HasPrefix(line, dataTag) {
-						lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[6:], &param)
+						lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, line[6:], &param)
 						for i := 0; i < len(lines); i++ {
 							dataChan <- []byte(lines[i])
 						}
@@ -640,7 +647,7 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 			}
 
 			if translator.NeedConvert(handlerType, c.Type()) {
-				lines := translator.Response(handlerType, c.Type(), newCtx, modelName, data, &param)
+				lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, data, &param)
 				for i := 0; i < len(lines); i++ {
 					dataChan <- []byte(lines[i])
 				}
@@ -651,7 +658,7 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 		}
 
 		if translator.NeedConvert(handlerType, c.Type()) {
-			lines := translator.Response(handlerType, c.Type(), ctx, modelName, []byte("[DONE]"), &param)
+			lines := translator.Response(handlerType, c.Type(), ctx, modelName, rawJSON, originalRequestRawJSON, []byte("[DONE]"), &param)
 			for i := 0; i < len(lines); i++ {
 				dataChan <- []byte(lines[i])
 			}

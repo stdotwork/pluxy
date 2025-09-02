@@ -6,7 +6,7 @@ import (
 )
 
 // PassthroughGeminiResponseStream forwards Gemini responses unchanged.
-func PassthroughGeminiResponseStream(_ context.Context, _ string, rawJSON []byte, _ *any) []string {
+func PassthroughGeminiResponseStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) []string {
 	if bytes.Equal(rawJSON, []byte("[DONE]")) {
 		return []string{}
 	}
@@ -14,6 +14,6 @@ func PassthroughGeminiResponseStream(_ context.Context, _ string, rawJSON []byte
 }
 
 // PassthroughGeminiResponseNonStream forwards Gemini responses unchanged.
-func PassthroughGeminiResponseNonStream(_ context.Context, _ string, rawJSON []byte, _ *any) string {
+func PassthroughGeminiResponseNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	return string(rawJSON)
 }

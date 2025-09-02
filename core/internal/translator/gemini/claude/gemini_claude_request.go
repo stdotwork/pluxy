@@ -27,7 +27,8 @@ import (
 //
 // Returns:
 //   - []byte: The transformed request in Gemini CLI format.
-func ConvertClaudeRequestToGemini(modelName string, rawJSON []byte, _ bool) []byte {
+func ConvertClaudeRequestToGemini(modelName string, inputRawJSON []byte, _ bool) []byte {
+	rawJSON := bytes.Clone(inputRawJSON)
 	var pathsToDelete []string
 	root := gjson.ParseBytes(rawJSON)
 	util.Walk(root, "", "additionalProperties", &pathsToDelete)
