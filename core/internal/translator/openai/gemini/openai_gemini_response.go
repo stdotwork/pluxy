@@ -183,27 +183,7 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 						argsStr := accumulator.Arguments.String()
 						var argsMap map[string]interface{}
 
-						if argsStr != "" && argsStr != "{}" {
-							// Handle malformed JSON by trying to fix common issues
-							fixedArgs := argsStr
-							// Fix unquoted keys and values (common in the sample)
-							if strings.Contains(fixedArgs, "北京") && !strings.Contains(fixedArgs, "\"北京\"") {
-								fixedArgs = strings.ReplaceAll(fixedArgs, "北京", "\"北京\"")
-							}
-							if strings.Contains(fixedArgs, "celsius") && !strings.Contains(fixedArgs, "\"celsius\"") {
-								fixedArgs = strings.ReplaceAll(fixedArgs, "celsius", "\"celsius\"")
-							}
-
-							if err := json.Unmarshal([]byte(fixedArgs), &argsMap); err != nil {
-								// If still fails, try to parse as raw string
-								if err2 := json.Unmarshal([]byte("\""+argsStr+"\""), &argsMap); err2 != nil {
-									// Last resort: use empty object
-									argsMap = map[string]interface{}{}
-								}
-							}
-						} else {
-							argsMap = map[string]interface{}{}
-						}
+						argsMap = parseArgsToMap(argsStr)
 
 						functionCallPart := map[string]interface{}{
 							"functionCall": map[string]interface{}{
@@ -261,6 +241,21 @@ func mapOpenAIFinishReasonToGemini(openAIReason string) string {
 	}
 }
 
+// parseArgsToMap safely parses a JSON string of function arguments into a map.
+// It returns an empty map if the input is empty or cannot be parsed as a JSON object.
+func parseArgsToMap(argsStr string) map[string]interface{} {
+	trimmed := strings.TrimSpace(argsStr)
+	if trimmed == "" || trimmed == "{}" {
+		return map[string]interface{}{}
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &out); err == nil {
+		return out
+	}
+	// Fallback: return empty object when parsing fails
+	return map[string]interface{}{}
+}
+
 // ConvertOpenAIResponseToGeminiNonStream converts a non-streaming OpenAI response to a non-streaming Gemini response.
 //
 // Parameters:
@@ -314,27 +309,7 @@ func ConvertOpenAIResponseToGeminiNonStream(_ context.Context, _ string, origina
 
 						// Parse arguments
 						var argsMap map[string]interface{}
-						if functionArgs != "" && functionArgs != "{}" {
-							// Handle malformed JSON by trying to fix common issues
-							fixedArgs := functionArgs
-							// Fix unquoted keys and values (common in the sample)
-							if strings.Contains(fixedArgs, "北京") && !strings.Contains(fixedArgs, "\"北京\"") {
-								fixedArgs = strings.ReplaceAll(fixedArgs, "北京", "\"北京\"")
-							}
-							if strings.Contains(fixedArgs, "celsius") && !strings.Contains(fixedArgs, "\"celsius\"") {
-								fixedArgs = strings.ReplaceAll(fixedArgs, "celsius", "\"celsius\"")
-							}
-
-							if err := json.Unmarshal([]byte(fixedArgs), &argsMap); err != nil {
-								// If still fails, try to parse as raw string
-								if err2 := json.Unmarshal([]byte("\""+functionArgs+"\""), &argsMap); err2 != nil {
-									// Last resort: use empty object
-									argsMap = map[string]interface{}{}
-								}
-							}
-						} else {
-							argsMap = map[string]interface{}{}
-						}
+						argsMap = parseArgsToMap(functionArgs)
 
 						functionCallPart := map[string]interface{}{
 							"functionCall": map[string]interface{}{
