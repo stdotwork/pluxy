@@ -346,30 +346,6 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 						c.AddAPIResponseData(ctx, line)
 						dataChan <- []byte(lines[i])
 					}
-				} else if bytes.HasPrefix(line, dataUglyTag) {
-					if bytes.Equal(line, doneTag) {
-						break
-					}
-					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[5:], &param)
-					for i := 0; i < len(lines); i++ {
-						dataChan <- []byte(lines[i])
-					}
-				} else if bytes.HasPrefix(line, dataUglyTag) {
-					if bytes.Equal(line, doneTag) {
-						break
-					}
-					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[5:], &param)
-					for i := 0; i < len(lines); i++ {
-						dataChan <- []byte(lines[i])
-					}
-				} else if bytes.HasPrefix(line, dataUglyTag) {
-					if bytes.Equal(line, doneTag) {
-						break
-					}
-					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, line[5:], &param)
-					for i := 0; i < len(lines); i++ {
-						dataChan <- []byte(lines[i])
-					}
 				}
 			}
 		} else {
