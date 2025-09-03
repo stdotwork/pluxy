@@ -1,284 +1,511 @@
 # Management API
 
-Base URL: `http://localhost:8317/v0/management`
+Base path: `http://localhost:8317/v0/management`
 
-This API manages runtime configuration and authentication files for the CLI Proxy API. All changes persist to the YAML config file and are hot‑reloaded by the server.
+This API manages the CLI Proxy API’s runtime configuration and authentication files. All changes are persisted to the YAML config file and hot‑reloaded by the service.
 
-Note: The following options cannot be changed via API and must be edited in the config file, then restart if needed:
+Note: The following options cannot be modified via API and must be set in the config file (restart if needed):
 - `allow-remote-management`
-- `remote-management-key` (stored as bcrypt hash after startup if plaintext was provided)
+- `remote-management-key` (if plaintext is detected at startup, it is automatically bcrypt‑hashed and written back to the config)
 
 ## Authentication
 
-- All requests (including localhost) must include a management key.
-- Remote access additionally requires `allow-remote-management: true` in config.
-- Provide the key via one of:
+- All requests (including localhost) must provide a valid management key.
+- Remote access requires enabling remote management in the config: `allow-remote-management: true`.
+- Provide the management key (in plaintext) via either:
   - `Authorization: Bearer <plaintext-key>`
   - `X-Management-Key: <plaintext-key>`
 
-If a plaintext key is present in the config on startup, it is bcrypt-hashed and written back to the config file automatically. If `remote-management-key` is empty, the Management API is entirely disabled (404 for `/v0/management/*`).
+If a plaintext key is detected in the config at startup, it will be bcrypt‑hashed and written back to the config file automatically.
 
 ## Request/Response Conventions
 
-- Content type: `application/json` unless noted.
-- Boolean/int/string updates use body: `{ "value": <type> }`.
-- Array PUT bodies can be either a raw array (e.g. `["a","b"]`) or `{ "items": [ ... ] }`.
-- Array PATCH accepts either `{ "old": "k1", "new": "k2" }` or `{ "index": 0, "value": "k2" }`.
-- Object-array PATCH supports either index or key match (documented per endpoint).
+- Content-Type: `application/json` (unless otherwise noted).
+- Boolean/int/string updates: request body is `{ "value": <type> }`.
+- Array PUT: either a raw array (e.g. `["a","b"]`) or `{ "items": [ ... ] }`.
+- Array PATCH: supports `{ "old": "k1", "new": "k2" }` or `{ "index": 0, "value": "k2" }`.
+- Object-array PATCH: supports matching by index or by key field (specified per endpoint).
 
 ## Endpoints
 
 ### Debug
-- GET `/debug` — get current debug flag
-- PUT/PATCH `/debug` — set debug (boolean)
-
-Example (set true):
-```bash
-curl -X PUT \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -H 'Content-Type: application/json' \
-  -d '{"value":true}' \
-  http://localhost:8317/v0/management/debug
-```
-Response:
-```json
-{ "status": "ok" }
-```
-
-### Proxy URL
-- GET `/proxy-url` — get proxy URL string
-- PUT/PATCH `/proxy-url` — set proxy URL string
-- DELETE `/proxy-url` — clear proxy URL
-
-Example (set):
-```bash
-curl -X PATCH -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '{"value":"socks5://user:pass@127.0.0.1:1080/"}' \
-  http://localhost:8317/v0/management/proxy-url
-```
-Response:
-```json
-{ "status": "ok" }
-```
-
-### Quota Exceeded Behavior
-- GET `/quota-exceeded/switch-project`
-- PUT/PATCH `/quota-exceeded/switch-project` — boolean
-- GET `/quota-exceeded/switch-preview-model`
-- PUT/PATCH `/quota-exceeded/switch-preview-model` — boolean
-
-Example:
-```bash
-curl -X PUT -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '{"value":false}' \
-  http://localhost:8317/v0/management/quota-exceeded/switch-project
-```
-Response:
-```json
-{ "status": "ok" }
-```
-
-### API Keys (proxy server auth)
-- GET `/api-keys` — return the full list
-- PUT `/api-keys` — replace the full list
-- PATCH `/api-keys` — update one entry (by `old/new` or `index/value`)
-- DELETE `/api-keys` — remove one entry (by `?value=` or `?index=`)
-
-Examples:
-```bash
-# Replace list
-curl -X PUT -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '["k1","k2","k3"]' \
-  http://localhost:8317/v0/management/api-keys
-
-# Patch: replace k2 -> k2b
-curl -X PATCH -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '{"old":"k2","new":"k2b"}' \
-  http://localhost:8317/v0/management/api-keys
-
-# Delete by value
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/api-keys?value=k1'
-```
-Response (GET):
-```json
-{ "api-keys": ["k1","k2b","k3"] }
-```
-
-### Generative Language API Keys (Gemini)
-- GET `/generative-language-api-key`
-- PUT `/generative-language-api-key`
-- PATCH `/generative-language-api-key`
-- DELETE `/generative-language-api-key`
-
-Same request/response shapes as API keys.
-
-### Codex API Keys (OpenAI)
-- GET `/codex-api-key`
+- GET `/debug` — Get the current debug state
   - Request:
     ```bash
-    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/codex-api-key
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/debug
     ```
   - Response:
     ```json
-    { "codex-api-key": ["sk-proj-01","sk-proj-02"] }
+    { "debug": false }
     ```
-- PUT `/codex-api-key`
+- PUT/PATCH `/debug` — Set debug (boolean)
   - Request:
     ```bash
     curl -X PUT -H 'Content-Type: application/json' \
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '["sk-proj-1","sk-proj-2"]' \
-      http://localhost:8317/v0/management/codex-api-key
+      -d '{"value":true}' \
+      http://localhost:8317/v0/management/debug
     ```
   - Response:
     ```json
     { "status": "ok" }
     ```
-- PATCH `/codex-api-key`
+
+### Proxy Server URL
+- GET `/proxy-url` — Get the proxy URL string
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/proxy-url
+    ```
+  - Response:
+    ```json
+    { "proxy-url": "socks5://user:pass@127.0.0.1:1080/" }
+    ```
+- PUT/PATCH `/proxy-url` — Set the proxy URL string
+  - Request (PUT):
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":"socks5://user:pass@127.0.0.1:1080/"}' \
+      http://localhost:8317/v0/management/proxy-url
+    ```
+  - Request (PATCH):
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":"http://127.0.0.1:8080"}' \
+      http://localhost:8317/v0/management/proxy-url
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- DELETE `/proxy-url` — Clear the proxy URL
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE http://localhost:8317/v0/management/proxy-url
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+
+### Quota Exceeded Behavior
+- GET `/quota-exceeded/switch-project`
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/quota-exceeded/switch-project
+    ```
+  - Response:
+    ```json
+    { "switch-project": true }
+    ```
+- PUT/PATCH `/quota-exceeded/switch-project` — Boolean
+  - Request:
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":false}' \
+      http://localhost:8317/v0/management/quota-exceeded/switch-project
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- GET `/quota-exceeded/switch-preview-model`
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/quota-exceeded/switch-preview-model
+    ```
+  - Response:
+    ```json
+    { "switch-preview-model": true }
+    ```
+- PUT/PATCH `/quota-exceeded/switch-preview-model` — Boolean
   - Request:
     ```bash
     curl -X PATCH -H 'Content-Type: application/json' \
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '{"old":"sk-proj-1","new":"sk-proj-1b"}' \
-      http://localhost:8317/v0/management/codex-api-key
+      -d '{"value":true}' \
+      http://localhost:8317/v0/management/quota-exceeded/switch-preview-model
     ```
   - Response:
     ```json
     { "status": "ok" }
     ```
-- DELETE `/codex-api-key`
+
+### API Keys (proxy service auth)
+- GET `/api-keys` — Return the full list
   - Request:
     ```bash
-    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/codex-api-key?value=sk-proj-2'
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/api-keys
+    ```
+  - Response:
+    ```json
+    { "api-keys": ["k1","k2","k3"] }
+    ```
+- PUT `/api-keys` — Replace the full list
+  - Request:
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '["k1","k2","k3"]' \
+      http://localhost:8317/v0/management/api-keys
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- PATCH `/api-keys` — Modify one item (`old/new` or `index/value`)
+  - Request (by old/new):
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"old":"k2","new":"k2b"}' \
+      http://localhost:8317/v0/management/api-keys
+    ```
+  - Request (by index/value):
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"index":0,"value":"k1b"}' \
+      http://localhost:8317/v0/management/api-keys
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- DELETE `/api-keys` — Delete one (`?value=` or `?index=`)
+  - Request (by value):
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/api-keys?value=k1'
+    ```
+  - Request (by index):
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/api-keys?index=0'
     ```
   - Response:
     ```json
     { "status": "ok" }
     ```
 
-### Request Logging
-- GET `/request-log` — get boolean
-- PUT/PATCH `/request-log` — set boolean
+### Gemini API Key (Generative Language)
+- GET `/generative-language-api-key`
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/generative-language-api-key
+    ```
+  - Response:
+    ```json
+    { "generative-language-api-key": ["AIzaSy...01","AIzaSy...02"] }
+    ```
+- PUT `/generative-language-api-key`
+  - Request:
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '["AIzaSy-1","AIzaSy-2"]' \
+      http://localhost:8317/v0/management/generative-language-api-key
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- PATCH `/generative-language-api-key`
+  - Request:
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"old":"AIzaSy-1","new":"AIzaSy-1b"}' \
+      http://localhost:8317/v0/management/generative-language-api-key
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- DELETE `/generative-language-api-key`
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/generative-language-api-key?value=AIzaSy-2'
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
 
-### Request Retry
-- GET `/request-retry` — get integer
-- PUT/PATCH `/request-retry` — set integer
+### Codex API KEY (object array)
+- GET `/codex-api-key` — List all
+    - Request:
+      ```bash
+      curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/codex-api-key
+      ```
+    - Response:
+      ```json
+      { "codex-api-key": [ { "api-key": "sk-a", "base-url": "" } ] }
+      ```
+- PUT `/codex-api-key` — Replace the list
+    - Request:
+      ```bash
+      curl -X PUT -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+        -d '[{"api-key":"sk-a"},{"api-key":"sk-b","base-url":"https://c.example.com"}]' \
+        http://localhost:8317/v0/management/codex-api-key
+      ```
+    - Response:
+      ```json
+      { "status": "ok" }
+      ```
+- PATCH `/codex-api-key` — Modify one (by `index` or `match`)
+    - Request (by index):
+      ```bash
+      curl -X PATCH -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+        -d '{"index":1,"value":{"api-key":"sk-b2","base-url":"https://c.example.com"}}' \
+        http://localhost:8317/v0/management/codex-api-key
+      ```
+    - Request (by match):
+      ```bash
+      curl -X PATCH -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+        -d '{"match":"sk-a","value":{"api-key":"sk-a","base-url":""}}' \
+        http://localhost:8317/v0/management/codex-api-key
+      ```
+    - Response:
+      ```json
+      { "status": "ok" }
+      ```
+- DELETE `/codex-api-key` — Delete one (`?api-key=` or `?index=`)
+    - Request (by api-key):
+      ```bash
+      curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/codex-api-key?api-key=sk-b2'
+      ```
+    - Request (by index):
+      ```bash
+      curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/codex-api-key?index=0'
+      ```
+    - Response:
+      ```json
+      { "status": "ok" }
+      ```
+
+### Request Retry Count
+- GET `/request-retry` — Get integer
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/request-retry
+    ```
+  - Response:
+    ```json
+    { "request-retry": 3 }
+    ```
+- PUT/PATCH `/request-retry` — Set integer
+  - Request:
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":5}' \
+      http://localhost:8317/v0/management/request-retry
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
 
 ### Allow Localhost Unauthenticated
-- GET `/allow-localhost-unauthenticated` — get boolean
-- PUT/PATCH `/allow-localhost-unauthenticated` — set boolean
+- GET `/allow-localhost-unauthenticated` — Get boolean
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/allow-localhost-unauthenticated
+    ```
+  - Response:
+    ```json
+    { "allow-localhost-unauthenticated": false }
+    ```
+- PUT/PATCH `/allow-localhost-unauthenticated` — Set boolean
+  - Request:
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":true}' \
+      http://localhost:8317/v0/management/allow-localhost-unauthenticated
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
 
-### Claude API Keys (object array)
-- GET `/claude-api-key` — full list
-- PUT `/claude-api-key` — replace list
-- PATCH `/claude-api-key` — update one item (by `index` or `match` API key)
-- DELETE `/claude-api-key` — remove one item (`?api-key=` or `?index=`)
-
-Object shape:
-```json
-{
-  "api-key": "sk-...",
-  "base-url": "https://custom.example.com"   // optional
-}
-```
-
-Examples:
-```bash
-# Replace list
-curl -X PUT -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '[{"api-key":"sk-a"},{"api-key":"sk-b","base-url":"https://c.example.com"}]' \
-  http://localhost:8317/v0/management/claude-api-key
-
-# Patch by index
-curl -X PATCH -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '{"index":1,"value":{"api-key":"sk-b2","base-url":"https://c.example.com"}}' \
-  http://localhost:8317/v0/management/claude-api-key
-
-# Patch by match (api-key)
-curl -X PATCH -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '{"match":"sk-a","value":{"api-key":"sk-a","base-url":""}}' \
-  http://localhost:8317/v0/management/claude-api-key
-
-# Delete by api-key
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/claude-api-key?api-key=sk-b2'
-```
-Response (GET):
-```json
-{
-  "claude-api-key": [
-    { "api-key": "sk-a", "base-url": "" }
-  ]
-}
-```
+### Claude API KEY (object array)
+- GET `/claude-api-key` — List all
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/claude-api-key
+    ```
+  - Response:
+    ```json
+    { "claude-api-key": [ { "api-key": "sk-a", "base-url": "" } ] }
+    ```
+- PUT `/claude-api-key` — Replace the list
+  - Request:
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '[{"api-key":"sk-a"},{"api-key":"sk-b","base-url":"https://c.example.com"}]' \
+      http://localhost:8317/v0/management/claude-api-key
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- PATCH `/claude-api-key` — Modify one (by `index` or `match`)
+  - Request (by index):
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"index":1,"value":{"api-key":"sk-b2","base-url":"https://c.example.com"}}' \
+      http://localhost:8317/v0/management/claude-api-key
+    ```
+  - Request (by match):
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"match":"sk-a","value":{"api-key":"sk-a","base-url":""}}' \
+      http://localhost:8317/v0/management/claude-api-key
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- DELETE `/claude-api-key` — Delete one (`?api-key=` or `?index=`)
+  - Request (by api-key):
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/claude-api-key?api-key=sk-b2'
+    ```
+  - Request (by index):
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/claude-api-key?index=0'
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
 
 ### OpenAI Compatibility Providers (object array)
-- GET `/openai-compatibility` — full list
-- PUT `/openai-compatibility` — replace list
-- PATCH `/openai-compatibility` — update one item by `index` or `name`
-- DELETE `/openai-compatibility` — remove by `?name=` or `?index=`
+- GET `/openai-compatibility` — List all
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/openai-compatibility
+    ```
+  - Response:
+    ```json
+    { "openai-compatibility": [ { "name": "openrouter", "base-url": "https://openrouter.ai/api/v1", "api-keys": [], "models": [] } ] }
+    ```
+- PUT `/openai-compatibility` — Replace the list
+  - Request:
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '[{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":["sk"],"models":[{"name":"m","alias":"a"}]}]' \
+      http://localhost:8317/v0/management/openai-compatibility
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- PATCH `/openai-compatibility` — Modify one (by `index` or `name`)
+  - Request (by name):
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"name":"openrouter","value":{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":[],"models":[]}}' \
+      http://localhost:8317/v0/management/openai-compatibility
+    ```
+  - Request (by index):
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"index":0,"value":{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":[],"models":[]}}' \
+      http://localhost:8317/v0/management/openai-compatibility
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+- DELETE `/openai-compatibility` — Delete (`?name=` or `?index=`)
+  - Request (by name):
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/openai-compatibility?name=openrouter'
+    ```
+  - Request (by index):
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/openai-compatibility?index=0'
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
 
-Object shape:
-```json
-{
-  "name": "openrouter",
-  "base-url": "https://openrouter.ai/api/v1",
-  "api-keys": ["sk-..."],
-  "models": [ {"name": "moonshotai/kimi-k2:free", "alias": "kimi-k2"} ]
-}
-```
+### Auth File Management
 
-Examples:
-```bash
-# Replace list
-curl -X PUT -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '[{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":["sk"],"models":[{"name":"m","alias":"a"}]}]' \
-  http://localhost:8317/v0/management/openai-compatibility
+Manage JSON token files under `auth-dir`: list, download, upload, delete.
 
-# Patch by name
-curl -X PATCH -H 'Content-Type: application/json' \
--H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-  -d '{"name":"openrouter","value":{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":[],"models":[]}}' \
-  http://localhost:8317/v0/management/openai-compatibility
-
-# Delete by index
-curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/openai-compatibility?index=0'
-```
-Response (GET):
-```json
-{ "openai-compatibility": [ { "name": "openrouter", "base-url": "...", "api-keys": [], "models": [] } ] }
-```
-
-### Auth Files Management
-
-List JSON token files under `auth-dir`, download/upload/delete.
-
-- GET `/auth-files` — list
+- GET `/auth-files` — List
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/auth-files
+    ```
   - Response:
     ```json
     { "files": [ { "name": "acc1.json", "size": 1234, "modtime": "2025-08-30T12:34:56Z" } ] }
     ```
 
-- GET `/auth-files/download?name=<file.json>` — download a single file
+- GET `/auth-files/download?name=<file.json>` — Download a single file
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -OJ 'http://localhost:8317/v0/management/auth-files/download?name=acc1.json'
+    ```
 
-- POST `/auth-files` — upload
-  - Multipart form: field `file` (must be `.json`)
-  - Or raw JSON body with `?name=<file.json>`
-  - Response: `{ "status": "ok" }`
+- POST `/auth-files` — Upload
+  - Request (multipart):
+    ```bash
+    curl -X POST -F 'file=@/path/to/acc1.json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      http://localhost:8317/v0/management/auth-files
+    ```
+  - Request (raw JSON):
+    ```bash
+    curl -X POST -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d @/path/to/acc1.json \
+      'http://localhost:8317/v0/management/auth-files?name=acc1.json'
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
 
-- DELETE `/auth-files?name=<file.json>` — delete a single file
-- DELETE `/auth-files?all=true` — delete all `.json` files in `auth-dir`
+- DELETE `/auth-files?name=<file.json>` — Delete a single file
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/auth-files?name=acc1.json'
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+
+- DELETE `/auth-files?all=true` — Delete all `.json` files under `auth-dir`
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/auth-files?all=true'
+    ```
+  - Response:
+    ```json
+    { "status": "ok", "deleted": 3 }
+    ```
 
 ## Error Responses
 
-Generic error shapes:
+Generic error format:
 - 400 Bad Request: `{ "error": "invalid body" }`
 - 401 Unauthorized: `{ "error": "missing management key" }` or `{ "error": "invalid management key" }`
 - 403 Forbidden: `{ "error": "remote management disabled" }`
@@ -287,6 +514,6 @@ Generic error shapes:
 
 ## Notes
 
-- Changes are written to the YAML configuration file and picked up by the server’s file watcher to hot-reload clients and settings.
-- `allow-remote-management` and `remote-management-key` must be edited in the configuration file and cannot be changed via the API.
+- Changes are written back to the YAML config file and hot‑reloaded by the file watcher and clients.
+- `allow-remote-management` and `remote-management-key` cannot be changed via the API; configure them in the config file.
 

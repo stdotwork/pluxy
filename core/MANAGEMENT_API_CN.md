@@ -233,72 +233,60 @@
     { "status": "ok" }
     ```
 
-### Codex API Key（OpenAI）
-- GET `/codex-api-key`
-  - 请求：
-    ```bash
-    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/codex-api-key
-    ```
-  - 响应：
-    ```json
-    { "codex-api-key": ["sk-proj-01","sk-proj-02"] }
-    ```
-- PUT `/codex-api-key`
-  - 请求：
-    ```bash
-    curl -X PUT -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '["sk-proj-1","sk-proj-2"]' \
-      http://localhost:8317/v0/management/codex-api-key
-    ```
-  - 响应：
-    ```json
-    { "status": "ok" }
-    ```
-- PATCH `/codex-api-key`
-  - 请求：
-    ```bash
-    curl -X PATCH -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '{"old":"sk-proj-1","new":"sk-proj-1b"}' \
-      http://localhost:8317/v0/management/codex-api-key
-    ```
-  - 响应：
-    ```json
-    { "status": "ok" }
-    ```
-- DELETE `/codex-api-key`
-  - 请求：
-    ```bash
-    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/codex-api-key?value=sk-proj-2'
-    ```
-  - 响应：
-    ```json
-    { "status": "ok" }
-    ```
-
-### 开启请求日志
-- GET `/request-log` — 获取布尔值
-  - 请求：
-    ```bash
-    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/request-log
-    ```
-  - 响应：
-    ```json
-    { "request-log": true }
-    ```
-- PUT/PATCH `/request-log` — 设置布尔值
-  - 请求：
-    ```bash
-    curl -X PUT -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '{"value":true}' \
-      http://localhost:8317/v0/management/request-log
-    ```
-  - 响应：
-    ```json
-    { "status": "ok" }
-    ```
+### Codex API KEY（对象数组）
+- GET `/codex-api-key` — 列出全部
+    - 请求：
+      ```bash
+      curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/codex-api-key
+      ```
+    - 响应：
+      ```json
+      { "codex-api-key": [ { "api-key": "sk-a", "base-url": "" } ] }
+      ```
+- PUT `/codex-api-key` — 完整改写列表
+    - 请求：
+      ```bash
+      curl -X PUT -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+        -d '[{"api-key":"sk-a"},{"api-key":"sk-b","base-url":"https://c.example.com"}]' \
+        http://localhost:8317/v0/management/codex-api-key
+      ```
+    - 响应：
+      ```json
+      { "status": "ok" }
+      ```
+- PATCH `/codex-api-key` — 修改其中一个（按 `index` 或 `match`）
+    - 请求（按索引）：
+      ```bash
+      curl -X PATCH -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+        -d '{"index":1,"value":{"api-key":"sk-b2","base-url":"https://c.example.com"}}' \
+        http://localhost:8317/v0/management/codex-api-key
+      ```
+    - 请求（按匹配）：
+      ```bash
+      curl -X PATCH -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+        -d '{"match":"sk-a","value":{"api-key":"sk-a","base-url":""}}' \
+        http://localhost:8317/v0/management/codex-api-key
+      ```
+    - 响应：
+      ```json
+      { "status": "ok" }
+      ```
+- DELETE `/codex-api-key` — 删除其中一个（`?api-key=` 或 `?index=`）
+    - 请求（按 api-key）：
+      ```bash
+      curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/codex-api-key?api-key=sk-b2'
+      ```
+    - 请求（按索引）：
+      ```bash
+      curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' -X DELETE 'http://localhost:8317/v0/management/codex-api-key?index=0'
+      ```
+    - 响应：
+      ```json
+      { "status": "ok" }
+      ```
 
 ### 请求重试次数
 - GET `/request-retry` — 获取整数
