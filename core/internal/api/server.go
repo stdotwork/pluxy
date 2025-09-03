@@ -292,7 +292,8 @@ func corsMiddleware() gin.HandlerFunc {
 // Parameters:
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
-func (s *Server) UpdateClients(clients []interfaces.Client, cfg *config.Config) {
+func (s *Server) UpdateClients(clients map[string]interfaces.Client, cfg *config.Config) {
+	clientSlice := s.clientsToSlice(clients)
 	// Update request logger enabled state if it has changed
 	if s.requestLogger != nil && s.cfg.RequestLog != cfg.RequestLog {
 		s.requestLogger.SetEnabled(cfg.RequestLog)
@@ -310,11 +311,11 @@ func (s *Server) UpdateClients(clients []interfaces.Client, cfg *config.Config) 
 	}
 
 	s.cfg = cfg
-	s.handlers.UpdateClients(clients, cfg)
+	s.handlers.UpdateClients(clientSlice, cfg)
 	if s.mgmt != nil {
 		s.mgmt.SetConfig(cfg)
 	}
-	log.Infof("server clients and configuration updated: %d clients", len(clients))
+	log.Infof("server clients and configuration updated: %d clients", len(clientSlice))
 }
 
 // (management handlers moved to internal/api/handlers/management)
@@ -383,4 +384,12 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func (s *Server) clientsToSlice(clientMap map[string]interfaces.Client) []interfaces.Client {
+	slice := make([]interfaces.Client, 0, len(clientMap))
+	for _, v := range clientMap {
+		slice = append(slice, v)
+	}
+	return slice
 }

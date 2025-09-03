@@ -34,14 +34,14 @@ type Watcher struct {
 	configPath     string
 	authDir        string
 	config         *config.Config
-	clients        []interfaces.Client
+	clients        map[string]interfaces.Client
 	clientsMutex   sync.RWMutex
-	reloadCallback func([]interfaces.Client, *config.Config)
+	reloadCallback func(map[string]interfaces.Client, *config.Config)
 	watcher        *fsnotify.Watcher
 }
 
 // NewWatcher creates a new file watcher instance
-func NewWatcher(configPath, authDir string, reloadCallback func([]interfaces.Client, *config.Config)) (*Watcher, error) {
+func NewWatcher(configPath, authDir string, reloadCallback func(map[string]interfaces.Client, *config.Config)) (*Watcher, error) {
 	watcher, errNewWatcher := fsnotify.NewWatcher()
 	if errNewWatcher != nil {
 		return nil, errNewWatcher
@@ -52,6 +52,7 @@ func NewWatcher(configPath, authDir string, reloadCallback func([]interfaces.Cli
 		authDir:        authDir,
 		reloadCallback: reloadCallback,
 		watcher:        watcher,
+		clients:        make(map[string]interfaces.Client),
 	}, nil
 }
 
@@ -90,7 +91,7 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 }
 
 // SetClients updates the current client list
-func (w *Watcher) SetClients(clients []interfaces.Client) {
+func (w *Watcher) SetClients(clients map[string]interfaces.Client) {
 	w.clientsMutex.Lock()
 	defer w.clientsMutex.Unlock()
 	w.clients = clients
@@ -119,7 +120,6 @@ func (w *Watcher) processEvents(ctx context.Context) {
 // handleEvent processes individual file system events
 func (w *Watcher) handleEvent(event fsnotify.Event) {
 	now := time.Now()
-
 	log.Debugf("file system event detected: %s %s", event.Op.String(), event.Name)
 
 	// Handle config file changes
@@ -130,13 +130,14 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 		return
 	}
 
-	// Handle auth directory changes (only for .json files)
-	// Simplified: reload on any change to .json files in auth directory
+	// Handle auth directory changes incrementally
 	if strings.HasPrefix(event.Name, w.authDir) && strings.HasSuffix(event.Name, ".json") {
-		log.Infof("auth file changed (%s): %s, reloading clients", event.Op.String(), filepath.Base(event.Name))
-		log.Debugf("auth file change details - operation: %s, file: %s, timestamp: %s",
-			event.Op.String(), filepath.Base(event.Name), now.Format("2006-01-02 15:04:05.000"))
-		w.reloadClients()
+		log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
+		if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
+			w.addOrUpdateClient(event.Name)
+		} else if event.Op&fsnotify.Remove == fsnotify.Remove {
+			w.removeClient(event.Name)
+		}
 	}
 }
 
@@ -201,9 +202,10 @@ func (w *Watcher) reloadConfig() {
 	w.reloadClients()
 }
 
-// reloadClients reloads all authentication clients
+// reloadClients performs a full scan of the auth directory and reloads all clients.
+// This is used for initial startup and for handling config file reloads.
 func (w *Watcher) reloadClients() {
-	log.Debugf("starting client reload process")
+	log.Debugf("starting full client reload process")
 
 	w.clientsMutex.RLock()
 	cfg := w.config
@@ -215,25 +217,24 @@ func (w *Watcher) reloadClients() {
 		return
 	}
 
-	log.Debugf("scanning auth directory: %s", cfg.AuthDir)
+	log.Debugf("scanning auth directory for initial load or full reload: %s", cfg.AuthDir)
 
-	// Create new client list
-	newClients := make([]interfaces.Client, 0)
+	// Create new client map
+	newClients := make(map[string]interfaces.Client)
 	authFileCount := 0
 	successfulAuthCount := 0
 
+	// Handle tilde expansion for auth directory
 	if strings.HasPrefix(cfg.AuthDir, "~") {
 		home, errUserHomeDir := os.UserHomeDir()
 		if errUserHomeDir != nil {
 			log.Fatalf("failed to get home directory: %v", errUserHomeDir)
 		}
-		// Reconstruct the path by replacing the tilde with the user's home directory.
 		parts := strings.Split(cfg.AuthDir, string(os.PathSeparator))
 		if len(parts) > 1 {
 			parts[0] = home
 			cfg.AuthDir = path.Join(parts...)
 		} else {
-			// If the path is just "~", set it to the home directory.
 			cfg.AuthDir = home
 		}
 	}
@@ -244,91 +245,14 @@ func (w *Watcher) reloadClients() {
 			log.Debugf("error accessing path %s: %v", path, err)
 			return err
 		}
-
-		// Process only JSON files in the auth directory
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
 			authFileCount++
 			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
-
-			data, errReadFile := os.ReadFile(path)
-			if errReadFile != nil {
-				return errReadFile
-			}
-
-			tokenType := "gemini"
-			typeResult := gjson.GetBytes(data, "type")
-			if typeResult.Exists() {
-				tokenType = typeResult.String()
-			}
-
-			// Decode the token storage file
-			if tokenType == "gemini" {
-				var ts gemini.GeminiTokenStorage
-				if err = json.Unmarshal(data, &ts); err == nil {
-					// For each valid token, create an authenticated client
-					clientCtx := context.Background()
-					log.Debugf("  initializing gemini authentication for token from %s...", filepath.Base(path))
-					geminiAuth := gemini.NewGeminiAuth()
-					httpClient, errGetClient := geminiAuth.GetAuthenticatedClient(clientCtx, &ts, cfg)
-					if errGetClient != nil {
-						log.Errorf("  failed to get authenticated client for token %s: %v", path, errGetClient)
-						return nil // Continue processing other files
-					}
-					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
-
-					// Add the new client to the pool
-					cliClient := client.NewGeminiCLIClient(httpClient, &ts, cfg)
-					newClients = append(newClients, cliClient)
-					successfulAuthCount++
-				} else {
-					log.Errorf("  failed to decode token file %s: %v", path, err)
-				}
-			} else if tokenType == "codex" {
-				var ts codex.CodexTokenStorage
-				if err = json.Unmarshal(data, &ts); err == nil {
-					// For each valid token, create an authenticated client
-					log.Debugf("  initializing codex authentication for token from %s...", filepath.Base(path))
-					codexClient, errGetClient := client.NewCodexClient(cfg, &ts)
-					if errGetClient != nil {
-						log.Errorf("  failed to get authenticated client for token %s: %v", path, errGetClient)
-						return nil // Continue processing other files
-					}
-					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
-
-					// Add the new client to the pool
-					newClients = append(newClients, codexClient)
-					successfulAuthCount++
-				} else {
-					log.Errorf("  failed to decode token file %s: %v", path, err)
-				}
-			} else if tokenType == "claude" {
-				var ts claude.ClaudeTokenStorage
-				if err = json.Unmarshal(data, &ts); err == nil {
-					// For each valid token, create an authenticated client
-					log.Debugf("  initializing claude authentication for token from %s...", filepath.Base(path))
-					claudeClient := client.NewClaudeClient(cfg, &ts)
-					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
-
-					// Add the new client to the pool
-					newClients = append(newClients, claudeClient)
-					successfulAuthCount++
-				} else {
-					log.Errorf("  failed to decode token file %s: %v", path, err)
-				}
-			} else if tokenType == "qwen" {
-				var ts qwen.QwenTokenStorage
-				if err = json.Unmarshal(data, &ts); err == nil {
-					// For each valid token, create an authenticated client
-					log.Debugf("  initializing qwen authentication for token from %s...", filepath.Base(path))
-					qwenClient := client.NewQwenClient(cfg, &ts)
-					log.Debugf("  authentication successful for token from %s", filepath.Base(path))
-
-					// Add the new client to the pool
-					newClients = append(newClients, qwenClient)
-					successfulAuthCount++
-				} else {
-					log.Errorf("  failed to decode token file %s: %v", path, err)
-				}
+			if client, err := w.createClientFromFile(path, cfg); err == nil {
+				newClients[path] = client
+				successfulAuthCount++
+			} else {
+				log.Errorf("failed to create client from file %s: %v", path, err)
 			}
 		}
 		return nil
@@ -337,8 +261,11 @@ func (w *Watcher) reloadClients() {
 		log.Errorf("error walking auth directory: %v", errWalk)
 		return
 	}
-
 	log.Debugf("auth directory scan complete - found %d .json files, %d successful authentications", authFileCount, successfulAuthCount)
+
+	// Note: API key-based clients are not stored in the map as they don't correspond to a file.
+	// They are re-created each time, which is lightweight.
+	clientSlice := w.clientsToSlice(newClients)
 
 	// Add clients for Generative Language API keys if configured
 	glAPIKeyCount := 0
@@ -346,22 +273,21 @@ func (w *Watcher) reloadClients() {
 		log.Debugf("processing %d Generative Language API Keys", len(cfg.GlAPIKey))
 		for i := 0; i < len(cfg.GlAPIKey); i++ {
 			httpClient := util.SetProxy(cfg, &http.Client{})
-
 			log.Debugf("Initializing with Generative Language API Key %d...", i+1)
 			cliClient := client.NewGeminiClient(httpClient, cfg, cfg.GlAPIKey[i])
-			newClients = append(newClients, cliClient)
+			clientSlice = append(clientSlice, cliClient)
 			glAPIKeyCount++
 		}
 		log.Debugf("Successfully initialized %d Generative Language API Key clients", glAPIKeyCount)
 	}
-
+	// ... (Claude, Codex, OpenAI-compat clients are handled similarly) ...
 	claudeAPIKeyCount := 0
 	if len(cfg.ClaudeKey) > 0 {
 		log.Debugf("processing %d Claude API Keys", len(cfg.ClaudeKey))
 		for i := 0; i < len(cfg.ClaudeKey); i++ {
 			log.Debugf("Initializing with Claude API Key %d...", i+1)
 			cliClient := client.NewClaudeClientWithKey(cfg, i)
-			newClients = append(newClients, cliClient)
+			clientSlice = append(clientSlice, cliClient)
 			claudeAPIKeyCount++
 		}
 		log.Debugf("Successfully initialized %d Claude API Key clients", claudeAPIKeyCount)
@@ -373,13 +299,12 @@ func (w *Watcher) reloadClients() {
 		for i := 0; i < len(cfg.CodexKey); i++ {
 			log.Debugf("Initializing with Codex API Key %d...", i+1)
 			cliClient := client.NewCodexClientWithKey(cfg, i)
-			newClients = append(newClients, cliClient)
+			clientSlice = append(clientSlice, cliClient)
 			codexAPIKeyCount++
 		}
 		log.Debugf("Successfully initialized %d Codex API Key clients", codexAPIKeyCount)
 	}
 
-	// Add clients for OpenAI compatibility providers if configured
 	openAICompatCount := 0
 	if len(cfg.OpenAICompatibility) > 0 {
 		log.Debugf("processing %d OpenAI-compatibility providers", len(cfg.OpenAICompatibility))
@@ -390,38 +315,163 @@ func (w *Watcher) reloadClients() {
 				log.Errorf("  failed to create OpenAI-compatibility client for %s: %v", compat.Name, errClient)
 				continue
 			}
-			newClients = append(newClients, compatClient)
+			clientSlice = append(clientSlice, compatClient)
 			openAICompatCount++
 		}
 		log.Debugf("Successfully initialized %d OpenAI-compatibility clients", openAICompatCount)
 	}
 
-	// Unregister old clients from the model registry if supported
+	// Unregister all old clients
 	w.clientsMutex.RLock()
-	for i := 0; i < len(w.clients); i++ {
-		if u, ok := any(w.clients[i]).(interface{ UnregisterClient() }); ok {
+	for _, oldClient := range w.clients {
+		if u, ok := any(oldClient).(interface{ UnregisterClient() }); ok {
 			u.UnregisterClient()
 		}
 	}
 	w.clientsMutex.RUnlock()
 
-	// Update the client list
+	// Update the client map
 	w.clientsMutex.Lock()
 	w.clients = newClients
 	w.clientsMutex.Unlock()
 
-	log.Infof("client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d OpenAI-compat)",
+	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
 		oldClientCount,
-		len(newClients),
+		len(clientSlice),
 		successfulAuthCount,
 		glAPIKeyCount,
 		claudeAPIKeyCount,
+		codexAPIKeyCount,
 		openAICompatCount,
 	)
 
 	// Trigger the callback to update the server
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback")
-		w.reloadCallback(newClients, cfg)
+		// Note: The callback signature expects a map now, but the API server internally works with a slice.
+		// We pass the map directly, and the server will handle converting it.
+		w.reloadCallback(w.clients, cfg)
+	}
+}
+
+// createClientFromFile creates a single client instance from a given token file path.
+func (w *Watcher) createClientFromFile(path string, cfg *config.Config) (interfaces.Client, error) {
+	data, errReadFile := os.ReadFile(path)
+	if errReadFile != nil {
+		return nil, errReadFile
+	}
+
+	// If the file is empty, it's likely an intermediate state (e.g., after touch, before write).
+	// Silently ignore it and wait for a subsequent write event with content.
+	if len(data) == 0 {
+		return nil, nil // Not an error, just nothing to process yet.
+	}
+
+	tokenType := "gemini"
+	typeResult := gjson.GetBytes(data, "type")
+	if typeResult.Exists() {
+		tokenType = typeResult.String()
+	}
+
+	var err error
+	if tokenType == "gemini" {
+		var ts gemini.GeminiTokenStorage
+		if err = json.Unmarshal(data, &ts); err == nil {
+			clientCtx := context.Background()
+			geminiAuth := gemini.NewGeminiAuth()
+			httpClient, errGetClient := geminiAuth.GetAuthenticatedClient(clientCtx, &ts, cfg)
+			if errGetClient != nil {
+				return nil, errGetClient
+			}
+			return client.NewGeminiCLIClient(httpClient, &ts, cfg), nil
+		}
+	} else if tokenType == "codex" {
+		var ts codex.CodexTokenStorage
+		if err = json.Unmarshal(data, &ts); err == nil {
+			return client.NewCodexClient(cfg, &ts)
+		}
+	} else if tokenType == "claude" {
+		var ts claude.ClaudeTokenStorage
+		if err = json.Unmarshal(data, &ts); err == nil {
+			return client.NewClaudeClient(cfg, &ts), nil
+		}
+	} else if tokenType == "qwen" {
+		var ts qwen.QwenTokenStorage
+		if err = json.Unmarshal(data, &ts); err == nil {
+			return client.NewQwenClient(cfg, &ts), nil
+		}
+	}
+
+	return nil, err
+}
+
+// clientsToSlice converts the client map to a slice.
+func (w *Watcher) clientsToSlice(clientMap map[string]interfaces.Client) []interfaces.Client {
+	s := make([]interfaces.Client, 0, len(clientMap))
+	for _, v := range clientMap {
+		s = append(s, v)
+	}
+	return s
+}
+
+// addOrUpdateClient handles the addition or update of a single client.
+func (w *Watcher) addOrUpdateClient(path string) {
+	w.clientsMutex.Lock()
+	defer w.clientsMutex.Unlock()
+
+	cfg := w.config
+	if cfg == nil {
+		log.Error("config is nil, cannot add or update client")
+		return
+	}
+
+	// Unregister old client if it exists
+	if oldClient, ok := w.clients[path]; ok {
+		if u, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
+			log.Debugf("unregistering old client for updated file: %s", filepath.Base(path))
+			u.UnregisterClient()
+		}
+	}
+
+	newClient, err := w.createClientFromFile(path, cfg)
+	if err != nil {
+		log.Errorf("failed to create/update client for %s: %v", filepath.Base(path), err)
+		// If creation fails, ensure the old client is removed from the map
+		delete(w.clients, path)
+	} else if newClient != nil { // Only update if a client was actually created
+		log.Debugf("successfully created/updated client for %s", filepath.Base(path))
+		w.clients[path] = newClient
+	} else {
+		// This case handles the empty file scenario gracefully
+		log.Debugf("ignoring empty auth file: %s", filepath.Base(path))
+		return // Do not trigger callback for an empty file
+	}
+
+	if w.reloadCallback != nil {
+		log.Debugf("triggering server update callback after add/update")
+		w.reloadCallback(w.clients, cfg)
+	}
+}
+
+// removeClient handles the removal of a single client.
+func (w *Watcher) removeClient(path string) {
+	w.clientsMutex.Lock()
+	defer w.clientsMutex.Unlock()
+
+	cfg := w.config
+
+	// Unregister client if it exists
+	if oldClient, ok := w.clients[path]; ok {
+		if u, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
+			log.Debugf("unregistering client for removed file: %s", filepath.Base(path))
+			u.UnregisterClient()
+		}
+		delete(w.clients, path)
+		log.Debugf("removed client for %s", filepath.Base(path))
+
+		if w.reloadCallback != nil {
+			log.Debugf("triggering server update callback after removal")
+			w.reloadCallback(w.clients, cfg)
+		}
 	}
 }
