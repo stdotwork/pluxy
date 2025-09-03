@@ -7,6 +7,7 @@ package watcher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -248,11 +249,11 @@ func (w *Watcher) reloadClients() {
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
 			authFileCount++
 			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
-			if client, err := w.createClientFromFile(path, cfg); err == nil {
-				newClients[path] = client
+			if cliClient, errCreateClientFromFile := w.createClientFromFile(path, cfg); errCreateClientFromFile == nil {
+				newClients[path] = cliClient
 				successfulAuthCount++
 			} else {
-				log.Errorf("failed to create client from file %s: %v", path, err)
+				log.Errorf("failed to create client from file %s: %v", path, errCreateClientFromFile)
 			}
 		}
 		return nil
@@ -345,12 +346,11 @@ func (w *Watcher) reloadClients() {
 		openAICompatCount,
 	)
 
-	// Trigger the callback to update the server
+	// Trigger the callback to update the server with file-based + API key clients
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback")
-		// Note: The callback signature expects a map now, but the API server internally works with a slice.
-		// We pass the map directly, and the server will handle converting it.
-		w.reloadCallback(w.clients, cfg)
+		combinedClients := w.buildCombinedClientMap(cfg)
+		w.reloadCallback(combinedClients, cfg)
 	}
 }
 
@@ -449,7 +449,8 @@ func (w *Watcher) addOrUpdateClient(path string) {
 
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback after add/update")
-		w.reloadCallback(w.clients, cfg)
+		combinedClients := w.buildCombinedClientMap(cfg)
+		w.reloadCallback(combinedClients, cfg)
 	}
 }
 
@@ -471,7 +472,59 @@ func (w *Watcher) removeClient(path string) {
 
 		if w.reloadCallback != nil {
 			log.Debugf("triggering server update callback after removal")
-			w.reloadCallback(w.clients, cfg)
+			combinedClients := w.buildCombinedClientMap(cfg)
+			w.reloadCallback(combinedClients, cfg)
 		}
 	}
+}
+
+// buildCombinedClientMap merges file-based clients with API key and compatibility clients.
+// This ensures the callback receives the complete set of active clients.
+func (w *Watcher) buildCombinedClientMap(cfg *config.Config) map[string]interfaces.Client {
+	combined := make(map[string]interfaces.Client)
+
+	// Include file-based clients
+	for k, v := range w.clients {
+		combined[k] = v
+	}
+
+	// Add Generative Language API Key clients
+	if len(cfg.GlAPIKey) > 0 {
+		for i := 0; i < len(cfg.GlAPIKey); i++ {
+			httpClient := util.SetProxy(cfg, &http.Client{})
+			cliClient := client.NewGeminiClient(httpClient, cfg, cfg.GlAPIKey[i])
+			combined[fmt.Sprintf("apikey:gemini:%d", i)] = cliClient
+		}
+	}
+
+	// Add Claude API Key clients
+	if len(cfg.ClaudeKey) > 0 {
+		for i := 0; i < len(cfg.ClaudeKey); i++ {
+			cliClient := client.NewClaudeClientWithKey(cfg, i)
+			combined[fmt.Sprintf("apikey:claude:%d", i)] = cliClient
+		}
+	}
+
+	// Add Codex API Key clients
+	if len(cfg.CodexKey) > 0 {
+		for i := 0; i < len(cfg.CodexKey); i++ {
+			cliClient := client.NewCodexClientWithKey(cfg, i)
+			combined[fmt.Sprintf("apikey:codex:%d", i)] = cliClient
+		}
+	}
+
+	// Add OpenAI compatibility clients
+	if len(cfg.OpenAICompatibility) > 0 {
+		for i := 0; i < len(cfg.OpenAICompatibility); i++ {
+			compat := cfg.OpenAICompatibility[i]
+			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compat)
+			if errClient != nil {
+				log.Errorf("failed to create OpenAI-compatibility client for %s: %v", compat.Name, errClient)
+				continue
+			}
+			combined[fmt.Sprintf("openai-compat:%s:%d", compat.Name, i)] = compatClient
+		}
+	}
+
+	return combined
 }
