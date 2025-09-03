@@ -119,7 +119,16 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 			}
 			template, _ = sjson.SetRaw(template, "choices.0.delta.tool_calls", `[]`)
 			functionCallItemTemplate, _ = sjson.Set(functionCallItemTemplate, "id", itemResult.Get("call_id").String())
-			functionCallItemTemplate, _ = sjson.Set(functionCallItemTemplate, "function.name", itemResult.Get("name").String())
+			{
+				// Restore original tool name if it was shortened
+				name := itemResult.Get("name").String()
+				// Build reverse map on demand from original request tools
+				rev := buildReverseMapFromOriginalOpenAI(originalRequestRawJSON)
+				if orig, ok := rev[name]; ok {
+					name = orig
+				}
+				functionCallItemTemplate, _ = sjson.Set(functionCallItemTemplate, "function.name", name)
+			}
 			functionCallItemTemplate, _ = sjson.Set(functionCallItemTemplate, "function.arguments", itemResult.Get("arguments").String())
 			template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
 			template, _ = sjson.SetRaw(template, "choices.0.delta.tool_calls.-1", functionCallItemTemplate)
@@ -244,7 +253,12 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 					}
 
 					if nameResult := outputItem.Get("name"); nameResult.Exists() {
-						functionCallTemplate, _ = sjson.Set(functionCallTemplate, "function.name", nameResult.String())
+						n := nameResult.String()
+						rev := buildReverseMapFromOriginalOpenAI(originalRequestRawJSON)
+						if orig, ok := rev[n]; ok {
+							n = orig
+						}
+						functionCallTemplate, _ = sjson.Set(functionCallTemplate, "function.name", n)
 					}
 
 					if argsResult := outputItem.Get("arguments"); argsResult.Exists() {
@@ -288,4 +302,35 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 		return template
 	}
 	return ""
+}
+
+// buildReverseMapFromOriginalOpenAI builds a map of shortened tool name -> original tool name
+// from the original OpenAI-style request JSON using the same shortening logic.
+func buildReverseMapFromOriginalOpenAI(original []byte) map[string]string {
+	tools := gjson.GetBytes(original, "tools")
+	rev := map[string]string{}
+	if tools.IsArray() && len(tools.Array()) > 0 {
+		var names []string
+		arr := tools.Array()
+		for i := 0; i < len(arr); i++ {
+			t := arr[i]
+			if t.Get("type").String() != "function" {
+				continue
+			}
+			fn := t.Get("function")
+			if !fn.Exists() {
+				continue
+			}
+			if v := fn.Get("name"); v.Exists() {
+				names = append(names, v.String())
+			}
+		}
+		if len(names) > 0 {
+			m := buildShortNameMap(names)
+			for orig, short := range m {
+				rev[short] = orig
+			}
+		}
+	}
+	return rev
 }

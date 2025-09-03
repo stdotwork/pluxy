@@ -80,7 +80,15 @@ func ConvertCodexResponseToGemini(_ context.Context, modelName string, originalR
 		if itemType == "function_call" {
 			// Create function call part
 			functionCall := `{"functionCall":{"name":"","args":{}}}`
-			functionCall, _ = sjson.Set(functionCall, "functionCall.name", itemResult.Get("name").String())
+			{
+				// Restore original tool name if shortened
+				n := itemResult.Get("name").String()
+				rev := buildReverseMapFromGeminiOriginal(originalRequestRawJSON)
+				if orig, ok := rev[n]; ok {
+					n = orig
+				}
+				functionCall, _ = sjson.Set(functionCall, "functionCall.name", n)
+			}
 
 			// Parse and set arguments
 			argsStr := itemResult.Get("arguments").String()
@@ -250,7 +258,14 @@ func ConvertCodexResponseToGeminiNonStream(_ context.Context, modelName string, 
 						hasToolCall = true
 						functionCall := map[string]interface{}{
 							"functionCall": map[string]interface{}{
-								"name": value.Get("name").String(),
+								"name": func() string {
+									n := value.Get("name").String()
+									rev := buildReverseMapFromGeminiOriginal(originalRequestRawJSON)
+									if orig, ok := rev[n]; ok {
+										return orig
+									}
+									return n
+								}(),
 								"args": map[string]interface{}{},
 							},
 						}
@@ -290,6 +305,35 @@ func ConvertCodexResponseToGeminiNonStream(_ context.Context, modelName string, 
 		return template
 	}
 	return ""
+}
+
+// buildReverseMapFromGeminiOriginal builds a map[short]original from original Gemini request tools.
+func buildReverseMapFromGeminiOriginal(original []byte) map[string]string {
+	tools := gjson.GetBytes(original, "tools")
+	rev := map[string]string{}
+	if !tools.IsArray() {
+		return rev
+	}
+	var names []string
+	tarr := tools.Array()
+	for i := 0; i < len(tarr); i++ {
+		fns := tarr[i].Get("functionDeclarations")
+		if !fns.IsArray() {
+			continue
+		}
+		for _, fn := range fns.Array() {
+			if v := fn.Get("name"); v.Exists() {
+				names = append(names, v.String())
+			}
+		}
+	}
+	if len(names) > 0 {
+		m := buildShortNameMap(names)
+		for orig, short := range m {
+			rev[short] = orig
+		}
+	}
+	return rev
 }
 
 // mustMarshalJSON marshals a value to JSON, panicking on error.

@@ -387,9 +387,9 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 		}
 	}()
 
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -400,6 +400,9 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 
 		resp, err := cliClient.SendRawMessage(cliCtx, modelName, rawJSON, "")
 		if err != nil {
+			errorResponse = err
+			h.LoggingAPIResponseError(cliCtx, err)
+
 			switch err.StatusCode {
 			case 429:
 				if h.Cfg.QuotaExceeded.SwitchProject {
@@ -430,6 +433,12 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 			cliCancel()
 			break
 		}
+	}
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = c.Writer.Write([]byte(errorResponse.Error.Error()))
+		cliCancel(errorResponse.Error)
+		return
 	}
 }
 
@@ -471,10 +480,10 @@ func (h *OpenAIAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON []byt
 		}
 	}()
 
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 outLoop:
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -511,6 +520,9 @@ outLoop:
 			// Handle errors from the backend.
 			case err, okError := <-errChan:
 				if okError {
+					errorResponse = err
+					h.LoggingAPIResponseError(cliCtx, err)
+
 					switch err.StatusCode {
 					case 429:
 						if h.Cfg.QuotaExceeded.SwitchProject {
@@ -534,6 +546,13 @@ outLoop:
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
+	}
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+		flusher.Flush()
+		cliCancel(errorResponse.Error)
+		return
 	}
 }
 
@@ -562,9 +581,9 @@ func (h *OpenAIAPIHandler) handleCompletionsNonStreamingResponse(c *gin.Context,
 		}
 	}()
 
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -576,6 +595,9 @@ func (h *OpenAIAPIHandler) handleCompletionsNonStreamingResponse(c *gin.Context,
 		// Send the converted chat completions request
 		resp, err := cliClient.SendRawMessage(cliCtx, modelName, chatCompletionsJSON, "")
 		if err != nil {
+			errorResponse = err
+			h.LoggingAPIResponseError(cliCtx, err)
+
 			switch err.StatusCode {
 			case 429:
 				if h.Cfg.QuotaExceeded.SwitchProject {
@@ -601,6 +623,13 @@ func (h *OpenAIAPIHandler) handleCompletionsNonStreamingResponse(c *gin.Context,
 			break
 		}
 	}
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = c.Writer.Write([]byte(errorResponse.Error.Error()))
+		cliCancel(errorResponse.Error)
+		return
+	}
+
 }
 
 // handleCompletionsStreamingResponse handles streaming completions responses.
@@ -644,10 +673,10 @@ func (h *OpenAIAPIHandler) handleCompletionsStreamingResponse(c *gin.Context, ra
 		}
 	}()
 
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 outLoop:
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -689,6 +718,9 @@ outLoop:
 			// Handle errors from the backend.
 			case err, okError := <-errChan:
 				if okError {
+					errorResponse = err
+					h.LoggingAPIResponseError(cliCtx, err)
+
 					switch err.StatusCode {
 					case 429:
 						if h.Cfg.QuotaExceeded.SwitchProject {
@@ -712,5 +744,12 @@ outLoop:
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
+	}
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+		flusher.Flush()
+		cliCancel(errorResponse.Error)
+		return
 	}
 }

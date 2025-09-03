@@ -122,7 +122,15 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 			template = `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"","name":"","input":{}}}`
 			template, _ = sjson.Set(template, "index", rootResult.Get("output_index").Int())
 			template, _ = sjson.Set(template, "content_block.id", itemResult.Get("call_id").String())
-			template, _ = sjson.Set(template, "content_block.name", itemResult.Get("name").String())
+			{
+				// Restore original tool name if shortened
+				name := itemResult.Get("name").String()
+				rev := buildReverseMapFromClaudeOriginalShortToOriginal(originalRequestRawJSON)
+				if orig, ok := rev[name]; ok {
+					name = orig
+				}
+				template, _ = sjson.Set(template, "content_block.name", name)
+			}
 
 			output = "event: content_block_start\n"
 			output += fmt.Sprintf("data: %s\n\n", template)
@@ -170,4 +178,28 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 //   - string: A Claude Code-compatible JSON response containing all message content and metadata
 func ConvertCodexResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
 	return ""
+}
+
+// buildReverseMapFromClaudeOriginalShortToOriginal builds a map[short]original from original Claude request tools.
+func buildReverseMapFromClaudeOriginalShortToOriginal(original []byte) map[string]string {
+	tools := gjson.GetBytes(original, "tools")
+	rev := map[string]string{}
+	if !tools.IsArray() {
+		return rev
+	}
+	var names []string
+	arr := tools.Array()
+	for i := 0; i < len(arr); i++ {
+		n := arr[i].Get("name").String()
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	if len(names) > 0 {
+		m := buildShortNameMap(names)
+		for orig, short := range m {
+			rev[short] = orig
+		}
+	}
+	return rev
 }

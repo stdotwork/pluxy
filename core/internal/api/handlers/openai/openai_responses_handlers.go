@@ -115,9 +115,9 @@ func (h *OpenAIResponsesAPIHandler) handleNonStreamingResponse(c *gin.Context, r
 		}
 	}()
 
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -128,6 +128,9 @@ func (h *OpenAIResponsesAPIHandler) handleNonStreamingResponse(c *gin.Context, r
 
 		resp, err := cliClient.SendRawMessage(cliCtx, modelName, rawJSON, "")
 		if err != nil {
+			errorResponse = err
+			h.LoggingAPIResponseError(cliCtx, err)
+
 			switch err.StatusCode {
 			case 429:
 				if h.Cfg.QuotaExceeded.SwitchProject {
@@ -159,6 +162,13 @@ func (h *OpenAIResponsesAPIHandler) handleNonStreamingResponse(c *gin.Context, r
 			break
 		}
 	}
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = c.Writer.Write([]byte(errorResponse.Error.Error()))
+		cliCancel(errorResponse.Error)
+		return
+	}
+
 }
 
 // handleStreamingResponse handles streaming responses for Gemini models.
@@ -199,10 +209,10 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 		}
 	}()
 
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 outLoop:
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -238,6 +248,8 @@ outLoop:
 			// Handle errors from the backend.
 			case err, okError := <-errChan:
 				if okError {
+					errorResponse = err
+					h.LoggingAPIResponseError(cliCtx, err)
 					switch err.StatusCode {
 					case 429:
 						if h.Cfg.QuotaExceeded.SwitchProject {
@@ -261,5 +273,13 @@ outLoop:
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
+	}
+
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+		flusher.Flush()
+		cliCancel(errorResponse.Error)
+		return
 	}
 }

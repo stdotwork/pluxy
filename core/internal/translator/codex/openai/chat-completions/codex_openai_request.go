@@ -9,6 +9,9 @@ package chat_completions
 import (
 	"bytes"
 
+	"strconv"
+	"strings"
+
 	"github.com/luispater/CLIProxyAPI/internal/misc"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -66,6 +69,31 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 
 	// Model
 	out, _ = sjson.Set(out, "model", modelName)
+
+	// Build tool name shortening map from original tools (if any)
+	originalToolNameMap := map[string]string{}
+	{
+		tools := gjson.GetBytes(rawJSON, "tools")
+		if tools.IsArray() && len(tools.Array()) > 0 {
+			// Collect original tool names
+			var names []string
+			arr := tools.Array()
+			for i := 0; i < len(arr); i++ {
+				t := arr[i]
+				if t.Get("type").String() == "function" {
+					fn := t.Get("function")
+					if fn.Exists() {
+						if v := fn.Get("name"); v.Exists() {
+							names = append(names, v.String())
+						}
+					}
+				}
+			}
+			if len(names) > 0 {
+				originalToolNameMap = buildShortNameMap(names)
+			}
+		}
+	}
 
 	// Extract system instructions from first system message (string or text object)
 	messages := gjson.GetBytes(rawJSON, "messages")
@@ -177,7 +205,15 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 								funcCall := `{}`
 								funcCall, _ = sjson.Set(funcCall, "type", "function_call")
 								funcCall, _ = sjson.Set(funcCall, "call_id", tc.Get("id").String())
-								funcCall, _ = sjson.Set(funcCall, "name", tc.Get("function.name").String())
+								{
+									name := tc.Get("function.name").String()
+									if short, ok := originalToolNameMap[name]; ok {
+										name = short
+									} else {
+										name = shortenNameIfNeeded(name)
+									}
+									funcCall, _ = sjson.Set(funcCall, "name", name)
+								}
 								funcCall, _ = sjson.Set(funcCall, "arguments", tc.Get("function.arguments").String())
 								out, _ = sjson.SetRaw(out, "input.-1", funcCall)
 							}
@@ -249,7 +285,13 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 				fn := t.Get("function")
 				if fn.Exists() {
 					if v := fn.Get("name"); v.Exists() {
-						item, _ = sjson.Set(item, "name", v.Value())
+						name := v.String()
+						if short, ok := originalToolNameMap[name]; ok {
+							name = short
+						} else {
+							name = shortenNameIfNeeded(name)
+						}
+						item, _ = sjson.Set(item, "name", name)
 					}
 					if v := fn.Get("description"); v.Exists() {
 						item, _ = sjson.Set(item, "description", v.Value())
@@ -272,4 +314,82 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 
 	out, _ = sjson.Set(out, "store", store)
 	return []byte(out)
+}
+
+// shortenNameIfNeeded applies the simple shortening rule for a single name.
+// If the name length exceeds 64, it will try to preserve the "mcp__" prefix and last segment.
+// Otherwise it truncates to 64 characters.
+func shortenNameIfNeeded(name string) string {
+	const limit = 64
+	if len(name) <= limit {
+		return name
+	}
+	if strings.HasPrefix(name, "mcp__") {
+		// Keep prefix and last segment after '__'
+		idx := strings.LastIndex(name, "__")
+		if idx > 0 {
+			candidate := "mcp__" + name[idx+2:]
+			if len(candidate) > limit {
+				return candidate[:limit]
+			}
+			return candidate
+		}
+	}
+	return name[:limit]
+}
+
+// buildShortNameMap generates unique short names (<=64) for the given list of names.
+// It preserves the "mcp__" prefix with the last segment when possible and ensures uniqueness
+// by appending suffixes like "~1", "~2" if needed.
+func buildShortNameMap(names []string) map[string]string {
+	const limit = 64
+	used := map[string]struct{}{}
+	m := map[string]string{}
+
+	baseCandidate := func(n string) string {
+		if len(n) <= limit {
+			return n
+		}
+		if strings.HasPrefix(n, "mcp__") {
+			idx := strings.LastIndex(n, "__")
+			if idx > 0 {
+				cand := "mcp__" + n[idx+2:]
+				if len(cand) > limit {
+					cand = cand[:limit]
+				}
+				return cand
+			}
+		}
+		return n[:limit]
+	}
+
+	makeUnique := func(cand string) string {
+		if _, ok := used[cand]; !ok {
+			return cand
+		}
+		base := cand
+		for i := 1; ; i++ {
+			suffix := "~" + strconv.Itoa(i)
+			allowed := limit - len(suffix)
+			if allowed < 0 {
+				allowed = 0
+			}
+			tmp := base
+			if len(tmp) > allowed {
+				tmp = tmp[:allowed]
+			}
+			tmp = tmp + suffix
+			if _, ok := used[tmp]; !ok {
+				return tmp
+			}
+		}
+	}
+
+	for _, n := range names {
+		cand := baseCandidate(n)
+		uniq := makeUnique(cand)
+		used[uniq] = struct{}{}
+		m[n] = uniq
+	}
+	return m
 }

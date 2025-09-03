@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 )
 
 // RequestLogger defines the interface for logging HTTP requests and responses.
@@ -34,7 +36,7 @@ type RequestLogger interface {
 	//
 	// Returns:
 	//   - error: An error if logging fails, nil otherwise
-	LogRequest(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response, apiRequest, apiResponse []byte) error
+	LogRequest(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response, apiRequest, apiResponse []byte, apiResponseErrors []*interfaces.ErrorMessage) error
 
 	// LogStreamingRequest initiates logging for a streaming request and returns a writer for chunks.
 	//
@@ -139,7 +141,7 @@ func (l *FileRequestLogger) SetEnabled(enabled bool) {
 //
 // Returns:
 //   - error: An error if logging fails, nil otherwise
-func (l *FileRequestLogger) LogRequest(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response, apiRequest, apiResponse []byte) error {
+func (l *FileRequestLogger) LogRequest(url, method string, requestHeaders map[string][]string, body []byte, statusCode int, responseHeaders map[string][]string, response, apiRequest, apiResponse []byte, apiResponseErrors []*interfaces.ErrorMessage) error {
 	if !l.enabled {
 		return nil
 	}
@@ -161,7 +163,7 @@ func (l *FileRequestLogger) LogRequest(url, method string, requestHeaders map[st
 	}
 
 	// Create log content
-	content := l.formatLogContent(url, method, requestHeaders, body, apiRequest, apiResponse, decompressedResponse, statusCode, responseHeaders)
+	content := l.formatLogContent(url, method, requestHeaders, body, apiRequest, apiResponse, decompressedResponse, statusCode, responseHeaders, apiResponseErrors)
 
 	// Write to file
 	if err = os.WriteFile(filePath, []byte(content), 0644); err != nil {
@@ -310,7 +312,7 @@ func (l *FileRequestLogger) sanitizeForFilename(path string) string {
 //
 // Returns:
 //   - string: The formatted log content
-func (l *FileRequestLogger) formatLogContent(url, method string, headers map[string][]string, body, apiRequest, apiResponse, response []byte, status int, responseHeaders map[string][]string) string {
+func (l *FileRequestLogger) formatLogContent(url, method string, headers map[string][]string, body, apiRequest, apiResponse, response []byte, status int, responseHeaders map[string][]string, apiResponseErrors []*interfaces.ErrorMessage) string {
 	var content strings.Builder
 
 	// Request info
@@ -319,6 +321,13 @@ func (l *FileRequestLogger) formatLogContent(url, method string, headers map[str
 	content.WriteString("=== API REQUEST ===\n")
 	content.Write(apiRequest)
 	content.WriteString("\n\n")
+
+	for i := 0; i < len(apiResponseErrors); i++ {
+		content.WriteString("=== API ERROR RESPONSE ===\n")
+		content.WriteString(fmt.Sprintf("HTTP Status: %d\n", apiResponseErrors[i].StatusCode))
+		content.WriteString(apiResponseErrors[i].Error.Error())
+		content.WriteString("\n\n")
+	}
 
 	content.WriteString("=== API RESPONSE ===\n")
 	content.Write(apiResponse)

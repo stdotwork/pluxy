@@ -139,12 +139,13 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 			}
 		}
 	}()
+
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 	// Main client rotation loop with quota management
 	// This loop implements a sophisticated load balancing and failover mechanism
 outLoop:
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -185,6 +186,8 @@ outLoop:
 			// This manages various error conditions and implements retry logic
 			case errInfo, okError := <-errChan:
 				if okError {
+					errorResponse = errInfo
+					h.LoggingAPIResponseError(cliCtx, errInfo)
 					// Special handling for quota exceeded errors
 					// If configured, attempt to switch to a different project/client
 					switch errInfo.StatusCode {
@@ -220,5 +223,13 @@ outLoop:
 			case <-time.After(500 * time.Millisecond):
 			}
 		}
+	}
+
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+		flusher.Flush()
+		cliCancel(errorResponse.Error)
+		return
 	}
 }

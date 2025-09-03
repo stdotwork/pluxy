@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/luispater/CLIProxyAPI/internal/misc"
@@ -45,6 +46,27 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	out, _ = sjson.SetRaw(out, "instructions", instructions)
 
 	root := gjson.ParseBytes(rawJSON)
+
+	// Pre-compute tool name shortening map from declared functionDeclarations
+	shortMap := map[string]string{}
+	if tools := root.Get("tools"); tools.IsArray() {
+		var names []string
+		tarr := tools.Array()
+		for i := 0; i < len(tarr); i++ {
+			fns := tarr[i].Get("functionDeclarations")
+			if !fns.IsArray() {
+				continue
+			}
+			for _, fn := range fns.Array() {
+				if v := fn.Get("name"); v.Exists() {
+					names = append(names, v.String())
+				}
+			}
+		}
+		if len(names) > 0 {
+			shortMap = buildShortNameMap(names)
+		}
+	}
 
 	// helper for generating paired call IDs in the form: call_<alphanum>
 	// Gemini uses sequential pairing across possibly multiple in-flight
@@ -124,7 +146,13 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 				if fc := p.Get("functionCall"); fc.Exists() {
 					fn := `{"type":"function_call"}`
 					if name := fc.Get("name"); name.Exists() {
-						fn, _ = sjson.Set(fn, "name", name.String())
+						n := name.String()
+						if short, ok := shortMap[n]; ok {
+							n = short
+						} else {
+							n = shortenNameIfNeeded(n)
+						}
+						fn, _ = sjson.Set(fn, "name", n)
 					}
 					if args := fc.Get("args"); args.Exists() {
 						fn, _ = sjson.Set(fn, "arguments", args.Raw)
@@ -185,7 +213,13 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 				tool := `{}`
 				tool, _ = sjson.Set(tool, "type", "function")
 				if v := fn.Get("name"); v.Exists() {
-					tool, _ = sjson.Set(tool, "name", v.String())
+					name := v.String()
+					if short, ok := shortMap[name]; ok {
+						name = short
+					} else {
+						name = shortenNameIfNeeded(name)
+					}
+					tool, _ = sjson.Set(tool, "name", name)
 				}
 				if v := fn.Get("description"); v.Exists() {
 					tool, _ = sjson.Set(tool, "description", v.String())
@@ -226,4 +260,77 @@ func ConvertGeminiRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	}
 
 	return []byte(out)
+}
+
+// shortenNameIfNeeded applies the simple shortening rule for a single name.
+func shortenNameIfNeeded(name string) string {
+	const limit = 64
+	if len(name) <= limit {
+		return name
+	}
+	if strings.HasPrefix(name, "mcp__") {
+		idx := strings.LastIndex(name, "__")
+		if idx > 0 {
+			cand := "mcp__" + name[idx+2:]
+			if len(cand) > limit {
+				return cand[:limit]
+			}
+			return cand
+		}
+	}
+	return name[:limit]
+}
+
+// buildShortNameMap ensures uniqueness of shortened names within a request.
+func buildShortNameMap(names []string) map[string]string {
+	const limit = 64
+	used := map[string]struct{}{}
+	m := map[string]string{}
+
+	baseCandidate := func(n string) string {
+		if len(n) <= limit {
+			return n
+		}
+		if strings.HasPrefix(n, "mcp__") {
+			idx := strings.LastIndex(n, "__")
+			if idx > 0 {
+				cand := "mcp__" + n[idx+2:]
+				if len(cand) > limit {
+					cand = cand[:limit]
+				}
+				return cand
+			}
+		}
+		return n[:limit]
+	}
+
+	makeUnique := func(cand string) string {
+		if _, ok := used[cand]; !ok {
+			return cand
+		}
+		base := cand
+		for i := 1; ; i++ {
+			suffix := "~" + strconv.Itoa(i)
+			allowed := limit - len(suffix)
+			if allowed < 0 {
+				allowed = 0
+			}
+			tmp := base
+			if len(tmp) > allowed {
+				tmp = tmp[:allowed]
+			}
+			tmp = tmp + suffix
+			if _, ok := used[tmp]; !ok {
+				return tmp
+			}
+		}
+	}
+
+	for _, n := range names {
+		cand := baseCandidate(n)
+		uniq := makeUnique(cand)
+		used[uniq] = struct{}{}
+		m[n] = uniq
+	}
+	return m
 }

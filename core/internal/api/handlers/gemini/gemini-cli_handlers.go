@@ -169,10 +169,10 @@ func (h *GeminiCLIAPIHandler) handleInternalStreamGenerateContent(c *gin.Context
 		}
 	}()
 
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 outLoop:
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -208,6 +208,9 @@ outLoop:
 			// Handle errors from the backend.
 			case err, okError := <-errChan:
 				if okError {
+					errorResponse = err
+					h.LoggingAPIResponseError(cliCtx, err)
+
 					switch err.StatusCode {
 					case 429:
 						if h.Cfg.QuotaExceeded.SwitchProject {
@@ -232,6 +235,13 @@ outLoop:
 			}
 		}
 	}
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
+		flusher.Flush()
+		cliCancel(errorResponse.Error)
+		return
+	}
 }
 
 // handleInternalGenerateContent handles non-streaming content generation requests.
@@ -252,9 +262,9 @@ func (h *GeminiCLIAPIHandler) handleInternalGenerateContent(c *gin.Context, rawJ
 		}
 	}()
 
+	var errorResponse *interfaces.ErrorMessage
 	retryCount := 0
 	for retryCount <= h.Cfg.RequestRetry {
-		var errorResponse *interfaces.ErrorMessage
 		cliClient, errorResponse = h.GetClient(modelName)
 		if errorResponse != nil {
 			c.Status(errorResponse.StatusCode)
@@ -265,6 +275,9 @@ func (h *GeminiCLIAPIHandler) handleInternalGenerateContent(c *gin.Context, rawJ
 
 		resp, err := cliClient.SendRawMessage(cliCtx, modelName, rawJSON, "")
 		if err != nil {
+			errorResponse = err
+			h.LoggingAPIResponseError(cliCtx, err)
+
 			switch err.StatusCode {
 			case 429:
 				if h.Cfg.QuotaExceeded.SwitchProject {
@@ -296,4 +309,11 @@ func (h *GeminiCLIAPIHandler) handleInternalGenerateContent(c *gin.Context, rawJ
 			break
 		}
 	}
+	if errorResponse != nil {
+		c.Status(errorResponse.StatusCode)
+		_, _ = c.Writer.Write([]byte(errorResponse.Error.Error()))
+		cliCancel(errorResponse.Error)
+		return
+	}
+
 }

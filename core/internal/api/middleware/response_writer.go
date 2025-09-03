@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/logging"
 )
 
@@ -240,6 +241,16 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 			}
 		}
 
+		var slicesAPIResponseError []*interfaces.ErrorMessage
+		apiResponseError, isExist := c.Get("API_RESPONSE_ERROR")
+		if isExist {
+			var ok bool
+			slicesAPIResponseError, ok = apiResponseError.([]*interfaces.ErrorMessage)
+			if !ok {
+				slicesAPIResponseError = nil
+			}
+		}
+
 		// Log complete non-streaming response
 		return w.logger.LogRequest(
 			w.requestInfo.URL,
@@ -251,6 +262,7 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 			w.body.Bytes(),
 			apiRequestBody,
 			apiResponseBody,
+			slicesAPIResponseError,
 		)
 	}
 
