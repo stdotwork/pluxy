@@ -49,7 +49,7 @@ import (
 //   - configPath: The path to the configuration file for watching changes
 func StartService(cfg *config.Config, configPath string) {
 	// Create a pool of API clients, one for each token file found.
-	cliClients := make([]interfaces.Client, 0)
+	cliClients := make(map[string]interfaces.Client)
 	err := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -88,7 +88,7 @@ func StartService(cfg *config.Config, configPath string) {
 
 					// Add the new client to the pool.
 					cliClient := client.NewGeminiCLIClient(httpClient, &ts, cfg)
-					cliClients = append(cliClients, cliClient)
+					cliClients[path] = cliClient
 				}
 			} else if tokenType == "codex" {
 				var ts codex.CodexTokenStorage
@@ -102,7 +102,7 @@ func StartService(cfg *config.Config, configPath string) {
 						return errGetClient
 					}
 					log.Info("Authentication successful.")
-					cliClients = append(cliClients, codexClient)
+					cliClients[path] = codexClient
 				}
 			} else if tokenType == "claude" {
 				var ts claude.ClaudeTokenStorage
@@ -111,7 +111,7 @@ func StartService(cfg *config.Config, configPath string) {
 					log.Info("Initializing claude authentication for token...")
 					claudeClient := client.NewClaudeClient(cfg, &ts)
 					log.Info("Authentication successful.")
-					cliClients = append(cliClients, claudeClient)
+					cliClients[path] = claudeClient
 				}
 			} else if tokenType == "qwen" {
 				var ts qwen.QwenTokenStorage
@@ -120,7 +120,7 @@ func StartService(cfg *config.Config, configPath string) {
 					log.Info("Initializing qwen authentication for token...")
 					qwenClient := client.NewQwenClient(cfg, &ts)
 					log.Info("Authentication successful.")
-					cliClients = append(cliClients, qwenClient)
+					cliClients[path] = qwenClient
 				}
 			}
 		}
@@ -130,6 +130,8 @@ func StartService(cfg *config.Config, configPath string) {
 		log.Fatalf("Error walking auth directory: %v", err)
 	}
 
+	clientSlice := clientsToSlice(cliClients)
+
 	if len(cfg.GlAPIKey) > 0 {
 		// Initialize clients with Generative Language API Keys if provided in configuration.
 		for i := 0; i < len(cfg.GlAPIKey); i++ {
@@ -137,7 +139,7 @@ func StartService(cfg *config.Config, configPath string) {
 
 			log.Debug("Initializing with Generative Language API Key...")
 			cliClient := client.NewGeminiClient(httpClient, cfg, cfg.GlAPIKey[i])
-			cliClients = append(cliClients, cliClient)
+			clientSlice = append(clientSlice, cliClient)
 		}
 	}
 
@@ -146,7 +148,7 @@ func StartService(cfg *config.Config, configPath string) {
 		for i := 0; i < len(cfg.ClaudeKey); i++ {
 			log.Debug("Initializing with Claude API Key...")
 			cliClient := client.NewClaudeClientWithKey(cfg, i)
-			cliClients = append(cliClients, cliClient)
+			clientSlice = append(clientSlice, cliClient)
 		}
 	}
 
@@ -155,7 +157,7 @@ func StartService(cfg *config.Config, configPath string) {
 		for i := 0; i < len(cfg.CodexKey); i++ {
 			log.Debug("Initializing with Codex API Key...")
 			cliClient := client.NewCodexClientWithKey(cfg, i)
-			cliClients = append(cliClients, cliClient)
+			clientSlice = append(clientSlice, cliClient)
 		}
 	}
 
@@ -167,12 +169,12 @@ func StartService(cfg *config.Config, configPath string) {
 			if errClient != nil {
 				log.Fatalf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
 			}
-			cliClients = append(cliClients, compatClient)
+			clientSlice = append(clientSlice, compatClient)
 		}
 	}
 
 	// Create and start the API server with the pool of clients in a separate goroutine.
-	apiServer := api.NewServer(cfg, cliClients, configPath)
+	apiServer := api.NewServer(cfg, clientSlice, configPath)
 	log.Infof("Starting API server on port %d", cfg.Port)
 
 	// Start the API server in a goroutine so it doesn't block the main thread.
@@ -187,7 +189,7 @@ func StartService(cfg *config.Config, configPath string) {
 	log.Info("API server started successfully")
 
 	// Setup file watcher for config and auth directory changes to enable hot-reloading.
-	fileWatcher, errNewWatcher := watcher.NewWatcher(configPath, cfg.AuthDir, func(newClients []interfaces.Client, newCfg *config.Config) {
+	fileWatcher, errNewWatcher := watcher.NewWatcher(configPath, cfg.AuthDir, func(newClients map[string]interfaces.Client, newCfg *config.Config) {
 		// Update the API server with new clients and configuration when files change.
 		apiServer.UpdateClients(newClients, newCfg)
 	})
@@ -230,8 +232,9 @@ func StartService(cfg *config.Config, configPath string) {
 
 		// Function to check and refresh tokens for all client types before they expire.
 		checkAndRefresh := func() {
-			for i := 0; i < len(cliClients); i++ {
-				if codexCli, ok := cliClients[i].(*client.CodexClient); ok {
+			clientSlice := clientsToSlice(cliClients)
+			for i := 0; i < len(clientSlice); i++ {
+				if codexCli, ok := clientSlice[i].(*client.CodexClient); ok {
 					if ts, isCodexTS := codexCli.TokenStorage().(*claude.ClaudeTokenStorage); isCodexTS {
 						if ts != nil && ts.Expire != "" {
 							if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
@@ -242,7 +245,7 @@ func StartService(cfg *config.Config, configPath string) {
 							}
 						}
 					}
-				} else if claudeCli, isOK := cliClients[i].(*client.ClaudeClient); isOK {
+				} else if claudeCli, isOK := clientSlice[i].(*client.ClaudeClient); isOK {
 					if ts, isCluadeTS := claudeCli.TokenStorage().(*claude.ClaudeTokenStorage); isCluadeTS {
 						if ts != nil && ts.Expire != "" {
 							if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
@@ -253,7 +256,7 @@ func StartService(cfg *config.Config, configPath string) {
 							}
 						}
 					}
-				} else if qwenCli, isQwenOK := cliClients[i].(*client.QwenClient); isQwenOK {
+				} else if qwenCli, isQwenOK := clientSlice[i].(*client.QwenClient); isQwenOK {
 					if ts, isQwenTS := qwenCli.TokenStorage().(*qwen.QwenTokenStorage); isQwenTS {
 						if ts != nil && ts.Expire != "" {
 							if expTime, errParse := time.Parse(time.RFC3339, ts.Expire); errParse == nil {
@@ -305,4 +308,12 @@ func StartService(cfg *config.Config, configPath string) {
 			// Periodic check to keep the loop running.
 		}
 	}
+}
+
+func clientsToSlice(clientMap map[string]interfaces.Client) []interfaces.Client {
+	s := make([]interfaces.Client, 0, len(clientMap))
+	for _, v := range clientMap {
+		s = append(s, v)
+	}
+	return s
 }

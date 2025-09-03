@@ -292,7 +292,7 @@ func (h *GeminiCLIAPIHandler) handleInternalGenerateContent(c *gin.Context, rawJ
 			break
 		} else {
 			_, _ = c.Writer.Write(resp)
-			cliCancel(resp)
+			cliCancel()
 			break
 		}
 	}

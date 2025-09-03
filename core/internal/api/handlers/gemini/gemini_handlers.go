@@ -405,7 +405,7 @@ func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName strin
 			break
 		} else {
 			_, _ = c.Writer.Write(resp)
-			cliCancel(resp)
+			cliCancel()
 			break
 		}
 	}

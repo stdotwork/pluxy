@@ -427,7 +427,7 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 			break
 		} else {
 			_, _ = c.Writer.Write(resp)
-			cliCancel(resp)
+			cliCancel()
 			break
 		}
 	}
@@ -597,7 +597,7 @@ func (h *OpenAIAPIHandler) handleCompletionsNonStreamingResponse(c *gin.Context,
 			// Convert chat completions response back to completions format
 			completionsResp := convertChatCompletionsResponseToCompletions(resp)
 			_, _ = c.Writer.Write(completionsResp)
-			cliCancel(completionsResp)
+			cliCancel()
 			break
 		}
 	}
