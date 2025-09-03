@@ -8,6 +8,7 @@ package gemini
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -248,12 +249,251 @@ func parseArgsToMap(argsStr string) map[string]interface{} {
 	if trimmed == "" || trimmed == "{}" {
 		return map[string]interface{}{}
 	}
+
+	// First try strict JSON
 	var out map[string]interface{}
-	if err := json.Unmarshal([]byte(trimmed), &out); err == nil {
+	if errUnmarshal := json.Unmarshal([]byte(trimmed), &out); errUnmarshal == nil {
 		return out
 	}
+
+	// Tolerant parse: handle streams where values are barewords (e.g., 北京, celsius)
+	tolerant := tolerantParseJSONMap(trimmed)
+	if len(tolerant) > 0 {
+		return tolerant
+	}
+
 	// Fallback: return empty object when parsing fails
 	return map[string]interface{}{}
+}
+
+// tolerantParseJSONMap attempts to parse a JSON-like object string into a map, tolerating
+// bareword values (unquoted strings) commonly seen during streamed tool calls.
+// Example input: {"location": 北京, "unit": celsius}
+func tolerantParseJSONMap(s string) map[string]interface{} {
+	// Ensure we operate within the outermost braces if present
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start == -1 || end == -1 || start >= end {
+		return map[string]interface{}{}
+	}
+	content := s[start+1 : end]
+
+	runes := []rune(content)
+	n := len(runes)
+	i := 0
+	result := make(map[string]interface{})
+
+	for i < n {
+		// Skip whitespace and commas
+		for i < n && (runes[i] == ' ' || runes[i] == '\n' || runes[i] == '\r' || runes[i] == '\t' || runes[i] == ',') {
+			i++
+		}
+		if i >= n {
+			break
+		}
+
+		// Expect quoted key
+		if runes[i] != '"' {
+			// Unable to parse this segment reliably; skip to next comma
+			for i < n && runes[i] != ',' {
+				i++
+			}
+			continue
+		}
+
+		// Parse JSON string for key
+		keyToken, nextIdx := parseJSONStringRunes(runes, i)
+		if nextIdx == -1 {
+			break
+		}
+		keyName := jsonStringTokenToRawString(keyToken)
+		i = nextIdx
+
+		// Skip whitespace
+		for i < n && (runes[i] == ' ' || runes[i] == '\n' || runes[i] == '\r' || runes[i] == '\t') {
+			i++
+		}
+		if i >= n || runes[i] != ':' {
+			break
+		}
+		i++ // skip ':'
+		// Skip whitespace
+		for i < n && (runes[i] == ' ' || runes[i] == '\n' || runes[i] == '\r' || runes[i] == '\t') {
+			i++
+		}
+		if i >= n {
+			break
+		}
+
+		// Parse value (string, number, object/array, bareword)
+		var value interface{}
+		switch runes[i] {
+		case '"':
+			// JSON string
+			valToken, ni := parseJSONStringRunes(runes, i)
+			if ni == -1 {
+				// Malformed; treat as empty string
+				value = ""
+				i = n
+			} else {
+				value = jsonStringTokenToRawString(valToken)
+				i = ni
+			}
+		case '{', '[':
+			// Bracketed value: attempt to capture balanced structure
+			seg, ni := captureBracketed(runes, i)
+			if ni == -1 {
+				i = n
+			} else {
+				var anyVal interface{}
+				if errUnmarshal := json.Unmarshal([]byte(seg), &anyVal); errUnmarshal == nil {
+					value = anyVal
+				} else {
+					value = seg
+				}
+				i = ni
+			}
+		default:
+			// Bare token until next comma or end
+			j := i
+			for j < n && runes[j] != ',' {
+				j++
+			}
+			token := strings.TrimSpace(string(runes[i:j]))
+			// Interpret common JSON atoms and numbers; otherwise treat as string
+			if token == "true" {
+				value = true
+			} else if token == "false" {
+				value = false
+			} else if token == "null" {
+				value = nil
+			} else if numVal, ok := tryParseNumber(token); ok {
+				value = numVal
+			} else {
+				value = token
+			}
+			i = j
+		}
+
+		result[keyName] = value
+
+		// Skip trailing whitespace and optional comma before next pair
+		for i < n && (runes[i] == ' ' || runes[i] == '\n' || runes[i] == '\r' || runes[i] == '\t') {
+			i++
+		}
+		if i < n && runes[i] == ',' {
+			i++
+		}
+	}
+
+	return result
+}
+
+// parseJSONStringRunes returns the JSON string token (including quotes) and the index just after it.
+func parseJSONStringRunes(runes []rune, start int) (string, int) {
+	if start >= len(runes) || runes[start] != '"' {
+		return "", -1
+	}
+	i := start + 1
+	escaped := false
+	for i < len(runes) {
+		r := runes[i]
+		if r == '\\' && !escaped {
+			escaped = true
+			i++
+			continue
+		}
+		if r == '"' && !escaped {
+			return string(runes[start : i+1]), i + 1
+		}
+		escaped = false
+		i++
+	}
+	return string(runes[start:]), -1
+}
+
+// jsonStringTokenToRawString converts a JSON string token (including quotes) to a raw Go string value.
+func jsonStringTokenToRawString(token string) string {
+	var s string
+	if errUnmarshal := json.Unmarshal([]byte(token), &s); errUnmarshal == nil {
+		return s
+	}
+	// Fallback: strip surrounding quotes if present
+	if len(token) >= 2 && token[0] == '"' && token[len(token)-1] == '"' {
+		return token[1 : len(token)-1]
+	}
+	return token
+}
+
+// captureBracketed captures a balanced JSON object/array starting at index i.
+// Returns the segment string and the index just after it; -1 if malformed.
+func captureBracketed(runes []rune, i int) (string, int) {
+	if i >= len(runes) {
+		return "", -1
+	}
+	startRune := runes[i]
+	var endRune rune
+	if startRune == '{' {
+		endRune = '}'
+	} else if startRune == '[' {
+		endRune = ']'
+	} else {
+		return "", -1
+	}
+	depth := 0
+	j := i
+	inStr := false
+	escaped := false
+	for j < len(runes) {
+		r := runes[j]
+		if inStr {
+			if r == '\\' && !escaped {
+				escaped = true
+				j++
+				continue
+			}
+			if r == '"' && !escaped {
+				inStr = false
+			} else {
+				escaped = false
+			}
+			j++
+			continue
+		}
+		if r == '"' {
+			inStr = true
+			j++
+			continue
+		}
+		if r == startRune {
+			depth++
+		} else if r == endRune {
+			depth--
+			if depth == 0 {
+				return string(runes[i : j+1]), j + 1
+			}
+		}
+		j++
+	}
+	return string(runes[i:]), -1
+}
+
+// tryParseNumber attempts to parse a string as an int or float.
+func tryParseNumber(s string) (interface{}, bool) {
+	if s == "" {
+		return nil, false
+	}
+	// Try integer
+	if i64, errParseInt := strconv.ParseInt(s, 10, 64); errParseInt == nil {
+		return i64, true
+	}
+	if u64, errParseUInt := strconv.ParseUint(s, 10, 64); errParseUInt == nil {
+		return u64, true
+	}
+	if f64, errParseFloat := strconv.ParseFloat(s, 64); errParseFloat == nil {
+		return f64, true
+	}
+	return nil, false
 }
 
 // ConvertOpenAIResponseToGeminiNonStream converts a non-streaming OpenAI response to a non-streaming Gemini response.
