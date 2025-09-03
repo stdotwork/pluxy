@@ -155,7 +155,7 @@ func (h *OpenAIResponsesAPIHandler) handleNonStreamingResponse(c *gin.Context, r
 			break
 		} else {
 			_, _ = c.Writer.Write(resp)
-			cliCancel(resp)
+			cliCancel()
 			break
 		}
 	}
