@@ -28,6 +28,23 @@ func ConvertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 
 	root := gjson.ParseBytes(rawJSON)
 
+	if v := root.Get("reasoning.effort"); v.Exists() {
+		out, _ = sjson.Set(out, "thinking.type", "enabled")
+
+		switch v.String() {
+		case "none":
+			out, _ = sjson.Set(out, "thinking.type", "disabled")
+		case "minimal":
+			out, _ = sjson.Set(out, "thinking.budget_tokens", 1024)
+		case "low":
+			out, _ = sjson.Set(out, "thinking.budget_tokens", 4096)
+		case "medium":
+			out, _ = sjson.Set(out, "thinking.budget_tokens", 8192)
+		case "high":
+			out, _ = sjson.Set(out, "thinking.budget_tokens", 24576)
+		}
+	}
+
 	// Helper for generating tool call IDs when missing
 	genToolCallID := func() string {
 		const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

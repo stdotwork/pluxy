@@ -41,6 +41,21 @@ func ConvertOpenAIRequestToClaude(modelName string, inputRawJSON []byte, stream 
 
 	root := gjson.ParseBytes(rawJSON)
 
+	if v := root.Get("reasoning_effort"); v.Exists() {
+		out, _ = sjson.Set(out, "thinking.type", "enabled")
+
+		switch v.String() {
+		case "none":
+			out, _ = sjson.Set(out, "thinking.type", "disabled")
+		case "low":
+			out, _ = sjson.Set(out, "thinking.budget_tokens", 1024)
+		case "medium":
+			out, _ = sjson.Set(out, "thinking.budget_tokens", 8192)
+		case "high":
+			out, _ = sjson.Set(out, "thinking.budget_tokens", 24576)
+		}
+	}
+
 	// Helper for generating tool call IDs in the form: toolu_<alphanum>
 	// This ensures unique identifiers for tool calls in the Claude Code format
 	genToolCallID := func() string {

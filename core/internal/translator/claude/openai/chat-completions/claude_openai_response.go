@@ -128,10 +128,11 @@ func ConvertClaudeResponseToOpenAI(_ context.Context, modelName string, original
 				return []string{}
 			}
 		}
-		return []string{template}
+		return []string{}
 
 	case "content_block_delta":
 		// Handle content delta (text, tool use arguments, or reasoning content)
+		hasContent := false
 		if delta := root.Get("delta"); delta.Exists() {
 			deltaType := delta.Get("type").String()
 
@@ -140,8 +141,14 @@ func ConvertClaudeResponseToOpenAI(_ context.Context, modelName string, original
 				// Text content delta - send incremental text updates
 				if text := delta.Get("text"); text.Exists() {
 					template, _ = sjson.Set(template, "choices.0.delta.content", text.String())
+					hasContent = true
 				}
-
+			case "thinking_delta":
+				// Accumulate reasoning/thinking content
+				if thinking := delta.Get("thinking"); thinking.Exists() {
+					template, _ = sjson.Set(template, "choices.0.delta.reasoning_content", thinking.String())
+					hasContent = true
+				}
 			case "input_json_delta":
 				// Tool use input delta - accumulate arguments for tool calls
 				if partialJSON := delta.Get("partial_json"); partialJSON.Exists() {
@@ -156,7 +163,11 @@ func ConvertClaudeResponseToOpenAI(_ context.Context, modelName string, original
 				return []string{}
 			}
 		}
-		return []string{template}
+		if hasContent {
+			return []string{template}
+		} else {
+			return []string{}
+		}
 
 	case "content_block_stop":
 		// End of content block - output complete tool call if it's a tool_use block

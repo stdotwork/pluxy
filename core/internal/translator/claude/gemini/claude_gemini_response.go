@@ -128,7 +128,7 @@ func ConvertClaudeResponseToGemini(_ context.Context, modelName string, original
 				}
 			case "thinking_delta":
 				// Thinking/reasoning content delta for models with reasoning capabilities
-				if text := delta.Get("text"); text.Exists() && text.String() != "" {
+				if text := delta.Get("thinking"); text.Exists() && text.String() != "" {
 					thinkingPart := `{"thought":true,"text":""}`
 					thinkingPart, _ = sjson.Set(thinkingPart, "text", text.String())
 					template, _ = sjson.SetRaw(template, "candidates.0.content.parts.-1", thinkingPart)
@@ -411,7 +411,7 @@ func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string,
 					}
 				case "thinking_delta":
 					// Process reasoning/thinking content
-					if text := delta.Get("text"); text.Exists() && text.String() != "" {
+					if text := delta.Get("thinking"); text.Exists() && text.String() != "" {
 						partJSON := `{"thought":true,"text":""}`
 						partJSON, _ = sjson.Set(partJSON, "text", text.String())
 						part := gjson.Parse(partJSON).Value().(map[string]interface{})

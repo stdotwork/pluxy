@@ -89,6 +89,17 @@ func ConvertGeminiRequestToClaude(modelName string, inputRawJSON []byte, stream 
 				out, _ = sjson.Set(out, "stop_sequences", stopSequences)
 			}
 		}
+		// Include thoughts configuration for reasoning process visibility
+		if thinkingConfig := genConfig.Get("thinkingConfig"); thinkingConfig.Exists() && thinkingConfig.IsObject() {
+			if includeThoughts := thinkingConfig.Get("include_thoughts"); includeThoughts.Exists() {
+				if includeThoughts.Type == gjson.True {
+					out, _ = sjson.Set(out, "thinking.type", "enabled")
+					if thinkingBudget := thinkingConfig.Get("thinkingBudget"); thinkingBudget.Exists() {
+						out, _ = sjson.Set(out, "thinking.budget_tokens", thinkingBudget.Int())
+					}
+				}
+			}
+		}
 	}
 
 	// System instruction conversion to Claude Code format
