@@ -130,6 +130,20 @@ func GetGeminiCLIModels() []*ModelInfo {
 			OutputTokenLimit:           65536,
 			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
 		},
+		{
+			ID:                         "gemini-2.5-flash-lite",
+			Object:                     "model",
+			Created:                    time.Now().Unix(),
+			OwnedBy:                    "google",
+			Type:                       "gemini",
+			Name:                       "models/gemini-2.5-flash-lite",
+			Version:                    "2.5",
+			DisplayName:                "Gemini 2.5 Flash Lite",
+			Description:                "Our smallest and most cost effective model, built for at scale usage.",
+			InputTokenLimit:            1048576,
+			OutputTokenLimit:           65536,
+			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
+		},
 	}
 }
 
