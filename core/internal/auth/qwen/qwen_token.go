@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 // QwenTokenStorage stores OAuth2 token information for Alibaba Qwen API authentication.
@@ -41,7 +41,7 @@ type QwenTokenStorage struct {
 //   - error: An error if the operation fails, nil otherwise
 func (ts *QwenTokenStorage) SaveTokenToFile(authFilePath string) error {
 	ts.Type = "qwen"
-	if err := os.MkdirAll(path.Dir(authFilePath), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(authFilePath), 0700); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 

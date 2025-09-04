@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -46,7 +46,7 @@ type GeminiTokenStorage struct {
 //   - error: An error if the operation fails, nil otherwise
 func (ts *GeminiTokenStorage) SaveTokenToFile(authFilePath string) error {
 	ts.Type = "gemini"
-	if err := os.MkdirAll(path.Dir(authFilePath), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(authFilePath), 0700); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 

@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 // ClaudeTokenStorage stores OAuth2 token information for Anthropic Claude API authentication.
@@ -49,7 +49,7 @@ func (ts *ClaudeTokenStorage) SaveTokenToFile(authFilePath string) error {
 	ts.Type = "claude"
 
 	// Create directory structure if it doesn't exist
-	if err := os.MkdirAll(path.Dir(authFilePath), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(authFilePath), 0700); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 

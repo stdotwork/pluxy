@@ -8,7 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/luispater/CLIProxyAPI/internal/cmd"
@@ -36,7 +36,7 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 	timestamp := entry.Time.Format("2006-01-02 15:04:05")
 	var newLog string
 	// Customize the log format to include timestamp, level, caller file/line, and message.
-	newLog = fmt.Sprintf("[%s] [%s] [%s:%d] %s\n", timestamp, entry.Level, path.Base(entry.Caller.File), entry.Caller.Line, entry.Message)
+	newLog = fmt.Sprintf("[%s] [%s] [%s:%d] %s\n", timestamp, entry.Level, filepath.Base(entry.Caller.File), entry.Caller.Line, entry.Message)
 
 	b.WriteString(newLog)
 	return b.Bytes(), nil
@@ -96,7 +96,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to get working directory: %v", err)
 		}
-		configFilePath = path.Join(wd, "config.yaml")
+		configFilePath = filepath.Join(wd, "config.yaml")
 		cfg, err = config.LoadConfig(configFilePath)
 	}
 	if err != nil {
@@ -120,7 +120,7 @@ func main() {
 		parts := strings.Split(cfg.AuthDir, string(os.PathSeparator))
 		if len(parts) > 1 {
 			parts[0] = home
-			cfg.AuthDir = path.Join(parts...)
+			cfg.AuthDir = filepath.Join(parts...)
 		} else {
 			// If the path is just "~", set it to the home directory.
 			cfg.AuthDir = home

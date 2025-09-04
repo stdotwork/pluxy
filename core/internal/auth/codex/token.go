@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 // CodexTokenStorage stores OAuth2 token information for OpenAI Codex API authentication.
@@ -43,7 +43,7 @@ type CodexTokenStorage struct {
 //   - error: An error if the operation fails, nil otherwise
 func (ts *CodexTokenStorage) SaveTokenToFile(authFilePath string) error {
 	ts.Type = "codex"
-	if err := os.MkdirAll(path.Dir(authFilePath), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(authFilePath), 0700); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 
