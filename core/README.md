@@ -486,6 +486,31 @@ Run the following command to start the server:
 docker run --rm -p 8317:8317 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest
 ```
 
+## Run with Docker Compose
+
+1.  Create a `config.yaml` from `config.example.yaml` and customize it.
+
+2.  Build and start the services using Docker Compose:
+    ```bash
+    docker compose up -d --build
+    ```
+
+3.  To authenticate with providers, run the login command inside the container:
+    - **Gemini**: `docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser --login`
+    - **OpenAI (Codex)**: `docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser --codex-login`
+    - **Claude**: `docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser --claude-login`
+    - **Qwen**: `docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser --qwen-login`
+
+4.  To view the server logs:
+    ```bash
+    docker compose logs -f
+    ```
+
+5.  To stop the application:
+    ```bash
+    docker compose down
+    ```
+
 ## Management API
 
 see [MANAGEMENT_API.md](MANAGEMENT_API.md)

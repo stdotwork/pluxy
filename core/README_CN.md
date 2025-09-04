@@ -499,6 +499,31 @@ docker run -it -rm -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /pat
 docker run --rm -p 8317:8317 -v /path/to/your/config.yaml:/CLIProxyAPI/config.yaml -v /path/to/your/auth-dir:/root/.cli-proxy-api eceasy/cli-proxy-api:latest
 ```
 
+## 使用 Docker Compose 运行
+
+1.  从 `config.example.yaml` 创建一个 `config.yaml` 文件并进行自定义。
+
+2.  使用 Docker Compose 构建并启动服务：
+    ```bash
+    docker compose up -d --build
+    ```
+
+3.  要在容器内运行登录命令进行身份验证：
+    - **Gemini**: `docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser --login`
+    - **OpenAI (Codex)**: `docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser --codex-login`
+    - **Claude**: `docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser --claude-login`
+    - **Qwen**: `docker compose exec cli-proxy-api /CLIProxyAPI/CLIProxyAPI -no-browser --qwen-login`
+
+4.  查看服务器日志：
+    ```bash
+    docker compose logs -f
+    ```
+
+5.  停止应用程序：
+    ```bash
+    docker compose down
+    ```
+
 ## 管理 API 文档
 
 请参见 [MANAGEMENT_API_CN.md](MANAGEMENT_API_CN.md)
