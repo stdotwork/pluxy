@@ -39,6 +39,8 @@ type Watcher struct {
 	clientsMutex   sync.RWMutex
 	reloadCallback func(map[string]interfaces.Client, *config.Config)
 	watcher        *fsnotify.Watcher
+	eventTimes     map[string]time.Time
+	eventMutex     sync.Mutex
 }
 
 // NewWatcher creates a new file watcher instance
@@ -54,6 +56,7 @@ func NewWatcher(configPath, authDir string, reloadCallback func(map[string]inter
 		reloadCallback: reloadCallback,
 		watcher:        watcher,
 		clients:        make(map[string]interfaces.Client),
+		eventTimes:     make(map[string]time.Time),
 	}, nil
 }
 
@@ -122,6 +125,16 @@ func (w *Watcher) processEvents(ctx context.Context) {
 func (w *Watcher) handleEvent(event fsnotify.Event) {
 	now := time.Now()
 	log.Debugf("file system event detected: %s %s", event.Op.String(), event.Name)
+
+	// Debounce logic to prevent rapid reloads
+	w.eventMutex.Lock()
+	if lastTime, ok := w.eventTimes[event.Name]; ok && now.Sub(lastTime) < 500*time.Millisecond {
+		log.Debugf("debouncing event for %s", event.Name)
+		w.eventMutex.Unlock()
+		return
+	}
+	w.eventTimes[event.Name] = now
+	w.eventMutex.Unlock()
 
 	// Handle config file changes
 	if event.Name == w.configPath && (event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create) {
