@@ -130,51 +130,14 @@ func StartService(cfg *config.Config, configPath string) {
 		log.Fatalf("Error walking auth directory: %v", err)
 	}
 
-	clientSlice := clientsToSlice(cliClients)
+	apiKeyClients := buildAPIKeyClients(cfg)
 
-	if len(cfg.GlAPIKey) > 0 {
-		// Initialize clients with Generative Language API Keys if provided in configuration.
-		for i := 0; i < len(cfg.GlAPIKey); i++ {
-			httpClient := util.SetProxy(cfg, &http.Client{})
-
-			log.Debug("Initializing with Generative Language API Key...")
-			cliClient := client.NewGeminiClient(httpClient, cfg, cfg.GlAPIKey[i])
-			clientSlice = append(clientSlice, cliClient)
-		}
-	}
-
-	if len(cfg.ClaudeKey) > 0 {
-		// Initialize clients with Claude API Keys if provided in configuration.
-		for i := 0; i < len(cfg.ClaudeKey); i++ {
-			log.Debug("Initializing with Claude API Key...")
-			cliClient := client.NewClaudeClientWithKey(cfg, i)
-			clientSlice = append(clientSlice, cliClient)
-		}
-	}
-
-	if len(cfg.CodexKey) > 0 {
-		// Initialize clients with Codex API Keys if provided in configuration.
-		for i := 0; i < len(cfg.CodexKey); i++ {
-			log.Debug("Initializing with Codex API Key...")
-			cliClient := client.NewCodexClientWithKey(cfg, i)
-			clientSlice = append(clientSlice, cliClient)
-		}
-	}
-
-	if len(cfg.OpenAICompatibility) > 0 {
-		// Initialize clients for OpenAI compatibility configurations
-		for _, compatConfig := range cfg.OpenAICompatibility {
-			log.Debugf("Initializing OpenAI compatibility client for provider: %s", compatConfig.Name)
-			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig)
-			if errClient != nil {
-				log.Fatalf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
-			}
-			clientSlice = append(clientSlice, compatClient)
-		}
-	}
+	// Combine file-based and API key-based clients for the initial server setup
+	allClients := clientsToSlice(cliClients)
+	allClients = append(allClients, clientsToSlice(apiKeyClients)...)
 
 	// Create and start the API server with the pool of clients in a separate goroutine.
-	apiServer := api.NewServer(cfg, clientSlice, configPath)
+	apiServer := api.NewServer(cfg, allClients, configPath)
 	log.Infof("Starting API server on port %d", cfg.Port)
 
 	// Start the API server in a goroutine so it doesn't block the main thread.
@@ -200,6 +163,7 @@ func StartService(cfg *config.Config, configPath string) {
 	// Set initial state for the watcher with current configuration and clients.
 	fileWatcher.SetConfig(cfg)
 	fileWatcher.SetClients(cliClients)
+	fileWatcher.SetAPIKeyClients(apiKeyClients)
 
 	// Start the file watcher in a separate context.
 	watcherCtx, watcherCancel := context.WithCancel(context.Background())
@@ -316,4 +280,48 @@ func clientsToSlice(clientMap map[string]interfaces.Client) []interfaces.Client 
 		s = append(s, v)
 	}
 	return s
+}
+
+// buildAPIKeyClients creates clients from API keys in the config
+func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
+	apiKeyClients := make(map[string]interfaces.Client)
+
+	if len(cfg.GlAPIKey) > 0 {
+		for _, key := range cfg.GlAPIKey {
+			httpClient := util.SetProxy(cfg, &http.Client{})
+			log.Debug("Initializing with Generative Language API Key...")
+			cliClient := client.NewGeminiClient(httpClient, cfg, key)
+			apiKeyClients[cliClient.GetClientID()] = cliClient
+		}
+	}
+
+	if len(cfg.ClaudeKey) > 0 {
+		for i := range cfg.ClaudeKey {
+			log.Debug("Initializing with Claude API Key...")
+			cliClient := client.NewClaudeClientWithKey(cfg, i)
+			apiKeyClients[cliClient.GetClientID()] = cliClient
+		}
+	}
+
+	if len(cfg.CodexKey) > 0 {
+		for i := range cfg.CodexKey {
+			log.Debug("Initializing with Codex API Key...")
+			cliClient := client.NewCodexClientWithKey(cfg, i)
+			apiKeyClients[cliClient.GetClientID()] = cliClient
+		}
+	}
+
+	if len(cfg.OpenAICompatibility) > 0 {
+		for _, compatConfig := range cfg.OpenAICompatibility {
+			log.Debugf("Initializing OpenAI compatibility client for provider: %s", compatConfig.Name)
+			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig)
+			if errClient != nil {
+				log.Errorf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
+				continue
+			}
+			apiKeyClients[compatClient.GetClientID()] = compatClient
+		}
+	}
+
+	return apiKeyClients
 }
