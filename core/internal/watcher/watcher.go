@@ -7,11 +7,9 @@ package watcher
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -36,6 +34,7 @@ type Watcher struct {
 	authDir        string
 	config         *config.Config
 	clients        map[string]interfaces.Client
+	apiKeyClients  map[string]interfaces.Client // New field for caching API key clients
 	clientsMutex   sync.RWMutex
 	reloadCallback func(map[string]interfaces.Client, *config.Config)
 	watcher        *fsnotify.Watcher
@@ -56,6 +55,7 @@ func NewWatcher(configPath, authDir string, reloadCallback func(map[string]inter
 		reloadCallback: reloadCallback,
 		watcher:        watcher,
 		clients:        make(map[string]interfaces.Client),
+		apiKeyClients:  make(map[string]interfaces.Client),
 		eventTimes:     make(map[string]time.Time),
 	}, nil
 }
@@ -94,11 +94,18 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 	w.config = cfg
 }
 
-// SetClients updates the current client list
+// SetClients sets the file-based clients.
 func (w *Watcher) SetClients(clients map[string]interfaces.Client) {
 	w.clientsMutex.Lock()
 	defer w.clientsMutex.Unlock()
 	w.clients = clients
+}
+
+// SetAPIKeyClients sets the API key-based clients.
+func (w *Watcher) SetAPIKeyClients(apiKeyClients map[string]interfaces.Client) {
+	w.clientsMutex.Lock()
+	defer w.clientsMutex.Unlock()
+	w.apiKeyClients = apiKeyClients
 }
 
 // processEvents handles file system events
@@ -216,14 +223,14 @@ func (w *Watcher) reloadConfig() {
 	w.reloadClients()
 }
 
-// reloadClients performs a full scan of the auth directory and reloads all clients.
-// This is used for initial startup and for handling config file reloads.
+// reloadClients performs a full scan and reload of all clients.
 func (w *Watcher) reloadClients() {
 	log.Debugf("starting full client reload process")
 
 	w.clientsMutex.RLock()
 	cfg := w.config
-	oldClientCount := len(w.clients)
+	oldFileClientCount := len(w.clients)
+	oldAPIKeyClientCount := len(w.apiKeyClients)
 	w.clientsMutex.RUnlock()
 
 	if cfg == nil {
@@ -231,138 +238,48 @@ func (w *Watcher) reloadClients() {
 		return
 	}
 
-	log.Debugf("scanning auth directory for initial load or full reload: %s", cfg.AuthDir)
-
-	// Create new client map
-	newClients := make(map[string]interfaces.Client)
-	authFileCount := 0
-	successfulAuthCount := 0
-
-	// Handle tilde expansion for auth directory
-	if strings.HasPrefix(cfg.AuthDir, "~") {
-		home, errUserHomeDir := os.UserHomeDir()
-		if errUserHomeDir != nil {
-			log.Fatalf("failed to get home directory: %v", errUserHomeDir)
-		}
-		parts := strings.Split(cfg.AuthDir, string(os.PathSeparator))
-		if len(parts) > 1 {
-			parts[0] = home
-			cfg.AuthDir = path.Join(parts...)
-		} else {
-			cfg.AuthDir = home
+	// Unregister all old API key clients before creating new ones
+	log.Debugf("unregistering %d old API key clients", oldAPIKeyClientCount)
+	for _, oldClient := range w.apiKeyClients {
+		if u, ok := oldClient.(interface{ UnregisterClient() }); ok {
+			u.UnregisterClient()
 		}
 	}
 
-	// Load clients from auth directory
-	errWalk := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			log.Debugf("error accessing path %s: %v", path, err)
-			return err
-		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
-			authFileCount++
-			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
-			if cliClient, errCreateClientFromFile := w.createClientFromFile(path, cfg); errCreateClientFromFile == nil {
-				newClients[path] = cliClient
-				successfulAuthCount++
-			} else {
-				log.Errorf("failed to create client from file %s: %v", path, errCreateClientFromFile)
-			}
-		}
-		return nil
-	})
-	if errWalk != nil {
-		log.Errorf("error walking auth directory: %v", errWalk)
-		return
-	}
-	log.Debugf("auth directory scan complete - found %d .json files, %d successful authentications", authFileCount, successfulAuthCount)
+	// Create new API key clients based on the new config
+	newAPIKeyClients := buildAPIKeyClients(cfg)
+	log.Debugf("created %d new API key clients", len(newAPIKeyClients))
 
-	// Note: API key-based clients are not stored in the map as they don't correspond to a file.
-	// They are re-created each time, which is lightweight.
-	clientSlice := w.clientsToSlice(newClients)
+	// Load file-based clients
+	newFileClients, successfulAuthCount := w.loadFileClients(cfg)
+	log.Debugf("loaded %d new file-based clients", len(newFileClients))
 
-	// Add clients for Generative Language API keys if configured
-	glAPIKeyCount := 0
-	if len(cfg.GlAPIKey) > 0 {
-		log.Debugf("processing %d Generative Language API Keys", len(cfg.GlAPIKey))
-		for i := 0; i < len(cfg.GlAPIKey); i++ {
-			httpClient := util.SetProxy(cfg, &http.Client{})
-			log.Debugf("Initializing with Generative Language API Key %d...", i+1)
-			cliClient := client.NewGeminiClient(httpClient, cfg, cfg.GlAPIKey[i])
-			clientSlice = append(clientSlice, cliClient)
-			glAPIKeyCount++
-		}
-		log.Debugf("Successfully initialized %d Generative Language API Key clients", glAPIKeyCount)
-	}
-	// ... (Claude, Codex, OpenAI-compat clients are handled similarly) ...
-	claudeAPIKeyCount := 0
-	if len(cfg.ClaudeKey) > 0 {
-		log.Debugf("processing %d Claude API Keys", len(cfg.ClaudeKey))
-		for i := 0; i < len(cfg.ClaudeKey); i++ {
-			log.Debugf("Initializing with Claude API Key %d...", i+1)
-			cliClient := client.NewClaudeClientWithKey(cfg, i)
-			clientSlice = append(clientSlice, cliClient)
-			claudeAPIKeyCount++
-		}
-		log.Debugf("Successfully initialized %d Claude API Key clients", claudeAPIKeyCount)
-	}
-
-	codexAPIKeyCount := 0
-	if len(cfg.CodexKey) > 0 {
-		log.Debugf("processing %d Codex API Keys", len(cfg.CodexKey))
-		for i := 0; i < len(cfg.CodexKey); i++ {
-			log.Debugf("Initializing with Codex API Key %d...", i+1)
-			cliClient := client.NewCodexClientWithKey(cfg, i)
-			clientSlice = append(clientSlice, cliClient)
-			codexAPIKeyCount++
-		}
-		log.Debugf("Successfully initialized %d Codex API Key clients", codexAPIKeyCount)
-	}
-
-	openAICompatCount := 0
-	if len(cfg.OpenAICompatibility) > 0 {
-		log.Debugf("processing %d OpenAI-compatibility providers", len(cfg.OpenAICompatibility))
-		for i := 0; i < len(cfg.OpenAICompatibility); i++ {
-			compat := cfg.OpenAICompatibility[i]
-			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compat)
-			if errClient != nil {
-				log.Errorf("  failed to create OpenAI-compatibility client for %s: %v", compat.Name, errClient)
-				continue
-			}
-			clientSlice = append(clientSlice, compatClient)
-			openAICompatCount++
-		}
-		log.Debugf("Successfully initialized %d OpenAI-compatibility clients", openAICompatCount)
-	}
-
-	// Unregister all old clients
-	w.clientsMutex.RLock()
+	// Unregister all old file-based clients
+	log.Debugf("unregistering %d old file-based clients", oldFileClientCount)
 	for _, oldClient := range w.clients {
 		if u, ok := any(oldClient).(interface{ UnregisterClient() }); ok {
 			u.UnregisterClient()
 		}
 	}
-	w.clientsMutex.RUnlock()
 
-	// Update the client map
+	// Update client maps
 	w.clientsMutex.Lock()
-	w.clients = newClients
+	w.clients = newFileClients
+	w.apiKeyClients = newAPIKeyClients
 	w.clientsMutex.Unlock()
 
-	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
-		oldClientCount,
-		len(clientSlice),
+	totalNewClients := len(newFileClients) + len(newAPIKeyClients)
+	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d API keys)",
+		oldFileClientCount+oldAPIKeyClientCount,
+		totalNewClients,
 		successfulAuthCount,
-		glAPIKeyCount,
-		claudeAPIKeyCount,
-		codexAPIKeyCount,
-		openAICompatCount,
+		len(newAPIKeyClients),
 	)
 
-	// Trigger the callback to update the server with file-based + API key clients
+	// Trigger the callback to update the server
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback")
-		combinedClients := w.buildCombinedClientMap(cfg)
+		combinedClients := w.buildCombinedClientMap()
 		w.reloadCallback(combinedClients, cfg)
 	}
 }
@@ -430,11 +347,11 @@ func (w *Watcher) clientsToSlice(clientMap map[string]interfaces.Client) []inter
 // addOrUpdateClient handles the addition or update of a single client.
 func (w *Watcher) addOrUpdateClient(path string) {
 	w.clientsMutex.Lock()
-	defer w.clientsMutex.Unlock()
 
 	cfg := w.config
 	if cfg == nil {
 		log.Error("config is nil, cannot add or update client")
+		w.clientsMutex.Unlock()
 		return
 	}
 
@@ -457,12 +374,15 @@ func (w *Watcher) addOrUpdateClient(path string) {
 	} else {
 		// This case handles the empty file scenario gracefully
 		log.Debugf("ignoring empty auth file: %s", filepath.Base(path))
+		w.clientsMutex.Unlock()
 		return // Do not trigger callback for an empty file
 	}
 
+	w.clientsMutex.Unlock() // Release the lock before the callback
+
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback after add/update")
-		combinedClients := w.buildCombinedClientMap(cfg)
+		combinedClients := w.buildCombinedClientMap()
 		w.reloadCallback(combinedClients, cfg)
 	}
 }
@@ -470,9 +390,9 @@ func (w *Watcher) addOrUpdateClient(path string) {
 // removeClient handles the removal of a single client.
 func (w *Watcher) removeClient(path string) {
 	w.clientsMutex.Lock()
-	defer w.clientsMutex.Unlock()
 
 	cfg := w.config
+	var clientRemoved bool
 
 	// Unregister client if it exists
 	if oldClient, ok := w.clients[path]; ok {
@@ -482,62 +402,111 @@ func (w *Watcher) removeClient(path string) {
 		}
 		delete(w.clients, path)
 		log.Debugf("removed client for %s", filepath.Base(path))
+		clientRemoved = true
+	}
 
-		if w.reloadCallback != nil {
-			log.Debugf("triggering server update callback after removal")
-			combinedClients := w.buildCombinedClientMap(cfg)
-			w.reloadCallback(combinedClients, cfg)
-		}
+	w.clientsMutex.Unlock() // Release the lock before the callback
+
+	if clientRemoved && w.reloadCallback != nil {
+		log.Debugf("triggering server update callback after removal")
+		combinedClients := w.buildCombinedClientMap()
+		w.reloadCallback(combinedClients, cfg)
 	}
 }
 
-// buildCombinedClientMap merges file-based clients with API key and compatibility clients.
-// This ensures the callback receives the complete set of active clients.
-func (w *Watcher) buildCombinedClientMap(cfg *config.Config) map[string]interfaces.Client {
+// buildCombinedClientMap merges file-based clients with API key clients from the cache.
+func (w *Watcher) buildCombinedClientMap() map[string]interfaces.Client {
+	w.clientsMutex.RLock()
+	defer w.clientsMutex.RUnlock()
+
 	combined := make(map[string]interfaces.Client)
 
-	// Include file-based clients
+	// Add file-based clients
 	for k, v := range w.clients {
 		combined[k] = v
 	}
 
-	// Add Generative Language API Key clients
-	if len(cfg.GlAPIKey) > 0 {
-		for i := 0; i < len(cfg.GlAPIKey); i++ {
-			httpClient := util.SetProxy(cfg, &http.Client{})
-			cliClient := client.NewGeminiClient(httpClient, cfg, cfg.GlAPIKey[i])
-			combined[fmt.Sprintf("apikey:gemini:%d", i)] = cliClient
-		}
-	}
-
-	// Add Claude API Key clients
-	if len(cfg.ClaudeKey) > 0 {
-		for i := 0; i < len(cfg.ClaudeKey); i++ {
-			cliClient := client.NewClaudeClientWithKey(cfg, i)
-			combined[fmt.Sprintf("apikey:claude:%d", i)] = cliClient
-		}
-	}
-
-	// Add Codex API Key clients
-	if len(cfg.CodexKey) > 0 {
-		for i := 0; i < len(cfg.CodexKey); i++ {
-			cliClient := client.NewCodexClientWithKey(cfg, i)
-			combined[fmt.Sprintf("apikey:codex:%d", i)] = cliClient
-		}
-	}
-
-	// Add OpenAI compatibility clients
-	if len(cfg.OpenAICompatibility) > 0 {
-		for i := 0; i < len(cfg.OpenAICompatibility); i++ {
-			compat := cfg.OpenAICompatibility[i]
-			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compat)
-			if errClient != nil {
-				log.Errorf("failed to create OpenAI-compatibility client for %s: %v", compat.Name, errClient)
-				continue
-			}
-			combined[fmt.Sprintf("openai-compat:%s:%d", compat.Name, i)] = compatClient
-		}
+	// Add cached API key-based clients
+	for k, v := range w.apiKeyClients {
+		combined[k] = v
 	}
 
 	return combined
+}
+
+// loadFileClients scans the auth directory and creates clients from .json files.
+func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Client, int) {
+	newClients := make(map[string]interfaces.Client)
+	authFileCount := 0
+	successfulAuthCount := 0
+
+	authDir := cfg.AuthDir
+	if strings.HasPrefix(authDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Errorf("failed to get home directory: %v", err)
+			return newClients, 0
+		}
+		authDir = filepath.Join(home, authDir[1:])
+	}
+
+	errWalk := filepath.Walk(authDir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			log.Debugf("error accessing path %s: %v", path, err)
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
+			authFileCount++
+			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
+			if cliClient, errCreate := w.createClientFromFile(path, cfg); errCreate == nil && cliClient != nil {
+				newClients[path] = cliClient
+				successfulAuthCount++
+			} else if errCreate != nil {
+				log.Errorf("failed to create client from file %s: %v", path, errCreate)
+			}
+		}
+		return nil
+	})
+
+	if errWalk != nil {
+		log.Errorf("error walking auth directory: %v", errWalk)
+	}
+	log.Debugf("auth directory scan complete - found %d .json files, %d successful authentications", authFileCount, successfulAuthCount)
+	return newClients, successfulAuthCount
+}
+
+// buildAPIKeyClients creates clients from API keys in the config.
+func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
+	apiKeyClients := make(map[string]interfaces.Client)
+
+	if len(cfg.GlAPIKey) > 0 {
+		for _, key := range cfg.GlAPIKey {
+			httpClient := util.SetProxy(cfg, &http.Client{})
+			cliClient := client.NewGeminiClient(httpClient, cfg, key)
+			apiKeyClients[cliClient.GetClientID()] = cliClient
+		}
+	}
+	if len(cfg.ClaudeKey) > 0 {
+		for i := range cfg.ClaudeKey {
+			cliClient := client.NewClaudeClientWithKey(cfg, i)
+			apiKeyClients[cliClient.GetClientID()] = cliClient
+		}
+	}
+	if len(cfg.CodexKey) > 0 {
+		for i := range cfg.CodexKey {
+			cliClient := client.NewCodexClientWithKey(cfg, i)
+			apiKeyClients[cliClient.GetClientID()] = cliClient
+		}
+	}
+	if len(cfg.OpenAICompatibility) > 0 {
+		for _, compatConfig := range cfg.OpenAICompatibility {
+			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig)
+			if errClient != nil {
+				log.Errorf("failed to create OpenAI-compatibility client for %s: %v", compatConfig.Name, errClient)
+				continue
+			}
+			apiKeyClients[compatClient.GetClientID()] = compatClient
+		}
+	}
+	return apiKeyClients
 }
