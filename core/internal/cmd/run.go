@@ -50,6 +50,7 @@ import (
 func StartService(cfg *config.Config, configPath string) {
 	// Create a pool of API clients, one for each token file found.
 	cliClients := make(map[string]interfaces.Client)
+	successfulAuthCount := 0
 	err := filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -89,6 +90,7 @@ func StartService(cfg *config.Config, configPath string) {
 					// Add the new client to the pool.
 					cliClient := client.NewGeminiCLIClient(httpClient, &ts, cfg)
 					cliClients[path] = cliClient
+					successfulAuthCount++
 				}
 			} else if tokenType == "codex" {
 				var ts codex.CodexTokenStorage
@@ -103,6 +105,7 @@ func StartService(cfg *config.Config, configPath string) {
 					}
 					log.Info("Authentication successful.")
 					cliClients[path] = codexClient
+					successfulAuthCount++
 				}
 			} else if tokenType == "claude" {
 				var ts claude.ClaudeTokenStorage
@@ -112,6 +115,7 @@ func StartService(cfg *config.Config, configPath string) {
 					claudeClient := client.NewClaudeClient(cfg, &ts)
 					log.Info("Authentication successful.")
 					cliClients[path] = claudeClient
+					successfulAuthCount++
 				}
 			} else if tokenType == "qwen" {
 				var ts qwen.QwenTokenStorage
@@ -121,6 +125,7 @@ func StartService(cfg *config.Config, configPath string) {
 					qwenClient := client.NewQwenClient(cfg, &ts)
 					log.Info("Authentication successful.")
 					cliClients[path] = qwenClient
+					successfulAuthCount++
 				}
 			}
 		}
@@ -130,7 +135,17 @@ func StartService(cfg *config.Config, configPath string) {
 		log.Fatalf("Error walking auth directory: %v", err)
 	}
 
-	apiKeyClients := buildAPIKeyClients(cfg)
+	apiKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := buildAPIKeyClients(cfg)
+
+	totalNewClients := len(cliClients) + len(apiKeyClients)
+	log.Infof("full client load complete - %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
+		totalNewClients,
+		successfulAuthCount,
+		glAPIKeyCount,
+		claudeAPIKeyCount,
+		codexAPIKeyCount,
+		openAICompatCount,
+	)
 
 	// Combine file-based and API key-based clients for the initial server setup
 	allClients := clientsToSlice(cliClients)
@@ -283,8 +298,12 @@ func clientsToSlice(clientMap map[string]interfaces.Client) []interfaces.Client 
 }
 
 // buildAPIKeyClients creates clients from API keys in the config
-func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
+func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, int, int, int) {
 	apiKeyClients := make(map[string]interfaces.Client)
+	glAPIKeyCount := 0
+	claudeAPIKeyCount := 0
+	codexAPIKeyCount := 0
+	openAICompatCount := 0
 
 	if len(cfg.GlAPIKey) > 0 {
 		for _, key := range cfg.GlAPIKey {
@@ -292,6 +311,7 @@ func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
 			log.Debug("Initializing with Generative Language API Key...")
 			cliClient := client.NewGeminiClient(httpClient, cfg, key)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
+			glAPIKeyCount++
 		}
 	}
 
@@ -300,6 +320,7 @@ func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
 			log.Debug("Initializing with Claude API Key...")
 			cliClient := client.NewClaudeClientWithKey(cfg, i)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
+			claudeAPIKeyCount++
 		}
 	}
 
@@ -308,6 +329,7 @@ func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
 			log.Debug("Initializing with Codex API Key...")
 			cliClient := client.NewCodexClientWithKey(cfg, i)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
+			codexAPIKeyCount++
 		}
 	}
 
@@ -320,8 +342,9 @@ func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
 				continue
 			}
 			apiKeyClients[compatClient.GetClientID()] = compatClient
+			openAICompatCount++
 		}
 	}
 
-	return apiKeyClients
+	return apiKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
 }
