@@ -6,6 +6,8 @@ package watcher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -38,8 +40,7 @@ type Watcher struct {
 	clientsMutex   sync.RWMutex
 	reloadCallback func(map[string]interfaces.Client, *config.Config)
 	watcher        *fsnotify.Watcher
-	eventTimes     map[string]time.Time
-	eventMutex     sync.Mutex
+	lastAuthHashes map[string]string
 }
 
 // NewWatcher creates a new file watcher instance
@@ -56,7 +57,7 @@ func NewWatcher(configPath, authDir string, reloadCallback func(map[string]inter
 		watcher:        watcher,
 		clients:        make(map[string]interfaces.Client),
 		apiKeyClients:  make(map[string]interfaces.Client),
-		eventTimes:     make(map[string]time.Time),
+		lastAuthHashes: make(map[string]string),
 	}, nil
 }
 
@@ -132,16 +133,6 @@ func (w *Watcher) processEvents(ctx context.Context) {
 func (w *Watcher) handleEvent(event fsnotify.Event) {
 	now := time.Now()
 	log.Debugf("file system event detected: %s %s", event.Op.String(), event.Name)
-
-	// Debounce logic to prevent rapid reloads
-	w.eventMutex.Lock()
-	if lastTime, ok := w.eventTimes[event.Name]; ok && now.Sub(lastTime) < 500*time.Millisecond {
-		log.Debugf("debouncing event for %s", event.Name)
-		w.eventMutex.Unlock()
-		return
-	}
-	w.eventTimes[event.Name] = now
-	w.eventMutex.Unlock()
 
 	// Handle config file changes
 	if event.Name == w.configPath && (event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create) {
@@ -266,6 +257,15 @@ func (w *Watcher) reloadClients() {
 	w.clientsMutex.Lock()
 	w.clients = newFileClients
 	w.apiKeyClients = newAPIKeyClients
+
+	// Rebuild auth file hash cache for current clients
+	w.lastAuthHashes = make(map[string]string, len(newFileClients))
+	for path := range newFileClients {
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+			sum := sha256.Sum256(data)
+			w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
+		}
+	}
 	w.clientsMutex.Unlock()
 
 	totalNewClients := len(newFileClients) + len(newAPIKeyClients)
@@ -355,7 +355,30 @@ func (w *Watcher) addOrUpdateClient(path string) {
 		return
 	}
 
-	// Unregister old client if it exists
+	// Read file to check for emptiness and calculate hash
+	data, errRead := os.ReadFile(path)
+	if errRead != nil {
+		log.Errorf("failed to read auth file %s: %v", filepath.Base(path), errRead)
+		w.clientsMutex.Unlock()
+		return
+	}
+	if len(data) == 0 {
+		// Empty file: ignore (wait for a subsequent WRITE)
+		log.Debugf("ignoring empty auth file: %s", filepath.Base(path))
+		w.clientsMutex.Unlock()
+		return
+	}
+
+	// Calculate a hash of the current content and compare with the cache
+	sum := sha256.Sum256(data)
+	curHash := hex.EncodeToString(sum[:])
+	if prev, ok := w.lastAuthHashes[path]; ok && prev == curHash {
+		log.Debugf("auth file unchanged (hash match), skipping reload: %s", filepath.Base(path))
+		w.clientsMutex.Unlock()
+		return
+	}
+
+	// If an old client exists, unregister it first
 	if oldClient, ok := w.clients[path]; ok {
 		if u, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
 			log.Debugf("unregistering old client for updated file: %s", filepath.Base(path))
@@ -363,22 +386,28 @@ func (w *Watcher) addOrUpdateClient(path string) {
 		}
 	}
 
+	// Create new client (reads the file again internally; this is acceptable as the files are small and it keeps the change minimal)
 	newClient, err := w.createClientFromFile(path, cfg)
 	if err != nil {
 		log.Errorf("failed to create/update client for %s: %v", filepath.Base(path), err)
-		// If creation fails, ensure the old client is removed from the map
+		// If creation fails, ensure the old client is removed from the map; don't update hash, let a subsequent change retry
 		delete(w.clients, path)
-	} else if newClient != nil { // Only update if a client was actually created
-		log.Debugf("successfully created/updated client for %s", filepath.Base(path))
-		w.clients[path] = newClient
-	} else {
-		// This case handles the empty file scenario gracefully
-		log.Debugf("ignoring empty auth file: %s", filepath.Base(path))
 		w.clientsMutex.Unlock()
-		return // Do not trigger callback for an empty file
+		return
+	}
+	if newClient == nil {
+		// This branch should not be reached normally (empty files are handled above); a fallback
+		log.Debugf("ignoring auth file with no client created: %s", filepath.Base(path))
+		w.clientsMutex.Unlock()
+		return
 	}
 
-	w.clientsMutex.Unlock() // Release the lock before the callback
+	// Update client and hash cache
+	log.Debugf("successfully created/updated client for %s", filepath.Base(path))
+	w.clients[path] = newClient
+	w.lastAuthHashes[path] = curHash
+
+	w.clientsMutex.Unlock() // Unlock before the callback
 
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback after add/update")
@@ -401,6 +430,7 @@ func (w *Watcher) removeClient(path string) {
 			u.UnregisterClient()
 		}
 		delete(w.clients, path)
+		delete(w.lastAuthHashes, path)
 		log.Debugf("removed client for %s", filepath.Base(path))
 		clientRemoved = true
 	}
