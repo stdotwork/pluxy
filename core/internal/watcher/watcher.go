@@ -238,7 +238,7 @@ func (w *Watcher) reloadClients() {
 	}
 
 	// Create new API key clients based on the new config
-	newAPIKeyClients := buildAPIKeyClients(cfg)
+	newAPIKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := buildAPIKeyClients(cfg)
 	log.Debugf("created %d new API key clients", len(newAPIKeyClients))
 
 	// Load file-based clients
@@ -269,11 +269,15 @@ func (w *Watcher) reloadClients() {
 	w.clientsMutex.Unlock()
 
 	totalNewClients := len(newFileClients) + len(newAPIKeyClients)
-	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d API keys)",
+
+	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
 		oldFileClientCount+oldAPIKeyClientCount,
 		totalNewClients,
 		successfulAuthCount,
-		len(newAPIKeyClients),
+		glAPIKeyCount,
+		claudeAPIKeyCount,
+		codexAPIKeyCount,
+		openAICompatCount,
 	)
 
 	// Trigger the callback to update the server
@@ -506,26 +510,33 @@ func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Cli
 }
 
 // buildAPIKeyClients creates clients from API keys in the config.
-func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
+func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, int, int, int) {
 	apiKeyClients := make(map[string]interfaces.Client)
+	glAPIKeyCount := 0
+	claudeAPIKeyCount := 0
+	codexAPIKeyCount := 0
+	openAICompatCount := 0
 
 	if len(cfg.GlAPIKey) > 0 {
 		for _, key := range cfg.GlAPIKey {
 			httpClient := util.SetProxy(cfg, &http.Client{})
 			cliClient := client.NewGeminiClient(httpClient, cfg, key)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
+			glAPIKeyCount++
 		}
 	}
 	if len(cfg.ClaudeKey) > 0 {
 		for i := range cfg.ClaudeKey {
 			cliClient := client.NewClaudeClientWithKey(cfg, i)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
+			claudeAPIKeyCount++
 		}
 	}
 	if len(cfg.CodexKey) > 0 {
 		for i := range cfg.CodexKey {
 			cliClient := client.NewCodexClientWithKey(cfg, i)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
+			codexAPIKeyCount++
 		}
 	}
 	if len(cfg.OpenAICompatibility) > 0 {
@@ -536,7 +547,8 @@ func buildAPIKeyClients(cfg *config.Config) map[string]interfaces.Client {
 				continue
 			}
 			apiKeyClients[compatClient.GetClientID()] = compatClient
+			openAICompatCount++
 		}
 	}
-	return apiKeyClients
+	return apiKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
 }
