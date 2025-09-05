@@ -18,6 +18,7 @@ import (
 	managementHandlers "github.com/luispater/CLIProxyAPI/internal/api/handlers/management"
 	"github.com/luispater/CLIProxyAPI/internal/api/handlers/openai"
 	"github.com/luispater/CLIProxyAPI/internal/api/middleware"
+	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/logging"
@@ -315,7 +316,47 @@ func (s *Server) UpdateClients(clients map[string]interfaces.Client, cfg *config
 	if s.mgmt != nil {
 		s.mgmt.SetConfig(cfg)
 	}
-	log.Infof("server clients and configuration updated: %d clients", len(clientSlice))
+
+	// Count client types for detailed logging
+	authFiles := 0
+	glAPIKeyCount := 0
+	claudeAPIKeyCount := 0
+	codexAPIKeyCount := 0
+	openAICompatCount := 0
+
+	for _, c := range clientSlice {
+		switch cl := c.(type) {
+		case *client.GeminiCLIClient:
+			authFiles++
+		case *client.CodexClient:
+			if cl.GetAPIKey() == "" {
+				authFiles++
+			} else {
+				codexAPIKeyCount++
+			}
+		case *client.ClaudeClient:
+			if cl.GetAPIKey() == "" {
+				authFiles++
+			} else {
+				claudeAPIKeyCount++
+			}
+		case *client.QwenClient:
+			authFiles++
+		case *client.GeminiClient:
+			glAPIKeyCount++
+		case *client.OpenAICompatibilityClient:
+			openAICompatCount++
+		}
+	}
+
+	log.Infof("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
+		len(clientSlice),
+		authFiles,
+		glAPIKeyCount,
+		claudeAPIKeyCount,
+		codexAPIKeyCount,
+		openAICompatCount,
+	)
 }
 
 // (management handlers moved to internal/api/handlers/management)
