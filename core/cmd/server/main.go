@@ -17,7 +17,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var Version = "dev"
+var (
+	Version   = "dev"
+	Commit    = "none"
+	BuildDate = "unknown"
+)
 
 // LogFormatter defines a custom log format for logrus.
 // This formatter adds timestamp, log level, and source location information
@@ -60,7 +64,7 @@ func init() {
 // It parses command-line flags, loads configuration, and starts the appropriate
 // service based on the provided flags (login, codex-login, or server mode).
 func main() {
-	log.Infof("CLIProxyAPI Version: %v", Version)
+	log.Infof("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s", Version, Commit, BuildDate)
 
 	// Command-line flags to control the application's behavior.
 	var login bool
