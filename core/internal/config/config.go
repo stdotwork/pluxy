@@ -15,46 +15,46 @@ import (
 // Config represents the application's configuration, loaded from a YAML file.
 type Config struct {
 	// Port is the network port on which the API server will listen.
-	Port int `yaml:"port"`
+	Port int `yaml:"port" json:"-"`
 
 	// AuthDir is the directory where authentication token files are stored.
-	AuthDir string `yaml:"auth-dir"`
+	AuthDir string `yaml:"auth-dir" json:"-"`
 
 	// Debug enables or disables debug-level logging and other debug features.
-	Debug bool `yaml:"debug"`
+	Debug bool `yaml:"debug" json:"debug"`
 
 	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
-	ProxyURL string `yaml:"proxy-url"`
+	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
 
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
-	APIKeys []string `yaml:"api-keys"`
+	APIKeys []string `yaml:"api-keys" json:"api-keys"`
 
 	// QuotaExceeded defines the behavior when a quota is exceeded.
-	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded"`
+	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 
 	// GlAPIKey is the API key for the generative language API.
-	GlAPIKey []string `yaml:"generative-language-api-key"`
+	GlAPIKey []string `yaml:"generative-language-api-key" json:"generative-language-api-key"`
 
 	// RequestLog enables or disables detailed request logging functionality.
-	RequestLog bool `yaml:"request-log"`
+	RequestLog bool `yaml:"request-log" json:"request-log"`
 
 	// RequestRetry defines the retry times when the request failed.
-	RequestRetry int `yaml:"request-retry"`
+	RequestRetry int `yaml:"request-retry" json:"request-retry"`
 
 	// ClaudeKey defines a list of Claude API key configurations as specified in the YAML configuration file.
-	ClaudeKey []ClaudeKey `yaml:"claude-api-key"`
+	ClaudeKey []ClaudeKey `yaml:"claude-api-key" json:"claude-api-key"`
 
 	// Codex defines a list of Codex API key configurations as specified in the YAML configuration file.
-	CodexKey []CodexKey `yaml:"codex-api-key"`
+	CodexKey []CodexKey `yaml:"codex-api-key" json:"codex-api-key"`
 
 	// OpenAICompatibility defines OpenAI API compatibility configurations for external providers.
-	OpenAICompatibility []OpenAICompatibility `yaml:"openai-compatibility"`
+	OpenAICompatibility []OpenAICompatibility `yaml:"openai-compatibility" json:"openai-compatibility"`
 
 	// AllowLocalhostUnauthenticated allows unauthenticated requests from localhost.
-	AllowLocalhostUnauthenticated bool `yaml:"allow-localhost-unauthenticated"`
+	AllowLocalhostUnauthenticated bool `yaml:"allow-localhost-unauthenticated" json:"allow-localhost-unauthenticated"`
 
 	// RemoteManagement nests management-related options under 'remote-management'.
-	RemoteManagement RemoteManagement `yaml:"remote-management"`
+	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
 }
 
 // RemoteManagement holds management API configuration under 'remote-management'.
@@ -69,58 +69,58 @@ type RemoteManagement struct {
 // It provides configuration options for automatic failover mechanisms.
 type QuotaExceeded struct {
 	// SwitchProject indicates whether to automatically switch to another project when a quota is exceeded.
-	SwitchProject bool `yaml:"switch-project"`
+	SwitchProject bool `yaml:"switch-project" json:"switch-project"`
 
 	// SwitchPreviewModel indicates whether to automatically switch to a preview model when a quota is exceeded.
-	SwitchPreviewModel bool `yaml:"switch-preview-model"`
+	SwitchPreviewModel bool `yaml:"switch-preview-model" json:"switch-preview-model"`
 }
 
 // ClaudeKey represents the configuration for a Claude API key,
 // including the API key itself and an optional base URL for the API endpoint.
 type ClaudeKey struct {
 	// APIKey is the authentication key for accessing Claude API services.
-	APIKey string `yaml:"api-key"`
+	APIKey string `yaml:"api-key" json:"api-key"`
 
 	// BaseURL is the base URL for the Claude API endpoint.
 	// If empty, the default Claude API URL will be used.
-	BaseURL string `yaml:"base-url"`
+	BaseURL string `yaml:"base-url" json:"base-url"`
 }
 
 // CodexKey represents the configuration for a Codex API key,
 // including the API key itself and an optional base URL for the API endpoint.
 type CodexKey struct {
 	// APIKey is the authentication key for accessing Codex API services.
-	APIKey string `yaml:"api-key"`
+	APIKey string `yaml:"api-key" json:"api-key"`
 
 	// BaseURL is the base URL for the Codex API endpoint.
 	// If empty, the default Codex API URL will be used.
-	BaseURL string `yaml:"base-url"`
+	BaseURL string `yaml:"base-url" json:"base-url"`
 }
 
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
 // with external providers, allowing model aliases to be routed through OpenAI API format.
 type OpenAICompatibility struct {
 	// Name is the identifier for this OpenAI compatibility configuration.
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 
 	// BaseURL is the base URL for the external OpenAI-compatible API endpoint.
-	BaseURL string `yaml:"base-url"`
+	BaseURL string `yaml:"base-url" json:"base-url"`
 
 	// APIKeys are the authentication keys for accessing the external API services.
-	APIKeys []string `yaml:"api-keys"`
+	APIKeys []string `yaml:"api-keys" json:"api-keys"`
 
 	// Models defines the model configurations including aliases for routing.
-	Models []OpenAICompatibilityModel `yaml:"models"`
+	Models []OpenAICompatibilityModel `yaml:"models" json:"models"`
 }
 
 // OpenAICompatibilityModel represents a model configuration for OpenAI compatibility,
 // including the actual model name and its alias for API routing.
 type OpenAICompatibilityModel struct {
 	// Name is the actual model name used by the external provider.
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 
 	// Alias is the model name alias that clients will use to reference this model.
-	Alias string `yaml:"alias"`
+	Alias string `yaml:"alias" json:"alias"`
 }
 
 // LoadConfig reads a YAML configuration file from the given path,

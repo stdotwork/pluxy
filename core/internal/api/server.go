@@ -150,6 +150,8 @@ func (s *Server) setupRoutes() {
 		mgmt := s.engine.Group("/v0/management")
 		mgmt.Use(s.mgmt.Middleware())
 		{
+			mgmt.GET("/config", s.mgmt.GetConfig)
+
 			mgmt.GET("/debug", s.mgmt.GetDebug)
 			mgmt.PUT("/debug", s.mgmt.PutDebug)
 			mgmt.PATCH("/debug", s.mgmt.PutDebug)

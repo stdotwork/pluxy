@@ -4,6 +4,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func (h *Handler) GetConfig(c *gin.Context) {
+	c.JSON(200, h.cfg)
+}
+
 // Debug
 func (h *Handler) GetDebug(c *gin.Context) { c.JSON(200, gin.H{"debug": h.cfg.Debug}) }
 func (h *Handler) PutDebug(c *gin.Context) { h.updateBoolField(c, func(v bool) { h.cfg.Debug = v }) }

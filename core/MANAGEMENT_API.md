@@ -28,6 +28,17 @@ If a plaintext key is detected in the config at startup, it will be bcrypt‑has
 
 ## Endpoints
 
+### Config
+- GET `/config` — Get the full config
+    - Request:
+      ```bash
+      curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/config
+      ```
+    - Response:
+      ```json
+      {"debug":true,"proxy-url":"","api-keys":["1...5","JS...W"],"quota-exceeded":{"switch-project":true,"switch-preview-model":true},"generative-language-api-key":["AI...01", "AI...02", "AI...03"],"request-log":true,"request-retry":3,"claude-api-key":[{"api-key":"cr...56","base-url":"https://example.com/api"},{"api-key":"cr...e3","base-url":"http://example.com:3000/api"},{"api-key":"sk-...q2","base-url":"https://example.com"}],"codex-api-key":[{"api-key":"sk...01","base-url":"https://example/v1"}],"openai-compatibility":[{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":["sk...01"],"models":[{"name":"moonshotai/kimi-k2:free","alias":"kimi-k2"}]},{"name":"iflow","base-url":"https://apis.iflow.cn/v1","api-keys":["sk...7e"],"models":[{"name":"deepseek-v3.1","alias":"deepseek-v3.1"},{"name":"glm-4.5","alias":"glm-4.5"},{"name":"kimi-k2","alias":"kimi-k2"}]}],"allow-localhost-unauthenticated":true}
+      ```
+
 ### Debug
 - GET `/debug` — Get the current debug state
   - Request:
