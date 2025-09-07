@@ -22,6 +22,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	"github.com/luispater/CLIProxyAPI/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/internal/logging"
+	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -305,11 +306,7 @@ func (s *Server) UpdateClients(clients map[string]interfaces.Client, cfg *config
 
 	// Update log level dynamically when debug flag changes
 	if s.cfg.Debug != cfg.Debug {
-		if cfg.Debug {
-			log.SetLevel(log.DebugLevel)
-		} else {
-			log.SetLevel(log.InfoLevel)
-		}
+		util.SetLogLevel(cfg)
 		log.Debugf("debug mode updated from %t to %t", s.cfg.Debug, cfg.Debug)
 	}
 

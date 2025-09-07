@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 // List auth files
@@ -27,7 +28,16 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 			continue
 		}
 		if info, errInfo := e.Info(); errInfo == nil {
-			files = append(files, gin.H{"name": name, "size": info.Size(), "modtime": info.ModTime()})
+			fileData := gin.H{"name": name, "size": info.Size(), "modtime": info.ModTime()}
+
+			// Read file to get type field
+			full := filepath.Join(h.cfg.AuthDir, name)
+			if data, errRead := os.ReadFile(full); errRead == nil {
+				typeValue := gjson.GetBytes(data, "type").String()
+				fileData["type"] = typeValue
+			}
+
+			files = append(files, fileData)
 		}
 	}
 	c.JSON(200, gin.H{"files": files})

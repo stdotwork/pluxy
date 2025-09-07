@@ -14,6 +14,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/cmd"
 	"github.com/luispater/CLIProxyAPI/internal/config"
 	_ "github.com/luispater/CLIProxyAPI/internal/translator"
+	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -112,11 +113,7 @@ func main() {
 	}
 
 	// Set the log level based on the configuration.
-	if cfg.Debug {
-		log.SetLevel(log.DebugLevel)
-	} else {
-		log.SetLevel(log.InfoLevel)
-	}
+	util.SetLogLevel(cfg)
 
 	// Expand the tilde (~) in the auth directory path to the user's home directory.
 	if strings.HasPrefix(cfg.AuthDir, "~") {

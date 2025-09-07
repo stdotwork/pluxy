@@ -466,7 +466,7 @@ Manage JSON token files under `auth-dir`: list, download, upload, delete.
     ```
   - Response:
     ```json
-    { "files": [ { "name": "acc1.json", "size": 1234, "modtime": "2025-08-30T12:34:56Z" } ] }
+    { "files": [ { "name": "acc1.json", "size": 1234, "modtime": "2025-08-30T12:34:56Z", "type": "google" } ] }
     ```
 
 - GET `/auth-files/download?name=<file.json>` — Download a single file
