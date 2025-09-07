@@ -8,34 +8,51 @@
 # Exit immediately if a command exits with a non-zero status.
 set -euo pipefail
 
-# --- Step 1: Get Version Information ---
-# Get the latest git tag or commit hash as the version string.
-VERSION="$(git describe --tags --always --dirty)"
+# --- Step 1: Choose Environment ---
+echo "Please select an option:"
+echo "1) Run using Pre-built Image (Recommended)"
+echo "2) Build from Source and Run (For Developers)"
+read -r -p "Enter choice [1-2]: " choice
 
-# Get the short commit hash.
-COMMIT="$(git rev-parse --short HEAD)"
+# --- Step 2: Execute based on choice ---
+case "$choice" in
+  1)
+    echo "--- Running with Pre-built Image ---"
+    docker compose up -d --remove-orphans --no-build
+    echo "Services are starting from remote image."
+    echo "Run 'docker compose logs -f' to see the logs."
+    ;;
+  2)
+    echo "--- Building from Source and Running ---"
 
-# Get the current UTC date and time in ISO 8601 format.
-BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # Get Version Information
+    VERSION="$(git describe --tags --always --dirty)"
+    COMMIT="$(git rev-parse --short HEAD)"
+    BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-echo "--- Building with the following info ---"
-echo "Version: ${VERSION}"
-echo "Commit: ${COMMIT}"
-echo "Build Date: ${BUILD_DATE}"
-echo "----------------------------------------"
+    echo "Building with the following info:"
+    echo "  Version: ${VERSION}"
+    echo "  Commit: ${COMMIT}"
+    echo "  Build Date: ${BUILD_DATE}"
+    echo "----------------------------------------"
 
-# --- Step 2: Build the Docker Image ---
-# Pass the version information as build arguments to 'docker compose build'.
-# These arguments are then used by the Dockerfile to inject them into the Go binary.
-docker compose build \
-  --build-arg VERSION="${VERSION}" \
-  --build-arg COMMIT="${COMMIT}" \
-  --build-arg BUILD_DATE="${BUILD_DATE}"
+    # Build and start the services with a local-only image tag
+    export CLI_PROXY_IMAGE="cli-proxy-api:local"
+    
+    echo "Building the Docker image..."
+    docker compose build \
+      --build-arg VERSION="${VERSION}" \
+      --build-arg COMMIT="${COMMIT}" \
+      --build-arg BUILD_DATE="${BUILD_DATE}"
 
-# --- Step 3: Start the Services ---
-# Start the services in detached mode using the newly built image.
-# '--remove-orphans' cleans up any containers for services that are no longer defined.
-docker compose up -d --remove-orphans
+    echo "Starting the services..."
+    docker compose up -d --remove-orphans --pull never
 
-echo "Build complete. Services are starting."
-echo "Run 'docker compose logs -f' to see the logs."
+    echo "Build complete. Services are starting."
+    echo "Run 'docker compose logs -f' to see the logs."
+    ;;
+  *)
+    echo "Invalid choice. Please enter 1 or 2."
+    exit 1
+    ;;
+esac
