@@ -514,6 +514,56 @@
     { "status": "ok", "deleted": 3 }
     ```
 
+### 登录/授权 URL
+
+以下端点用于发起各提供商的登录流程，并返回需要在浏览器中打开的 URL。流程完成后，令牌会保存到 `auths/` 目录。
+
+- GET `/anthropic-auth-url` — 开始 Anthropic（Claude）登录
+  - 请求：
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      http://localhost:8317/v0/management/anthropic-auth-url
+    ```
+  - 响应：
+    ```json
+    { "status": "ok", "url": "https://..." }
+    ```
+
+- GET `/codex-auth-url` — 开始 Codex 登录
+  - 请求：
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      http://localhost:8317/v0/management/codex-auth-url
+    ```
+  - 响应：
+    ```json
+    { "status": "ok", "url": "https://..." }
+    ```
+
+- GET `/gemini-cli-auth-url` — 开始 Google（Gemini CLI）登录
+  - 查询参数：
+    - `project_id`（可选）：Google Cloud 项目 ID。
+  - 请求：
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      'http://localhost:8317/v0/management/gemini-cli-auth-url?project_id=<PROJECT_ID>'
+    ```
+  - 响应：
+    ```json
+    { "status": "ok", "url": "https://..." }
+    ```
+
+- GET `/qwen-auth-url` — 开始 Qwen 登录（设备授权流程）
+  - 请求：
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      http://localhost:8317/v0/management/qwen-auth-url
+    ```
+  - 响应：
+    ```json
+    { "status": "ok", "url": "https://..." }
+    ```
+
 ## 错误响应
 
 通用错误格式：
@@ -527,4 +577,3 @@
 
 - 变更会写回 YAML 配置文件，并由文件监控器热重载配置与客户端。
 - `allow-remote-management` 与 `remote-management-key` 不能通过 API 修改，需在配置文件中设置。
-

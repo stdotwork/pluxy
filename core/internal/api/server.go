@@ -211,6 +211,12 @@ func (s *Server) setupRoutes() {
 			mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
 			mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
 			mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
+
+			mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
+			mgmt.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
+			mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
+			mgmt.GET("/qwen-auth-url", s.mgmt.RequestQwenToken)
+
 		}
 	}
 }

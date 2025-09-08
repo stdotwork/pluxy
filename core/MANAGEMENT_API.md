@@ -514,6 +514,56 @@ Manage JSON token files under `auth-dir`: list, download, upload, delete.
     { "status": "ok", "deleted": 3 }
     ```
 
+### Login/OAuth URLs
+
+These endpoints initiate provider login flows and return a URL to open in a browser. Tokens are saved under `auths/` once the flow completes.
+
+- GET `/anthropic-auth-url` — Start Anthropic (Claude) login
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      http://localhost:8317/v0/management/anthropic-auth-url
+    ```
+  - Response:
+    ```json
+    { "status": "ok", "url": "https://..." }
+    ```
+
+- GET `/codex-auth-url` — Start Codex login
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      http://localhost:8317/v0/management/codex-auth-url
+    ```
+  - Response:
+    ```json
+    { "status": "ok", "url": "https://..." }
+    ```
+
+- GET `/gemini-cli-auth-url` — Start Google (Gemini CLI) login
+  - Query params:
+    - `project_id` (optional): Google Cloud project ID.
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      'http://localhost:8317/v0/management/gemini-cli-auth-url?project_id=<PROJECT_ID>'
+    ```
+  - Response:
+    ```json
+    { "status": "ok", "url": "https://..." }
+    ```
+
+- GET `/qwen-auth-url` — Start Qwen login (device flow)
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      http://localhost:8317/v0/management/qwen-auth-url
+    ```
+  - Response:
+    ```json
+    { "status": "ok", "url": "https://..." }
+    ```
+
 ## Error Responses
 
 Generic error format:
@@ -527,4 +577,3 @@ Generic error format:
 
 - Changes are written back to the YAML config file and hot‑reloaded by the file watcher and clients.
 - `allow-remote-management` and `remote-management-key` cannot be changed via the API; configure them in the config file.
-

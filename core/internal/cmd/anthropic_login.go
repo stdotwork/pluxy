@@ -15,6 +15,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/browser"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/misc"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 )
@@ -44,7 +45,7 @@ func DoClaudeLogin(cfg *config.Config, options *LoginOptions) {
 	}
 
 	// Generate random state parameter
-	state, err := generateRandomState()
+	state, err := misc.GenerateRandomState()
 	if err != nil {
 		log.Fatalf("Failed to generate state parameter: %v", err)
 		return

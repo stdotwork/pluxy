@@ -5,8 +5,6 @@ package cmd
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,6 +15,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/browser"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/misc"
 	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 )
@@ -52,7 +51,7 @@ func DoCodexLogin(cfg *config.Config, options *LoginOptions) {
 	}
 
 	// Generate random state parameter
-	state, err := generateRandomState()
+	state, err := misc.GenerateRandomState()
 	if err != nil {
 		log.Fatalf("Failed to generate state parameter: %v", err)
 		return
@@ -176,18 +175,4 @@ func DoCodexLogin(cfg *config.Config, options *LoginOptions) {
 	}
 
 	log.Info("You can now use Codex services through this CLI")
-}
-
-// generateRandomState generates a cryptographically secure random state parameter
-// for OAuth2 flows to prevent CSRF attacks.
-//
-// Returns:
-//   - string: A hexadecimal encoded random state string
-//   - error: An error if the random generation fails, nil otherwise
-func generateRandomState() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate random bytes: %w", err)
-	}
-	return hex.EncodeToString(bytes), nil
 }
