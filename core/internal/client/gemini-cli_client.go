@@ -417,6 +417,7 @@ func (c *GeminiCLIClient) SendRawTokenCount(ctx context.Context, modelName strin
 				if newModelName != "" {
 					log.Debugf("Model %s is quota exceeded. Switch to preview model %s", modelName, newModelName)
 					rawJSON, _ = sjson.SetBytes(rawJSON, "model", newModelName)
+					modelName = newModelName
 					continue
 				}
 			}
