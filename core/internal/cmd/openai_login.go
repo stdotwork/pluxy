@@ -17,6 +17,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/internal/browser"
 	"github.com/luispater/CLIProxyAPI/internal/client"
 	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/internal/util"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -94,11 +95,13 @@ func DoCodexLogin(cfg *config.Config, options *LoginOptions) {
 		// Check if browser is available
 		if !browser.IsAvailable() {
 			log.Warn("No browser available on this system")
+			util.PrintSSHTunnelInstructions(1455)
 			log.Infof("Please manually open this URL in your browser:\n\n%s\n", authURL)
 		} else {
 			if err = browser.OpenURL(authURL); err != nil {
 				authErr := codex.NewAuthenticationError(codex.ErrBrowserOpenFailed, err)
 				log.Warn(codex.GetUserFriendlyMessage(authErr))
+				util.PrintSSHTunnelInstructions(1455)
 				log.Infof("Please manually open this URL in your browser:\n\n%s\n", authURL)
 
 				// Log platform info for debugging
@@ -109,6 +112,7 @@ func DoCodexLogin(cfg *config.Config, options *LoginOptions) {
 			}
 		}
 	} else {
+		util.PrintSSHTunnelInstructions(1455)
 		log.Infof("Please open this URL in your browser:\n\n%s\n", authURL)
 	}
 
