@@ -335,14 +335,16 @@ func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, 
 
 	if len(cfg.OpenAICompatibility) > 0 {
 		for _, compatConfig := range cfg.OpenAICompatibility {
-			log.Debugf("Initializing OpenAI compatibility client for provider: %s", compatConfig.Name)
-			compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig)
-			if errClient != nil {
-				log.Errorf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
-				continue
+			for i := 0; i < len(compatConfig.APIKeys); i++ {
+				log.Debugf("Initializing OpenAI compatibility client for provider: %s", compatConfig.Name)
+				compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig, i)
+				if errClient != nil {
+					log.Errorf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
+					continue
+				}
+				apiKeyClients[compatClient.GetClientID()] = compatClient
+				openAICompatCount++
 			}
-			apiKeyClients[compatClient.GetClientID()] = compatClient
-			openAICompatCount++
 		}
 	}
 

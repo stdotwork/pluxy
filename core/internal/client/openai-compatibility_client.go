@@ -44,7 +44,7 @@ type OpenAICompatibilityClient struct {
 // Returns:
 //   - *OpenAICompatibilityClient: A new OpenAI compatibility client instance.
 //   - error: An error if the client creation fails.
-func NewOpenAICompatibilityClient(cfg *config.Config, compatConfig *config.OpenAICompatibility) (*OpenAICompatibilityClient, error) {
+func NewOpenAICompatibilityClient(cfg *config.Config, compatConfig *config.OpenAICompatibility, apiKeyIndex int) (*OpenAICompatibilityClient, error) {
 	if compatConfig == nil {
 		return nil, fmt.Errorf("compatibility configuration is required")
 	}
@@ -53,10 +53,14 @@ func NewOpenAICompatibilityClient(cfg *config.Config, compatConfig *config.OpenA
 		return nil, fmt.Errorf("at least one API key is required for OpenAI compatibility provider: %s", compatConfig.Name)
 	}
 
+	if len(compatConfig.APIKeys) <= apiKeyIndex {
+		return nil, fmt.Errorf("invalid API key index for OpenAI compatibility provider: %s", compatConfig.Name)
+	}
+
 	httpClient := util.SetProxy(cfg, &http.Client{})
 
 	// Generate unique client ID
-	clientID := fmt.Sprintf("openai-compatibility-%s-%d", compatConfig.Name, time.Now().UnixNano())
+	clientID := fmt.Sprintf("openai-compatibility-%s-%d-%d", compatConfig.Name, apiKeyIndex, time.Now().UnixNano())
 
 	client := &OpenAICompatibilityClient{
 		ClientBase: ClientBase{
@@ -66,7 +70,7 @@ func NewOpenAICompatibilityClient(cfg *config.Config, compatConfig *config.OpenA
 			modelQuotaExceeded: make(map[string]*time.Time),
 		},
 		compatConfig:       compatConfig,
-		currentAPIKeyIndex: 0,
+		currentAPIKeyIndex: apiKeyIndex,
 	}
 
 	// Initialize model registry
@@ -134,8 +138,6 @@ func (c *OpenAICompatibilityClient) GetCurrentAPIKey() string {
 	}
 
 	key := c.compatConfig.APIKeys[c.currentAPIKeyIndex]
-	// Rotate to next key for load balancing
-	c.currentAPIKeyIndex = (c.currentAPIKeyIndex + 1) % len(c.compatConfig.APIKeys)
 	return key
 }
 

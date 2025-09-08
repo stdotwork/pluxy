@@ -3,3 +3,4 @@ docs/*
 logs/*
 auths/*
 !auths/.gitkeep
+AGENTS.md
