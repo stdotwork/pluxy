@@ -41,6 +41,7 @@ type Watcher struct {
 	reloadCallback func(map[string]interfaces.Client, *config.Config)
 	watcher        *fsnotify.Watcher
 	lastAuthHashes map[string]string
+	lastConfigHash string
 }
 
 // NewWatcher creates a new file watcher instance
@@ -136,9 +137,33 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 
 	// Handle config file changes
 	if event.Name == w.configPath && (event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create) {
-		log.Infof("config file changed, reloading: %s", w.configPath)
 		log.Debugf("config file change details - operation: %s, timestamp: %s", event.Op.String(), now.Format("2006-01-02 15:04:05.000"))
-		w.reloadConfig()
+		data, err := os.ReadFile(w.configPath)
+		if err != nil {
+			log.Errorf("failed to read config file for hash check: %v", err)
+			return
+		}
+		if len(data) == 0 {
+			log.Debugf("ignoring empty config file write event")
+			return
+		}
+		sum := sha256.Sum256(data)
+		newHash := hex.EncodeToString(sum[:])
+
+		w.clientsMutex.RLock()
+		currentHash := w.lastConfigHash
+		w.clientsMutex.RUnlock()
+
+		if currentHash != "" && currentHash == newHash {
+			log.Debugf("config file content unchanged (hash match), skipping reload")
+			return
+		}
+		log.Infof("config file changed, reloading: %s", w.configPath)
+		if w.reloadConfig() {
+			w.clientsMutex.Lock()
+			w.lastConfigHash = newHash
+			w.clientsMutex.Unlock()
+		}
 		return
 	}
 
@@ -154,13 +179,13 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 }
 
 // reloadConfig reloads the configuration and triggers a full reload
-func (w *Watcher) reloadConfig() {
+func (w *Watcher) reloadConfig() bool {
 	log.Debugf("starting config reload from: %s", w.configPath)
 
 	newConfig, errLoadConfig := config.LoadConfig(w.configPath)
 	if errLoadConfig != nil {
 		log.Errorf("failed to reload config: %v", errLoadConfig)
-		return
+		return false
 	}
 
 	w.clientsMutex.Lock()
@@ -220,6 +245,7 @@ func (w *Watcher) reloadConfig() {
 	log.Infof("config successfully reloaded, triggering client reload")
 	// Reload clients with new config
 	w.reloadClients()
+	return true
 }
 
 // reloadClients performs a full scan and reload of all clients.
