@@ -259,9 +259,6 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 				out, _ = sjson.Set(out, "text.verbosity", v.Value())
 			}
 		}
-
-		// The examples include store: true when response_format is provided
-		store = true
 	} else if text.Exists() {
 		// If only text.verbosity present (no response_format), map verbosity
 		if v := text.Get("verbosity"); v.Exists() {
@@ -305,10 +302,6 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 				}
 				out, _ = sjson.SetRaw(out, "tools.-1", item)
 			}
-		}
-		// The examples include store: true when tools and formatting are used; be conservative
-		if rf.Exists() {
-			store = true
 		}
 	}
 
