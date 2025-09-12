@@ -98,20 +98,18 @@ type FileRequestLogger struct {
 //
 // Parameters:
 //   - enabled: Whether request logging should be enabled
-//   - logsDir: The directory where log files should be stored
+//   - logsDir: The directory where log files should be stored (can be relative)
+//   - configDir: The directory of the configuration file; when logsDir is
+//     relative, it will be resolved relative to this directory
 //
 // Returns:
 //   - *FileRequestLogger: A new file-based request logger instance
-func NewFileRequestLogger(enabled bool, logsDir string) *FileRequestLogger {
-	// Resolve logsDir relative to the executable directory when it's not absolute.
+func NewFileRequestLogger(enabled bool, logsDir string, configDir string) *FileRequestLogger {
+	// Resolve logsDir relative to the configuration file directory when it's not absolute.
 	if !filepath.IsAbs(logsDir) {
-		if exePath, err := os.Executable(); err == nil {
-			// Resolve symlinks to get the real executable path
-			if realExe, errEvalSymlinks := filepath.EvalSymlinks(exePath); errEvalSymlinks == nil {
-				exePath = realExe
-			}
-			execDir := filepath.Dir(exePath)
-			logsDir = filepath.Join(execDir, logsDir)
+		// If configDir is provided, resolve logsDir relative to it.
+		if configDir != "" {
+			logsDir = filepath.Join(configDir, logsDir)
 		}
 	}
 	return &FileRequestLogger{

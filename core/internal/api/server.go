@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -75,7 +76,8 @@ func NewServer(cfg *config.Config, cliClients []interfaces.Client, configFilePat
 	engine.Use(gin.Recovery())
 
 	// Add request logging middleware (positioned after recovery, before auth)
-	requestLogger := logging.NewFileRequestLogger(cfg.RequestLog, "logs")
+	// Resolve logs directory relative to the configuration file directory.
+	requestLogger := logging.NewFileRequestLogger(cfg.RequestLog, "logs", filepath.Dir(configFilePath))
 	engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
 
 	engine.Use(corsMiddleware())
