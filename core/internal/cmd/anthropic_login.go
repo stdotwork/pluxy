@@ -11,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luispater/CLIProxyAPI/internal/auth/claude"
-	"github.com/luispater/CLIProxyAPI/internal/browser"
-	"github.com/luispater/CLIProxyAPI/internal/client"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	"github.com/luispater/CLIProxyAPI/internal/misc"
-	"github.com/luispater/CLIProxyAPI/internal/util"
+	"github.com/luispater/CLIProxyAPI/v5/internal/auth/claude"
+	"github.com/luispater/CLIProxyAPI/v5/internal/browser"
+	"github.com/luispater/CLIProxyAPI/v5/internal/client"
+	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
+	"github.com/luispater/CLIProxyAPI/v5/internal/util"
 	log "github.com/sirupsen/logrus"
 )
 

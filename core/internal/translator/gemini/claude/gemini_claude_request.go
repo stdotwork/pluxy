@@ -10,8 +10,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	client "github.com/luispater/CLIProxyAPI/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/internal/util"
+	client "github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/v5/internal/util"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )

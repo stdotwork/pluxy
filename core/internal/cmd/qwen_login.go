@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/luispater/CLIProxyAPI/internal/auth/qwen"
-	"github.com/luispater/CLIProxyAPI/internal/browser"
-	"github.com/luispater/CLIProxyAPI/internal/client"
-	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/v5/internal/auth/qwen"
+	"github.com/luispater/CLIProxyAPI/v5/internal/browser"
+	"github.com/luispater/CLIProxyAPI/v5/internal/client"
+	"github.com/luispater/CLIProxyAPI/v5/internal/config"
 	log "github.com/sirupsen/logrus"
 )
 

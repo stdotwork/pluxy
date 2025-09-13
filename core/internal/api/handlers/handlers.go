@@ -8,10 +8,10 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/internal/client"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	"github.com/luispater/CLIProxyAPI/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/internal/util"
+	"github.com/luispater/CLIProxyAPI/v5/internal/client"
+	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/v5/internal/util"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 )

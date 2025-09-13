@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/luispater/CLIProxyAPI/internal/misc"
-	"github.com/luispater/CLIProxyAPI/internal/util"
+	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
+	"github.com/luispater/CLIProxyAPI/v5/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"

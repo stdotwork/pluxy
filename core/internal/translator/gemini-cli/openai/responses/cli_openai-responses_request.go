@@ -3,8 +3,8 @@ package responses
 import (
 	"bytes"
 
-	. "github.com/luispater/CLIProxyAPI/internal/translator/gemini-cli/gemini"
-	. "github.com/luispater/CLIProxyAPI/internal/translator/gemini/openai/responses"
+	. "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini-cli/gemini"
+	. "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini/openai/responses"
 )
 
 func ConvertOpenAIResponsesRequestToGeminiCLI(modelName string, inputRawJSON []byte, stream bool) []byte {

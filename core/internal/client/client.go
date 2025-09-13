@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/internal/auth"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	"github.com/luispater/CLIProxyAPI/internal/registry"
+	"github.com/luispater/CLIProxyAPI/v5/internal/auth"
+	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/luispater/CLIProxyAPI/v5/internal/registry"
 )
 
 // ClientBase provides a common base structure for all AI API clients.

@@ -3,7 +3,7 @@ package translator
 import (
 	"context"
 
-	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
 	log "github.com/sirupsen/logrus"
 )
 

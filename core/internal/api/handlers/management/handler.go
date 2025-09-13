@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/v5/internal/config"
 	"golang.org/x/crypto/bcrypt"
 )
 

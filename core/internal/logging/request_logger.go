@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luispater/CLIProxyAPI/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
 )
 
 // RequestLogger defines the interface for logging HTTP requests and responses.

@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	. "github.com/luispater/CLIProxyAPI/internal/translator/gemini/openai/chat-completions"
+	. "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini/openai/chat-completions"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )

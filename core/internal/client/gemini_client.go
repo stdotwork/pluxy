@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/internal/config"
-	. "github.com/luispater/CLIProxyAPI/internal/constant"
-	"github.com/luispater/CLIProxyAPI/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/internal/registry"
-	"github.com/luispater/CLIProxyAPI/internal/translator/translator"
-	"github.com/luispater/CLIProxyAPI/internal/util"
+	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	. "github.com/luispater/CLIProxyAPI/v5/internal/constant"
+	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/v5/internal/registry"
+	"github.com/luispater/CLIProxyAPI/v5/internal/translator/translator"
+	"github.com/luispater/CLIProxyAPI/v5/internal/util"
 	log "github.com/sirupsen/logrus"
 )
 

@@ -7,7 +7,7 @@ package geminiCLI
 import (
 	"context"
 
-	. "github.com/luispater/CLIProxyAPI/internal/translator/codex/gemini"
+	. "github.com/luispater/CLIProxyAPI/v5/internal/translator/codex/gemini"
 	"github.com/tidwall/sjson"
 )
 

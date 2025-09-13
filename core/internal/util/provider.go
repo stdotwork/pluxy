@@ -6,7 +6,7 @@ package util
 import (
 	"strings"
 
-	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/v5/internal/config"
 )
 
 // GetProviderName determines the AI service provider based on the model name.

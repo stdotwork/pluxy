@@ -8,7 +8,7 @@ package geminiCLI
 import (
 	"bytes"
 
-	. "github.com/luispater/CLIProxyAPI/internal/translator/codex/gemini"
+	. "github.com/luispater/CLIProxyAPI/v5/internal/translator/codex/gemini"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )

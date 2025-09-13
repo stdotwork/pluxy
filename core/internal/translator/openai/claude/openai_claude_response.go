@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/luispater/CLIProxyAPI/internal/util"
+	"github.com/luispater/CLIProxyAPI/v5/internal/util"
 	"github.com/tidwall/gjson"
 )
 

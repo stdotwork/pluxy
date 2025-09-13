@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/luispater/CLIProxyAPI/internal/misc"
+	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )

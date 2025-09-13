@@ -7,9 +7,9 @@ import (
 	"context"
 	"os"
 
-	"github.com/luispater/CLIProxyAPI/internal/auth/gemini"
-	"github.com/luispater/CLIProxyAPI/internal/client"
-	"github.com/luispater/CLIProxyAPI/internal/config"
+	"github.com/luispater/CLIProxyAPI/v5/internal/auth/gemini"
+	"github.com/luispater/CLIProxyAPI/v5/internal/client"
+	"github.com/luispater/CLIProxyAPI/v5/internal/config"
 	log "github.com/sirupsen/logrus"
 )
 
