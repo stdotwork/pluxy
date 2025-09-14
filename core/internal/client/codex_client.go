@@ -447,6 +447,7 @@ func (c *CodexClient) APIRequest(ctx context.Context, modelName, endpoint string
 	req.Header.Set("Openai-Beta", "responses=experimental")
 	req.Header.Set("Session_id", sessionID)
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Connection", "Keep-Alive")
 
 	if c.apiKeyIndex != -1 {
 		// Using API key authentication
