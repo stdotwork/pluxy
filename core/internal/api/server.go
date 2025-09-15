@@ -200,6 +200,10 @@ func (s *Server) setupRoutes() {
 			mgmt.PUT("/debug", s.mgmt.PutDebug)
 			mgmt.PATCH("/debug", s.mgmt.PutDebug)
 
+			mgmt.GET("/force-gpt-5-codex", s.mgmt.GetForceGPT5Codex)
+			mgmt.PUT("/force-gpt-5-codex", s.mgmt.PutForceGPT5Codex)
+			mgmt.PATCH("/force-gpt-5-codex", s.mgmt.PutForceGPT5Codex)
+
 			mgmt.GET("/proxy-url", s.mgmt.GetProxyURL)
 			mgmt.PUT("/proxy-url", s.mgmt.PutProxyURL)
 			mgmt.PATCH("/proxy-url", s.mgmt.PutProxyURL)

@@ -136,6 +136,10 @@ func (c *CodexClient) CanProvideModel(modelName string) bool {
 		"gpt-5-low",
 		"gpt-5-medium",
 		"gpt-5-high",
+		"gpt-5-codex",
+		"gpt-5-codex-low",
+		"gpt-5-codex-medium",
+		"gpt-5-codex-high",
 		"codex-mini-latest",
 	}
 	return util.InArray(models, modelName)
@@ -414,6 +418,25 @@ func (c *CodexClient) APIRequest(ctx context.Context, modelName, endpoint string
 			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "medium")
 		case "gpt-5-high":
 			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "high")
+		}
+	} else if util.InArray([]string{"gpt-5-codex", "gpt-5-codex-low", "gpt-5-codex-medium", "gpt-5-codex-high"}, modelName) {
+		jsonBody, _ = sjson.SetBytes(jsonBody, "model", "gpt-5-codex")
+		switch modelName {
+		case "gpt-5-codex":
+			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "medium")
+		case "gpt-5-codex-low":
+			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "low")
+		case "gpt-5-codex-medium":
+			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "medium")
+		case "gpt-5-codex-high":
+			jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "high")
+		}
+	} else if c.cfg.ForceGPT5Codex {
+		if gjson.GetBytes(jsonBody, "model").String() == "gpt-5" {
+			if gjson.GetBytes(jsonBody, "reasoning.effort").String() == "minimal" {
+				jsonBody, _ = sjson.SetBytes(jsonBody, "reasoning.effort", "low")
+			}
+			jsonBody, _ = sjson.SetBytes(jsonBody, "model", "gpt-5-codex")
 		}
 	}
 

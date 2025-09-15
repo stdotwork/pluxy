@@ -44,6 +44,9 @@ type Config struct {
 	// ClaudeKey defines a list of Claude API key configurations as specified in the YAML configuration file.
 	ClaudeKey []ClaudeKey `yaml:"claude-api-key" json:"claude-api-key"`
 
+	// ForceGPT5Codex forces the use of GPT-5 Codex model.
+	ForceGPT5Codex bool `yaml:"force-gpt-5-codex" json:"force-gpt-5-codex"`
+
 	// Codex defines a list of Codex API key configurations as specified in the YAML configuration file.
 	CodexKey []CodexKey `yaml:"codex-api-key" json:"codex-api-key"`
 
