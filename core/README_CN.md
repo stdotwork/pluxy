@@ -275,7 +275,7 @@ console.log(await claudeResponse.json());
 | `debug`                                 | boolean  | false              | 启用调试模式以获取详细日志。                                                      |
 | `api-keys`                              | string[] | []                 | 可用于验证请求的API密钥列表。                                                    |
 | `generative-language-api-key`           | string[] | []                 | 生成式语言API密钥列表。                                                       |
-| `force-gpt-5-codex`                     | bool     | false              | 强制将 GPT-5 调用转换成 GPT-5 Codex.                                        |
+| `force-gpt-5-codex`                     | bool     | false              | 强制将 GPT-5 调用转换成 GPT-5 Codex。                                        |
 | `codex-api-key`                         | object   | {}                 | Codex API密钥列表。                                                      |
 | `codex-api-key.api-key`                 | string   | ""                 | Codex API密钥。                                                        |
 | `codex-api-key.base-url`                | string   | ""                 | 自定义的Codex API端点                                                     |
