@@ -42,7 +42,7 @@ generative-language-api-key:
   - "AIzaSy...04"
 
 # forces the use of GPT-5 Codex model.
-gpt-5-codex: true
+force-gpt-5-codex: true
 
 # Codex API keys
 codex-api-key:
