@@ -122,13 +122,14 @@ func main() {
 			log.Fatalf("failed to get home directory: %v", errUserHomeDir)
 		}
 		// Reconstruct the path by replacing the tilde with the user's home directory.
-		parts := strings.Split(cfg.AuthDir, string(os.PathSeparator))
-		if len(parts) > 1 {
-			parts[0] = home
-			cfg.AuthDir = filepath.Join(parts...)
-		} else {
-			// If the path is just "~", set it to the home directory.
+		remainder := strings.TrimPrefix(cfg.AuthDir, "~")
+		remainder = strings.TrimLeft(remainder, "/\\")
+		if remainder == "" {
 			cfg.AuthDir = home
+		} else {
+			// Normalize any slash style in the remainder so Windows paths keep nested directories.
+			normalized := strings.ReplaceAll(remainder, "\\", "/")
+			cfg.AuthDir = filepath.Join(home, filepath.FromSlash(normalized))
 		}
 	}
 

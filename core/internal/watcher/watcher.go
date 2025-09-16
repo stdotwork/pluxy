@@ -44,6 +44,11 @@ type Watcher struct {
 	lastConfigHash string
 }
 
+const (
+	authFileReadMaxAttempts = 5
+	authFileReadRetryDelay  = 100 * time.Millisecond
+)
+
 // NewWatcher creates a new file watcher instance
 func NewWatcher(configPath, authDir string, reloadCallback func(map[string]interfaces.Client, *config.Config)) (*Watcher, error) {
 	watcher, errNewWatcher := fsnotify.NewWatcher()
@@ -298,7 +303,7 @@ func (w *Watcher) reloadClients() {
 	// Rebuild auth file hash cache for current clients
 	w.lastAuthHashes = make(map[string]string, len(newFileClients))
 	for path := range newFileClients {
-		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+		if data, err := readAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); err == nil && len(data) > 0 {
 			sum := sha256.Sum256(data)
 			w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
 		}
@@ -327,7 +332,7 @@ func (w *Watcher) reloadClients() {
 
 // createClientFromFile creates a single client instance from a given token file path.
 func (w *Watcher) createClientFromFile(path string, cfg *config.Config) (interfaces.Client, error) {
-	data, errReadFile := os.ReadFile(path)
+	data, errReadFile := readAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay)
 	if errReadFile != nil {
 		return nil, errReadFile
 	}
@@ -385,8 +390,38 @@ func (w *Watcher) clientsToSlice(clientMap map[string]interfaces.Client) []inter
 	return s
 }
 
+// readAuthFileWithRetry attempts to read the auth file multiple times to work around
+// short-lived locks on Windows while token files are being written.
+func readAuthFileWithRetry(path string, attempts int, delay time.Duration) ([]byte, error) {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		if i < attempts-1 {
+			time.Sleep(delay)
+		}
+	}
+	return nil, lastErr
+}
+
 // addOrUpdateClient handles the addition or update of a single client.
 func (w *Watcher) addOrUpdateClient(path string) {
+	data, errRead := readAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay)
+	if errRead != nil {
+		log.Errorf("failed to read auth file %s: %v", filepath.Base(path), errRead)
+		return
+	}
+	if len(data) == 0 {
+		log.Debugf("ignoring empty auth file: %s", filepath.Base(path))
+		return
+	}
+
+	sum := sha256.Sum256(data)
+	curHash := hex.EncodeToString(sum[:])
+
 	w.clientsMutex.Lock()
 
 	cfg := w.config
@@ -395,24 +430,6 @@ func (w *Watcher) addOrUpdateClient(path string) {
 		w.clientsMutex.Unlock()
 		return
 	}
-
-	// Read file to check for emptiness and calculate hash
-	data, errRead := os.ReadFile(path)
-	if errRead != nil {
-		log.Errorf("failed to read auth file %s: %v", filepath.Base(path), errRead)
-		w.clientsMutex.Unlock()
-		return
-	}
-	if len(data) == 0 {
-		// Empty file: ignore (wait for a subsequent WRITE)
-		log.Debugf("ignoring empty auth file: %s", filepath.Base(path))
-		w.clientsMutex.Unlock()
-		return
-	}
-
-	// Calculate a hash of the current content and compare with the cache
-	sum := sha256.Sum256(data)
-	curHash := hex.EncodeToString(sum[:])
 	if prev, ok := w.lastAuthHashes[path]; ok && prev == curHash {
 		log.Debugf("auth file unchanged (hash match), skipping reload: %s", filepath.Base(path))
 		w.clientsMutex.Unlock()
