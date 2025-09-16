@@ -129,8 +129,14 @@ func ConvertClaudeRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 			inputSchemaResult := toolResult.Get("input_schema")
 			if inputSchemaResult.Exists() && inputSchemaResult.IsObject() {
 				inputSchema := inputSchemaResult.Raw
-				inputSchema, _ = sjson.Delete(inputSchema, "additionalProperties")
-				inputSchema, _ = sjson.Delete(inputSchema, "$schema")
+				// Use comprehensive schema sanitization for Gemini API compatibility
+				if sanitizedSchema, sanitizeErr := util.SanitizeSchemaForGemini(inputSchema); sanitizeErr == nil {
+					inputSchema = sanitizedSchema
+				} else {
+					// Fallback to basic cleanup if sanitization fails
+					inputSchema, _ = sjson.Delete(inputSchema, "additionalProperties")
+					inputSchema, _ = sjson.Delete(inputSchema, "$schema")
+				}
 				tool, _ := sjson.Delete(toolResult.Raw, "input_schema")
 				tool, _ = sjson.SetRaw(tool, "parameters", inputSchema)
 				var toolDeclaration any
