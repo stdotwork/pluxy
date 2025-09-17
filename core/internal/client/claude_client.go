@@ -331,8 +331,16 @@ func (c *ClaudeClient) SendRawTokenCount(_ context.Context, _ string, _ []byte, 
 // Returns:
 //   - error: An error if the save operation fails, nil otherwise.
 func (c *ClaudeClient) SaveTokenToFile() error {
-	fileName := filepath.Join(c.cfg.AuthDir, fmt.Sprintf("claude-%s.json", c.tokenStorage.(*claude.ClaudeTokenStorage).Email))
-	return c.tokenStorage.SaveTokenToFile(fileName)
+	// API-key based clients don't have a file-backed token to persist.
+	if c.apiKeyIndex != -1 {
+		return nil
+	}
+	ts, ok := c.tokenStorage.(*claude.ClaudeTokenStorage)
+	if !ok || ts == nil || ts.Email == "" {
+		return nil
+	}
+	fileName := filepath.Join(c.cfg.AuthDir, fmt.Sprintf("claude-%s.json", ts.Email))
+	return ts.SaveTokenToFile(fileName)
 }
 
 // RefreshTokens refreshes the access tokens if they have expired.

@@ -380,6 +380,8 @@ func (s *Server) UpdateClients(clients map[string]interfaces.Client, cfg *config
 		switch cl := c.(type) {
 		case *client.GeminiCLIClient:
 			authFiles++
+		case *client.GeminiWebClient:
+			authFiles++
 		case *client.CodexClient:
 			if cl.GetAPIKey() == "" {
 				authFiles++

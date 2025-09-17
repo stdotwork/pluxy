@@ -48,6 +48,9 @@ import (
 //   - cfg: The application configuration containing settings like port, auth directory, API keys
 //   - configPath: The path to the configuration file for watching changes
 func StartService(cfg *config.Config, configPath string) {
+	// Track the current active clients for graceful shutdown persistence.
+	var activeClients map[string]interfaces.Client
+	var activeClientsMu sync.RWMutex
 	// Create a pool of API clients, one for each token file found.
 	cliClients := make(map[string]interfaces.Client)
 	successfulAuthCount := 0
@@ -141,6 +144,24 @@ func StartService(cfg *config.Config, configPath string) {
 					cliClients[path] = qwenClient
 					successfulAuthCount++
 				}
+			} else if tokenType == "gemini-web" {
+				var ts gemini.GeminiWebTokenStorage
+				if err = json.Unmarshal(data, &ts); err == nil {
+					log.Info("Initializing gemini web authentication for token...")
+					geminiWebClient, errClient := client.NewGeminiWebClient(cfg, &ts, path)
+					if errClient != nil {
+						log.Errorf("failed to create gemini web client for token %s: %v", path, errClient)
+						return errClient
+					}
+					if geminiWebClient.IsReady() {
+						log.Info("Authentication successful.")
+						geminiWebClient.EnsureRegistered()
+					} else {
+						log.Info("Client created. Authentication pending (background retry in progress).")
+					}
+					cliClients[path] = geminiWebClient
+					successfulAuthCount++
+				}
 			}
 		}
 		return nil
@@ -165,6 +186,20 @@ func StartService(cfg *config.Config, configPath string) {
 	allClients := clientsToSlice(cliClients)
 	allClients = append(allClients, clientsToSlice(apiKeyClients)...)
 
+	// Initialize activeClients map for shutdown persistence
+	{
+		combined := make(map[string]interfaces.Client, len(cliClients)+len(apiKeyClients))
+		for k, v := range cliClients {
+			combined[k] = v
+		}
+		for k, v := range apiKeyClients {
+			combined[k] = v
+		}
+		activeClientsMu.Lock()
+		activeClients = combined
+		activeClientsMu.Unlock()
+	}
+
 	// Create and start the API server with the pool of clients in a separate goroutine.
 	apiServer := api.NewServer(cfg, allClients, configPath)
 	log.Infof("Starting API server on port %d", cfg.Port)
@@ -184,6 +219,10 @@ func StartService(cfg *config.Config, configPath string) {
 	fileWatcher, errNewWatcher := watcher.NewWatcher(configPath, cfg.AuthDir, func(newClients map[string]interfaces.Client, newCfg *config.Config) {
 		// Update the API server with new clients and configuration when files change.
 		apiServer.UpdateClients(newClients, newCfg)
+		// Keep an up-to-date snapshot for graceful shutdown persistence.
+		activeClientsMu.Lock()
+		activeClients = newClients
+		activeClientsMu.Unlock()
 	})
 	if errNewWatcher != nil {
 		log.Fatalf("failed to create file watcher: %v", errNewWatcher)
@@ -286,9 +325,32 @@ func StartService(cfg *config.Config, configPath string) {
 			cancelRefresh()
 			wgRefresh.Wait()
 
+			// Stop file watcher early to avoid token save triggering reloads/registrations during shutdown.
+			watcherCancel()
+			if errStopWatcher := fileWatcher.Stop(); errStopWatcher != nil {
+				log.Errorf("error stopping file watcher: %v", errStopWatcher)
+			}
+
 			// Create a context with a timeout for the shutdown process.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			_ = cancel
+
+			// Persist tokens/cookies for all active clients before stopping services.
+			func() {
+				activeClientsMu.RLock()
+				snapshot := make([]interfaces.Client, 0, len(activeClients))
+				for _, c := range activeClients {
+					snapshot = append(snapshot, c)
+				}
+				activeClientsMu.RUnlock()
+				for _, c := range snapshot {
+					// Persist tokens/cookies then unregister/cleanup per client.
+					_ = c.SaveTokenToFile()
+					if u, ok := any(c).(interface{ UnregisterClient() }); ok {
+						u.UnregisterClient()
+					}
+				}
+			}()
 
 			// Stop the API server gracefully.
 			if err = apiServer.Stop(ctx); err != nil {

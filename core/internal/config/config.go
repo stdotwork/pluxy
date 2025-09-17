@@ -58,6 +58,37 @@ type Config struct {
 
 	// RemoteManagement nests management-related options under 'remote-management'.
 	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
+
+	// GeminiWeb groups configuration for Gemini Web client
+	GeminiWeb GeminiWebConfig `yaml:"gemini-web" json:"gemini-web"`
+}
+
+// GeminiWebConfig nests Gemini Web related options under 'gemini-web'.
+type GeminiWebConfig struct {
+	// Context enables JSON-based conversation reuse.
+	// Defaults to true if not set in YAML (see LoadConfig).
+	Context bool `yaml:"context" json:"context"`
+
+	// CodeMode, when true, enables coding mode behaviors for Gemini Web:
+	// - Attach the predefined "Coding partner" Gem
+	// - Enable XML wrapping hint for tool markup
+	// - Merge <think> content into visible content for tool-friendly output
+	CodeMode bool `yaml:"code-mode" json:"code-mode"`
+
+	// MaxCharsPerRequest caps the number of characters (runes) sent to
+	// Gemini Web in a single request. Long prompts will be split into
+	// multiple requests with a continuation hint, and only the final
+	// request will carry any files. When unset or <=0, a conservative
+	// default of 1,000,000 will be used.
+	MaxCharsPerRequest int `yaml:"max-chars-per-request" json:"max-chars-per-request"`
+
+	// DisableContinuationHint, when true, disables the continuation hint for split prompts.
+	// The hint is enabled by default.
+	DisableContinuationHint bool `yaml:"disable-continuation-hint,omitempty" json:"disable-continuation-hint,omitempty"`
+
+	// TokenRefreshSeconds controls the background cookie auto-refresh interval in seconds.
+	// When unset or <= 0, defaults to 540 seconds.
+	TokenRefreshSeconds int `yaml:"token-refresh-seconds" json:"token-refresh-seconds"`
 }
 
 // RemoteManagement holds management API configuration under 'remote-management'.
@@ -145,6 +176,8 @@ func LoadConfig(configFile string) (*Config, error) {
 
 	// Unmarshal the YAML data into the Config struct.
 	var config Config
+	// Set defaults before unmarshal so that absent keys keep defaults.
+	config.GeminiWeb.Context = true
 	if err = yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
