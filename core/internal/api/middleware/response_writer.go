@@ -28,6 +28,7 @@ type ResponseWriterWrapper struct {
 	isStreaming  bool                       // isStreaming indicates whether the response is a streaming type (e.g., text/event-stream).
 	streamWriter logging.StreamingLogWriter // streamWriter is a writer for handling streaming log entries.
 	chunkChannel chan []byte                // chunkChannel is a channel for asynchronously passing response chunks to the logger.
+	streamDone   chan struct{}              // streamDone signals when the streaming goroutine completes.
 	logger       logging.RequestLogger      // logger is the instance of the request logger service.
 	requestInfo  *RequestInfo               // requestInfo holds the details of the original request.
 	statusCode   int                        // statusCode stores the HTTP status code of the response.
@@ -108,9 +109,11 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 		if err == nil {
 			w.streamWriter = streamWriter
 			w.chunkChannel = make(chan []byte, 100) // Buffered channel for async writes
+			doneChan := make(chan struct{})
+			w.streamDone = doneChan
 
 			// Start async chunk processor
-			go w.processStreamingChunks()
+			go w.processStreamingChunks(doneChan)
 
 			// Write status immediately
 			_ = streamWriter.WriteStatus(statusCode, w.headers)
@@ -168,7 +171,13 @@ func (w *ResponseWriterWrapper) detectStreaming(contentType string) bool {
 
 // processStreamingChunks runs in a separate goroutine to process response chunks from the chunkChannel.
 // It asynchronously writes each chunk to the streaming log writer.
-func (w *ResponseWriterWrapper) processStreamingChunks() {
+func (w *ResponseWriterWrapper) processStreamingChunks(done chan struct{}) {
+	if done == nil {
+		return
+	}
+
+	defer close(done)
+
 	if w.streamWriter == nil || w.chunkChannel == nil {
 		return
 	}
@@ -194,8 +203,15 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 			w.chunkChannel = nil
 		}
 
+		if w.streamDone != nil {
+			<-w.streamDone
+			w.streamDone = nil
+		}
+
 		if w.streamWriter != nil {
-			return w.streamWriter.Close()
+			err := w.streamWriter.Close()
+			w.streamWriter = nil
+			return err
 		}
 	} else {
 		// Capture final status code and headers if not already captured
