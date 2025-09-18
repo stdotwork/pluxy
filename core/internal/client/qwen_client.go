@@ -61,6 +61,7 @@ func NewQwenClient(cfg *config.Config, ts *qwen.QwenTokenStorage) *QwenClient {
 			cfg:                cfg,
 			modelQuotaExceeded: make(map[string]*time.Time),
 			tokenStorage:       ts,
+			isAvailable:        true,
 		},
 		qwenAuth: qwen.NewQwenAuth(cfg),
 	}
@@ -446,4 +447,14 @@ func (c *QwenClient) IsModelQuotaExceeded(model string) bool {
 //   - *sync.Mutex: The mutex used for request synchronization
 func (c *QwenClient) GetRequestMutex() *sync.Mutex {
 	return nil
+}
+
+// IsAvailable returns true if the client is available for use.
+func (c *QwenClient) IsAvailable() bool {
+	return c.isAvailable
+}
+
+// SetUnavailable sets the client to unavailable.
+func (c *QwenClient) SetUnavailable() {
+	c.isAvailable = false
 }

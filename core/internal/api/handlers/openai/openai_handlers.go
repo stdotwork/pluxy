@@ -442,8 +442,12 @@ func (h *OpenAIAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []
 				errRefreshTokens := cliClient.RefreshTokens(cliCtx)
 				if errRefreshTokens != nil {
 					log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+					cliClient.SetUnavailable()
 				}
 				retryCount++
+				continue
+			case 402:
+				cliClient.SetUnavailable()
 				continue
 			default:
 				// Forward other errors directly to the client
@@ -557,6 +561,18 @@ outLoop:
 						log.Debugf("http status code %d, switch client", err.StatusCode)
 						retryCount++
 						continue outLoop
+					case 401:
+						log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
+						errRefreshTokens := cliClient.RefreshTokens(cliCtx)
+						if errRefreshTokens != nil {
+							log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+							cliClient.SetUnavailable()
+						}
+						retryCount++
+						continue outLoop
+					case 402:
+						cliClient.SetUnavailable()
+						continue outLoop
 					default:
 						// Forward other errors directly to the client
 						c.Status(err.StatusCode)
@@ -631,6 +647,18 @@ func (h *OpenAIAPIHandler) handleCompletionsNonStreamingResponse(c *gin.Context,
 			case 403, 408, 500, 502, 503, 504:
 				log.Debugf("http status code %d, switch client", err.StatusCode)
 				retryCount++
+				continue
+			case 401:
+				log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
+				errRefreshTokens := cliClient.RefreshTokens(cliCtx)
+				if errRefreshTokens != nil {
+					log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+					cliClient.SetUnavailable()
+				}
+				retryCount++
+				continue
+			case 402:
+				cliClient.SetUnavailable()
 				continue
 			default:
 				// Forward other errors directly to the client
@@ -754,6 +782,18 @@ outLoop:
 					case 403, 408, 500, 502, 503, 504:
 						log.Debugf("http status code %d, switch client", err.StatusCode)
 						retryCount++
+						continue outLoop
+					case 401:
+						log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
+						errRefreshTokens := cliClient.RefreshTokens(cliCtx)
+						if errRefreshTokens != nil {
+							log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+							cliClient.SetUnavailable()
+						}
+						retryCount++
+						continue outLoop
+					case 402:
+						cliClient.SetUnavailable()
 						continue outLoop
 					default:
 						// Forward other errors directly to the client

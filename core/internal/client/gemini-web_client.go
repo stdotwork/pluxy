@@ -96,6 +96,7 @@ func NewGeminiWebClient(cfg *config.Config, ts *gemini.GeminiWebTokenStorage, to
 			cfg:                cfg,
 			tokenStorage:       ts,
 			modelQuotaExceeded: make(map[string]*time.Time),
+			isAvailable:        true,
 		},
 		tokenFilePath:  tokenFilePath,
 		convStore:      make(map[string][]string),
@@ -1071,4 +1072,14 @@ func (c *GeminiWebClient) storeConversationJSON(model string, history []geminiWe
 	index := c.convIndex
 	c.convMutex.Unlock()
 	_ = geminiWeb.SaveConvData(geminiWeb.ConvDataPath(c.tokenFilePath), items, index)
+}
+
+// IsAvailable returns true if the client is available for use.
+func (c *GeminiWebClient) IsAvailable() bool {
+	return c.isAvailable
+}
+
+// SetUnavailable sets the client to unavailable.
+func (c *GeminiWebClient) SetUnavailable() {
+	c.isAvailable = false
 }

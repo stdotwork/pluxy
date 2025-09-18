@@ -54,6 +54,7 @@ func NewGeminiClient(httpClient *http.Client, cfg *config.Config, glAPIKey strin
 			httpClient:         httpClient,
 			cfg:                cfg,
 			modelQuotaExceeded: make(map[string]*time.Time),
+			isAvailable:        true,
 		},
 		glAPIKey: glAPIKey,
 	}
@@ -444,4 +445,14 @@ func (c *GeminiClient) GetRequestMutex() *sync.Mutex {
 func (c *GeminiClient) RefreshTokens(ctx context.Context) error {
 	// API keys don't need refreshing
 	return nil
+}
+
+// IsAvailable returns true if the client is available for use.
+func (c *GeminiClient) IsAvailable() bool {
+	return c.isAvailable
+}
+
+// SetUnavailable sets the client to unavailable.
+func (c *GeminiClient) SetUnavailable() {
+	c.isAvailable = false
 }

@@ -205,8 +205,12 @@ outLoop:
 						err := cliClient.RefreshTokens(cliCtx)
 						if err != nil {
 							log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+							cliClient.SetUnavailable()
 						}
 						retryCount++
+						continue outLoop
+					case 402:
+						cliClient.SetUnavailable()
 						continue outLoop
 					default:
 						// Forward other errors directly to the client

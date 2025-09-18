@@ -67,6 +67,7 @@ func NewClaudeClient(cfg *config.Config, ts *claude.ClaudeTokenStorage) *ClaudeC
 			cfg:                cfg,
 			modelQuotaExceeded: make(map[string]*time.Time),
 			tokenStorage:       ts,
+			isAvailable:        true,
 		},
 		claudeAuth:  claude.NewClaudeAuth(cfg),
 		apiKeyIndex: -1,
@@ -102,6 +103,7 @@ func NewClaudeClientWithKey(cfg *config.Config, apiKeyIndex int) *ClaudeClient {
 			cfg:                cfg,
 			modelQuotaExceeded: make(map[string]*time.Time),
 			tokenStorage:       &empty.EmptyStorage{},
+			isAvailable:        true,
 		},
 		claudeAuth:  claude.NewClaudeAuth(cfg),
 		apiKeyIndex: apiKeyIndex,
@@ -580,4 +582,14 @@ func (c *ClaudeClient) IsModelQuotaExceeded(model string) bool {
 //   - *sync.Mutex: The mutex used for request synchronization
 func (c *ClaudeClient) GetRequestMutex() *sync.Mutex {
 	return nil
+}
+
+// IsAvailable returns true if the client is available for use.
+func (c *ClaudeClient) IsAvailable() bool {
+	return c.isAvailable
+}
+
+// SetUnavailable sets the client to unavailable.
+func (c *ClaudeClient) SetUnavailable() {
+	c.isAvailable = false
 }

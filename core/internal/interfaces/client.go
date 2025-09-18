@@ -52,5 +52,12 @@ type Client interface {
 	// Provider returns the name of the AI service provider (e.g., "gemini", "claude").
 	Provider() string
 
+	// RefreshTokens refreshes the access tokens if needed
 	RefreshTokens(ctx context.Context) error
+
+	// IsAvailable returns true if the client is available for use.
+	IsAvailable() bool
+
+	// SetUnavailable sets the client to unavailable.
+	SetUnavailable()
 }

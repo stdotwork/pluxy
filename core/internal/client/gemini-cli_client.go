@@ -69,6 +69,7 @@ func NewGeminiCLIClient(httpClient *http.Client, ts *geminiAuth.GeminiTokenStora
 			cfg:                cfg,
 			tokenStorage:       ts,
 			modelQuotaExceeded: make(map[string]*time.Time),
+			isAvailable:        true,
 		},
 	}
 
@@ -871,7 +872,18 @@ func (c *GeminiCLIClient) GetRequestMutex() *sync.Mutex {
 	return nil
 }
 
+// RefreshTokens is not applicable for Gemini CLI clients as they use API keys.
 func (c *GeminiCLIClient) RefreshTokens(ctx context.Context) error {
 	// API keys don't need refreshing
 	return nil
+}
+
+// IsAvailable returns true if the client is available for use.
+func (c *GeminiCLIClient) IsAvailable() bool {
+	return c.isAvailable
+}
+
+// SetUnavailable sets the client to unavailable.
+func (c *GeminiCLIClient) SetUnavailable() {
+	c.isAvailable = false
 }

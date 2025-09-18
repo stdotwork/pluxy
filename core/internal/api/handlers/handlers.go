@@ -8,11 +8,9 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/v5/internal/client"
 	"github.com/luispater/CLIProxyAPI/v5/internal/config"
 	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/v5/internal/util"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 )
 
@@ -97,7 +95,7 @@ func (h *BaseAPIHandler) UpdateClients(clients []interfaces.Client, cfg *config.
 func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) (interfaces.Client, *interfaces.ErrorMessage) {
 	clients := make([]interfaces.Client, 0)
 	for i := 0; i < len(h.CliClients); i++ {
-		if h.CliClients[i].CanProvideModel(modelName) {
+		if h.CliClients[i].CanProvideModel(modelName) && h.CliClients[i].IsAvailable() && !h.CliClients[i].IsModelQuotaExceeded(modelName) {
 			clients = append(clients, h.CliClients[i])
 		}
 	}
@@ -126,24 +124,6 @@ func (h *BaseAPIHandler) GetClient(modelName string, isGenerateContent ...bool) 
 	reorderedClients := make([]interfaces.Client, 0)
 	for i := 0; i < len(clients); i++ {
 		cliClient = clients[(startIndex+1+i)%len(clients)]
-		if cliClient.IsModelQuotaExceeded(modelName) {
-			if cliClient.Provider() == "gemini-cli" {
-				log.Debugf("Gemini Model %s is quota exceeded for account %s, project id: %s", modelName, cliClient.GetEmail(), cliClient.(*client.GeminiCLIClient).GetProjectID())
-			} else if cliClient.Provider() == "gemini" {
-				log.Debugf("Gemini Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
-			} else if cliClient.Provider() == "codex" {
-				log.Debugf("Codex Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
-			} else if cliClient.Provider() == "claude" {
-				log.Debugf("Claude Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
-			} else if cliClient.Provider() == "qwen" {
-				log.Debugf("Qwen Model %s is quota exceeded for account %s", modelName, cliClient.GetEmail())
-			} else if cliClient.Type() == "openai-compatibility" {
-				log.Debugf("OpenAI Compatibility Model %s is quota exceeded for provider %s", modelName, cliClient.Provider())
-			}
-			cliClient = nil
-			continue
-
-		}
 		reorderedClients = append(reorderedClients, cliClient)
 	}
 

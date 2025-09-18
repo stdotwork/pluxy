@@ -41,6 +41,9 @@ type ClientBase struct {
 
 	// modelRegistry is the global model registry for tracking model availability.
 	modelRegistry *registry.ModelRegistry
+
+	// unavailable tracks whether the client is unavailable
+	isAvailable bool
 }
 
 // GetRequestMutex returns the mutex used to synchronize requests for this client.

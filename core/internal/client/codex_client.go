@@ -65,6 +65,7 @@ func NewCodexClient(cfg *config.Config, ts *codex.CodexTokenStorage) (*CodexClie
 			cfg:                cfg,
 			modelQuotaExceeded: make(map[string]*time.Time),
 			tokenStorage:       ts,
+			isAvailable:        true,
 		},
 		codexAuth:   codex.NewCodexAuth(cfg),
 		apiKeyIndex: -1,
@@ -100,6 +101,7 @@ func NewCodexClientWithKey(cfg *config.Config, apiKeyIndex int) *CodexClient {
 			cfg:                cfg,
 			modelQuotaExceeded: make(map[string]*time.Time),
 			tokenStorage:       &empty.EmptyStorage{},
+			isAvailable:        true,
 		},
 		codexAuth:   codex.NewCodexAuth(cfg),
 		apiKeyIndex: apiKeyIndex,
@@ -556,4 +558,14 @@ func (c *CodexClient) IsModelQuotaExceeded(model string) bool {
 //   - *sync.Mutex: The mutex used for request synchronization
 func (c *CodexClient) GetRequestMutex() *sync.Mutex {
 	return nil
+}
+
+// IsAvailable returns true if the client is available for use.
+func (c *CodexClient) IsAvailable() bool {
+	return c.isAvailable
+}
+
+// SetUnavailable sets the client to unavailable.
+func (c *CodexClient) SetUnavailable() {
+	c.isAvailable = false
 }

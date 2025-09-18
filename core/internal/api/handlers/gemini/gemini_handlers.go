@@ -276,6 +276,18 @@ outLoop:
 						log.Debugf("http status code %d, switch client", err.StatusCode)
 						retryCount++
 						continue outLoop
+					case 401:
+						log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
+						errRefreshTokens := cliClient.RefreshTokens(cliCtx)
+						if errRefreshTokens != nil {
+							log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+							cliClient.SetUnavailable()
+						}
+						retryCount++
+						continue outLoop
+					case 402:
+						cliClient.SetUnavailable()
+						continue outLoop
 					default:
 						// Forward other errors directly to the client
 						c.Status(err.StatusCode)
@@ -406,8 +418,12 @@ func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName strin
 				errRefreshTokens := cliClient.RefreshTokens(cliCtx)
 				if errRefreshTokens != nil {
 					log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
+					cliClient.SetUnavailable()
 				}
 				retryCount++
+				continue
+			case 402:
+				cliClient.SetUnavailable()
 				continue
 			default:
 				// Forward other errors directly to the client

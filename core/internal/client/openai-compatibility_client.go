@@ -68,6 +68,7 @@ func NewOpenAICompatibilityClient(cfg *config.Config, compatConfig *config.OpenA
 			httpClient:         httpClient,
 			cfg:                cfg,
 			modelQuotaExceeded: make(map[string]*time.Time),
+			isAvailable:        true,
 		},
 		compatConfig:       compatConfig,
 		currentAPIKeyIndex: apiKeyIndex,
@@ -424,4 +425,14 @@ func (c *OpenAICompatibilityClient) RefreshTokens(ctx context.Context) error {
 //   - *sync.Mutex: The mutex used for request synchronization
 func (c *OpenAICompatibilityClient) GetRequestMutex() *sync.Mutex {
 	return nil
+}
+
+// IsAvailable returns true if the client is available for use.
+func (c *OpenAICompatibilityClient) IsAvailable() bool {
+	return c.isAvailable
+}
+
+// SetUnavailable sets the client to unavailable.
+func (c *OpenAICompatibilityClient) SetUnavailable() {
+	c.isAvailable = false
 }
