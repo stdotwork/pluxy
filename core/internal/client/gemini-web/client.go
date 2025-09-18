@@ -182,9 +182,9 @@ func (c *GeminiClient) startAutoRefresh() {
 				}
 
 				if c.accountLabel != "" {
-					DebugRaw("Cookies and token refreshed [%s]. New __Secure-1PSIDTS: %s", c.accountLabel, MaskToken28(nextCookies["__Secure-1PSIDTS"]))
+					DebugRaw("Cookies refreshed [%s]. New __Secure-1PSIDTS: %s", c.accountLabel, MaskToken28(nextCookies["__Secure-1PSIDTS"]))
 				} else {
-					DebugRaw("Cookies and token refreshed. New __Secure-1PSIDTS: %s", MaskToken28(nextCookies["__Secure-1PSIDTS"]))
+					DebugRaw("Cookies refreshed. New __Secure-1PSIDTS: %s", MaskToken28(nextCookies["__Secure-1PSIDTS"]))
 				}
 			}
 		}
