@@ -172,6 +172,7 @@ func NewGeminiWebClient(cfg *config.Config, ts *gemini.GeminiWebTokenStorage, to
 		go client.backgroundInitRetry()
 	} else {
 		client.cookieRotationStarted = true
+		client.registerModelsOnce()
 		// Persist immediately once after successful init to capture fresh cookies
 		_ = client.SaveTokenToFile()
 		client.startCookiePersist()
