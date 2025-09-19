@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"io/fs"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -26,7 +25,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/v5/internal/client"
 	"github.com/luispater/CLIProxyAPI/v5/internal/config"
 	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
+	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
 	"github.com/luispater/CLIProxyAPI/v5/internal/watcher"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -75,6 +74,7 @@ func StartService(cfg *config.Config, configPath string) {
 
 		// Process only JSON files in the auth directory to load authentication tokens.
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
+			misc.LogCredentialSeparator()
 			log.Debugf("Loading token from: %s", path)
 			data, errReadFile := os.ReadFile(path)
 			if errReadFile != nil {
@@ -139,7 +139,7 @@ func StartService(cfg *config.Config, configPath string) {
 				if err = json.Unmarshal(data, &ts); err == nil {
 					// For each valid Qwen token, create an authenticated client.
 					log.Info("Initializing qwen authentication for token...")
-					qwenClient := client.NewQwenClient(cfg, &ts)
+					qwenClient := client.NewQwenClient(cfg, &ts, path)
 					log.Info("Authentication successful.")
 					cliClients[path] = qwenClient
 					successfulAuthCount++
@@ -170,7 +170,7 @@ func StartService(cfg *config.Config, configPath string) {
 		log.Fatalf("Error walking auth directory: %v", err)
 	}
 
-	apiKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := buildAPIKeyClients(cfg)
+	apiKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := watcher.BuildAPIKeyClients(cfg)
 
 	totalNewClients := len(cliClients) + len(apiKeyClients)
 	log.Infof("full client load complete - %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
@@ -346,7 +346,12 @@ func StartService(cfg *config.Config, configPath string) {
 				for _, c := range snapshot {
 					// Persist tokens/cookies then unregister/cleanup per client.
 					_ = c.SaveTokenToFile()
-					if u, ok := any(c).(interface{ UnregisterClient() }); ok {
+					switch u := any(c).(type) {
+					case interface {
+						UnregisterClientWithReason(interfaces.UnregisterReason)
+					}:
+						u.UnregisterClientWithReason(interfaces.UnregisterReasonShutdown)
+					case interface{ UnregisterClient() }:
 						u.UnregisterClient()
 					}
 				}
@@ -371,58 +376,4 @@ func clientsToSlice(clientMap map[string]interfaces.Client) []interfaces.Client 
 		s = append(s, v)
 	}
 	return s
-}
-
-// buildAPIKeyClients creates clients from API keys in the config
-func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, int, int, int) {
-	apiKeyClients := make(map[string]interfaces.Client)
-	glAPIKeyCount := 0
-	claudeAPIKeyCount := 0
-	codexAPIKeyCount := 0
-	openAICompatCount := 0
-
-	if len(cfg.GlAPIKey) > 0 {
-		for _, key := range cfg.GlAPIKey {
-			httpClient := util.SetProxy(cfg, &http.Client{})
-			log.Debug("Initializing with Generative Language API Key...")
-			cliClient := client.NewGeminiClient(httpClient, cfg, key)
-			apiKeyClients[cliClient.GetClientID()] = cliClient
-			glAPIKeyCount++
-		}
-	}
-
-	if len(cfg.ClaudeKey) > 0 {
-		for i := range cfg.ClaudeKey {
-			log.Debug("Initializing with Claude API Key...")
-			cliClient := client.NewClaudeClientWithKey(cfg, i)
-			apiKeyClients[cliClient.GetClientID()] = cliClient
-			claudeAPIKeyCount++
-		}
-	}
-
-	if len(cfg.CodexKey) > 0 {
-		for i := range cfg.CodexKey {
-			log.Debug("Initializing with Codex API Key...")
-			cliClient := client.NewCodexClientWithKey(cfg, i)
-			apiKeyClients[cliClient.GetClientID()] = cliClient
-			codexAPIKeyCount++
-		}
-	}
-
-	if len(cfg.OpenAICompatibility) > 0 {
-		for _, compatConfig := range cfg.OpenAICompatibility {
-			for i := 0; i < len(compatConfig.APIKeys); i++ {
-				log.Debugf("Initializing OpenAI compatibility client for provider: %s", compatConfig.Name)
-				compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig, i)
-				if errClient != nil {
-					log.Errorf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
-					continue
-				}
-				apiKeyClients[compatClient.GetClientID()] = compatClient
-				openAICompatCount++
-			}
-		}
-	}
-
-	return apiKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
 }

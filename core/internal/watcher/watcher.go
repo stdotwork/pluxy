@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/v5/internal/client"
 	"github.com/luispater/CLIProxyAPI/v5/internal/config"
 	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
+	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
 	"github.com/luispater/CLIProxyAPI/v5/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -137,11 +139,19 @@ func (w *Watcher) processEvents(ctx context.Context) {
 
 // handleEvent processes individual file system events
 func (w *Watcher) handleEvent(event fsnotify.Event) {
+	// Filter only relevant events: config file or auth-dir JSON files.
+	isConfigEvent := event.Name == w.configPath && (event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create)
+	isAuthJSON := strings.HasPrefix(event.Name, w.authDir) && strings.HasSuffix(event.Name, ".json")
+	if !isConfigEvent && !isAuthJSON {
+		// Ignore unrelated files (e.g., cookie snapshots *.cookie) and other noise.
+		return
+	}
+
 	now := time.Now()
 	log.Debugf("file system event detected: %s %s", event.Op.String(), event.Name)
 
 	// Handle config file changes
-	if event.Name == w.configPath && (event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create) {
+	if isConfigEvent {
 		log.Debugf("config file change details - operation: %s, timestamp: %s", event.Op.String(), now.Format("2006-01-02 15:04:05.000"))
 		data, err := os.ReadFile(w.configPath)
 		if err != nil {
@@ -172,8 +182,8 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 		return
 	}
 
-	// Handle auth directory changes incrementally
-	if strings.HasPrefix(event.Name, w.authDir) && strings.HasSuffix(event.Name, ".json") {
+	// Handle auth directory changes incrementally (.json only)
+	if isAuthJSON {
 		log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
 		if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
 			w.addOrUpdateClient(event.Name)
@@ -289,13 +299,11 @@ func (w *Watcher) reloadClients() {
 	// Unregister all old API key clients before creating new ones
 	log.Debugf("unregistering %d old API key clients", oldAPIKeyClientCount)
 	for _, oldClient := range w.apiKeyClients {
-		if u, ok := oldClient.(interface{ UnregisterClient() }); ok {
-			u.UnregisterClient()
-		}
+		unregisterClientWithReason(oldClient, interfaces.UnregisterReasonReload)
 	}
 
 	// Create new API key clients based on the new config
-	newAPIKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := buildAPIKeyClients(cfg)
+	newAPIKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := BuildAPIKeyClients(cfg)
 	log.Debugf("created %d new API key clients", len(newAPIKeyClients))
 
 	// Load file-based clients
@@ -305,9 +313,7 @@ func (w *Watcher) reloadClients() {
 	// Unregister all old file-based clients
 	log.Debugf("unregistering %d old file-based clients", oldFileClientCount)
 	for _, oldClient := range w.clients {
-		if u, ok := any(oldClient).(interface{ UnregisterClient() }); ok {
-			u.UnregisterClient()
-		}
+		unregisterClientWithReason(oldClient, interfaces.UnregisterReasonReload)
 	}
 
 	// Update client maps
@@ -389,7 +395,7 @@ func (w *Watcher) createClientFromFile(path string, cfg *config.Config) (interfa
 	} else if tokenType == "qwen" {
 		var ts qwen.QwenTokenStorage
 		if err = json.Unmarshal(data, &ts); err == nil {
-			return client.NewQwenClient(cfg, &ts), nil
+			return client.NewQwenClient(cfg, &ts, path), nil
 		}
 	} else if tokenType == "gemini-web" {
 		var ts gemini.GeminiWebTokenStorage
@@ -413,18 +419,40 @@ func (w *Watcher) clientsToSlice(clientMap map[string]interfaces.Client) []inter
 // readAuthFileWithRetry attempts to read the auth file multiple times to work around
 // short-lived locks on Windows while token files are being written.
 func readAuthFileWithRetry(path string, attempts int, delay time.Duration) ([]byte, error) {
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		data, err := os.ReadFile(path)
+	read := func(target string) ([]byte, error) {
+		var lastErr error
+		for i := 0; i < attempts; i++ {
+			data, err := os.ReadFile(target)
+			if err == nil {
+				return data, nil
+			}
+			lastErr = err
+			if i < attempts-1 {
+				time.Sleep(delay)
+			}
+		}
+		return nil, lastErr
+	}
+
+	candidates := []string{
+		util.CookieSnapshotPath(path),
+		path,
+	}
+
+	for idx, candidate := range candidates {
+		data, err := read(candidate)
 		if err == nil {
 			return data, nil
 		}
-		lastErr = err
-		if i < attempts-1 {
-			time.Sleep(delay)
+		if errors.Is(err, os.ErrNotExist) {
+			if idx < len(candidates)-1 {
+				continue
+			}
 		}
+		return nil, err
 	}
-	return nil, lastErr
+
+	return nil, os.ErrNotExist
 }
 
 // addOrUpdateClient handles the addition or update of a single client.
@@ -458,10 +486,10 @@ func (w *Watcher) addOrUpdateClient(path string) {
 
 	// If an old client exists, unregister it first
 	if oldClient, ok := w.clients[path]; ok {
-		if u, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
+		if _, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
 			log.Debugf("unregistering old client for updated file: %s", filepath.Base(path))
-			u.UnregisterClient()
 		}
+		unregisterClientWithReason(oldClient, interfaces.UnregisterReasonAuthFileUpdated)
 	}
 
 	// Create new client (reads the file again internally; this is acceptable as the files are small and it keeps the change minimal)
@@ -503,10 +531,10 @@ func (w *Watcher) removeClient(path string) {
 
 	// Unregister client if it exists
 	if oldClient, ok := w.clients[path]; ok {
-		if u, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
+		if _, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
 			log.Debugf("unregistering client for removed file: %s", filepath.Base(path))
-			u.UnregisterClient()
 		}
+		unregisterClientWithReason(oldClient, interfaces.UnregisterReasonAuthFileRemoved)
 		delete(w.clients, path)
 		delete(w.lastAuthHashes, path)
 		log.Debugf("removed client for %s", filepath.Base(path))
@@ -542,6 +570,18 @@ func (w *Watcher) buildCombinedClientMap() map[string]interfaces.Client {
 	return combined
 }
 
+// unregisterClientWithReason attempts to call client-specific unregister hooks with context.
+func unregisterClientWithReason(c interfaces.Client, reason interfaces.UnregisterReason) {
+	switch u := any(c).(type) {
+	case interface {
+		UnregisterClientWithReason(interfaces.UnregisterReason)
+	}:
+		u.UnregisterClientWithReason(reason)
+	case interface{ UnregisterClient() }:
+		u.UnregisterClient()
+	}
+}
+
 // loadFileClients scans the auth directory and creates clients from .json files.
 func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Client, int) {
 	newClients := make(map[string]interfaces.Client)
@@ -565,6 +605,7 @@ func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Cli
 		}
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
 			authFileCount++
+			misc.LogCredentialSeparator()
 			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
 			if cliClient, errCreate := w.createClientFromFile(path, cfg); errCreate == nil && cliClient != nil {
 				newClients[path] = cliClient
@@ -583,8 +624,7 @@ func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Cli
 	return newClients, successfulAuthCount
 }
 
-// buildAPIKeyClients creates clients from API keys in the config.
-func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, int, int, int) {
+func BuildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, int, int, int) {
 	apiKeyClients := make(map[string]interfaces.Client)
 	glAPIKeyCount := 0
 	claudeAPIKeyCount := 0
@@ -594,6 +634,8 @@ func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, 
 	if len(cfg.GlAPIKey) > 0 {
 		for _, key := range cfg.GlAPIKey {
 			httpClient := util.SetProxy(cfg, &http.Client{})
+			misc.LogCredentialSeparator()
+			log.Debug("Initializing with Gemini API Key...")
 			cliClient := client.NewGeminiClient(httpClient, cfg, key)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
 			glAPIKeyCount++
@@ -601,6 +643,8 @@ func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, 
 	}
 	if len(cfg.ClaudeKey) > 0 {
 		for i := range cfg.ClaudeKey {
+			misc.LogCredentialSeparator()
+			log.Debug("Initializing with Claude API Key...")
 			cliClient := client.NewClaudeClientWithKey(cfg, i)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
 			claudeAPIKeyCount++
@@ -608,6 +652,8 @@ func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, 
 	}
 	if len(cfg.CodexKey) > 0 {
 		for i := range cfg.CodexKey {
+			misc.LogCredentialSeparator()
+			log.Debug("Initializing with Codex API Key...")
 			cliClient := client.NewCodexClientWithKey(cfg, i)
 			apiKeyClients[cliClient.GetClientID()] = cliClient
 			codexAPIKeyCount++
@@ -616,9 +662,11 @@ func buildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, 
 	if len(cfg.OpenAICompatibility) > 0 {
 		for _, compatConfig := range cfg.OpenAICompatibility {
 			for i := 0; i < len(compatConfig.APIKeys); i++ {
+				misc.LogCredentialSeparator()
+				log.Debugf("Initializing OpenAI compatibility client for provider: %s", compatConfig.Name)
 				compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig, i)
 				if errClient != nil {
-					log.Errorf("failed to create OpenAI-compatibility client for %s: %v", compatConfig.Name, errClient)
+					log.Errorf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
 					continue
 				}
 				apiKeyClients[compatClient.GetClientID()] = compatClient

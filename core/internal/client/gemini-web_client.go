@@ -40,10 +40,11 @@ const (
 
 type GeminiWebClient struct {
 	ClientBase
-	gwc           *geminiWeb.GeminiClient
-	tokenFilePath string
-	convStore     map[string][]string
-	convMutex     sync.RWMutex
+	gwc             *geminiWeb.GeminiClient
+	tokenFilePath   string
+	snapshotManager *util.Manager[gemini.GeminiWebTokenStorage]
+	convStore       map[string][]string
+	convMutex       sync.RWMutex
 
 	// JSON-based conversation persistence
 	convData  map[string]geminiWeb.ConversationRecord
@@ -60,13 +61,33 @@ type GeminiWebClient struct {
 	modelsRegistered bool
 }
 
-func (c *GeminiWebClient) UnregisterClient() {
+func (c *GeminiWebClient) UnregisterClient() { c.unregisterClient(interfaces.UnregisterReasonReload) }
+
+// UnregisterClientWithReason allows the watcher to avoid recreating deleted auth files.
+func (c *GeminiWebClient) UnregisterClientWithReason(reason interfaces.UnregisterReason) {
+	c.unregisterClient(reason)
+}
+
+func (c *GeminiWebClient) unregisterClient(reason interfaces.UnregisterReason) {
 	if c.cookiePersistCancel != nil {
 		c.cookiePersistCancel()
 		c.cookiePersistCancel = nil
 	}
-	// Flush sidecar cookies to main token file and remove sidecar
-	c.flushCookiesSidecarToMain()
+	switch reason {
+	case interfaces.UnregisterReasonAuthFileRemoved:
+		if c.snapshotManager != nil && c.tokenFilePath != "" {
+			log.Debugf("skipping Gemini Web snapshot flush because auth file is missing: %s", filepath.Base(c.tokenFilePath))
+			util.RemoveCookieSnapshots(c.tokenFilePath)
+		}
+	case interfaces.UnregisterReasonAuthFileUpdated:
+		if c.snapshotManager != nil && c.tokenFilePath != "" {
+			log.Debugf("skipping Gemini Web snapshot flush because auth file was updated: %s", filepath.Base(c.tokenFilePath))
+			util.RemoveCookieSnapshots(c.tokenFilePath)
+		}
+	default:
+		// Flush cookie snapshot to main token file and remove snapshot
+		c.flushCookieSnapshotToMain()
+	}
 	if c.gwc != nil {
 		c.gwc.Close(0)
 		c.gwc = nil
@@ -113,12 +134,32 @@ func NewGeminiWebClient(cfg *config.Config, ts *gemini.GeminiWebTokenStorage, to
 		client.convIndex = index
 	}
 
-	client.InitializeModelRegistry(clientID)
-
-	// Prefer sidecar cookies at startup if present
-	if ok, err := geminiWeb.ApplyCookiesSidecarToTokenStorage(tokenFilePath, ts); err == nil && ok {
-		log.Debugf("Loaded Gemini Web cookies from sidecar: %s", filepath.Base(geminiWeb.CookiesSidecarPath(tokenFilePath)))
+	if tokenFilePath != "" {
+		client.snapshotManager = util.NewManager[gemini.GeminiWebTokenStorage](
+			tokenFilePath,
+			ts,
+			util.Hooks[gemini.GeminiWebTokenStorage]{
+				Apply: func(store, snapshot *gemini.GeminiWebTokenStorage) {
+					if snapshot.Secure1PSID != "" {
+						store.Secure1PSID = snapshot.Secure1PSID
+					}
+					if snapshot.Secure1PSIDTS != "" {
+						store.Secure1PSIDTS = snapshot.Secure1PSIDTS
+					}
+				},
+				WriteMain: func(path string, data *gemini.GeminiWebTokenStorage) error {
+					return data.SaveTokenToFile(path)
+				},
+			},
+		)
+		if applied, err := client.snapshotManager.Apply(); err != nil {
+			log.Warnf("Failed to apply Gemini Web cookie snapshot for %s: %v", filepath.Base(tokenFilePath), err)
+		} else if applied {
+			log.Debugf("Loaded Gemini Web cookie snapshot: %s", filepath.Base(util.CookieSnapshotPath(tokenFilePath)))
+		}
 	}
+
+	client.InitializeModelRegistry(clientID)
 
 	client.gwc = geminiWeb.NewGeminiClient(ts.Secure1PSID, ts.Secure1PSIDTS, cfg.ProxyURL, geminiWeb.WithAccountLabel(strings.TrimSuffix(filepath.Base(tokenFilePath), ".json")))
 	timeoutSec := geminiWebDefaultTimeoutSec
@@ -131,6 +172,7 @@ func NewGeminiWebClient(cfg *config.Config, ts *gemini.GeminiWebTokenStorage, to
 		go client.backgroundInitRetry()
 	} else {
 		client.cookieRotationStarted = true
+		client.registerModelsOnce()
 		// Persist immediately once after successful init to capture fresh cookies
 		_ = client.SaveTokenToFile()
 		client.startCookiePersist()
@@ -783,7 +825,7 @@ func (c *GeminiWebClient) SendRawTokenCount(ctx context.Context, modelName strin
 	return []byte(fmt.Sprintf(`{"totalTokens":%d}`, est)), nil
 }
 
-// SaveTokenToFile persists current cookies to a sidecar file via gemini-web helpers.
+// SaveTokenToFile persists current cookies to a cookie snapshot via gemini-web helpers.
 func (c *GeminiWebClient) SaveTokenToFile() error {
 	ts := c.tokenStorage.(*gemini.GeminiWebTokenStorage)
 	if c.gwc != nil && c.gwc.Cookies != nil {
@@ -794,11 +836,16 @@ func (c *GeminiWebClient) SaveTokenToFile() error {
 			ts.Secure1PSIDTS = v
 		}
 	}
-	log.Debugf("Saving Gemini Web cookies sidecar to %s", filepath.Base(geminiWeb.CookiesSidecarPath(c.tokenFilePath)))
-	return geminiWeb.SaveCookiesSidecar(c.tokenFilePath, c.gwc.Cookies)
+	if c.snapshotManager == nil {
+		if c.tokenFilePath == "" {
+			return nil
+		}
+		return ts.SaveTokenToFile(c.tokenFilePath)
+	}
+	return c.snapshotManager.Persist()
 }
 
-// startCookiePersist periodically writes refreshed cookies into the sidecar file.
+// startCookiePersist periodically writes refreshed cookies into the cookie snapshot file.
 func (c *GeminiWebClient) startCookiePersist() {
 	if c.gwc == nil {
 		return
@@ -827,7 +874,7 @@ func (c *GeminiWebClient) startCookiePersist() {
 			case <-ticker.C:
 				if c.gwc != nil && c.gwc.Cookies != nil {
 					if err := c.SaveTokenToFile(); err != nil {
-						log.Errorf("Failed to persist cookies sidecar for %s: %v", c.GetEmail(), err)
+						log.Errorf("Failed to persist cookie snapshot for %s: %v", c.GetEmail(), err)
 					}
 				}
 			}
@@ -1020,22 +1067,32 @@ func (c *GeminiWebClient) backgroundInitRetry() {
 	}
 }
 
-// IsSelfPersistedToken compares provided token storage with currently active cookies.
-// Removed: IsSelfPersistedToken (no longer needed with sidecar-only periodic persistence)
-
-// flushCookiesSidecarToMain merges sidecar cookies into the main token file.
-func (c *GeminiWebClient) flushCookiesSidecarToMain() {
-	if c.tokenFilePath == "" {
+// flushCookieSnapshotToMain merges snapshot cookies into the main token file.
+func (c *GeminiWebClient) flushCookieSnapshotToMain() {
+	if c.snapshotManager == nil {
 		return
 	}
-	base := c.tokenStorage.(*gemini.GeminiWebTokenStorage)
-	if err := geminiWeb.FlushCookiesSidecarToMain(c.tokenFilePath, c.gwc.Cookies, base); err != nil {
-		log.Errorf("Failed to flush cookies sidecar to main for %s: %v", filepath.Base(c.tokenFilePath), err)
+	ts := c.tokenStorage.(*gemini.GeminiWebTokenStorage)
+	var opts []util.FlushOption[gemini.GeminiWebTokenStorage]
+	if c.gwc != nil && c.gwc.Cookies != nil {
+		gwCookies := c.gwc.Cookies
+		opts = append(opts, util.WithFallback(func() *gemini.GeminiWebTokenStorage {
+			merged := *ts
+			if v := gwCookies["__Secure-1PSID"]; v != "" {
+				merged.Secure1PSID = v
+			}
+			if v := gwCookies["__Secure-1PSIDTS"]; v != "" {
+				merged.Secure1PSIDTS = v
+			}
+			return &merged
+		}))
+	}
+	if err := c.snapshotManager.Flush(opts...); err != nil {
+		log.Errorf("Failed to flush cookie snapshot to main for %s: %v", filepath.Base(c.tokenFilePath), err)
 	}
 }
 
 // findReusableSession and storeConversationJSON live here as client bridges; hashing/records in gemini-web
-
 func (c *GeminiWebClient) getConfiguredGem() *geminiWeb.Gem {
 	if c.cfg.GeminiWeb.CodeMode {
 		return &geminiWeb.Gem{ID: "coding-partner", Name: "Coding partner", Predefined: true}
