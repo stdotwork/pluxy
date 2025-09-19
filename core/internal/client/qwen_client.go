@@ -37,7 +37,9 @@ const (
 // QwenClient implements the Client interface for OpenAI API
 type QwenClient struct {
 	ClientBase
-	qwenAuth *qwen.QwenAuth
+	qwenAuth        *qwen.QwenAuth
+	tokenFilePath   string
+	snapshotManager *util.Manager[qwen.QwenTokenStorage]
 }
 
 // NewQwenClient creates a new OpenAI client instance
@@ -48,7 +50,7 @@ type QwenClient struct {
 //
 // Returns:
 //   - *QwenClient: A new Qwen client instance.
-func NewQwenClient(cfg *config.Config, ts *qwen.QwenTokenStorage) *QwenClient {
+func NewQwenClient(cfg *config.Config, ts *qwen.QwenTokenStorage, tokenFilePath ...string) *QwenClient {
 	httpClient := util.SetProxy(cfg, &http.Client{})
 
 	// Generate unique client ID
@@ -64,6 +66,47 @@ func NewQwenClient(cfg *config.Config, ts *qwen.QwenTokenStorage) *QwenClient {
 			isAvailable:        true,
 		},
 		qwenAuth: qwen.NewQwenAuth(cfg),
+	}
+
+	// If created with a known token file path, record it.
+	if len(tokenFilePath) > 0 && tokenFilePath[0] != "" {
+		client.tokenFilePath = filepath.Clean(tokenFilePath[0])
+	}
+
+	// If no explicit path provided but email exists, derive the canonical path.
+	if client.tokenFilePath == "" && ts != nil && ts.Email != "" {
+		client.tokenFilePath = filepath.Clean(filepath.Join(cfg.AuthDir, fmt.Sprintf("qwen-%s.json", ts.Email)))
+	}
+
+	if client.tokenFilePath != "" {
+		client.snapshotManager = util.NewManager[qwen.QwenTokenStorage](
+			client.tokenFilePath,
+			ts,
+			util.Hooks[qwen.QwenTokenStorage]{
+				Apply: func(store, snapshot *qwen.QwenTokenStorage) {
+					if snapshot.AccessToken != "" {
+						store.AccessToken = snapshot.AccessToken
+					}
+					if snapshot.RefreshToken != "" {
+						store.RefreshToken = snapshot.RefreshToken
+					}
+					if snapshot.ResourceURL != "" {
+						store.ResourceURL = snapshot.ResourceURL
+					}
+					if snapshot.Expire != "" {
+						store.Expire = snapshot.Expire
+					}
+				},
+				WriteMain: func(path string, data *qwen.QwenTokenStorage) error {
+					return data.SaveTokenToFile(path)
+				},
+			},
+		)
+		if applied, err := client.snapshotManager.Apply(); err != nil {
+			log.Warnf("Failed to apply Qwen cookie snapshot for %s: %v", filepath.Base(client.tokenFilePath), err)
+		} else if applied {
+			log.Debugf("Loaded Qwen cookie snapshot: %s", filepath.Base(util.CookieSnapshotPath(client.tokenFilePath)))
+		}
 	}
 
 	// Initialize model registry and register Qwen models
@@ -275,7 +318,13 @@ func (c *QwenClient) SendRawTokenCount(_ context.Context, _ string, _ []byte, _ 
 // Returns:
 //   - error: An error if the save operation fails, nil otherwise.
 func (c *QwenClient) SaveTokenToFile() error {
-	fileName := filepath.Join(c.cfg.AuthDir, fmt.Sprintf("qwen-%s.json", c.tokenStorage.(*qwen.QwenTokenStorage).Email))
+	ts := c.tokenStorage.(*qwen.QwenTokenStorage)
+	// When the client was created from an auth file, persist via cookie snapshot
+	if c.snapshotManager != nil {
+		return c.snapshotManager.Persist()
+	}
+	// Initial bootstrap (e.g., during OAuth flow) writes the main token file
+	fileName := filepath.Join(c.cfg.AuthDir, fmt.Sprintf("qwen-%s.json", ts.Email))
 	return c.tokenStorage.SaveTokenToFile(fileName)
 }
 
@@ -347,7 +396,7 @@ func (c *QwenClient) APIRequest(ctx context.Context, modelName, endpoint string,
 	}
 
 	var url string
-	if c.tokenStorage.(*qwen.QwenTokenStorage).ResourceURL == "" {
+	if c.tokenStorage.(*qwen.QwenTokenStorage).ResourceURL != "" {
 		url = fmt.Sprintf("https://%s/v1%s", c.tokenStorage.(*qwen.QwenTokenStorage).ResourceURL, endpoint)
 	} else {
 		url = fmt.Sprintf("%s%s", qwenEndpoint, endpoint)
@@ -457,4 +506,40 @@ func (c *QwenClient) IsAvailable() bool {
 // SetUnavailable sets the client to unavailable.
 func (c *QwenClient) SetUnavailable() {
 	c.isAvailable = false
+}
+
+// UnregisterClient flushes cookie snapshot back into the main token file.
+func (c *QwenClient) UnregisterClient() { c.unregisterClient(interfaces.UnregisterReasonReload) }
+
+// UnregisterClientWithReason allows the watcher to adjust persistence behaviour.
+func (c *QwenClient) UnregisterClientWithReason(reason interfaces.UnregisterReason) {
+	c.unregisterClient(reason)
+}
+
+func (c *QwenClient) unregisterClient(reason interfaces.UnregisterReason) {
+	if c.snapshotManager != nil {
+		switch reason {
+		case interfaces.UnregisterReasonAuthFileRemoved:
+			if c.tokenFilePath != "" {
+				log.Debugf("skipping Qwen snapshot flush because auth file is missing: %s", filepath.Base(c.tokenFilePath))
+				util.RemoveCookieSnapshots(c.tokenFilePath)
+			}
+		case interfaces.UnregisterReasonAuthFileUpdated:
+			if c.tokenFilePath != "" {
+				log.Debugf("skipping Qwen snapshot flush because auth file was updated: %s", filepath.Base(c.tokenFilePath))
+				util.RemoveCookieSnapshots(c.tokenFilePath)
+			}
+		case interfaces.UnregisterReasonShutdown, interfaces.UnregisterReasonReload:
+			if err := c.snapshotManager.Flush(); err != nil {
+				log.Errorf("Failed to flush Qwen cookie snapshot to main for %s: %v", filepath.Base(c.tokenFilePath), err)
+			}
+		default:
+			if err := c.snapshotManager.Flush(); err != nil {
+				log.Errorf("Failed to flush Qwen cookie snapshot to main for %s: %v", filepath.Base(c.tokenFilePath), err)
+			}
+		}
+	} else if c.tokenFilePath != "" && (reason == interfaces.UnregisterReasonAuthFileRemoved || reason == interfaces.UnregisterReasonAuthFileUpdated) {
+		util.RemoveCookieSnapshots(c.tokenFilePath)
+	}
+	c.ClientBase.UnregisterClient()
 }
