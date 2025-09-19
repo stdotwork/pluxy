@@ -8,7 +8,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-func ConvertOpenAIResponsesRequestToCodex(_ string, inputRawJSON []byte, _ bool) []byte {
+func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte, _ bool) []byte {
 	rawJSON := bytes.Clone(inputRawJSON)
 
 	rawJSON, _ = sjson.SetBytes(rawJSON, "stream", true)
@@ -16,7 +16,7 @@ func ConvertOpenAIResponsesRequestToCodex(_ string, inputRawJSON []byte, _ bool)
 	rawJSON, _ = sjson.SetBytes(rawJSON, "parallel_tool_calls", true)
 	rawJSON, _ = sjson.SetBytes(rawJSON, "include", []string{"reasoning.encrypted_content"})
 
-	instructions := misc.CodexInstructions
+	instructions := misc.CodexInstructions(modelName)
 
 	originalInstructions := ""
 	originalInstructionsResult := gjson.GetBytes(rawJSON, "instructions")

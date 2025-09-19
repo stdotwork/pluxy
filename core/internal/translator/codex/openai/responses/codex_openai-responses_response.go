@@ -19,7 +19,7 @@ func ConvertCodexResponseToOpenAIResponses(ctx context.Context, modelName string
 		if typeResult := gjson.GetBytes(rawJSON, "type"); typeResult.Exists() {
 			typeStr := typeResult.String()
 			if typeStr == "response.created" || typeStr == "response.in_progress" || typeStr == "response.completed" {
-				instructions := misc.CodexInstructions
+				instructions := misc.CodexInstructions(modelName)
 				instructionsResult := gjson.GetBytes(rawJSON, "response.instructions")
 				if instructionsResult.Raw == instructions {
 					rawJSON, _ = sjson.SetBytes(rawJSON, "response.instructions", gjson.GetBytes(originalRequestRawJSON, "instructions").String())
@@ -33,7 +33,7 @@ func ConvertCodexResponseToOpenAIResponses(ctx context.Context, modelName string
 
 // ConvertCodexResponseToOpenAIResponsesNonStream builds a single Responses JSON
 // from a non-streaming OpenAI Chat Completions response.
-func ConvertCodexResponseToOpenAIResponsesNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+func ConvertCodexResponseToOpenAIResponsesNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)
@@ -54,7 +54,7 @@ func ConvertCodexResponseToOpenAIResponsesNonStream(_ context.Context, _ string,
 		responseResult := rootResult.Get("response")
 		template := responseResult.Raw
 
-		instructions := misc.CodexInstructions
+		instructions := misc.CodexInstructions(modelName)
 		instructionsResult := gjson.Get(template, "instructions")
 		if instructionsResult.Raw == instructions {
 			template, _ = sjson.Set(template, "instructions", gjson.GetBytes(originalRequestRawJSON, "instructions").String())

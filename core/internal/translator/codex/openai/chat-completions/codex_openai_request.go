@@ -97,7 +97,7 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 
 	// Extract system instructions from first system message (string or text object)
 	messages := gjson.GetBytes(rawJSON, "messages")
-	instructions := misc.CodexInstructions
+	instructions := misc.CodexInstructions(modelName)
 	out, _ = sjson.SetRaw(out, "instructions", instructions)
 	// if messages.IsArray() {
 	// 	arr := messages.Array()

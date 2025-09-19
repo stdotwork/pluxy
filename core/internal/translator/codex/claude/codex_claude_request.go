@@ -39,7 +39,7 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 
 	template := `{"model":"","instructions":"","input":[]}`
 
-	instructions := misc.CodexInstructions
+	instructions := misc.CodexInstructions(modelName)
 	template, _ = sjson.SetRaw(template, "instructions", instructions)
 
 	rootResult := gjson.ParseBytes(rawJSON)
