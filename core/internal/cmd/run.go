@@ -26,6 +26,7 @@ import (
 	"github.com/luispater/CLIProxyAPI/v5/internal/config"
 	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
 	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
+	"github.com/luispater/CLIProxyAPI/v5/internal/util"
 	"github.com/luispater/CLIProxyAPI/v5/internal/watcher"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -76,7 +77,7 @@ func StartService(cfg *config.Config, configPath string) {
 		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
 			misc.LogCredentialSeparator()
 			log.Debugf("Loading token from: %s", path)
-			data, errReadFile := os.ReadFile(path)
+			data, errReadFile := util.ReadAuthFilePreferSnapshot(path)
 			if errReadFile != nil {
 				return errReadFile
 			}
@@ -344,6 +345,7 @@ func StartService(cfg *config.Config, configPath string) {
 				}
 				activeClientsMu.RUnlock()
 				for _, c := range snapshot {
+					misc.LogCredentialSeparator()
 					// Persist tokens/cookies then unregister/cleanup per client.
 					_ = c.SaveTokenToFile()
 					switch u := any(c).(type) {

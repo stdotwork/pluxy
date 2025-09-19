@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io/fs"
 	"net/http"
 	"os"
@@ -324,7 +323,7 @@ func (w *Watcher) reloadClients() {
 	// Rebuild auth file hash cache for current clients
 	w.lastAuthHashes = make(map[string]string, len(newFileClients))
 	for path := range newFileClients {
-		if data, err := readAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); err == nil && len(data) > 0 {
+		if data, err := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); err == nil && len(data) > 0 {
 			sum := sha256.Sum256(data)
 			w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
 		}
@@ -353,7 +352,7 @@ func (w *Watcher) reloadClients() {
 
 // createClientFromFile creates a single client instance from a given token file path.
 func (w *Watcher) createClientFromFile(path string, cfg *config.Config) (interfaces.Client, error) {
-	data, errReadFile := readAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay)
+	data, errReadFile := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay)
 	if errReadFile != nil {
 		return nil, errReadFile
 	}
@@ -416,48 +415,9 @@ func (w *Watcher) clientsToSlice(clientMap map[string]interfaces.Client) []inter
 	return s
 }
 
-// readAuthFileWithRetry attempts to read the auth file multiple times to work around
-// short-lived locks on Windows while token files are being written.
-func readAuthFileWithRetry(path string, attempts int, delay time.Duration) ([]byte, error) {
-	read := func(target string) ([]byte, error) {
-		var lastErr error
-		for i := 0; i < attempts; i++ {
-			data, err := os.ReadFile(target)
-			if err == nil {
-				return data, nil
-			}
-			lastErr = err
-			if i < attempts-1 {
-				time.Sleep(delay)
-			}
-		}
-		return nil, lastErr
-	}
-
-	candidates := []string{
-		util.CookieSnapshotPath(path),
-		path,
-	}
-
-	for idx, candidate := range candidates {
-		data, err := read(candidate)
-		if err == nil {
-			return data, nil
-		}
-		if errors.Is(err, os.ErrNotExist) {
-			if idx < len(candidates)-1 {
-				continue
-			}
-		}
-		return nil, err
-	}
-
-	return nil, os.ErrNotExist
-}
-
 // addOrUpdateClient handles the addition or update of a single client.
 func (w *Watcher) addOrUpdateClient(path string) {
-	data, errRead := readAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay)
+	data, errRead := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay)
 	if errRead != nil {
 		log.Errorf("failed to read auth file %s: %v", filepath.Base(path), errRead)
 		return
