@@ -344,6 +344,7 @@ func StartService(cfg *config.Config, configPath string) {
 				}
 				activeClientsMu.RUnlock()
 				for _, c := range snapshot {
+					misc.LogCredentialSeparator()
 					// Persist tokens/cookies then unregister/cleanup per client.
 					_ = c.SaveTokenToFile()
 					switch u := any(c).(type) {
