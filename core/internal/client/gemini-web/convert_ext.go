@@ -1,6 +1,7 @@
 package geminiwebapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -137,5 +138,41 @@ func ConvertOutputToGemini(output *ModelOutput, modelName string, promptText str
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal gemini response: %w", err)
 	}
-	return b, nil
+	return ensureColonSpacing(b), nil
+}
+
+// ensureColonSpacing inserts a single space after JSON key-value colons while
+// leaving string content untouched. This matches the relaxed formatting used by
+// Gemini responses and keeps downstream text-processing tools compatible with
+// the proxy output.
+func ensureColonSpacing(b []byte) []byte {
+	if len(b) == 0 {
+		return b
+	}
+	var out bytes.Buffer
+	out.Grow(len(b) + len(b)/8)
+	inString := false
+	escaped := false
+	for i := 0; i < len(b); i++ {
+		ch := b[i]
+		out.WriteByte(ch)
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch ch {
+		case '\\':
+			escaped = true
+		case '"':
+			inString = !inString
+		case ':':
+			if !inString && i+1 < len(b) {
+				next := b[i+1]
+				if next != ' ' && next != '\n' && next != '\r' && next != '\t' {
+					out.WriteByte(' ')
+				}
+			}
+		}
+	}
+	return out.Bytes()
 }
