@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
 )
@@ -91,6 +92,52 @@ func WriteCookieSnapshot(mainPath string, v any) error {
 		return err
 	}
 	return nil
+}
+
+// ReadAuthFilePreferSnapshot returns the first non-empty auth payload preferring snapshots.
+func ReadAuthFilePreferSnapshot(path string) ([]byte, error) {
+	return ReadAuthFileWithRetry(path, 1, 0)
+}
+
+// ReadAuthFileWithRetry attempts to read an auth file multiple times and prefers cookie snapshots.
+func ReadAuthFileWithRetry(path string, attempts int, delay time.Duration) ([]byte, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	read := func(target string) ([]byte, error) {
+		var lastErr error
+		for i := 0; i < attempts; i++ {
+			data, err := os.ReadFile(target)
+			if err == nil {
+				return data, nil
+			}
+			lastErr = err
+			if i < attempts-1 {
+				time.Sleep(delay)
+			}
+		}
+		return nil, lastErr
+	}
+
+	candidates := []string{
+		CookieSnapshotPath(path),
+		path,
+	}
+
+	for idx, candidate := range candidates {
+		data, err := read(candidate)
+		if err == nil {
+			return data, nil
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			if idx < len(candidates)-1 {
+				continue
+			}
+		}
+		return nil, err
+	}
+
+	return nil, os.ErrNotExist
 }
 
 // RemoveCookieSnapshots removes the snapshot file if it exists.
