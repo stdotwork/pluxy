@@ -23,6 +23,9 @@ import (
 	_ "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini/openai/chat-completions"
 	_ "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini/openai/responses"
 
+	_ "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini-web/openai/chat-completions"
+	_ "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini-web/openai/responses"
+
 	_ "github.com/luispater/CLIProxyAPI/v5/internal/translator/openai/claude"
 	_ "github.com/luispater/CLIProxyAPI/v5/internal/translator/openai/gemini"
 	_ "github.com/luispater/CLIProxyAPI/v5/internal/translator/openai/gemini-cli"
