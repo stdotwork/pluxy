@@ -394,6 +394,7 @@ func (c *GeminiWebClient) prepareChat(ctx context.Context, modelName string, raw
 	c.appendUpstreamRequestLog(ctx, modelName, res.tagged, true, res.prompt, len(uploadedFiles), res.reuse, res.metaLen)
 	gem := c.getConfiguredGem()
 	res.chat = c.gwc.StartChat(model, gem, meta)
+	res.chat.SetRequestedModel(modelName)
 	return res, nil
 }
 
