@@ -170,6 +170,31 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 					node := []byte(`{"role":"model","parts":[{"text":""}]}`)
 					node, _ = sjson.SetBytes(node, "parts.0.text", content.String())
 					out, _ = sjson.SetRawBytes(out, "contents.-1", node)
+				} else if content.IsArray() {
+					// Assistant multimodal content (e.g. text + image) -> single model content with parts
+					node := []byte(`{"role":"model","parts":[]}`)
+					p := 0
+					for _, item := range content.Array() {
+						switch item.Get("type").String() {
+						case "text":
+							node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".text", item.Get("text").String())
+							p++
+						case "image_url":
+							// If the assistant returned an inline data URL, preserve it for history fidelity.
+							imageURL := item.Get("image_url.url").String()
+							if len(imageURL) > 5 { // expect data:...
+								pieces := strings.SplitN(imageURL[5:], ";", 2)
+								if len(pieces) == 2 && len(pieces[1]) > 7 {
+									mime := pieces[0]
+									data := pieces[1][7:]
+									node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.mime_type", mime)
+									node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".inlineData.data", data)
+									p++
+								}
+							}
+						}
+					}
+					out, _ = sjson.SetRawBytes(out, "contents.-1", node)
 				} else if !content.Exists() || content.Type == gjson.Null {
 					// Tool calls -> single model content with functionCall parts
 					tcs := m.Get("tool_calls")
