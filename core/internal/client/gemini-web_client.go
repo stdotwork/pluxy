@@ -207,7 +207,7 @@ func (c *GeminiWebClient) registerModelsOnce() {
 	if c.modelsRegistered {
 		return
 	}
-	c.RegisterModels(GEMINI, geminiWeb.GetGeminiWebAliasedModels())
+	c.RegisterModels(GEMINIWEB, geminiWeb.GetGeminiWebAliasedModels())
 	c.modelsRegistered = true
 }
 
@@ -219,8 +219,8 @@ func (c *GeminiWebClient) EnsureRegistered() {
 	}
 }
 
-func (c *GeminiWebClient) Type() string     { return GEMINI }
-func (c *GeminiWebClient) Provider() string { return GEMINI }
+func (c *GeminiWebClient) Type() string     { return GEMINIWEB }
+func (c *GeminiWebClient) Provider() string { return GEMINIWEB }
 func (c *GeminiWebClient) CanProvideModel(modelName string) bool {
 	geminiWeb.EnsureGeminiWebAliasMap()
 	_, ok := geminiWeb.GeminiWebAliasMap[strings.ToLower(modelName)]
