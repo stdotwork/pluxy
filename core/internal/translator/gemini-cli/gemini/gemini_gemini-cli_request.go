@@ -8,6 +8,7 @@ package gemini
 import (
 	"context"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -29,6 +30,7 @@ import (
 // Returns:
 //   - []string: The transformed request data in Gemini API format
 func ConvertGeminiCliRequestToGemini(ctx context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) []string {
+	log.Debug("ConvertGeminiCliRequestToGemini")
 	if alt, ok := ctx.Value("alt").(string); ok {
 		var chunk []byte
 		if alt == "" {
@@ -68,6 +70,7 @@ func ConvertGeminiCliRequestToGemini(ctx context.Context, _ string, originalRequ
 // Returns:
 //   - string: A Gemini-compatible JSON response containing the response data
 func ConvertGeminiCliRequestToGeminiNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertGeminiCliRequestToGeminiNonStream")
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		return responseResult.Raw

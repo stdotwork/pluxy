@@ -8,7 +8,8 @@ package geminiCLI
 import (
 	"bytes"
 
-	. "github.com/luispater/CLIProxyAPI/v5/internal/translator/openai/gemini"
+	. "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/openai/gemini"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -17,6 +18,7 @@ import (
 // It extracts the model name, generation config, message contents, and tool declarations
 // from the raw JSON request and returns them in the format expected by the OpenAI API.
 func ConvertGeminiCLIRequestToOpenAI(modelName string, inputRawJSON []byte, stream bool) []byte {
+	log.Debug("ConvertGeminiCLIRequestToOpenAI")
 	rawJSON := bytes.Clone(inputRawJSON)
 	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)
 	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelName)

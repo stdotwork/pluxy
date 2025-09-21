@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -34,14 +35,15 @@ type claudeToResponsesState struct {
 	ReasoningIndex     int
 }
 
-var dataTag = []byte("data: ")
+var dataTag = []byte("data:")
 
 func emitEvent(event string, payload string) string {
-	return fmt.Sprintf("event: %s\ndata: %s\n\n", event, payload)
+	return fmt.Sprintf("event: %s\ndata: %s", event, payload)
 }
 
 // ConvertClaudeResponseToOpenAIResponses converts Claude SSE to OpenAI Responses SSE events.
 func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertClaudeResponseToOpenAIResponses")
 	if *param == nil {
 		*param = &claudeToResponsesState{FuncArgsBuf: make(map[int]*strings.Builder), FuncNames: make(map[int]string), FuncCallIDs: make(map[int]string)}
 	}
@@ -51,7 +53,7 @@ func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName strin
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 	root := gjson.ParseBytes(rawJSON)
 	ev := root.Get("type").String()
 	var out []string
@@ -389,6 +391,7 @@ func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName strin
 
 // ConvertClaudeResponseToOpenAIResponsesNonStream aggregates Claude SSE into a single OpenAI Responses JSON.
 func ConvertClaudeResponseToOpenAIResponsesNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertClaudeResponseToOpenAIResponsesNonStream")
 	// Aggregate Claude SSE lines into a single OpenAI Responses JSON (non-stream)
 	// We follow the same aggregation logic as the streaming variant but produce
 	// one final object matching docs/out.json structure.

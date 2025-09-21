@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/v5/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 )
 
 // RequestInfo holds essential details of an incoming HTTP request for logging purposes.

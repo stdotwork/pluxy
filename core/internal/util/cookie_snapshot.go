@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 )
 
 const cookieSnapshotExt = ".cookie"
@@ -76,7 +76,7 @@ func RemoveFile(path string) error {
 func TryReadCookieSnapshotInto(mainPath string, v any) (bool, error) {
 	snap := CookieSnapshotPath(mainPath)
 	if err := ReadJSON(snap, v); err != nil {
-		if err == os.ErrNotExist {
+		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, err
@@ -232,11 +232,6 @@ func WithFallback[T any](fn func() *T) FlushOption[T] {
 	return func(opts *FlushOptions[T]) { opts.Fallback = fn }
 }
 
-// WithMutate allows last-minute mutation of the payload before writing main file.
-func WithMutate[T any](fn func(*T)) FlushOption[T] {
-	return func(opts *FlushOptions[T]) { opts.Mutate = fn }
-}
-
 // Flush commits snapshot (or fallback) into the main token file and removes the snapshot.
 func (m *Manager[T]) Flush(options ...FlushOption[T]) error {
 	if m == nil || m.mainPath == "" {
@@ -272,11 +267,11 @@ func (m *Manager[T]) Flush(options ...FlushOption[T]) error {
 		cfg.Mutate(payload)
 	}
 	if m.hooks.WriteMain != nil {
-		if err := m.hooks.WriteMain(m.mainPath, payload); err != nil {
+		if err = m.hooks.WriteMain(m.mainPath, payload); err != nil {
 			return err
 		}
 	} else {
-		if err := WriteJSON(m.mainPath, payload); err != nil {
+		if err = WriteJSON(m.mainPath, payload); err != nil {
 			return err
 		}
 	}

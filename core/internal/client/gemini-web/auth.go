@@ -164,7 +164,7 @@ func rotate1psidts(cookies map[string]string, proxy string, insecure bool) (stri
 
 	if st, err := os.Stat(cacheFile); err == nil {
 		if time.Since(st.ModTime()) <= time.Minute {
-			if b, err := os.ReadFile(cacheFile); err == nil {
+			if b, errReadFile := os.ReadFile(cacheFile); errReadFile == nil {
 				v := strings.TrimSpace(string(b))
 				if v != "" {
 					return v, nil
@@ -192,7 +192,9 @@ func rotate1psidts(cookies map[string]string, proxy string, insecure bool) (stri
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return "", &AuthError{Msg: "unauthorized"}

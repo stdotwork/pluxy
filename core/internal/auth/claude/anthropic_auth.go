@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	log "github.com/sirupsen/logrus"
 )
 

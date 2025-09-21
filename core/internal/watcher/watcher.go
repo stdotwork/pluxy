@@ -9,8 +9,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,17 +18,18 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/luispater/CLIProxyAPI/v5/internal/auth/claude"
-	"github.com/luispater/CLIProxyAPI/v5/internal/auth/codex"
-	"github.com/luispater/CLIProxyAPI/v5/internal/auth/gemini"
-	"github.com/luispater/CLIProxyAPI/v5/internal/auth/qwen"
-	"github.com/luispater/CLIProxyAPI/v5/internal/client"
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
-	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
+	// "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
+	// "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
+	// "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
+	// "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
+	// "github.com/router-for-me/CLIProxyAPI/v6/internal/client"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	// "github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
+	// "github.com/tidwall/gjson"
 )
 
 // Watcher manages file watching for configuration and authentication files
@@ -36,10 +37,8 @@ type Watcher struct {
 	configPath     string
 	authDir        string
 	config         *config.Config
-	clients        map[string]interfaces.Client
-	apiKeyClients  map[string]interfaces.Client // New field for caching API key clients
 	clientsMutex   sync.RWMutex
-	reloadCallback func(map[string]interfaces.Client, *config.Config)
+	reloadCallback func(*config.Config)
 	watcher        *fsnotify.Watcher
 	lastAuthHashes map[string]string
 	lastConfigHash string
@@ -47,11 +46,14 @@ type Watcher struct {
 
 const (
 	authFileReadMaxAttempts = 5
-	authFileReadRetryDelay  = 100 * time.Millisecond
+	authFileReadRetryDelay  = 0
+	// replaceCheckDelay is a short delay to allow atomic replace (rename) to settle
+	// before deciding whether a Remove event indicates a real deletion.
+	replaceCheckDelay = 50 * time.Millisecond
 )
 
 // NewWatcher creates a new file watcher instance
-func NewWatcher(configPath, authDir string, reloadCallback func(map[string]interfaces.Client, *config.Config)) (*Watcher, error) {
+func NewWatcher(configPath, authDir string, reloadCallback func(*config.Config)) (*Watcher, error) {
 	watcher, errNewWatcher := fsnotify.NewWatcher()
 	if errNewWatcher != nil {
 		return nil, errNewWatcher
@@ -62,8 +64,6 @@ func NewWatcher(configPath, authDir string, reloadCallback func(map[string]inter
 		authDir:        authDir,
 		reloadCallback: reloadCallback,
 		watcher:        watcher,
-		clients:        make(map[string]interfaces.Client),
-		apiKeyClients:  make(map[string]interfaces.Client),
 		lastAuthHashes: make(map[string]string),
 	}, nil
 }
@@ -87,6 +87,8 @@ func (w *Watcher) Start(ctx context.Context) error {
 	// Start the event processing goroutine
 	go w.processEvents(ctx)
 
+	// Perform an initial full reload based on current config and auth dir
+	w.reloadClients()
 	return nil
 }
 
@@ -103,18 +105,8 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 }
 
 // SetClients sets the file-based clients.
-func (w *Watcher) SetClients(clients map[string]interfaces.Client) {
-	w.clientsMutex.Lock()
-	defer w.clientsMutex.Unlock()
-	w.clients = clients
-}
-
-// SetAPIKeyClients sets the API key-based clients.
-func (w *Watcher) SetAPIKeyClients(apiKeyClients map[string]interfaces.Client) {
-	w.clientsMutex.Lock()
-	defer w.clientsMutex.Unlock()
-	w.apiKeyClients = apiKeyClients
-}
+// SetClients removed
+// SetAPIKeyClients removed
 
 // processEvents handles file system events
 func (w *Watcher) processEvents(ctx context.Context) {
@@ -187,6 +179,14 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 		if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
 			w.addOrUpdateClient(event.Name)
 		} else if event.Op&fsnotify.Remove == fsnotify.Remove {
+			// Atomic replace on some platforms may surface as Remove+Create for the target path.
+			// Wait briefly; if the file exists again, treat as update instead of removal.
+			time.Sleep(replaceCheckDelay)
+			if _, statErr := os.Stat(event.Name); statErr == nil {
+				// File exists after a short delay; handle as an update.
+				w.addOrUpdateClient(event.Name)
+				return
+			}
 			w.removeClient(event.Name)
 		}
 	}
@@ -286,8 +286,6 @@ func (w *Watcher) reloadClients() {
 
 	w.clientsMutex.RLock()
 	cfg := w.config
-	oldFileClientCount := len(w.clients)
-	oldAPIKeyClientCount := len(w.apiKeyClients)
 	w.clientsMutex.RUnlock()
 
 	if cfg == nil {
@@ -296,44 +294,42 @@ func (w *Watcher) reloadClients() {
 	}
 
 	// Unregister all old API key clients before creating new ones
-	log.Debugf("unregistering %d old API key clients", oldAPIKeyClientCount)
-	for _, oldClient := range w.apiKeyClients {
-		unregisterClientWithReason(oldClient, interfaces.UnregisterReasonReload)
-	}
+	// no legacy clients to unregister
 
 	// Create new API key clients based on the new config
-	newAPIKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := BuildAPIKeyClients(cfg)
-	log.Debugf("created %d new API key clients", len(newAPIKeyClients))
+	glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := BuildAPIKeyClients(cfg)
+	log.Debugf("created %d new API key clients", 0)
 
 	// Load file-based clients
-	newFileClients, successfulAuthCount := w.loadFileClients(cfg)
-	log.Debugf("loaded %d new file-based clients", len(newFileClients))
+	successfulAuthCount := w.loadFileClients(cfg)
+	log.Debugf("loaded %d new file-based clients", 0)
 
-	// Unregister all old file-based clients
-	log.Debugf("unregistering %d old file-based clients", oldFileClientCount)
-	for _, oldClient := range w.clients {
-		unregisterClientWithReason(oldClient, interfaces.UnregisterReasonReload)
-	}
+	// no legacy file-based clients to unregister
 
 	// Update client maps
 	w.clientsMutex.Lock()
-	w.clients = newFileClients
-	w.apiKeyClients = newAPIKeyClients
 
 	// Rebuild auth file hash cache for current clients
-	w.lastAuthHashes = make(map[string]string, len(newFileClients))
-	for path := range newFileClients {
-		if data, err := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); err == nil && len(data) > 0 {
-			sum := sha256.Sum256(data)
-			w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
+	w.lastAuthHashes = make(map[string]string)
+	// Recompute hashes for current auth files
+	_ = filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return nil
 		}
-	}
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
+			if data, err := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); err == nil && len(data) > 0 {
+				sum := sha256.Sum256(data)
+				w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
+			}
+		}
+		return nil
+	})
 	w.clientsMutex.Unlock()
 
-	totalNewClients := len(newFileClients) + len(newAPIKeyClients)
+	totalNewClients := successfulAuthCount + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
 
 	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
-		oldFileClientCount+oldAPIKeyClientCount,
+		0,
 		totalNewClients,
 		successfulAuthCount,
 		glAPIKeyCount,
@@ -345,75 +341,12 @@ func (w *Watcher) reloadClients() {
 	// Trigger the callback to update the server
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback")
-		combinedClients := w.buildCombinedClientMap()
-		w.reloadCallback(combinedClients, cfg)
+		w.reloadCallback(cfg)
 	}
 }
 
 // createClientFromFile creates a single client instance from a given token file path.
-func (w *Watcher) createClientFromFile(path string, cfg *config.Config) (interfaces.Client, error) {
-	data, errReadFile := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay)
-	if errReadFile != nil {
-		return nil, errReadFile
-	}
-
-	// If the file is empty, it's likely an intermediate state (e.g., after touch, before write).
-	// Silently ignore it and wait for a subsequent write event with content.
-	if len(data) == 0 {
-		return nil, nil // Not an error, just nothing to process yet.
-	}
-
-	tokenType := ""
-	typeResult := gjson.GetBytes(data, "type")
-	if typeResult.Exists() {
-		tokenType = typeResult.String()
-	}
-
-	var err error
-	if tokenType == "gemini" {
-		var ts gemini.GeminiTokenStorage
-		if err = json.Unmarshal(data, &ts); err == nil {
-			clientCtx := context.Background()
-			geminiAuth := gemini.NewGeminiAuth()
-			httpClient, errGetClient := geminiAuth.GetAuthenticatedClient(clientCtx, &ts, cfg)
-			if errGetClient != nil {
-				return nil, errGetClient
-			}
-			return client.NewGeminiCLIClient(httpClient, &ts, cfg), nil
-		}
-	} else if tokenType == "codex" {
-		var ts codex.CodexTokenStorage
-		if err = json.Unmarshal(data, &ts); err == nil {
-			return client.NewCodexClient(cfg, &ts)
-		}
-	} else if tokenType == "claude" {
-		var ts claude.ClaudeTokenStorage
-		if err = json.Unmarshal(data, &ts); err == nil {
-			return client.NewClaudeClient(cfg, &ts), nil
-		}
-	} else if tokenType == "qwen" {
-		var ts qwen.QwenTokenStorage
-		if err = json.Unmarshal(data, &ts); err == nil {
-			return client.NewQwenClient(cfg, &ts, path), nil
-		}
-	} else if tokenType == "gemini-web" {
-		var ts gemini.GeminiWebTokenStorage
-		if err = json.Unmarshal(data, &ts); err == nil {
-			return client.NewGeminiWebClient(cfg, &ts, path)
-		}
-	}
-
-	return nil, err
-}
-
-// clientsToSlice converts the client map to a slice.
-func (w *Watcher) clientsToSlice(clientMap map[string]interfaces.Client) []interfaces.Client {
-	s := make([]interfaces.Client, 0, len(clientMap))
-	for _, v := range clientMap {
-		s = append(s, v)
-	}
-	return s
-}
+// createClientFromFile removed (legacy)
 
 // addOrUpdateClient handles the addition or update of a single client.
 func (w *Watcher) addOrUpdateClient(path string) {
@@ -444,41 +377,14 @@ func (w *Watcher) addOrUpdateClient(path string) {
 		return
 	}
 
-	// If an old client exists, unregister it first
-	if oldClient, ok := w.clients[path]; ok {
-		if _, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
-			log.Debugf("unregistering old client for updated file: %s", filepath.Base(path))
-		}
-		unregisterClientWithReason(oldClient, interfaces.UnregisterReasonAuthFileUpdated)
-	}
-
-	// Create new client (reads the file again internally; this is acceptable as the files are small and it keeps the change minimal)
-	newClient, err := w.createClientFromFile(path, cfg)
-	if err != nil {
-		log.Errorf("failed to create/update client for %s: %v", filepath.Base(path), err)
-		// If creation fails, ensure the old client is removed from the map; don't update hash, let a subsequent change retry
-		delete(w.clients, path)
-		w.clientsMutex.Unlock()
-		return
-	}
-	if newClient == nil {
-		// This branch should not be reached normally (empty files are handled above); a fallback
-		log.Debugf("ignoring auth file with no client created: %s", filepath.Base(path))
-		w.clientsMutex.Unlock()
-		return
-	}
-
-	// Update client and hash cache
-	log.Debugf("successfully created/updated client for %s", filepath.Base(path))
-	w.clients[path] = newClient
+	// Update hash cache
 	w.lastAuthHashes[path] = curHash
 
 	w.clientsMutex.Unlock() // Unlock before the callback
 
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback after add/update")
-		combinedClients := w.buildCombinedClientMap()
-		w.reloadCallback(combinedClients, cfg)
+		w.reloadCallback(cfg)
 	}
 }
 
@@ -487,64 +393,167 @@ func (w *Watcher) removeClient(path string) {
 	w.clientsMutex.Lock()
 
 	cfg := w.config
-	var clientRemoved bool
-
-	// Unregister client if it exists
-	if oldClient, ok := w.clients[path]; ok {
-		if _, canUnregister := any(oldClient).(interface{ UnregisterClient() }); canUnregister {
-			log.Debugf("unregistering client for removed file: %s", filepath.Base(path))
-		}
-		unregisterClientWithReason(oldClient, interfaces.UnregisterReasonAuthFileRemoved)
-		delete(w.clients, path)
-		delete(w.lastAuthHashes, path)
-		log.Debugf("removed client for %s", filepath.Base(path))
-		clientRemoved = true
-	}
+	delete(w.lastAuthHashes, path)
 
 	w.clientsMutex.Unlock() // Release the lock before the callback
 
-	if clientRemoved && w.reloadCallback != nil {
+	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback after removal")
-		combinedClients := w.buildCombinedClientMap()
-		w.reloadCallback(combinedClients, cfg)
+		w.reloadCallback(cfg)
 	}
+}
+
+// SnapshotCombinedClients returns a snapshot of current combined clients.
+// SnapshotCombinedClients removed
+
+// SnapshotCoreAuths converts current clients snapshot into core auth entries.
+func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
+	out := make([]*coreauth.Auth, 0, 32)
+	now := time.Now()
+	// Also synthesize auth entries for OpenAI-compatibility providers directly from config
+	w.clientsMutex.RLock()
+	cfg := w.config
+	w.clientsMutex.RUnlock()
+	if cfg != nil {
+		// Gemini official API keys -> synthesize auths
+		for i := range cfg.GlAPIKey {
+			k := cfg.GlAPIKey[i]
+			a := &coreauth.Auth{
+				ID:       fmt.Sprintf("gemini:apikey:%d", i),
+				Provider: "gemini",
+				Label:    "gemini-apikey",
+				Status:   coreauth.StatusActive,
+				Attributes: map[string]string{
+					"source":  fmt.Sprintf("config:gemini#%d", i),
+					"api_key": k,
+				},
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			out = append(out, a)
+		}
+		// Claude API keys -> synthesize auths
+		for i := range cfg.ClaudeKey {
+			ck := cfg.ClaudeKey[i]
+			attrs := map[string]string{
+				"source":  fmt.Sprintf("config:claude#%d", i),
+				"api_key": ck.APIKey,
+			}
+			if ck.BaseURL != "" {
+				attrs["base_url"] = ck.BaseURL
+			}
+			a := &coreauth.Auth{
+				ID:         fmt.Sprintf("claude:apikey:%d", i),
+				Provider:   "claude",
+				Label:      "claude-apikey",
+				Status:     coreauth.StatusActive,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			out = append(out, a)
+		}
+		// Codex API keys -> synthesize auths
+		for i := range cfg.CodexKey {
+			ck := cfg.CodexKey[i]
+			attrs := map[string]string{
+				"source":  fmt.Sprintf("config:codex#%d", i),
+				"api_key": ck.APIKey,
+			}
+			if ck.BaseURL != "" {
+				attrs["base_url"] = ck.BaseURL
+			}
+			a := &coreauth.Auth{
+				ID:         fmt.Sprintf("codex:apikey:%d", i),
+				Provider:   "codex",
+				Label:      "codex-apikey",
+				Status:     coreauth.StatusActive,
+				Attributes: attrs,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			out = append(out, a)
+		}
+		for i := range cfg.OpenAICompatibility {
+			compat := &cfg.OpenAICompatibility[i]
+			base := compat.BaseURL
+			for j := range compat.APIKeys {
+				key := compat.APIKeys[j]
+				a := &coreauth.Auth{
+					ID:       fmt.Sprintf("openai-compatibility:%s:%d", compat.Name, j),
+					Provider: "openai-compatibility",
+					Label:    compat.Name,
+					Status:   coreauth.StatusActive,
+					Attributes: map[string]string{
+						"source":      fmt.Sprintf("config:%s#%d", compat.Name, j),
+						"base_url":    base,
+						"api_key":     key,
+						"compat_name": compat.Name,
+					},
+					CreatedAt: now,
+					UpdatedAt: now,
+				}
+				out = append(out, a)
+			}
+		}
+	}
+	// Also synthesize auth entries directly from auth files (for OAuth/file-backed providers)
+	entries, _ := os.ReadDir(w.authDir)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".json") {
+			continue
+		}
+		full := filepath.Join(w.authDir, name)
+		data, err := os.ReadFile(full)
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		var metadata map[string]any
+		if err = json.Unmarshal(data, &metadata); err != nil {
+			continue
+		}
+		t, _ := metadata["type"].(string)
+		if t == "" {
+			continue
+		}
+		provider := strings.ToLower(t)
+		if provider == "gemini" {
+			provider = "gemini-cli"
+		}
+		label := provider
+		if email, _ := metadata["email"].(string); email != "" {
+			label = email
+		}
+		a := &coreauth.Auth{
+			ID:       full,
+			Provider: provider,
+			Label:    label,
+			Status:   coreauth.StatusActive,
+			Attributes: map[string]string{
+				"source": full,
+				"path":   full,
+			},
+			Metadata:  metadata,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // buildCombinedClientMap merges file-based clients with API key clients from the cache.
-func (w *Watcher) buildCombinedClientMap() map[string]interfaces.Client {
-	w.clientsMutex.RLock()
-	defer w.clientsMutex.RUnlock()
-
-	combined := make(map[string]interfaces.Client)
-
-	// Add file-based clients
-	for k, v := range w.clients {
-		combined[k] = v
-	}
-
-	// Add cached API key-based clients
-	for k, v := range w.apiKeyClients {
-		combined[k] = v
-	}
-
-	return combined
-}
+// buildCombinedClientMap removed
 
 // unregisterClientWithReason attempts to call client-specific unregister hooks with context.
-func unregisterClientWithReason(c interfaces.Client, reason interfaces.UnregisterReason) {
-	switch u := any(c).(type) {
-	case interface {
-		UnregisterClientWithReason(interfaces.UnregisterReason)
-	}:
-		u.UnregisterClientWithReason(reason)
-	case interface{ UnregisterClient() }:
-		u.UnregisterClient()
-	}
-}
+// unregisterClientWithReason removed
 
 // loadFileClients scans the auth directory and creates clients from .json files.
-func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Client, int) {
-	newClients := make(map[string]interfaces.Client)
+func (w *Watcher) loadFileClients(cfg *config.Config) int {
 	authFileCount := 0
 	successfulAuthCount := 0
 
@@ -553,7 +562,7 @@ func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Cli
 		home, err := os.UserHomeDir()
 		if err != nil {
 			log.Errorf("failed to get home directory: %v", err)
-			return newClients, 0
+			return 0
 		}
 		authDir = filepath.Join(home, authDir[1:])
 	}
@@ -567,11 +576,9 @@ func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Cli
 			authFileCount++
 			misc.LogCredentialSeparator()
 			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
-			if cliClient, errCreate := w.createClientFromFile(path, cfg); errCreate == nil && cliClient != nil {
-				newClients[path] = cliClient
+			// Count readable JSON files as successful auth entries
+			if data, errCreate := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); errCreate == nil && len(data) > 0 {
 				successfulAuthCount++
-			} else if errCreate != nil {
-				log.Errorf("failed to create client from file %s: %v", path, errCreate)
 			}
 		}
 		return nil
@@ -581,58 +588,30 @@ func (w *Watcher) loadFileClients(cfg *config.Config) (map[string]interfaces.Cli
 		log.Errorf("error walking auth directory: %v", errWalk)
 	}
 	log.Debugf("auth directory scan complete - found %d .json files, %d successful authentications", authFileCount, successfulAuthCount)
-	return newClients, successfulAuthCount
+	return successfulAuthCount
 }
 
-func BuildAPIKeyClients(cfg *config.Config) (map[string]interfaces.Client, int, int, int, int) {
-	apiKeyClients := make(map[string]interfaces.Client)
+func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int) {
 	glAPIKeyCount := 0
 	claudeAPIKeyCount := 0
 	codexAPIKeyCount := 0
 	openAICompatCount := 0
 
 	if len(cfg.GlAPIKey) > 0 {
-		for _, key := range cfg.GlAPIKey {
-			httpClient := util.SetProxy(cfg, &http.Client{})
-			misc.LogCredentialSeparator()
-			log.Debug("Initializing with Gemini API Key...")
-			cliClient := client.NewGeminiClient(httpClient, cfg, key)
-			apiKeyClients[cliClient.GetClientID()] = cliClient
-			glAPIKeyCount++
-		}
+		// Stateless executor handles Gemini API keys; avoid constructing legacy clients.
+		glAPIKeyCount += len(cfg.GlAPIKey)
 	}
 	if len(cfg.ClaudeKey) > 0 {
-		for i := range cfg.ClaudeKey {
-			misc.LogCredentialSeparator()
-			log.Debug("Initializing with Claude API Key...")
-			cliClient := client.NewClaudeClientWithKey(cfg, i)
-			apiKeyClients[cliClient.GetClientID()] = cliClient
-			claudeAPIKeyCount++
-		}
+		claudeAPIKeyCount += len(cfg.ClaudeKey)
 	}
 	if len(cfg.CodexKey) > 0 {
-		for i := range cfg.CodexKey {
-			misc.LogCredentialSeparator()
-			log.Debug("Initializing with Codex API Key...")
-			cliClient := client.NewCodexClientWithKey(cfg, i)
-			apiKeyClients[cliClient.GetClientID()] = cliClient
-			codexAPIKeyCount++
-		}
+		codexAPIKeyCount += len(cfg.CodexKey)
 	}
 	if len(cfg.OpenAICompatibility) > 0 {
+		// Do not construct legacy clients for OpenAI-compat providers; these are handled by the stateless executor.
 		for _, compatConfig := range cfg.OpenAICompatibility {
-			for i := 0; i < len(compatConfig.APIKeys); i++ {
-				misc.LogCredentialSeparator()
-				log.Debugf("Initializing OpenAI compatibility client for provider: %s", compatConfig.Name)
-				compatClient, errClient := client.NewOpenAICompatibilityClient(cfg, &compatConfig, i)
-				if errClient != nil {
-					log.Errorf("failed to create OpenAI compatibility client for %s: %v", compatConfig.Name, errClient)
-					continue
-				}
-				apiKeyClients[compatClient.GetClientID()] = compatClient
-				openAICompatCount++
-			}
+			openAICompatCount += len(compatConfig.APIKeys)
 		}
 	}
-	return apiKeyClients, glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
+	return glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
 }

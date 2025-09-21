@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/auth/gemini"
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	log "github.com/sirupsen/logrus"
 )
 

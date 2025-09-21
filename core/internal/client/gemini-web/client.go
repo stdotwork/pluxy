@@ -31,6 +31,13 @@ type GeminiClient struct {
 	rotateCancel    context.CancelFunc
 	insecure        bool
 	accountLabel    string
+	// onCookiesRefreshed is an optional callback invoked after cookies
+	// are refreshed and the __Secure-1PSIDTS value changes.
+	onCookiesRefreshed func()
+}
+
+var NanoBananaModel = map[string]struct{}{
+	"gemini-2.5-flash-image-preview": {},
 }
 
 // NewGeminiClient creates a client. Pass empty strings to auto-detect via browser cookies (not implemented in Go port).
@@ -67,6 +74,13 @@ func WithInsecureTLS(insecure bool) func(*GeminiClient) {
 // for logging purposes.
 func WithAccountLabel(label string) func(*GeminiClient) {
 	return func(c *GeminiClient) { c.accountLabel = label }
+}
+
+// WithOnCookiesRefreshed registers a callback invoked when cookies are refreshed
+// and the __Secure-1PSIDTS value changes. The callback runs in the background
+// refresh goroutine; keep it lightweight and non-blocking.
+func WithOnCookiesRefreshed(cb func()) func(*GeminiClient) {
+	return func(c *GeminiClient) { c.onCookiesRefreshed = cb }
 }
 
 // Init initializes the access token and http client.
@@ -154,6 +168,10 @@ func (c *GeminiClient) startAutoRefresh() {
 				return
 			case <-ticker.C:
 				// Step 1: rotate __Secure-1PSIDTS
+				oldTS := ""
+				if c.Cookies != nil {
+					oldTS = c.Cookies["__Secure-1PSIDTS"]
+				}
 				newTS, err := rotate1psidts(c.Cookies, c.Proxy, c.insecure)
 				if err != nil {
 					Warning("Failed to refresh cookies. Background auto refresh canceled: %v", err)
@@ -185,6 +203,17 @@ func (c *GeminiClient) startAutoRefresh() {
 					DebugRaw("Cookies refreshed [%s]. New __Secure-1PSIDTS: %s", c.accountLabel, MaskToken28(nextCookies["__Secure-1PSIDTS"]))
 				} else {
 					DebugRaw("Cookies refreshed. New __Secure-1PSIDTS: %s", MaskToken28(nextCookies["__Secure-1PSIDTS"]))
+				}
+
+				// Trigger persistence only when TS actually changes
+				if c.onCookiesRefreshed != nil {
+					currentTS := ""
+					if c.Cookies != nil {
+						currentTS = c.Cookies["__Secure-1PSIDTS"]
+					}
+					if currentTS != "" && currentTS != oldTS {
+						c.onCookiesRefreshed()
+					}
 				}
 			}
 		}
@@ -239,6 +268,14 @@ func (c *GeminiClient) GenerateContent(prompt string, files []string, model Mode
 	}
 }
 
+func ensureAnyLen(slice []any, index int) []any {
+	if index < len(slice) {
+		return slice
+	}
+	gap := index + 1 - len(slice)
+	return append(slice, make([]any, gap)...)
+}
+
 func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, gem *Gem, chat *ChatSession) (ModelOutput, error) {
 	var empty ModelOutput
 	// Build f.req
@@ -266,6 +303,14 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	}
 
 	inner := []any{item0, nil, item2}
+	requestedModel := strings.ToLower(model.Name)
+	if chat != nil && chat.RequestedModel() != "" {
+		requestedModel = chat.RequestedModel()
+	}
+	if _, ok := NanoBananaModel[requestedModel]; ok {
+		inner = ensureAnyLen(inner, 49)
+		inner[49] = 14
+	}
 	if gem != nil {
 		// pad with 16 nils then gem ID
 		for i := 0; i < 16; i++ {
@@ -674,16 +719,17 @@ func truncateForLog(s string, n int) string {
 
 // StartChat returns a ChatSession attached to the client
 func (c *GeminiClient) StartChat(model Model, gem *Gem, metadata []string) *ChatSession {
-	return &ChatSession{client: c, metadata: normalizeMeta(metadata), model: model, gem: gem}
+	return &ChatSession{client: c, metadata: normalizeMeta(metadata), model: model, gem: gem, requestedModel: strings.ToLower(model.Name)}
 }
 
 // ChatSession holds conversation metadata
 type ChatSession struct {
-	client     *GeminiClient
-	metadata   []string // cid, rid, rcid
-	lastOutput *ModelOutput
-	model      Model
-	gem        *Gem
+	client         *GeminiClient
+	metadata       []string // cid, rid, rcid
+	lastOutput     *ModelOutput
+	model          Model
+	gem            *Gem
+	requestedModel string
 }
 
 func (cs *ChatSession) String() string {
@@ -710,6 +756,10 @@ func normalizeMeta(v []string) []string {
 
 func (cs *ChatSession) Metadata() []string     { return cs.metadata }
 func (cs *ChatSession) SetMetadata(v []string) { cs.metadata = normalizeMeta(v) }
+func (cs *ChatSession) RequestedModel() string { return cs.requestedModel }
+func (cs *ChatSession) SetRequestedModel(name string) {
+	cs.requestedModel = strings.ToLower(name)
+}
 func (cs *ChatSession) CID() string {
 	if len(cs.metadata) > 0 {
 		return cs.metadata[0]

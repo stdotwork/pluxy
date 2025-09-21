@@ -7,18 +7,17 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/v5/internal/api/handlers"
-	. "github.com/luispater/CLIProxyAPI/v5/internal/constant"
-	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/v5/internal/registry"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
-	log "github.com/sirupsen/logrus"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers"
+	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/tidwall/gjson"
 )
 
@@ -105,73 +104,19 @@ func (h *OpenAIResponsesAPIHandler) handleNonStreamingResponse(c *gin.Context, r
 
 	modelName := gjson.GetBytes(rawJSON, "model").String()
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-
-	var cliClient interfaces.Client
 	defer func() {
-		if cliClient != nil {
-			if mutex := cliClient.GetRequestMutex(); mutex != nil {
-				mutex.Unlock()
-			}
-		}
+		cliCancel()
 	}()
 
-	var errorResponse *interfaces.ErrorMessage
-	retryCount := 0
-	for retryCount <= h.Cfg.RequestRetry {
-		cliClient, errorResponse = h.GetClient(modelName)
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			cliCancel()
-			return
-		}
-
-		resp, err := cliClient.SendRawMessage(cliCtx, modelName, rawJSON, "")
-		if err != nil {
-			errorResponse = err
-			h.LoggingAPIResponseError(cliCtx, err)
-
-			switch err.StatusCode {
-			case 429:
-				if h.Cfg.QuotaExceeded.SwitchProject {
-					log.Debugf("quota exceeded, switch client")
-					continue // Restart the client selection process
-				}
-			case 403, 408, 500, 502, 503, 504:
-				log.Debugf("http status code %d, switch client", err.StatusCode)
-				retryCount++
-				continue
-			case 401:
-				log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
-				errRefreshTokens := cliClient.RefreshTokens(cliCtx)
-				if errRefreshTokens != nil {
-					log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
-					cliClient.SetUnavailable()
-				}
-				retryCount++
-				continue
-			case 402:
-				cliClient.SetUnavailable()
-				continue
-			default:
-				// Forward other errors directly to the client
-				c.Status(err.StatusCode)
-				_, _ = c.Writer.Write([]byte(err.Error.Error()))
-				cliCancel(err.Error)
-			}
-			break
-		} else {
-			_, _ = c.Writer.Write(resp)
-			cliCancel()
-			break
-		}
-	}
-	if errorResponse != nil {
-		c.Status(errorResponse.StatusCode)
-		_, _ = c.Writer.Write([]byte(errorResponse.Error.Error()))
-		cliCancel(errorResponse.Error)
+	resp, errMsg := h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
+	if errMsg != nil {
+		h.WriteErrorResponse(c, errMsg)
 		return
 	}
+	_, _ = c.Writer.Write(resp)
+	return
+
+	// no legacy fallback
 
 }
 
@@ -200,102 +145,49 @@ func (h *OpenAIResponsesAPIHandler) handleStreamingResponse(c *gin.Context, rawJ
 		return
 	}
 
+	// New core execution path
 	modelName := gjson.GetBytes(rawJSON, "model").String()
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
+	dataChan, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
+	h.forwardResponsesStream(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan)
+	return
+}
 
-	var cliClient interfaces.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		if cliClient != nil {
-			if mutex := cliClient.GetRequestMutex(); mutex != nil {
-				mutex.Unlock()
-			}
-		}
-	}()
-
-	var errorResponse *interfaces.ErrorMessage
-	retryCount := 0
-outLoop:
-	for retryCount <= h.Cfg.RequestRetry {
-		cliClient, errorResponse = h.GetClient(modelName)
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			flusher.Flush()
-			cliCancel()
+func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			cancel(c.Request.Context().Err())
 			return
-		}
-
-		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, modelName, rawJSON, "")
-
-		for {
-			select {
-			// Handle client disconnection.
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("openai client disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request.
-					return
-				}
-			// Process incoming response chunks.
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					flusher.Flush()
-					cliCancel()
-					return
-				}
-
-				_, _ = c.Writer.Write(chunk)
-				_, _ = c.Writer.Write([]byte("\n"))
+		case chunk, ok := <-data:
+			if !ok {
 				flusher.Flush()
-			// Handle errors from the backend.
-			case err, okError := <-errChan:
-				if okError {
-					errorResponse = err
-					h.LoggingAPIResponseError(cliCtx, err)
-					switch err.StatusCode {
-					case 429:
-						if h.Cfg.QuotaExceeded.SwitchProject {
-							log.Debugf("quota exceeded, switch client")
-							continue outLoop // Restart the client selection process
-						}
-					case 403, 408, 500, 502, 503, 504:
-						log.Debugf("http status code %d, switch client", err.StatusCode)
-						retryCount++
-						continue outLoop
-					case 401:
-						log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
-						errRefreshTokens := cliClient.RefreshTokens(cliCtx)
-						if errRefreshTokens != nil {
-							log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
-							cliClient.SetUnavailable()
-						}
-						retryCount++
-						continue outLoop
-					case 402:
-						cliClient.SetUnavailable()
-						continue outLoop
-					default:
-						// Forward other errors directly to the client
-						c.Status(err.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						flusher.Flush()
-						cliCancel(err.Error)
-					}
-					return
-				}
-			// Send a keep-alive signal to the client.
-			case <-time.After(500 * time.Millisecond):
+				cancel(nil)
+				return
 			}
-		}
-	}
 
-	if errorResponse != nil {
-		c.Status(errorResponse.StatusCode)
-		_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-		flusher.Flush()
-		cliCancel(errorResponse.Error)
-		return
+			if bytes.HasPrefix(chunk, []byte("event:")) {
+				_, _ = c.Writer.Write([]byte("\n"))
+			}
+			_, _ = c.Writer.Write(chunk)
+			_, _ = c.Writer.Write([]byte("\n"))
+
+			flusher.Flush()
+		case errMsg, ok := <-errs:
+			if !ok {
+				continue
+			}
+			if errMsg != nil {
+				h.WriteErrorResponse(c, errMsg)
+				flusher.Flush()
+			}
+			var execErr error
+			if errMsg != nil {
+				execErr = errMsg.Error
+			}
+			cancel(execErr)
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 }

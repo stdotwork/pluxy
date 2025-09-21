@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 )
 
 // Endpoints used by the Gemini web app

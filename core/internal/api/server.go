@@ -14,19 +14,60 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/v5/internal/api/handlers"
-	"github.com/luispater/CLIProxyAPI/v5/internal/api/handlers/claude"
-	"github.com/luispater/CLIProxyAPI/v5/internal/api/handlers/gemini"
-	managementHandlers "github.com/luispater/CLIProxyAPI/v5/internal/api/handlers/management"
-	"github.com/luispater/CLIProxyAPI/v5/internal/api/handlers/openai"
-	"github.com/luispater/CLIProxyAPI/v5/internal/api/middleware"
-	"github.com/luispater/CLIProxyAPI/v5/internal/client"
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
-	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/v5/internal/logging"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/claude"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/gemini"
+	managementHandlers "github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/management"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/openai"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
+
+type serverOptionConfig struct {
+	extraMiddleware      []gin.HandlerFunc
+	engineConfigurator   func(*gin.Engine)
+	routerConfigurator   func(*gin.Engine, *handlers.BaseAPIHandler, *config.Config)
+	requestLoggerFactory func(*config.Config, string) logging.RequestLogger
+}
+
+// ServerOption customises HTTP server construction.
+type ServerOption func(*serverOptionConfig)
+
+func defaultRequestLoggerFactory(cfg *config.Config, configPath string) logging.RequestLogger {
+	return logging.NewFileRequestLogger(cfg.RequestLog, "logs", filepath.Dir(configPath))
+}
+
+// WithMiddleware appends additional Gin middleware during server construction.
+func WithMiddleware(mw ...gin.HandlerFunc) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.extraMiddleware = append(cfg.extraMiddleware, mw...)
+	}
+}
+
+// WithEngineConfigurator allows callers to mutate the Gin engine prior to middleware setup.
+func WithEngineConfigurator(fn func(*gin.Engine)) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.engineConfigurator = fn
+	}
+}
+
+// WithRouterConfigurator appends a callback after default routes are registered.
+func WithRouterConfigurator(fn func(*gin.Engine, *handlers.BaseAPIHandler, *config.Config)) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.routerConfigurator = fn
+	}
+}
+
+// WithRequestLoggerFactory customises request logger creation.
+func WithRequestLoggerFactory(factory func(*config.Config, string) logging.RequestLogger) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.requestLoggerFactory = factory
+	}
+}
 
 // Server represents the main API server.
 // It encapsulates the Gin engine, HTTP server, handlers, and configuration.
@@ -44,7 +85,8 @@ type Server struct {
 	cfg *config.Config
 
 	// requestLogger is the request logger instance for dynamic configuration updates.
-	requestLogger *logging.FileRequestLogger
+	requestLogger logging.RequestLogger
+	loggerToggle  func(bool)
 
 	// configFilePath is the absolute path to the YAML config file for persistence.
 	configFilePath string
@@ -58,11 +100,16 @@ type Server struct {
 //
 // Parameters:
 //   - cfg: The server configuration
-//   - cliClients: A slice of AI service clients
 //
 // Returns:
 //   - *Server: A new server instance
-func NewServer(cfg *config.Config, cliClients []interfaces.Client, configFilePath string) *Server {
+func NewServer(cfg *config.Config, authManager *auth.Manager, configFilePath string, opts ...ServerOption) *Server {
+	optionState := &serverOptionConfig{
+		requestLoggerFactory: defaultRequestLoggerFactory,
+	}
+	for i := range opts {
+		opts[i](optionState)
+	}
 	// Set gin mode
 	if !cfg.Debug {
 		gin.SetMode(gin.ReleaseMode)
@@ -70,31 +117,50 @@ func NewServer(cfg *config.Config, cliClients []interfaces.Client, configFilePat
 
 	// Create gin engine
 	engine := gin.New()
+	if optionState.engineConfigurator != nil {
+		optionState.engineConfigurator(engine)
+	}
 
 	// Add middleware
 	engine.Use(gin.Logger())
 	engine.Use(gin.Recovery())
+	for _, mw := range optionState.extraMiddleware {
+		engine.Use(mw)
+	}
 
 	// Add request logging middleware (positioned after recovery, before auth)
 	// Resolve logs directory relative to the configuration file directory.
-	requestLogger := logging.NewFileRequestLogger(cfg.RequestLog, "logs", filepath.Dir(configFilePath))
-	engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
+	var requestLogger logging.RequestLogger
+	var toggle func(bool)
+	if optionState.requestLoggerFactory != nil {
+		requestLogger = optionState.requestLoggerFactory(cfg, configFilePath)
+	}
+	if requestLogger != nil {
+		engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
+		if setter, ok := requestLogger.(interface{ SetEnabled(bool) }); ok {
+			toggle = setter.SetEnabled
+		}
+	}
 
 	engine.Use(corsMiddleware())
 
 	// Create server instance
 	s := &Server{
 		engine:         engine,
-		handlers:       handlers.NewBaseAPIHandlers(cliClients, cfg),
+		handlers:       handlers.NewBaseAPIHandlers(cfg, authManager),
 		cfg:            cfg,
 		requestLogger:  requestLogger,
+		loggerToggle:   toggle,
 		configFilePath: configFilePath,
 	}
 	// Initialize management handler
-	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath)
+	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 
 	// Setup routes
 	s.setupRoutes()
+	if optionState.routerConfigurator != nil {
+		optionState.routerConfigurator(engine, s.handlers, cfg)
+	}
 
 	// Create HTTP server
 	s.server = &http.Server{
@@ -349,11 +415,14 @@ func corsMiddleware() gin.HandlerFunc {
 // Parameters:
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
-func (s *Server) UpdateClients(clients map[string]interfaces.Client, cfg *config.Config) {
-	clientSlice := s.clientsToSlice(clients)
+func (s *Server) UpdateClients(cfg *config.Config) {
 	// Update request logger enabled state if it has changed
 	if s.requestLogger != nil && s.cfg.RequestLog != cfg.RequestLog {
-		s.requestLogger.SetEnabled(cfg.RequestLog)
+		if s.loggerToggle != nil {
+			s.loggerToggle(cfg.RequestLog)
+		} else if toggler, ok := s.requestLogger.(interface{ SetEnabled(bool) }); ok {
+			toggler.SetEnabled(cfg.RequestLog)
+		}
 		log.Debugf("request logging updated from %t to %t", s.cfg.RequestLog, cfg.RequestLog)
 	}
 
@@ -364,47 +433,49 @@ func (s *Server) UpdateClients(clients map[string]interfaces.Client, cfg *config
 	}
 
 	s.cfg = cfg
-	s.handlers.UpdateClients(clientSlice, cfg)
+	s.handlers.UpdateClients(cfg)
 	if s.mgmt != nil {
 		s.mgmt.SetConfig(cfg)
+		s.mgmt.SetAuthManager(s.handlers.AuthManager)
 	}
 
-	// Count client types for detailed logging
+	// Count types from AuthManager state + config
 	authFiles := 0
 	glAPIKeyCount := 0
 	claudeAPIKeyCount := 0
 	codexAPIKeyCount := 0
 	openAICompatCount := 0
 
-	for _, c := range clientSlice {
-		switch cl := c.(type) {
-		case *client.GeminiCLIClient:
-			authFiles++
-		case *client.GeminiWebClient:
-			authFiles++
-		case *client.CodexClient:
-			if cl.GetAPIKey() == "" {
-				authFiles++
-			} else {
+	if s.handlers != nil && s.handlers.AuthManager != nil {
+		for _, a := range s.handlers.AuthManager.List() {
+			if a == nil {
+				continue
+			}
+			if a.Attributes != nil {
+				if p := a.Attributes["path"]; p != "" {
+					authFiles++
+					continue
+				}
+			}
+			switch strings.ToLower(a.Provider) {
+			case "gemini":
+				glAPIKeyCount++
+			case "claude":
+				claudeAPIKeyCount++
+			case "codex":
 				codexAPIKeyCount++
 			}
-		case *client.ClaudeClient:
-			if cl.GetAPIKey() == "" {
-				authFiles++
-			} else {
-				claudeAPIKeyCount++
-			}
-		case *client.QwenClient:
-			authFiles++
-		case *client.GeminiClient:
-			glAPIKeyCount++
-		case *client.OpenAICompatibilityClient:
-			openAICompatCount++
+		}
+	}
+	if cfg != nil {
+		for i := range cfg.OpenAICompatibility {
+			openAICompatCount += len(cfg.OpenAICompatibility[i].APIKeys)
 		}
 	}
 
+	total := authFiles + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
 	log.Infof("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
-		len(clientSlice),
+		total,
 		authFiles,
 		glAPIKeyCount,
 		claudeAPIKeyCount,
@@ -481,10 +552,4 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func (s *Server) clientsToSlice(clientMap map[string]interfaces.Client) []interfaces.Client {
-	slice := make([]interfaces.Client, 0, len(clientMap))
-	for _, v := range clientMap {
-		slice = append(slice, v)
-	}
-	return slice
-}
+// legacy clientsToSlice removed; handlers no longer consume legacy client slices

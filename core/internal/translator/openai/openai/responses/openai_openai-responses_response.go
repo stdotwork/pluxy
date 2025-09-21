@@ -1,11 +1,13 @@
 package responses
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -34,12 +36,13 @@ type oaiToResponsesState struct {
 }
 
 func emitRespEvent(event string, payload string) string {
-	return fmt.Sprintf("event: %s\ndata: %s\n\n", event, payload)
+	return fmt.Sprintf("event: %s\ndata: %s", event, payload)
 }
 
 // ConvertOpenAIChatCompletionsResponseToOpenAIResponses converts OpenAI Chat Completions streaming chunks
 // to OpenAI Responses SSE events (response.*).
 func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertOpenAIChatCompletionsResponseToOpenAIResponses")
 	if *param == nil {
 		*param = &oaiToResponsesState{
 			FuncArgsBuf:     make(map[int]*strings.Builder),
@@ -54,6 +57,10 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		}
 	}
 	st := (*param).(*oaiToResponsesState)
+
+	if bytes.HasPrefix(rawJSON, []byte("data:")) {
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
+	}
 
 	root := gjson.ParseBytes(rawJSON)
 	obj := root.Get("object").String()
@@ -511,6 +518,7 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 // ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream builds a single Responses JSON
 // from a non-streaming OpenAI Chat Completions response.
 func ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream")
 	root := gjson.ParseBytes(rawJSON)
 
 	// Basic response scaffold
@@ -540,7 +548,7 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(_ context.Co
 			resp, _ = sjson.Set(resp, "max_output_tokens", v.Int())
 		} else {
 			// Also support max_tokens from chat completion style
-			if v := req.Get("max_tokens"); v.Exists() {
+			if v = req.Get("max_tokens"); v.Exists() {
 				resp, _ = sjson.Set(resp, "max_output_tokens", v.Int())
 			}
 		}
@@ -549,7 +557,7 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(_ context.Co
 		}
 		if v := req.Get("model"); v.Exists() {
 			resp, _ = sjson.Set(resp, "model", v.String())
-		} else if v := root.Get("model"); v.Exists() {
+		} else if v = root.Get("model"); v.Exists() {
 			resp, _ = sjson.Set(resp, "model", v.String())
 		}
 		if v := req.Get("parallel_tool_calls"); v.Exists() {

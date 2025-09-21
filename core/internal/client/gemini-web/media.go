@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	misc "github.com/luispater/CLIProxyAPI/v5/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/tidwall/gjson"
 )
 
@@ -118,7 +118,9 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("Error downloading image: %d %s", resp.StatusCode, resp.Status)
 	}
@@ -128,7 +130,7 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 	if path == "" {
 		path = "temp"
 	}
-	if err := os.MkdirAll(path, 0o755); err != nil {
+	if err = os.MkdirAll(path, 0o755); err != nil {
 		return "", err
 	}
 	dest := filepath.Join(path, filename)
@@ -159,21 +161,21 @@ func (g GeneratedImage) Save(path string, filename string, fullSize bool, verbos
 	if len(g.Cookies) == 0 {
 		return "", &ValueError{Msg: "GeneratedImage requires cookies."}
 	}
-	url := g.URL
+	strURL := g.URL
 	if fullSize {
-		url = url + "=s2048"
+		strURL = strURL + "=s2048"
 	}
 	if filename == "" {
 		name := time.Now().Format("20060102150405")
-		if len(url) >= 10 {
-			name = fmt.Sprintf("%s_%s.png", name, url[len(url)-10:])
+		if len(strURL) >= 10 {
+			name = fmt.Sprintf("%s_%s.png", name, strURL[len(strURL)-10:])
 		} else {
 			name += ".png"
 		}
 		filename = name
 	}
 	tmp := g.Image
-	tmp.URL = url
+	tmp.URL = strURL
 	return tmp.Save(path, filename, g.Cookies, verbose, skipInvalidFilename, insecure)
 }
 
@@ -331,7 +333,9 @@ func uploadFile(path string, proxy string, insecure bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -339,14 +343,14 @@ func uploadFile(path string, proxy string, insecure bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := io.Copy(fw, f); err != nil {
+	if _, err = io.Copy(fw, f); err != nil {
 		return "", err
 	}
 	_ = mw.Close()
 
 	tr := &http.Transport{}
 	if proxy != "" {
-		if pu, err := url.Parse(proxy); err == nil {
+		if pu, errParse := url.Parse(proxy); errParse == nil {
 			tr.Proxy = http.ProxyURL(pu)
 		}
 	}
@@ -369,7 +373,9 @@ func uploadFile(path string, proxy string, insecure bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", &APIError{Msg: resp.Status}
 	}

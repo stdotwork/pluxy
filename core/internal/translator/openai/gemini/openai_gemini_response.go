@@ -6,11 +6,13 @@
 package gemini
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -45,6 +47,7 @@ type ToolCallAccumulator struct {
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response.
 func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertOpenAIResponseToGemini")
 	if *param == nil {
 		*param = &ConvertOpenAIResponseToGeminiParams{
 			ToolCallsAccumulator: nil,
@@ -56,6 +59,10 @@ func ConvertOpenAIResponseToGemini(_ context.Context, _ string, originalRequestR
 	// Handle [DONE] marker
 	if strings.TrimSpace(string(rawJSON)) == "[DONE]" {
 		return []string{}
+	}
+
+	if bytes.HasPrefix(rawJSON, []byte("data:")) {
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
 	}
 
 	root := gjson.ParseBytes(rawJSON)
@@ -507,6 +514,7 @@ func tryParseNumber(s string) (interface{}, bool) {
 // Returns:
 //   - string: A Gemini-compatible JSON response.
 func ConvertOpenAIResponseToGeminiNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertOpenAIResponseToGeminiNonStream")
 	root := gjson.ParseBytes(rawJSON)
 
 	// Base Gemini response template

@@ -1,7 +1,7 @@
 package util
 
 import (
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	log "github.com/sirupsen/logrus"
 )
 

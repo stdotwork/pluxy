@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -27,15 +28,19 @@ type Handler struct {
 
 	attemptsMu     sync.Mutex
 	failedAttempts map[string]*attemptInfo // keyed by client IP
+	authManager    *coreauth.Manager
 }
 
 // NewHandler creates a new management handler instance.
-func NewHandler(cfg *config.Config, configFilePath string) *Handler {
-	return &Handler{cfg: cfg, configFilePath: configFilePath, failedAttempts: make(map[string]*attemptInfo)}
+func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Manager) *Handler {
+	return &Handler{cfg: cfg, configFilePath: configFilePath, failedAttempts: make(map[string]*attemptInfo), authManager: manager}
 }
 
 // SetConfig updates the in-memory config reference when the server hot-reloads.
 func (h *Handler) SetConfig(cfg *config.Config) { h.cfg = cfg }
+
+// SetAuthManager updates the auth manager reference used by management endpoints.
+func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = manager }
 
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.

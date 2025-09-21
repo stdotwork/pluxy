@@ -7,18 +7,17 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/v5/internal/api/handlers"
-	. "github.com/luispater/CLIProxyAPI/v5/internal/constant"
-	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/v5/internal/registry"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
-	log "github.com/sirupsen/logrus"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers"
+	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/tidwall/gjson"
 )
 
@@ -129,111 +128,47 @@ func (h *ClaudeCodeAPIHandler) handleStreamingResponse(c *gin.Context, rawJSON [
 	// This allows proper cleanup and cancellation of ongoing requests
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 
-	var cliClient interfaces.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		// This prevents deadlocks and ensures proper resource cleanup
-		if cliClient != nil {
-			if mutex := cliClient.GetRequestMutex(); mutex != nil {
-				mutex.Unlock()
-			}
-		}
-	}()
+	dataChan, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
+	h.forwardClaudeStream(c, flusher, func(err error) { cliCancel(err) }, dataChan, errChan)
+	return
+}
 
-	var errorResponse *interfaces.ErrorMessage
-	retryCount := 0
-	// Main client rotation loop with quota management
-	// This loop implements a sophisticated load balancing and failover mechanism
-outLoop:
-	for retryCount <= h.Cfg.RequestRetry {
-		cliClient, errorResponse = h.GetClient(modelName)
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			flusher.Flush()
-			cliCancel()
+func (h *ClaudeCodeAPIHandler) forwardClaudeStream(c *gin.Context, flusher http.Flusher, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			cancel(c.Request.Context().Err())
 			return
-		}
-
-		// Initiate streaming communication with the backend client using raw JSON
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, modelName, rawJSON, "")
-
-		// Main streaming loop - handles multiple concurrent events using Go channels
-		// This select statement manages four different types of events simultaneously
-		for {
-			select {
-			// Case 1: Handle client disconnection
-			// Detects when the HTTP client has disconnected and cleans up resources
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("claude client disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request to prevent resource leaks
-					return
-				}
-
-			// Case 2: Process incoming response chunks from the backend
-			// This handles the actual streaming data from the AI model
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					flusher.Flush()
-					cliCancel()
-					return
-				}
-
-				_, _ = c.Writer.Write(chunk)
-				_, _ = c.Writer.Write([]byte("\n"))
-			// Case 3: Handle errors from the backend
-			// This manages various error conditions and implements retry logic
-			case errInfo, okError := <-errChan:
-				if okError {
-					errorResponse = errInfo
-					h.LoggingAPIResponseError(cliCtx, errInfo)
-					// Special handling for quota exceeded errors
-					// If configured, attempt to switch to a different project/client
-					switch errInfo.StatusCode {
-					case 429:
-						if h.Cfg.QuotaExceeded.SwitchProject {
-							log.Debugf("quota exceeded, switch client")
-							continue outLoop // Restart the client selection process
-						}
-					case 403, 408, 500, 502, 503, 504:
-						log.Debugf("http status code %d, switch client, %s", errInfo.StatusCode, util.HideAPIKey(cliClient.GetEmail()))
-						retryCount++
-						continue outLoop
-					case 401:
-						log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
-						err := cliClient.RefreshTokens(cliCtx)
-						if err != nil {
-							log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
-							cliClient.SetUnavailable()
-						}
-						retryCount++
-						continue outLoop
-					case 402:
-						cliClient.SetUnavailable()
-						continue outLoop
-					default:
-						// Forward other errors directly to the client
-						c.Status(errInfo.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, errInfo.Error.Error())
-						flusher.Flush()
-						cliCancel(errInfo.Error)
-					}
-					return
-				}
-
-			// Case 4: Send periodic keep-alive signals
-			// Prevents connection timeouts during long-running requests
-			case <-time.After(500 * time.Millisecond):
+		case chunk, ok := <-data:
+			if !ok {
+				flusher.Flush()
+				cancel(nil)
+				return
 			}
-		}
-	}
 
-	if errorResponse != nil {
-		c.Status(errorResponse.StatusCode)
-		_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-		flusher.Flush()
-		cliCancel(errorResponse.Error)
-		return
+			if bytes.HasPrefix(chunk, []byte("event:")) {
+				_, _ = c.Writer.Write([]byte("\n"))
+			}
+
+			_, _ = c.Writer.Write(chunk)
+			_, _ = c.Writer.Write([]byte("\n"))
+
+			flusher.Flush()
+		case errMsg, ok := <-errs:
+			if !ok {
+				continue
+			}
+			if errMsg != nil {
+				h.WriteErrorResponse(c, errMsg)
+				flusher.Flush()
+			}
+			var execErr error
+			if errMsg != nil {
+				execErr = errMsg.Error
+			}
+			cancel(execErr)
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 }

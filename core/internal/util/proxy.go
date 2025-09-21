@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
 )

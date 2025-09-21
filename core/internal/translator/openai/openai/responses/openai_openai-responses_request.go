@@ -3,6 +3,7 @@ package responses
 import (
 	"bytes"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -27,6 +28,7 @@ import (
 // Returns:
 //   - []byte: The transformed request data in OpenAI chat completions format
 func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inputRawJSON []byte, stream bool) []byte {
+	log.Debug("ConvertOpenAIResponsesRequestToOpenAIChatCompletions")
 	rawJSON := bytes.Clone(inputRawJSON)
 	// Base OpenAI chat completions template with default values
 	out := `{"model":"","messages":[],"stream":false}`

@@ -13,12 +13,13 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
 var (
-	dataTag = []byte("data: ")
+	dataTag = []byte("data:")
 )
 
 // ConvertAnthropicResponseToOpenAIParams holds parameters for response conversion
@@ -51,6 +52,7 @@ type ToolCallAccumulator struct {
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
 func ConvertClaudeResponseToOpenAI(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertClaudeResponseToOpenAI")
 	if *param == nil {
 		*param = &ConvertAnthropicResponseToOpenAIParams{
 			CreatedAt:    0,
@@ -62,7 +64,7 @@ func ConvertClaudeResponseToOpenAI(_ context.Context, modelName string, original
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	root := gjson.ParseBytes(rawJSON)
 	eventType := root.Get("type").String()
@@ -278,6 +280,8 @@ func mapAnthropicStopReasonToOpenAI(anthropicReason string) string {
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertClaudeResponseToOpenAINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertClaudeResponseToOpenAINonStream")
+
 	chunks := make([][]byte, 0)
 
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
@@ -289,7 +293,7 @@ func ConvertClaudeResponseToOpenAINonStream(_ context.Context, _ string, origina
 		if !bytes.HasPrefix(line, dataTag) {
 			continue
 		}
-		chunks = append(chunks, line[6:])
+		chunks = append(chunks, bytes.TrimSpace(rawJSON[5:]))
 	}
 
 	// Base OpenAI non-streaming response template

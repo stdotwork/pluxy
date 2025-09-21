@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -41,6 +42,7 @@ type Params struct {
 // Returns:
 //   - []string: A slice of strings, each containing a Claude-compatible JSON response.
 func ConvertGeminiResponseToClaude(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertGeminiResponseToClaude")
 	if *param == nil {
 		*param = &Params{
 			IsGlAPIKey:       false,
@@ -246,5 +248,6 @@ func ConvertGeminiResponseToClaude(_ context.Context, _ string, originalRequestR
 // Returns:
 //   - string: A Claude-compatible JSON response.
 func ConvertGeminiResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
+	log.Debug("ConvertGeminiResponseToClaudeNonStream")
 	return ""
 }

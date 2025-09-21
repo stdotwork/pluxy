@@ -10,8 +10,9 @@ import (
 	"encoding/json"
 	"strings"
 
-	client "github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
+	client "github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -35,6 +36,7 @@ import (
 // Returns:
 //   - []byte: The transformed request data in Gemini CLI API format
 func ConvertClaudeRequestToCLI(modelName string, inputRawJSON []byte, _ bool) []byte {
+	log.Debug("ConvertClaudeRequestToCLI")
 	rawJSON := bytes.Clone(inputRawJSON)
 	var pathsToDelete []string
 	root := gjson.ParseBytes(rawJSON)

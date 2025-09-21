@@ -28,6 +28,7 @@ The first Chinese provider has now been added: [Qwen Code](https://github.com/Qw
 - Qwen Code multi-account load balancing
 - OpenAI Codex multi-account load balancing
 - OpenAI-compatible upstream providers via config (e.g., OpenRouter)
+- Reusable Go SDK for embedding the proxy (see `docs/sdk-usage.md`)
 
 ## Installation
 

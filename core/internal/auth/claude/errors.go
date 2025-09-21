@@ -100,13 +100,6 @@ var (
 		Message: "Timeout waiting for OAuth callback",
 		Code:    http.StatusRequestTimeout,
 	}
-
-	// ErrBrowserOpenFailed represents an error when opening the browser for authentication fails.
-	ErrBrowserOpenFailed = &AuthenticationError{
-		Type:    "browser_open_failed",
-		Message: "Failed to open browser for authentication",
-		Code:    http.StatusInternalServerError,
-	}
 )
 
 // NewAuthenticationError creates a new authentication error with a cause based on a base error.

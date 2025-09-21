@@ -13,12 +13,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/v5/internal/api/handlers"
-	. "github.com/luispater/CLIProxyAPI/v5/internal/constant"
-	"github.com/luispater/CLIProxyAPI/v5/internal/interfaces"
-	"github.com/luispater/CLIProxyAPI/v5/internal/registry"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
-	log "github.com/sirupsen/logrus"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers"
+	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 )
 
 // GeminiAPIHandler contains the handlers for Gemini API endpoints.
@@ -210,105 +211,9 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 	}
 
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-
-	var cliClient interfaces.Client
-	defer func() {
-		// Ensure the client's mutex is unlocked on function exit.
-		if cliClient != nil {
-			if mutex := cliClient.GetRequestMutex(); mutex != nil {
-				mutex.Unlock()
-			}
-		}
-	}()
-
-	var errorResponse *interfaces.ErrorMessage
-	retryCount := 0
-outLoop:
-	for retryCount <= h.Cfg.RequestRetry {
-		cliClient, errorResponse = h.GetClient(modelName)
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			flusher.Flush()
-			cliCancel()
-			return
-		}
-
-		// Send the message and receive response chunks and errors via channels.
-		respChan, errChan := cliClient.SendRawMessageStream(cliCtx, modelName, rawJSON, alt)
-		for {
-			select {
-			// Handle client disconnection.
-			case <-c.Request.Context().Done():
-				if c.Request.Context().Err().Error() == "context canceled" {
-					log.Debugf("gemini client disconnected: %v", c.Request.Context().Err())
-					cliCancel() // Cancel the backend request.
-					return
-				}
-			// Process incoming response chunks.
-			case chunk, okStream := <-respChan:
-				if !okStream {
-					cliCancel()
-					return
-				}
-
-				if alt == "" {
-					_, _ = c.Writer.Write([]byte("data: "))
-					_, _ = c.Writer.Write(chunk)
-					_, _ = c.Writer.Write([]byte("\n\n"))
-				} else {
-					_, _ = c.Writer.Write(chunk)
-				}
-				flusher.Flush()
-			// Handle errors from the backend.
-			case err, okError := <-errChan:
-				if okError {
-					errorResponse = err
-					h.LoggingAPIResponseError(cliCtx, err)
-
-					switch err.StatusCode {
-					case 429:
-						if h.Cfg.QuotaExceeded.SwitchProject {
-							log.Debugf("quota exceeded, switch client")
-							continue outLoop // Restart the client selection process
-						}
-					case 403, 408, 500, 502, 503, 504:
-						log.Debugf("http status code %d, switch client", err.StatusCode)
-						retryCount++
-						continue outLoop
-					case 401:
-						log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
-						errRefreshTokens := cliClient.RefreshTokens(cliCtx)
-						if errRefreshTokens != nil {
-							log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
-							cliClient.SetUnavailable()
-						}
-						retryCount++
-						continue outLoop
-					case 402:
-						cliClient.SetUnavailable()
-						continue outLoop
-					default:
-						// Forward other errors directly to the client
-						c.Status(err.StatusCode)
-						_, _ = fmt.Fprint(c.Writer, err.Error.Error())
-						flusher.Flush()
-						cliCancel(err.Error)
-					}
-					return
-				}
-			// Send a keep-alive signal to the client.
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
-	}
-	if errorResponse != nil {
-		c.Status(errorResponse.StatusCode)
-		_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-		flusher.Flush()
-		cliCancel(errorResponse.Error)
-		return
-	}
+	dataChan, errChan := h.ExecuteStreamWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
+	h.forwardGeminiStream(c, flusher, alt, func(err error) { cliCancel(err) }, dataChan, errChan)
+	return
 }
 
 // handleCountTokens handles token counting requests for Gemini models.
@@ -324,42 +229,32 @@ func (h *GeminiAPIHandler) handleCountTokens(c *gin.Context, modelName string, r
 
 	alt := h.GetAlt(c)
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
+	defer func() { cliCancel() }()
 
-	var cliClient interfaces.Client
-	defer func() {
-		if cliClient != nil {
-			if mutex := cliClient.GetRequestMutex(); mutex != nil {
-				mutex.Unlock()
-			}
-		}
-	}()
-
-	for {
-		var errorResponse *interfaces.ErrorMessage
-		cliClient, errorResponse = h.GetClient(modelName, false)
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			cliCancel()
+	// Execute via AuthManager with action=countTokens
+	req := coreexecutor.Request{
+		Model:   modelName,
+		Payload: rawJSON,
+		Metadata: map[string]any{
+			"action": "countTokens",
+		},
+	}
+	opts := coreexecutor.Options{
+		Stream:          false,
+		Alt:             alt,
+		OriginalRequest: rawJSON,
+		SourceFormat:    sdktranslator.FromString(h.HandlerType()),
+	}
+	resp, err := h.AuthManager.Execute(cliCtx, []string{"gemini"}, req, opts)
+	if err != nil {
+		if msg, ok := executor.UnwrapError(err); ok {
+			h.WriteErrorResponse(c, msg)
 			return
 		}
-
-		resp, err := cliClient.SendRawTokenCount(cliCtx, modelName, rawJSON, alt)
-		if err != nil {
-			if err.StatusCode == 429 && h.Cfg.QuotaExceeded.SwitchProject {
-				continue
-			} else {
-				c.Status(err.StatusCode)
-				_, _ = c.Writer.Write([]byte(err.Error.Error()))
-				cliCancel(err.Error)
-			}
-			break
-		} else {
-			_, _ = c.Writer.Write(resp)
-			cliCancel(resp)
-			break
-		}
+		h.WriteErrorResponse(c, &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: err})
+		return
 	}
+	_, _ = c.Writer.Write(resp.Payload)
 }
 
 // handleGenerateContent handles non-streaming content generation requests for Gemini models.
@@ -373,75 +268,52 @@ func (h *GeminiAPIHandler) handleCountTokens(c *gin.Context, modelName string, r
 //   - rawJSON: The raw JSON request body containing generation parameters and content
 func (h *GeminiAPIHandler) handleGenerateContent(c *gin.Context, modelName string, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
-
 	alt := h.GetAlt(c)
-
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-
-	var cliClient interfaces.Client
-	defer func() {
-		if cliClient != nil {
-			if mutex := cliClient.GetRequestMutex(); mutex != nil {
-				mutex.Unlock()
-			}
-		}
-	}()
-
-	var errorResponse *interfaces.ErrorMessage
-	retryCount := 0
-	for retryCount <= h.Cfg.RequestRetry {
-		cliClient, errorResponse = h.GetClient(modelName)
-		if errorResponse != nil {
-			c.Status(errorResponse.StatusCode)
-			_, _ = fmt.Fprint(c.Writer, errorResponse.Error.Error())
-			cliCancel()
-			return
-		}
-
-		resp, err := cliClient.SendRawMessage(cliCtx, modelName, rawJSON, alt)
-		if err != nil {
-			errorResponse = err
-			h.LoggingAPIResponseError(cliCtx, err)
-
-			switch err.StatusCode {
-			case 429:
-				if h.Cfg.QuotaExceeded.SwitchProject {
-					log.Debugf("quota exceeded, switch client")
-					continue // Restart the client selection process
-				}
-			case 403, 408, 500, 502, 503, 504:
-				log.Debugf("http status code %d, switch client", err.StatusCode)
-				retryCount++
-				continue
-			case 401:
-				log.Debugf("unauthorized request, try to refresh token, %s", util.HideAPIKey(cliClient.GetEmail()))
-				errRefreshTokens := cliClient.RefreshTokens(cliCtx)
-				if errRefreshTokens != nil {
-					log.Debugf("refresh token failed, switch client, %s", util.HideAPIKey(cliClient.GetEmail()))
-					cliClient.SetUnavailable()
-				}
-				retryCount++
-				continue
-			case 402:
-				cliClient.SetUnavailable()
-				continue
-			default:
-				// Forward other errors directly to the client
-				c.Status(err.StatusCode)
-				_, _ = c.Writer.Write([]byte(err.Error.Error()))
-				cliCancel(err.Error)
-			}
-			break
-		} else {
-			_, _ = c.Writer.Write(resp)
-			cliCancel()
-			break
-		}
-	}
-	if errorResponse != nil {
-		c.Status(errorResponse.StatusCode)
-		_, _ = c.Writer.Write([]byte(errorResponse.Error.Error()))
-		cliCancel(errorResponse.Error)
+	resp, errMsg := h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
+	if errMsg != nil {
+		h.WriteErrorResponse(c, errMsg)
+		cliCancel(errMsg.Error)
 		return
+	}
+	_, _ = c.Writer.Write(resp)
+	cliCancel()
+}
+
+func (h *GeminiAPIHandler) forwardGeminiStream(c *gin.Context, flusher http.Flusher, alt string, cancel func(error), data <-chan []byte, errs <-chan *interfaces.ErrorMessage) {
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			cancel(c.Request.Context().Err())
+			return
+		case chunk, ok := <-data:
+			if !ok {
+				cancel(nil)
+				return
+			}
+			if alt == "" {
+				_, _ = c.Writer.Write([]byte("data: "))
+				_, _ = c.Writer.Write(chunk)
+				_, _ = c.Writer.Write([]byte("\n\n"))
+			} else {
+				_, _ = c.Writer.Write(chunk)
+			}
+			flusher.Flush()
+		case errMsg, ok := <-errs:
+			if !ok {
+				continue
+			}
+			if errMsg != nil {
+				h.WriteErrorResponse(c, errMsg)
+				flusher.Flush()
+			}
+			var execErr error
+			if errMsg != nil {
+				execErr = errMsg.Error
+			}
+			cancel(execErr)
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 }

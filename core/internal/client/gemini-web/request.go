@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 )
 
 const continuationHint = "\n(More messages to come, please reply with just 'ok.')"
@@ -51,14 +51,14 @@ func SendWithSplit(chat *ChatSession, text string, files []string, cfg *config.C
 		return ModelOutput{}, fmt.Errorf("nil chat session")
 	}
 
-	// Resolve max characters per request
-	max := MaxCharsPerRequest(cfg)
-	if max <= 0 {
-		max = 1_000_000
+	// Resolve maxChars characters per request
+	maxChars := MaxCharsPerRequest(cfg)
+	if maxChars <= 0 {
+		maxChars = 1_000_000
 	}
 
 	// If within limit, send directly
-	if utf8.RuneCountInString(text) <= max {
+	if utf8.RuneCountInString(text) <= maxChars {
 		return chat.SendMessage(text, files)
 	}
 
@@ -73,11 +73,11 @@ func SendWithSplit(chat *ChatSession, text string, files []string, cfg *config.C
 	if useHint {
 		hintLen = utf8.RuneCountInString(continuationHint)
 	}
-	chunkSize := max - hintLen
+	chunkSize := maxChars - hintLen
 	if chunkSize <= 0 {
-		// max is too small to accommodate the hint; fall back to no-hint splitting
+		// maxChars is too small to accommodate the hint; fall back to no-hint splitting
 		useHint = false
-		chunkSize = max
+		chunkSize = maxChars
 	}
 	if chunkSize <= 0 {
 		// As a last resort, split by single rune to avoid exceeding the limit

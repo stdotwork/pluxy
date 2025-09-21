@@ -47,39 +47,6 @@ func Warning(format string, v ...any)  { log.Warnf(prefix(format), v...) }
 func Error(format string, v ...any)    { log.Errorf(prefix(format), v...) }
 func Success(format string, v ...any)  { log.Infof(prefix("SUCCESS "+format), v...) }
 
-// MaskToken hides the middle part of a sensitive value with '*'.
-// It keeps up to left and right edge characters for readability.
-// If input is very short, it returns a fully masked string of the same length.
-func MaskToken(s string) string {
-	n := len(s)
-	if n == 0 {
-		return ""
-	}
-	if n <= 6 {
-		return strings.Repeat("*", n)
-	}
-	// Keep up to 6 chars on the left and 4 on the right, but never exceed available length
-	left := 6
-	if left > n-4 {
-		left = n - 4
-	}
-	right := 4
-	if right > n-left {
-		right = n - left
-	}
-	if left < 0 {
-		left = 0
-	}
-	if right < 0 {
-		right = 0
-	}
-	middle := n - left - right
-	if middle < 0 {
-		middle = 0
-	}
-	return s[:left] + strings.Repeat("*", middle) + s[n-right:]
-}
-
 // MaskToken28 returns a fixed-length (28) masked representation showing:
 // first 8 chars + 8 asterisks + 4 middle chars + last 8 chars.
 // If the input is shorter than 20 characters, it returns a fully masked string
@@ -90,10 +57,6 @@ func MaskToken28(s string) string {
 		return ""
 	}
 	if n < 20 {
-		// Too short to safely reveal; mask entirely but cap to 28
-		if n > 28 {
-			n = 28
-		}
 		return strings.Repeat("*", n)
 	}
 	// Pick 4 middle characters around the center
@@ -107,10 +70,10 @@ func MaskToken28(s string) string {
 			midStart = 8
 		}
 	}
-	prefix := s[:8]
+	prefixByte := s[:8]
 	middle := s[midStart : midStart+4]
 	suffix := s[n-8:]
-	return prefix + strings.Repeat("*", 4) + middle + strings.Repeat("*", 4) + suffix
+	return prefixByte + strings.Repeat("*", 4) + middle + strings.Repeat("*", 4) + suffix
 }
 
 // BuildUpstreamRequestLog builds a compact preview string for upstream request logging.

@@ -12,7 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -30,10 +31,10 @@ import (
 // Returns:
 //   - []byte: The transformed request data in OpenAI Responses API format
 func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream bool) []byte {
+	log.Debug("ConvertOpenAIRequestToCodex")
 	rawJSON := bytes.Clone(inputRawJSON)
 	// Start with empty JSON object
 	out := `{}`
-	store := false
 
 	// Stream must be set to true
 	out, _ = sjson.Set(out, "stream", stream)
@@ -305,7 +306,7 @@ func ConvertOpenAIRequestToCodex(modelName string, inputRawJSON []byte, stream b
 		}
 	}
 
-	out, _ = sjson.Set(out, "store", store)
+	out, _ = sjson.Set(out, "store", false)
 	return []byte(out)
 }
 

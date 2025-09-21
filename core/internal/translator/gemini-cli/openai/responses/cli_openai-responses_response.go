@@ -3,11 +3,13 @@ package responses
 import (
 	"context"
 
-	. "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini/openai/responses"
+	. "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/openai/responses"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
 func ConvertGeminiCLIResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertGeminiCLIResponseToOpenAIResponses")
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		rawJSON = []byte(responseResult.Raw)
@@ -16,6 +18,7 @@ func ConvertGeminiCLIResponseToOpenAIResponses(ctx context.Context, modelName st
 }
 
 func ConvertGeminiCLIResponseToOpenAIResponsesNonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
+	log.Debug("ConvertGeminiCLIResponseToOpenAIResponsesNonStream")
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		rawJSON = []byte(responseResult.Raw)

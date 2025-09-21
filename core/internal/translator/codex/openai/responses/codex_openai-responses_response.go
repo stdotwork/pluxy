@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -13,8 +14,9 @@ import (
 // ConvertCodexResponseToOpenAIResponses converts OpenAI Chat Completions streaming chunks
 // to OpenAI Responses SSE events (response.*).
 func ConvertCodexResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	if bytes.HasPrefix(rawJSON, []byte("data: ")) {
-		rawJSON = rawJSON[6:]
+	log.Debug("ConvertCodexResponseToOpenAIResponses")
+	if bytes.HasPrefix(rawJSON, []byte("data:")) {
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
 		if typeResult := gjson.GetBytes(rawJSON, "type"); typeResult.Exists() {
 			typeStr := typeResult.String()
 			if typeStr == "response.created" || typeStr == "response.in_progress" || typeStr == "response.completed" {
@@ -29,27 +31,31 @@ func ConvertCodexResponseToOpenAIResponses(ctx context.Context, modelName string
 // ConvertCodexResponseToOpenAIResponsesNonStream builds a single Responses JSON
 // from a non-streaming OpenAI Chat Completions response.
 func ConvertCodexResponseToOpenAIResponsesNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertCodexResponseToOpenAIResponsesNonStream")
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)
-	dataTag := []byte("data: ")
+	dataTag := []byte("data:")
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
 		if !bytes.HasPrefix(line, dataTag) {
 			continue
 		}
-		rawJSON = line[6:]
+		line = bytes.TrimSpace(line[5:])
 
-		rootResult := gjson.ParseBytes(rawJSON)
+		rootResult := gjson.ParseBytes(line)
 		// Verify this is a response.completed event
+
 		if rootResult.Get("type").String() != "response.completed" {
+
 			continue
 		}
 		responseResult := rootResult.Get("response")
 		template := responseResult.Raw
 
 		template, _ = sjson.Set(template, "instructions", gjson.GetBytes(originalRequestRawJSON, "instructions").String())
+
 		return template
 	}
 	return ""

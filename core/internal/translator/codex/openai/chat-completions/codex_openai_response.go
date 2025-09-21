@@ -11,12 +11,13 @@ import (
 	"context"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
 var (
-	dataTag = []byte("data: ")
+	dataTag = []byte("data:")
 )
 
 // ConvertCliToOpenAIParams holds parameters for response conversion.
@@ -42,6 +43,7 @@ type ConvertCliToOpenAIParams struct {
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
 func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertCodexResponseToOpenAI")
 	if *param == nil {
 		*param = &ConvertCliToOpenAIParams{
 			Model:             modelName,
@@ -54,7 +56,7 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	// Initialize the OpenAI SSE template.
 	template := `{"id":"","object":"chat.completion.chunk","created":12345,"model":"model","choices":[{"index":0,"delta":{"role":null,"content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
@@ -166,6 +168,7 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertCodexResponseToOpenAINonStream")
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)
@@ -175,7 +178,7 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 		if !bytes.HasPrefix(line, dataTag) {
 			continue
 		}
-		rawJSON = line[6:]
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 		rootResult := gjson.ParseBytes(rawJSON)
 		// Verify this is a response.completed event

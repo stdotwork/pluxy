@@ -11,7 +11,8 @@ import (
 	"fmt"
 	"time"
 
-	. "github.com/luispater/CLIProxyAPI/v5/internal/translator/gemini/openai/chat-completions"
+	. "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/openai/chat-completions"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -36,6 +37,7 @@ type convertCliResponseToOpenAIChatParams struct {
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
 func ConvertCliResponseToOpenAI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertCliResponseToOpenAI")
 	if *param == nil {
 		*param = &convertCliResponseToOpenAIChatParams{
 			UnixTimestamp: 0,
@@ -146,6 +148,7 @@ func ConvertCliResponseToOpenAI(_ context.Context, _ string, originalRequestRawJ
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertCliResponseToOpenAINonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
+	log.Debug("ConvertCliResponseToOpenAINonStream")
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		return ConvertGeminiResponseToOpenAINonStream(ctx, modelName, originalRequestRawJSON, requestRawJSON, []byte(responseResult.Raw), param)

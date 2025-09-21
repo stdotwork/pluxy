@@ -4,45 +4,56 @@
 package util
 
 import (
-	"strings"
-
-	"github.com/luispater/CLIProxyAPI/v5/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 )
 
-// GetProviderName determines the AI service provider based on the model name.
-// It analyzes the model name string to identify which service provider it belongs to.
-// First checks for OpenAI compatibility aliases, then falls back to standard provider detection.
+// GetProviderName determines all AI service providers capable of serving a registered model.
+// It first queries the global model registry to retrieve the providers backing the supplied model name.
+// When the model has not been registered yet, it falls back to legacy string heuristics to infer
+// potential providers.
 //
-// Supported providers:
-//   - "gemini" for Google's Gemini models
-//   - "gpt" for OpenAI's GPT models
-//   - "claude" for Anthropic's Claude models
+// Supported providers include (but are not limited to):
+//   - "gemini" for Google's Gemini family
+//   - "codex" for OpenAI GPT-compatible providers
+//   - "claude" for Anthropic models
 //   - "qwen" for Alibaba's Qwen models
 //   - "openai-compatibility" for external OpenAI-compatible providers
-//   - "unknow" for unrecognized model names
 //
 // Parameters:
-//   - modelName: The name of the model to identify the provider for.
+//   - modelName: The name of the model to identify providers for.
 //   - cfg: The application configuration containing OpenAI compatibility settings.
 //
 // Returns:
-//   - string: The name of the provider.
-func GetProviderName(modelName string, cfg *config.Config) string {
-	// First check if this model name is an OpenAI compatibility alias
-	if IsOpenAICompatibilityAlias(modelName, cfg) {
-		return "openai-compatibility"
-	} else if strings.Contains(modelName, "gemini") { // Fall back to standard provider detection
-		return "gemini"
-	} else if strings.Contains(modelName, "gpt") {
-		return "gpt"
-	} else if strings.Contains(modelName, "codex") {
-		return "gpt"
-	} else if strings.HasPrefix(modelName, "claude") {
-		return "claude"
-	} else if strings.HasPrefix(modelName, "qwen") {
-		return "qwen"
+//   - []string: All provider identifiers capable of serving the model, ordered by preference.
+func GetProviderName(modelName string, cfg *config.Config) []string {
+	if modelName == "" {
+		return nil
 	}
-	return "unknow"
+
+	providers := make([]string, 0, 4)
+	seen := make(map[string]struct{})
+
+	appendProvider := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, exists := seen[name]; exists {
+			return
+		}
+		seen[name] = struct{}{}
+		providers = append(providers, name)
+	}
+
+	for _, provider := range registry.GetGlobalRegistry().GetModelProviders(modelName) {
+		appendProvider(provider)
+	}
+
+	if len(providers) > 0 {
+		return providers
+	}
+
+	return providers
 }
 
 // IsOpenAICompatibilityAlias checks if the given model name is an alias

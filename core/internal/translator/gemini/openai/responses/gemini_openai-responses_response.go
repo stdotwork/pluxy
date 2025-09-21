@@ -1,11 +1,13 @@
 package responses
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -37,11 +39,12 @@ type geminiToResponsesState struct {
 }
 
 func emitEvent(event string, payload string) string {
-	return fmt.Sprintf("event: %s\ndata: %s\n\n", event, payload)
+	return fmt.Sprintf("event: %s\ndata: %s", event, payload)
 }
 
 // ConvertGeminiResponseToOpenAIResponses converts Gemini SSE chunks into OpenAI Responses SSE events.
 func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertGeminiResponseToOpenAIResponses")
 	if *param == nil {
 		*param = &geminiToResponsesState{
 			FuncArgsBuf: make(map[int]*strings.Builder),
@@ -50,6 +53,10 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 		}
 	}
 	st := (*param).(*geminiToResponsesState)
+
+	if bytes.HasPrefix(rawJSON, []byte("data:")) {
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
+	}
 
 	root := gjson.ParseBytes(rawJSON)
 	if !root.Exists() {
@@ -417,6 +424,7 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 
 // ConvertGeminiResponseToOpenAIResponsesNonStream aggregates Gemini response JSON into a single OpenAI Responses JSON object.
 func ConvertGeminiResponseToOpenAIResponsesNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertGeminiResponseToOpenAIResponsesNonStream")
 	root := gjson.ParseBytes(rawJSON)
 
 	// Base response scaffold
@@ -456,7 +464,7 @@ func ConvertGeminiResponseToOpenAIResponsesNonStream(_ context.Context, _ string
 		}
 		if v := req.Get("model"); v.Exists() {
 			resp, _ = sjson.Set(resp, "model", v.String())
-		} else if v := root.Get("modelVersion"); v.Exists() {
+		} else if v = root.Get("modelVersion"); v.Exists() {
 			resp, _ = sjson.Set(resp, "model", v.String())
 		}
 		if v := req.Get("parallel_tool_calls"); v.Exists() {

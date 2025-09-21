@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/luispater/CLIProxyAPI/v5/internal/auth/claude"
-	"github.com/luispater/CLIProxyAPI/v5/internal/auth/codex"
-	geminiAuth "github.com/luispater/CLIProxyAPI/v5/internal/auth/gemini"
-	"github.com/luispater/CLIProxyAPI/v5/internal/auth/qwen"
-	"github.com/luispater/CLIProxyAPI/v5/internal/client"
-	"github.com/luispater/CLIProxyAPI/v5/internal/misc"
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
+	geminiAuth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
+	// legacy client removed
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"golang.org/x/oauth2"
@@ -89,6 +90,11 @@ func (h *Handler) DownloadAuthFile(c *gin.Context) {
 
 // Upload auth file: multipart or raw JSON with ?name=
 func (h *Handler) UploadAuthFile(c *gin.Context) {
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
+		return
+	}
+	ctx := c.Request.Context()
 	if file, err := c.FormFile("file"); err == nil && file != nil {
 		name := filepath.Base(file.Filename)
 		if !strings.HasSuffix(strings.ToLower(name), ".json") {
@@ -96,8 +102,22 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 			return
 		}
 		dst := filepath.Join(h.cfg.AuthDir, name)
+		if !filepath.IsAbs(dst) {
+			if abs, errAbs := filepath.Abs(dst); errAbs == nil {
+				dst = abs
+			}
+		}
 		if errSave := c.SaveUploadedFile(file, dst); errSave != nil {
 			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to save file: %v", errSave)})
+			return
+		}
+		data, errRead := os.ReadFile(dst)
+		if errRead != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read saved file: %v", errRead)})
+			return
+		}
+		if errReg := h.registerAuthFromFile(ctx, dst, data); errReg != nil {
+			c.JSON(500, gin.H{"error": errReg.Error()})
 			return
 		}
 		c.JSON(200, gin.H{"status": "ok"})
@@ -118,8 +138,17 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		return
 	}
 	dst := filepath.Join(h.cfg.AuthDir, filepath.Base(name))
+	if !filepath.IsAbs(dst) {
+		if abs, errAbs := filepath.Abs(dst); errAbs == nil {
+			dst = abs
+		}
+	}
 	if errWrite := os.WriteFile(dst, data, 0o600); errWrite != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("failed to write file: %v", errWrite)})
+		return
+	}
+	if err := h.registerAuthFromFile(ctx, dst, data); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"status": "ok"})
@@ -127,6 +156,11 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 
 // Delete auth files: single by name or all
 func (h *Handler) DeleteAuthFile(c *gin.Context) {
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
+		return
+	}
+	ctx := c.Request.Context()
 	if all := c.Query("all"); all == "true" || all == "1" || all == "*" {
 		entries, err := os.ReadDir(h.cfg.AuthDir)
 		if err != nil {
@@ -143,8 +177,14 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 				continue
 			}
 			full := filepath.Join(h.cfg.AuthDir, name)
+			if !filepath.IsAbs(full) {
+				if abs, errAbs := filepath.Abs(full); errAbs == nil {
+					full = abs
+				}
+			}
 			if err = os.Remove(full); err == nil {
 				deleted++
+				h.disableAuth(ctx, full)
 			}
 		}
 		c.JSON(200, gin.H{"status": "ok", "deleted": deleted})
@@ -156,6 +196,11 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 		return
 	}
 	full := filepath.Join(h.cfg.AuthDir, filepath.Base(name))
+	if !filepath.IsAbs(full) {
+		if abs, errAbs := filepath.Abs(full); errAbs == nil {
+			full = abs
+		}
+	}
 	if err := os.Remove(full); err != nil {
 		if os.IsNotExist(err) {
 			c.JSON(404, gin.H{"error": "file not found"})
@@ -164,7 +209,73 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 		}
 		return
 	}
+	h.disableAuth(ctx, full)
 	c.JSON(200, gin.H{"status": "ok"})
+}
+
+func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []byte) error {
+	if h.authManager == nil {
+		return nil
+	}
+	if path == "" {
+		return fmt.Errorf("auth path is empty")
+	}
+	if data == nil {
+		var err error
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read auth file: %w", err)
+		}
+	}
+	metadata := make(map[string]any)
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return fmt.Errorf("invalid auth file: %w", err)
+	}
+	provider, _ := metadata["type"].(string)
+	if provider == "" {
+		provider = "unknown"
+	}
+	label := provider
+	if email, ok := metadata["email"].(string); ok && email != "" {
+		label = email
+	}
+	attr := map[string]string{
+		"path":   path,
+		"source": path,
+	}
+	auth := &coreauth.Auth{
+		ID:         path,
+		Provider:   provider,
+		Label:      label,
+		Status:     coreauth.StatusActive,
+		Attributes: attr,
+		Metadata:   metadata,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	if existing, ok := h.authManager.GetByID(path); ok {
+		auth.CreatedAt = existing.CreatedAt
+		auth.LastRefreshedAt = existing.LastRefreshedAt
+		auth.NextRefreshAfter = existing.NextRefreshAfter
+		auth.Runtime = existing.Runtime
+		_, err := h.authManager.Update(ctx, auth)
+		return err
+	}
+	_, err := h.authManager.Register(ctx, auth)
+	return err
+}
+
+func (h *Handler) disableAuth(ctx context.Context, id string) {
+	if h.authManager == nil || id == "" {
+		return
+	}
+	if auth, ok := h.authManager.GetByID(id); ok {
+		auth.Disabled = true
+		auth.Status = coreauth.StatusDisabled
+		auth.StatusMessage = "removed via management API"
+		auth.UpdatedAt = time.Now()
+		_, _ = h.authManager.Update(ctx, auth)
+	}
 }
 
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
@@ -307,10 +418,9 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 
 		// Create token storage
 		tokenStorage := anthropicAuth.CreateTokenStorage(bundle)
-		// Initialize Claude client
-		anthropicClient := client.NewClaudeClient(h.cfg, tokenStorage)
-		// Save token storage
-		if errSave := anthropicClient.SaveTokenToFile(); errSave != nil {
+		// Persist token to file directly
+		fileName := filepath.Join(h.cfg.AuthDir, fmt.Sprintf("claude-%s.json", tokenStorage.Email))
+		if errSave := tokenStorage.SaveTokenToFile(fileName); errSave != nil {
 			log.Fatalf("Failed to save authentication tokens: %v", errSave)
 			oauthStatus[state] = "Failed to save authentication tokens"
 			return
@@ -458,7 +568,7 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 
 		// Initialize authenticated HTTP client via GeminiAuth to honor proxy settings
 		gemAuth := geminiAuth.NewGeminiAuth()
-		httpClient2, errGetClient := gemAuth.GetAuthenticatedClient(ctx, &ts, h.cfg, true)
+		_, errGetClient := gemAuth.GetAuthenticatedClient(ctx, &ts, h.cfg, true)
 		if errGetClient != nil {
 			log.Fatalf("failed to get authenticated client: %v", errGetClient)
 			oauthStatus[state] = "Failed to get authenticated client"
@@ -466,54 +576,9 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 		}
 		log.Info("Authentication successful.")
 
-		// Initialize the API client
-		cliClient := client.NewGeminiCLIClient(httpClient2, &ts, h.cfg)
-
-		// Perform the user setup process (migrated from DoLogin)
-		if err = cliClient.SetupUser(ctx, ts.Email, projectID); err != nil {
-			if err.Error() == "failed to start user onboarding, need define a project id" {
-				log.Error("Failed to start user onboarding: A project ID is required.")
-				oauthStatus[state] = "Failed to start user onboarding: A project ID is required"
-				project, errGetProjectList := cliClient.GetProjectList(ctx)
-				if errGetProjectList != nil {
-					log.Fatalf("Failed to get project list: %v", err)
-					oauthStatus[state] = "Failed to get project list"
-				} else {
-					log.Infof("Your account %s needs to specify a project ID.", ts.Email)
-					log.Info("========================================================================")
-					for _, p := range project.Projects {
-						log.Infof("Project ID: %s", p.ProjectID)
-						log.Infof("Project Name: %s", p.Name)
-						log.Info("------------------------------------------------------------------------")
-					}
-					log.Infof("Please run this command to login again with a specific project:\n\n%s --login --project_id <project_id>\n", os.Args[0])
-				}
-			} else {
-				log.Fatalf("Failed to complete user setup: %v", err)
-				oauthStatus[state] = "Failed to complete user setup"
-			}
-			return
-		}
-
-		// Post-setup checks and token persistence
-		auto := projectID == ""
-		cliClient.SetIsAuto(auto)
-		if !cliClient.IsChecked() && !cliClient.IsAuto() {
-			isChecked, checkErr := cliClient.CheckCloudAPIIsEnabled()
-			if checkErr != nil {
-				log.Fatalf("Failed to check if Cloud AI API is enabled: %v", checkErr)
-				oauthStatus[state] = "Failed to check if Cloud AI API is enabled"
-				return
-			}
-			cliClient.SetIsChecked(isChecked)
-			if !isChecked {
-				log.Fatal("Failed to check if Cloud AI API is enabled. If you encounter an error message, please create an issue.")
-				oauthStatus[state] = "Failed to check if Cloud AI API is enabled"
-				return
-			}
-		}
-
-		if err = cliClient.SaveTokenToFile(); err != nil {
+		// Persist token to file directly
+		fileName := filepath.Join(h.cfg.AuthDir, fmt.Sprintf("gemini-%s.json", ts.Email))
+		if err = ts.SaveTokenToFile(fileName); err != nil {
 			log.Fatalf("Failed to save token to file: %v", err)
 			oauthStatus[state] = "Failed to save token to file"
 			return
@@ -655,13 +720,8 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 
 		// Create token storage and persist
 		tokenStorage := openaiAuth.CreateTokenStorage(bundle)
-		openaiClient, errInit := client.NewCodexClient(h.cfg, tokenStorage)
-		if errInit != nil {
-			oauthStatus[state] = "Failed to initialize Codex client"
-			log.Fatalf("Failed to initialize Codex client: %v", errInit)
-			return
-		}
-		if errSave := openaiClient.SaveTokenToFile(); errSave != nil {
+		fileName := filepath.Join(h.cfg.AuthDir, fmt.Sprintf("codex-%s.json", tokenStorage.Email))
+		if errSave := tokenStorage.SaveTokenToFile(fileName); errSave != nil {
 			oauthStatus[state] = "Failed to save authentication tokens"
 			log.Fatalf("Failed to save authentication tokens: %v", errSave)
 			return
@@ -707,13 +767,10 @@ func (h *Handler) RequestQwenToken(c *gin.Context) {
 		// Create token storage
 		tokenStorage := qwenAuth.CreateTokenStorage(tokenData)
 
-		// Initialize Qwen client
-		qwenClient := client.NewQwenClient(h.cfg, tokenStorage)
-
 		tokenStorage.Email = fmt.Sprintf("qwen-%d", time.Now().UnixMilli())
-
 		// Save token storage
-		if err = qwenClient.SaveTokenToFile(); err != nil {
+		fileName := filepath.Join(h.cfg.AuthDir, fmt.Sprintf("qwen-%s.json", tokenStorage.Email))
+		if err = tokenStorage.SaveTokenToFile(fileName); err != nil {
 			log.Fatalf("Failed to save authentication tokens: %v", err)
 			oauthStatus[state] = "Failed to save authentication tokens"
 			return

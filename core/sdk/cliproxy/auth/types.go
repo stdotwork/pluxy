@@ -1,0 +1,218 @@
+package auth
+
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+	"time"
+
+	clipauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
+)
+
+// Auth encapsulates the runtime state and metadata associated with a single credential.
+type Auth struct {
+	// ID uniquely identifies the auth record across restarts.
+	ID string `json:"id"`
+	// Provider is the upstream provider key (e.g. "gemini", "claude").
+	Provider string `json:"provider"`
+	// Label is an optional human readable label for logging.
+	Label string `json:"label,omitempty"`
+	// Status is the lifecycle status managed by the AuthManager.
+	Status Status `json:"status"`
+	// StatusMessage holds a short description for the current status.
+	StatusMessage string `json:"status_message,omitempty"`
+	// Disabled indicates the auth is intentionally disabled by operator.
+	Disabled bool `json:"disabled"`
+	// Unavailable flags transient provider unavailability (e.g. quota exceeded).
+	Unavailable bool `json:"unavailable"`
+	// ProxyURL overrides the global proxy setting for this auth if provided.
+	ProxyURL string `json:"proxy_url,omitempty"`
+	// Attributes stores provider specific metadata needed by executors (immutable configuration).
+	Attributes map[string]string `json:"attributes,omitempty"`
+	// Metadata stores runtime mutable provider state (e.g. tokens, cookies).
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Quota captures recent quota information for load balancers.
+	Quota QuotaState `json:"quota"`
+	// LastError stores the last failure encountered while executing or refreshing.
+	LastError *Error `json:"last_error,omitempty"`
+	// CreatedAt is the creation timestamp in UTC.
+	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt is the last modification timestamp in UTC.
+	UpdatedAt time.Time `json:"updated_at"`
+	// LastRefreshedAt records the last successful refresh time in UTC.
+	LastRefreshedAt time.Time `json:"last_refreshed_at"`
+	// NextRefreshAfter is the earliest time a refresh should retrigger.
+	NextRefreshAfter time.Time `json:"next_refresh_after"`
+
+	// Runtime carries non-serialisable data used during execution (in-memory only).
+	Runtime any `json:"-"`
+}
+
+// QuotaState contains limiter tracking data for a credential.
+type QuotaState struct {
+	// Exceeded indicates the credential recently hit a quota error.
+	Exceeded bool `json:"exceeded"`
+	// Reason provides an optional provider specific human readable description.
+	Reason string `json:"reason,omitempty"`
+	// NextRecoverAt is when the credential may become available again.
+	NextRecoverAt time.Time `json:"next_recover_at"`
+}
+
+// Clone shallow copies the Auth structure, duplicating maps to avoid accidental mutation.
+func (a *Auth) Clone() *Auth {
+	if a == nil {
+		return nil
+	}
+	copyAuth := *a
+	if len(a.Attributes) > 0 {
+		copyAuth.Attributes = make(map[string]string, len(a.Attributes))
+		for key, value := range a.Attributes {
+			copyAuth.Attributes[key] = value
+		}
+	}
+	if len(a.Metadata) > 0 {
+		copyAuth.Metadata = make(map[string]any, len(a.Metadata))
+		for key, value := range a.Metadata {
+			copyAuth.Metadata[key] = value
+		}
+	}
+	copyAuth.Runtime = a.Runtime
+	return &copyAuth
+}
+
+func (a *Auth) AccountInfo() (bool, string) {
+	if a == nil {
+		return false, ""
+	}
+	if a.Metadata != nil {
+		if v, ok := a.Metadata["email"].(string); ok {
+			return false, v
+		}
+	} else if a.Attributes != nil {
+		if v := a.Attributes["api_key"]; v != "" {
+			return true, v
+		}
+	}
+	return false, ""
+}
+
+// ExpirationTime attempts to extract the credential expiration timestamp from metadata.
+// It inspects common keys such as "expired", "expire", "expires_at", and also
+// nested "token" objects to remain compatible with legacy auth file formats.
+func (a *Auth) ExpirationTime() (time.Time, bool) {
+	if a == nil {
+		return time.Time{}, false
+	}
+	if ts, ok := expirationFromMap(a.Metadata); ok {
+		return ts, true
+	}
+	return time.Time{}, false
+}
+
+var defaultAuthenticatorFactories = map[string]func() clipauth.Authenticator{
+	"codex":      func() clipauth.Authenticator { return clipauth.NewCodexAuthenticator() },
+	"claude":     func() clipauth.Authenticator { return clipauth.NewClaudeAuthenticator() },
+	"qwen":       func() clipauth.Authenticator { return clipauth.NewQwenAuthenticator() },
+	"gemini":     func() clipauth.Authenticator { return clipauth.NewGeminiAuthenticator() },
+	"gemini-cli": func() clipauth.Authenticator { return clipauth.NewGeminiAuthenticator() },
+}
+
+var expireKeys = [...]string{"expired", "expire", "expires_at", "expiresAt", "expiry", "expires"}
+
+func expirationFromMap(meta map[string]any) (time.Time, bool) {
+	if meta == nil {
+		return time.Time{}, false
+	}
+	for _, key := range expireKeys {
+		if v, ok := meta[key]; ok {
+			if ts, ok := parseTimeValue(v); ok {
+				return ts, true
+			}
+		}
+	}
+	for _, nestedKey := range []string{"token", "Token"} {
+		if nested, ok := meta[nestedKey]; ok {
+			switch val := nested.(type) {
+			case map[string]any:
+				if ts, ok := expirationFromMap(val); ok {
+					return ts, true
+				}
+			case map[string]string:
+				temp := make(map[string]any, len(val))
+				for k, v := range val {
+					temp[k] = v
+				}
+				if ts, ok := expirationFromMap(temp); ok {
+					return ts, true
+				}
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+func ProviderRefreshLead(provider string, runtime any) time.Duration {
+	provider = strings.ToLower(provider)
+	if runtime != nil {
+		if eval, ok := runtime.(interface{ RefreshLead() *time.Duration }); ok {
+			if lead := eval.RefreshLead(); lead != nil && *lead > 0 {
+				return *lead
+			}
+		}
+	}
+	if factory, ok := defaultAuthenticatorFactories[provider]; ok {
+		if auth := factory(); auth != nil {
+			if lead := auth.RefreshLead(); lead != nil && *lead > 0 {
+				return *lead
+			}
+		}
+	}
+	return 0
+}
+
+func parseTimeValue(v any) (time.Time, bool) {
+	switch value := v.(type) {
+	case string:
+		s := strings.TrimSpace(value)
+		if s == "" {
+			return time.Time{}, false
+		}
+		layouts := []string{
+			time.RFC3339,
+			time.RFC3339Nano,
+			"2006-01-02 15:04:05",
+			"2006-01-02T15:04:05Z07:00",
+		}
+		for _, layout := range layouts {
+			if ts, err := time.Parse(layout, s); err == nil {
+				return ts, true
+			}
+		}
+		if unix, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return normaliseUnix(unix), true
+		}
+	case float64:
+		return normaliseUnix(int64(value)), true
+	case int64:
+		return normaliseUnix(value), true
+	case json.Number:
+		if i, err := value.Int64(); err == nil {
+			return normaliseUnix(i), true
+		}
+		if f, err := value.Float64(); err == nil {
+			return normaliseUnix(int64(f)), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func normaliseUnix(raw int64) time.Time {
+	if raw <= 0 {
+		return time.Time{}
+	}
+	// Heuristic: treat values with millisecond precision (>1e12) accordingly.
+	if raw > 1_000_000_000_000 {
+		return time.UnixMilli(raw)
+	}
+	return time.Unix(raw, 0)
+}

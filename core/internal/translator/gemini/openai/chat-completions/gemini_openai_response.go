@@ -8,9 +8,11 @@ package chat_completions
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -35,6 +37,7 @@ type convertGeminiResponseToOpenAIChatParams struct {
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
 func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertGeminiResponseToOpenAI")
 	if *param == nil {
 		*param = &convertGeminiResponseToOpenAIChatParams{
 			UnixTimestamp: 0,
@@ -99,6 +102,10 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 			partResult := partResults[i]
 			partTextResult := partResult.Get("text")
 			functionCallResult := partResult.Get("functionCall")
+			inlineDataResult := partResult.Get("inlineData")
+			if !inlineDataResult.Exists() {
+				inlineDataResult = partResult.Get("inline_data")
+			}
 
 			if partTextResult.Exists() {
 				// Handle text content, distinguishing between regular content and reasoning/thoughts.
@@ -124,6 +131,34 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 				}
 				template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
 				template, _ = sjson.SetRaw(template, "choices.0.delta.tool_calls.-1", functionCallTemplate)
+			} else if inlineDataResult.Exists() {
+				data := inlineDataResult.Get("data").String()
+				if data == "" {
+					continue
+				}
+				mimeType := inlineDataResult.Get("mimeType").String()
+				if mimeType == "" {
+					mimeType = inlineDataResult.Get("mime_type").String()
+				}
+				if mimeType == "" {
+					mimeType = "image/png"
+				}
+				imageURL := fmt.Sprintf("data:%s;base64,%s", mimeType, data)
+				imagePayload, err := json.Marshal(map[string]any{
+					"type": "image_url",
+					"image_url": map[string]string{
+						"url": imageURL,
+					},
+				})
+				if err != nil {
+					continue
+				}
+				imagesResult := gjson.Get(template, "choices.0.delta.images")
+				if !imagesResult.Exists() || !imagesResult.IsArray() {
+					template, _ = sjson.SetRaw(template, "choices.0.delta.images", `[]`)
+				}
+				template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
+				template, _ = sjson.SetRaw(template, "choices.0.delta.images.-1", string(imagePayload))
 			}
 		}
 	}
@@ -145,6 +180,7 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertGeminiResponseToOpenAINonStream")
 	var unixTimestamp int64
 	template := `{"id":"","object":"chat.completion","created":123456,"model":"model","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
 	if modelVersionResult := gjson.GetBytes(rawJSON, "modelVersion"); modelVersionResult.Exists() {
@@ -193,6 +229,10 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 			partResult := partsResults[i]
 			partTextResult := partResult.Get("text")
 			functionCallResult := partResult.Get("functionCall")
+			inlineDataResult := partResult.Get("inlineData")
+			if !inlineDataResult.Exists() {
+				inlineDataResult = partResult.Get("inline_data")
+			}
 
 			if partTextResult.Exists() {
 				// Append text content, distinguishing between regular content and reasoning.
@@ -217,9 +257,34 @@ func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, origina
 				}
 				template, _ = sjson.Set(template, "choices.0.message.role", "assistant")
 				template, _ = sjson.SetRaw(template, "choices.0.message.tool_calls.-1", functionCallItemTemplate)
-			} else {
-				// If no usable content is found, return an empty string.
-				return ""
+			} else if inlineDataResult.Exists() {
+				data := inlineDataResult.Get("data").String()
+				if data == "" {
+					continue
+				}
+				mimeType := inlineDataResult.Get("mimeType").String()
+				if mimeType == "" {
+					mimeType = inlineDataResult.Get("mime_type").String()
+				}
+				if mimeType == "" {
+					mimeType = "image/png"
+				}
+				imageURL := fmt.Sprintf("data:%s;base64,%s", mimeType, data)
+				imagePayload, err := json.Marshal(map[string]any{
+					"type": "image_url",
+					"image_url": map[string]string{
+						"url": imageURL,
+					},
+				})
+				if err != nil {
+					continue
+				}
+				imagesResult := gjson.Get(template, "choices.0.message.images")
+				if !imagesResult.Exists() || !imagesResult.IsArray() {
+					template, _ = sjson.SetRaw(template, "choices.0.message.images", `[]`)
+				}
+				template, _ = sjson.Set(template, "choices.0.message.role", "assistant")
+				template, _ = sjson.SetRaw(template, "choices.0.message.images.-1", string(imagePayload))
 			}
 		}
 	}

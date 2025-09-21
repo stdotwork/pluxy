@@ -4,6 +4,8 @@
 package registry
 
 import (
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +56,8 @@ type ModelRegistration struct {
 	LastUpdated time.Time
 	// QuotaExceededClients tracks which clients have exceeded quota for this model
 	QuotaExceededClients map[string]*time.Time
+	// Providers tracks available clients grouped by provider identifier
+	Providers map[string]int
 }
 
 // ModelRegistry manages the global registry of available models
@@ -62,6 +66,8 @@ type ModelRegistry struct {
 	models map[string]*ModelRegistration
 	// clientModels maps client ID to the models it provides
 	clientModels map[string][]string
+	// clientProviders maps client ID to its provider identifier
+	clientProviders map[string]string
 	// mutex ensures thread-safe access to the registry
 	mutex *sync.RWMutex
 }
@@ -74,9 +80,10 @@ var registryOnce sync.Once
 func GetGlobalRegistry() *ModelRegistry {
 	registryOnce.Do(func() {
 		globalRegistry = &ModelRegistry{
-			models:       make(map[string]*ModelRegistration),
-			clientModels: make(map[string][]string),
-			mutex:        &sync.RWMutex{},
+			models:          make(map[string]*ModelRegistration),
+			clientModels:    make(map[string][]string),
+			clientProviders: make(map[string]string),
+			mutex:           &sync.RWMutex{},
 		}
 	})
 	return globalRegistry
@@ -94,6 +101,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	// Remove any existing registration for this client
 	r.unregisterClientInternal(clientID)
 
+	provider := strings.ToLower(clientProvider)
 	modelIDs := make([]string, 0, len(models))
 	now := time.Now()
 
@@ -104,20 +112,35 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 			// Model already exists, increment count
 			existing.Count++
 			existing.LastUpdated = now
+			if provider != "" {
+				if existing.Providers == nil {
+					existing.Providers = make(map[string]int)
+				}
+				existing.Providers[provider]++
+			}
 			log.Debugf("Incremented count for model %s, now %d clients", model.ID, existing.Count)
 		} else {
 			// New model, create registration
-			r.models[model.ID] = &ModelRegistration{
+			registration := &ModelRegistration{
 				Info:                 model,
 				Count:                1,
 				LastUpdated:          now,
 				QuotaExceededClients: make(map[string]*time.Time),
 			}
+			if provider != "" {
+				registration.Providers = map[string]int{provider: 1}
+			}
+			r.models[model.ID] = registration
 			log.Debugf("Registered new model %s from provider %s", model.ID, clientProvider)
 		}
 	}
 
 	r.clientModels[clientID] = modelIDs
+	if provider != "" {
+		r.clientProviders[clientID] = provider
+	} else {
+		delete(r.clientProviders, clientID)
+	}
 	log.Debugf("Registered client %s from provider %s with %d models", clientID, clientProvider, len(models))
 }
 
@@ -133,7 +156,11 @@ func (r *ModelRegistry) UnregisterClient(clientID string) {
 // unregisterClientInternal performs the actual client unregistration (internal, no locking)
 func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	models, exists := r.clientModels[clientID]
+	provider, hasProvider := r.clientProviders[clientID]
 	if !exists {
+		if hasProvider {
+			delete(r.clientProviders, clientID)
+		}
 		return
 	}
 
@@ -146,6 +173,16 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 			// Remove quota tracking for this client
 			delete(registration.QuotaExceededClients, clientID)
 
+			if hasProvider && registration.Providers != nil {
+				if count, ok := registration.Providers[provider]; ok {
+					if count <= 1 {
+						delete(registration.Providers, provider)
+					} else {
+						registration.Providers[provider] = count - 1
+					}
+				}
+			}
+
 			log.Debugf("Decremented count for model %s, now %d clients", modelID, registration.Count)
 
 			// Remove model if no clients remain
@@ -157,6 +194,9 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	}
 
 	delete(r.clientModels, clientID)
+	if hasProvider {
+		delete(r.clientProviders, clientID)
+	}
 	log.Debugf("Unregistered client %s", clientID)
 }
 
@@ -254,6 +294,50 @@ func (r *ModelRegistry) GetModelCount(modelID string) int {
 		return registration.Count - expiredClients
 	}
 	return 0
+}
+
+// GetModelProviders returns provider identifiers that currently supply the given model
+// Parameters:
+//   - modelID: The model ID to check
+//
+// Returns:
+//   - []string: Provider identifiers ordered by availability count (descending)
+func (r *ModelRegistry) GetModelProviders(modelID string) []string {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	registration, exists := r.models[modelID]
+	if !exists || registration == nil || len(registration.Providers) == 0 {
+		return nil
+	}
+
+	type providerCount struct {
+		name  string
+		count int
+	}
+	providers := make([]providerCount, 0, len(registration.Providers))
+	for name, count := range registration.Providers {
+		if count <= 0 {
+			continue
+		}
+		providers = append(providers, providerCount{name: name, count: count})
+	}
+	if len(providers) == 0 {
+		return nil
+	}
+
+	sort.Slice(providers, func(i, j int) bool {
+		if providers[i].count == providers[j].count {
+			return providers[i].name < providers[j].name
+		}
+		return providers[i].count > providers[j].count
+	})
+
+	result := make([]string, 0, len(providers))
+	for _, item := range providers {
+		result = append(result, item.name)
+	}
+	return result
 }
 
 // convertModelToMap converts ModelInfo to the appropriate format for different handler types

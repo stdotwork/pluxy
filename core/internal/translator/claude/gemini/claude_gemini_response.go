@@ -12,12 +12,13 @@ import (
 	"strings"
 	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
 var (
-	dataTag = []byte("data: ")
+	dataTag = []byte("data:")
 )
 
 // ConvertAnthropicResponseToGeminiParams holds parameters for response conversion
@@ -53,6 +54,7 @@ type ConvertAnthropicResponseToGeminiParams struct {
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response
 func ConvertClaudeResponseToGemini(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertClaudeResponseToGemini")
 	if *param == nil {
 		*param = &ConvertAnthropicResponseToGeminiParams{
 			Model:      modelName,
@@ -64,7 +66,7 @@ func ConvertClaudeResponseToGemini(_ context.Context, modelName string, original
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	root := gjson.ParseBytes(rawJSON)
 	eventType := root.Get("type").String()
@@ -321,6 +323,7 @@ func convertMapToJSON(m map[string]interface{}) string {
 // Returns:
 //   - string: A Gemini-compatible JSON response containing all message content and metadata
 func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	log.Debug("ConvertClaudeResponseToGeminiNonStream")
 	// Base Gemini response template for non-streaming with default values
 	template := `{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"},"modelVersion":"","createTime":"","responseId":""}`
 
@@ -336,7 +339,7 @@ func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string,
 		line := scanner.Bytes()
 		// log.Debug(string(line))
 		if bytes.HasPrefix(line, dataTag) {
-			jsonData := line[6:]
+			jsonData := bytes.TrimSpace(line[5:])
 			streamingEvents = append(streamingEvents, jsonData)
 		}
 	}

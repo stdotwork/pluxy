@@ -6,12 +6,18 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
 
-	"github.com/luispater/CLIProxyAPI/v5/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+)
+
+var (
+	dataTag = []byte("data:")
 )
 
 // ConvertOpenAIResponseToAnthropicParams holds parameters for response conversion
@@ -53,6 +59,7 @@ type ToolCallAccumulator struct {
 // Returns:
 //   - []string: A slice of strings, each containing an Anthropic-compatible JSON response.
 func ConvertOpenAIResponseToClaude(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
+	log.Debug("ConvertOpenAIResponseToClaude")
 	if *param == nil {
 		*param = &ConvertOpenAIResponseToAnthropicParams{
 			MessageID:               "",
@@ -66,6 +73,11 @@ func ConvertOpenAIResponseToClaude(_ context.Context, _ string, originalRequestR
 			MessageDeltaSent:        false,
 		}
 	}
+
+	if !bytes.HasPrefix(rawJSON, dataTag) {
+		return []string{}
+	}
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	// Check if this is the [DONE] marker
 	rawStr := strings.TrimSpace(string(rawJSON))
@@ -441,5 +453,6 @@ func mapOpenAIFinishReasonToAnthropic(openAIReason string) string {
 // Returns:
 //   - string: An Anthropic-compatible JSON response.
 func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
+	log.Debug("ConvertOpenAIResponseToClaudeNonStream")
 	return ""
 }
