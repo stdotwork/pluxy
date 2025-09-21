@@ -174,21 +174,19 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}
 
 	// Handle auth directory changes incrementally (.json only)
-	if isAuthJSON {
-		log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
-		if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
+	log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
+	if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
+		w.addOrUpdateClient(event.Name)
+	} else if event.Op&fsnotify.Remove == fsnotify.Remove {
+		// Atomic replace on some platforms may surface as Remove+Create for the target path.
+		// Wait briefly; if the file exists again, treat as update instead of removal.
+		time.Sleep(replaceCheckDelay)
+		if _, statErr := os.Stat(event.Name); statErr == nil {
+			// File exists after a short delay; handle as an update.
 			w.addOrUpdateClient(event.Name)
-		} else if event.Op&fsnotify.Remove == fsnotify.Remove {
-			// Atomic replace on some platforms may surface as Remove+Create for the target path.
-			// Wait briefly; if the file exists again, treat as update instead of removal.
-			time.Sleep(replaceCheckDelay)
-			if _, statErr := os.Stat(event.Name); statErr == nil {
-				// File exists after a short delay; handle as an update.
-				w.addOrUpdateClient(event.Name)
-				return
-			}
-			w.removeClient(event.Name)
+			return
 		}
+		w.removeClient(event.Name)
 	}
 }
 
@@ -301,7 +299,7 @@ func (w *Watcher) reloadClients() {
 	log.Debugf("created %d new API key clients", 0)
 
 	// Load file-based clients
-	successfulAuthCount := w.loadFileClients(cfg)
+	authFileCount := w.loadFileClients(cfg)
 	log.Debugf("loaded %d new file-based clients", 0)
 
 	// no legacy file-based clients to unregister
@@ -317,7 +315,7 @@ func (w *Watcher) reloadClients() {
 			return nil
 		}
 		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
-			if data, err := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); err == nil && len(data) > 0 {
+			if data, errReadAuthFileWithRetry := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); errReadAuthFileWithRetry == nil && len(data) > 0 {
 				sum := sha256.Sum256(data)
 				w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
 			}
@@ -326,12 +324,12 @@ func (w *Watcher) reloadClients() {
 	})
 	w.clientsMutex.Unlock()
 
-	totalNewClients := successfulAuthCount + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
+	totalNewClients := authFileCount + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
 
 	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
 		0,
 		totalNewClients,
-		successfulAuthCount,
+		authFileCount,
 		glAPIKeyCount,
 		claudeAPIKeyCount,
 		codexAPIKeyCount,
@@ -572,7 +570,7 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 			log.Debugf("error accessing path %s: %v", path, err)
 			return err
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".json") {
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
 			authFileCount++
 			misc.LogCredentialSeparator()
 			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
@@ -587,8 +585,8 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 	if errWalk != nil {
 		log.Errorf("error walking auth directory: %v", errWalk)
 	}
-	log.Debugf("auth directory scan complete - found %d .json files, %d successful authentications", authFileCount, successfulAuthCount)
-	return successfulAuthCount
+	log.Debugf("auth directory scan complete - found %d .json files, %d readable", authFileCount, successfulAuthCount)
+	return authFileCount
 }
 
 func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int) {

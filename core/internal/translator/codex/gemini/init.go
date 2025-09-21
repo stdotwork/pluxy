@@ -8,8 +8,8 @@ import (
 
 func init() {
 	translator.Register(
-		GEMINI,
-		CODEX,
+		Gemini,
+		Codex,
 		ConvertGeminiRequestToCodex,
 		interfaces.TranslateResponse{
 			Stream:    ConvertCodexResponseToGemini,

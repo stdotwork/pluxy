@@ -43,7 +43,7 @@ func NewClaudeCodeAPIHandler(apiHandlers *handlers.BaseAPIHandler) *ClaudeCodeAP
 
 // HandlerType returns the identifier for this handler implementation.
 func (h *ClaudeCodeAPIHandler) HandlerType() string {
-	return CLAUDE
+	return Claude
 }
 
 // Models returns a list of models supported by this handler.

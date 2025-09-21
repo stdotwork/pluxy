@@ -79,10 +79,6 @@ func SendWithSplit(chat *ChatSession, text string, files []string, cfg *config.C
 		useHint = false
 		chunkSize = maxChars
 	}
-	if chunkSize <= 0 {
-		// As a last resort, split by single rune to avoid exceeding the limit
-		chunkSize = 1
-	}
 
 	// Split into rune-safe chunks
 	chunks := ChunkByRunes(text, chunkSize)

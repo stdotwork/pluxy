@@ -43,7 +43,7 @@ func NewOpenAIResponsesAPIHandler(apiHandlers *handlers.BaseAPIHandler) *OpenAIR
 
 // HandlerType returns the identifier for this handler implementation.
 func (h *OpenAIResponsesAPIHandler) HandlerType() string {
-	return OPENAI_RESPONSE
+	return OpenaiResponse
 }
 
 // Models returns the OpenAIResponses-compatible model metadata supported by this handler.
@@ -161,6 +161,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesStream(c *gin.Context, flush
 			return
 		case chunk, ok := <-data:
 			if !ok {
+				_, _ = c.Writer.Write([]byte("\n"))
 				flusher.Flush()
 				cancel(nil)
 				return

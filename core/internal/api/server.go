@@ -439,38 +439,14 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		s.mgmt.SetAuthManager(s.handlers.AuthManager)
 	}
 
-	// Count types from AuthManager state + config
-	authFiles := 0
-	glAPIKeyCount := 0
-	claudeAPIKeyCount := 0
-	codexAPIKeyCount := 0
+	// Count client sources from configuration and auth directory
+	authFiles := util.CountAuthFiles(cfg.AuthDir)
+	glAPIKeyCount := len(cfg.GlAPIKey)
+	claudeAPIKeyCount := len(cfg.ClaudeKey)
+	codexAPIKeyCount := len(cfg.CodexKey)
 	openAICompatCount := 0
-
-	if s.handlers != nil && s.handlers.AuthManager != nil {
-		for _, a := range s.handlers.AuthManager.List() {
-			if a == nil {
-				continue
-			}
-			if a.Attributes != nil {
-				if p := a.Attributes["path"]; p != "" {
-					authFiles++
-					continue
-				}
-			}
-			switch strings.ToLower(a.Provider) {
-			case "gemini":
-				glAPIKeyCount++
-			case "claude":
-				claudeAPIKeyCount++
-			case "codex":
-				codexAPIKeyCount++
-			}
-		}
-	}
-	if cfg != nil {
-		for i := range cfg.OpenAICompatibility {
-			openAICompatCount += len(cfg.OpenAICompatibility[i].APIKeys)
-		}
+	for i := range cfg.OpenAICompatibility {
+		openAICompatCount += len(cfg.OpenAICompatibility[i].APIKeys)
 	}
 
 	total := authFiles + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount

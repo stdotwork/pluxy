@@ -101,7 +101,9 @@ func LoadConvStore(path string) (map[string][]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	out := map[string][]string{}
 	err = db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("account_meta"))
@@ -138,24 +140,26 @@ func SaveConvStore(path string, data map[string][]string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	return db.Update(func(tx *bolt.Tx) error {
 		// Recreate bucket to reflect the given snapshot exactly.
 		if b := tx.Bucket([]byte("account_meta")); b != nil {
-			if err := tx.DeleteBucket([]byte("account_meta")); err != nil {
+			if err = tx.DeleteBucket([]byte("account_meta")); err != nil {
 				return err
 			}
 		}
-		b, err := tx.CreateBucket([]byte("account_meta"))
-		if err != nil {
-			return err
+		b, errCreateBucket := tx.CreateBucket([]byte("account_meta"))
+		if errCreateBucket != nil {
+			return errCreateBucket
 		}
 		for k, v := range data {
 			enc, e := json.Marshal(v)
 			if e != nil {
 				return e
 			}
-			if e := b.Put([]byte(k), enc); e != nil {
+			if e = b.Put([]byte(k), enc); e != nil {
 				return e
 			}
 		}
@@ -177,7 +181,9 @@ func LoadConvData(path string) (map[string]ConversationRecord, map[string]string
 	if err != nil {
 		return nil, nil, err
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	items := map[string]ConversationRecord{}
 	index := map[string]string{}
 	err = db.View(func(tx *bolt.Tx) error {
@@ -229,37 +235,39 @@ func SaveConvData(path string, items map[string]ConversationRecord, index map[st
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 	return db.Update(func(tx *bolt.Tx) error {
 		// Recreate items bucket
 		if b := tx.Bucket([]byte("conv_items")); b != nil {
-			if err := tx.DeleteBucket([]byte("conv_items")); err != nil {
+			if err = tx.DeleteBucket([]byte("conv_items")); err != nil {
 				return err
 			}
 		}
-		bi, err := tx.CreateBucket([]byte("conv_items"))
-		if err != nil {
-			return err
+		bi, errCreateBucket := tx.CreateBucket([]byte("conv_items"))
+		if errCreateBucket != nil {
+			return errCreateBucket
 		}
 		for k, rec := range items {
 			enc, e := json.Marshal(rec)
 			if e != nil {
 				return e
 			}
-			if e := bi.Put([]byte(k), enc); e != nil {
+			if e = bi.Put([]byte(k), enc); e != nil {
 				return e
 			}
 		}
 
 		// Recreate index bucket
 		if b := tx.Bucket([]byte("conv_index")); b != nil {
-			if err := tx.DeleteBucket([]byte("conv_index")); err != nil {
+			if err = tx.DeleteBucket([]byte("conv_index")); err != nil {
 				return err
 			}
 		}
-		bx, err := tx.CreateBucket([]byte("conv_index"))
-		if err != nil {
-			return err
+		bx, errCreateBucket := tx.CreateBucket([]byte("conv_index"))
+		if errCreateBucket != nil {
+			return errCreateBucket
 		}
 		for k, v := range index {
 			if e := bx.Put([]byte(k), []byte(v)); e != nil {

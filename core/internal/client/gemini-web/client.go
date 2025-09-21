@@ -96,7 +96,7 @@ func (c *GeminiClient) Init(timeoutSec float64, autoClose bool, closeDelaySec fl
 
 	tr := &http.Transport{}
 	if c.Proxy != "" {
-		if pu, err := url.Parse(c.Proxy); err == nil {
+		if pu, errParse := url.Parse(c.Proxy); errParse == nil {
 			tr.Proxy = http.ProxyURL(pu)
 		}
 	}
@@ -348,7 +348,9 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	if err != nil {
 		return empty, &TimeoutError{GeminiError{Msg: "Generate content request timed out."}}
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode == 429 {
 		// Surface 429 as TemporarilyBlocked to match Python behavior
@@ -368,7 +370,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 		return empty, &APIError{Msg: "Invalid response data received."}
 	}
 	var responseJSON []any
-	if err := json.Unmarshal([]byte(parts[2]), &responseJSON); err != nil {
+	if err = json.Unmarshal([]byte(parts[2]), &responseJSON); err != nil {
 		c.Close(0)
 		return empty, &APIError{Msg: "Invalid response data received."}
 	}
@@ -388,7 +390,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 			continue
 		}
 		var mainPart []any
-		if err := json.Unmarshal([]byte(s), &mainPart); err != nil {
+		if err = json.Unmarshal([]byte(s), &mainPart); err != nil {
 			continue
 		}
 		if len(mainPart) > 4 && mainPart[4] != nil {
@@ -406,7 +408,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 				continue
 			}
 			var top []any
-			if err := json.Unmarshal([]byte(line), &top); err != nil {
+			if err = json.Unmarshal([]byte(line), &top); err != nil {
 				continue
 			}
 			lastTop = top
@@ -420,7 +422,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 					continue
 				}
 				var mainPart []any
-				if err := json.Unmarshal([]byte(s), &mainPart); err != nil {
+				if err = json.Unmarshal([]byte(s), &mainPart); err != nil {
 					continue
 				}
 				if len(mainPart) > 4 && mainPart[4] != nil {
@@ -465,7 +467,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	if len(bodyArr) > 1 {
 		if metaArr, ok := bodyArr[1].([]any); ok {
 			for _, v := range metaArr {
-				if s, ok := v.(string); ok {
+				if s, isOk := v.(string); isOk {
 					metadata = append(metadata, s)
 				}
 			}
@@ -482,22 +484,22 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	reGen := regexp.MustCompile(`http://googleusercontent\.com/image_generation_content/\d+`)
 
 	for ci, candAny := range candContainer {
-		cArr, ok := candAny.([]any)
-		if !ok {
+		cArr, isOk := candAny.([]any)
+		if !isOk {
 			continue
 		}
 		// text: cArr[1][0]
 		var text string
 		if len(cArr) > 1 {
-			if sArr, ok := cArr[1].([]any); ok && len(sArr) > 0 {
+			if sArr, isOk1 := cArr[1].([]any); isOk1 && len(sArr) > 0 {
 				text, _ = sArr[0].(string)
 			}
 		}
 		if reCard.MatchString(text) {
 			// candidate[22] and candidate[22][0] or text
 			if len(cArr) > 22 {
-				if arr, ok := cArr[22].([]any); ok && len(arr) > 0 {
-					if s, ok := arr[0].(string); ok {
+				if arr, isOk1 := cArr[22].([]any); isOk1 && len(arr) > 0 {
+					if s, isOk2 := arr[0].(string); isOk2 {
 						text = s
 					}
 				}
@@ -507,9 +509,9 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 		// thoughts: candidate[37][0][0]
 		var thoughts *string
 		if len(cArr) > 37 {
-			if a, ok := cArr[37].([]any); ok && len(a) > 0 {
-				if b, ok := a[0].([]any); ok && len(b) > 0 {
-					if s, ok := b[0].(string); ok {
+			if a, ok1 := cArr[37].([]any); ok1 && len(a) > 0 {
+				if b1, ok2 := a[0].([]any); ok2 && len(b1) > 0 {
+					if s, ok3 := b1[0].(string); ok3 {
 						ss := decodeHTML(s)
 						thoughts = &ss
 					}
@@ -518,34 +520,34 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 		}
 
 		// web images: candidate[12][1]
-		webImages := []WebImage{}
+		var webImages []WebImage
 		var imgSection any
 		if len(cArr) > 12 {
 			imgSection = cArr[12]
 		}
-		if arr, ok := imgSection.([]any); ok && len(arr) > 1 {
-			if imagesArr, ok := arr[1].([]any); ok {
+		if arr, ok1 := imgSection.([]any); ok1 && len(arr) > 1 {
+			if imagesArr, ok2 := arr[1].([]any); ok2 {
 				for _, wiAny := range imagesArr {
-					wiArr, ok := wiAny.([]any)
-					if !ok {
+					wiArr, ok3 := wiAny.([]any)
+					if !ok3 {
 						continue
 					}
 					// url: wiArr[0][0][0], title: wiArr[7][0], alt: wiArr[0][4]
 					var urlStr, title, alt string
 					if len(wiArr) > 0 {
-						if a, ok := wiArr[0].([]any); ok && len(a) > 0 {
-							if b, ok := a[0].([]any); ok && len(b) > 0 {
-								urlStr, _ = b[0].(string)
+						if a, ok5 := wiArr[0].([]any); ok5 && len(a) > 0 {
+							if b1, ok6 := a[0].([]any); ok6 && len(b1) > 0 {
+								urlStr, _ = b1[0].(string)
 							}
 							if len(a) > 4 {
-								if s, ok := a[4].(string); ok {
+								if s, ok6 := a[4].(string); ok6 {
 									alt = s
 								}
 							}
 						}
 					}
 					if len(wiArr) > 7 {
-						if a, ok := wiArr[7].([]any); ok && len(a) > 0 {
+						if a, ok4 := wiArr[7].([]any); ok4 && len(a) > 0 {
 							title, _ = a[0].(string)
 						}
 					}
@@ -555,10 +557,10 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 		}
 
 		// generated images
-		genImages := []GeneratedImage{}
+		var genImages []GeneratedImage
 		hasGen := false
-		if arr, ok := imgSection.([]any); ok && len(arr) > 7 {
-			if a, ok := arr[7].([]any); ok && len(a) > 0 && a[0] != nil {
+		if arr, ok1 := imgSection.([]any); ok1 && len(arr) > 7 {
+			if a, ok2 := arr[7].([]any); ok2 && len(a) > 0 && a[0] != nil {
 				hasGen = true
 			}
 		}
@@ -567,23 +569,23 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 			var imgBody []any
 			for pi := bodyIndex; pi < len(responseJSON); pi++ {
 				part := responseJSON[pi]
-				arr, ok := part.([]any)
-				if !ok || len(arr) < 3 {
+				arr, ok1 := part.([]any)
+				if !ok1 || len(arr) < 3 {
 					continue
 				}
-				s, ok := arr[2].(string)
-				if !ok {
+				s, ok1 := arr[2].(string)
+				if !ok1 {
 					continue
 				}
 				var mp []any
-				if err := json.Unmarshal([]byte(s), &mp); err != nil {
+				if err = json.Unmarshal([]byte(s), &mp); err != nil {
 					continue
 				}
 				if len(mp) > 4 {
-					if tt, ok := mp[4].([]any); ok && len(tt) > ci {
-						if sec, ok := tt[ci].([]any); ok && len(sec) > 12 {
-							if ss, ok := sec[12].([]any); ok && len(ss) > 7 {
-								if first, ok := ss[7].([]any); ok && len(first) > 0 && first[0] != nil {
+					if tt, ok2 := mp[4].([]any); ok2 && len(tt) > ci {
+						if sec, ok3 := tt[ci].([]any); ok3 && len(sec) > 12 {
+							if ss, ok4 := sec[12].([]any); ok4 && len(ss) > 7 {
+								if first, ok5 := ss[7].([]any); ok5 && len(first) > 0 && first[0] != nil {
 									imgBody = mp
 									break
 								}
@@ -597,34 +599,34 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 			}
 			imgCand := imgBody[4].([]any)[ci].([]any)
 			if len(imgCand) > 1 {
-				if a, ok := imgCand[1].([]any); ok && len(a) > 0 {
-					if s, ok := a[0].(string); ok {
+				if a, ok1 := imgCand[1].([]any); ok1 && len(a) > 0 {
+					if s, ok2 := a[0].(string); ok2 {
 						text = strings.TrimSpace(reGen.ReplaceAllString(s, ""))
 					}
 				}
 			}
 			// images list at imgCand[12][7][0]
 			if len(imgCand) > 12 {
-				if s1, ok := imgCand[12].([]any); ok && len(s1) > 7 {
-					if s2, ok := s1[7].([]any); ok && len(s2) > 0 {
-						if s3, ok := s2[0].([]any); ok {
+				if s1, ok1 := imgCand[12].([]any); ok1 && len(s1) > 7 {
+					if s2, ok2 := s1[7].([]any); ok2 && len(s2) > 0 {
+						if s3, ok3 := s2[0].([]any); ok3 {
 							for ii, giAny := range s3 {
-								ga, ok := giAny.([]any)
-								if !ok || len(ga) < 4 {
+								ga, ok4 := giAny.([]any)
+								if !ok4 || len(ga) < 4 {
 									continue
 								}
 								// url: ga[0][3][3]
 								var urlStr, title, alt string
-								if a, ok := ga[0].([]any); ok && len(a) > 3 {
-									if b, ok := a[3].([]any); ok && len(b) > 3 {
-										urlStr, _ = b[3].(string)
+								if a, ok5 := ga[0].([]any); ok5 && len(a) > 3 {
+									if b1, ok6 := a[3].([]any); ok6 && len(b1) > 3 {
+										urlStr, _ = b1[3].(string)
 									}
 								}
 								// title from ga[3][6]
 								if len(ga) > 3 {
-									if a, ok := ga[3].([]any); ok {
+									if a, ok5 := ga[3].([]any); ok5 {
 										if len(a) > 6 {
-											if v, ok := a[6].(float64); ok && v != 0 {
+											if v, ok6 := a[6].(float64); ok6 && v != 0 {
 												title = fmt.Sprintf("[Generated Image %.0f]", v)
 											} else {
 												title = "[Generated Image]"
@@ -634,13 +636,13 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 										}
 										// alt from ga[3][5][ii] fallback
 										if len(a) > 5 {
-											if tt, ok := a[5].([]any); ok {
+											if tt, ok6 := a[5].([]any); ok6 {
 												if ii < len(tt) {
-													if s, ok := tt[ii].(string); ok {
+													if s, ok7 := tt[ii].(string); ok7 {
 														alt = s
 													}
 												} else if len(tt) > 0 {
-													if s, ok := tt[0].(string); ok {
+													if s, ok7 := tt[0].(string); ok7 {
 														alt = s
 													}
 												}
@@ -707,14 +709,6 @@ func extractErrorCode(top []any) (int, bool) {
 		return 0, false
 	}
 	return int(f), true
-}
-
-// truncateForLog returns a shortened string for logging
-func truncateForLog(s string, n int) string {
-	if n <= 0 || len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 // StartChat returns a ChatSession attached to the client

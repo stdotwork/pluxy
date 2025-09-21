@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 )
 
 // OpenAICompatExecutor implements a stateless executor for OpenAI-compatible providers.
@@ -18,11 +20,12 @@ import (
 // using per-auth credentials (API key) and per-auth HTTP transport (proxy) from context.
 type OpenAICompatExecutor struct {
 	provider string
+	cfg      *config.Config
 }
 
 // NewOpenAICompatExecutor creates an executor bound to a provider key (e.g., "openrouter").
-func NewOpenAICompatExecutor(provider string) *OpenAICompatExecutor {
-	return &OpenAICompatExecutor{provider: provider}
+func NewOpenAICompatExecutor(provider string, cfg *config.Config) *OpenAICompatExecutor {
+	return &OpenAICompatExecutor{provider: provider, cfg: cfg}
 }
 
 // Identifier implements cliproxyauth.ProviderExecutor.
@@ -45,6 +48,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	translated := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), opts.Stream)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
+	recordAPIRequest(ctx, e.cfg, translated)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
@@ -64,12 +68,14 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
+		appendAPIResponseChunk(ctx, e.cfg, b)
 		return cliproxyexecutor.Response{}, statusErr{code: resp.StatusCode, msg: string(b)}
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
+	appendAPIResponseChunk(ctx, e.cfg, body)
 	// Translate response back to source format when needed
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, body, &param)
@@ -86,6 +92,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	translated := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), true)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
+	recordAPIRequest(ctx, e.cfg, translated)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
 	if err != nil {
 		return nil, err
@@ -107,6 +114,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
+		appendAPIResponseChunk(ctx, e.cfg, b)
 		return nil, statusErr{code: resp.StatusCode, msg: string(b)}
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
@@ -119,6 +127,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		var param any
 		for scanner.Scan() {
 			line := scanner.Bytes()
+			appendAPIResponseChunk(ctx, e.cfg, line)
 			if len(line) == 0 {
 				continue
 			}
@@ -129,7 +138,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
 			}
 		}
-		if err := scanner.Err(); err != nil {
+		if err = scanner.Err(); err != nil {
 			out <- cliproxyexecutor.StreamChunk{Err: err}
 		}
 	}()

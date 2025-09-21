@@ -38,7 +38,7 @@ func NewGeminiCLIAPIHandler(apiHandlers *handlers.BaseAPIHandler) *GeminiCLIAPIH
 
 // HandlerType returns the type of this handler.
 func (h *GeminiCLIAPIHandler) HandlerType() string {
-	return GEMINICLI
+	return GeminiCLI
 }
 
 // Models returns a list of models supported by this handler.

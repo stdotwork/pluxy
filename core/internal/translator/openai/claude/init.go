@@ -8,8 +8,8 @@ import (
 
 func init() {
 	translator.Register(
-		CLAUDE,
-		OPENAI,
+		Claude,
+		OpenAI,
 		ConvertClaudeRequestToOpenAI,
 		interfaces.TranslateResponse{
 			Stream:    ConvertOpenAIResponseToClaude,

@@ -122,7 +122,7 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Error downloading image: %d %s", resp.StatusCode, resp.Status)
+		return "", fmt.Errorf("error downloading image: %d %s", resp.StatusCode, resp.Status)
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.Contains(strings.ToLower(ct), "image") {
 		Warning("Content type of %s is not image, but %s.", filename, ct)

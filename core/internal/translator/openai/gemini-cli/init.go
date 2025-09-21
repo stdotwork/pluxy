@@ -8,8 +8,8 @@ import (
 
 func init() {
 	translator.Register(
-		GEMINICLI,
-		OPENAI,
+		GeminiCLI,
+		OpenAI,
 		ConvertGeminiCLIRequestToOpenAI,
 		interfaces.TranslateResponse{
 			Stream:    ConvertOpenAIResponseToGeminiCLI,

@@ -9,8 +9,8 @@ import (
 
 func init() {
 	translator.Register(
-		OPENAI_RESPONSE,
-		GEMINIWEB,
+		OpenaiResponse,
+		GeminiWeb,
 		geminiResponses.ConvertOpenAIResponsesRequestToGemini,
 		interfaces.TranslateResponse{
 			Stream:    geminiResponses.ConvertGeminiResponseToOpenAIResponses,

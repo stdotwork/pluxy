@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
@@ -33,9 +34,13 @@ var geminiOauthScopes = []string{
 }
 
 // GeminiCLIExecutor talks to the Cloud Code Assist endpoint using OAuth credentials from auth metadata.
-type GeminiCLIExecutor struct{}
+type GeminiCLIExecutor struct {
+	cfg *config.Config
+}
 
-func NewGeminiCLIExecutor() *GeminiCLIExecutor { return &GeminiCLIExecutor{} }
+func NewGeminiCLIExecutor(cfg *config.Config) *GeminiCLIExecutor {
+	return &GeminiCLIExecutor{cfg: cfg}
+}
 
 func (e *GeminiCLIExecutor) Identifier() string { return "gemini-cli" }
 
@@ -91,6 +96,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 			url = url + fmt.Sprintf("?$alt=%s", opts.Alt)
 		}
 
+		recordAPIRequest(ctx, e.cfg, payload)
 		reqHTTP, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 		if errReq != nil {
 			return cliproxyexecutor.Response{}, errReq
@@ -105,6 +111,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		}
 		data, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
+		appendAPIResponseChunk(ctx, e.cfg, data)
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			var param any
 			out := sdktranslator.TranslateNonStream(respCtx, to, from, attemptModel, bytes.Clone(opts.OriginalRequest), payload, data, &param)
@@ -117,6 +124,9 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		}
 	}
 
+	if len(lastBody) > 0 {
+		appendAPIResponseChunk(ctx, e.cfg, lastBody)
+	}
 	return cliproxyexecutor.Response{}, statusErr{code: lastStatus, msg: string(lastBody)}
 }
 
@@ -162,6 +172,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 			url = url + fmt.Sprintf("?$alt=%s", opts.Alt)
 		}
 
+		recordAPIRequest(ctx, e.cfg, payload)
 		reqHTTP, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 		if errReq != nil {
 			return nil, errReq
@@ -177,6 +188,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			data, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
+			appendAPIResponseChunk(ctx, e.cfg, data)
 			lastStatus = resp.StatusCode
 			lastBody = data
 			if resp.StatusCode == 429 {
@@ -196,6 +208,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 				var param any
 				for scanner.Scan() {
 					line := scanner.Bytes()
+					appendAPIResponseChunk(ctx, e.cfg, line)
 					if bytes.HasPrefix(line, dataTag) {
 						segments := sdktranslator.TranslateStream(respCtx, to, from, attempt, bytes.Clone(opts.OriginalRequest), reqBody, bytes.Clone(line), &param)
 						for i := range segments {
@@ -219,6 +232,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 				out <- cliproxyexecutor.StreamChunk{Err: errRead}
 				return
 			}
+			appendAPIResponseChunk(ctx, e.cfg, data)
 			var param any
 			segments := sdktranslator.TranslateStream(respCtx, to, from, attempt, bytes.Clone(opts.OriginalRequest), reqBody, data, &param)
 			for i := range segments {
@@ -325,7 +339,7 @@ func updateGeminiCLITokenMetadata(auth *cliproxyauth.Auth, base map[string]any, 
 	}
 	if raw, err := json.Marshal(tok); err == nil {
 		var tokenMap map[string]any
-		if err := json.Unmarshal(raw, &tokenMap); err == nil {
+		if err = json.Unmarshal(raw, &tokenMap); err == nil {
 			for k, v := range tokenMap {
 				merged[k] = v
 			}

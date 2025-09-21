@@ -8,8 +8,8 @@ import (
 
 func init() {
 	translator.Register(
-		OPENAI,
-		CODEX,
+		OpenAI,
+		Codex,
 		ConvertOpenAIRequestToCodex,
 		interfaces.TranslateResponse{
 			Stream:    ConvertCodexResponseToOpenAI,

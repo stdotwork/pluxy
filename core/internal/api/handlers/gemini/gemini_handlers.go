@@ -38,7 +38,7 @@ func NewGeminiAPIHandler(apiHandlers *handlers.BaseAPIHandler) *GeminiAPIHandler
 
 // HandlerType returns the identifier for this handler implementation.
 func (h *GeminiAPIHandler) HandlerType() string {
-	return GEMINI
+	return Gemini
 }
 
 // Models returns the Gemini-compatible model metadata supported by this handler.

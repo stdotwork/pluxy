@@ -147,7 +147,7 @@ func (h *Handler) UploadAuthFile(c *gin.Context) {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("failed to write file: %v", errWrite)})
 		return
 	}
-	if err := h.registerAuthFromFile(ctx, dst, data); err != nil {
+	if err = h.registerAuthFromFile(ctx, dst, data); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

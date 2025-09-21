@@ -289,9 +289,6 @@ func sanitizeTypeFields(jsonStr string) string {
 						break
 					} else if typeStr == "number" || typeStr == "integer" {
 						preferredType = typeStr
-						if preferredType == "" {
-							preferredType = typeStr
-						}
 					} else if preferredType == "" {
 						preferredType = typeStr
 					}
@@ -323,6 +320,8 @@ func walkForTypeFields(value gjson.Result, path string, paths *[]string) {
 			walkForTypeFields(val, childPath, paths)
 			return true
 		})
+	default:
+
 	}
 }
 
@@ -367,5 +366,7 @@ func findNestedSchemaPaths(value gjson.Result, path string, fieldsToFind []strin
 			findNestedSchemaPaths(val, childPath, fieldsToFind, paths)
 			return true
 		})
+	default:
+
 	}
 }

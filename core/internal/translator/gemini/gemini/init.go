@@ -10,8 +10,8 @@ import (
 // The request converter ensures missing or invalid roles are normalized to valid values.
 func init() {
 	translator.Register(
-		GEMINI,
-		GEMINI,
+		Gemini,
+		Gemini,
 		ConvertGeminiRequestToGemini,
 		interfaces.TranslateResponse{
 			Stream:    PassthroughGeminiResponseStream,

@@ -44,7 +44,7 @@ func NewOpenAIAPIHandler(apiHandlers *handlers.BaseAPIHandler) *OpenAIAPIHandler
 
 // HandlerType returns the identifier for this handler implementation.
 func (h *OpenAIAPIHandler) HandlerType() string {
-	return OPENAI
+	return OpenAI
 }
 
 // Models returns the OpenAI-compatible model metadata supported by this handler.

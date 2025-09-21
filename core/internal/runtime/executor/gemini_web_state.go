@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
 	geminiwebapi "github.com/router-for-me/CLIProxyAPI/v6/internal/client/gemini-web"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -192,8 +191,8 @@ func (s *geminiWebState) onCookiesRefreshed() {
 func (s *geminiWebState) tokenSnapshot() *gemini.GeminiWebTokenStorage {
 	s.tokenMu.Lock()
 	defer s.tokenMu.Unlock()
-	copy := *s.token
-	return &copy
+	c := *s.token
+	return &c
 }
 
 func (s *geminiWebState) ShouldRefresh(now time.Time, _ *cliproxyauth.Auth) bool {
@@ -225,13 +224,9 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 	res.translatedRaw = bytes.Clone(rawJSON)
 	if handler, ok := ctx.Value("handler").(interfaces.APIHandler); ok && handler != nil {
 		res.handlerType = handler.HandlerType()
-		res.translatedRaw = translator.Request(res.handlerType, constant.GEMINIWEB, modelName, res.translatedRaw, stream)
+		res.translatedRaw = translator.Request(res.handlerType, constant.GeminiWeb, modelName, res.translatedRaw, stream)
 	}
-	if s.cfg != nil && s.cfg.RequestLog {
-		if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
-			ginCtx.Set("API_REQUEST", res.translatedRaw)
-		}
-	}
+	recordAPIRequest(ctx, s.cfg, res.translatedRaw)
 
 	messages, files, mimes, msgFileIdx, err := geminiwebapi.ParseMessagesAndFiles(res.translatedRaw)
 	if err != nil {
@@ -336,7 +331,7 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 	}
 	res.uploaded = uploaded
 
-	if err := s.ensureClient(); err != nil {
+	if err = s.ensureClient(); err != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: err}
 	}
 	chat := s.client.StartChat(model, s.getConfiguredGem(), meta)
@@ -443,36 +438,19 @@ func (s *geminiWebState) persistConversation(modelName string, prep *geminiWebPr
 }
 
 func (s *geminiWebState) addAPIResponseData(ctx context.Context, line []byte) {
-	if s.cfg == nil || !s.cfg.RequestLog {
-		return
-	}
-	data := bytes.TrimSpace(bytes.Clone(line))
-	if len(data) == 0 {
-		return
-	}
-	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
-		if existing, exists := ginCtx.Get("API_RESPONSE"); exists {
-			if prev, okBytes := existing.([]byte); okBytes {
-				prev = append(prev, data...)
-				prev = append(prev, []byte("\n\n")...)
-				ginCtx.Set("API_RESPONSE", prev)
-				return
-			}
-		}
-		ginCtx.Set("API_RESPONSE", data)
-	}
+	appendAPIResponseChunk(ctx, s.cfg, line)
 }
 
 func (s *geminiWebState) convertToTarget(ctx context.Context, modelName string, prep *geminiWebPrepared, gemBytes []byte) []byte {
 	if prep == nil || prep.handlerType == "" {
 		return gemBytes
 	}
-	if !translator.NeedConvert(prep.handlerType, constant.GEMINIWEB) {
+	if !translator.NeedConvert(prep.handlerType, constant.GeminiWeb) {
 		return gemBytes
 	}
 	var param any
-	out := translator.ResponseNonStream(prep.handlerType, constant.GEMINIWEB, ctx, modelName, prep.originalRaw, prep.translatedRaw, gemBytes, &param)
-	if prep.handlerType == constant.OPENAI && out != "" {
+	out := translator.ResponseNonStream(prep.handlerType, constant.GeminiWeb, ctx, modelName, prep.originalRaw, prep.translatedRaw, gemBytes, &param)
+	if prep.handlerType == constant.OpenAI && out != "" {
 		newID := fmt.Sprintf("chatcmpl-%x", time.Now().UnixNano())
 		if v := gjson.Parse(out).Get("id"); v.Exists() {
 			out, _ = sjson.Set(out, "id", newID)
@@ -485,22 +463,22 @@ func (s *geminiWebState) convertStream(ctx context.Context, modelName string, pr
 	if prep == nil || prep.handlerType == "" {
 		return []string{string(gemBytes)}
 	}
-	if !translator.NeedConvert(prep.handlerType, constant.GEMINIWEB) {
+	if !translator.NeedConvert(prep.handlerType, constant.GeminiWeb) {
 		return []string{string(gemBytes)}
 	}
 	var param any
-	return translator.Response(prep.handlerType, constant.GEMINIWEB, ctx, modelName, prep.originalRaw, prep.translatedRaw, gemBytes, &param)
+	return translator.Response(prep.handlerType, constant.GeminiWeb, ctx, modelName, prep.originalRaw, prep.translatedRaw, gemBytes, &param)
 }
 
 func (s *geminiWebState) doneStream(ctx context.Context, modelName string, prep *geminiWebPrepared) []string {
 	if prep == nil || prep.handlerType == "" {
 		return nil
 	}
-	if !translator.NeedConvert(prep.handlerType, constant.GEMINIWEB) {
+	if !translator.NeedConvert(prep.handlerType, constant.GeminiWeb) {
 		return nil
 	}
 	var param any
-	return translator.Response(prep.handlerType, constant.GEMINIWEB, ctx, modelName, prep.originalRaw, prep.translatedRaw, []byte("[DONE]"), &param)
+	return translator.Response(prep.handlerType, constant.GeminiWeb, ctx, modelName, prep.originalRaw, prep.translatedRaw, []byte("[DONE]"), &param)
 }
 
 func (s *geminiWebState) useReusableContext() bool {

@@ -8,8 +8,8 @@ import (
 
 func init() {
 	translator.Register(
-		CLAUDE,
-		CODEX,
+		Claude,
+		Codex,
 		ConvertClaudeRequestToCodex,
 		interfaces.TranslateResponse{
 			Stream:    ConvertCodexResponseToClaude,
