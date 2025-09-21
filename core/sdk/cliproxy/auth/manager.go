@@ -254,10 +254,13 @@ func (m *Manager) executeWithProvider(ctx context.Context, provider string, req 
 			return cliproxyexecutor.Response{}, errPick
 		}
 
-		if isAPIKey, info := auth.AccountInfo(); isAPIKey {
-			log.Debugf("Use API key %s for model %s", util.HideAPIKey(info), req.Model)
-		} else {
-			log.Debugf("Use OAuth %s for model %s", info, req.Model)
+		accountType, accountInfo := auth.AccountInfo()
+		if accountType == "api_key" {
+			log.Debugf("Use API key %s for model %s", util.HideAPIKey(accountInfo), req.Model)
+		} else if accountType == "oauth" {
+			log.Debugf("Use OAuth %s for model %s", accountInfo, req.Model)
+		} else if accountType == "cookie" {
+			log.Debugf("Use Cookie %s for model %s", util.HideAPIKey(accountInfo), req.Model)
 		}
 
 		tried[auth.ID] = struct{}{}
@@ -298,10 +301,13 @@ func (m *Manager) executeStreamWithProvider(ctx context.Context, provider string
 			return nil, errPick
 		}
 
-		if isAPIKey, info := auth.AccountInfo(); isAPIKey {
-			log.Debugf("Use API key %s for model %s", util.HideAPIKey(info), req.Model)
-		} else {
-			log.Debugf("Use OAuth %s for model %s", info, req.Model)
+		accountType, accountInfo := auth.AccountInfo()
+		if accountType == "api_key" {
+			log.Debugf("Use API key %s for model %s", util.HideAPIKey(accountInfo), req.Model)
+		} else if accountType == "oauth" {
+			log.Debugf("Use OAuth %s for model %s", accountInfo, req.Model)
+		} else if accountType == "cookie" {
+			log.Debugf("Use Cookie %s for model %s", util.HideAPIKey(accountInfo), req.Model)
 		}
 
 		tried[auth.ID] = struct{}{}

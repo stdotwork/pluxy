@@ -80,38 +80,38 @@ func (a *Auth) Clone() *Auth {
 	return &copyAuth
 }
 
-func (a *Auth) AccountInfo() (bool, string) {
+func (a *Auth) AccountInfo() (string, string) {
 	if a == nil {
-		return false, ""
+		return "", ""
 	}
 	if strings.ToLower(a.Provider) == "gemini-web" {
 		if a.Metadata != nil {
 			if v, ok := a.Metadata["secure_1psid"].(string); ok && v != "" {
-				return true, v
+				return "cookie", v
 			}
 			if v, ok := a.Metadata["__Secure-1PSID"].(string); ok && v != "" {
-				return true, v
+				return "cookie", v
 			}
 		}
 		if a.Attributes != nil {
 			if v := a.Attributes["secure_1psid"]; v != "" {
-				return true, v
+				return "cookie", v
 			}
 			if v := a.Attributes["api_key"]; v != "" {
-				return true, v
+				return "cookie", v
 			}
 		}
 	}
 	if a.Metadata != nil {
 		if v, ok := a.Metadata["email"].(string); ok {
-			return false, v
+			return "oauth", v
 		}
 	} else if a.Attributes != nil {
 		if v := a.Attributes["api_key"]; v != "" {
-			return true, v
+			return "api_key", v
 		}
 	}
-	return false, ""
+	return "", ""
 }
 
 // ExpirationTime attempts to extract the credential expiration timestamp from metadata.
