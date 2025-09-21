@@ -9,7 +9,6 @@ import (
 )
 
 func ConvertGeminiCLIResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertGeminiCLIResponseToOpenAIResponses")
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		rawJSON = []byte(responseResult.Raw)
@@ -18,7 +17,6 @@ func ConvertGeminiCLIResponseToOpenAIResponses(ctx context.Context, modelName st
 }
 
 func ConvertGeminiCLIResponseToOpenAIResponsesNonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
-	log.Debug("ConvertGeminiCLIResponseToOpenAIResponsesNonStream")
 	responseResult := gjson.GetBytes(rawJSON, "response")
 	if responseResult.Exists() {
 		rawJSON = []byte(responseResult.Raw)

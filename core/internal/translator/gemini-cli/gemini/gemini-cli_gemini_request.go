@@ -32,7 +32,6 @@ import (
 // Returns:
 //   - []byte: The transformed request data in Gemini API format
 func ConvertGeminiRequestToGeminiCLI(_ string, inputRawJSON []byte, _ bool) []byte {
-	log.Debug("ConvertGeminiRequestToGeminiCLI")
 	rawJSON := bytes.Clone(inputRawJSON)
 	template := ""
 	template = `{"project":"","request":{},"model":""}`

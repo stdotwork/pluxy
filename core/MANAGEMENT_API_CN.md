@@ -18,6 +18,10 @@
 
 若在启动时检测到配置中的管理密钥为明文，会自动使用 bcrypt 加密并回写到配置文件中。
 
+其它说明：
+- 若 `remote-management.secret-key` 为空，则管理 API 整体被禁用（所有 `/v0/management` 路由均返回 404）。
+- 对于远程 IP，连续 5 次认证失败会触发临时封禁（约 30 分钟）。
+
 ## 请求/响应约定
 
 - Content-Type：`application/json`（除非另有说明）。
@@ -56,6 +60,29 @@
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
       -d '{"value":true}' \
       http://localhost:8317/v0/management/debug
+    ```
+  - 响应：
+    ```json
+    { "status": "ok" }
+    ```
+
+### 强制 GPT-5 Codex
+- GET `/force-gpt-5-codex` — 获取当前标志
+  - 请求：
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/force-gpt-5-codex
+    ```
+  - 响应：
+    ```json
+    { "gpt-5-codex": false }
+    ```
+- PUT/PATCH `/force-gpt-5-codex` — 设置布尔值
+  - 请求：
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":true}' \
+      http://localhost:8317/v0/management/force-gpt-5-codex
     ```
   - 响应：
     ```json
@@ -322,6 +349,29 @@
     { "status": "ok" }
     ```
 
+### 请求日志开关
+- GET `/request-log` — 获取布尔值
+  - 请求：
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/request-log
+    ```
+  - 响应：
+    ```json
+    { "request-log": false }
+    ```
+- PUT/PATCH `/request-log` — 设置布尔值
+  - 请求：
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":true}' \
+      http://localhost:8317/v0/management/request-log
+    ```
+  - 响应：
+    ```json
+    { "status": "ok" }
+    ```
+
 ### 允许本地未认证访问
 - GET `/allow-localhost-unauthenticated` — 获取布尔值
   - 请求：
@@ -562,6 +612,19 @@
   - 响应：
     ```json
     { "status": "ok", "url": "https://..." }
+    ```
+
+- GET `/get-auth-status?state=<state>` — 轮询 OAuth 流程状态
+  - 请求：
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      'http://localhost:8317/v0/management/get-auth-status?state=<STATE_FROM_AUTH_URL>'
+    ```
+  - 响应示例：
+    ```json
+    { "status": "wait" }
+    { "status": "ok" }
+    { "status": "error", "error": "Authentication failed" }
     ```
 
 ## 错误响应

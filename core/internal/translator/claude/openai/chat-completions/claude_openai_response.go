@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -52,7 +51,6 @@ type ToolCallAccumulator struct {
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
 func ConvertClaudeResponseToOpenAI(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertClaudeResponseToOpenAI")
 	if *param == nil {
 		*param = &ConvertAnthropicResponseToOpenAIParams{
 			CreatedAt:    0,
@@ -280,7 +278,6 @@ func mapAnthropicStopReasonToOpenAI(anthropicReason string) string {
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertClaudeResponseToOpenAINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("ConvertClaudeResponseToOpenAINonStream")
 
 	chunks := make([][]byte, 0)
 

@@ -9,8 +9,6 @@ import (
 
 // PassthroughGeminiResponseStream forwards Gemini responses unchanged.
 func PassthroughGeminiResponseStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) []string {
-	log.Debug("PassthroughGeminiResponseStream")
-
 	if bytes.HasPrefix(rawJSON, []byte("data:")) {
 		rawJSON = bytes.TrimSpace(rawJSON[5:])
 	}
@@ -24,6 +22,5 @@ func PassthroughGeminiResponseStream(_ context.Context, _ string, originalReques
 
 // PassthroughGeminiResponseNonStream forwards Gemini responses unchanged.
 func PassthroughGeminiResponseNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("PassthroughGeminiResponseNonStream")
 	return string(rawJSON)
 }

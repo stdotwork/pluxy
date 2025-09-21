@@ -59,7 +59,6 @@ type ToolCallAccumulator struct {
 // Returns:
 //   - []string: A slice of strings, each containing an Anthropic-compatible JSON response.
 func ConvertOpenAIResponseToClaude(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertOpenAIResponseToClaude")
 	if *param == nil {
 		*param = &ConvertOpenAIResponseToAnthropicParams{
 			MessageID:               "",
@@ -453,6 +452,5 @@ func mapOpenAIFinishReasonToAnthropic(openAIReason string) string {
 // Returns:
 //   - string: An Anthropic-compatible JSON response.
 func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
-	log.Debug("ConvertOpenAIResponseToClaudeNonStream")
 	return ""
 }

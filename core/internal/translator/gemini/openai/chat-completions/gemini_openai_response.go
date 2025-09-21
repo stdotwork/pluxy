@@ -37,7 +37,6 @@ type convertGeminiResponseToOpenAIChatParams struct {
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
 func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertGeminiResponseToOpenAI")
 	if *param == nil {
 		*param = &convertGeminiResponseToOpenAIChatParams{
 			UnixTimestamp: 0,
@@ -180,7 +179,6 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertGeminiResponseToOpenAINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("ConvertGeminiResponseToOpenAINonStream")
 	var unixTimestamp int64
 	template := `{"id":"","object":"chat.completion","created":123456,"model":"model","choices":[{"index":0,"message":{"role":"assistant","content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
 	if modelVersionResult := gjson.GetBytes(rawJSON, "modelVersion"); modelVersionResult.Exists() {

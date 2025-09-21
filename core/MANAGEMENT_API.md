@@ -16,6 +16,10 @@ Note: The following options cannot be modified via API and must be set in the co
   - `Authorization: Bearer <plaintext-key>`
   - `X-Management-Key: <plaintext-key>`
 
+Additional notes:
+- If `remote-management.secret-key` is empty, the entire Management API is disabled (all `/v0/management` routes return 404).
+- For remote IPs, 5 consecutive authentication failures trigger a temporary ban (~30 minutes) before further attempts are allowed.
+
 If a plaintext key is detected in the config at startup, it will be bcrypt‑hashed and written back to the config file automatically.
 
 ## Request/Response Conventions
@@ -56,6 +60,29 @@ If a plaintext key is detected in the config at startup, it will be bcrypt‑has
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
       -d '{"value":true}' \
       http://localhost:8317/v0/management/debug
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+
+### Force GPT-5 Codex
+- GET `/force-gpt-5-codex` — Get current flag
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/force-gpt-5-codex
+    ```
+  - Response:
+    ```json
+    { "gpt-5-codex": false }
+    ```
+- PUT/PATCH `/force-gpt-5-codex` — Set boolean
+  - Request:
+    ```bash
+    curl -X PUT -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":true}' \
+      http://localhost:8317/v0/management/force-gpt-5-codex
     ```
   - Response:
     ```json
@@ -322,6 +349,29 @@ If a plaintext key is detected in the config at startup, it will be bcrypt‑has
     { "status": "ok" }
     ```
 
+### Request Log
+- GET `/request-log` — Get boolean
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/request-log
+    ```
+  - Response:
+    ```json
+    { "request-log": false }
+    ```
+- PUT/PATCH `/request-log` — Set boolean
+  - Request:
+    ```bash
+    curl -X PATCH -H 'Content-Type: application/json' \
+    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      -d '{"value":true}' \
+      http://localhost:8317/v0/management/request-log
+    ```
+  - Response:
+    ```json
+    { "status": "ok" }
+    ```
+
 ### Allow Localhost Unauthenticated
 - GET `/allow-localhost-unauthenticated` — Get boolean
   - Request:
@@ -562,6 +612,19 @@ These endpoints initiate provider login flows and return a URL to open in a brow
   - Response:
     ```json
     { "status": "ok", "url": "https://..." }
+    ```
+
+- GET `/get-auth-status?state=<state>` — Poll OAuth flow status
+  - Request:
+    ```bash
+    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+      'http://localhost:8317/v0/management/get-auth-status?state=<STATE_FROM_AUTH_URL>'
+    ```
+  - Response examples:
+    ```json
+    { "status": "wait" }
+    { "status": "ok" }
+    { "status": "error", "error": "Authentication failed" }
     ```
 
 ## Error Responses

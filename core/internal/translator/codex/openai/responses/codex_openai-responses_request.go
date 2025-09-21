@@ -4,13 +4,11 @@ import (
 	"bytes"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
 func ConvertOpenAIResponsesRequestToCodex(modelName string, inputRawJSON []byte, _ bool) []byte {
-	log.Debug("ConvertOpenAIResponsesRequestToCodex")
 	rawJSON := bytes.Clone(inputRawJSON)
 
 	rawJSON, _ = sjson.SetBytes(rawJSON, "stream", true)

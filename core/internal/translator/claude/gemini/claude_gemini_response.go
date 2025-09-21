@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -54,7 +53,6 @@ type ConvertAnthropicResponseToGeminiParams struct {
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response
 func ConvertClaudeResponseToGemini(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertClaudeResponseToGemini")
 	if *param == nil {
 		*param = &ConvertAnthropicResponseToGeminiParams{
 			Model:      modelName,
@@ -323,7 +321,6 @@ func convertMapToJSON(m map[string]interface{}) string {
 // Returns:
 //   - string: A Gemini-compatible JSON response containing all message content and metadata
 func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("ConvertClaudeResponseToGeminiNonStream")
 	// Base Gemini response template for non-streaming with default values
 	template := `{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"},"modelVersion":"","createTime":"","responseId":""}`
 

@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -37,7 +36,6 @@ import (
 // Returns:
 //   - []byte: The transformed request data in Claude Code API format
 func ConvertGeminiRequestToClaude(modelName string, inputRawJSON []byte, stream bool) []byte {
-	log.Debug("ConvertGeminiRequestToClaude")
 	rawJSON := bytes.Clone(inputRawJSON)
 	// Base Claude Code API template with default max_tokens value
 	out := `{"model":"","max_tokens":32000,"messages":[]}`

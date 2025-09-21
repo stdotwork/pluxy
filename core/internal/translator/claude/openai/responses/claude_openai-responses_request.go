@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -22,7 +21,6 @@ import (
 // - max_output_tokens -> max_tokens
 // - stream passthrough via parameter
 func ConvertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte, stream bool) []byte {
-	log.Debug("ConvertOpenAIResponsesRequestToClaude")
 	rawJSON := bytes.Clone(inputRawJSON)
 
 	// Base Claude message payload

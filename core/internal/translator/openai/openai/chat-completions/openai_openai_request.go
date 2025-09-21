@@ -4,8 +4,6 @@ package chat_completions
 
 import (
 	"bytes"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // ConvertOpenAIRequestToOpenAI converts an OpenAI Chat Completions request (raw JSON)
@@ -19,6 +17,5 @@ import (
 // Returns:
 //   - []byte: The transformed request data in Gemini CLI API format
 func ConvertOpenAIRequestToOpenAI(modelName string, inputRawJSON []byte, _ bool) []byte {
-	log.Debug("ConvertOpenAIRequestToOpenAI")
 	return bytes.Clone(inputRawJSON)
 }

@@ -11,7 +11,6 @@ import (
 	"context"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -43,7 +42,6 @@ type ConvertCliToOpenAIParams struct {
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
 func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertCodexResponseToOpenAI")
 	if *param == nil {
 		*param = &ConvertCliToOpenAIParams{
 			Model:             modelName,
@@ -168,7 +166,6 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("ConvertCodexResponseToOpenAINonStream")
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)

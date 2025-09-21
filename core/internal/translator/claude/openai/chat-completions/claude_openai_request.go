@@ -12,7 +12,6 @@ import (
 	"math/big"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -35,7 +34,6 @@ import (
 // Returns:
 //   - []byte: The transformed request data in Claude Code API format
 func ConvertOpenAIRequestToClaude(modelName string, inputRawJSON []byte, stream bool) []byte {
-	log.Debug("ConvertOpenAIRequestToClaude")
 	rawJSON := bytes.Clone(inputRawJSON)
 
 	// Base Claude Code API template with default max_tokens value

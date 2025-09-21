@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -14,7 +13,6 @@ import (
 // ConvertCodexResponseToOpenAIResponses converts OpenAI Chat Completions streaming chunks
 // to OpenAI Responses SSE events (response.*).
 func ConvertCodexResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertCodexResponseToOpenAIResponses")
 	if bytes.HasPrefix(rawJSON, []byte("data:")) {
 		rawJSON = bytes.TrimSpace(rawJSON[5:])
 		if typeResult := gjson.GetBytes(rawJSON, "type"); typeResult.Exists() {
@@ -31,7 +29,6 @@ func ConvertCodexResponseToOpenAIResponses(ctx context.Context, modelName string
 // ConvertCodexResponseToOpenAIResponsesNonStream builds a single Responses JSON
 // from a non-streaming OpenAI Chat Completions response.
 func ConvertCodexResponseToOpenAIResponsesNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("ConvertCodexResponseToOpenAIResponsesNonStream")
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)

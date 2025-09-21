@@ -48,6 +48,7 @@
 - 支持 Qwen Code 多账户轮询
 - 支持 OpenAI Codex 多账户轮询
 - 通过配置接入上游 OpenAI 兼容提供商（例如 OpenRouter）
+- 可复用的 Go SDK（见 `docs/sdk-usage.md`）
 
 ## 安装
 
@@ -621,6 +622,12 @@ docker run --rm -p 8317:8317 -v /path/to/your/config.yaml:/CLIProxyAPI/config.ya
 ## 管理 API 文档
 
 请参见 [MANAGEMENT_API_CN.md](MANAGEMENT_API_CN.md)
+
+## SDK 文档
+
+- 使用文档：`docs/sdk-usage_CN.md`（English: `docs/sdk-usage.md`）
+- 高级（执行器与翻译器）：`docs/sdk-advanced_CN.md`（English: `docs/sdk-advanced.md`）
+- 自定义 Provider 示例：`examples/custom-provider`
 
 ## 贡献
 

@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -37,7 +36,6 @@ var (
 // Returns:
 //   - []string: A slice of strings, each containing a Claude Code-compatible JSON response
 func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertCodexResponseToClaude")
 	if *param == nil {
 		hasToolCall := false
 		*param = &hasToolCall
@@ -179,7 +177,6 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 // Returns:
 //   - string: A Claude Code-compatible JSON response containing all message content and metadata
 func ConvertCodexResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
-	log.Debug("ConvertCodexResponseToClaudeNonStream")
 	return ""
 }
 

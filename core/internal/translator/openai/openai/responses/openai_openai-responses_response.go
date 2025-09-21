@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -42,7 +41,6 @@ func emitRespEvent(event string, payload string) string {
 // ConvertOpenAIChatCompletionsResponseToOpenAIResponses converts OpenAI Chat Completions streaming chunks
 // to OpenAI Responses SSE events (response.*).
 func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertOpenAIChatCompletionsResponseToOpenAIResponses")
 	if *param == nil {
 		*param = &oaiToResponsesState{
 			FuncArgsBuf:     make(map[int]*strings.Builder),
@@ -518,7 +516,6 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 // ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream builds a single Responses JSON
 // from a non-streaming OpenAI Chat Completions response.
 func ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream")
 	root := gjson.ParseBytes(rawJSON)
 
 	// Basic response scaffold

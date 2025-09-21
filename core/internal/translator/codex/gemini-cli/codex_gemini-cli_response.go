@@ -8,7 +8,6 @@ import (
 	"context"
 
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/codex/gemini"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/sjson"
 )
 
@@ -26,7 +25,6 @@ import (
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response wrapped in a response object
 func ConvertCodexResponseToGeminiCLI(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertCodexResponseToGeminiCLI")
 	outputs := ConvertCodexResponseToGemini(ctx, modelName, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 	newOutputs := make([]string, 0)
 	for i := 0; i < len(outputs); i++ {
@@ -50,7 +48,6 @@ func ConvertCodexResponseToGeminiCLI(ctx context.Context, modelName string, orig
 // Returns:
 //   - string: A Gemini-compatible JSON response wrapped in a response object
 func ConvertCodexResponseToGeminiCLINonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
-	log.Debug("ConvertCodexResponseToGeminiCLINonStream")
 	// log.Debug(string(rawJSON))
 	strJSON := ConvertCodexResponseToGeminiNonStream(ctx, modelName, originalRequestRawJSON, requestRawJSON, rawJSON, param)
 	json := `{"response": {}}`

@@ -9,7 +9,6 @@ import (
 	"bytes"
 
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/codex/gemini"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -31,7 +30,6 @@ import (
 // Returns:
 //   - []byte: The transformed request data in Codex API format
 func ConvertGeminiCLIRequestToCodex(modelName string, inputRawJSON []byte, stream bool) []byte {
-	log.Debug("ConvertGeminiRequestToCodex")
 	rawJSON := bytes.Clone(inputRawJSON)
 
 	rawJSON = []byte(gjson.GetBytes(rawJSON, "request").Raw)

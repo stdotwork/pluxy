@@ -28,7 +28,7 @@ The first Chinese provider has now been added: [Qwen Code](https://github.com/Qw
 - Qwen Code multi-account load balancing
 - OpenAI Codex multi-account load balancing
 - OpenAI-compatible upstream providers via config (e.g., OpenRouter)
-- Reusable Go SDK for embedding the proxy (see `docs/sdk-usage.md`)
+- Reusable Go SDK for embedding the proxy (see `docs/sdk-usage.md`, 中文: `docs/sdk-usage_CN.md`)
 
 ## Installation
 
@@ -613,6 +613,11 @@ docker run --rm -p 8317:8317 -v /path/to/your/config.yaml:/CLIProxyAPI/config.ya
 ## Management API
 
 see [MANAGEMENT_API.md](MANAGEMENT_API.md)
+
+## SDK Docs
+
+- Usage: `docs/sdk-usage.md` (中文: `docs/sdk-usage_CN.md`)
+- Advanced (executors & translators): `docs/sdk-advanced.md` (中文: `docs/sdk-advanced_CN.md`)
 
 ## Contributing
 

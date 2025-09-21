@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -36,7 +35,6 @@ import (
 // Returns:
 //   - []byte: The transformed request data in internal client format
 func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) []byte {
-	log.Debug("ConvertClaudeRequestToCodex")
 	rawJSON := bytes.Clone(inputRawJSON)
 
 	template := `{"model":"","instructions":"","input":[]}`

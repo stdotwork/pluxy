@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -19,7 +18,6 @@ import (
 // It extracts the model name, system instruction, message contents, and tool declarations
 // from the raw JSON request and returns them in the format expected by the OpenAI API.
 func ConvertClaudeRequestToOpenAI(modelName string, inputRawJSON []byte, stream bool) []byte {
-	log.Debug("ConvertClaudeRequestToOpenAI")
 	rawJSON := bytes.Clone(inputRawJSON)
 	// Base OpenAI Chat Completions API template
 	out := `{"model":"","messages":[]}`

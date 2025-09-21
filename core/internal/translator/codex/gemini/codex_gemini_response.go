@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -42,7 +41,6 @@ type ConvertCodexResponseToGeminiParams struct {
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini-compatible JSON response
 func ConvertCodexResponseToGemini(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertCodexResponseToGemini")
 	if *param == nil {
 		*param = &ConvertCodexResponseToGeminiParams{
 			Model:             modelName,
@@ -154,7 +152,6 @@ func ConvertCodexResponseToGemini(_ context.Context, modelName string, originalR
 // Returns:
 //   - string: A Gemini-compatible JSON response containing all message content and metadata
 func ConvertCodexResponseToGeminiNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("ConvertCodexResponseToGeminiNonStream")
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)

@@ -10,7 +10,6 @@ import (
 )
 
 func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte, stream bool) []byte {
-	log.Debug("ConvertOpenAIResponsesRequestToGemini")
 	rawJSON := bytes.Clone(inputRawJSON)
 
 	// Note: modelName and stream parameters are part of the fixed method signature

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -44,7 +43,6 @@ func emitEvent(event string, payload string) string {
 
 // ConvertGeminiResponseToOpenAIResponses converts Gemini SSE chunks into OpenAI Responses SSE events.
 func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertGeminiResponseToOpenAIResponses")
 	if *param == nil {
 		*param = &geminiToResponsesState{
 			FuncArgsBuf: make(map[int]*strings.Builder),
@@ -424,7 +422,6 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 
 // ConvertGeminiResponseToOpenAIResponsesNonStream aggregates Gemini response JSON into a single OpenAI Responses JSON object.
 func ConvertGeminiResponseToOpenAIResponsesNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-	log.Debug("ConvertGeminiResponseToOpenAIResponsesNonStream")
 	root := gjson.ParseBytes(rawJSON)
 
 	// Base response scaffold

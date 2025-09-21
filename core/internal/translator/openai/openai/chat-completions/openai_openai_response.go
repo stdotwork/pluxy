@@ -27,7 +27,6 @@ import (
 // Returns:
 //   - []string: A slice of strings, each containing an OpenAI-compatible JSON response
 func ConvertOpenAIResponseToOpenAI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	log.Debug("ConvertOpenAIResponseToOpenAI")
 	if bytes.HasPrefix(rawJSON, []byte("data:")) {
 		rawJSON = bytes.TrimSpace(rawJSON[5:])
 	}
@@ -51,6 +50,5 @@ func ConvertOpenAIResponseToOpenAI(_ context.Context, _ string, originalRequestR
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertOpenAIResponseToOpenAINonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string {
-	log.Debug("ConvertOpenAIResponseToOpenAINonStream")
 	return string(rawJSON)
 }

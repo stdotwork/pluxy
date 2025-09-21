@@ -18,7 +18,6 @@ import (
 //
 // It keeps the payload otherwise unchanged.
 func ConvertGeminiRequestToGemini(_ string, inputRawJSON []byte, _ bool) []byte {
-	log.Debug("ConvertClaudeRequestToGemini")
 	rawJSON := bytes.Clone(inputRawJSON)
 	// Fast path: if no contents field, return as-is
 	contents := gjson.GetBytes(rawJSON, "contents")
