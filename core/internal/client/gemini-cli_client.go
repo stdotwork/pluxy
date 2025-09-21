@@ -554,7 +554,7 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 	rawJSON, _ = sjson.SetBytes(rawJSON, "project", c.GetProjectID())
 	rawJSON, _ = sjson.SetBytes(rawJSON, "model", modelName)
 
-	dataTag := []byte("data: ")
+	dataTag := []byte("data:")
 	errChan := make(chan *interfaces.ErrorMessage)
 	dataChan := make(chan []byte)
 	// log.Debugf(string(rawJSON))
@@ -619,7 +619,7 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 				for scanner.Scan() {
 					line := scanner.Bytes()
 					if bytes.HasPrefix(line, dataTag) {
-						lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, line[6:], &param)
+						lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, bytes.TrimSpace(line[5:]), &param)
 						for i := 0; i < len(lines); i++ {
 							dataChan <- []byte(lines[i])
 						}
@@ -630,7 +630,7 @@ func (c *GeminiCLIClient) SendRawMessageStream(ctx context.Context, modelName st
 				for scanner.Scan() {
 					line := scanner.Bytes()
 					if bytes.HasPrefix(line, dataTag) {
-						dataChan <- line[6:]
+						dataChan <- bytes.TrimSpace(line[5:])
 					}
 					c.AddAPIResponseData(ctx, line)
 				}

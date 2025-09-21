@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	dataTag = []byte("data: ")
+	dataTag = []byte("data:")
 )
 
 // ConvertCliToOpenAIParams holds parameters for response conversion.
@@ -54,7 +54,7 @@ func ConvertCodexResponseToOpenAI(_ context.Context, modelName string, originalR
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	// Initialize the OpenAI SSE template.
 	template := `{"id":"","object":"chat.completion.chunk","created":12345,"model":"model","choices":[{"index":0,"delta":{"role":null,"content":null,"reasoning_content":null,"tool_calls":null},"finish_reason":null,"native_finish_reason":null}]}`
@@ -175,7 +175,7 @@ func ConvertCodexResponseToOpenAINonStream(_ context.Context, _ string, original
 		if !bytes.HasPrefix(line, dataTag) {
 			continue
 		}
-		rawJSON = line[6:]
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 		rootResult := gjson.ParseBytes(rawJSON)
 		// Verify this is a response.completed event

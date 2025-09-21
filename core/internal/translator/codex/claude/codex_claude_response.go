@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	dataTag = []byte("data: ")
+	dataTag = []byte("data:")
 )
 
 // ConvertCodexResponseToClaude performs sophisticated streaming response format conversion.
@@ -45,7 +45,7 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	output := ""
 	rootResult := gjson.ParseBytes(rawJSON)

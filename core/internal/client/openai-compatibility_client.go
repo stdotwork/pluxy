@@ -291,9 +291,8 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, true)
 
-	dataTag := []byte("data: ")
-	dataUglyTag := []byte("data:") // Some APIs providers don't add space after "data:", fuck for them all
-	doneTag := []byte("data: [DONE]")
+	dataTag := []byte("data:")
+	doneTag := []byte("[DONE]")
 	errChan := make(chan *interfaces.ErrorMessage)
 	dataChan := make(chan []byte)
 	// log.Debugf(string(rawJSON))
@@ -332,19 +331,10 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 			for scanner.Scan() {
 				line := scanner.Bytes()
 				if bytes.HasPrefix(line, dataTag) {
-					if bytes.Equal(line, doneTag) {
+					if bytes.Equal(bytes.TrimSpace(line[5:]), doneTag) {
 						break
 					}
-					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, line[6:], &param)
-					for i := 0; i < len(lines); i++ {
-						c.AddAPIResponseData(ctx, line)
-						dataChan <- []byte(lines[i])
-					}
-				} else if bytes.HasPrefix(line, dataUglyTag) {
-					if bytes.Equal(line, doneTag) {
-						break
-					}
-					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, line[5:], &param)
+					lines := translator.Response(handlerType, c.Type(), newCtx, modelName, originalRequestRawJSON, rawJSON, bytes.TrimSpace(line[5:]), &param)
 					for i := 0; i < len(lines); i++ {
 						c.AddAPIResponseData(ctx, line)
 						dataChan <- []byte(lines[i])
@@ -356,13 +346,10 @@ func (c *OpenAICompatibilityClient) SendRawMessageStream(ctx context.Context, mo
 			for scanner.Scan() {
 				line := scanner.Bytes()
 				if bytes.HasPrefix(line, dataTag) {
-					if bytes.Equal(line, doneTag) {
+					if bytes.Equal(bytes.TrimSpace(line[5:]), doneTag) {
 						break
 					}
-					c.AddAPIResponseData(newCtx, line[6:])
-					dataChan <- line[6:]
-				} else if bytes.HasPrefix(line, dataUglyTag) {
-					c.AddAPIResponseData(newCtx, line[5:])
+					c.AddAPIResponseData(newCtx, bytes.TrimSpace(line[5:]))
 					dataChan <- line[5:]
 				}
 			}

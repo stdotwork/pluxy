@@ -215,8 +215,8 @@ func (c *QwenClient) SendRawMessageStream(ctx context.Context, modelName string,
 	handlerType := handler.HandlerType()
 	rawJSON = translator.Request(handlerType, c.Type(), modelName, rawJSON, true)
 
-	dataTag := []byte("data: ")
-	doneTag := []byte("data: [DONE]")
+	dataTag := []byte("data:")
+	doneTag := []byte("[DONE]")
 	errChan := make(chan *interfaces.ErrorMessage)
 	dataChan := make(chan []byte)
 
@@ -264,7 +264,7 @@ func (c *QwenClient) SendRawMessageStream(ctx context.Context, modelName string,
 			for scanner.Scan() {
 				line := scanner.Bytes()
 				if bytes.HasPrefix(line, dataTag) {
-					lines := translator.Response(handlerType, c.Type(), ctx, modelName, originalRequestRawJSON, rawJSON, line[6:], &param)
+					lines := translator.Response(handlerType, c.Type(), ctx, modelName, originalRequestRawJSON, rawJSON, bytes.TrimSpace(line[5:]), &param)
 					for i := 0; i < len(lines); i++ {
 						dataChan <- []byte(lines[i])
 					}
@@ -274,9 +274,9 @@ func (c *QwenClient) SendRawMessageStream(ctx context.Context, modelName string,
 		} else {
 			for scanner.Scan() {
 				line := scanner.Bytes()
-				if !bytes.HasPrefix(line, doneTag) {
-					if bytes.HasPrefix(line, dataTag) {
-						dataChan <- line[6:]
+				if bytes.HasPrefix(line, dataTag) {
+					if !bytes.Equal(bytes.TrimSpace(line[5:]), doneTag) {
+						dataChan <- bytes.TrimSpace(line[5:])
 					}
 				}
 				c.AddAPIResponseData(ctx, line)

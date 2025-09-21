@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	dataTag = []byte("data: ")
+	dataTag = []byte("data:")
 )
 
 // ConvertAnthropicResponseToGeminiParams holds parameters for response conversion
@@ -64,7 +64,7 @@ func ConvertClaudeResponseToGemini(_ context.Context, modelName string, original
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	root := gjson.ParseBytes(rawJSON)
 	eventType := root.Get("type").String()
@@ -336,7 +336,7 @@ func ConvertClaudeResponseToGeminiNonStream(_ context.Context, modelName string,
 		line := scanner.Bytes()
 		// log.Debug(string(line))
 		if bytes.HasPrefix(line, dataTag) {
-			jsonData := line[6:]
+			jsonData := bytes.TrimSpace(line[5:])
 			streamingEvents = append(streamingEvents, jsonData)
 		}
 	}

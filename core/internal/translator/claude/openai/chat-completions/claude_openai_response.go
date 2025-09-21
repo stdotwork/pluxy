@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	dataTag = []byte("data: ")
+	dataTag = []byte("data:")
 )
 
 // ConvertAnthropicResponseToOpenAIParams holds parameters for response conversion
@@ -62,7 +62,7 @@ func ConvertClaudeResponseToOpenAI(_ context.Context, modelName string, original
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	root := gjson.ParseBytes(rawJSON)
 	eventType := root.Get("type").String()
@@ -289,7 +289,7 @@ func ConvertClaudeResponseToOpenAINonStream(_ context.Context, _ string, origina
 		if !bytes.HasPrefix(line, dataTag) {
 			continue
 		}
-		chunks = append(chunks, line[6:])
+		chunks = append(chunks, bytes.TrimSpace(rawJSON[5:]))
 	}
 
 	// Base OpenAI non-streaming response template

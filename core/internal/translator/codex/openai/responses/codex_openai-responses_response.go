@@ -13,8 +13,8 @@ import (
 // ConvertCodexResponseToOpenAIResponses converts OpenAI Chat Completions streaming chunks
 // to OpenAI Responses SSE events (response.*).
 func ConvertCodexResponseToOpenAIResponses(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []string {
-	if bytes.HasPrefix(rawJSON, []byte("data: ")) {
-		rawJSON = rawJSON[6:]
+	if bytes.HasPrefix(rawJSON, []byte("data:")) {
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
 		if typeResult := gjson.GetBytes(rawJSON, "type"); typeResult.Exists() {
 			typeStr := typeResult.String()
 			if typeStr == "response.created" || typeStr == "response.in_progress" || typeStr == "response.completed" {
@@ -32,14 +32,14 @@ func ConvertCodexResponseToOpenAIResponsesNonStream(_ context.Context, modelName
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
 	buffer := make([]byte, 10240*1024)
 	scanner.Buffer(buffer, 10240*1024)
-	dataTag := []byte("data: ")
+	dataTag := []byte("data:")
 	for scanner.Scan() {
 		line := scanner.Bytes()
 
 		if !bytes.HasPrefix(line, dataTag) {
 			continue
 		}
-		rawJSON = line[6:]
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 		rootResult := gjson.ParseBytes(rawJSON)
 		// Verify this is a response.completed event

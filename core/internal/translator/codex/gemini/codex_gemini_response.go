@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	dataTag = []byte("data: ")
+	dataTag = []byte("data:")
 )
 
 // ConvertCodexResponseToGeminiParams holds parameters for response conversion.
@@ -53,7 +53,7 @@ func ConvertCodexResponseToGemini(_ context.Context, modelName string, originalR
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 	rootResult := gjson.ParseBytes(rawJSON)
 	typeResult := rootResult.Get("type")
@@ -161,7 +161,7 @@ func ConvertCodexResponseToGeminiNonStream(_ context.Context, modelName string, 
 		if !bytes.HasPrefix(line, dataTag) {
 			continue
 		}
-		rawJSON = line[6:]
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
 
 		rootResult := gjson.ParseBytes(rawJSON)
 

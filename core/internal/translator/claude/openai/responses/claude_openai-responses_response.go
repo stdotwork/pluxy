@@ -34,7 +34,7 @@ type claudeToResponsesState struct {
 	ReasoningIndex     int
 }
 
-var dataTag = []byte("data: ")
+var dataTag = []byte("data:")
 
 func emitEvent(event string, payload string) string {
 	return fmt.Sprintf("event: %s\ndata: %s\n\n", event, payload)
@@ -51,7 +51,7 @@ func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName strin
 	if !bytes.HasPrefix(rawJSON, dataTag) {
 		return []string{}
 	}
-	rawJSON = rawJSON[6:]
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
 	root := gjson.ParseBytes(rawJSON)
 	ev := root.Get("type").String()
 	var out []string
