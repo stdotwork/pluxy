@@ -128,8 +128,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 
 	// Add middleware
-	engine.Use(gin.Logger())
-	engine.Use(gin.Recovery())
+	engine.Use(logging.GinLogrusLogger())
+	engine.Use(logging.GinLogrusRecovery())
 	for _, mw := range optionState.extraMiddleware {
 		engine.Use(mw)
 	}
