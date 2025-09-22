@@ -8,8 +8,6 @@ package chat_completions
 import (
 	"bytes"
 	"context"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // ConvertOpenAIResponseToOpenAI translates a single chunk of a streaming response from the

@@ -2,8 +2,6 @@ package responses
 
 import (
 	"bytes"
-
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )

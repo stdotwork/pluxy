@@ -3,8 +3,6 @@ package gemini
 import (
 	"bytes"
 	"context"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // PassthroughGeminiResponseStream forwards Gemini responses unchanged.

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/openai/responses"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
