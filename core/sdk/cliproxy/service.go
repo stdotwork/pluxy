@@ -78,7 +78,7 @@ func (s *Service) ensureAuthUpdateQueue(ctx context.Context) {
 		return
 	}
 	if s.authUpdates == nil {
-		s.authUpdates = make(chan watcher.AuthUpdate, 64)
+		s.authUpdates = make(chan watcher.AuthUpdate, 256)
 	}
 	if s.authQueueStop != nil {
 		return
@@ -98,6 +98,14 @@ func (s *Service) consumeAuthUpdates(ctx context.Context) {
 				return
 			}
 			s.handleAuthUpdate(ctx, update)
+			for {
+				select {
+				case nextUpdate := <-s.authUpdates:
+					s.handleAuthUpdate(ctx, nextUpdate)
+				default:
+					break
+				}
+			}
 		}
 	}
 }
