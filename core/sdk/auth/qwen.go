@@ -110,38 +110,3 @@ func (a *QwenAuthenticator) Login(ctx context.Context, cfg *config.Config, opts 
 		Metadata: metadata,
 	}, nil
 }
-
-func (a *QwenAuthenticator) Refresh(ctx context.Context, cfg *config.Config, record *TokenRecord) (*TokenRecord, error) {
-	if record == nil || record.Storage == nil {
-		return nil, fmt.Errorf("cliproxy auth: empty token record for qwen refresh")
-	}
-	if cfg == nil {
-		return nil, fmt.Errorf("cliproxy auth: configuration is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	storage, ok := record.Storage.(*qwen.QwenTokenStorage)
-	if !ok {
-		return nil, fmt.Errorf("cliproxy auth: unexpected token storage type for qwen refresh")
-	}
-
-	svc := qwen.NewQwenAuth(cfg)
-	td, err := svc.RefreshTokens(ctx, storage.RefreshToken)
-	if err != nil {
-		return nil, err
-	}
-	storage.AccessToken = td.AccessToken
-	storage.RefreshToken = td.RefreshToken
-	storage.ResourceURL = td.ResourceURL
-	storage.Expire = td.Expire
-
-	result := &TokenRecord{
-		Provider: a.Provider(),
-		FileName: record.FileName,
-		Storage:  storage,
-		Metadata: record.Metadata,
-	}
-	return result, nil
-}

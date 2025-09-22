@@ -67,29 +67,3 @@ func (m *Manager) Login(ctx context.Context, provider string, cfg *config.Config
 	}
 	return record, savedPath, nil
 }
-
-// Refresh delegates to the provider-specific refresh implementation and persists the result.
-func (m *Manager) Refresh(ctx context.Context, provider string, cfg *config.Config, record *TokenRecord) (*TokenRecord, string, error) {
-	auth, ok := m.authenticators[provider]
-	if !ok {
-		return nil, "", fmt.Errorf("cliproxy auth: authenticator %s not registered", provider)
-	}
-
-	updated, err := auth.Refresh(ctx, cfg, record)
-	if err != nil {
-		return nil, "", err
-	}
-	if updated == nil {
-		updated = record
-	}
-
-	if m.store == nil {
-		return updated, "", nil
-	}
-
-	savedPath, err := m.store.Save(ctx, cfg, updated)
-	if err != nil {
-		return updated, "", err
-	}
-	return updated, savedPath, nil
-}

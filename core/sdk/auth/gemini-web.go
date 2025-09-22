@@ -23,13 +23,6 @@ func (a *GeminiWebAuthenticator) Login(ctx context.Context, cfg *config.Config, 
 	return nil, fmt.Errorf("gemini-web authenticator does not support scripted login; use CLI --gemini-web-auth")
 }
 
-func (a *GeminiWebAuthenticator) Refresh(ctx context.Context, cfg *config.Config, record *TokenRecord) (*TokenRecord, error) {
-	_ = ctx
-	_ = cfg
-	_ = record
-	return nil, ErrRefreshNotSupported
-}
-
 func (a *GeminiWebAuthenticator) RefreshLead() *time.Duration {
 	d := 9 * time.Minute
 	return &d

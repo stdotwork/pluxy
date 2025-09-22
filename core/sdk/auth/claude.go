@@ -143,36 +143,3 @@ func (a *ClaudeAuthenticator) Login(ctx context.Context, cfg *config.Config, opt
 		Metadata: metadata,
 	}, nil
 }
-
-func (a *ClaudeAuthenticator) Refresh(ctx context.Context, cfg *config.Config, record *TokenRecord) (*TokenRecord, error) {
-	if record == nil || record.Storage == nil {
-		return nil, fmt.Errorf("cliproxy auth: empty token record for claude refresh")
-	}
-	if cfg == nil {
-		return nil, fmt.Errorf("cliproxy auth: configuration is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	storage, ok := record.Storage.(*claude.ClaudeTokenStorage)
-	if !ok {
-		return nil, fmt.Errorf("cliproxy auth: unexpected token storage type for claude refresh")
-	}
-
-	// Refresh via auth service directly (no legacy client)
-	svc := claude.NewClaudeAuth(cfg)
-	td, err := svc.RefreshTokensWithRetry(ctx, storage.RefreshToken, 3)
-	if err != nil {
-		return nil, err
-	}
-	svc.UpdateTokenStorage(storage, td)
-
-	result := &TokenRecord{
-		Provider: a.Provider(),
-		FileName: record.FileName,
-		Storage:  storage,
-		Metadata: record.Metadata,
-	}
-	return result, nil
-}

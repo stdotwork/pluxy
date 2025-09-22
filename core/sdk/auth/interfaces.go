@@ -37,6 +37,5 @@ type TokenStore interface {
 type Authenticator interface {
 	Provider() string
 	Login(ctx context.Context, cfg *config.Config, opts *LoginOptions) (*TokenRecord, error)
-	Refresh(ctx context.Context, cfg *config.Config, record *TokenRecord) (*TokenRecord, error)
 	RefreshLead() *time.Duration
 }

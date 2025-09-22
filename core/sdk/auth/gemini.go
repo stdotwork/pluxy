@@ -66,7 +66,3 @@ func (a *GeminiAuthenticator) Login(ctx context.Context, cfg *config.Config, opt
 		Metadata: metadata,
 	}, nil
 }
-
-func (a *GeminiAuthenticator) Refresh(ctx context.Context, cfg *config.Config, record *TokenRecord) (*TokenRecord, error) {
-	return nil, ErrRefreshNotSupported
-}

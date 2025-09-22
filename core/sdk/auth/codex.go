@@ -142,35 +142,3 @@ func (a *CodexAuthenticator) Login(ctx context.Context, cfg *config.Config, opts
 		Metadata: metadata,
 	}, nil
 }
-
-func (a *CodexAuthenticator) Refresh(ctx context.Context, cfg *config.Config, record *TokenRecord) (*TokenRecord, error) {
-	if record == nil || record.Storage == nil {
-		return nil, fmt.Errorf("cliproxy auth: empty token record for codex refresh")
-	}
-	if cfg == nil {
-		return nil, fmt.Errorf("cliproxy auth: configuration is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	storage, ok := record.Storage.(*codex.CodexTokenStorage)
-	if !ok {
-		return nil, fmt.Errorf("cliproxy auth: unexpected token storage type for codex refresh")
-	}
-
-	svc := codex.NewCodexAuth(cfg)
-	td, err := svc.RefreshTokensWithRetry(ctx, storage.RefreshToken, 3)
-	if err != nil {
-		return nil, err
-	}
-	svc.UpdateTokenStorage(storage, td)
-
-	result := &TokenRecord{
-		Provider: a.Provider(),
-		FileName: record.FileName,
-		Storage:  storage,
-		Metadata: record.Metadata,
-	}
-	return result, nil
-}

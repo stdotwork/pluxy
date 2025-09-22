@@ -169,23 +169,23 @@ func expirationFromMap(meta map[string]any) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func ProviderRefreshLead(provider string, runtime any) time.Duration {
+func ProviderRefreshLead(provider string, runtime any) *time.Duration {
 	provider = strings.ToLower(provider)
 	if runtime != nil {
 		if eval, ok := runtime.(interface{ RefreshLead() *time.Duration }); ok {
 			if lead := eval.RefreshLead(); lead != nil && *lead > 0 {
-				return *lead
+				return lead
 			}
 		}
 	}
 	if factory, ok := defaultAuthenticatorFactories[provider]; ok {
 		if auth := factory(); auth != nil {
 			if lead := auth.RefreshLead(); lead != nil && *lead > 0 {
-				return *lead
+				return lead
 			}
 		}
 	}
-	return 0
+	return nil
 }
 
 func parseTimeValue(v any) (time.Time, bool) {

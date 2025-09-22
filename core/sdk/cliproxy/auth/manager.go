@@ -585,17 +585,21 @@ func (m *Manager) checkRefreshes(ctx context.Context) {
 	now := time.Now()
 	snapshot := m.snapshotAuths()
 	for _, a := range snapshot {
-		log.Debugf("checking refresh for %s, %s", a.Provider, a.ID)
-		if !m.shouldRefresh(a, now) {
-			continue
+		typ, _ := a.AccountInfo()
+		if typ != "api_key" {
+			if !m.shouldRefresh(a, now) {
+				continue
+			}
+			log.Debugf("checking refresh for %s, %s, %s", a.Provider, a.ID, typ)
+
+			if exec := m.executorFor(a.Provider); exec == nil {
+				continue
+			}
+			if !m.markRefreshPending(a.ID, now) {
+				continue
+			}
+			go m.refreshAuth(ctx, a.ID)
 		}
-		if exec := m.executorFor(a.Provider); exec == nil {
-			continue
-		}
-		if !m.markRefreshPending(a.ID, now) {
-			continue
-		}
-		go m.refreshAuth(ctx, a.ID)
 	}
 }
 
@@ -646,17 +650,20 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 
 	provider := strings.ToLower(a.Provider)
 	lead := ProviderRefreshLead(provider, a.Runtime)
-	if lead <= 0 {
+	if lead == nil {
+		return false
+	}
+	if *lead <= 0 {
 		if hasExpiry && !expiry.IsZero() {
 			return now.After(expiry)
 		}
 		return false
 	}
 	if hasExpiry && !expiry.IsZero() {
-		return time.Until(expiry) <= lead
+		return time.Until(expiry) <= *lead
 	}
 	if !lastRefresh.IsZero() {
-		return now.Sub(lastRefresh) >= lead
+		return now.Sub(lastRefresh) >= *lead
 	}
 	return true
 }
@@ -839,6 +846,7 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	}
 	cloned := auth.Clone()
 	updated, err := exec.Refresh(ctx, cloned)
+	log.Debugf("refreshed %s, %s, %v", auth.Provider, auth.ID, err)
 	now := time.Now()
 	if err != nil {
 		m.mu.Lock()
