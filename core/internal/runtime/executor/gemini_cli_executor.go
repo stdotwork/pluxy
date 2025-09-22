@@ -192,6 +192,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 			appendAPIResponseChunk(ctx, e.cfg, data)
 			lastStatus = resp.StatusCode
 			lastBody = data
+			log.Debugf("request error, error status: %d, error body: %s", resp.StatusCode, string(data))
 			if resp.StatusCode == 429 {
 				continue
 			}

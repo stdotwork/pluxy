@@ -66,6 +66,7 @@ func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		appendAPIResponseChunk(ctx, e.cfg, b)
+		log.Debugf("request error, error status: %d, error body: %s", resp.StatusCode, string(b))
 		return cliproxyexecutor.Response{}, statusErr{code: resp.StatusCode, msg: string(b)}
 	}
 	data, err := io.ReadAll(resp.Body)
@@ -120,6 +121,7 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
 		appendAPIResponseChunk(ctx, e.cfg, b)
+		log.Debugf("request error, error status: %d, error body: %s", resp.StatusCode, string(b))
 		return nil, statusErr{code: resp.StatusCode, msg: string(b)}
 	}
 	out := make(chan cliproxyexecutor.StreamChunk)
