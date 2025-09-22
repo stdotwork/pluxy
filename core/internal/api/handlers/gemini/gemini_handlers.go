@@ -17,9 +17,6 @@ import (
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
-	coreexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 )
 
 // GeminiAPIHandler contains the handlers for Gemini API endpoints.
@@ -226,35 +223,16 @@ func (h *GeminiAPIHandler) handleStreamGenerateContent(c *gin.Context, modelName
 //   - rawJSON: The raw JSON request body containing the content to count
 func (h *GeminiAPIHandler) handleCountTokens(c *gin.Context, modelName string, rawJSON []byte) {
 	c.Header("Content-Type", "application/json")
-
 	alt := h.GetAlt(c)
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
-	defer func() { cliCancel() }()
-
-	// Execute via AuthManager with action=countTokens
-	req := coreexecutor.Request{
-		Model:   modelName,
-		Payload: rawJSON,
-		Metadata: map[string]any{
-			"action": "countTokens",
-		},
-	}
-	opts := coreexecutor.Options{
-		Stream:          false,
-		Alt:             alt,
-		OriginalRequest: rawJSON,
-		SourceFormat:    sdktranslator.FromString(h.HandlerType()),
-	}
-	resp, err := h.AuthManager.Execute(cliCtx, []string{"gemini"}, req, opts)
-	if err != nil {
-		if msg, ok := executor.UnwrapError(err); ok {
-			h.WriteErrorResponse(c, msg)
-			return
-		}
-		h.WriteErrorResponse(c, &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: err})
+	resp, errMsg := h.ExecuteCountWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
+	if errMsg != nil {
+		h.WriteErrorResponse(c, errMsg)
+		cliCancel(errMsg.Error)
 		return
 	}
-	_, _ = c.Writer.Write(resp.Payload)
+	_, _ = c.Writer.Write(resp)
+	cliCancel()
 }
 
 // handleGenerateContent handles non-streaming content generation requests for Gemini models.

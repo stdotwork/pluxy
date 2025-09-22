@@ -100,6 +100,10 @@ func (a *ClientAdapter) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	return out, nil
 }
 
+func (e *ClientAdapter) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{Payload: []byte{}}, nil
+}
+
 // Refresh delegates to the legacy client's refresh logic when available.
 func (a *ClientAdapter) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	client, _, err := resolveLegacyClient(auth)

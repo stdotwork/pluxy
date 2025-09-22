@@ -158,6 +158,33 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	return cloneBytes(resp.Payload), nil
 }
 
+// ExecuteCountWithAuthManager executes a non-streaming request via the core auth manager.
+// This path is the only supported execution route.
+func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string) ([]byte, *interfaces.ErrorMessage) {
+	providers := util.GetProviderName(modelName, h.Cfg)
+	if len(providers) == 0 {
+		return nil, &interfaces.ErrorMessage{StatusCode: http.StatusBadRequest, Error: fmt.Errorf("unknown provider for model %s", modelName)}
+	}
+	req := coreexecutor.Request{
+		Model:   modelName,
+		Payload: cloneBytes(rawJSON),
+	}
+	opts := coreexecutor.Options{
+		Stream:          false,
+		Alt:             alt,
+		OriginalRequest: cloneBytes(rawJSON),
+		SourceFormat:    sdktranslator.FromString(handlerType),
+	}
+	resp, err := h.AuthManager.ExecuteCount(ctx, providers, req, opts)
+	if err != nil {
+		if msg, ok := executor.UnwrapError(err); ok {
+			return nil, msg
+		}
+		return nil, &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: err}
+	}
+	return cloneBytes(resp.Payload), nil
+}
+
 // ExecuteStreamWithAuthManager executes a streaming request via the core auth manager.
 // This path is the only supported execution route.
 func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string) (<-chan []byte, <-chan *interfaces.ErrorMessage) {
