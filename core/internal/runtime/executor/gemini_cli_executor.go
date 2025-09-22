@@ -255,6 +255,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 }
 
 func (e *GeminiCLIExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
+	// log.Debugf("gemini cli executor: refresh called")
 	_ = ctx
 	return auth, nil
 }
