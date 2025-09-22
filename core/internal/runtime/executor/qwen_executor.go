@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	qwenauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -179,6 +180,8 @@ func (e *QwenExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*c
 	// Use "expired" for consistency with existing file format
 	auth.Metadata["expired"] = td.Expire
 	auth.Metadata["type"] = "qwen"
+	now := time.Now().Format(time.RFC3339)
+	auth.Metadata["last_refresh"] = now
 	return auth, nil
 }
 

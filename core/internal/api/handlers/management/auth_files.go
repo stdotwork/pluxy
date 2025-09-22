@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,61 @@ import (
 var (
 	oauthStatus = make(map[string]string)
 )
+
+var lastRefreshKeys = []string{"last_refresh", "lastRefresh", "last_refreshed_at", "lastRefreshedAt"}
+
+func extractLastRefreshTimestamp(meta map[string]any) (time.Time, bool) {
+	if len(meta) == 0 {
+		return time.Time{}, false
+	}
+	for _, key := range lastRefreshKeys {
+		if val, ok := meta[key]; ok {
+			if ts, ok1 := parseLastRefreshValue(val); ok1 {
+				return ts, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+func parseLastRefreshValue(v any) (time.Time, bool) {
+	switch val := v.(type) {
+	case string:
+		s := strings.TrimSpace(val)
+		if s == "" {
+			return time.Time{}, false
+		}
+		layouts := []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02T15:04:05Z07:00"}
+		for _, layout := range layouts {
+			if ts, err := time.Parse(layout, s); err == nil {
+				return ts.UTC(), true
+			}
+		}
+		if unix, err := strconv.ParseInt(s, 10, 64); err == nil && unix > 0 {
+			return time.Unix(unix, 0).UTC(), true
+		}
+	case float64:
+		if val <= 0 {
+			return time.Time{}, false
+		}
+		return time.Unix(int64(val), 0).UTC(), true
+	case int64:
+		if val <= 0 {
+			return time.Time{}, false
+		}
+		return time.Unix(val, 0).UTC(), true
+	case int:
+		if val <= 0 {
+			return time.Time{}, false
+		}
+		return time.Unix(int64(val), 0).UTC(), true
+	case json.Number:
+		if i, err := val.Int64(); err == nil && i > 0 {
+			return time.Unix(i, 0).UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
 
 // List auth files
 func (h *Handler) ListAuthFiles(c *gin.Context) {
@@ -239,6 +295,8 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 	if email, ok := metadata["email"].(string); ok && email != "" {
 		label = email
 	}
+	lastRefresh, hasLastRefresh := extractLastRefreshTimestamp(metadata)
+
 	attr := map[string]string{
 		"path":   path,
 		"source": path,
@@ -253,9 +311,14 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
+	if hasLastRefresh {
+		auth.LastRefreshedAt = lastRefresh
+	}
 	if existing, ok := h.authManager.GetByID(path); ok {
 		auth.CreatedAt = existing.CreatedAt
-		auth.LastRefreshedAt = existing.LastRefreshedAt
+		if !hasLastRefresh {
+			auth.LastRefreshedAt = existing.LastRefreshedAt
+		}
 		auth.NextRefreshAfter = existing.NextRefreshAfter
 		auth.Runtime = existing.Runtime
 		_, err := h.authManager.Update(ctx, auth)

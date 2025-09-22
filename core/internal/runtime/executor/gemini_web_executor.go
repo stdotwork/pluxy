@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -121,6 +122,7 @@ func (e *GeminiWebExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth
 	auth.Metadata["secure_1psid"] = ts.Secure1PSID
 	auth.Metadata["secure_1psidts"] = ts.Secure1PSIDTS
 	auth.Metadata["type"] = "gemini-web"
+	auth.Metadata["last_refresh"] = time.Now().Format(time.RFC3339)
 	return auth, nil
 }
 
