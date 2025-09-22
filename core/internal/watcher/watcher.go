@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,24 @@ type Watcher struct {
 	watcher        *fsnotify.Watcher
 	lastAuthHashes map[string]string
 	lastConfigHash string
+	authQueue      chan<- AuthUpdate
+	currentAuths   map[string]*coreauth.Auth
+}
+
+// AuthUpdateAction represents the type of change detected in auth sources.
+type AuthUpdateAction string
+
+const (
+	AuthUpdateActionAdd    AuthUpdateAction = "add"
+	AuthUpdateActionModify AuthUpdateAction = "modify"
+	AuthUpdateActionDelete AuthUpdateAction = "delete"
+)
+
+// AuthUpdate describes an incremental change to auth configuration.
+type AuthUpdate struct {
+	Action AuthUpdateAction
+	ID     string
+	Auth   *coreauth.Auth
 }
 
 const (
@@ -102,6 +121,88 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 	w.clientsMutex.Lock()
 	defer w.clientsMutex.Unlock()
 	w.config = cfg
+}
+
+// SetAuthUpdateQueue sets the queue used to emit auth updates.
+func (w *Watcher) SetAuthUpdateQueue(queue chan<- AuthUpdate) {
+	w.clientsMutex.Lock()
+	defer w.clientsMutex.Unlock()
+	w.authQueue = queue
+}
+
+func (w *Watcher) refreshAuthState() {
+	auths := w.SnapshotCoreAuths()
+	w.clientsMutex.Lock()
+	updates := w.prepareAuthUpdatesLocked(auths)
+	w.clientsMutex.Unlock()
+	w.dispatchAuthUpdates(updates)
+}
+
+func (w *Watcher) prepareAuthUpdatesLocked(auths []*coreauth.Auth) []AuthUpdate {
+	newState := make(map[string]*coreauth.Auth, len(auths))
+	for _, auth := range auths {
+		if auth == nil || auth.ID == "" {
+			continue
+		}
+		newState[auth.ID] = auth.Clone()
+	}
+	if w.currentAuths == nil {
+		w.currentAuths = newState
+		if w.authQueue == nil {
+			return nil
+		}
+		updates := make([]AuthUpdate, 0, len(newState))
+		for id, auth := range newState {
+			updates = append(updates, AuthUpdate{Action: AuthUpdateActionAdd, ID: id, Auth: auth.Clone()})
+		}
+		return updates
+	}
+	if w.authQueue == nil {
+		w.currentAuths = newState
+		return nil
+	}
+	updates := make([]AuthUpdate, 0, len(newState)+len(w.currentAuths))
+	for id, auth := range newState {
+		if existing, ok := w.currentAuths[id]; !ok {
+			updates = append(updates, AuthUpdate{Action: AuthUpdateActionAdd, ID: id, Auth: auth.Clone()})
+		} else if !authEqual(existing, auth) {
+			updates = append(updates, AuthUpdate{Action: AuthUpdateActionModify, ID: id, Auth: auth.Clone()})
+		}
+	}
+	for id := range w.currentAuths {
+		if _, ok := newState[id]; !ok {
+			updates = append(updates, AuthUpdate{Action: AuthUpdateActionDelete, ID: id})
+		}
+	}
+	w.currentAuths = newState
+	return updates
+}
+
+func (w *Watcher) dispatchAuthUpdates(updates []AuthUpdate) {
+	if len(updates) == 0 || w.authQueue == nil {
+		return
+	}
+	for _, update := range updates {
+		w.authQueue <- update
+	}
+}
+
+func authEqual(a, b *coreauth.Auth) bool {
+	return reflect.DeepEqual(normalizeAuth(a), normalizeAuth(b))
+}
+
+func normalizeAuth(a *coreauth.Auth) *coreauth.Auth {
+	if a == nil {
+		return nil
+	}
+	clone := a.Clone()
+	clone.CreatedAt = time.Time{}
+	clone.UpdatedAt = time.Time{}
+	clone.LastRefreshedAt = time.Time{}
+	clone.NextRefreshAfter = time.Time{}
+	clone.Runtime = nil
+	clone.Quota.NextRecoverAt = time.Time{}
+	return clone
 }
 
 // SetClients sets the file-based clients.
@@ -326,6 +427,8 @@ func (w *Watcher) reloadClients() {
 
 	totalNewClients := authFileCount + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
 
+	w.refreshAuthState()
+
 	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
 		0,
 		totalNewClients,
@@ -380,6 +483,8 @@ func (w *Watcher) addOrUpdateClient(path string) {
 
 	w.clientsMutex.Unlock() // Unlock before the callback
 
+	w.refreshAuthState()
+
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback after add/update")
 		w.reloadCallback(cfg)
@@ -394,6 +499,8 @@ func (w *Watcher) removeClient(path string) {
 	delete(w.lastAuthHashes, path)
 
 	w.clientsMutex.Unlock() // Release the lock before the callback
+
+	w.refreshAuthState()
 
 	if w.reloadCallback != nil {
 		log.Debugf("triggering server update callback after removal")
