@@ -15,6 +15,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/sjson"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -168,7 +169,52 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 }
 
 func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	return cliproxyexecutor.Response{Payload: []byte{}}, fmt.Errorf("not implemented")
+	apiKey, bearer := geminiCreds(auth)
+
+	from := opts.SourceFormat
+	to := sdktranslator.FromString("gemini")
+	translatedReq := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), false)
+	respCtx := context.WithValue(ctx, "alt", opts.Alt)
+	translatedReq, _ = sjson.DeleteBytes(translatedReq, "tools")
+
+	url := fmt.Sprintf("%s/%s/models/%s:%s", glEndpoint, glAPIVersion, req.Model, "countTokens")
+	recordAPIRequest(ctx, e.cfg, translatedReq)
+	requestBody := bytes.NewReader(translatedReq)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, requestBody)
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		httpReq.Header.Set("x-goog-api-key", apiKey)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+bearer)
+	}
+
+	httpClient := &http.Client{}
+	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
+		httpClient.Transport = rt
+	}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
+	appendAPIResponseChunk(ctx, e.cfg, data)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Debugf("request error, error status: %d, error body: %s", resp.StatusCode, string(data))
+		return cliproxyexecutor.Response{}, statusErr{code: resp.StatusCode, msg: string(data)}
+	}
+
+	var param any
+	translated := sdktranslator.TranslateNonStream(respCtx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translatedReq, data, &param)
+	return cliproxyexecutor.Response{Payload: []byte(translated)}, nil
 }
 
 func (e *GeminiExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
