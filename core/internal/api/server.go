@@ -23,6 +23,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
@@ -84,6 +85,9 @@ type Server struct {
 	// cfg holds the current server configuration.
 	cfg *config.Config
 
+	// accessManager handles request authentication providers.
+	accessManager *sdkaccess.Manager
+
 	// requestLogger is the request logger instance for dynamic configuration updates.
 	requestLogger logging.RequestLogger
 	loggerToggle  func(bool)
@@ -100,10 +104,12 @@ type Server struct {
 //
 // Parameters:
 //   - cfg: The server configuration
+//   - authManager: core runtime auth manager
+//   - accessManager: request authentication manager
 //
 // Returns:
 //   - *Server: A new server instance
-func NewServer(cfg *config.Config, authManager *auth.Manager, configFilePath string, opts ...ServerOption) *Server {
+func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdkaccess.Manager, configFilePath string, opts ...ServerOption) *Server {
 	optionState := &serverOptionConfig{
 		requestLoggerFactory: defaultRequestLoggerFactory,
 	}
@@ -149,10 +155,12 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, configFilePath str
 		engine:         engine,
 		handlers:       handlers.NewBaseAPIHandlers(cfg, authManager),
 		cfg:            cfg,
+		accessManager:  accessManager,
 		requestLogger:  requestLogger,
 		loggerToggle:   toggle,
 		configFilePath: configFilePath,
 	}
+	s.applyAccessConfig(cfg)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 
@@ -180,9 +188,11 @@ func (s *Server) setupRoutes() {
 	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
 	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
 
+	cfgSupplier := func() *config.Config { return s.cfg }
+
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
-	v1.Use(AuthMiddleware(s.cfg))
+	v1.Use(AuthMiddleware(cfgSupplier, s.accessManager))
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
@@ -193,7 +203,7 @@ func (s *Server) setupRoutes() {
 
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
-	v1beta.Use(AuthMiddleware(s.cfg))
+	v1beta.Use(AuthMiddleware(cfgSupplier, s.accessManager))
 	{
 		v1beta.GET("/models", geminiHandlers.GeminiModels)
 		v1beta.POST("/models/:action", geminiHandlers.GeminiHandler)
@@ -409,6 +419,18 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
+func (s *Server) applyAccessConfig(cfg *config.Config) {
+	if s == nil || s.accessManager == nil {
+		return
+	}
+	providers, err := sdkaccess.BuildProviders(cfg)
+	if err != nil {
+		log.Errorf("failed to update request auth providers: %v", err)
+		return
+	}
+	s.accessManager.SetProviders(providers)
+}
+
 // UpdateClients updates the server's client list and configuration.
 // This method is called when the configuration or authentication tokens change.
 //
@@ -438,6 +460,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		s.mgmt.SetConfig(cfg)
 		s.mgmt.SetAuthManager(s.handlers.AuthManager)
 	}
+	s.applyAccessConfig(cfg)
 
 	// Count client sources from configuration and auth directory
 	authFiles := util.CountAuthFiles(cfg.AuthDir)
@@ -463,68 +486,46 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 // (management handlers moved to internal/api/handlers/management)
 
 // AuthMiddleware returns a Gin middleware handler that authenticates requests
-// using API keys. If no API keys are configured, it allows all requests.
-//
-// Parameters:
-//   - cfg: The server configuration containing API keys
-//
-// Returns:
-//   - gin.HandlerFunc: The authentication middleware handler
-func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
+// using the configured authentication providers. When no providers are available,
+// it allows all requests (legacy behaviour).
+func AuthMiddleware(cfgFn func() *config.Config, manager *sdkaccess.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if cfg.AllowLocalhostUnauthenticated && strings.HasPrefix(c.Request.RemoteAddr, "127.0.0.1:") {
-			c.Next()
-			return
-		}
-
-		if len(cfg.APIKeys) == 0 {
-			c.Next()
-			return
-		}
-
-		// Get the Authorization header
-		authHeader := c.GetHeader("Authorization")
-		authHeaderGoogle := c.GetHeader("X-Goog-Api-Key")
-		authHeaderAnthropic := c.GetHeader("X-Api-Key")
-
-		// Get the API key from the query parameter
-		apiKeyQuery, _ := c.GetQuery("key")
-
-		if authHeader == "" && authHeaderGoogle == "" && authHeaderAnthropic == "" && apiKeyQuery == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Missing API key",
-			})
-			return
-		}
-
-		// Extract the API key
-		parts := strings.Split(authHeader, " ")
-		var apiKey string
-		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-			apiKey = parts[1]
-		} else {
-			apiKey = authHeader
-		}
-
-		// Find the API key in the in-memory list
-		var foundKey string
-		for i := range cfg.APIKeys {
-			if cfg.APIKeys[i] == apiKey || cfg.APIKeys[i] == authHeaderGoogle || cfg.APIKeys[i] == authHeaderAnthropic || cfg.APIKeys[i] == apiKeyQuery {
-				foundKey = cfg.APIKeys[i]
-				break
+		cfg := cfgFn()
+		if cfg != nil && cfg.AllowLocalhostUnauthenticated {
+			ip := c.ClientIP()
+			if ip == "127.0.0.1" || ip == "::1" || strings.HasPrefix(c.Request.RemoteAddr, "127.0.0.1:") || strings.HasPrefix(c.Request.RemoteAddr, "[::1]:") {
+				c.Next()
+				return
 			}
 		}
-		if foundKey == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Invalid API key",
-			})
+
+		if manager == nil {
+			c.Next()
 			return
 		}
 
-		// Store the API key and user in the context
-		c.Set("apiKey", foundKey)
+		result, err := manager.Authenticate(c.Request.Context(), c.Request)
+		if err == nil {
+			if result != nil {
+				c.Set("apiKey", result.Principal)
+				c.Set("accessProvider", result.Provider)
+				if len(result.Metadata) > 0 {
+					c.Set("accessMetadata", result.Metadata)
+				}
+			}
+			c.Next()
+			return
+		}
 
-		c.Next()
+		switch {
+		case errors.Is(err, sdkaccess.ErrNoCredentials):
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Missing API key"})
+		case errors.Is(err, sdkaccess.ErrInvalidCredential):
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
+		default:
+			log.Errorf("authentication middleware error: %v", err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Authentication service error"})
+		}
 	}
 }
 

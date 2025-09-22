@@ -9,7 +9,7 @@ import (
 )
 
 // Generic helpers for list[string]
-func (h *Handler) putStringList(c *gin.Context, set func([]string)) {
+func (h *Handler) putStringList(c *gin.Context, set func([]string), after func()) {
 	data, err := c.GetRawData()
 	if err != nil {
 		c.JSON(400, gin.H{"error": "failed to read body"})
@@ -27,10 +27,13 @@ func (h *Handler) putStringList(c *gin.Context, set func([]string)) {
 		arr = obj.Items
 	}
 	set(arr)
+	if after != nil {
+		after()
+	}
 	h.persist(c)
 }
 
-func (h *Handler) patchStringList(c *gin.Context, target *[]string) {
+func (h *Handler) patchStringList(c *gin.Context, target *[]string, after func()) {
 	var body struct {
 		Old   *string `json:"old"`
 		New   *string `json:"new"`
@@ -43,6 +46,9 @@ func (h *Handler) patchStringList(c *gin.Context, target *[]string) {
 	}
 	if body.Index != nil && body.Value != nil && *body.Index >= 0 && *body.Index < len(*target) {
 		(*target)[*body.Index] = *body.Value
+		if after != nil {
+			after()
+		}
 		h.persist(c)
 		return
 	}
@@ -50,23 +56,32 @@ func (h *Handler) patchStringList(c *gin.Context, target *[]string) {
 		for i := range *target {
 			if (*target)[i] == *body.Old {
 				(*target)[i] = *body.New
+				if after != nil {
+					after()
+				}
 				h.persist(c)
 				return
 			}
 		}
 		*target = append(*target, *body.New)
+		if after != nil {
+			after()
+		}
 		h.persist(c)
 		return
 	}
 	c.JSON(400, gin.H{"error": "missing fields"})
 }
 
-func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string) {
+func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after func()) {
 	if idxStr := c.Query("index"); idxStr != "" {
 		var idx int
 		_, err := fmt.Sscanf(idxStr, "%d", &idx)
 		if err == nil && idx >= 0 && idx < len(*target) {
 			*target = append((*target)[:idx], (*target)[idx+1:]...)
+			if after != nil {
+				after()
+			}
 			h.persist(c)
 			return
 		}
@@ -79,6 +94,9 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string) {
 			}
 		}
 		*target = out
+		if after != nil {
+			after()
+		}
 		h.persist(c)
 		return
 	}
@@ -88,20 +106,24 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string) {
 // api-keys
 func (h *Handler) GetAPIKeys(c *gin.Context) { c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys}) }
 func (h *Handler) PutAPIKeys(c *gin.Context) {
-	h.putStringList(c, func(v []string) { h.cfg.APIKeys = v })
+	h.putStringList(c, func(v []string) { config.SyncInlineAPIKeys(h.cfg, v) }, nil)
 }
-func (h *Handler) PatchAPIKeys(c *gin.Context)  { h.patchStringList(c, &h.cfg.APIKeys) }
-func (h *Handler) DeleteAPIKeys(c *gin.Context) { h.deleteFromStringList(c, &h.cfg.APIKeys) }
+func (h *Handler) PatchAPIKeys(c *gin.Context) {
+	h.patchStringList(c, &h.cfg.APIKeys, func() { config.SyncInlineAPIKeys(h.cfg, h.cfg.APIKeys) })
+}
+func (h *Handler) DeleteAPIKeys(c *gin.Context) {
+	h.deleteFromStringList(c, &h.cfg.APIKeys, func() { config.SyncInlineAPIKeys(h.cfg, h.cfg.APIKeys) })
+}
 
 // generative-language-api-key
 func (h *Handler) GetGlKeys(c *gin.Context) {
 	c.JSON(200, gin.H{"generative-language-api-key": h.cfg.GlAPIKey})
 }
 func (h *Handler) PutGlKeys(c *gin.Context) {
-	h.putStringList(c, func(v []string) { h.cfg.GlAPIKey = v })
+	h.putStringList(c, func(v []string) { h.cfg.GlAPIKey = v }, nil)
 }
-func (h *Handler) PatchGlKeys(c *gin.Context)  { h.patchStringList(c, &h.cfg.GlAPIKey) }
-func (h *Handler) DeleteGlKeys(c *gin.Context) { h.deleteFromStringList(c, &h.cfg.GlAPIKey) }
+func (h *Handler) PatchGlKeys(c *gin.Context)  { h.patchStringList(c, &h.cfg.GlAPIKey, nil) }
+func (h *Handler) DeleteGlKeys(c *gin.Context) { h.deleteFromStringList(c, &h.cfg.GlAPIKey, nil) }
 
 // claude-api-key: []ClaudeKey
 func (h *Handler) GetClaudeKeys(c *gin.Context) {

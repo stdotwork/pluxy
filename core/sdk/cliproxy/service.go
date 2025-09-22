@@ -16,6 +16,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
+	_ "github.com/router-for-me/CLIProxyAPI/v6/sdk/access/providers/configapikey"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -40,8 +42,9 @@ type Service struct {
 	watcherCancel context.CancelFunc
 
 	// legacy client caches removed
-	authManager *sdkAuth.Manager
-	coreManager *coreauth.Manager
+	authManager   *sdkAuth.Manager
+	accessManager *sdkaccess.Manager
+	coreManager   *coreauth.Manager
 
 	shutdownOnce sync.Once
 }
@@ -54,6 +57,18 @@ func newDefaultAuthManager() *sdkAuth.Manager {
 		sdkAuth.NewClaudeAuthenticator(),
 		sdkAuth.NewQwenAuthenticator(),
 	)
+}
+
+func (s *Service) refreshAccessProviders(cfg *config.Config) {
+	if s == nil || s.accessManager == nil || cfg == nil {
+		return
+	}
+	providers, err := sdkaccess.BuildProviders(cfg)
+	if err != nil {
+		log.Errorf("failed to rebuild request auth providers: %v", err)
+		return
+	}
+	s.accessManager.SetProviders(providers)
 }
 
 // Run starts the service and blocks until the context is cancelled or the server stops.
@@ -102,7 +117,8 @@ func (s *Service) Run(ctx context.Context) error {
 	// legacy clients removed; no caches to refresh
 
 	// handlers no longer depend on legacy clients; pass nil slice initially
-	s.server = api.NewServer(s.cfg, s.coreManager, s.configPath, s.serverOptions...)
+	s.refreshAccessProviders(s.cfg)
+	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, s.serverOptions...)
 
 	if s.authManager == nil {
 		s.authManager = newDefaultAuthManager()
@@ -139,6 +155,7 @@ func (s *Service) Run(ctx context.Context) error {
 		// Pull the latest auth snapshot and sync
 		auths := watcherWrapper.SnapshotAuths()
 		s.syncCoreAuthFromAuths(ctx, auths)
+		s.refreshAccessProviders(newCfg)
 		if s.server != nil {
 			s.server.UpdateClients(newCfg)
 		}

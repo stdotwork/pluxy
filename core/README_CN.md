@@ -282,7 +282,12 @@ console.log(await claudeResponse.json());
 | `quota-exceeded.switch-project`         | boolean  | true               | 当配额超限时，是否自动切换到另一个项目。                                                |
 | `quota-exceeded.switch-preview-model`   | boolean  | true               | 当配额超限时，是否自动切换到预览模型。                                                 |
 | `debug`                                 | boolean  | false              | 启用调试模式以获取详细日志。                                                      |
-| `api-keys`                              | string[] | []                 | 可用于验证请求的API密钥列表。                                                    |
+| `auth`                                  | object   | {}                 | 请求鉴权配置。                                                                  |
+| `auth.providers`                        | object[] | []                 | 鉴权提供方列表，内置 `config-api-key` 支持内联密钥。                             |
+| `auth.providers.*.name`                 | string   | ""                 | 提供方实例名称。                                                                |
+| `auth.providers.*.type`                 | string   | ""                 | 提供方实现标识（例如 `config-api-key`）。                                       |
+| `auth.providers.*.api-keys`             | string[] | []                 | `config-api-key` 提供方使用的内联密钥。                                          |
+| `api-keys`                              | string[] | []                 | 兼容旧配置的简写，会自动同步到默认 `config-api-key` 提供方。                     |
 | `generative-language-api-key`           | string[] | []                 | 生成式语言API密钥列表。                                                       |
 | `force-gpt-5-codex`                     | bool     | false              | 强制将 GPT-5 调用转换成 GPT-5 Codex。                                        |
 | `codex-api-key`                         | object   | {}                 | Codex API密钥列表。                                                      |
@@ -346,10 +351,14 @@ gemini-web:
   max-chars-per-request: 1000000 # 单次请求最大字符数
   token-refresh-seconds: 540 # Cookie 刷新间隔（秒）
 
-# 用于本地身份验证的 API 密钥
-api-keys:
-  - "your-api-key-1"
-  - "your-api-key-2"
+# 请求鉴权提供方
+auth:
+  providers:
+    - name: "default"
+      type: "config-api-key"
+      api-keys:
+        - "your-api-key-1"
+        - "your-api-key-2"
 
 # AIStduio Gemini API 的 API 密钥
 generative-language-api-key:
@@ -415,13 +424,20 @@ openai-compatibility:
 
 `auth-dir` 参数指定身份验证令牌的存储位置。当您运行登录命令时，应用程序将在此目录中创建包含 Google 账户身份验证令牌的 JSON 文件。多个账户可用于轮询。
 
-### API 密钥
+### 请求鉴权提供方
 
-`api-keys` 参数允许您定义可用于验证对代理服务器请求的 API 密钥列表。在向 API 发出请求时，您可以在 `Authorization` 标头中包含其中一个密钥：
+通过 `auth.providers` 配置接入请求鉴权。内置的 `config-api-key` 提供方支持内联密钥：
 
 ```
-Authorization: Bearer your-api-key-1
+auth:
+  providers:
+    - name: default
+      type: config-api-key
+      api-keys:
+        - your-api-key-1
 ```
+
+调用时可在 `Authorization` 标头中携带密钥（或继续使用 `X-Goog-Api-Key`、`X-Api-Key`、查询参数 `key`）。为了兼容旧版本，顶层的 `api-keys` 字段仍然可用，并会自动同步到默认的 `config-api-key` 提供方。
 
 ### 官方生成式语言 API
 

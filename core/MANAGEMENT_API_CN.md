@@ -173,6 +173,7 @@
     ```
 
 ### API Keys（代理服务认证）
+这些接口会更新配置中 `auth.providers` 内置的 `config-api-key` 提供方，旧版顶层 `api-keys` 会自动保持同步。
 - GET `/api-keys` — 返回完整列表
   - 请求：
     ```bash

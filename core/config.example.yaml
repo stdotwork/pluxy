@@ -29,10 +29,14 @@ quota-exceeded:
   switch-project: true # Whether to automatically switch to another project when a quota is exceeded
   switch-preview-model: true # Whether to automatically switch to a preview model when a quota is exceeded
 
-# API keys for authentication
-api-keys:
-  - "your-api-key-1"
-  - "your-api-key-2"
+# Request authentication providers
+auth:
+  providers:
+    - name: "default"
+      type: "config-api-key"
+      api-keys:
+        - "your-api-key-1"
+        - "your-api-key-2"
 
 # API keys for official Generative Language API
 generative-language-api-key:

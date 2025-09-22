@@ -173,6 +173,7 @@ If a plaintext key is detected in the config at startup, it will be bcrypt‑has
     ```
 
 ### API Keys (proxy service auth)
+These endpoints update the inline `config-api-key` provider inside the `auth.providers` section of the configuration. Legacy top-level `api-keys` remain in sync automatically.
 - GET `/api-keys` — Return the full list
   - Request:
     ```bash

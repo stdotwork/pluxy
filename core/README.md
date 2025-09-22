@@ -270,7 +270,12 @@ The server uses a YAML configuration file (`config.yaml`) located in the project
 | `quota-exceeded.switch-project`         | boolean  | true               | Whether to automatically switch to another project when a quota is exceeded.                                                                                                              |
 | `quota-exceeded.switch-preview-model`   | boolean  | true               | Whether to automatically switch to a preview model when a quota is exceeded.                                                                                                              |
 | `debug`                                 | boolean  | false              | Enable debug mode for verbose logging.                                                                                                                                                    |
-| `api-keys`                              | string[] | []                 | List of API keys that can be used to authenticate requests.                                                                                                                               |
+| `auth`                                  | object   | {}                 | Request authentication configuration.                                                                                                                                                     |
+| `auth.providers`                        | object[] | []                 | Authentication providers. Includes built-in `config-api-key` for inline keys.                                                                                                             |
+| `auth.providers.*.name`                 | string   | ""                 | Provider instance name.                                                                                                                                                                   |
+| `auth.providers.*.type`                 | string   | ""                 | Provider implementation identifier (for example `config-api-key`).                                                                                                                        |
+| `auth.providers.*.api-keys`             | string[] | []                 | Inline API keys consumed by the `config-api-key` provider.                                                                                                                                |
+| `api-keys`                              | string[] | []                 | Legacy shorthand for inline API keys. Values are mirrored into the `config-api-key` provider for backwards compatibility.                                                                 |
 | `generative-language-api-key`           | string[] | []                 | List of Generative Language API keys.                                                                                                                                                     |
 | `force-gpt-5-codex`                     | bool     | false              | Force the conversion of GPT-5 calls to GPT-5 Codex.                                                                                                                                       |
 | `codex-api-key`                         | object   | {}                 | List of Codex API keys.                                                                                                                                                                   |
@@ -334,10 +339,14 @@ gemini-web:
   max-chars-per-request: 1000000 # Max characters per request
   token-refresh-seconds: 540 # Cookie refresh interval in seconds
 
-# API keys for authentication
-api-keys:
-  - "your-api-key-1"
-  - "your-api-key-2"
+# Request authentication providers
+auth:
+  providers:
+    - name: "default"
+      type: "config-api-key"
+      api-keys:
+        - "your-api-key-1"
+        - "your-api-key-2"
 
 # API keys for official Generative Language API
 generative-language-api-key:
@@ -408,13 +417,20 @@ And you can always use Gemini CLI with `CODE_ASSIST_ENDPOINT` set to `http://127
 
 The `auth-dir` parameter specifies where authentication tokens are stored. When you run the login command, the application will create JSON files in this directory containing the authentication tokens for your Google accounts. Multiple accounts can be used for load balancing.
 
-### API Keys
+### Request Authentication Providers
 
-The `api-keys` parameter allows you to define a list of API keys that can be used to authenticate requests to your proxy server. When making requests to the API, you can include one of these keys in the `Authorization` header:
+Configure inbound authentication through the `auth.providers` section. The built-in `config-api-key` provider works with inline keys:
 
 ```
-Authorization: Bearer your-api-key-1
+auth:
+  providers:
+    - name: default
+      type: config-api-key
+      api-keys:
+        - your-api-key-1
 ```
+
+Clients should send requests with an `Authorization: Bearer your-api-key-1` header (or `X-Goog-Api-Key`, `X-Api-Key`, or `?key=` as before). The legacy top-level `api-keys` array is still accepted and automatically synced to the default provider for backwards compatibility.
 
 ### Official Generative Language API
 
