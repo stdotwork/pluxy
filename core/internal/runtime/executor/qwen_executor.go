@@ -20,6 +20,12 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+const (
+	qwenUserAgent           = "google-api-nodejs-client/9.15.1"
+	qwenXGoogAPIClient      = "gl-node/22.17.0"
+	qwenClientMetadataValue = "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI"
+)
+
 // QwenExecutor is a stateless executor for Qwen Code using OpenAI-compatible chat completions.
 // If access token is unavailable, it falls back to legacy via ClientAdapter.
 type QwenExecutor struct {
@@ -51,8 +57,7 @@ func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+token)
+	applyQwenHeaders(httpReq, token, false)
 
 	httpClient := &http.Client{}
 	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
@@ -105,9 +110,7 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+token)
-	httpReq.Header.Set("Accept", "text/event-stream")
+	applyQwenHeaders(httpReq, token, true)
 
 	httpClient := &http.Client{Timeout: 0}
 	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
@@ -185,6 +188,19 @@ func (e *QwenExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*c
 	now := time.Now().Format(time.RFC3339)
 	auth.Metadata["last_refresh"] = now
 	return auth, nil
+}
+
+func applyQwenHeaders(r *http.Request, token string, stream bool) {
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("User-Agent", qwenUserAgent)
+	r.Header.Set("X-Goog-Api-Client", qwenXGoogAPIClient)
+	r.Header.Set("Client-Metadata", qwenClientMetadataValue)
+	if stream {
+		r.Header.Set("Accept", "text/event-stream")
+		return
+	}
+	r.Header.Set("Accept", "application/json")
 }
 
 func qwenCreds(a *cliproxyauth.Auth) (token, baseURL string) {

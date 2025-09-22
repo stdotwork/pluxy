@@ -105,6 +105,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		reqHTTP.Header.Set("Content-Type", "application/json")
 		reqHTTP.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 		applyGeminiCLIHeaders(reqHTTP)
+		reqHTTP.Header.Set("Accept", "application/json")
 
 		resp, errDo := httpClient.Do(reqHTTP)
 		if errDo != nil {
@@ -181,6 +182,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		reqHTTP.Header.Set("Content-Type", "application/json")
 		reqHTTP.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 		applyGeminiCLIHeaders(reqHTTP)
+		reqHTTP.Header.Set("Accept", "text/event-stream")
 
 		resp, errDo := httpClient.Do(reqHTTP)
 		if errDo != nil {

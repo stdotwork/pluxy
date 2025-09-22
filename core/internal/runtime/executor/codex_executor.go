@@ -17,6 +17,8 @@ import (
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/sjson"
+
+	"github.com/google/uuid"
 )
 
 // CodexExecutor is a stateless executor for Codex (OpenAI Responses API entrypoint).
@@ -76,8 +78,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
+	applyCodexHeaders(httpReq, auth, apiKey)
 
 	httpClient := &http.Client{}
 	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
@@ -149,9 +150,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
+	applyCodexHeaders(httpReq, auth, apiKey)
 
 	httpClient := &http.Client{Timeout: 0}
 	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
@@ -228,6 +227,33 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	now := time.Now().Format(time.RFC3339)
 	auth.Metadata["last_refresh"] = now
 	return auth, nil
+}
+
+func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string) {
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("Version", "0.21.0")
+	r.Header.Set("Openai-Beta", "responses=experimental")
+	r.Header.Set("Session_id", uuid.NewString())
+	r.Header.Set("Accept", "text/event-stream")
+	r.Header.Set("Connection", "Keep-Alive")
+
+	isAPIKey := false
+	if auth != nil && auth.Attributes != nil {
+		if v := strings.TrimSpace(auth.Attributes["api_key"]); v != "" {
+			isAPIKey = true
+		}
+	}
+	if !isAPIKey {
+		r.Header.Set("Originator", "codex_cli_rs")
+		if auth != nil && auth.Metadata != nil {
+			if accountID, ok := auth.Metadata["account_id"].(string); ok {
+				if trimmed := strings.TrimSpace(accountID); trimmed != "" {
+					r.Header.Set("Chatgpt-Account-Id", trimmed)
+				}
+			}
+		}
+	}
 }
 
 func codexCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {

@@ -54,9 +54,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Anthropic-Version", "2023-06-01")
+	applyClaudeHeaders(httpReq, apiKey, false)
 
 	httpClient := &http.Client{}
 	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
@@ -102,10 +100,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Anthropic-Version", "2023-06-01")
-	httpReq.Header.Set("Accept", "text/event-stream")
+	applyClaudeHeaders(httpReq, apiKey, true)
 
 	httpClient := &http.Client{Timeout: 0}
 	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
@@ -177,6 +172,32 @@ func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 	now := time.Now().Format(time.RFC3339)
 	auth.Metadata["last_refresh"] = now
 	return auth, nil
+}
+
+func applyClaudeHeaders(r *http.Request, apiKey string, stream bool) {
+	r.Header.Set("Authorization", "Bearer "+apiKey)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Anthropic-Version", "2023-06-01")
+	r.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
+	r.Header.Set("Anthropic-Beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
+	r.Header.Set("Connection", "keep-alive")
+	r.Header.Set("User-Agent", "claude-cli/1.0.83 (external, cli)")
+	r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	r.Header.Set("X-App", "cli")
+	r.Header.Set("X-Stainless-Helper-Method", "stream")
+	r.Header.Set("X-Stainless-Retry-Count", "0")
+	r.Header.Set("X-Stainless-Runtime-Version", "v24.3.0")
+	r.Header.Set("X-Stainless-Package-Version", "0.55.1")
+	r.Header.Set("X-Stainless-Runtime", "node")
+	r.Header.Set("X-Stainless-Lang", "js")
+	r.Header.Set("X-Stainless-Arch", "arm64")
+	r.Header.Set("X-Stainless-Os", "MacOS")
+	r.Header.Set("X-Stainless-Timeout", "60")
+	if stream {
+		r.Header.Set("Accept", "text/event-stream")
+		return
+	}
+	r.Header.Set("Accept", "application/json")
 }
 
 func claudeCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
