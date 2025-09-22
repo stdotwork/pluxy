@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
-	baseauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth"
 	geminiwebclient "github.com/router-for-me/CLIProxyAPI/v6/internal/client/gemini-web"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
@@ -268,33 +267,6 @@ func (s *Service) ensureAuthDir() error {
 		return fmt.Errorf("cliproxy: auth path exists but is not a directory: %s", s.cfg.AuthDir)
 	}
 	return nil
-}
-
-func (s *Service) syncCoreAuthFromClients(ctx context.Context, _ map[string]any) { _ = ctx }
-
-func (s *Service) startRefreshLoop() {
-	// legacy refresh loop disabled; core auth manager handles auto refresh
-}
-
-func (s *Service) refreshTokens(ctx context.Context) { _ = ctx /* no-op */ }
-
-func (s *Service) snapshotFileClients() map[string]any { return nil }
-
-// persistClients deprecated: no legacy clients remain
-func (s *Service) persistClients() {}
-
-// refreshCachesFromCombined deprecated: no legacy clients remain
-func (s *Service) refreshCachesFromCombined(_ map[string]any) {}
-
-// combineClients deprecated
-
-func (s *Service) refreshWithManager(ctx context.Context, provider, filePath string, storage baseauth.TokenStorage, metadata map[string]string) {
-	_ = ctx
-	_ = provider
-	_ = filePath
-	_ = storage
-	_ = metadata
-	// legacy file-backed refresh was replaced by core auth manager auto refresh
 }
 
 // syncCoreAuthFromAuths registers or updates core auths and disables missing ones.
