@@ -772,7 +772,18 @@ func (cs *ChatSession) RCID() string {
 	}
 	return ""
 }
-
+func (cs *ChatSession) setCID(v string) {
+	if len(cs.metadata) < 1 {
+		cs.metadata = normalizeMeta(cs.metadata)
+	}
+	cs.metadata[0] = v
+}
+func (cs *ChatSession) setRID(v string) {
+	if len(cs.metadata) < 2 {
+		cs.metadata = normalizeMeta(cs.metadata)
+	}
+	cs.metadata[1] = v
+}
 func (cs *ChatSession) setRCID(v string) {
 	if len(cs.metadata) < 3 {
 		cs.metadata = normalizeMeta(cs.metadata)

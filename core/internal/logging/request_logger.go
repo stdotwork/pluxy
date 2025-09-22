@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
@@ -494,12 +493,6 @@ type FileStreamingLogWriter struct {
 
 	// statusWritten indicates whether the response status has been written.
 	statusWritten bool
-
-	// mu protects concurrent access to the writer state.
-	mu sync.RWMutex
-
-	// closed indicates whether the streaming writer has been closed.
-	closed bool
 }
 
 // WriteChunkAsync writes a response chunk asynchronously (non-blocking).
@@ -507,10 +500,7 @@ type FileStreamingLogWriter struct {
 // Parameters:
 //   - chunk: The response chunk to write
 func (w *FileStreamingLogWriter) WriteChunkAsync(chunk []byte) {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
-	if w.chunkChan == nil || w.closed {
+	if w.chunkChan == nil {
 		return
 	}
 
@@ -535,9 +525,6 @@ func (w *FileStreamingLogWriter) WriteChunkAsync(chunk []byte) {
 // Returns:
 //   - error: An error if writing fails, nil otherwise
 func (w *FileStreamingLogWriter) WriteStatus(status int, headers map[string][]string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if w.file == nil || w.statusWritten {
 		return nil
 	}
@@ -566,38 +553,21 @@ func (w *FileStreamingLogWriter) WriteStatus(status int, headers map[string][]st
 // Returns:
 //   - error: An error if closing fails, nil otherwise
 func (w *FileStreamingLogWriter) Close() error {
-	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return nil
-	}
-	w.closed = true
-	chunkChan := w.chunkChan
-	closeChan := w.closeChan
-	file := w.file
-	w.mu.Unlock()
-
-	if chunkChan != nil {
-		close(chunkChan)
+	if w.chunkChan != nil {
+		close(w.chunkChan)
 	}
 
 	// Wait for async writer to finish
-	if closeChan != nil {
-		<-closeChan
+	if w.closeChan != nil {
+		<-w.closeChan
+		w.chunkChan = nil
 	}
 
-	var err error
-	if file != nil {
-		err = file.Close()
+	if w.file != nil {
+		return w.file.Close()
 	}
 
-	w.mu.Lock()
-	w.chunkChan = nil
-	w.closeChan = nil
-	w.file = nil
-	w.mu.Unlock()
-
-	return err
+	return nil
 }
 
 // asyncWriter runs in a goroutine to handle async chunk writing.

@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -141,6 +143,7 @@ func (s *geminiWebState) ensureClient() error {
 	if s.cfg != nil && s.cfg.GeminiWeb.TokenRefreshSeconds > 0 {
 		refresh = s.cfg.GeminiWeb.TokenRefreshSeconds
 	}
+	// Use explicit refresh; background auto-refresh disabled here
 	if err := s.client.Init(float64(timeout), false, 300, false, float64(refresh), false); err != nil {
 		s.client = nil
 		return err
@@ -166,9 +169,12 @@ func (s *geminiWebState) refresh(ctx context.Context) error {
 	if s.cfg != nil && s.cfg.GeminiWeb.TokenRefreshSeconds > 0 {
 		refresh = s.cfg.GeminiWeb.TokenRefreshSeconds
 	}
+	// Use explicit refresh; background auto-refresh disabled here
 	if err := s.client.Init(float64(timeout), false, 300, false, float64(refresh), false); err != nil {
 		return err
 	}
+	// Attempt rotation proactively to persist new TS sooner
+	_ = s.tryRotatePSIDTS(proxyURL)
 	s.lastRefresh = time.Now()
 	return nil
 }
@@ -193,6 +199,59 @@ func (s *geminiWebState) tokenSnapshot() *gemini.GeminiWebTokenStorage {
 	defer s.tokenMu.Unlock()
 	c := *s.token
 	return &c
+}
+
+// tryRotatePSIDTS performs a best-effort rotation of __Secure-1PSIDTS using
+// the public RotateCookies endpoint. On success it updates both the in-memory
+// token and the live client's cookie jar so that subsequent requests adopt the
+// new value. Any error is ignored by the caller to avoid disrupting refresh.
+func (s *geminiWebState) tryRotatePSIDTS(proxy string) error {
+	cookies := map[string]string{
+		"__Secure-1PSID":   s.token.Secure1PSID,
+		"__Secure-1PSIDTS": s.token.Secure1PSIDTS,
+	}
+
+	tr := &http.Transport{}
+	if proxy != "" {
+		if pu, err := url.Parse(proxy); err == nil {
+			tr.Proxy = http.ProxyURL(pu)
+		}
+	}
+	client := &http.Client{Transport: tr, Timeout: 60 * time.Second}
+
+	req, _ := http.NewRequest(http.MethodPost, geminiwebapi.EndpointRotateCookies, bytes.NewReader([]byte("[000,\"-0000000000000000000\"]")))
+	for k, vs := range geminiwebapi.HeadersRotateCookies {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
+	for k, v := range cookies {
+		req.AddCookie(&http.Cookie{Name: k, Value: v})
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		for _, c := range resp.Cookies() {
+			if c == nil {
+				continue
+			}
+			if c.Name == "__Secure-1PSIDTS" && c.Value != "" && c.Value != s.token.Secure1PSIDTS {
+				s.tokenMu.Lock()
+				s.token.Secure1PSIDTS = c.Value
+				s.tokenDirty = true
+				if s.client != nil && s.client.Cookies != nil {
+					s.client.Cookies["__Secure-1PSIDTS"] = c.Value
+				}
+				s.tokenMu.Unlock()
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func (s *geminiWebState) ShouldRefresh(now time.Time, _ *cliproxyauth.Auth) bool {
