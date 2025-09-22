@@ -11,6 +11,7 @@ import (
 
 	codexauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -18,6 +19,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/sjson"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
@@ -232,9 +234,16 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+token)
-	r.Header.Set("Version", "0.21.0")
-	r.Header.Set("Openai-Beta", "responses=experimental")
-	r.Header.Set("Session_id", uuid.NewString())
+
+	var ginHeaders http.Header
+	if ginCtx, ok := r.Context().Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+		ginHeaders = ginCtx.Request.Header
+	}
+
+	misc.EnsureHeader(r.Header, ginHeaders, "Version", "0.21.0")
+	misc.EnsureHeader(r.Header, ginHeaders, "Openai-Beta", "responses=experimental")
+	misc.EnsureHeader(r.Header, ginHeaders, "Session_id", uuid.NewString())
+
 	r.Header.Set("Accept", "text/event-stream")
 	r.Header.Set("Connection", "Keep-Alive")
 
@@ -248,9 +257,7 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string) {
 		r.Header.Set("Originator", "codex_cli_rs")
 		if auth != nil && auth.Metadata != nil {
 			if accountID, ok := auth.Metadata["account_id"].(string); ok {
-				if trimmed := strings.TrimSpace(accountID); trimmed != "" {
-					r.Header.Set("Chatgpt-Account-Id", trimmed)
-				}
+				r.Header.Set("Chatgpt-Account-Id", accountID)
 			}
 		}
 	}

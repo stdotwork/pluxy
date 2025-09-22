@@ -18,6 +18,8 @@ import (
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/sjson"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ClaudeExecutor is a stateless executor for Anthropic Claude over the messages API.
@@ -177,22 +179,28 @@ func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 func applyClaudeHeaders(r *http.Request, apiKey string, stream bool) {
 	r.Header.Set("Authorization", "Bearer "+apiKey)
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Anthropic-Version", "2023-06-01")
-	r.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
-	r.Header.Set("Anthropic-Beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
+
+	var ginHeaders http.Header
+	if ginCtx, ok := r.Context().Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+		ginHeaders = ginCtx.Request.Header
+	}
+
+	misc.EnsureHeader(r.Header, ginHeaders, "Anthropic-Version", "2023-06-01")
+	misc.EnsureHeader(r.Header, ginHeaders, "Anthropic-Dangerous-Direct-Browser-Access", "true")
+	misc.EnsureHeader(r.Header, ginHeaders, "Anthropic-Beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-App", "cli")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Helper-Method", "stream")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Retry-Count", "0")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime-Version", "v24.3.0")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Package-Version", "0.55.1")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime", "node")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Lang", "js")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Arch", "arm64")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Os", "MacOS")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Timeout", "60")
 	r.Header.Set("Connection", "keep-alive")
 	r.Header.Set("User-Agent", "claude-cli/1.0.83 (external, cli)")
 	r.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
-	r.Header.Set("X-App", "cli")
-	r.Header.Set("X-Stainless-Helper-Method", "stream")
-	r.Header.Set("X-Stainless-Retry-Count", "0")
-	r.Header.Set("X-Stainless-Runtime-Version", "v24.3.0")
-	r.Header.Set("X-Stainless-Package-Version", "0.55.1")
-	r.Header.Set("X-Stainless-Runtime", "node")
-	r.Header.Set("X-Stainless-Lang", "js")
-	r.Header.Set("X-Stainless-Arch", "arm64")
-	r.Header.Set("X-Stainless-Os", "MacOS")
-	r.Header.Set("X-Stainless-Timeout", "60")
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
 		return

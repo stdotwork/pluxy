@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
@@ -393,9 +395,14 @@ func stringValue(m map[string]any, key string) string {
 
 // applyGeminiCLIHeaders sets required headers for the Gemini CLI upstream.
 func applyGeminiCLIHeaders(r *http.Request) {
-	r.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
-	r.Header.Set("X-Goog-Api-Client", "gl-node/22.17.0")
-	r.Header.Set("Client-Metadata", geminiCLIClientMetadata())
+	var ginHeaders http.Header
+	if ginCtx, ok := r.Context().Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+		ginHeaders = ginCtx.Request.Header
+	}
+
+	misc.EnsureHeader(r.Header, ginHeaders, "User-Agent", "google-api-nodejs-client/9.15.1")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Goog-Api-Client", "gl-node/22.17.0")
+	misc.EnsureHeader(r.Header, ginHeaders, "Client-Metadata", geminiCLIClientMetadata())
 }
 
 // geminiCLIClientMetadata returns a compact metadata string required by upstream.
