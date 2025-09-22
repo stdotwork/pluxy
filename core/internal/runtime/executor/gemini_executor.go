@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 const (
@@ -161,8 +165,104 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 }
 
 func (e *GeminiExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
-	// API-key based: no-op; cookie-based handled by legacy fallback when used.
-	_ = ctx
+	// OAuth bearer token refresh for official Gemini API.
+	if auth == nil {
+		return nil, fmt.Errorf("gemini executor: auth is nil")
+	}
+	if auth.Metadata == nil {
+		return auth, nil
+	}
+	// Token data is typically nested under "token" map in Gemini files.
+	tokenMap, _ := auth.Metadata["token"].(map[string]any)
+	var refreshToken, accessToken, clientID, clientSecret, tokenURI, expiryStr string
+	if tokenMap != nil {
+		if v, ok := tokenMap["refresh_token"].(string); ok {
+			refreshToken = v
+		}
+		if v, ok := tokenMap["access_token"].(string); ok {
+			accessToken = v
+		}
+		if v, ok := tokenMap["client_id"].(string); ok {
+			clientID = v
+		}
+		if v, ok := tokenMap["client_secret"].(string); ok {
+			clientSecret = v
+		}
+		if v, ok := tokenMap["token_uri"].(string); ok {
+			tokenURI = v
+		}
+		if v, ok := tokenMap["expiry"].(string); ok {
+			expiryStr = v
+		}
+	} else {
+		// Fallback to top-level keys if present
+		if v, ok := auth.Metadata["refresh_token"].(string); ok {
+			refreshToken = v
+		}
+		if v, ok := auth.Metadata["access_token"].(string); ok {
+			accessToken = v
+		}
+		if v, ok := auth.Metadata["client_id"].(string); ok {
+			clientID = v
+		}
+		if v, ok := auth.Metadata["client_secret"].(string); ok {
+			clientSecret = v
+		}
+		if v, ok := auth.Metadata["token_uri"].(string); ok {
+			tokenURI = v
+		}
+		if v, ok := auth.Metadata["expiry"].(string); ok {
+			expiryStr = v
+		}
+	}
+	if refreshToken == "" {
+		// Nothing to do for API key or cookie based entries
+		return auth, nil
+	}
+
+	// Prepare oauth2 config; default to Google endpoints
+	endpoint := google.Endpoint
+	if tokenURI != "" {
+		endpoint.TokenURL = tokenURI
+	}
+	conf := &oauth2.Config{ClientID: clientID, ClientSecret: clientSecret, Endpoint: endpoint}
+
+	// Ensure proxy-aware HTTP client for token refresh
+	httpClient := util.SetProxy(e.cfg, &http.Client{})
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+
+	// Build base token
+	tok := &oauth2.Token{AccessToken: accessToken, RefreshToken: refreshToken}
+	if t, err := time.Parse(time.RFC3339, expiryStr); err == nil {
+		tok.Expiry = t
+	}
+	newTok, err := conf.TokenSource(ctx, tok).Token()
+	if err != nil {
+		return nil, err
+	}
+
+	// Persist back to metadata; prefer nested token map if present
+	if tokenMap == nil {
+		tokenMap = make(map[string]any)
+	}
+	tokenMap["access_token"] = newTok.AccessToken
+	tokenMap["refresh_token"] = newTok.RefreshToken
+	tokenMap["expiry"] = newTok.Expiry.Format(time.RFC3339)
+	if clientID != "" {
+		tokenMap["client_id"] = clientID
+	}
+	if clientSecret != "" {
+		tokenMap["client_secret"] = clientSecret
+	}
+	if tokenURI != "" {
+		tokenMap["token_uri"] = tokenURI
+	}
+	auth.Metadata["token"] = tokenMap
+
+	// Also mirror top-level access_token for compatibility if previously present
+	if _, ok := auth.Metadata["access_token"]; ok {
+		auth.Metadata["access_token"] = newTok.AccessToken
+	}
 	return auth, nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	qwenauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -143,7 +144,39 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 }
 
 func (e *QwenExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
-	_ = ctx
+	if auth == nil {
+		return nil, fmt.Errorf("qwen executor: auth is nil")
+	}
+	// Expect refresh_token in metadata for OAuth-based accounts
+	var refreshToken string
+	if auth.Metadata != nil {
+		if v, ok := auth.Metadata["refresh_token"].(string); ok && strings.TrimSpace(v) != "" {
+			refreshToken = v
+		}
+	}
+	if strings.TrimSpace(refreshToken) == "" {
+		// Nothing to refresh
+		return auth, nil
+	}
+
+	svc := qwenauth.NewQwenAuth(e.cfg)
+	td, err := svc.RefreshTokens(ctx, refreshToken)
+	if err != nil {
+		return nil, err
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["access_token"] = td.AccessToken
+	if td.RefreshToken != "" {
+		auth.Metadata["refresh_token"] = td.RefreshToken
+	}
+	if td.ResourceURL != "" {
+		auth.Metadata["resource_url"] = td.ResourceURL
+	}
+	// Use "expired" for consistency with existing file format
+	auth.Metadata["expired"] = td.Expire
+	auth.Metadata["type"] = "qwen"
 	return auth, nil
 }
 

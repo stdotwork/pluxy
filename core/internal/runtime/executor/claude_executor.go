@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	claudeauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -141,7 +142,33 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 }
 
 func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
-	_ = ctx
+	if auth == nil {
+		return nil, fmt.Errorf("claude executor: auth is nil")
+	}
+	var refreshToken string
+	if auth.Metadata != nil {
+		if v, ok := auth.Metadata["refresh_token"].(string); ok && v != "" {
+			refreshToken = v
+		}
+	}
+	if refreshToken == "" {
+		return auth, nil
+	}
+	svc := claudeauth.NewClaudeAuth(e.cfg)
+	td, err := svc.RefreshTokens(ctx, refreshToken)
+	if err != nil {
+		return nil, err
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	auth.Metadata["access_token"] = td.AccessToken
+	if td.RefreshToken != "" {
+		auth.Metadata["refresh_token"] = td.RefreshToken
+	}
+	auth.Metadata["email"] = td.Email
+	auth.Metadata["expired"] = td.Expire
+	auth.Metadata["type"] = "claude"
 	return auth, nil
 }
 
