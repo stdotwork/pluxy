@@ -14,6 +14,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/sjson"
 )
 
 // OpenAICompatExecutor implements a stateless executor for OpenAI-compatible providers.
@@ -47,6 +48,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("openai")
 	translated := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), opts.Stream)
+	if modelOverride := e.resolveUpstreamModel(req.Model, auth); modelOverride != "" {
+		translated = e.overrideModel(translated, modelOverride)
+	}
 
 	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
 	recordAPIRequest(ctx, e.cfg, translated)
@@ -91,6 +95,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("openai")
 	translated := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), true)
+	if modelOverride := e.resolveUpstreamModel(req.Model, auth); modelOverride != "" {
+		translated = e.overrideModel(translated, modelOverride)
+	}
 
 	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
 	recordAPIRequest(ctx, e.cfg, translated)
@@ -162,6 +169,67 @@ func (e *OpenAICompatExecutor) resolveCredentials(auth *cliproxyauth.Auth) (base
 		apiKey = auth.Attributes["api_key"]
 	}
 	return
+}
+
+func (e *OpenAICompatExecutor) resolveUpstreamModel(alias string, auth *cliproxyauth.Auth) string {
+	if alias == "" || auth == nil || e.cfg == nil {
+		return ""
+	}
+	compat := e.resolveCompatConfig(auth)
+	if compat == nil {
+		return ""
+	}
+	for i := range compat.Models {
+		model := compat.Models[i]
+		if model.Alias != "" {
+			if strings.EqualFold(model.Alias, alias) {
+				if model.Name != "" {
+					return model.Name
+				}
+				return alias
+			}
+			continue
+		}
+		if strings.EqualFold(model.Name, alias) {
+			return model.Name
+		}
+	}
+	return ""
+}
+
+func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth) *config.OpenAICompatibility {
+	if auth == nil || e.cfg == nil {
+		return nil
+	}
+	candidates := make([]string, 0, 3)
+	if auth.Attributes != nil {
+		if v := strings.TrimSpace(auth.Attributes["compat_name"]); v != "" {
+			candidates = append(candidates, v)
+		}
+		if v := strings.TrimSpace(auth.Attributes["provider_key"]); v != "" {
+			candidates = append(candidates, v)
+		}
+	}
+	if v := strings.TrimSpace(auth.Provider); v != "" {
+		candidates = append(candidates, v)
+	}
+	for i := range e.cfg.OpenAICompatibility {
+		compat := &e.cfg.OpenAICompatibility[i]
+		for _, candidate := range candidates {
+			if candidate != "" && strings.EqualFold(strings.TrimSpace(candidate), compat.Name) {
+				return compat
+			}
+		}
+	}
+	return nil
+}
+
+func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byte {
+	if len(payload) == 0 || model == "" {
+		return payload
+	}
+	payload, _ = sjson.SetBytes(payload, "model", model)
+	return payload
 }
 
 type statusErr struct {

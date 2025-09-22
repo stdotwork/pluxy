@@ -474,19 +474,24 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 		}
 		for i := range cfg.OpenAICompatibility {
 			compat := &cfg.OpenAICompatibility[i]
+			providerName := strings.ToLower(strings.TrimSpace(compat.Name))
+			if providerName == "" {
+				providerName = "openai-compatibility"
+			}
 			base := compat.BaseURL
 			for j := range compat.APIKeys {
 				key := compat.APIKeys[j]
 				a := &coreauth.Auth{
 					ID:       fmt.Sprintf("openai-compatibility:%s:%d", compat.Name, j),
-					Provider: "openai-compatibility",
+					Provider: providerName,
 					Label:    compat.Name,
 					Status:   coreauth.StatusActive,
 					Attributes: map[string]string{
-						"source":      fmt.Sprintf("config:%s#%d", compat.Name, j),
-						"base_url":    base,
-						"api_key":     key,
-						"compat_name": compat.Name,
+						"source":       fmt.Sprintf("config:%s#%d", compat.Name, j),
+						"base_url":     base,
+						"api_key":      key,
+						"compat_name":  compat.Name,
+						"provider_key": providerName,
 					},
 					CreatedAt: now,
 					UpdatedAt: now,

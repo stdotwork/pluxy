@@ -295,7 +295,11 @@ func (s *Service) syncCoreAuthFromAuths(ctx context.Context, auths []*coreauth.A
 		case "qwen":
 			s.coreManager.RegisterExecutor(executor.NewQwenExecutor(s.cfg))
 		default:
-			s.coreManager.RegisterExecutor(executor.NewOpenAICompatExecutor("openai-compatibility", s.cfg))
+			providerKey := strings.ToLower(strings.TrimSpace(a.Provider))
+			if providerKey == "" {
+				providerKey = "openai-compatibility"
+			}
+			s.coreManager.RegisterExecutor(executor.NewOpenAICompatExecutor(providerKey, s.cfg))
 		}
 
 		// Preserve existing temporal fields
@@ -341,7 +345,7 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 			}
 		}
 	}
-	provider := strings.ToLower(a.Provider)
+	provider := strings.ToLower(strings.TrimSpace(a.Provider))
 	var models []*ModelInfo
 	switch provider {
 	case "gemini":
@@ -359,11 +363,19 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	default:
 		// Handle OpenAI-compatibility providers by name using config
 		if s.cfg != nil {
-			// When provider is normalized to "openai-compatibility", read the original name from attributes.
-			compatName := a.Provider
-			if strings.EqualFold(compatName, "openai-compatibility") {
-				if a.Attributes != nil && a.Attributes["compat_name"] != "" {
-					compatName = a.Attributes["compat_name"]
+			providerKey := provider
+			compatName := strings.TrimSpace(a.Provider)
+			if strings.EqualFold(providerKey, "openai-compatibility") {
+				if a.Attributes != nil {
+					if v := strings.TrimSpace(a.Attributes["compat_name"]); v != "" {
+						compatName = v
+					}
+					if v := strings.TrimSpace(a.Attributes["provider_key"]); v != "" {
+						providerKey = strings.ToLower(v)
+					}
+				}
+				if providerKey == "openai-compatibility" && compatName != "" {
+					providerKey = strings.ToLower(compatName)
 				}
 			}
 			for i := range s.cfg.OpenAICompatibility {
@@ -384,7 +396,10 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 					}
 					// Register and return
 					if len(ms) > 0 {
-						GlobalModelRegistry().RegisterClient(a.ID, a.Provider, ms)
+						if providerKey == "" {
+							providerKey = "openai-compatibility"
+						}
+						GlobalModelRegistry().RegisterClient(a.ID, providerKey, ms)
 					}
 					return
 				}
@@ -392,6 +407,10 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		}
 	}
 	if len(models) > 0 {
-		GlobalModelRegistry().RegisterClient(a.ID, a.Provider, models)
+		key := provider
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(a.Provider))
+		}
+		GlobalModelRegistry().RegisterClient(a.ID, key, models)
 	}
 }
