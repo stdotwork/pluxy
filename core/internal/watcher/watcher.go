@@ -526,8 +526,14 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 		if email, _ := metadata["email"].(string); email != "" {
 			label = email
 		}
+		// Use relative path under authDir as ID to stay consistent with FileStore
+		id := full
+		if rel, errRel := filepath.Rel(w.authDir, full); errRel == nil && rel != "" {
+			id = rel
+		}
+
 		a := &coreauth.Auth{
-			ID:       full,
+			ID:       id,
 			Provider: provider,
 			Label:    label,
 			Status:   coreauth.StatusActive,
