@@ -412,6 +412,25 @@ func (s *geminiWebState) send(ctx context.Context, modelName string, reqPayload 
 		return nil, s.wrapSendError(err), nil
 	}
 
+	// Hook: For gemini-2.5-flash-image-preview, if the API returns only images without any text,
+	// inject a small textual summary so that conversation persistence has non-empty assistant text.
+	// This helps conversation recovery (conv store) to match sessions reliably.
+	if strings.EqualFold(modelName, "gemini-2.5-flash-image-preview") {
+		if len(output.Candidates) > 0 {
+			c := output.Candidates[output.Chosen]
+			hasNoText := strings.TrimSpace(c.Text) == ""
+			hasImages := len(c.GeneratedImages) > 0 || len(c.WebImages) > 0
+			if hasNoText && hasImages {
+				// Build a stable, concise fallback text. Avoid dynamic details to keep hashes stable.
+				// Prefer a deterministic phrase with count to aid users while keeping consistency.
+				fallback := "Done"
+				// Mutate the chosen candidate's text so both response conversion and
+				// conversation persistence observe the same fallback.
+				output.Candidates[output.Chosen].Text = fallback
+			}
+		}
+	}
+
 	gemBytes, err := geminiwebapi.ConvertOutputToGemini(&output, modelName, prep.prompt)
 	if err != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: err}, nil

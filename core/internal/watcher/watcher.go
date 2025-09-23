@@ -26,7 +26,7 @@ import (
 	// "github.com/router-for-me/CLIProxyAPI/v6/internal/client"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	// "github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -807,7 +807,6 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 		}
 		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
 			authFileCount++
-			misc.LogCredentialSeparator()
 			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
 			// Count readable JSON files as successful auth entries
 			if data, errCreate := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); errCreate == nil && len(data) > 0 {
