@@ -26,7 +26,7 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 	}
 	available := make([]*Auth, 0, len(auths))
 	now := time.Now()
-	for i := range auths {
+	for i := 0; i < len(auths); i++ {
 		candidate := auths[i]
 		if candidate.Unavailable && candidate.NextRetryAfter.After(now) {
 			continue
@@ -42,7 +42,13 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 	key := provider + ":" + model
 	s.mu.Lock()
 	index := s.cursors[key]
-	s.cursors[key] = (index + 1) % len(available)
+
+	if index >= 2_147_483_640 {
+		index = 0
+	}
+
+	s.cursors[key] = index + 1
 	s.mu.Unlock()
+	// log.Debugf("available: %d, index: %d, key: %d", len(available), index, index%len(available))
 	return available[index%len(available)], nil
 }

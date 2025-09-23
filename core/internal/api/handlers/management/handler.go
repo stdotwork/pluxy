@@ -74,9 +74,6 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 
 			allowRemote := h.cfg.RemoteManagement.AllowRemote
 			if !allowRemote {
-				allowRemote = true
-			}
-			if !allowRemote {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "remote management disabled"})
 				return
 			}
