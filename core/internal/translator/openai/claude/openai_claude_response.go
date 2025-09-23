@@ -13,6 +13,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 var (
@@ -450,6 +451,177 @@ func mapOpenAIFinishReasonToAnthropic(openAIReason string) string {
 //
 // Returns:
 //   - string: An Anthropic-compatible JSON response.
-func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
-	return ""
+func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	_ = originalRequestRawJSON
+	_ = requestRawJSON
+
+	root := gjson.ParseBytes(rawJSON)
+
+	response := map[string]interface{}{
+		"id":            root.Get("id").String(),
+		"type":          "message",
+		"role":          "assistant",
+		"model":         root.Get("model").String(),
+		"content":       []interface{}{},
+		"stop_reason":   nil,
+		"stop_sequence": nil,
+		"usage": map[string]interface{}{
+			"input_tokens":  0,
+			"output_tokens": 0,
+		},
+	}
+
+	var contentBlocks []interface{}
+	hasToolCall := false
+
+	if choices := root.Get("choices"); choices.Exists() && choices.IsArray() && len(choices.Array()) > 0 {
+		choice := choices.Array()[0]
+
+		if finishReason := choice.Get("finish_reason"); finishReason.Exists() {
+			response["stop_reason"] = mapOpenAIFinishReasonToAnthropic(finishReason.String())
+		}
+
+		if message := choice.Get("message"); message.Exists() {
+			if contentArray := message.Get("content"); contentArray.Exists() && contentArray.IsArray() {
+				var textBuilder strings.Builder
+				var thinkingBuilder strings.Builder
+
+				flushText := func() {
+					if textBuilder.Len() == 0 {
+						return
+					}
+					contentBlocks = append(contentBlocks, map[string]interface{}{
+						"type": "text",
+						"text": textBuilder.String(),
+					})
+					textBuilder.Reset()
+				}
+
+				flushThinking := func() {
+					if thinkingBuilder.Len() == 0 {
+						return
+					}
+					contentBlocks = append(contentBlocks, map[string]interface{}{
+						"type":     "thinking",
+						"thinking": thinkingBuilder.String(),
+					})
+					thinkingBuilder.Reset()
+				}
+
+				for _, item := range contentArray.Array() {
+					typeStr := item.Get("type").String()
+					switch typeStr {
+					case "text":
+						flushThinking()
+						textBuilder.WriteString(item.Get("text").String())
+					case "tool_calls":
+						flushThinking()
+						flushText()
+						toolCalls := item.Get("tool_calls")
+						if toolCalls.IsArray() {
+							toolCalls.ForEach(func(_, tc gjson.Result) bool {
+								hasToolCall = true
+								toolUse := map[string]interface{}{
+									"type": "tool_use",
+									"id":   tc.Get("id").String(),
+									"name": tc.Get("function.name").String(),
+								}
+
+								argsStr := util.FixJSON(tc.Get("function.arguments").String())
+								if argsStr != "" {
+									var parsed interface{}
+									if err := json.Unmarshal([]byte(argsStr), &parsed); err == nil {
+										toolUse["input"] = parsed
+									} else {
+										toolUse["input"] = map[string]interface{}{}
+									}
+								} else {
+									toolUse["input"] = map[string]interface{}{}
+								}
+
+								contentBlocks = append(contentBlocks, toolUse)
+								return true
+							})
+						}
+					case "reasoning":
+						flushText()
+						if thinking := item.Get("text"); thinking.Exists() {
+							thinkingBuilder.WriteString(thinking.String())
+						}
+					default:
+						flushThinking()
+						flushText()
+					}
+				}
+
+				flushThinking()
+				flushText()
+			}
+
+			if toolCalls := message.Get("tool_calls"); toolCalls.Exists() && toolCalls.IsArray() {
+				toolCalls.ForEach(func(_, toolCall gjson.Result) bool {
+					hasToolCall = true
+					toolUseBlock := map[string]interface{}{
+						"type": "tool_use",
+						"id":   toolCall.Get("id").String(),
+						"name": toolCall.Get("function.name").String(),
+					}
+
+					argsStr := toolCall.Get("function.arguments").String()
+					argsStr = util.FixJSON(argsStr)
+					if argsStr != "" {
+						var args interface{}
+						if err := json.Unmarshal([]byte(argsStr), &args); err == nil {
+							toolUseBlock["input"] = args
+						} else {
+							toolUseBlock["input"] = map[string]interface{}{}
+						}
+					} else {
+						toolUseBlock["input"] = map[string]interface{}{}
+					}
+
+					contentBlocks = append(contentBlocks, toolUseBlock)
+					return true
+				})
+			}
+		}
+	}
+
+	response["content"] = contentBlocks
+
+	if respUsage := root.Get("usage"); respUsage.Exists() {
+		usageJSON := `{}`
+		usageJSON, _ = sjson.Set(usageJSON, "input_tokens", respUsage.Get("prompt_tokens").Int())
+		usageJSON, _ = sjson.Set(usageJSON, "output_tokens", respUsage.Get("completion_tokens").Int())
+		parsedUsage := gjson.Parse(usageJSON).Value().(map[string]interface{})
+		response["usage"] = parsedUsage
+	}
+
+	if response["stop_reason"] == nil {
+		if hasToolCall {
+			response["stop_reason"] = "tool_use"
+		} else {
+			response["stop_reason"] = "end_turn"
+		}
+	}
+
+	if !hasToolCall {
+		if toolBlocks := response["content"].([]interface{}); len(toolBlocks) > 0 {
+			for _, block := range toolBlocks {
+				if m, ok := block.(map[string]interface{}); ok && m["type"] == "tool_use" {
+					hasToolCall = true
+					break
+				}
+			}
+		}
+		if hasToolCall {
+			response["stop_reason"] = "tool_use"
+		}
+	}
+
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		return ""
+	}
+	return string(responseJSON)
 }

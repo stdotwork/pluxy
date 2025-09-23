@@ -9,7 +9,9 @@ package claude
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -251,6 +253,126 @@ func ConvertGeminiCLIResponseToClaude(_ context.Context, _ string, originalReque
 //
 // Returns:
 //   - string: A Claude-compatible JSON response.
-func ConvertGeminiCLIResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, _ []byte, _ *any) string {
-	return ""
+func ConvertGeminiCLIResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
+	_ = originalRequestRawJSON
+	_ = requestRawJSON
+
+	root := gjson.ParseBytes(rawJSON)
+
+	response := map[string]interface{}{
+		"id":            root.Get("response.responseId").String(),
+		"type":          "message",
+		"role":          "assistant",
+		"model":         root.Get("response.modelVersion").String(),
+		"content":       []interface{}{},
+		"stop_reason":   nil,
+		"stop_sequence": nil,
+		"usage": map[string]interface{}{
+			"input_tokens":  root.Get("response.usageMetadata.promptTokenCount").Int(),
+			"output_tokens": root.Get("response.usageMetadata.candidatesTokenCount").Int() + root.Get("response.usageMetadata.thoughtsTokenCount").Int(),
+		},
+	}
+
+	parts := root.Get("response.candidates.0.content.parts")
+	var contentBlocks []interface{}
+	textBuilder := strings.Builder{}
+	thinkingBuilder := strings.Builder{}
+	toolIDCounter := 0
+	hasToolCall := false
+
+	flushText := func() {
+		if textBuilder.Len() == 0 {
+			return
+		}
+		contentBlocks = append(contentBlocks, map[string]interface{}{
+			"type": "text",
+			"text": textBuilder.String(),
+		})
+		textBuilder.Reset()
+	}
+
+	flushThinking := func() {
+		if thinkingBuilder.Len() == 0 {
+			return
+		}
+		contentBlocks = append(contentBlocks, map[string]interface{}{
+			"type":     "thinking",
+			"thinking": thinkingBuilder.String(),
+		})
+		thinkingBuilder.Reset()
+	}
+
+	if parts.IsArray() {
+		for _, part := range parts.Array() {
+			if text := part.Get("text"); text.Exists() && text.String() != "" {
+				if part.Get("thought").Bool() {
+					flushText()
+					thinkingBuilder.WriteString(text.String())
+					continue
+				}
+				flushThinking()
+				textBuilder.WriteString(text.String())
+				continue
+			}
+
+			if functionCall := part.Get("functionCall"); functionCall.Exists() {
+				flushThinking()
+				flushText()
+				hasToolCall = true
+
+				name := functionCall.Get("name").String()
+				toolIDCounter++
+				toolBlock := map[string]interface{}{
+					"type":  "tool_use",
+					"id":    fmt.Sprintf("tool_%d", toolIDCounter),
+					"name":  name,
+					"input": map[string]interface{}{},
+				}
+
+				if args := functionCall.Get("args"); args.Exists() {
+					var parsed interface{}
+					if err := json.Unmarshal([]byte(args.Raw), &parsed); err == nil {
+						toolBlock["input"] = parsed
+					}
+				}
+
+				contentBlocks = append(contentBlocks, toolBlock)
+				continue
+			}
+		}
+	}
+
+	flushThinking()
+	flushText()
+
+	response["content"] = contentBlocks
+
+	stopReason := "end_turn"
+	if hasToolCall {
+		stopReason = "tool_use"
+	} else {
+		if finish := root.Get("response.candidates.0.finishReason"); finish.Exists() {
+			switch finish.String() {
+			case "MAX_TOKENS":
+				stopReason = "max_tokens"
+			case "STOP", "FINISH_REASON_UNSPECIFIED", "UNKNOWN":
+				stopReason = "end_turn"
+			default:
+				stopReason = "end_turn"
+			}
+		}
+	}
+	response["stop_reason"] = stopReason
+
+	if usage := response["usage"].(map[string]interface{}); usage["input_tokens"] == int64(0) && usage["output_tokens"] == int64(0) {
+		if usageMeta := root.Get("response.usageMetadata"); !usageMeta.Exists() {
+			delete(response, "usage")
+		}
+	}
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
