@@ -1,7 +1,6 @@
 package geminiwebapi
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,30 +9,18 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
 // GeminiClient is the async http client interface (Go port)
 type GeminiClient struct {
-	Cookies         map[string]string
-	Proxy           string
-	Running         bool
-	httpClient      *http.Client
-	AccessToken     string
-	Timeout         time.Duration
-	AutoClose       bool
-	CloseDelay      time.Duration
-	closeMu         sync.Mutex
-	closeTimer      *time.Timer
-	AutoRefresh     bool
-	RefreshInterval time.Duration
-	rotateCancel    context.CancelFunc
-	insecure        bool
-	accountLabel    string
-	// onCookiesRefreshed is an optional callback invoked after cookies
-	// are refreshed and the __Secure-1PSIDTS value changes.
-	onCookiesRefreshed func()
+	Cookies     map[string]string
+	Proxy       string
+	Running     bool
+	httpClient  *http.Client
+	AccessToken string
+	Timeout     time.Duration
+	insecure    bool
 }
 
 var NanoBananaModel = map[string]struct{}{
@@ -43,15 +30,11 @@ var NanoBananaModel = map[string]struct{}{
 // NewGeminiClient creates a client. Pass empty strings to auto-detect via browser cookies (not implemented in Go port).
 func NewGeminiClient(secure1psid string, secure1psidts string, proxy string, opts ...func(*GeminiClient)) *GeminiClient {
 	c := &GeminiClient{
-		Cookies:         map[string]string{},
-		Proxy:           proxy,
-		Running:         false,
-		Timeout:         300 * time.Second,
-		AutoClose:       false,
-		CloseDelay:      300 * time.Second,
-		AutoRefresh:     true,
-		RefreshInterval: 540 * time.Second,
-		insecure:        false,
+		Cookies:  map[string]string{},
+		Proxy:    proxy,
+		Running:  false,
+		Timeout:  300 * time.Second,
+		insecure: false,
 	}
 	if secure1psid != "" {
 		c.Cookies["__Secure-1PSID"] = secure1psid
@@ -70,21 +53,8 @@ func WithInsecureTLS(insecure bool) func(*GeminiClient) {
 	return func(c *GeminiClient) { c.insecure = insecure }
 }
 
-// WithAccountLabel sets an identifying label (e.g., token filename sans .json)
-// for logging purposes.
-func WithAccountLabel(label string) func(*GeminiClient) {
-	return func(c *GeminiClient) { c.accountLabel = label }
-}
-
-// WithOnCookiesRefreshed registers a callback invoked when cookies are refreshed
-// and the __Secure-1PSIDTS value changes. The callback runs in the background
-// refresh goroutine; keep it lightweight and non-blocking.
-func WithOnCookiesRefreshed(cb func()) func(*GeminiClient) {
-	return func(c *GeminiClient) { c.onCookiesRefreshed = cb }
-}
-
 // Init initializes the access token and http client.
-func (c *GeminiClient) Init(timeoutSec float64, autoClose bool, closeDelaySec float64, autoRefresh bool, refreshIntervalSec float64, verbose bool) error {
+func (c *GeminiClient) Init(timeoutSec float64, verbose bool) error {
 	// get access token
 	token, validCookies, err := getAccessToken(c.Cookies, c.Proxy, verbose, c.insecure)
 	if err != nil {
@@ -108,17 +78,6 @@ func (c *GeminiClient) Init(timeoutSec float64, autoClose bool, closeDelaySec fl
 	c.Running = true
 
 	c.Timeout = time.Duration(timeoutSec * float64(time.Second))
-	c.AutoClose = autoClose
-	c.CloseDelay = time.Duration(closeDelaySec * float64(time.Second))
-	if c.AutoClose {
-		c.resetCloseTimer()
-	}
-
-	c.AutoRefresh = autoRefresh
-	c.RefreshInterval = time.Duration(refreshIntervalSec * float64(time.Second))
-	if c.AutoRefresh {
-		c.startAutoRefresh()
-	}
 	if verbose {
 		Success("Gemini client initialized successfully.")
 	}
@@ -130,94 +89,6 @@ func (c *GeminiClient) Close(delaySec float64) {
 		time.Sleep(time.Duration(delaySec * float64(time.Second)))
 	}
 	c.Running = false
-	c.closeMu.Lock()
-	if c.closeTimer != nil {
-		c.closeTimer.Stop()
-		c.closeTimer = nil
-	}
-	c.closeMu.Unlock()
-	// Transport/client closed by GC; nothing explicit
-	if c.rotateCancel != nil {
-		c.rotateCancel()
-		c.rotateCancel = nil
-	}
-}
-
-func (c *GeminiClient) resetCloseTimer() {
-	c.closeMu.Lock()
-	defer c.closeMu.Unlock()
-	if c.closeTimer != nil {
-		c.closeTimer.Stop()
-		c.closeTimer = nil
-	}
-	c.closeTimer = time.AfterFunc(c.CloseDelay, func() { c.Close(0) })
-}
-
-func (c *GeminiClient) startAutoRefresh() {
-	if c.rotateCancel != nil {
-		c.rotateCancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	c.rotateCancel = cancel
-	go func() {
-		ticker := time.NewTicker(c.RefreshInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// Step 1: rotate __Secure-1PSIDTS
-				oldTS := ""
-				if c.Cookies != nil {
-					oldTS = c.Cookies["__Secure-1PSIDTS"]
-				}
-				newTS, err := rotate1psidts(c.Cookies, c.Proxy, c.insecure)
-				if err != nil {
-					Warning("Failed to refresh cookies. Background auto refresh canceled: %v", err)
-					cancel()
-					return
-				}
-
-				// Prepare a snapshot of cookies for access token refresh
-				nextCookies := map[string]string{}
-				for k, v := range c.Cookies {
-					nextCookies[k] = v
-				}
-				if newTS != "" {
-					nextCookies["__Secure-1PSIDTS"] = newTS
-				}
-
-				// Step 2: refresh access token using updated cookies
-				token, validCookies, err := getAccessToken(nextCookies, c.Proxy, false, c.insecure)
-				if err != nil {
-					// Apply rotated cookies even if token refresh fails, then retry on next tick
-					c.Cookies = nextCookies
-					Warning("Failed to refresh access token after cookie rotation: %v", err)
-				} else {
-					c.AccessToken = token
-					c.Cookies = validCookies
-				}
-
-				if c.accountLabel != "" {
-					DebugRaw("Cookies refreshed [%s]. New __Secure-1PSIDTS: %s", c.accountLabel, MaskToken28(nextCookies["__Secure-1PSIDTS"]))
-				} else {
-					DebugRaw("Cookies refreshed. New __Secure-1PSIDTS: %s", MaskToken28(nextCookies["__Secure-1PSIDTS"]))
-				}
-
-				// Trigger persistence only when TS actually changes
-				if c.onCookiesRefreshed != nil {
-					currentTS := ""
-					if c.Cookies != nil {
-						currentTS = c.Cookies["__Secure-1PSIDTS"]
-					}
-					if currentTS != "" && currentTS != oldTS {
-						c.onCookiesRefreshed()
-					}
-				}
-			}
-		}
-	}()
 }
 
 // ensureRunning mirrors the Python decorator behavior and retries on APIError.
@@ -225,7 +96,15 @@ func (c *GeminiClient) ensureRunning() error {
 	if c.Running {
 		return nil
 	}
-	return c.Init(float64(c.Timeout/time.Second), c.AutoClose, float64(c.CloseDelay/time.Second), c.AutoRefresh, float64(c.RefreshInterval/time.Second), false)
+	return c.Init(float64(c.Timeout/time.Second), false)
+}
+
+// RotateTS performs a RotateCookies request and returns the new __Secure-1PSIDTS value (if any).
+func (c *GeminiClient) RotateTS() (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("gemini web client is nil")
+	}
+	return rotate1PSIDTS(c.Cookies, c.Proxy, c.insecure)
 }
 
 // GenerateContent sends a prompt (with optional files) and parses the response into ModelOutput.
@@ -236,9 +115,6 @@ func (c *GeminiClient) GenerateContent(prompt string, files []string, model Mode
 	}
 	if err := c.ensureRunning(); err != nil {
 		return empty, err
-	}
-	if c.AutoClose {
-		c.resetCloseTimer()
 	}
 
 	// Retry wrapper similar to decorator (retry=2)

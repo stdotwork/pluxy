@@ -120,10 +120,6 @@ type GeminiWebConfig struct {
 	// DisableContinuationHint, when true, disables the continuation hint for split prompts.
 	// The hint is enabled by default.
 	DisableContinuationHint bool `yaml:"disable-continuation-hint,omitempty" json:"disable-continuation-hint,omitempty"`
-
-	// TokenRefreshSeconds controls the background cookie auto-refresh interval in seconds.
-	// When unset or <= 0, defaults to 540 seconds.
-	TokenRefreshSeconds int `yaml:"token-refresh-seconds" json:"token-refresh-seconds"`
 }
 
 // RemoteManagement holds management API configuration under 'remote-management'.
