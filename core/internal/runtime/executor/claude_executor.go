@@ -45,7 +45,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("claude")
-	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), false)
+	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), from != to)
 
 	if !strings.HasPrefix(req.Model, "claude-3-5-haiku") {
 		body, _ = sjson.SetRawBytes(body, "system", []byte(misc.ClaudeCodeInstructions))

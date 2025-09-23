@@ -58,6 +58,9 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 	if input := root.Get("input"); input.Exists() && input.IsArray() {
 		input.ForEach(func(_, item gjson.Result) bool {
 			itemType := item.Get("type").String()
+			if itemType == "" && item.Get("role").String() != "" {
+				itemType = "message"
+			}
 
 			switch itemType {
 			case "message":
@@ -72,6 +75,9 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 
 					content.ForEach(func(_, contentItem gjson.Result) bool {
 						contentType := contentItem.Get("type").String()
+						if contentType == "" {
+							contentType = "input_text"
+						}
 
 						switch contentType {
 						case "input_text":

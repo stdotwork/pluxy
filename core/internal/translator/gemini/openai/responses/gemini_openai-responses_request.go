@@ -31,9 +31,33 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 	if input := root.Get("input"); input.Exists() && input.IsArray() {
 		input.ForEach(func(_, item gjson.Result) bool {
 			itemType := item.Get("type").String()
+			itemRole := item.Get("role").String()
+			if itemType == "" && itemRole != "" {
+				itemType = "message"
+			}
 
 			switch itemType {
 			case "message":
+				if strings.EqualFold(itemRole, "system") {
+					if contentArray := item.Get("content"); contentArray.Exists() && contentArray.IsArray() {
+						var builder strings.Builder
+						contentArray.ForEach(func(_, contentItem gjson.Result) bool {
+							text := contentItem.Get("text").String()
+							if builder.Len() > 0 && text != "" {
+								builder.WriteByte('\n')
+							}
+							builder.WriteString(text)
+							return true
+						})
+						if !gjson.Get(out, "system_instruction").Exists() {
+							systemInstr := `{"parts":[{"text":""}]}`
+							systemInstr, _ = sjson.Set(systemInstr, "parts.0.text", builder.String())
+							out, _ = sjson.SetRaw(out, "system_instruction", systemInstr)
+						}
+					}
+					return true
+				}
+
 				// Handle regular messages
 				// Note: In Responses format, model outputs may appear as content items with type "output_text"
 				// even when the message.role is "user". We split such items into distinct Gemini messages
@@ -41,11 +65,25 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 				if contentArray := item.Get("content"); contentArray.Exists() && contentArray.IsArray() {
 					contentArray.ForEach(func(_, contentItem gjson.Result) bool {
 						contentType := contentItem.Get("type").String()
+						if contentType == "" {
+							contentType = "input_text"
+						}
 						switch contentType {
 						case "input_text", "output_text":
 							if text := contentItem.Get("text"); text.Exists() {
 								effRole := "user"
+								if itemRole != "" {
+									switch strings.ToLower(itemRole) {
+									case "assistant", "model":
+										effRole = "model"
+									default:
+										effRole = strings.ToLower(itemRole)
+									}
+								}
 								if contentType == "output_text" {
+									effRole = "model"
+								}
+								if effRole == "assistant" {
 									effRole = "model"
 								}
 								one := `{"role":"","parts":[]}`

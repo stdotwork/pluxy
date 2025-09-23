@@ -68,16 +68,55 @@ func ConvertOpenAIResponsesRequestToClaude(modelName string, inputRawJSON []byte
 	out, _ = sjson.Set(out, "stream", stream)
 
 	// instructions -> as a leading message (use role user for Claude API compatibility)
-	if instr := root.Get("instructions"); instr.Exists() && instr.Type == gjson.String && instr.String() != "" {
-		sysMsg := `{"role":"user","content":""}`
-		sysMsg, _ = sjson.Set(sysMsg, "content", instr.String())
-		out, _ = sjson.SetRaw(out, "messages.-1", sysMsg)
+	instructionsText := ""
+	extractedFromSystem := false
+	if instr := root.Get("instructions"); instr.Exists() && instr.Type == gjson.String {
+		instructionsText = instr.String()
+		if instructionsText != "" {
+			sysMsg := `{"role":"user","content":""}`
+			sysMsg, _ = sjson.Set(sysMsg, "content", instructionsText)
+			out, _ = sjson.SetRaw(out, "messages.-1", sysMsg)
+		}
+	}
+
+	if instructionsText == "" {
+		if input := root.Get("input"); input.Exists() && input.IsArray() {
+			input.ForEach(func(_, item gjson.Result) bool {
+				if strings.EqualFold(item.Get("role").String(), "system") {
+					var builder strings.Builder
+					if parts := item.Get("content"); parts.Exists() && parts.IsArray() {
+						parts.ForEach(func(_, part gjson.Result) bool {
+							text := part.Get("text").String()
+							if builder.Len() > 0 && text != "" {
+								builder.WriteByte('\n')
+							}
+							builder.WriteString(text)
+							return true
+						})
+					}
+					instructionsText = builder.String()
+					if instructionsText != "" {
+						sysMsg := `{"role":"user","content":""}`
+						sysMsg, _ = sjson.Set(sysMsg, "content", instructionsText)
+						out, _ = sjson.SetRaw(out, "messages.-1", sysMsg)
+						extractedFromSystem = true
+					}
+				}
+				return instructionsText == ""
+			})
+		}
 	}
 
 	// input array processing
 	if input := root.Get("input"); input.Exists() && input.IsArray() {
 		input.ForEach(func(_, item gjson.Result) bool {
+			if extractedFromSystem && strings.EqualFold(item.Get("role").String(), "system") {
+				return true
+			}
 			typ := item.Get("type").String()
+			if typ == "" && item.Get("role").String() != "" {
+				typ = "message"
+			}
 			switch typ {
 			case "message":
 				// Determine role from content type (input_text=user, output_text=assistant)
