@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
@@ -66,14 +67,28 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("response body close error: %v", errClose)
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		appendAPIResponseChunk(ctx, e.cfg, b)
 		log.Debugf("request error, error status: %d, error body: %s", resp.StatusCode, string(b))
 		return cliproxyexecutor.Response{}, statusErr{code: resp.StatusCode, msg: string(b)}
 	}
-	data, err := io.ReadAll(resp.Body)
+	reader := io.Reader(resp.Body)
+	var decoder *zstd.Decoder
+	if hasZSTDEcoding(resp.Header.Get("Content-Encoding")) {
+		decoder, err = zstd.NewReader(resp.Body)
+		if err != nil {
+			return cliproxyexecutor.Response{}, fmt.Errorf("failed to initialize zstd decoder: %w", err)
+		}
+		reader = decoder
+		defer decoder.Close()
+	}
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
@@ -178,6 +193,19 @@ func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 	now := time.Now().Format(time.RFC3339)
 	auth.Metadata["last_refresh"] = now
 	return auth, nil
+}
+
+func hasZSTDEcoding(contentEncoding string) bool {
+	if contentEncoding == "" {
+		return false
+	}
+	parts := strings.Split(contentEncoding, ",")
+	for i := range parts {
+		if strings.EqualFold(strings.TrimSpace(parts[i]), "zstd") {
+			return true
+		}
+	}
+	return false
 }
 
 func applyClaudeHeaders(r *http.Request, apiKey string, stream bool) {

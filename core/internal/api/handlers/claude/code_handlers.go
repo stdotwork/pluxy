@@ -76,10 +76,10 @@ func (h *ClaudeCodeAPIHandler) ClaudeMessages(c *gin.Context) {
 	// Check if the client requested a streaming response.
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	if !streamResult.Exists() || streamResult.Type == gjson.False {
-		return
+		h.handleNonStreamingResponse(c, rawJSON)
+	} else {
+		h.handleStreamingResponse(c, rawJSON)
 	}
-
-	h.handleStreamingResponse(c, rawJSON)
 }
 
 // ClaudeModels handles the Claude models listing endpoint.
@@ -91,6 +91,32 @@ func (h *ClaudeCodeAPIHandler) ClaudeModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"data": h.Models(),
 	})
+}
+
+// handleNonStreamingResponse handles non-streaming content generation requests for Claude models.
+// This function processes the request synchronously and returns the complete generated
+// response in a single API call. It supports various generation parameters and
+// response formats.
+//
+// Parameters:
+//   - c: The Gin context for the request
+//   - modelName: The name of the Gemini model to use for content generation
+//   - rawJSON: The raw JSON request body containing generation parameters and content
+func (h *ClaudeCodeAPIHandler) handleNonStreamingResponse(c *gin.Context, rawJSON []byte) {
+	c.Header("Content-Type", "application/json")
+	alt := h.GetAlt(c)
+	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
+
+	modelName := gjson.GetBytes(rawJSON, "model").String()
+
+	resp, errMsg := h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
+	if errMsg != nil {
+		h.WriteErrorResponse(c, errMsg)
+		cliCancel(errMsg.Error)
+		return
+	}
+	_, _ = c.Writer.Write(resp)
+	cliCancel()
 }
 
 // handleStreamingResponse streams Claude-compatible responses backed by Gemini.

@@ -322,9 +322,6 @@ func (s *Service) Run(ctx context.Context) error {
 	// Prefer core auth manager auto refresh if available.
 	if s.coreManager != nil {
 		interval := 15 * time.Minute
-		if sec := s.cfg.GeminiWeb.TokenRefreshSeconds; sec > 0 {
-			interval = time.Duration(sec) * time.Second
-		}
 		s.coreManager.StartAutoRefresh(context.Background(), interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
 	}
