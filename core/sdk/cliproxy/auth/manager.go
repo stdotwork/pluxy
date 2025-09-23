@@ -486,6 +486,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		return
 	}
 	// Update in-memory auth status based on result.
+	shouldResumeModel := false
+	shouldSuspendModel := false
+	suspendReason := ""
 	m.mu.Lock()
 	if auth, ok := m.auths[result.AuthID]; ok && auth != nil {
 		now := time.Now()
@@ -501,6 +504,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			auth.UpdatedAt = now
 			if result.Model != "" {
 				registry.GetGlobalRegistry().ClearModelQuotaExceeded(auth.ID, result.Model)
+				shouldResumeModel = true
 			}
 		} else {
 			// Default transient error state.
@@ -511,7 +515,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 				auth.LastError = &Error{Code: result.Error.Code, Message: result.Error.Message, Retryable: result.Error.Retryable}
 			}
 			// If the error carries a status code, adjust backoff/quota accordingly.
-			// 401 -> auth issue; 402/429 -> quota; 5xx -> transient.
+			// 401 -> auth issue; 402 -> billing; 403 -> forbidden; 429 -> quota; 5xx -> transient.
 			var statusCode int
 			if se, isOk := any(result.Error).(interface{ StatusCode() int }); isOk && se != nil {
 				statusCode = se.StatusCode()
@@ -519,19 +523,35 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			switch statusCode {
 			case 401:
 				auth.StatusMessage = "unauthorized"
-				auth.NextRefreshAfter = now.Add(5 * time.Minute)
-			case 402, 429:
+				auth.NextRefreshAfter = now.Add(30 * time.Minute)
+				if result.Model != "" {
+					shouldSuspendModel = true
+					suspendReason = "unauthorized"
+				}
+			case 402, 403:
+				auth.StatusMessage = "payment_required"
+				auth.NextRefreshAfter = now.Add(30 * time.Minute)
+				if result.Model != "" {
+					shouldSuspendModel = true
+					suspendReason = "payment_required"
+				}
+			case 429:
 				auth.StatusMessage = "quota exhausted"
 				auth.Quota.Exceeded = true
 				auth.Quota.Reason = "quota"
-				auth.Quota.NextRecoverAt = now.Add(10 * time.Minute)
+				auth.Quota.NextRecoverAt = now.Add(30 * time.Minute)
 				auth.NextRefreshAfter = auth.Quota.NextRecoverAt
 				if result.Model != "" {
+					shouldSuspendModel = true
 					registry.GetGlobalRegistry().SetModelQuotaExceeded(auth.ID, result.Model)
 				}
-			case 403, 408, 500, 502, 503, 504:
+			case 408, 500, 502, 503, 504:
 				auth.StatusMessage = "transient upstream error"
 				auth.NextRefreshAfter = now.Add(1 * time.Minute)
+				if result.Model != "" {
+					shouldSuspendModel = false
+					suspendReason = "forbidden"
+				}
 			default:
 				// keep generic
 				if auth.StatusMessage == "" {
@@ -543,6 +563,12 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 		_ = m.persist(ctx, auth)
 	}
 	m.mu.Unlock()
+
+	if shouldResumeModel {
+		registry.GetGlobalRegistry().ResumeClientModel(result.AuthID, result.Model)
+	} else if shouldSuspendModel {
+		registry.GetGlobalRegistry().SuspendClientModel(result.AuthID, result.Model, suspendReason)
+	}
 
 	m.hook.OnResult(ctx, result)
 }
