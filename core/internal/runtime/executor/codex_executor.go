@@ -18,11 +18,14 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+var dataTag = []byte("data:")
 
 // CodexExecutor is a stateless executor for Codex (OpenAI Responses API entrypoint).
 // If api_key is unavailable on auth, it falls back to legacy via ClientAdapter.
@@ -44,6 +47,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("codex")
@@ -75,6 +79,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 	}
 
+	body, _ = sjson.SetBytes(body, "stream", true)
+
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	recordAPIRequest(ctx, e.cfg, body)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -103,9 +109,27 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		return cliproxyexecutor.Response{}, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, data)
-	var param any
-	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, data, &param)
-	return cliproxyexecutor.Response{Payload: []byte(out)}, nil
+
+	lines := bytes.Split(data, []byte("\n"))
+	for _, line := range lines {
+		if !bytes.HasPrefix(line, dataTag) {
+			continue
+		}
+
+		line = bytes.TrimSpace(line[5:])
+		if gjson.GetBytes(line, "type").String() != "response.completed" {
+			continue
+		}
+
+		if detail, ok := parseCodexUsage(line); ok {
+			reporter.publish(ctx, detail)
+		}
+
+		var param any
+		out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, line, &param)
+		return cliproxyexecutor.Response{Payload: []byte(out)}, nil
+	}
+	return cliproxyexecutor.Response{}, statusErr{code: 408, msg: "stream error: stream disconnected before completion: stream closed before response.completed"}
 }
 
 func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
@@ -116,6 +140,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("codex")
@@ -181,6 +206,16 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			appendAPIResponseChunk(ctx, e.cfg, line)
+
+			if bytes.HasPrefix(line, dataTag) {
+				data := bytes.TrimSpace(line[5:])
+				if gjson.GetBytes(data, "type").String() == "response.completed" {
+					if detail, ok := parseCodexUsage(data); ok {
+						reporter.publish(ctx, detail)
+					}
+				}
+			}
+
 			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, bytes.Clone(line), &param)
 			for i := range chunks {
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}

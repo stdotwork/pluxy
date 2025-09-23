@@ -14,12 +14,14 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
+	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/sdk/access/providers/configapikey"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -49,6 +51,11 @@ type Service struct {
 	coreManager   *coreauth.Manager
 
 	shutdownOnce sync.Once
+}
+
+// RegisterUsagePlugin registers a usage plugin on the global usage manager.
+func (s *Service) RegisterUsagePlugin(plugin usage.Plugin) {
+	usage.RegisterPlugin(plugin)
 }
 
 func newDefaultAuthManager() *sdkAuth.Manager {
@@ -216,6 +223,8 @@ func (s *Service) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	usage.StartDefault(ctx)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
@@ -388,6 +397,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 				}
 			}
 		}
+
+		usage.StopDefault()
 	})
 	return shutdownErr
 }

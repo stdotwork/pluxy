@@ -43,6 +43,7 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		// Fallback to legacy client
 		return NewClientAdapter("gemini").Execute(ctx, auth, req, opts)
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	// Official Gemini API via API key or OAuth bearer
 	from := opts.SourceFormat
@@ -92,6 +93,7 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		return cliproxyexecutor.Response{}, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, data)
+	reporter.publish(ctx, parseGeminiUsage(data))
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, data, &param)
 	return cliproxyexecutor.Response{Payload: []byte(out)}, nil
@@ -103,6 +105,7 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		// Fallback to legacy streaming
 		return NewClientAdapter("gemini").ExecuteStream(ctx, auth, req, opts)
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("gemini")
@@ -152,6 +155,9 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			appendAPIResponseChunk(ctx, e.cfg, line)
+			if detail, ok := parseGeminiStreamUsage(line); ok {
+				reporter.publish(ctx, detail)
+			}
 			lines := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, bytes.Clone(line), &param)
 			for i := range lines {
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(lines[i])}

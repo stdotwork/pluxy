@@ -38,6 +38,7 @@ func (e *GeminiWebExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	if err = state.ensureClient(); err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	mutex := state.getRequestMutex()
 	if mutex != nil {
@@ -51,6 +52,7 @@ func (e *GeminiWebExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		return cliproxyexecutor.Response{}, geminiWebErrorFromMessage(errMsg)
 	}
 	resp = state.convertToTarget(ctx, req.Model, prep, resp)
+	reporter.publish(ctx, parseGeminiUsage(resp))
 
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("gemini-web")
@@ -68,6 +70,7 @@ func (e *GeminiWebExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	if err = state.ensureClient(); err != nil {
 		return nil, err
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	mutex := state.getRequestMutex()
 	if mutex != nil {
@@ -81,6 +84,7 @@ func (e *GeminiWebExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		}
 		return nil, geminiWebErrorFromMessage(errMsg)
 	}
+	reporter.publish(ctx, parseGeminiUsage(gemBytes))
 
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("gemini-web")

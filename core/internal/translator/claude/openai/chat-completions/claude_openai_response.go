@@ -6,7 +6,6 @@
 package chat_completions
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -278,19 +277,14 @@ func mapAnthropicStopReasonToOpenAI(anthropicReason string) string {
 // Returns:
 //   - string: An OpenAI-compatible JSON response containing all message content and metadata
 func ConvertClaudeResponseToOpenAINonStream(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
-
 	chunks := make([][]byte, 0)
 
-	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
-	buffer := make([]byte, 10240*1024)
-	scanner.Buffer(buffer, 10240*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		// log.Debug(string(line))
+	lines := bytes.Split(rawJSON, []byte("\n"))
+	for _, line := range lines {
 		if !bytes.HasPrefix(line, dataTag) {
 			continue
 		}
-		chunks = append(chunks, bytes.TrimSpace(rawJSON[5:]))
+		chunks = append(chunks, bytes.TrimSpace(line[5:]))
 	}
 
 	// Base OpenAI non-streaming response template

@@ -43,6 +43,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	if baseURL == "" || apiKey == "" {
 		return cliproxyexecutor.Response{}, statusErr{code: http.StatusUnauthorized, msg: "missing provider baseURL or apiKey"}
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	// Translate inbound request to OpenAI format
 	from := opts.SourceFormat
@@ -82,6 +83,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		return cliproxyexecutor.Response{}, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, body)
+	reporter.publish(ctx, parseOpenAIUsage(body))
 	// Translate response back to source format when needed
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translated, body, &param)
@@ -93,6 +95,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	if baseURL == "" || apiKey == "" {
 		return nil, statusErr{code: http.StatusUnauthorized, msg: "missing provider baseURL or apiKey"}
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("openai")
 	translated := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), true)
@@ -138,6 +141,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			appendAPIResponseChunk(ctx, e.cfg, line)
+			if detail, ok := parseOpenAIStreamUsage(line); ok {
+				reporter.publish(ctx, detail)
+			}
 			if len(line) == 0 {
 				continue
 			}

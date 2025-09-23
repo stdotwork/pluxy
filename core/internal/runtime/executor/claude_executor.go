@@ -43,10 +43,12 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("claude")
 	// Use streaming translation to preserve function calling, except for claude.
-	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), from != to)
+	stream := from != to
+	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), stream)
 
 	if !strings.HasPrefix(req.Model, "claude-3-5-haiku") {
 		body, _ = sjson.SetRawBytes(body, "system", []byte(misc.ClaudeCodeInstructions))
@@ -94,6 +96,16 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		return cliproxyexecutor.Response{}, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, data)
+	if stream {
+		lines := bytes.Split(data, []byte("\n"))
+		for _, line := range lines {
+			if detail, ok := parseClaudeStreamUsage(line); ok {
+				reporter.publish(ctx, detail)
+			}
+		}
+	} else {
+		reporter.publish(ctx, parseClaudeUsage(data))
+	}
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, data, &param)
 	return cliproxyexecutor.Response{Payload: []byte(out)}, nil
@@ -107,6 +119,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
+	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("claude")
 	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), true)
@@ -146,6 +159,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			appendAPIResponseChunk(ctx, e.cfg, line)
+			if detail, ok := parseClaudeStreamUsage(line); ok {
+				reporter.publish(ctx, detail)
+			}
 			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, bytes.Clone(line), &param)
 			for i := range chunks {
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
