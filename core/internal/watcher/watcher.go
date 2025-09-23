@@ -461,9 +461,6 @@ func (w *Watcher) reloadConfig() bool {
 		if oldConfig.GeminiWeb.DisableContinuationHint != newConfig.GeminiWeb.DisableContinuationHint {
 			log.Debugf("  gemini-web.disable-continuation-hint: %t -> %t", oldConfig.GeminiWeb.DisableContinuationHint, newConfig.GeminiWeb.DisableContinuationHint)
 		}
-		if oldConfig.GeminiWeb.TokenRefreshSeconds != newConfig.GeminiWeb.TokenRefreshSeconds {
-			log.Debugf("  gemini-web.token-refresh-seconds: %d -> %d", oldConfig.GeminiWeb.TokenRefreshSeconds, newConfig.GeminiWeb.TokenRefreshSeconds)
-		}
 		if oldConfig.GeminiWeb.CodeMode != newConfig.GeminiWeb.CodeMode {
 			log.Debugf("  gemini-web.code-mode: %t -> %t", oldConfig.GeminiWeb.CodeMode, newConfig.GeminiWeb.CodeMode)
 		}

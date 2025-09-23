@@ -308,7 +308,6 @@ console.log(await claudeResponse.json());
 | `gemini-web.code-mode`                  | boolean  | false              | 是否启用代码模式，优化代码相关任务的响应。                                      |
 | `gemini-web.max-chars-per-request`      | integer  | 1,000,000          | 单次请求发送给 Gemini Web 的最大字符数。                                        |
 | `gemini-web.disable-continuation-hint`  | boolean  | false              | 当提示被拆分时，是否禁用连续提示的暗示。                                        |
-| `gemini-web.token-refresh-seconds`      | integer  | 540                | 后台 Cookie 自动刷新的间隔（秒）。                                            |
 
 ### 配置文件示例
 
@@ -349,7 +348,6 @@ gemini-web:
   context: true # 启用会话上下文重用
   code-mode: false # 启用代码模式
   max-chars-per-request: 1000000 # 单次请求最大字符数
-  token-refresh-seconds: 540 # Cookie 刷新间隔（秒）
 
 # 请求鉴权提供方
 auth:

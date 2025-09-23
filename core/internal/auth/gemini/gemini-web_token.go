@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	log "github.com/sirupsen/logrus"
@@ -18,12 +19,16 @@ type GeminiWebTokenStorage struct {
 	Secure1PSID   string `json:"secure_1psid"`
 	Secure1PSIDTS string `json:"secure_1psidts"`
 	Type          string `json:"type"`
+	LastRefresh   string `json:"last_refresh,omitempty"`
 }
 
 // SaveTokenToFile serializes the Gemini Web token storage to a JSON file.
 func (ts *GeminiWebTokenStorage) SaveTokenToFile(authFilePath string) error {
 	misc.LogSavingCredentials(authFilePath)
 	ts.Type = "gemini-web"
+	if ts.LastRefresh == "" {
+		ts.LastRefresh = time.Now().Format(time.RFC3339)
+	}
 	if err := os.MkdirAll(filepath.Dir(authFilePath), 0700); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}

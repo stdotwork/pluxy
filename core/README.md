@@ -296,7 +296,6 @@ The server uses a YAML configuration file (`config.yaml`) located in the project
 | `gemini-web.code-mode`                  | boolean  | false              | Enables code mode for optimized responses in coding-related tasks.                                                                                                                        |
 | `gemini-web.max-chars-per-request`      | integer  | 1,000,000          | The maximum number of characters to send to Gemini Web in a single request.                                                                                                               |
 | `gemini-web.disable-continuation-hint`  | boolean  | false              | Disables the continuation hint for split prompts.                                                                                                                                         |
-| `gemini-web.token-refresh-seconds`      | integer  | 540                | The interval in seconds for background cookie auto-refresh.                                                                                                                               |
 
 ### Example Configuration File
 
@@ -337,7 +336,6 @@ gemini-web:
   context: true # Enable conversation context reuse
   code-mode: false # Enable code mode
   max-chars-per-request: 1000000 # Max characters per request
-  token-refresh-seconds: 540 # Cookie refresh interval in seconds
 
 # Request authentication providers
 auth:

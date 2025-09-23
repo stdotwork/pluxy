@@ -151,26 +151,11 @@ func getAccessToken(baseCookies map[string]string, proxy string, verbose bool, i
 	return "", nil, &AuthError{Msg: "Failed to retrieve token."}
 }
 
-// rotate1psidts refreshes __Secure-1PSIDTS and caches it locally.
-func rotate1psidts(cookies map[string]string, proxy string, insecure bool) (string, error) {
-	psid, ok := cookies["__Secure-1PSID"]
+// rotate1PSIDTS refreshes __Secure-1PSIDTS
+func rotate1PSIDTS(cookies map[string]string, proxy string, insecure bool) (string, error) {
+	_, ok := cookies["__Secure-1PSID"]
 	if !ok {
 		return "", &AuthError{Msg: "__Secure-1PSID missing"}
-	}
-
-	cacheDir := "temp"
-	_ = os.MkdirAll(cacheDir, 0o755)
-	cacheFile := filepath.Join(cacheDir, ".cached_1psidts_"+psid+".txt")
-
-	if st, err := os.Stat(cacheFile); err == nil {
-		if time.Since(st.ModTime()) <= time.Minute {
-			if b, errReadFile := os.ReadFile(cacheFile); errReadFile == nil {
-				v := strings.TrimSpace(string(b))
-				if v != "" {
-					return v, nil
-				}
-			}
-		}
 	}
 
 	tr := &http.Transport{}
@@ -205,7 +190,6 @@ func rotate1psidts(cookies map[string]string, proxy string, insecure bool) (stri
 
 	for _, c := range resp.Cookies() {
 		if c.Name == "__Secure-1PSIDTS" {
-			_ = os.WriteFile(cacheFile, []byte(c.Value), 0o644)
 			return c.Value, nil
 		}
 	}
