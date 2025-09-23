@@ -95,13 +95,13 @@ func (e *GeminiWebExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 			defer mutex.Unlock()
 		}
 		for _, line := range lines {
-			lines := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), req.Payload, bytes.Clone([]byte(line)), &param)
+			lines = sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), req.Payload, bytes.Clone([]byte(line)), &param)
 			for _, l := range lines {
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(l)}
 			}
 		}
 		for _, line := range done {
-			lines := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), req.Payload, bytes.Clone([]byte(line)), &param)
+			lines = sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), req.Payload, bytes.Clone([]byte(line)), &param)
 			for _, l := range lines {
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(l)}
 			}

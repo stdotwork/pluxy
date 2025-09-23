@@ -42,6 +42,10 @@ func ConvertGeminiResponseToOpenAI(_ context.Context, _ string, originalRequestR
 		}
 	}
 
+	if bytes.HasPrefix(rawJSON, []byte("data:")) {
+		rawJSON = bytes.TrimSpace(rawJSON[5:])
+	}
+
 	if bytes.Equal(rawJSON, []byte("[DONE]")) {
 		return []string{}
 	}
