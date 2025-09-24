@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
+	geminiwebapi "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -35,23 +36,23 @@ func (e *GeminiWebExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
-	if err = state.ensureClient(); err != nil {
+	if err = state.EnsureClient(); err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
-	mutex := state.getRequestMutex()
+	mutex := state.GetRequestMutex()
 	if mutex != nil {
 		mutex.Lock()
 		defer mutex.Unlock()
 	}
 
 	payload := bytes.Clone(req.Payload)
-	resp, errMsg, prep := state.send(ctx, req.Model, payload, opts)
+	resp, errMsg, prep := state.Send(ctx, req.Model, payload, opts)
 	if errMsg != nil {
 		return cliproxyexecutor.Response{}, geminiWebErrorFromMessage(errMsg)
 	}
-	resp = state.convertToTarget(ctx, req.Model, prep, resp)
+	resp = state.ConvertToTarget(ctx, req.Model, prep, resp)
 	reporter.publish(ctx, parseGeminiUsage(resp))
 
 	from := opts.SourceFormat
@@ -67,17 +68,17 @@ func (e *GeminiWebExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	if err != nil {
 		return nil, err
 	}
-	if err = state.ensureClient(); err != nil {
+	if err = state.EnsureClient(); err != nil {
 		return nil, err
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
-	mutex := state.getRequestMutex()
+	mutex := state.GetRequestMutex()
 	if mutex != nil {
 		mutex.Lock()
 	}
 
-	gemBytes, errMsg, prep := state.send(ctx, req.Model, bytes.Clone(req.Payload), opts)
+	gemBytes, errMsg, prep := state.Send(ctx, req.Model, bytes.Clone(req.Payload), opts)
 	if errMsg != nil {
 		if mutex != nil {
 			mutex.Unlock()
@@ -90,8 +91,8 @@ func (e *GeminiWebExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	to := sdktranslator.FromString("gemini-web")
 	var param any
 
-	lines := state.convertStream(ctx, req.Model, prep, gemBytes)
-	done := state.doneStream(ctx, req.Model, prep)
+	lines := state.ConvertStream(ctx, req.Model, prep, gemBytes)
+	done := state.DoneStream(ctx, req.Model, prep)
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
 		defer close(out)
@@ -124,10 +125,10 @@ func (e *GeminiWebExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth
 	if err != nil {
 		return nil, err
 	}
-	if err = state.refresh(ctx); err != nil {
+	if err = state.Refresh(ctx); err != nil {
 		return nil, err
 	}
-	ts := state.tokenSnapshot()
+	ts := state.TokenSnapshot()
 	if auth.Metadata == nil {
 		auth.Metadata = make(map[string]any)
 	}
@@ -139,10 +140,10 @@ func (e *GeminiWebExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth
 }
 
 type geminiWebRuntime struct {
-	state *geminiWebState
+	state *geminiwebapi.GeminiWebState
 }
 
-func (e *GeminiWebExecutor) stateFor(auth *cliproxyauth.Auth) (*geminiWebState, error) {
+func (e *GeminiWebExecutor) stateFor(auth *cliproxyauth.Auth) (*geminiwebapi.GeminiWebState, error) {
 	if auth == nil {
 		return nil, fmt.Errorf("gemini-web executor: auth is nil")
 	}
@@ -175,7 +176,7 @@ func (e *GeminiWebExecutor) stateFor(auth *cliproxyauth.Auth) (*geminiWebState, 
 			storagePath = p
 		}
 	}
-	state := newGeminiWebState(cfg, ts, storagePath)
+	state := geminiwebapi.NewGeminiWebState(cfg, ts, storagePath)
 	runtime := &geminiWebRuntime{state: state}
 	auth.Runtime = runtime
 	return state, nil

@@ -1,4 +1,4 @@
-package executor
+package geminiwebapi
 
 import (
 	"bytes"
@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
-	geminiwebapi "github.com/router-for-me/CLIProxyAPI/v6/internal/client/gemini-web"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
@@ -25,7 +25,7 @@ const (
 	geminiWebDefaultTimeoutSec = 300
 )
 
-type geminiWebState struct {
+type GeminiWebState struct {
 	cfg         *config.Config
 	token       *gemini.GeminiWebTokenStorage
 	storagePath string
@@ -34,29 +34,29 @@ type geminiWebState struct {
 	accountID      string
 
 	reqMu  sync.Mutex
-	client *geminiwebapi.GeminiClient
+	client *GeminiClient
 
 	tokenMu    sync.Mutex
 	tokenDirty bool
 
 	convMu    sync.RWMutex
 	convStore map[string][]string
-	convData  map[string]geminiwebapi.ConversationRecord
+	convData  map[string]ConversationRecord
 	convIndex map[string]string
 
 	lastRefresh time.Time
 }
 
-func newGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, storagePath string) *geminiWebState {
-	state := &geminiWebState{
+func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, storagePath string) *GeminiWebState {
+	state := &GeminiWebState{
 		cfg:         cfg,
 		token:       token,
 		storagePath: storagePath,
 		convStore:   make(map[string][]string),
-		convData:    make(map[string]geminiwebapi.ConversationRecord),
+		convData:    make(map[string]ConversationRecord),
 		convIndex:   make(map[string]string),
 	}
-	suffix := geminiwebapi.Sha256Hex(token.Secure1PSID)
+	suffix := Sha256Hex(token.Secure1PSID)
 	if len(suffix) > 16 {
 		suffix = suffix[:16]
 	}
@@ -75,39 +75,39 @@ func newGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, 
 	return state
 }
 
-func (s *geminiWebState) loadConversationCaches() {
+func (s *GeminiWebState) loadConversationCaches() {
 	if path := s.convStorePath(); path != "" {
-		if store, err := geminiwebapi.LoadConvStore(path); err == nil {
+		if store, err := LoadConvStore(path); err == nil {
 			s.convStore = store
 		}
 	}
 	if path := s.convDataPath(); path != "" {
-		if items, index, err := geminiwebapi.LoadConvData(path); err == nil {
+		if items, index, err := LoadConvData(path); err == nil {
 			s.convData = items
 			s.convIndex = index
 		}
 	}
 }
 
-func (s *geminiWebState) convStorePath() string {
+func (s *GeminiWebState) convStorePath() string {
 	base := s.storagePath
 	if base == "" {
 		base = s.accountID + ".json"
 	}
-	return geminiwebapi.ConvStorePath(base)
+	return ConvStorePath(base)
 }
 
-func (s *geminiWebState) convDataPath() string {
+func (s *GeminiWebState) convDataPath() string {
 	base := s.storagePath
 	if base == "" {
 		base = s.accountID + ".json"
 	}
-	return geminiwebapi.ConvDataPath(base)
+	return ConvDataPath(base)
 }
 
-func (s *geminiWebState) getRequestMutex() *sync.Mutex { return &s.reqMu }
+func (s *GeminiWebState) GetRequestMutex() *sync.Mutex { return &s.reqMu }
 
-func (s *geminiWebState) ensureClient() error {
+func (s *GeminiWebState) EnsureClient() error {
 	if s.client != nil && s.client.Running {
 		return nil
 	}
@@ -115,7 +115,7 @@ func (s *geminiWebState) ensureClient() error {
 	if s.cfg != nil {
 		proxyURL = s.cfg.ProxyURL
 	}
-	s.client = geminiwebapi.NewGeminiClient(
+	s.client = NewGeminiClient(
 		s.token.Secure1PSID,
 		s.token.Secure1PSIDTS,
 		proxyURL,
@@ -129,13 +129,13 @@ func (s *geminiWebState) ensureClient() error {
 	return nil
 }
 
-func (s *geminiWebState) refresh(ctx context.Context) error {
+func (s *GeminiWebState) Refresh(ctx context.Context) error {
 	_ = ctx
 	proxyURL := ""
 	if s.cfg != nil {
 		proxyURL = s.cfg.ProxyURL
 	}
-	s.client = geminiwebapi.NewGeminiClient(
+	s.client = NewGeminiClient(
 		s.token.Secure1PSID,
 		s.token.Secure1PSIDTS,
 		proxyURL,
@@ -158,7 +158,7 @@ func (s *geminiWebState) refresh(ctx context.Context) error {
 	return nil
 }
 
-func (s *geminiWebState) tokenSnapshot() *gemini.GeminiWebTokenStorage {
+func (s *GeminiWebState) TokenSnapshot() *gemini.GeminiWebTokenStorage {
 	s.tokenMu.Lock()
 	defer s.tokenMu.Unlock()
 	c := *s.token
@@ -170,15 +170,15 @@ type geminiWebPrepared struct {
 	translatedRaw []byte
 	prompt        string
 	uploaded      []string
-	chat          *geminiwebapi.ChatSession
-	cleaned       []geminiwebapi.RoleText
+	chat          *ChatSession
+	cleaned       []RoleText
 	underlying    string
 	reuse         bool
 	tagged        bool
 	originalRaw   []byte
 }
 
-func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON []byte, stream bool, original []byte) (*geminiWebPrepared, *interfaces.ErrorMessage) {
+func (s *GeminiWebState) prepare(ctx context.Context, modelName string, rawJSON []byte, stream bool, original []byte) (*geminiWebPrepared, *interfaces.ErrorMessage) {
 	res := &geminiWebPrepared{originalRaw: original}
 	res.translatedRaw = bytes.Clone(rawJSON)
 	if handler, ok := ctx.Value("handler").(interfaces.APIHandler); ok && handler != nil {
@@ -187,14 +187,14 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 	}
 	recordAPIRequest(ctx, s.cfg, res.translatedRaw)
 
-	messages, files, mimes, msgFileIdx, err := geminiwebapi.ParseMessagesAndFiles(res.translatedRaw)
+	messages, files, mimes, msgFileIdx, err := ParseMessagesAndFiles(res.translatedRaw)
 	if err != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 400, Error: fmt.Errorf("bad request: %w", err)}
 	}
-	cleaned := geminiwebapi.SanitizeAssistantMessages(messages)
+	cleaned := SanitizeAssistantMessages(messages)
 	res.cleaned = cleaned
-	res.underlying = geminiwebapi.MapAliasToUnderlying(modelName)
-	model, err := geminiwebapi.ModelFromName(res.underlying)
+	res.underlying = MapAliasToUnderlying(modelName)
+	model, err := ModelFromName(res.underlying)
 	if err != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 400, Error: err}
 	}
@@ -210,11 +210,11 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 			res.reuse = true
 			meta = reuseMeta
 			if len(remaining) == 1 {
-				useMsgs = []geminiwebapi.RoleText{remaining[0]}
+				useMsgs = []RoleText{remaining[0]}
 			} else if len(remaining) > 1 {
 				useMsgs = remaining
 			} else if len(cleaned) > 0 {
-				useMsgs = []geminiwebapi.RoleText{cleaned[len(cleaned)-1]}
+				useMsgs = []RoleText{cleaned[len(cleaned)-1]}
 			}
 			if len(useMsgs) == 1 && len(messages) > 0 && len(msgFileIdx) == len(messages) {
 				lastIdx := len(msgFileIdx) - 1
@@ -242,8 +242,8 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 			}
 		} else {
 			if len(cleaned) >= 2 && strings.EqualFold(cleaned[len(cleaned)-2].Role, "assistant") {
-				keyUnderlying := geminiwebapi.AccountMetaKey(s.accountID, res.underlying)
-				keyAlias := geminiwebapi.AccountMetaKey(s.accountID, modelName)
+				keyUnderlying := AccountMetaKey(s.accountID, res.underlying)
+				keyAlias := AccountMetaKey(s.accountID, modelName)
 				s.convMu.RLock()
 				fallbackMeta := s.convStore[keyUnderlying]
 				if len(fallbackMeta) == 0 {
@@ -252,7 +252,7 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 				s.convMu.RUnlock()
 				if len(fallbackMeta) > 0 {
 					meta = fallbackMeta
-					useMsgs = []geminiwebapi.RoleText{cleaned[len(cleaned)-1]}
+					useMsgs = []RoleText{cleaned[len(cleaned)-1]}
 					res.reuse = true
 					filesSubset = nil
 					mimesSubset = nil
@@ -260,8 +260,8 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 			}
 		}
 	} else {
-		keyUnderlying := geminiwebapi.AccountMetaKey(s.accountID, res.underlying)
-		keyAlias := geminiwebapi.AccountMetaKey(s.accountID, modelName)
+		keyUnderlying := AccountMetaKey(s.accountID, res.underlying)
+		keyAlias := AccountMetaKey(s.accountID, modelName)
 		s.convMu.RLock()
 		if v, ok := s.convStore[keyUnderlying]; ok && len(v) > 0 {
 			meta = v
@@ -271,26 +271,26 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 		s.convMu.RUnlock()
 	}
 
-	res.tagged = geminiwebapi.NeedRoleTags(useMsgs)
+	res.tagged = NeedRoleTags(useMsgs)
 	if res.reuse && len(useMsgs) == 1 {
 		res.tagged = false
 	}
 
 	enableXML := s.cfg != nil && s.cfg.GeminiWeb.CodeMode
-	useMsgs = geminiwebapi.AppendXMLWrapHintIfNeeded(useMsgs, !enableXML)
+	useMsgs = AppendXMLWrapHintIfNeeded(useMsgs, !enableXML)
 
-	res.prompt = geminiwebapi.BuildPrompt(useMsgs, res.tagged, res.tagged)
+	res.prompt = BuildPrompt(useMsgs, res.tagged, res.tagged)
 	if strings.TrimSpace(res.prompt) == "" {
 		return nil, &interfaces.ErrorMessage{StatusCode: 400, Error: errors.New("bad request: empty prompt after filtering system/thought content")}
 	}
 
-	uploaded, upErr := geminiwebapi.MaterializeInlineFiles(filesSubset, mimesSubset)
+	uploaded, upErr := MaterializeInlineFiles(filesSubset, mimesSubset)
 	if upErr != nil {
 		return nil, upErr
 	}
 	res.uploaded = uploaded
 
-	if err = s.ensureClient(); err != nil {
+	if err = s.EnsureClient(); err != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: err}
 	}
 	chat := s.client.StartChat(model, s.getConfiguredGem(), meta)
@@ -300,14 +300,14 @@ func (s *geminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 	return res, nil
 }
 
-func (s *geminiWebState) send(ctx context.Context, modelName string, reqPayload []byte, opts cliproxyexecutor.Options) ([]byte, *interfaces.ErrorMessage, *geminiWebPrepared) {
+func (s *GeminiWebState) Send(ctx context.Context, modelName string, reqPayload []byte, opts cliproxyexecutor.Options) ([]byte, *interfaces.ErrorMessage, *geminiWebPrepared) {
 	prep, errMsg := s.prepare(ctx, modelName, reqPayload, opts.Stream, opts.OriginalRequest)
 	if errMsg != nil {
 		return nil, errMsg, nil
 	}
-	defer geminiwebapi.CleanupFiles(prep.uploaded)
+	defer CleanupFiles(prep.uploaded)
 
-	output, err := geminiwebapi.SendWithSplit(prep.chat, prep.prompt, prep.uploaded, s.cfg)
+	output, err := SendWithSplit(prep.chat, prep.prompt, prep.uploaded, s.cfg)
 	if err != nil {
 		return nil, s.wrapSendError(err), nil
 	}
@@ -331,7 +331,7 @@ func (s *geminiWebState) send(ctx context.Context, modelName string, reqPayload 
 		}
 	}
 
-	gemBytes, err := geminiwebapi.ConvertOutputToGemini(&output, modelName, prep.prompt)
+	gemBytes, err := ConvertOutputToGemini(&output, modelName, prep.prompt)
 	if err != nil {
 		return nil, &interfaces.ErrorMessage{StatusCode: 500, Error: err}, nil
 	}
@@ -341,13 +341,13 @@ func (s *geminiWebState) send(ctx context.Context, modelName string, reqPayload 
 	return gemBytes, nil, prep
 }
 
-func (s *geminiWebState) wrapSendError(genErr error) *interfaces.ErrorMessage {
+func (s *GeminiWebState) wrapSendError(genErr error) *interfaces.ErrorMessage {
 	status := 500
-	var usage *geminiwebapi.UsageLimitExceeded
-	var blocked *geminiwebapi.TemporarilyBlocked
-	var invalid *geminiwebapi.ModelInvalid
-	var valueErr *geminiwebapi.ValueError
-	var timeout *geminiwebapi.TimeoutError
+	var usage *UsageLimitExceeded
+	var blocked *TemporarilyBlocked
+	var invalid *ModelInvalid
+	var valueErr *ValueError
+	var timeout *TimeoutError
 	switch {
 	case errors.As(genErr, &usage):
 		status = 429
@@ -363,14 +363,14 @@ func (s *geminiWebState) wrapSendError(genErr error) *interfaces.ErrorMessage {
 	return &interfaces.ErrorMessage{StatusCode: status, Error: genErr}
 }
 
-func (s *geminiWebState) persistConversation(modelName string, prep *geminiWebPrepared, output *geminiwebapi.ModelOutput) {
+func (s *GeminiWebState) persistConversation(modelName string, prep *geminiWebPrepared, output *ModelOutput) {
 	if output == nil || prep == nil || prep.chat == nil {
 		return
 	}
 	metadata := prep.chat.Metadata()
 	if len(metadata) > 0 {
-		keyUnderlying := geminiwebapi.AccountMetaKey(s.accountID, prep.underlying)
-		keyAlias := geminiwebapi.AccountMetaKey(s.accountID, modelName)
+		keyUnderlying := AccountMetaKey(s.accountID, prep.underlying)
+		keyAlias := AccountMetaKey(s.accountID, modelName)
 		s.convMu.Lock()
 		s.convStore[keyUnderlying] = metadata
 		s.convStore[keyAlias] = metadata
@@ -384,18 +384,18 @@ func (s *geminiWebState) persistConversation(modelName string, prep *geminiWebPr
 			storeSnapshot[k] = cp
 		}
 		s.convMu.Unlock()
-		_ = geminiwebapi.SaveConvStore(s.convStorePath(), storeSnapshot)
+		_ = SaveConvStore(s.convStorePath(), storeSnapshot)
 	}
 
 	if !s.useReusableContext() {
 		return
 	}
-	rec, ok := geminiwebapi.BuildConversationRecord(prep.underlying, s.stableClientID, prep.cleaned, output, metadata)
+	rec, ok := BuildConversationRecord(prep.underlying, s.stableClientID, prep.cleaned, output, metadata)
 	if !ok {
 		return
 	}
-	stableHash := geminiwebapi.HashConversation(rec.ClientID, prep.underlying, rec.Messages)
-	accountHash := geminiwebapi.HashConversation(s.accountID, prep.underlying, rec.Messages)
+	stableHash := HashConversation(rec.ClientID, prep.underlying, rec.Messages)
+	accountHash := HashConversation(s.accountID, prep.underlying, rec.Messages)
 
 	s.convMu.Lock()
 	s.convData[stableHash] = rec
@@ -403,7 +403,7 @@ func (s *geminiWebState) persistConversation(modelName string, prep *geminiWebPr
 	if accountHash != stableHash {
 		s.convIndex["hash:"+accountHash] = stableHash
 	}
-	dataSnapshot := make(map[string]geminiwebapi.ConversationRecord, len(s.convData))
+	dataSnapshot := make(map[string]ConversationRecord, len(s.convData))
 	for k, v := range s.convData {
 		dataSnapshot[k] = v
 	}
@@ -412,14 +412,14 @@ func (s *geminiWebState) persistConversation(modelName string, prep *geminiWebPr
 		indexSnapshot[k] = v
 	}
 	s.convMu.Unlock()
-	_ = geminiwebapi.SaveConvData(s.convDataPath(), dataSnapshot, indexSnapshot)
+	_ = SaveConvData(s.convDataPath(), dataSnapshot, indexSnapshot)
 }
 
-func (s *geminiWebState) addAPIResponseData(ctx context.Context, line []byte) {
+func (s *GeminiWebState) addAPIResponseData(ctx context.Context, line []byte) {
 	appendAPIResponseChunk(ctx, s.cfg, line)
 }
 
-func (s *geminiWebState) convertToTarget(ctx context.Context, modelName string, prep *geminiWebPrepared, gemBytes []byte) []byte {
+func (s *GeminiWebState) ConvertToTarget(ctx context.Context, modelName string, prep *geminiWebPrepared, gemBytes []byte) []byte {
 	if prep == nil || prep.handlerType == "" {
 		return gemBytes
 	}
@@ -437,7 +437,7 @@ func (s *geminiWebState) convertToTarget(ctx context.Context, modelName string, 
 	return []byte(out)
 }
 
-func (s *geminiWebState) convertStream(ctx context.Context, modelName string, prep *geminiWebPrepared, gemBytes []byte) []string {
+func (s *GeminiWebState) ConvertStream(ctx context.Context, modelName string, prep *geminiWebPrepared, gemBytes []byte) []string {
 	if prep == nil || prep.handlerType == "" {
 		return []string{string(gemBytes)}
 	}
@@ -448,7 +448,7 @@ func (s *geminiWebState) convertStream(ctx context.Context, modelName string, pr
 	return translator.Response(prep.handlerType, constant.GeminiWeb, ctx, modelName, prep.originalRaw, prep.translatedRaw, gemBytes, &param)
 }
 
-func (s *geminiWebState) doneStream(ctx context.Context, modelName string, prep *geminiWebPrepared) []string {
+func (s *GeminiWebState) DoneStream(ctx context.Context, modelName string, prep *geminiWebPrepared) []string {
 	if prep == nil || prep.handlerType == "" {
 		return nil
 	}
@@ -459,24 +459,56 @@ func (s *geminiWebState) doneStream(ctx context.Context, modelName string, prep 
 	return translator.Response(prep.handlerType, constant.GeminiWeb, ctx, modelName, prep.originalRaw, prep.translatedRaw, []byte("[DONE]"), &param)
 }
 
-func (s *geminiWebState) useReusableContext() bool {
+func (s *GeminiWebState) useReusableContext() bool {
 	if s.cfg == nil {
 		return true
 	}
 	return s.cfg.GeminiWeb.Context
 }
 
-func (s *geminiWebState) findReusableSession(modelName string, msgs []geminiwebapi.RoleText) ([]string, []geminiwebapi.RoleText) {
+func (s *GeminiWebState) findReusableSession(modelName string, msgs []RoleText) ([]string, []RoleText) {
 	s.convMu.RLock()
 	items := s.convData
 	index := s.convIndex
 	s.convMu.RUnlock()
-	return geminiwebapi.FindReusableSessionIn(items, index, s.stableClientID, s.accountID, modelName, msgs)
+	return FindReusableSessionIn(items, index, s.stableClientID, s.accountID, modelName, msgs)
 }
 
-func (s *geminiWebState) getConfiguredGem() *geminiwebapi.Gem {
+func (s *GeminiWebState) getConfiguredGem() *Gem {
 	if s.cfg != nil && s.cfg.GeminiWeb.CodeMode {
-		return &geminiwebapi.Gem{ID: "coding-partner", Name: "Coding partner", Predefined: true}
+		return &Gem{ID: "coding-partner", Name: "Coding partner", Predefined: true}
 	}
 	return nil
+}
+
+// recordAPIRequest stores the upstream request payload in Gin context for request logging.
+func recordAPIRequest(ctx context.Context, cfg *config.Config, payload []byte) {
+	if cfg == nil || !cfg.RequestLog || len(payload) == 0 {
+		return
+	}
+	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
+		ginCtx.Set("API_REQUEST", bytes.Clone(payload))
+	}
+}
+
+// appendAPIResponseChunk appends an upstream response chunk to Gin context for request logging.
+func appendAPIResponseChunk(ctx context.Context, cfg *config.Config, chunk []byte) {
+	if cfg == nil || !cfg.RequestLog {
+		return
+	}
+	data := bytes.TrimSpace(bytes.Clone(chunk))
+	if len(data) == 0 {
+		return
+	}
+	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil {
+		if existing, exists := ginCtx.Get("API_RESPONSE"); exists {
+			if prev, okBytes := existing.([]byte); okBytes {
+				prev = append(prev, data...)
+				prev = append(prev, []byte("\n\n")...)
+				ginCtx.Set("API_RESPONSE", prev)
+				return
+			}
+		}
+		ginCtx.Set("API_RESPONSE", data)
+	}
 }
