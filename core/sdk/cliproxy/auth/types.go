@@ -45,6 +45,8 @@ type Auth struct {
 	NextRefreshAfter time.Time `json:"next_refresh_after"`
 	// NextRetryAfter is the earliest time a retry should retrigger.
 	NextRetryAfter time.Time `json:"next_retry_after"`
+	// ModelStates tracks per-model runtime availability data.
+	ModelStates map[string]*ModelState `json:"model_states,omitempty"`
 
 	// Runtime carries non-serialisable data used during execution (in-memory only).
 	Runtime any `json:"-"`
@@ -58,6 +60,24 @@ type QuotaState struct {
 	Reason string `json:"reason,omitempty"`
 	// NextRecoverAt is when the credential may become available again.
 	NextRecoverAt time.Time `json:"next_recover_at"`
+}
+
+// ModelState captures the execution state for a specific model under an auth entry.
+type ModelState struct {
+	// Status reflects the lifecycle status for this model.
+	Status Status `json:"status"`
+	// StatusMessage provides an optional short description of the status.
+	StatusMessage string `json:"status_message,omitempty"`
+	// Unavailable mirrors whether the model is temporarily blocked for retries.
+	Unavailable bool `json:"unavailable"`
+	// NextRetryAfter defines the per-model retry time.
+	NextRetryAfter time.Time `json:"next_retry_after"`
+	// LastError records the latest error observed for this model.
+	LastError *Error `json:"last_error,omitempty"`
+	// Quota retains quota information if this model hit rate limits.
+	Quota QuotaState `json:"quota"`
+	// UpdatedAt tracks the last update timestamp for this model state.
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Clone shallow copies the Auth structure, duplicating maps to avoid accidental mutation.
@@ -78,8 +98,31 @@ func (a *Auth) Clone() *Auth {
 			copyAuth.Metadata[key] = value
 		}
 	}
+	if len(a.ModelStates) > 0 {
+		copyAuth.ModelStates = make(map[string]*ModelState, len(a.ModelStates))
+		for key, state := range a.ModelStates {
+			copyAuth.ModelStates[key] = state.Clone()
+		}
+	}
 	copyAuth.Runtime = a.Runtime
 	return &copyAuth
+}
+
+// Clone duplicates a model state including nested error details.
+func (m *ModelState) Clone() *ModelState {
+	if m == nil {
+		return nil
+	}
+	copyState := *m
+	if m.LastError != nil {
+		copyState.LastError = &Error{
+			Code:       m.LastError.Code,
+			Message:    m.LastError.Message,
+			Retryable:  m.LastError.Retryable,
+			HTTPStatus: m.LastError.HTTPStatus,
+		}
+	}
+	return &copyState
 }
 
 func (a *Auth) AccountInfo() (string, string) {

@@ -28,10 +28,7 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 	now := time.Now()
 	for i := 0; i < len(auths); i++ {
 		candidate := auths[i]
-		if candidate.Unavailable && candidate.NextRetryAfter.After(now) {
-			continue
-		}
-		if candidate.Status == StatusDisabled || candidate.Disabled {
+		if isAuthBlockedForModel(candidate, model, now) {
 			continue
 		}
 		available = append(available, candidate)
@@ -51,4 +48,32 @@ func (s *RoundRobinSelector) Pick(ctx context.Context, provider, model string, o
 	s.mu.Unlock()
 	// log.Debugf("available: %d, index: %d, key: %d", len(available), index, index%len(available))
 	return available[index%len(available)], nil
+}
+
+func isAuthBlockedForModel(auth *Auth, model string, now time.Time) bool {
+	if auth == nil {
+		return true
+	}
+	if auth.Disabled || auth.Status == StatusDisabled {
+		return true
+	}
+	if model != "" && len(auth.ModelStates) > 0 {
+		if state, ok := auth.ModelStates[model]; ok && state != nil {
+			if state.Status == StatusDisabled {
+				return true
+			}
+			if state.Unavailable {
+				if state.NextRetryAfter.IsZero() {
+					return false
+				}
+				if state.NextRetryAfter.After(now) {
+					return true
+				}
+			}
+		}
+	}
+	if auth.Unavailable && auth.NextRetryAfter.After(now) {
+		return true
+	}
+	return false
 }
