@@ -1,3 +1,6 @@
+// Package executor provides runtime execution capabilities for various AI service providers.
+// It includes stateless executors that handle API requests, streaming responses,
+// token counting, and authentication refresh for different AI service providers.
 package executor
 
 import (
@@ -22,22 +25,49 @@ import (
 )
 
 const (
-	glEndpoint   = "https://generativelanguage.googleapis.com"
+	// glEndpoint is the base URL for the Google Generative Language API.
+	glEndpoint = "https://generativelanguage.googleapis.com"
+
+	// glAPIVersion is the API version used for Gemini requests.
 	glAPIVersion = "v1beta"
 )
 
 // GeminiExecutor is a stateless executor for the official Gemini API using API keys.
-// If no API key is found on the auth entry, it falls back to the legacy client via ClientAdapter.
+// It handles both API key and OAuth bearer token authentication, supporting both
+// regular and streaming requests to the Google Generative Language API.
 type GeminiExecutor struct {
+	// cfg holds the application configuration.
 	cfg *config.Config
 }
 
+// NewGeminiExecutor creates a new Gemini executor instance.
+//
+// Parameters:
+//   - cfg: The application configuration
+//
+// Returns:
+//   - *GeminiExecutor: A new Gemini executor instance
 func NewGeminiExecutor(cfg *config.Config) *GeminiExecutor { return &GeminiExecutor{cfg: cfg} }
 
+// Identifier returns the executor identifier for Gemini.
 func (e *GeminiExecutor) Identifier() string { return "gemini" }
 
+// PrepareRequest prepares the HTTP request for execution (no-op for Gemini).
 func (e *GeminiExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error { return nil }
 
+// Execute performs a non-streaming request to the Gemini API.
+// It translates the request to Gemini format, sends it to the API, and translates
+// the response back to the requested format.
+//
+// Parameters:
+//   - ctx: The context for the request
+//   - auth: The authentication information
+//   - req: The request to execute
+//   - opts: Additional execution options
+//
+// Returns:
+//   - cliproxyexecutor.Response: The response from the API
+//   - error: An error if the request fails
 func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, bearer := geminiCreds(auth)
 

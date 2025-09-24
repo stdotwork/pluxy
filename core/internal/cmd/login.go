@@ -1,3 +1,6 @@
+// Package cmd provides command-line interface functionality for the CLI Proxy API server.
+// It includes authentication flows for various AI service providers, service startup,
+// and other command-line operations.
 package cmd
 
 import (
@@ -10,6 +13,13 @@ import (
 )
 
 // DoLogin handles Google Gemini authentication using the shared authentication manager.
+// It initiates the OAuth flow for Google Gemini services and saves the authentication
+// tokens to the configured auth directory.
+//
+// Parameters:
+//   - cfg: The application configuration
+//   - projectID: Optional Google Cloud project ID for Gemini services
+//   - options: Login options including browser behavior and prompts
 func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 	if options == nil {
 		options = &LoginOptions{}

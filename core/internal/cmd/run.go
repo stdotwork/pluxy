@@ -1,3 +1,6 @@
+// Package cmd provides command-line interface functionality for the CLI Proxy API server.
+// It includes authentication flows for various AI service providers, service startup,
+// and other command-line operations.
 package cmd
 
 import (
@@ -12,6 +15,12 @@ import (
 )
 
 // StartService builds and runs the proxy service using the exported SDK.
+// It creates a new proxy service instance, sets up signal handling for graceful shutdown,
+// and starts the service with the provided configuration.
+//
+// Parameters:
+//   - cfg: The application configuration
+//   - configPath: The path to the configuration file
 func StartService(cfg *config.Config, configPath string) {
 	service, err := cliproxy.NewBuilder().
 		WithConfig(cfg).
