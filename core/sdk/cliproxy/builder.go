@@ -183,7 +183,15 @@ func (b *Builder) Build() (*Service, error) {
 
 	coreManager := b.coreManager
 	if coreManager == nil {
-		coreManager = coreauth.NewManager(coreauth.NewFileStore(b.cfg.AuthDir), nil, nil)
+		tokenStore := sdkAuth.GetTokenStore()
+		if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok && b.cfg != nil {
+			dirSetter.SetBaseDir(b.cfg.AuthDir)
+		}
+		store, ok := tokenStore.(coreauth.Store)
+		if !ok {
+			return nil, fmt.Errorf("cliproxy: token store does not implement coreauth.Store")
+		}
+		coreManager = coreauth.NewManager(store, nil, nil)
 	}
 	// Attach a default RoundTripper provider so providers can opt-in per-auth transports.
 	coreManager.SetRoundTripperProvider(newDefaultRoundTripperProvider())

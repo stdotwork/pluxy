@@ -528,7 +528,7 @@ func (w *Watcher) reloadClients() {
 			return nil
 		}
 		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
-			if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+			if data, errReadFile := os.ReadFile(path); errReadFile == nil && len(data) > 0 {
 				sum := sha256.Sum256(data)
 				w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
 			}
@@ -750,7 +750,7 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 		if email, _ := metadata["email"].(string); email != "" {
 			label = email
 		}
-		// Use relative path under authDir as ID to stay consistent with FileStore
+		// Use relative path under authDir as ID to stay consistent with the file-based token store
 		id := full
 		if rel, errRel := filepath.Rel(w.authDir, full); errRel == nil && rel != "" {
 			id = rel

@@ -817,7 +817,7 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	if auth.Metadata == nil {
 		return nil
 	}
-	return m.store.Save(ctx, auth)
+	return m.store.SaveAuth(ctx, auth)
 }
 
 // StartAutoRefresh launches a background loop that evaluates auth freshness

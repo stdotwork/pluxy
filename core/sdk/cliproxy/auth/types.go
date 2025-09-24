@@ -4,9 +4,8 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
-
-	clipauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 )
 
 // Auth encapsulates the runtime state and metadata associated with a single credential.
@@ -172,13 +171,19 @@ func (a *Auth) ExpirationTime() (time.Time, bool) {
 	return time.Time{}, false
 }
 
-var defaultAuthenticatorFactories = map[string]func() clipauth.Authenticator{
-	"codex":      func() clipauth.Authenticator { return clipauth.NewCodexAuthenticator() },
-	"claude":     func() clipauth.Authenticator { return clipauth.NewClaudeAuthenticator() },
-	"qwen":       func() clipauth.Authenticator { return clipauth.NewQwenAuthenticator() },
-	"gemini":     func() clipauth.Authenticator { return clipauth.NewGeminiAuthenticator() },
-	"gemini-cli": func() clipauth.Authenticator { return clipauth.NewGeminiAuthenticator() },
-	"gemini-web": func() clipauth.Authenticator { return clipauth.NewGeminiWebAuthenticator() },
+var (
+	refreshLeadMu        sync.RWMutex
+	refreshLeadFactories = make(map[string]func() *time.Duration)
+)
+
+func RegisterRefreshLeadProvider(provider string, factory func() *time.Duration) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" || factory == nil {
+		return
+	}
+	refreshLeadMu.Lock()
+	refreshLeadFactories[provider] = factory
+	refreshLeadMu.Unlock()
 }
 
 var expireKeys = [...]string{"expired", "expire", "expires_at", "expiresAt", "expiry", "expires"}
@@ -216,7 +221,7 @@ func expirationFromMap(meta map[string]any) (time.Time, bool) {
 }
 
 func ProviderRefreshLead(provider string, runtime any) *time.Duration {
-	provider = strings.ToLower(provider)
+	provider = strings.ToLower(strings.TrimSpace(provider))
 	if runtime != nil {
 		if eval, ok := runtime.(interface{ RefreshLead() *time.Duration }); ok {
 			if lead := eval.RefreshLead(); lead != nil && *lead > 0 {
@@ -224,12 +229,14 @@ func ProviderRefreshLead(provider string, runtime any) *time.Duration {
 			}
 		}
 	}
-	if factory, ok := defaultAuthenticatorFactories[provider]; ok {
-		if auth := factory(); auth != nil {
-			if lead := auth.RefreshLead(); lead != nil && *lead > 0 {
-				return lead
-			}
-		}
+	refreshLeadMu.RLock()
+	factory := refreshLeadFactories[provider]
+	refreshLeadMu.RUnlock()
+	if factory == nil {
+		return nil
+	}
+	if lead := factory(); lead != nil && *lead > 0 {
+		return lead
 	}
 	return nil
 }

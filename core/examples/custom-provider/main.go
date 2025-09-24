@@ -23,9 +23,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	api "github.com/router-for-me/CLIProxyAPI/v6/internal/api"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	clipexec "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -155,7 +156,15 @@ func main() {
 		panic(err)
 	}
 
-	core := coreauth.NewManager(coreauth.NewFileStore(cfg.AuthDir), nil, nil)
+	tokenStore := sdkAuth.GetTokenStore()
+	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
+		dirSetter.SetBaseDir(cfg.AuthDir)
+	}
+	store, ok := tokenStore.(coreauth.Store)
+	if !ok {
+		panic("token store does not implement coreauth.Store")
+	}
+	core := coreauth.NewManager(store, nil, nil)
 	core.RegisterExecutor(MyExecutor{})
 
 	hooks := cliproxy.Hooks{
