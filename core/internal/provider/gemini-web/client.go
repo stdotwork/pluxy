@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // GeminiClient is the async http client interface (Go port)
@@ -79,7 +81,7 @@ func (c *GeminiClient) Init(timeoutSec float64, verbose bool) error {
 
 	c.Timeout = time.Duration(timeoutSec * float64(time.Second))
 	if verbose {
-		Success("Gemini client initialized successfully.")
+		log.Infof("Gemini client initialized successfully.")
 	}
 	return nil
 }

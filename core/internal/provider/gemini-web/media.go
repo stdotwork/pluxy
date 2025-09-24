@@ -20,6 +20,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
@@ -58,7 +59,7 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 			filename = m[1]
 		} else {
 			if verbose {
-				Warning("Invalid filename: %s", filename)
+				log.Warnf("Invalid filename: %s", filename)
 			}
 			if skipInvalidFilename {
 				return "", nil
@@ -125,7 +126,7 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 		return "", fmt.Errorf("error downloading image: %d %s", resp.StatusCode, resp.Status)
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.Contains(strings.ToLower(ct), "image") {
-		Warning("Content type of %s is not image, but %s.", filename, ct)
+		log.Warnf("Content type of %s is not image, but %s.", filename, ct)
 	}
 	if path == "" {
 		path = "temp"
@@ -144,7 +145,7 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 		return "", err
 	}
 	if verbose {
-		Info("Image saved as %s", dest)
+		log.Infof("Image saved as %s", dest)
 	}
 	abspath, _ := filepath.Abs(dest)
 	return abspath, nil

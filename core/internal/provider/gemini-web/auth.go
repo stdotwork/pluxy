@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type httpOptions struct {
@@ -103,7 +105,7 @@ func getAccessToken(baseCookies map[string]string, proxy string, verbose bool, i
 			}
 			trySets = append(trySets, merged)
 		} else if verbose {
-			Debug("Skipping base cookies: __Secure-1PSIDTS missing")
+			log.Debug("Skipping base cookies: __Secure-1PSIDTS missing")
 		}
 	}
 
@@ -130,7 +132,7 @@ func getAccessToken(baseCookies map[string]string, proxy string, verbose bool, i
 		resp, mergedCookies, err := sendInitRequest(cookies, proxy, insecure)
 		if err != nil {
 			if verbose {
-				Warning("Failed init request: %v", err)
+				log.Warnf("Failed init request: %v", err)
 			}
 			continue
 		}
@@ -143,7 +145,7 @@ func getAccessToken(baseCookies map[string]string, proxy string, verbose bool, i
 		if len(matches) >= 2 {
 			token := matches[1]
 			if verbose {
-				Success("Gemini access token acquired.")
+				log.Infof("Gemini access token acquired.")
 			}
 			return token, mergedCookies, nil
 		}
@@ -212,3 +214,27 @@ func (r *constReader) Read(p []byte) (int, error) {
 }
 
 func stringsReader(s string) io.Reader { return &constReader{s: s} }
+
+func MaskToken28(s string) string {
+	n := len(s)
+	if n == 0 {
+		return ""
+	}
+	if n < 20 {
+		return strings.Repeat("*", n)
+	}
+	midStart := n/2 - 2
+	if midStart < 8 {
+		midStart = 8
+	}
+	if midStart+4 > n-8 {
+		midStart = n - 8 - 4
+		if midStart < 8 {
+			midStart = 8
+		}
+	}
+	prefixByte := s[:8]
+	middle := s[midStart : midStart+4]
+	suffix := s[n-8:]
+	return prefixByte + strings.Repeat("*", 4) + middle + strings.Repeat("*", 4) + suffix
+}
