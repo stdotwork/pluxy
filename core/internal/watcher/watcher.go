@@ -69,8 +69,6 @@ type AuthUpdate struct {
 }
 
 const (
-	authFileReadMaxAttempts = 5
-	authFileReadRetryDelay  = 0
 	// replaceCheckDelay is a short delay to allow atomic replace (rename) to settle
 	// before deciding whether a Remove event indicates a real deletion.
 	replaceCheckDelay = 50 * time.Millisecond
@@ -530,7 +528,7 @@ func (w *Watcher) reloadClients() {
 			return nil
 		}
 		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
-			if data, errReadAuthFileWithRetry := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); errReadAuthFileWithRetry == nil && len(data) > 0 {
+			if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
 				sum := sha256.Sum256(data)
 				w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
 			}
@@ -565,7 +563,7 @@ func (w *Watcher) reloadClients() {
 
 // addOrUpdateClient handles the addition or update of a single client.
 func (w *Watcher) addOrUpdateClient(path string) {
-	data, errRead := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay)
+	data, errRead := os.ReadFile(path)
 	if errRead != nil {
 		log.Errorf("failed to read auth file %s: %v", filepath.Base(path), errRead)
 		return
@@ -806,7 +804,7 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 			authFileCount++
 			log.Debugf("processing auth file %d: %s", authFileCount, filepath.Base(path))
 			// Count readable JSON files as successful auth entries
-			if data, errCreate := util.ReadAuthFileWithRetry(path, authFileReadMaxAttempts, authFileReadRetryDelay); errCreate == nil && len(data) > 0 {
+			if data, errCreate := os.ReadFile(path); errCreate == nil && len(data) > 0 {
 				successfulAuthCount++
 			}
 		}

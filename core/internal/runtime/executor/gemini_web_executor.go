@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
-	geminiwebapi "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	geminiwebapi "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
