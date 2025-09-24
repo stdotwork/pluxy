@@ -18,6 +18,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -156,7 +157,6 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 
 	httpClient := newHTTPClient(ctx, 0)
 	respCtx := context.WithValue(ctx, "alt", opts.Alt)
-	dataTag := []byte("data:")
 
 	var lastStatus int
 	var lastBody []byte
@@ -321,8 +321,8 @@ func (e *GeminiCLIExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.
 		_ = resp.Body.Close()
 		appendAPIResponseChunk(ctx, e.cfg, data)
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			var param any
-			translated := sdktranslator.TranslateNonStream(respCtx, to, from, attemptModel, bytes.Clone(opts.OriginalRequest), payload, data, &param)
+			count := gjson.GetBytes(data, "totalTokens").Int()
+			translated := sdktranslator.TranslateTokenCount(respCtx, to, from, count, data)
 			return cliproxyexecutor.Response{Payload: []byte(translated)}, nil
 		}
 		lastStatus = resp.StatusCode

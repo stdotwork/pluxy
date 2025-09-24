@@ -54,5 +54,8 @@ func ConvertClaudeResponseToGeminiCLINonStream(ctx context.Context, modelName st
 	json := `{"response": {}}`
 	strJSON, _ = sjson.SetRaw(json, "response", strJSON)
 	return strJSON
+}
 
+func GeminiCLITokenCount(ctx context.Context, count int64) string {
+	return GeminiTokenCount(ctx, count)
 }

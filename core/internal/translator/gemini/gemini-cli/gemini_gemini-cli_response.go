@@ -7,6 +7,8 @@ package geminiCLI
 import (
 	"bytes"
 	"context"
+	"fmt"
+
 	"github.com/tidwall/sjson"
 )
 
@@ -46,4 +48,8 @@ func ConvertGeminiResponseToGeminiCLINonStream(_ context.Context, _ string, orig
 	json := `{"response": {}}`
 	rawJSON, _ = sjson.SetRawBytes([]byte(json), "response", rawJSON)
 	return string(rawJSON)
+}
+
+func GeminiCLITokenCount(ctx context.Context, count int64) string {
+	return fmt.Sprintf(`{"totalTokens":%d,"promptTokensDetails":[{"modality":"TEXT","tokenCount":%d}]}`, count, count)
 }

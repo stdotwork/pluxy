@@ -82,6 +82,43 @@ func (h *ClaudeCodeAPIHandler) ClaudeMessages(c *gin.Context) {
 	}
 }
 
+// ClaudeMessages handles Claude-compatible streaming chat completions.
+// This function implements a sophisticated client rotation and quota management system
+// to ensure high availability and optimal resource utilization across multiple backend clients.
+//
+// Parameters:
+//   - c: The Gin context for the request.
+func (h *ClaudeCodeAPIHandler) ClaudeCountTokens(c *gin.Context) {
+	// Extract raw JSON data from the incoming request
+	rawJSON, err := c.GetRawData()
+	// If data retrieval fails, return a 400 Bad Request error.
+	if err != nil {
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: fmt.Sprintf("Invalid request: %v", err),
+				Type:    "invalid_request_error",
+			},
+		})
+		return
+	}
+
+	c.Header("Content-Type", "application/json")
+
+	alt := h.GetAlt(c)
+	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
+
+	modelName := gjson.GetBytes(rawJSON, "model").String()
+
+	resp, errMsg := h.ExecuteCountWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, alt)
+	if errMsg != nil {
+		h.WriteErrorResponse(c, errMsg)
+		cliCancel(errMsg.Error)
+		return
+	}
+	_, _ = c.Writer.Write(resp)
+	cliCancel()
+}
+
 // ClaudeModels handles the Claude models listing endpoint.
 // It returns a JSON response containing available Claude models and their specifications.
 //

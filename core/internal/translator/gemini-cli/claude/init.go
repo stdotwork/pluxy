@@ -12,8 +12,9 @@ func init() {
 		GeminiCLI,
 		ConvertClaudeRequestToCLI,
 		interfaces.TranslateResponse{
-			Stream:    ConvertGeminiCLIResponseToClaude,
-			NonStream: ConvertGeminiCLIResponseToClaudeNonStream,
+			Stream:     ConvertGeminiCLIResponseToClaude,
+			NonStream:  ConvertGeminiCLIResponseToClaudeNonStream,
+			TokenCount: ClaudeTokenCount,
 		},
 	)
 }

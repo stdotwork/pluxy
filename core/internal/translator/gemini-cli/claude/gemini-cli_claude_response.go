@@ -376,3 +376,7 @@ func ConvertGeminiCLIResponseToClaudeNonStream(_ context.Context, _ string, orig
 	}
 	return string(encoded)
 }
+
+func ClaudeTokenCount(ctx context.Context, count int64) string {
+	return fmt.Sprintf(`{"input_tokens":%d}`, count)
+}

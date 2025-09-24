@@ -18,6 +18,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
 	"github.com/gin-gonic/gin"
@@ -175,7 +176,68 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 }
 
 func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	return cliproxyexecutor.Response{Payload: []byte{}}, fmt.Errorf("not implemented")
+	apiKey, baseURL := claudeCreds(auth)
+	if apiKey == "" {
+		return NewClientAdapter("claude").Execute(ctx, auth, req, opts)
+	}
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+
+	from := opts.SourceFormat
+	to := sdktranslator.FromString("claude")
+	// Use streaming translation to preserve function calling, except for claude.
+	stream := from != to
+	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), stream)
+
+	if !strings.HasPrefix(req.Model, "claude-3-5-haiku") {
+		body, _ = sjson.SetRawBytes(body, "system", []byte(misc.ClaudeCodeInstructions))
+	}
+
+	url := fmt.Sprintf("%s/v1/messages/count_tokens?beta=true", baseURL)
+	recordAPIRequest(ctx, e.cfg, body)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
+	applyClaudeHeaders(httpReq, apiKey, false)
+
+	httpClient := &http.Client{}
+	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
+		httpClient.Transport = rt
+	}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("response body close error: %v", errClose)
+		}
+	}()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		appendAPIResponseChunk(ctx, e.cfg, b)
+		return cliproxyexecutor.Response{}, statusErr{code: resp.StatusCode, msg: string(b)}
+	}
+	reader := io.Reader(resp.Body)
+	var decoder *zstd.Decoder
+	if hasZSTDEcoding(resp.Header.Get("Content-Encoding")) {
+		decoder, err = zstd.NewReader(resp.Body)
+		if err != nil {
+			return cliproxyexecutor.Response{}, fmt.Errorf("failed to initialize zstd decoder: %w", err)
+		}
+		reader = decoder
+		defer decoder.Close()
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return cliproxyexecutor.Response{}, err
+	}
+	appendAPIResponseChunk(ctx, e.cfg, data)
+	count := gjson.GetBytes(data, "input_tokens").Int()
+	out := sdktranslator.TranslateTokenCount(ctx, to, from, count, data)
+	return cliproxyexecutor.Response{Payload: []byte(out)}, nil
 }
 
 func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {

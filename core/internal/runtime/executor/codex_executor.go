@@ -53,9 +53,11 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	to := sdktranslator.FromString("codex")
 	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), false)
 
-	if util.InArray([]string{"gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, req.Model) {
+	if util.InArray([]string{"gpt-5", "gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, req.Model) {
 		body, _ = sjson.SetBytes(body, "model", "gpt-5")
 		switch req.Model {
+		case "gpt-5":
+			body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 		case "gpt-5-minimal":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "minimal")
 		case "gpt-5-low":
@@ -146,9 +148,11 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	to := sdktranslator.FromString("codex")
 	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), true)
 
-	if util.InArray([]string{"gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, req.Model) {
+	if util.InArray([]string{"gpt-5", "gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, req.Model) {
 		body, _ = sjson.SetBytes(body, "model", "gpt-5")
 		switch req.Model {
+		case "gpt-5":
+			body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 		case "gpt-5-minimal":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "minimal")
 		case "gpt-5-low":

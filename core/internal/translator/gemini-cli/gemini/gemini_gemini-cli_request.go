@@ -7,6 +7,7 @@ package gemini
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -73,4 +74,8 @@ func ConvertGeminiCliRequestToGeminiNonStream(_ context.Context, _ string, origi
 		return responseResult.Raw
 	}
 	return string(rawJSON)
+}
+
+func GeminiTokenCount(ctx context.Context, count int64) string {
+	return fmt.Sprintf(`{"totalTokens":%d,"promptTokensDetails":[{"modality":"TEXT","tokenCount":%d}]}`, count, count)
 }

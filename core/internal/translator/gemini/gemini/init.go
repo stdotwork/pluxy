@@ -14,8 +14,9 @@ func init() {
 		Gemini,
 		ConvertGeminiRequestToGemini,
 		interfaces.TranslateResponse{
-			Stream:    PassthroughGeminiResponseStream,
-			NonStream: PassthroughGeminiResponseNonStream,
+			Stream:     PassthroughGeminiResponseStream,
+			NonStream:  PassthroughGeminiResponseNonStream,
+			TokenCount: GeminiTokenCount,
 		},
 	)
 }

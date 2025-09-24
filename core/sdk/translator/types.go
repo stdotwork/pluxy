@@ -11,8 +11,11 @@ type ResponseStreamTransform func(ctx context.Context, model string, originalReq
 // ResponseNonStreamTransform converts non-stream responses between schemas.
 type ResponseNonStreamTransform func(ctx context.Context, model string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) string
 
+type ResponseTokenCountTransform func(ctx context.Context, count int64) string
+
 // ResponseTransform groups streaming and non-streaming transforms.
 type ResponseTransform struct {
-	Stream    ResponseStreamTransform
-	NonStream ResponseNonStreamTransform
+	Stream     ResponseStreamTransform
+	NonStream  ResponseNonStreamTransform
+	TokenCount ResponseTokenCountTransform
 }

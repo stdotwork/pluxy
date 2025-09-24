@@ -15,6 +15,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -182,9 +183,11 @@ func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	translatedReq := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), false)
 	respCtx := context.WithValue(ctx, "alt", opts.Alt)
 	translatedReq, _ = sjson.DeleteBytes(translatedReq, "tools")
+	translatedReq, _ = sjson.DeleteBytes(translatedReq, "generationConfig")
 
 	url := fmt.Sprintf("%s/%s/models/%s:%s", glEndpoint, glAPIVersion, req.Model, "countTokens")
 	recordAPIRequest(ctx, e.cfg, translatedReq)
+
 	requestBody := bytes.NewReader(translatedReq)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, requestBody)
@@ -218,8 +221,8 @@ func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		return cliproxyexecutor.Response{}, statusErr{code: resp.StatusCode, msg: string(data)}
 	}
 
-	var param any
-	translated := sdktranslator.TranslateNonStream(respCtx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), translatedReq, data, &param)
+	count := gjson.GetBytes(data, "totalTokens").Int()
+	translated := sdktranslator.TranslateTokenCount(respCtx, to, from, count, data)
 	return cliproxyexecutor.Response{Payload: []byte(translated)}, nil
 }
 

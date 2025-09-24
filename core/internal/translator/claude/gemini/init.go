@@ -12,8 +12,9 @@ func init() {
 		Claude,
 		ConvertGeminiRequestToClaude,
 		interfaces.TranslateResponse{
-			Stream:    ConvertClaudeResponseToGemini,
-			NonStream: ConvertClaudeResponseToGeminiNonStream,
+			Stream:     ConvertClaudeResponseToGemini,
+			NonStream:  ConvertClaudeResponseToGeminiNonStream,
+			TokenCount: GeminiTokenCount,
 		},
 	)
 }
