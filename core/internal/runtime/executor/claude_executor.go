@@ -38,9 +38,7 @@ func (e *ClaudeExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) e
 
 func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, baseURL := claudeCreds(auth)
-	if apiKey == "" {
-		return NewClientAdapter("claude").Execute(ctx, auth, req, opts)
-	}
+
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
@@ -114,9 +112,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 
 func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
 	apiKey, baseURL := claudeCreds(auth)
-	if apiKey == "" {
-		return NewClientAdapter("claude").ExecuteStream(ctx, auth, req, opts)
-	}
+
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
@@ -177,9 +173,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, baseURL := claudeCreds(auth)
-	if apiKey == "" {
-		return NewClientAdapter("claude").Execute(ctx, auth, req, opts)
-	}
+
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}

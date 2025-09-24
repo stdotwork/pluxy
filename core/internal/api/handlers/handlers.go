@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -150,9 +149,6 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	}
 	resp, err := h.AuthManager.Execute(ctx, providers, req, opts)
 	if err != nil {
-		if msg, ok := executor.UnwrapError(err); ok {
-			return nil, msg
-		}
 		return nil, &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: err}
 	}
 	return cloneBytes(resp.Payload), nil
@@ -177,9 +173,6 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	}
 	resp, err := h.AuthManager.ExecuteCount(ctx, providers, req, opts)
 	if err != nil {
-		if msg, ok := executor.UnwrapError(err); ok {
-			return nil, msg
-		}
 		return nil, &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: err}
 	}
 	return cloneBytes(resp.Payload), nil
@@ -208,11 +201,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 	chunks, err := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 	if err != nil {
 		errChan := make(chan *interfaces.ErrorMessage, 1)
-		if msg, ok := executor.UnwrapError(err); ok {
-			errChan <- msg
-		} else {
-			errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: err}
-		}
+		errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: err}
 		close(errChan)
 		return nil, errChan
 	}
@@ -223,11 +212,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 		defer close(errChan)
 		for chunk := range chunks {
 			if chunk.Err != nil {
-				if msg, ok := executor.UnwrapError(chunk.Err); ok {
-					errChan <- msg
-				} else {
-					errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: chunk.Err}
-				}
+				errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusInternalServerError, Error: chunk.Err}
 				return
 			}
 			if len(chunk.Payload) > 0 {

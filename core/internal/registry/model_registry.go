@@ -393,23 +393,24 @@ func (r *ModelRegistry) GetModelProviders(modelID string) []string {
 		count int
 	}
 	providers := make([]providerCount, 0, len(registration.Providers))
-	suspendedByProvider := make(map[string]int)
-	if registration.SuspendedClients != nil {
-		for clientID := range registration.SuspendedClients {
-			if provider, ok := r.clientProviders[clientID]; ok && provider != "" {
-				suspendedByProvider[provider]++
-			}
-		}
-	}
+	// suspendedByProvider := make(map[string]int)
+	// if registration.SuspendedClients != nil {
+	// 	for clientID := range registration.SuspendedClients {
+	// 		if provider, ok := r.clientProviders[clientID]; ok && provider != "" {
+	// 			suspendedByProvider[provider]++
+	// 		}
+	// 	}
+	// }
 	for name, count := range registration.Providers {
 		if count <= 0 {
 			continue
 		}
-		adjusted := count - suspendedByProvider[name]
-		if adjusted <= 0 {
-			continue
-		}
-		providers = append(providers, providerCount{name: name, count: adjusted})
+		// adjusted := count - suspendedByProvider[name]
+		// if adjusted <= 0 {
+		// 	continue
+		// }
+		// providers = append(providers, providerCount{name: name, count: adjusted})
+		providers = append(providers, providerCount{name: name, count: count})
 	}
 	if len(providers) == 0 {
 		return nil

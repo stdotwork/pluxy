@@ -40,9 +40,7 @@ func (e *QwenExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) err
 
 func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	token, baseURL := qwenCreds(auth)
-	if token == "" {
-		return NewClientAdapter("qwen").Execute(ctx, auth, req, opts)
-	}
+
 	if baseURL == "" {
 		baseURL = "https://portal.qwen.ai/v1"
 	}
@@ -88,9 +86,7 @@ func (e *QwenExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 
 func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
 	token, baseURL := qwenCreds(auth)
-	if token == "" {
-		return NewClientAdapter("qwen").ExecuteStream(ctx, auth, req, opts)
-	}
+
 	if baseURL == "" {
 		baseURL = "https://portal.qwen.ai/v1"
 	}

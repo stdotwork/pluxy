@@ -41,9 +41,7 @@ func (e *CodexExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) er
 
 func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, baseURL := codexCreds(auth)
-	if apiKey == "" {
-		return NewClientAdapter("codex").Execute(ctx, auth, req, opts)
-	}
+
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}
@@ -136,9 +134,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 
 func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
 	apiKey, baseURL := codexCreds(auth)
-	if apiKey == "" {
-		return NewClientAdapter("codex").ExecuteStream(ctx, auth, req, opts)
-	}
+
 	if baseURL == "" {
 		baseURL = "https://chatgpt.com/backend-api/codex"
 	}

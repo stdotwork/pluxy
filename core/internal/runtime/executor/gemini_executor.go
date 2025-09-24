@@ -40,10 +40,7 @@ func (e *GeminiExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) e
 
 func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	apiKey, bearer := geminiCreds(auth)
-	if apiKey == "" && bearer == "" {
-		// Fallback to legacy client
-		return NewClientAdapter("gemini").Execute(ctx, auth, req, opts)
-	}
+
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	// Official Gemini API via API key or OAuth bearer
@@ -102,10 +99,7 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 
 func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
 	apiKey, bearer := geminiCreds(auth)
-	if apiKey == "" && bearer == "" {
-		// Fallback to legacy streaming
-		return NewClientAdapter("gemini").ExecuteStream(ctx, auth, req, opts)
-	}
+
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	from := opts.SourceFormat
