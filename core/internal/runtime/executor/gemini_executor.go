@@ -59,6 +59,8 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		url = url + fmt.Sprintf("?$alt=%s", opts.Alt)
 	}
 
+	body, _ = sjson.DeleteBytes(body, "session_id")
+
 	recordAPIRequest(ctx, e.cfg, body)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -112,6 +114,9 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	} else {
 		url = url + fmt.Sprintf("?$alt=%s", opts.Alt)
 	}
+
+	body, _ = sjson.DeleteBytes(body, "session_id")
+
 	recordAPIRequest(ctx, e.cfg, body)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {

@@ -12,6 +12,8 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+var dataTag = []byte("data:")
+
 // ConvertGeminiResponseToGeminiCLI converts Gemini streaming response format to Gemini CLI single-line JSON format.
 // This function processes various Gemini event types and transforms them into Gemini CLI-compatible JSON responses.
 // It handles thinking content, regular text content, and function calls, outputting single-line JSON
@@ -26,6 +28,11 @@ import (
 // Returns:
 //   - []string: A slice of strings, each containing a Gemini CLI-compatible JSON response.
 func ConvertGeminiResponseToGeminiCLI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) []string {
+	if !bytes.HasPrefix(rawJSON, dataTag) {
+		return []string{}
+	}
+	rawJSON = bytes.TrimSpace(rawJSON[5:])
+
 	if bytes.Equal(rawJSON, []byte("[DONE]")) {
 		return []string{}
 	}

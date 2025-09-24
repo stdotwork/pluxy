@@ -193,7 +193,14 @@ func (h *GeminiCLIAPIHandler) forwardCLIStream(c *gin.Context, flusher http.Flus
 				return
 			}
 			if alt == "" {
-				_, _ = c.Writer.Write([]byte("data: "))
+				if bytes.Equal(chunk, []byte("data: [DONE]")) || bytes.Equal(chunk, []byte("[DONE]")) {
+					continue
+				}
+
+				if !bytes.HasPrefix(chunk, []byte("data:")) {
+					_, _ = c.Writer.Write([]byte("data: "))
+				}
+
 				_, _ = c.Writer.Write(chunk)
 				_, _ = c.Writer.Write([]byte("\n\n"))
 			} else {
