@@ -71,7 +71,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		body, _ = sjson.SetBytes(body, "model", "gpt-5-codex")
 		switch req.Model {
 		case "gpt-5-codex":
-			body, _ = sjson.SetBytes(body, "reasoning.effort", "medium")
+			body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 		case "gpt-5-codex-low":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "low")
 		case "gpt-5-codex-medium":
@@ -166,7 +166,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		body, _ = sjson.SetBytes(body, "model", "gpt-5-codex")
 		switch req.Model {
 		case "gpt-5-codex":
-			body, _ = sjson.SetBytes(body, "reasoning.effort", "medium")
+			body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 		case "gpt-5-codex-low":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "low")
 		case "gpt-5-codex-medium":
