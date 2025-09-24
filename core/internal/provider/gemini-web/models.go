@@ -1,14 +1,17 @@
 package geminiwebapi
 
 import (
+	"fmt"
+	"html"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 )
 
-// Endpoints used by the Gemini web app
+// Gemini web endpoints and default headers ----------------------------------
 const (
 	EndpointGoogle        = "https://www.google.com"
 	EndpointInit          = "https://gemini.google.com/app"
@@ -17,7 +20,6 @@ const (
 	EndpointUpload        = "https://content-push.googleapis.com/upload"
 )
 
-// Default headers
 var (
 	HeadersGemini = http.Header{
 		"Content-Type":  []string{"application/x-www-form-urlencoded;charset=utf-8"},
@@ -35,7 +37,7 @@ var (
 	}
 )
 
-// Model defines available model names and headers
+// Model metadata -------------------------------------------------------------
 type Model struct {
 	Name         string
 	ModelHeader  http.Header
@@ -62,14 +64,14 @@ var (
 		},
 		AdvancedOnly: false,
 	}
-	ModelG20Flash = Model{ // Deprecated, still supported
+	ModelG20Flash = Model{
 		Name: "gemini-2.0-flash",
 		ModelHeader: http.Header{
 			"x-goog-ext-525001261-jspb": []string{"[1,null,null,null,\"f299729663a2343f\"]"},
 		},
 		AdvancedOnly: false,
 	}
-	ModelG20FlashThinking = Model{ // Deprecated, still supported
+	ModelG20FlashThinking = Model{
 		Name: "gemini-2.0-flash-thinking",
 		ModelHeader: http.Header{
 			"x-goog-ext-525001261-jspb": []string{"[null,null,null,null,\"7ca48d02d802f20a\"]"},
@@ -78,7 +80,6 @@ var (
 	}
 )
 
-// ModelFromName returns a model by name or error if not found
 func ModelFromName(name string) (Model, error) {
 	switch name {
 	case ModelUnspecified.Name:
@@ -96,7 +97,7 @@ func ModelFromName(name string) (Model, error) {
 	}
 }
 
-// Known error codes returned from server
+// Known error codes returned from the server.
 const (
 	ErrorUsageLimitExceeded   = 1037
 	ErrorModelInconsistent    = 1050
@@ -109,7 +110,6 @@ var (
 	GeminiWebAliasMap  map[string]string
 )
 
-// EnsureGeminiWebAliasMap initializes alias lookup lazily.
 func EnsureGeminiWebAliasMap() {
 	GeminiWebAliasOnce.Do(func() {
 		GeminiWebAliasMap = make(map[string]string)
@@ -125,7 +125,6 @@ func EnsureGeminiWebAliasMap() {
 	})
 }
 
-// GetGeminiWebAliasedModels returns Gemini models exposed with web aliases.
 func GetGeminiWebAliasedModels() []*registry.ModelInfo {
 	EnsureGeminiWebAliasMap()
 	aliased := make([]*registry.ModelInfo, 0)
@@ -148,7 +147,6 @@ func GetGeminiWebAliasedModels() []*registry.ModelInfo {
 	return aliased
 }
 
-// MapAliasToUnderlying normalizes web aliases back to canonical Gemini IDs.
 func MapAliasToUnderlying(name string) string {
 	EnsureGeminiWebAliasMap()
 	n := strings.ToLower(name)
@@ -162,7 +160,151 @@ func MapAliasToUnderlying(name string) string {
 	return name
 }
 
-// AliasFromModelID builds the web alias for a Gemini model identifier.
 func AliasFromModelID(modelID string) string {
 	return modelID + "-web"
+}
+
+// Conversation domain structures -------------------------------------------
+type RoleText struct {
+	Role string
+	Text string
+}
+
+type StoredMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	Name    string `json:"name,omitempty"`
+}
+
+type ConversationRecord struct {
+	Model     string          `json:"model"`
+	ClientID  string          `json:"client_id"`
+	Metadata  []string        `json:"metadata,omitempty"`
+	Messages  []StoredMessage `json:"messages"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type Candidate struct {
+	RCID            string
+	Text            string
+	Thoughts        *string
+	WebImages       []WebImage
+	GeneratedImages []GeneratedImage
+}
+
+func (c Candidate) String() string {
+	t := c.Text
+	if len(t) > 20 {
+		t = t[:20] + "..."
+	}
+	return fmt.Sprintf("Candidate(rcid='%s', text='%s', images=%d)", c.RCID, t, len(c.WebImages)+len(c.GeneratedImages))
+}
+
+func (c Candidate) Images() []Image {
+	images := make([]Image, 0, len(c.WebImages)+len(c.GeneratedImages))
+	for _, wi := range c.WebImages {
+		images = append(images, wi.Image)
+	}
+	for _, gi := range c.GeneratedImages {
+		images = append(images, gi.Image)
+	}
+	return images
+}
+
+type ModelOutput struct {
+	Metadata   []string
+	Candidates []Candidate
+	Chosen     int
+}
+
+func (m ModelOutput) String() string { return m.Text() }
+
+func (m ModelOutput) Text() string {
+	if len(m.Candidates) == 0 {
+		return ""
+	}
+	return m.Candidates[m.Chosen].Text
+}
+
+func (m ModelOutput) Thoughts() *string {
+	if len(m.Candidates) == 0 {
+		return nil
+	}
+	return m.Candidates[m.Chosen].Thoughts
+}
+
+func (m ModelOutput) Images() []Image {
+	if len(m.Candidates) == 0 {
+		return nil
+	}
+	return m.Candidates[m.Chosen].Images()
+}
+
+func (m ModelOutput) RCID() string {
+	if len(m.Candidates) == 0 {
+		return ""
+	}
+	return m.Candidates[m.Chosen].RCID
+}
+
+type Gem struct {
+	ID          string
+	Name        string
+	Description *string
+	Prompt      *string
+	Predefined  bool
+}
+
+func (g Gem) String() string {
+	return fmt.Sprintf("Gem(id='%s', name='%s', description='%v', prompt='%v', predefined=%v)", g.ID, g.Name, g.Description, g.Prompt, g.Predefined)
+}
+
+func decodeHTML(s string) string { return html.UnescapeString(s) }
+
+// Error hierarchy -----------------------------------------------------------
+type AuthError struct{ Msg string }
+
+func (e *AuthError) Error() string {
+	if e.Msg == "" {
+		return "authentication error"
+	}
+	return e.Msg
+}
+
+type APIError struct{ Msg string }
+
+func (e *APIError) Error() string {
+	if e.Msg == "" {
+		return "api error"
+	}
+	return e.Msg
+}
+
+type ImageGenerationError struct{ APIError }
+
+type GeminiError struct{ Msg string }
+
+func (e *GeminiError) Error() string {
+	if e.Msg == "" {
+		return "gemini error"
+	}
+	return e.Msg
+}
+
+type TimeoutError struct{ GeminiError }
+
+type UsageLimitExceeded struct{ GeminiError }
+
+type ModelInvalid struct{ GeminiError }
+
+type TemporarilyBlocked struct{ GeminiError }
+
+type ValueError struct{ Msg string }
+
+func (e *ValueError) Error() string {
+	if e.Msg == "" {
+		return "value error"
+	}
+	return e.Msg
 }
