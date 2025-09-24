@@ -21,6 +21,7 @@ import (
 	// legacy client removed
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -341,6 +342,18 @@ func (h *Handler) disableAuth(ctx context.Context, id string) {
 	}
 }
 
+func (h *Handler) saveTokenRecord(ctx context.Context, record *sdkAuth.TokenRecord) (string, error) {
+	if record == nil {
+		return "", fmt.Errorf("token record is nil")
+	}
+	store := h.tokenStore
+	if store == nil {
+		store = sdkAuth.GetTokenStore()
+		h.tokenStore = store
+	}
+	return store.Save(ctx, h.cfg, record)
+}
+
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 	ctx := context.Background()
 
@@ -481,15 +494,20 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 
 		// Create token storage
 		tokenStorage := anthropicAuth.CreateTokenStorage(bundle)
-		// Persist token to file directly
-		fileName := filepath.Join(h.cfg.AuthDir, fmt.Sprintf("claude-%s.json", tokenStorage.Email))
-		if errSave := tokenStorage.SaveTokenToFile(fileName); errSave != nil {
+		record := &sdkAuth.TokenRecord{
+			Provider: "claude",
+			FileName: fmt.Sprintf("claude-%s.json", tokenStorage.Email),
+			Storage:  tokenStorage,
+			Metadata: map[string]string{"email": tokenStorage.Email},
+		}
+		savedPath, errSave := h.saveTokenRecord(ctx, record)
+		if errSave != nil {
 			log.Fatalf("Failed to save authentication tokens: %v", errSave)
 			oauthStatus[state] = "Failed to save authentication tokens"
 			return
 		}
 
-		log.Info("Authentication successful!")
+		log.Infof("Authentication successful! Token saved to %s", savedPath)
 		if bundle.APIKey != "" {
 			log.Info("API key obtained and saved")
 		}
@@ -639,16 +657,24 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 		}
 		log.Info("Authentication successful.")
 
-		// Persist token to file directly
-		fileName := filepath.Join(h.cfg.AuthDir, fmt.Sprintf("gemini-%s.json", ts.Email))
-		if err = ts.SaveTokenToFile(fileName); err != nil {
-			log.Fatalf("Failed to save token to file: %v", err)
+		record := &sdkAuth.TokenRecord{
+			Provider: "gemini",
+			FileName: fmt.Sprintf("gemini-%s.json", ts.Email),
+			Storage:  &ts,
+			Metadata: map[string]string{
+				"email":      ts.Email,
+				"project_id": ts.ProjectID,
+			},
+		}
+		savedPath, errSave := h.saveTokenRecord(ctx, record)
+		if errSave != nil {
+			log.Fatalf("Failed to save token to file: %v", errSave)
 			oauthStatus[state] = "Failed to save token to file"
 			return
 		}
 
 		delete(oauthStatus, state)
-		log.Info("You can now use Gemini CLI services through this CLI")
+		log.Infof("You can now use Gemini CLI services through this CLI; token saved to %s", savedPath)
 	}()
 
 	oauthStatus[state] = ""
@@ -783,13 +809,22 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 
 		// Create token storage and persist
 		tokenStorage := openaiAuth.CreateTokenStorage(bundle)
-		fileName := filepath.Join(h.cfg.AuthDir, fmt.Sprintf("codex-%s.json", tokenStorage.Email))
-		if errSave := tokenStorage.SaveTokenToFile(fileName); errSave != nil {
+		record := &sdkAuth.TokenRecord{
+			Provider: "codex",
+			FileName: fmt.Sprintf("codex-%s.json", tokenStorage.Email),
+			Storage:  tokenStorage,
+			Metadata: map[string]string{
+				"email":      tokenStorage.Email,
+				"account_id": tokenStorage.AccountID,
+			},
+		}
+		savedPath, errSave := h.saveTokenRecord(ctx, record)
+		if errSave != nil {
 			oauthStatus[state] = "Failed to save authentication tokens"
 			log.Fatalf("Failed to save authentication tokens: %v", errSave)
 			return
 		}
-		log.Info("Authentication successful!")
+		log.Infof("Authentication successful! Token saved to %s", savedPath)
 		if bundle.APIKey != "" {
 			log.Info("API key obtained and saved")
 		}
@@ -831,15 +866,20 @@ func (h *Handler) RequestQwenToken(c *gin.Context) {
 		tokenStorage := qwenAuth.CreateTokenStorage(tokenData)
 
 		tokenStorage.Email = fmt.Sprintf("qwen-%d", time.Now().UnixMilli())
-		// Save token storage
-		fileName := filepath.Join(h.cfg.AuthDir, fmt.Sprintf("qwen-%s.json", tokenStorage.Email))
-		if err = tokenStorage.SaveTokenToFile(fileName); err != nil {
-			log.Fatalf("Failed to save authentication tokens: %v", err)
+		record := &sdkAuth.TokenRecord{
+			Provider: "qwen",
+			FileName: fmt.Sprintf("qwen-%s.json", tokenStorage.Email),
+			Storage:  tokenStorage,
+			Metadata: map[string]string{"email": tokenStorage.Email},
+		}
+		savedPath, errSave := h.saveTokenRecord(ctx, record)
+		if errSave != nil {
+			log.Fatalf("Failed to save authentication tokens: %v", errSave)
 			oauthStatus[state] = "Failed to save authentication tokens"
 			return
 		}
 
-		log.Info("Authentication successful!")
+		log.Infof("Authentication successful! Token saved to %s", savedPath)
 		log.Info("You can now use Qwen services through this CLI")
 		delete(oauthStatus, state)
 	}()

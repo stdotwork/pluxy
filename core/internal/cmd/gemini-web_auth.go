@@ -3,15 +3,16 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -48,13 +49,17 @@ func DoGeminiWebAuth(cfg *config.Config) {
 	hasher.Write([]byte(secure1psid))
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	fileName := fmt.Sprintf("gemini-web-%s.json", hash[:16])
-	filePath := filepath.Join(cfg.AuthDir, fileName)
-
-	err := tokenStorage.SaveTokenToFile(filePath)
+	record := &sdkAuth.TokenRecord{
+		Provider: "gemini-web",
+		FileName: fileName,
+		Storage:  tokenStorage,
+	}
+	store := sdkAuth.GetTokenStore()
+	savedPath, err := store.Save(context.Background(), cfg, record)
 	if err != nil {
 		log.Fatalf("Failed to save Gemini Web token to file: %v", err)
 		return
 	}
 
-	log.Infof("Successfully saved Gemini Web token to: %s", filePath)
+	log.Infof("Successfully saved Gemini Web token to: %s", savedPath)
 }

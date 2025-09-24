@@ -11,7 +11,7 @@ import (
 // Returns:
 //   - *sdkAuth.Manager: A configured authentication manager instance
 func newAuthManager() *sdkAuth.Manager {
-	store := sdkAuth.NewFileTokenStore()
+	store := sdkAuth.GetTokenStore()
 	manager := sdkAuth.NewManager(store,
 		sdkAuth.NewGeminiAuthenticator(),
 		sdkAuth.NewCodexAuthenticator(),

@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -31,6 +32,7 @@ type Handler struct {
 	failedAttempts map[string]*attemptInfo // keyed by client IP
 	authManager    *coreauth.Manager
 	usageStats     *usage.RequestStatistics
+	tokenStore     sdkAuth.TokenStore
 }
 
 // NewHandler creates a new management handler instance.
@@ -41,6 +43,7 @@ func NewHandler(cfg *config.Config, configFilePath string, manager *coreauth.Man
 		failedAttempts: make(map[string]*attemptInfo),
 		authManager:    manager,
 		usageStats:     usage.GetRequestStatistics(),
+		tokenStore:     sdkAuth.GetTokenStore(),
 	}
 }
 
