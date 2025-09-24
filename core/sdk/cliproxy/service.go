@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
-	geminiwebclient "github.com/router-for-me/CLIProxyAPI/v6/internal/client/gemini-web"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	geminiwebclient "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
