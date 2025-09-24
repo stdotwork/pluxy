@@ -476,31 +476,6 @@ func (s *Service) ensureAuthDir() error {
 	return nil
 }
 
-// syncCoreAuthFromAuths registers or updates core auths and disables missing ones.
-func (s *Service) syncCoreAuthFromAuths(ctx context.Context, auths []*coreauth.Auth) {
-	if s.coreManager == nil {
-		return
-	}
-	seen := make(map[string]struct{}, len(auths))
-	for _, a := range auths {
-		if a == nil || a.ID == "" {
-			continue
-		}
-		seen[a.ID] = struct{}{}
-		s.applyCoreAuthAddOrUpdate(ctx, a)
-	}
-	// Disable removed auths
-	for _, stored := range s.coreManager.List() {
-		if stored == nil {
-			continue
-		}
-		if _, ok := seen[stored.ID]; ok {
-			continue
-		}
-		s.applyCoreAuthRemoval(ctx, stored.ID)
-	}
-}
-
 // registerModelsForAuth (re)binds provider models in the global registry using the core auth ID as client identifier.
 func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	if a == nil || a.ID == "" {

@@ -32,6 +32,61 @@
 
 ## 端点说明
 
+### Usage（请求统计）
+- GET `/usage` — 获取内存中的请求统计
+  - 响应：
+    ```json
+    {
+      "usage": {
+        "total_requests": 24,
+        "success_count": 22,
+        "failure_count": 2,
+        "total_tokens": 13890,
+        "requests_by_day": {
+          "2024-05-20": 12
+        },
+        "requests_by_hour": {
+          "09": 4,
+          "18": 8
+        },
+        "tokens_by_day": {
+          "2024-05-20": 9876
+        },
+        "tokens_by_hour": {
+          "09": 1234,
+          "18": 865
+        },
+        "apis": {
+          "POST /v1/chat/completions": {
+            "total_requests": 12,
+            "total_tokens": 9021,
+            "models": {
+              "gpt-4o-mini": {
+                "total_requests": 8,
+                "total_tokens": 7123,
+                "details": [
+                  {
+                    "timestamp": "2024-05-20T09:15:04.123456Z",
+                    "tokens": {
+                      "input_tokens": 523,
+                      "output_tokens": 308,
+                      "reasoning_tokens": 0,
+                      "cached_tokens": 0,
+                      "total_tokens": 831
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+    ```
+  - 说明：
+    - 仅统计带有 token 使用信息的请求，服务重启后数据会被清空。
+    - 小时维度会将所有日期折叠到 `00`–`23` 的统一小时桶中。
+
 ### Config
 - GET `/config` — 获取完整的配置
     - 请求:

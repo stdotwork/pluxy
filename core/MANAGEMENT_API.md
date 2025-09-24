@@ -32,6 +32,61 @@ If a plaintext key is detected in the config at startup, it will be bcrypt‑has
 
 ## Endpoints
 
+### Usage Statistics
+- GET `/usage` — Retrieve aggregated in-memory request metrics
+  - Response:
+    ```json
+    {
+      "usage": {
+        "total_requests": 24,
+        "success_count": 22,
+        "failure_count": 2,
+        "total_tokens": 13890,
+        "requests_by_day": {
+          "2024-05-20": 12
+        },
+        "requests_by_hour": {
+          "09": 4,
+          "18": 8
+        },
+        "tokens_by_day": {
+          "2024-05-20": 9876
+        },
+        "tokens_by_hour": {
+          "09": 1234,
+          "18": 865
+        },
+        "apis": {
+          "POST /v1/chat/completions": {
+            "total_requests": 12,
+            "total_tokens": 9021,
+            "models": {
+              "gpt-4o-mini": {
+                "total_requests": 8,
+                "total_tokens": 7123,
+                "details": [
+                  {
+                    "timestamp": "2024-05-20T09:15:04.123456Z",
+                    "tokens": {
+                      "input_tokens": 523,
+                      "output_tokens": 308,
+                      "reasoning_tokens": 0,
+                      "cached_tokens": 0,
+                      "total_tokens": 831
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+    ```
+  - Notes:
+    - Statistics are recalculated for every request that reports token usage; data resets when the server restarts.
+    - Hourly counters fold all days into the same hour bucket (`00`–`23`).
+
 ### Config
 - GET `/config` — Get the full config
     - Request:

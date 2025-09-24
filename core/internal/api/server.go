@@ -271,6 +271,7 @@ func (s *Server) setupRoutes() {
 		mgmt := s.engine.Group("/v0/management")
 		mgmt.Use(s.mgmt.Middleware())
 		{
+			mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
 			mgmt.GET("/config", s.mgmt.GetConfig)
 
 			mgmt.GET("/debug", s.mgmt.GetDebug)
