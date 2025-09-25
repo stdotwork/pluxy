@@ -21,6 +21,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/translator/translator"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	bolt "go.etcd.io/bbolt"
@@ -158,6 +159,8 @@ func (s *GeminiWebState) Refresh(ctx context.Context) error {
 			s.client.Cookies["__Secure-1PSIDTS"] = newTS
 		}
 		s.tokenMu.Unlock()
+		// Detailed debug log: provider and account.
+		log.Debugf("gemini web account %s rotated 1PSIDTS: %s", s.accountID, MaskToken28(newTS))
 	}
 	s.lastRefresh = time.Now()
 	return nil
