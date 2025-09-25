@@ -98,16 +98,16 @@ func (s *GeminiWebState) Label() string {
 }
 
 func (s *GeminiWebState) loadConversationCaches() {
-	if path := s.convPath(); path != "" {
-		if store, err := LoadConvStore(path); err == nil {
-			s.convStore = store
-		}
+	path := s.convPath()
+	if path == "" {
+		return
 	}
-	if path := s.convPath(); path != "" {
-		if items, index, err := LoadConvData(path); err == nil {
-			s.convData = items
-			s.convIndex = index
-		}
+	if store, err := LoadConvStore(path); err == nil {
+		s.convStore = store
+	}
+	if items, index, err := LoadConvData(path); err == nil {
+		s.convData = items
+		s.convIndex = index
 	}
 }
 

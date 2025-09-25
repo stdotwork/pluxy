@@ -52,7 +52,7 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 			filename = q[0]
 		}
 	}
-	// Regex validation (align with Python: ^(.*\.\w+)) to extract name with extension.
+	// Regex validation (pattern: ^(.*\.\w+)) to extract name with extension.
 	if filename != "" {
 		re := regexp.MustCompile(`^(.*\.\w+)`)
 		if m := re.FindStringSubmatch(filename); len(m) >= 2 {
@@ -70,7 +70,7 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 	client := newHTTPClient(httpOptions{ProxyURL: i.Proxy, Insecure: insecure, FollowRedirects: true})
 	client.Timeout = 120 * time.Second
 
-	// Helper to set raw Cookie header using provided cookies (to mirror Python client behavior).
+	// Helper to set raw Cookie header using provided cookies (parity with the reference client behavior).
 	buildCookieHeader := func(m map[string]string) string {
 		if len(m) == 0 {
 			return ""
