@@ -320,6 +320,20 @@ func normalizeAuth(a *coreauth.Auth) *coreauth.Auth {
 	return clone
 }
 
+// computeOpenAICompatModelsHash returns a stable hash for the compatibility models so that
+// changes to the model list trigger auth updates during hot reload.
+func computeOpenAICompatModelsHash(models []config.OpenAICompatibilityModel) string {
+	if len(models) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(models)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 // SetClients sets the file-based clients.
 // SetClients removed
 // SetAPIKeyClients removed
@@ -700,20 +714,24 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 			base := compat.BaseURL
 			for j := range compat.APIKeys {
 				key := compat.APIKeys[j]
+				attrs := map[string]string{
+					"source":       fmt.Sprintf("config:%s#%d", compat.Name, j),
+					"base_url":     base,
+					"api_key":      key,
+					"compat_name":  compat.Name,
+					"provider_key": providerName,
+				}
+				if hash := computeOpenAICompatModelsHash(compat.Models); hash != "" {
+					attrs["models_hash"] = hash
+				}
 				a := &coreauth.Auth{
-					ID:       fmt.Sprintf("openai-compatibility:%s:%d", compat.Name, j),
-					Provider: providerName,
-					Label:    compat.Name,
-					Status:   coreauth.StatusActive,
-					Attributes: map[string]string{
-						"source":       fmt.Sprintf("config:%s#%d", compat.Name, j),
-						"base_url":     base,
-						"api_key":      key,
-						"compat_name":  compat.Name,
-						"provider_key": providerName,
-					},
-					CreatedAt: now,
-					UpdatedAt: now,
+					ID:         fmt.Sprintf("openai-compatibility:%s:%d", compat.Name, j),
+					Provider:   providerName,
+					Label:      compat.Name,
+					Status:     coreauth.StatusActive,
+					Attributes: attrs,
+					CreatedAt:  now,
+					UpdatedAt:  now,
 				}
 				out = append(out, a)
 			}
