@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
@@ -41,13 +42,13 @@ func DoClaudeLogin(cfg *config.Config, options *LoginOptions) {
 			}
 			return
 		}
-		log.Fatalf("Claude authentication failed: %v", err)
+		fmt.Printf("Claude authentication failed: %v\n", err)
 		return
 	}
 
 	if savedPath != "" {
-		log.Infof("Authentication saved to %s", savedPath)
+		fmt.Printf("Authentication saved to %s\n", savedPath)
 	}
 
-	log.Info("Claude authentication successful!")
+	fmt.Println("Claude authentication successful!")
 }

@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
@@ -43,16 +44,16 @@ func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 	if err != nil {
 		var selectionErr *sdkAuth.ProjectSelectionError
 		if errors.As(err, &selectionErr) {
-			log.Error(selectionErr.Error())
+			fmt.Println(selectionErr.Error())
 			projects := selectionErr.ProjectsDisplay()
 			if len(projects) > 0 {
-				log.Info("========================================================================")
+				fmt.Println("========================================================================")
 				for _, p := range projects {
-					log.Infof("Project ID: %s", p.ProjectID)
-					log.Infof("Project Name: %s", p.Name)
-					log.Info("------------------------------------------------------------------------")
+					fmt.Printf("Project ID: %s\n", p.ProjectID)
+					fmt.Printf("Project Name: %s\n", p.Name)
+					fmt.Println("------------------------------------------------------------------------")
 				}
-				log.Info("Please rerun the login command with --project_id <project_id>.")
+				fmt.Println("Please rerun the login command with --project_id <project_id>.")
 			}
 			return
 		}

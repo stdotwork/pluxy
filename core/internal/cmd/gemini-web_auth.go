@@ -35,7 +35,7 @@ func DoGeminiWebAuth(cfg *config.Config) {
 	secure1psidts = strings.TrimSpace(secure1psidts)
 
 	if secure1psidts == "" {
-		log.Fatal("The __Secure-1PSIDTS value cannot be empty.")
+		fmt.Println("The __Secure-1PSIDTS value cannot be empty.")
 		return
 	}
 
@@ -57,9 +57,9 @@ func DoGeminiWebAuth(cfg *config.Config) {
 	store := sdkAuth.GetTokenStore()
 	savedPath, err := store.Save(context.Background(), cfg, record)
 	if err != nil {
-		log.Fatalf("Failed to save Gemini Web token to file: %v", err)
+		fmt.Printf("Failed to save Gemini Web token to file: %v\n", err)
 		return
 	}
 
-	log.Infof("Successfully saved Gemini Web token to: %s", savedPath)
+	fmt.Printf("Successfully saved Gemini Web token to: %s\n", savedPath)
 }

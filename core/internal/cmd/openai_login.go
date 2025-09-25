@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
@@ -52,12 +53,12 @@ func DoCodexLogin(cfg *config.Config, options *LoginOptions) {
 			}
 			return
 		}
-		log.Fatalf("Codex authentication failed: %v", err)
+		fmt.Printf("Codex authentication failed: %v\n", err)
 		return
 	}
 
 	if savedPath != "" {
-		log.Infof("Authentication saved to %s", savedPath)
+		fmt.Printf("Authentication saved to %s\n", savedPath)
 	}
-	log.Info("Codex authentication successful!")
+	fmt.Println("Codex authentication successful!")
 }

@@ -48,13 +48,13 @@ func DoQwenLogin(cfg *config.Config, options *LoginOptions) {
 			log.Error(emailErr.Error())
 			return
 		}
-		log.Fatalf("Qwen authentication failed: %v", err)
+		fmt.Printf("Qwen authentication failed: %v\n", err)
 		return
 	}
 
 	if savedPath != "" {
-		log.Infof("Authentication saved to %s", savedPath)
+		fmt.Printf("Authentication saved to %s\n", savedPath)
 	}
 
-	log.Info("Qwen authentication successful!")
+	fmt.Println("Qwen authentication successful!")
 }
