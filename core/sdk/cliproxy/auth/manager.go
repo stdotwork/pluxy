@@ -286,7 +286,8 @@ func (m *Manager) executeWithProvider(ctx context.Context, provider string, req 
 		} else if accountType == "oauth" {
 			log.Debugf("Use OAuth %s for model %s", accountInfo, req.Model)
 		} else if accountType == "cookie" {
-			log.Debugf("Use Cookie %s for model %s", util.HideAPIKey(accountInfo), req.Model)
+			// Only Gemini Web uses cookie; print stable account label as-is.
+			log.Debugf("Use Cookie %s for model %s", accountInfo, req.Model)
 		}
 
 		tried[auth.ID] = struct{}{}
@@ -333,7 +334,7 @@ func (m *Manager) executeCountWithProvider(ctx context.Context, provider string,
 		} else if accountType == "oauth" {
 			log.Debugf("Use OAuth %s for model %s", accountInfo, req.Model)
 		} else if accountType == "cookie" {
-			log.Debugf("Use Cookie %s for model %s", util.HideAPIKey(accountInfo), req.Model)
+			log.Debugf("Use Cookie %s for model %s", accountInfo, req.Model)
 		}
 
 		tried[auth.ID] = struct{}{}
@@ -380,7 +381,7 @@ func (m *Manager) executeStreamWithProvider(ctx context.Context, provider string
 		} else if accountType == "oauth" {
 			log.Debugf("Use OAuth %s for model %s", accountInfo, req.Model)
 		} else if accountType == "cookie" {
-			log.Debugf("Use Cookie %s for model %s", util.HideAPIKey(accountInfo), req.Model)
+			log.Debugf("Use Cookie %s for model %s", accountInfo, req.Model)
 		}
 
 		tried[auth.ID] = struct{}{}

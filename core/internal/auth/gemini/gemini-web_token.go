@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
@@ -20,12 +21,25 @@ type GeminiWebTokenStorage struct {
 	Secure1PSIDTS string `json:"secure_1psidts"`
 	Type          string `json:"type"`
 	LastRefresh   string `json:"last_refresh,omitempty"`
+	// Label is a stable account identifier used for logging, e.g. "gemini-web-<hash>".
+	// It is derived from the auth file name when not explicitly set.
+	Label string `json:"label,omitempty"`
 }
 
 // SaveTokenToFile serializes the Gemini Web token storage to a JSON file.
 func (ts *GeminiWebTokenStorage) SaveTokenToFile(authFilePath string) error {
 	misc.LogSavingCredentials(authFilePath)
 	ts.Type = "gemini-web"
+	// Auto-derive a stable label from the file name if missing.
+	if ts.Label == "" {
+		base := filepath.Base(authFilePath)
+		if strings.HasSuffix(strings.ToLower(base), ".json") {
+			base = strings.TrimSuffix(base, filepath.Ext(base))
+		}
+		if base != "" {
+			ts.Label = base
+		}
+	}
 	if ts.LastRefresh == "" {
 		ts.LastRefresh = time.Now().Format(time.RFC3339)
 	}

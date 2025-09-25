@@ -129,19 +129,18 @@ func (a *Auth) AccountInfo() (string, string) {
 		return "", ""
 	}
 	if strings.ToLower(a.Provider) == "gemini-web" {
+		// Prefer explicit label written into auth file (e.g., gemini-web-<hash>)
+		if a.Metadata != nil {
+			if v, ok := a.Metadata["label"].(string); ok && strings.TrimSpace(v) != "" {
+				return "cookie", strings.TrimSpace(v)
+			}
+		}
+		// Minimal fallback to cookie value for backward compatibility
 		if a.Metadata != nil {
 			if v, ok := a.Metadata["secure_1psid"].(string); ok && v != "" {
 				return "cookie", v
 			}
 			if v, ok := a.Metadata["__Secure-1PSID"].(string); ok && v != "" {
-				return "cookie", v
-			}
-		}
-		if a.Attributes != nil {
-			if v := a.Attributes["secure_1psid"]; v != "" {
-				return "cookie", v
-			}
-			if v := a.Attributes["api_key"]; v != "" {
 				return "cookie", v
 			}
 		}

@@ -49,6 +49,10 @@ func DoGeminiWebAuth(cfg *config.Config) {
 	hasher.Write([]byte(secure1psid))
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	fileName := fmt.Sprintf("gemini-web-%s.json", hash[:16])
+	// Set a stable label for logging, e.g. gemini-web-<hash>
+	if tokenStorage != nil {
+		tokenStorage.Label = strings.TrimSuffix(fileName, ".json")
+	}
 	record := &sdkAuth.TokenRecord{
 		Provider: "gemini-web",
 		FileName: fileName,
