@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -136,6 +137,11 @@ func (e *GeminiWebExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth
 	auth.Metadata["secure_1psidts"] = ts.Secure1PSIDTS
 	auth.Metadata["type"] = "gemini-web"
 	auth.Metadata["last_refresh"] = time.Now().Format(time.RFC3339)
+	if v, ok := auth.Metadata["label"].(string); !ok || strings.TrimSpace(v) == "" {
+		if lbl := state.Label(); strings.TrimSpace(lbl) != "" {
+			auth.Metadata["label"] = strings.TrimSpace(lbl)
+		}
+	}
 	return auth, nil
 }
 
