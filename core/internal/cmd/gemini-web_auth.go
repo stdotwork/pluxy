@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -27,43 +28,101 @@ import (
 //  3. Call https://accounts.google.com/ListAccounts with the cookie to obtain email.
 //  4. Save auth file with the same structure, and set Label to the email.
 func DoGeminiWebAuth(cfg *config.Config) {
+	var secure1psid, secure1psidts, email string
+
 	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Print("Paste your full Google Cookie and press Enter: ")
-	rawCookie, _ := reader.ReadString('\n')
-	rawCookie = strings.TrimSpace(rawCookie)
-	if rawCookie == "" {
-		log.Fatal("Cookie cannot be empty")
-		return
-	}
-
-	// Parse K=V cookie pairs separated by ';'
-	cookieMap := make(map[string]string)
-	parts := strings.Split(rawCookie, ";")
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
+	isMacOS := strings.HasPrefix(runtime.GOOS, "darwin")
+	if !isMacOS {
+		fmt.Print("Paste your full Google Cookie and press Enter: ")
+		rawCookie, _ := reader.ReadString('\n')
+		rawCookie = strings.TrimSpace(rawCookie)
+		if rawCookie == "" {
+			log.Fatal("Cookie cannot be empty")
+			return
 		}
-		if eq := strings.Index(p, "="); eq > 0 {
-			k := strings.TrimSpace(p[:eq])
-			v := strings.TrimSpace(p[eq+1:])
-			if k != "" {
-				cookieMap[k] = v
+
+		// Parse K=V cookie pairs separated by ';'
+		cookieMap := make(map[string]string)
+		parts := strings.Split(rawCookie, ";")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if eq := strings.Index(p, "="); eq > 0 {
+				k := strings.TrimSpace(p[:eq])
+				v := strings.TrimSpace(p[eq+1:])
+				if k != "" {
+					cookieMap[k] = v
+				}
+			}
+		}
+		secure1psid = strings.TrimSpace(cookieMap["__Secure-1PSID"])
+		secure1psidts = strings.TrimSpace(cookieMap["__Secure-1PSIDTS"])
+
+		// Build HTTP client with proxy settings respected.
+		httpClient := &http.Client{Timeout: 15 * time.Second}
+		httpClient = util.SetProxy(cfg, httpClient)
+
+		// Request ListAccounts to extract email as label (use POST per upstream behavior).
+		req, err := http.NewRequest(http.MethodPost, "https://accounts.google.com/ListAccounts", nil)
+		if err != nil {
+			fmt.Printf("Failed to create request: %v\n", err)
+			return
+		}
+		req.Header.Set("Cookie", rawCookie)
+		req.Header.Set("Accept", "application/json, text/plain, */*")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+		req.Header.Set("Origin", "https://accounts.google.com")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+
+		resp, err := httpClient.Do(req)
+
+		if err != nil {
+			fmt.Printf("Request to ListAccounts failed: %v\n", err)
+		} else {
+			defer func() {
+				_ = resp.Body.Close()
+			}()
+			if resp.StatusCode != http.StatusOK {
+				fmt.Printf("ListAccounts returned status code: %d\n", resp.StatusCode)
+			} else {
+				var payload []any
+				if err = json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+					fmt.Printf("Failed to parse ListAccounts response: %v\n", err)
+				} else {
+					// Expected structure like: ["gaia.l.a.r", [["gaia.l.a",1,"Name","email@example.com", ... ]]]
+					if len(payload) >= 2 {
+						if accounts, ok := payload[1].([]any); ok && len(accounts) >= 1 {
+							if first, ok1 := accounts[0].([]any); ok1 && len(first) >= 4 {
+								if em, ok2 := first[3].(string); ok2 {
+									email = strings.TrimSpace(em)
+								}
+							}
+						}
+					}
+					if email == "" {
+						fmt.Println("Failed to parse email from ListAccounts response")
+					}
+				}
 			}
 		}
 	}
 
-	secure1psid := strings.TrimSpace(cookieMap["__Secure-1PSID"])
-	secure1psidts := strings.TrimSpace(cookieMap["__Secure-1PSIDTS"])
 	// Fallback: prompt user to input missing values
 	if secure1psid == "" {
-		fmt.Print("Cookie missing __Secure-1PSID. Enter __Secure-1PSID: ")
+		if !isMacOS {
+			fmt.Print("Cookie missing __Secure-1PSID. ")
+		}
+		fmt.Print("Enter __Secure-1PSID: ")
 		v, _ := reader.ReadString('\n')
 		secure1psid = strings.TrimSpace(v)
 	}
 	if secure1psidts == "" {
-		fmt.Print("Cookie missing __Secure-1PSIDTS. Enter __Secure-1PSIDTS: ")
+		if !isMacOS {
+			fmt.Print("Cookie missing __Secure-1PSID. ")
+		}
+		fmt.Print("Enter __Secure-1PSIDTS: ")
 		v, _ := reader.ReadString('\n')
 		secure1psidts = strings.TrimSpace(v)
 	}
@@ -71,51 +130,10 @@ func DoGeminiWebAuth(cfg *config.Config) {
 		log.Fatal("__Secure-1PSID and __Secure-1PSIDTS cannot be empty")
 		return
 	}
-
-	// Build HTTP client with proxy settings respected.
-	httpClient := &http.Client{Timeout: 15 * time.Second}
-	httpClient = util.SetProxy(cfg, httpClient)
-
-	// Request ListAccounts to extract email as label (use POST per upstream behavior).
-	req, err := http.NewRequest(http.MethodPost, "https://accounts.google.com/ListAccounts", nil)
-	if err != nil {
-		fmt.Printf("Failed to create request: %v\n", err)
-		return
-	}
-	req.Header.Set("Cookie", rawCookie)
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-	req.Header.Set("Origin", "https://accounts.google.com")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-
-	resp, err := httpClient.Do(req)
-	email := ""
-	if err != nil {
-		fmt.Printf("Request to ListAccounts failed: %v\n", err)
-	} else {
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			fmt.Printf("ListAccounts returned status code: %d\n", resp.StatusCode)
-		} else {
-			var payload []any
-			if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-				fmt.Printf("Failed to parse ListAccounts response: %v\n", err)
-			} else {
-				// Expected structure like: ["gaia.l.a.r", [["gaia.l.a",1,"Name","email@example.com", ... ]]]
-				if len(payload) >= 2 {
-					if accounts, ok := payload[1].([]any); ok && len(accounts) >= 1 {
-						if first, ok := accounts[0].([]any); ok && len(first) >= 4 {
-							if em, ok := first[3].(string); ok {
-								email = strings.TrimSpace(em)
-							}
-						}
-					}
-				}
-				if email == "" {
-					fmt.Println("Failed to parse email from ListAccounts response")
-				}
-			}
-		}
+	if isMacOS {
+		fmt.Print("Enter your account email: ")
+		v, _ := reader.ReadString('\n')
+		email = strings.TrimSpace(v)
 	}
 
 	// Generate a filename based on the SHA256 hash of the PSID
