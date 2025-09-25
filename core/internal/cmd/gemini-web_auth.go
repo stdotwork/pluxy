@@ -6,42 +6,107 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	log "github.com/sirupsen/logrus"
 )
 
 // DoGeminiWebAuth handles the process of creating a Gemini Web token file.
-// It prompts the user for their cookie values and saves them to a JSON file.
+// New flow:
+//  1. Prompt user to paste the full cookie string.
+//  2. Extract __Secure-1PSID and __Secure-1PSIDTS from the cookie string.
+//  3. Call https://accounts.google.com/ListAccounts with the cookie to obtain email.
+//  4. Save auth file with the same structure, and set Label to the email.
 func DoGeminiWebAuth(cfg *config.Config) {
 	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Print("Enter your __Secure-1PSID cookie value: ")
-	secure1psid, _ := reader.ReadString('\n')
-	secure1psid = strings.TrimSpace(secure1psid)
-
-	if secure1psid == "" {
-		log.Fatal("The __Secure-1PSID value cannot be empty.")
+	fmt.Print("Paste your full Google Cookie and press Enter: ")
+	rawCookie, _ := reader.ReadString('\n')
+	rawCookie = strings.TrimSpace(rawCookie)
+	if rawCookie == "" {
+		log.Fatal("Cookie cannot be empty")
 		return
 	}
 
-	fmt.Print("Enter your __Secure-1PSIDTS cookie value: ")
-	secure1psidts, _ := reader.ReadString('\n')
-	secure1psidts = strings.TrimSpace(secure1psidts)
+	// Parse K=V cookie pairs separated by ';'
+	cookieMap := make(map[string]string)
+	parts := strings.Split(rawCookie, ";")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if eq := strings.Index(p, "="); eq > 0 {
+			k := strings.TrimSpace(p[:eq])
+			v := strings.TrimSpace(p[eq+1:])
+			if k != "" {
+				cookieMap[k] = v
+			}
+		}
+	}
 
-	if secure1psidts == "" {
-		fmt.Println("The __Secure-1PSIDTS value cannot be empty.")
+	secure1psid := strings.TrimSpace(cookieMap["__Secure-1PSID"])
+	secure1psidts := strings.TrimSpace(cookieMap["__Secure-1PSIDTS"])
+	if secure1psid == "" || secure1psidts == "" {
+		fmt.Println("Cookie does not contain __Secure-1PSID or __Secure-1PSIDTS")
 		return
 	}
 
-	tokenStorage := &gemini.GeminiWebTokenStorage{
-		Secure1PSID:   secure1psid,
-		Secure1PSIDTS: secure1psidts,
+	// Build HTTP client with proxy settings respected.
+	httpClient := &http.Client{Timeout: 15 * time.Second}
+	httpClient = util.SetProxy(cfg, httpClient)
+
+	// Request ListAccounts to extract email as label (use POST per upstream behavior).
+	req, err := http.NewRequest(http.MethodPost, "https://accounts.google.com/ListAccounts", nil)
+	if err != nil {
+		fmt.Printf("Failed to create request: %v\n", err)
+		return
+	}
+	req.Header.Set("Cookie", rawCookie)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	req.Header.Set("Origin", "https://accounts.google.com")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Printf("Request to ListAccounts failed: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("ListAccounts returned status code: %d\n", resp.StatusCode)
+		return
+	}
+
+	var payload []any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		fmt.Printf("Failed to parse ListAccounts response: %v\n", err)
+		return
+	}
+
+	// Expected structure like: ["gaia.l.a.r", [["gaia.l.a",1,"Name","email@example.com", ... ]]]
+	email := ""
+	if len(payload) >= 2 {
+		if accounts, ok := payload[1].([]any); ok && len(accounts) >= 1 {
+			if first, ok := accounts[0].([]any); ok && len(first) >= 4 {
+				if em, ok := first[3].(string); ok {
+					email = strings.TrimSpace(em)
+				}
+			}
+		}
+	}
+	if email == "" {
+		fmt.Println("Failed to parse email from ListAccounts response; fallback to filename-based label")
 	}
 
 	// Generate a filename based on the SHA256 hash of the PSID
@@ -49,9 +114,17 @@ func DoGeminiWebAuth(cfg *config.Config) {
 	hasher.Write([]byte(secure1psid))
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	fileName := fmt.Sprintf("gemini-web-%s.json", hash[:16])
-	// Set a stable label for logging, e.g. gemini-web-<hash>
-	if tokenStorage != nil {
-		tokenStorage.Label = strings.TrimSuffix(fileName, ".json")
+
+	// Decide label: prefer email; fallback to file name without .json
+	label := email
+	if label == "" {
+		label = strings.TrimSuffix(fileName, ".json")
+	}
+
+	tokenStorage := &gemini.GeminiWebTokenStorage{
+		Secure1PSID:   secure1psid,
+		Secure1PSIDTS: secure1psidts,
+		Label:         label,
 	}
 	record := &sdkAuth.TokenRecord{
 		Provider: "gemini-web",
