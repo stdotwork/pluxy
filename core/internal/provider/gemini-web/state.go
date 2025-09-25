@@ -82,12 +82,12 @@ func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, 
 }
 
 func (s *GeminiWebState) loadConversationCaches() {
-	if path := s.convStorePath(); path != "" {
+	if path := s.convPath(); path != "" {
 		if store, err := LoadConvStore(path); err == nil {
 			s.convStore = store
 		}
 	}
-	if path := s.convDataPath(); path != "" {
+	if path := s.convPath(); path != "" {
 		if items, index, err := LoadConvData(path); err == nil {
 			s.convData = items
 			s.convIndex = index
@@ -95,20 +95,14 @@ func (s *GeminiWebState) loadConversationCaches() {
 	}
 }
 
-func (s *GeminiWebState) convStorePath() string {
+// convPath returns the BoltDB file path used for both account metadata and conversation data.
+func (s *GeminiWebState) convPath() string {
 	base := s.storagePath
 	if base == "" {
-		base = s.accountID + ".json"
+		// Use accountID directly as base name; ConvBoltPath will append .bolt.
+		base = s.accountID
 	}
-	return ConvStorePath(base)
-}
-
-func (s *GeminiWebState) convDataPath() string {
-	base := s.storagePath
-	if base == "" {
-		base = s.accountID + ".json"
-	}
-	return ConvDataPath(base)
+	return ConvBoltPath(base)
 }
 
 func (s *GeminiWebState) GetRequestMutex() *sync.Mutex { return &s.reqMu }
@@ -392,7 +386,7 @@ func (s *GeminiWebState) persistConversation(modelName string, prep *geminiWebPr
 			storeSnapshot[k] = cp
 		}
 		s.convMu.Unlock()
-		_ = SaveConvStore(s.convStorePath(), storeSnapshot)
+		_ = SaveConvStore(s.convPath(), storeSnapshot)
 	}
 
 	if !s.useReusableContext() {
@@ -420,7 +414,7 @@ func (s *GeminiWebState) persistConversation(modelName string, prep *geminiWebPr
 		indexSnapshot[k] = v
 	}
 	s.convMu.Unlock()
-	_ = SaveConvData(s.convDataPath(), dataSnapshot, indexSnapshot)
+	_ = SaveConvData(s.convPath(), dataSnapshot, indexSnapshot)
 }
 
 func (s *GeminiWebState) addAPIResponseData(ctx context.Context, line []byte) {
@@ -557,19 +551,9 @@ func HashConversation(clientID, model string, msgs []StoredMessage) string {
 	return Sha256Hex(b.String())
 }
 
-// ConvStorePath returns the path for account-level metadata persistence based on token file path.
-func ConvStorePath(tokenFilePath string) string {
-	wd, err := os.Getwd()
-	if err != nil || wd == "" {
-		wd = "."
-	}
-	convDir := filepath.Join(wd, "conv")
-	base := strings.TrimSuffix(filepath.Base(tokenFilePath), filepath.Ext(tokenFilePath))
-	return filepath.Join(convDir, base+".bolt")
-}
-
-// ConvDataPath returns the path for full conversation persistence based on token file path.
-func ConvDataPath(tokenFilePath string) string {
+// ConvBoltPath returns the BoltDB file path used for both account metadata and conversation data.
+// Different logical datasets are kept in separate buckets within this single DB file.
+func ConvBoltPath(tokenFilePath string) string {
 	wd, err := os.Getwd()
 	if err != nil || wd == "" {
 		wd = "."

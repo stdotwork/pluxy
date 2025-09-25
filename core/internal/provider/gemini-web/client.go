@@ -420,13 +420,10 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	form.Set("f.req", string(outerJSON))
 
 	req, _ := http.NewRequest(http.MethodPost, EndpointGenerate, strings.NewReader(form.Encode()))
-	// headers
 	applyHeaders(req, HeadersGemini)
 	applyHeaders(req, model.ModelHeader)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
-	for k, v := range c.Cookies {
-		req.AddCookie(&http.Cookie{Name: k, Value: v})
-	}
+	applyCookies(req, c.Cookies)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
