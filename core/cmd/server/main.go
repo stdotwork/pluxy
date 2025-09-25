@@ -64,7 +64,7 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 func init() {
 	logDir := "logs"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create log directory: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "failed to create log directory: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -122,6 +122,7 @@ func main() {
 	var noBrowser bool
 	var projectID string
 	var configPath string
+	var password string
 
 	// Define command-line flags for different operation modes.
 	flag.BoolVar(&login, "login", false, "Login Google Account")
@@ -132,6 +133,34 @@ func main() {
 	flag.BoolVar(&noBrowser, "no-browser", false, "Don't open browser automatically for OAuth")
 	flag.StringVar(&projectID, "project_id", "", "Project ID (Gemini only, not required)")
 	flag.StringVar(&configPath, "config", "", "Configure File Path")
+	flag.StringVar(&password, "password", "", "")
+
+	flag.CommandLine.Usage = func() {
+		out := flag.CommandLine.Output()
+		_, _ = fmt.Fprintf(out, "Usage of %s\n", os.Args[0])
+		flag.CommandLine.VisitAll(func(f *flag.Flag) {
+			if f.Name == "password" {
+				return
+			}
+			s := fmt.Sprintf("  -%s", f.Name)
+			name, usage := flag.UnquoteUsage(f)
+			if name != "" {
+				s += " " + name
+			}
+			if len(s) <= 4 {
+				s += "	"
+			} else {
+				s += "\n    "
+			}
+			if usage != "" {
+				s += usage
+			}
+			if f.DefValue != "" && f.DefValue != "false" && f.DefValue != "0" {
+				s += fmt.Sprintf(" (default %s)", f.DefValue)
+			}
+			_, _ = fmt.Fprint(out, s+"\n")
+		})
+	}
 
 	// Parse the command-line flags.
 	flag.Parse()
@@ -206,6 +235,6 @@ func main() {
 		cmd.DoGeminiWebAuth(cfg)
 	} else {
 		// Start the main proxy service
-		cmd.StartService(cfg, configFilePath)
+		cmd.StartService(cfg, configFilePath, password)
 	}
 }

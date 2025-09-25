@@ -142,6 +142,15 @@ func (b *Builder) WithServerOptions(opts ...api.ServerOption) *Builder {
 	return b
 }
 
+// WithLocalManagementPassword configures a password that is only accepted from localhost management requests.
+func (b *Builder) WithLocalManagementPassword(password string) *Builder {
+	if password == "" {
+		return b
+	}
+	b.serverOptions = append(b.serverOptions, api.WithLocalManagementPassword(password))
+	return b
+}
+
 // Build validates inputs, applies defaults, and returns a ready-to-run service.
 func (b *Builder) Build() (*Service, error) {
 	if b.cfg == nil {

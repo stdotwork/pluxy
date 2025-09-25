@@ -21,10 +21,12 @@ import (
 // Parameters:
 //   - cfg: The application configuration
 //   - configPath: The path to the configuration file
-func StartService(cfg *config.Config, configPath string) {
+//   - localPassword: Optional password accepted for local management requests
+func StartService(cfg *config.Config, configPath string, localPassword string) {
 	service, err := cliproxy.NewBuilder().
 		WithConfig(cfg).
 		WithConfigPath(configPath).
+		WithLocalManagementPassword(localPassword).
 		Build()
 	if err != nil {
 		log.Fatalf("failed to build proxy service: %v", err)
