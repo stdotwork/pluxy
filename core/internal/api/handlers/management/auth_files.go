@@ -689,6 +689,7 @@ func (h *Handler) CreateGeminiWebToken(c *gin.Context) {
 	var payload struct {
 		Secure1PSID   string `json:"secure_1psid"`
 		Secure1PSIDTS string `json:"secure_1psidts"`
+		Label         string `json:"label"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -696,12 +697,17 @@ func (h *Handler) CreateGeminiWebToken(c *gin.Context) {
 	}
 	payload.Secure1PSID = strings.TrimSpace(payload.Secure1PSID)
 	payload.Secure1PSIDTS = strings.TrimSpace(payload.Secure1PSIDTS)
+	payload.Label = strings.TrimSpace(payload.Label)
 	if payload.Secure1PSID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "secure_1psid is required"})
 		return
 	}
 	if payload.Secure1PSIDTS == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "secure_1psidts is required"})
+		return
+	}
+	if payload.Label == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "label is required"})
 		return
 	}
 
@@ -713,6 +719,7 @@ func (h *Handler) CreateGeminiWebToken(c *gin.Context) {
 	tokenStorage := &geminiAuth.GeminiWebTokenStorage{
 		Secure1PSID:   payload.Secure1PSID,
 		Secure1PSIDTS: payload.Secure1PSIDTS,
+		Label:         payload.Label,
 	}
 	// Provide a stable label (gemini-web-<hash>) for logging and identification
 	tokenStorage.Label = strings.TrimSuffix(fileName, ".json")
