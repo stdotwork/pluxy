@@ -8,7 +8,9 @@ import (
 	"errors"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy"
 	log "github.com/sirupsen/logrus"
@@ -23,19 +25,30 @@ import (
 //   - configPath: The path to the configuration file
 //   - localPassword: Optional password accepted for local management requests
 func StartService(cfg *config.Config, configPath string, localPassword string) {
-	service, err := cliproxy.NewBuilder().
+	builder := cliproxy.NewBuilder().
 		WithConfig(cfg).
 		WithConfigPath(configPath).
-		WithLocalManagementPassword(localPassword).
-		Build()
+		WithLocalManagementPassword(localPassword)
+
+	ctxSignal, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	runCtx := ctxSignal
+	if localPassword != "" {
+		var keepAliveCancel context.CancelFunc
+		runCtx, keepAliveCancel = context.WithCancel(ctxSignal)
+		builder = builder.WithServerOptions(api.WithKeepAliveEndpoint(10*time.Second, func() {
+			log.Warn("keep-alive endpoint idle for 10s, shutting down")
+			keepAliveCancel()
+		}))
+	}
+
+	service, err := builder.Build()
 	if err != nil {
 		log.Fatalf("failed to build proxy service: %v", err)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	err = service.Run(ctx)
+	err = service.Run(runCtx)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("proxy service exited with error: %v", err)
 	}
