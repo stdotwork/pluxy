@@ -714,6 +714,8 @@ func (h *Handler) CreateGeminiWebToken(c *gin.Context) {
 		Secure1PSID:   payload.Secure1PSID,
 		Secure1PSIDTS: payload.Secure1PSIDTS,
 	}
+	// Provide a stable label (gemini-web-<hash>) for logging and identification
+	tokenStorage.Label = strings.TrimSuffix(fileName, ".json")
 
 	record := &sdkAuth.TokenRecord{
 		Provider: "gemini-web",

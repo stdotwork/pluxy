@@ -97,8 +97,12 @@ func getAccessToken(baseCookies map[string]string, proxy string, verbose bool, i
 	{
 		client := newHTTPClient(httpOptions{ProxyURL: proxy, Insecure: insecure, FollowRedirects: true})
 		req, _ := http.NewRequest(http.MethodGet, EndpointGoogle, nil)
-		resp, _ := client.Do(req)
-		if resp != nil {
+		resp, err := client.Do(req)
+		if err != nil {
+			if verbose {
+				log.Debugf("priming google cookies failed: %v", err)
+			}
+		} else if resp != nil {
 			if u, err := url.Parse(EndpointGoogle); err == nil {
 				for _, c := range client.Jar.Cookies(u) {
 					extraCookies[c.Name] = c.Value
@@ -172,18 +176,10 @@ func rotate1PSIDTS(cookies map[string]string, proxy string, insecure bool) (stri
 		return "", &AuthError{Msg: "__Secure-1PSID missing"}
 	}
 
-	tr := &http.Transport{}
-	if proxy != "" {
-		if pu, err := url.Parse(proxy); err == nil {
-			tr.Proxy = http.ProxyURL(pu)
-		}
-	}
-	if insecure {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	}
-	client := &http.Client{Transport: tr, Timeout: 60 * time.Second}
+	// Reuse shared HTTP client helper for consistency.
+	client := newHTTPClient(httpOptions{ProxyURL: proxy, Insecure: insecure, FollowRedirects: true})
 
-	req, _ := http.NewRequest(http.MethodPost, EndpointRotateCookies, io.NopCloser(stringsReader("[000,\"-0000000000000000000\"]")))
+	req, _ := http.NewRequest(http.MethodPost, EndpointRotateCookies, strings.NewReader("[000,\"-0000000000000000000\"]"))
 	applyHeaders(req, HeadersRotateCookies)
 	applyCookies(req, cookies)
 
@@ -207,25 +203,18 @@ func rotate1PSIDTS(cookies map[string]string, proxy string, insecure bool) (stri
 			return c.Value, nil
 		}
 	}
+	// Fallback: check cookie jar in case the Set-Cookie was on a redirect hop
+	if u, err := url.Parse(EndpointRotateCookies); err == nil && client.Jar != nil {
+		for _, c := range client.Jar.Cookies(u) {
+			if c.Name == "__Secure-1PSIDTS" && c.Value != "" {
+				return c.Value, nil
+			}
+		}
+	}
 	return "", nil
 }
 
-type constReader struct {
-	s string
-	i int
-}
-
-func (r *constReader) Read(p []byte) (int, error) {
-	if r.i >= len(r.s) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.s[r.i:])
-	r.i += n
-	return n, nil
-}
-
-func stringsReader(s string) io.Reader { return &constReader{s: s} }
-
+// MaskToken28 masks a sensitive token for safe logging. Keep middle partially visible.
 func MaskToken28(s string) string {
 	n := len(s)
 	if n == 0 {
@@ -431,21 +420,10 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	form.Set("f.req", string(outerJSON))
 
 	req, _ := http.NewRequest(http.MethodPost, EndpointGenerate, strings.NewReader(form.Encode()))
-	// headers
-	for k, v := range HeadersGemini {
-		for _, vv := range v {
-			req.Header.Add(k, vv)
-		}
-	}
-	for k, v := range model.ModelHeader {
-		for _, vv := range v {
-			req.Header.Add(k, vv)
-		}
-	}
+	applyHeaders(req, HeadersGemini)
+	applyHeaders(req, model.ModelHeader)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
-	for k, v := range c.Cookies {
-		req.AddCookie(&http.Cookie{Name: k, Value: v})
-	}
+	applyCookies(req, c.Cookies)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
