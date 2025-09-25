@@ -1,0 +1,516 @@
+// Package api provides the HTTP API server implementation for the CLI Proxy API.
+// It includes the main server struct, routing setup, middleware for CORS and authentication,
+// and integration with various AI API handlers (OpenAI, Claude, Gemini).
+// The server supports hot-reloading of clients and configuration.
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/claude"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/gemini"
+	managementHandlers "github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/management"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/openai"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
+)
+
+type serverOptionConfig struct {
+	extraMiddleware      []gin.HandlerFunc
+	engineConfigurator   func(*gin.Engine)
+	routerConfigurator   func(*gin.Engine, *handlers.BaseAPIHandler, *config.Config)
+	requestLoggerFactory func(*config.Config, string) logging.RequestLogger
+}
+
+// ServerOption customises HTTP server construction.
+type ServerOption func(*serverOptionConfig)
+
+func defaultRequestLoggerFactory(cfg *config.Config, configPath string) logging.RequestLogger {
+	return logging.NewFileRequestLogger(cfg.RequestLog, "logs", filepath.Dir(configPath))
+}
+
+// WithMiddleware appends additional Gin middleware during server construction.
+func WithMiddleware(mw ...gin.HandlerFunc) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.extraMiddleware = append(cfg.extraMiddleware, mw...)
+	}
+}
+
+// WithEngineConfigurator allows callers to mutate the Gin engine prior to middleware setup.
+func WithEngineConfigurator(fn func(*gin.Engine)) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.engineConfigurator = fn
+	}
+}
+
+// WithRouterConfigurator appends a callback after default routes are registered.
+func WithRouterConfigurator(fn func(*gin.Engine, *handlers.BaseAPIHandler, *config.Config)) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.routerConfigurator = fn
+	}
+}
+
+// WithRequestLoggerFactory customises request logger creation.
+func WithRequestLoggerFactory(factory func(*config.Config, string) logging.RequestLogger) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.requestLoggerFactory = factory
+	}
+}
+
+// Server represents the main API server.
+// It encapsulates the Gin engine, HTTP server, handlers, and configuration.
+type Server struct {
+	// engine is the Gin web framework engine instance.
+	engine *gin.Engine
+
+	// server is the underlying HTTP server.
+	server *http.Server
+
+	// handlers contains the API handlers for processing requests.
+	handlers *handlers.BaseAPIHandler
+
+	// cfg holds the current server configuration.
+	cfg *config.Config
+
+	// accessManager handles request authentication providers.
+	accessManager *sdkaccess.Manager
+
+	// requestLogger is the request logger instance for dynamic configuration updates.
+	requestLogger logging.RequestLogger
+	loggerToggle  func(bool)
+
+	// configFilePath is the absolute path to the YAML config file for persistence.
+	configFilePath string
+
+	// management handler
+	mgmt *managementHandlers.Handler
+}
+
+// NewServer creates and initializes a new API server instance.
+// It sets up the Gin engine, middleware, routes, and handlers.
+//
+// Parameters:
+//   - cfg: The server configuration
+//   - authManager: core runtime auth manager
+//   - accessManager: request authentication manager
+//
+// Returns:
+//   - *Server: A new server instance
+func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdkaccess.Manager, configFilePath string, opts ...ServerOption) *Server {
+	optionState := &serverOptionConfig{
+		requestLoggerFactory: defaultRequestLoggerFactory,
+	}
+	for i := range opts {
+		opts[i](optionState)
+	}
+	// Set gin mode
+	if !cfg.Debug {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	// Create gin engine
+	engine := gin.New()
+	if optionState.engineConfigurator != nil {
+		optionState.engineConfigurator(engine)
+	}
+
+	// Add middleware
+	engine.Use(logging.GinLogrusLogger())
+	engine.Use(logging.GinLogrusRecovery())
+	for _, mw := range optionState.extraMiddleware {
+		engine.Use(mw)
+	}
+
+	// Add request logging middleware (positioned after recovery, before auth)
+	// Resolve logs directory relative to the configuration file directory.
+	var requestLogger logging.RequestLogger
+	var toggle func(bool)
+	if optionState.requestLoggerFactory != nil {
+		requestLogger = optionState.requestLoggerFactory(cfg, configFilePath)
+	}
+	if requestLogger != nil {
+		engine.Use(middleware.RequestLoggingMiddleware(requestLogger))
+		if setter, ok := requestLogger.(interface{ SetEnabled(bool) }); ok {
+			toggle = setter.SetEnabled
+		}
+	}
+
+	engine.Use(corsMiddleware())
+
+	// Create server instance
+	s := &Server{
+		engine:         engine,
+		handlers:       handlers.NewBaseAPIHandlers(cfg, authManager),
+		cfg:            cfg,
+		accessManager:  accessManager,
+		requestLogger:  requestLogger,
+		loggerToggle:   toggle,
+		configFilePath: configFilePath,
+	}
+	s.applyAccessConfig(cfg)
+	// Initialize management handler
+	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
+
+	// Setup routes
+	s.setupRoutes()
+	if optionState.routerConfigurator != nil {
+		optionState.routerConfigurator(engine, s.handlers, cfg)
+	}
+
+	// Create HTTP server
+	s.server = &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.Port),
+		Handler: engine,
+	}
+
+	return s
+}
+
+// setupRoutes configures the API routes for the server.
+// It defines the endpoints and associates them with their respective handlers.
+func (s *Server) setupRoutes() {
+	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
+	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
+	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
+	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
+	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
+
+	// OpenAI compatible API routes
+	v1 := s.engine.Group("/v1")
+	v1.Use(AuthMiddleware(s.accessManager))
+	{
+		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
+		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
+		v1.POST("/completions", openaiHandlers.Completions)
+		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
+		v1.POST("/messages/count_tokens", claudeCodeHandlers.ClaudeCountTokens)
+		v1.POST("/responses", openaiResponsesHandlers.Responses)
+	}
+
+	// Gemini compatible API routes
+	v1beta := s.engine.Group("/v1beta")
+	v1beta.Use(AuthMiddleware(s.accessManager))
+	{
+		v1beta.GET("/models", geminiHandlers.GeminiModels)
+		v1beta.POST("/models/:action", geminiHandlers.GeminiHandler)
+		v1beta.GET("/models/:action", geminiHandlers.GeminiGetHandler)
+	}
+
+	// Root endpoint
+	s.engine.GET("/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "CLI Proxy API Server",
+			"version": "1.0.0",
+			"endpoints": []string{
+				"POST /v1/chat/completions",
+				"POST /v1/completions",
+				"GET /v1/models",
+			},
+		})
+	})
+	s.engine.POST("/v1internal:method", geminiCLIHandlers.CLIHandler)
+
+	// OAuth callback endpoints (reuse main server port)
+	// These endpoints receive provider redirects and persist
+	// the short-lived code/state for the waiting goroutine.
+	s.engine.GET("/anthropic/callback", func(c *gin.Context) {
+		code := c.Query("code")
+		state := c.Query("state")
+		errStr := c.Query("error")
+		// Persist to a temporary file keyed by state
+		if state != "" {
+			file := fmt.Sprintf("%s/.oauth-anthropic-%s.oauth", s.cfg.AuthDir, state)
+			_ = os.WriteFile(file, []byte(fmt.Sprintf(`{"code":"%s","state":"%s","error":"%s"}`, code, state, errStr)), 0o600)
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>")
+	})
+
+	s.engine.GET("/codex/callback", func(c *gin.Context) {
+		code := c.Query("code")
+		state := c.Query("state")
+		errStr := c.Query("error")
+		if state != "" {
+			file := fmt.Sprintf("%s/.oauth-codex-%s.oauth", s.cfg.AuthDir, state)
+			_ = os.WriteFile(file, []byte(fmt.Sprintf(`{"code":"%s","state":"%s","error":"%s"}`, code, state, errStr)), 0o600)
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>")
+	})
+
+	s.engine.GET("/google/callback", func(c *gin.Context) {
+		code := c.Query("code")
+		state := c.Query("state")
+		errStr := c.Query("error")
+		if state != "" {
+			file := fmt.Sprintf("%s/.oauth-gemini-%s.oauth", s.cfg.AuthDir, state)
+			_ = os.WriteFile(file, []byte(fmt.Sprintf(`{"code":"%s","state":"%s","error":"%s"}`, code, state, errStr)), 0o600)
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>")
+	})
+
+	// Management API routes (delegated to management handlers)
+	// New logic: if remote-management-key is empty, do not expose any management endpoint (404).
+	if s.cfg.RemoteManagement.SecretKey != "" {
+		mgmt := s.engine.Group("/v0/management")
+		mgmt.Use(s.mgmt.Middleware())
+		{
+			mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
+			mgmt.GET("/config", s.mgmt.GetConfig)
+
+			mgmt.GET("/debug", s.mgmt.GetDebug)
+			mgmt.PUT("/debug", s.mgmt.PutDebug)
+			mgmt.PATCH("/debug", s.mgmt.PutDebug)
+
+			mgmt.GET("/proxy-url", s.mgmt.GetProxyURL)
+			mgmt.PUT("/proxy-url", s.mgmt.PutProxyURL)
+			mgmt.PATCH("/proxy-url", s.mgmt.PutProxyURL)
+			mgmt.DELETE("/proxy-url", s.mgmt.DeleteProxyURL)
+
+			mgmt.GET("/quota-exceeded/switch-project", s.mgmt.GetSwitchProject)
+			mgmt.PUT("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
+			mgmt.PATCH("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
+
+			mgmt.GET("/quota-exceeded/switch-preview-model", s.mgmt.GetSwitchPreviewModel)
+			mgmt.PUT("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
+			mgmt.PATCH("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
+
+			mgmt.GET("/api-keys", s.mgmt.GetAPIKeys)
+			mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
+			mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
+			mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
+
+			mgmt.GET("/generative-language-api-key", s.mgmt.GetGlKeys)
+			mgmt.PUT("/generative-language-api-key", s.mgmt.PutGlKeys)
+			mgmt.PATCH("/generative-language-api-key", s.mgmt.PatchGlKeys)
+			mgmt.DELETE("/generative-language-api-key", s.mgmt.DeleteGlKeys)
+
+			mgmt.GET("/request-log", s.mgmt.GetRequestLog)
+			mgmt.PUT("/request-log", s.mgmt.PutRequestLog)
+			mgmt.PATCH("/request-log", s.mgmt.PutRequestLog)
+
+			mgmt.GET("/request-retry", s.mgmt.GetRequestRetry)
+			mgmt.PUT("/request-retry", s.mgmt.PutRequestRetry)
+			mgmt.PATCH("/request-retry", s.mgmt.PutRequestRetry)
+
+			mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
+			mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
+			mgmt.PATCH("/claude-api-key", s.mgmt.PatchClaudeKey)
+			mgmt.DELETE("/claude-api-key", s.mgmt.DeleteClaudeKey)
+
+			mgmt.GET("/codex-api-key", s.mgmt.GetCodexKeys)
+			mgmt.PUT("/codex-api-key", s.mgmt.PutCodexKeys)
+			mgmt.PATCH("/codex-api-key", s.mgmt.PatchCodexKey)
+			mgmt.DELETE("/codex-api-key", s.mgmt.DeleteCodexKey)
+
+			mgmt.GET("/openai-compatibility", s.mgmt.GetOpenAICompat)
+			mgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
+			mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
+			mgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
+
+			mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
+			mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
+			mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
+			mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
+
+			mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
+			mgmt.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
+			mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
+			mgmt.POST("/gemini-web-token", s.mgmt.CreateGeminiWebToken)
+			mgmt.GET("/qwen-auth-url", s.mgmt.RequestQwenToken)
+			mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
+		}
+	}
+}
+
+// unifiedModelsHandler creates a unified handler for the /v1/models endpoint
+// that routes to different handlers based on the User-Agent header.
+// If User-Agent starts with "claude-cli", it routes to Claude handler,
+// otherwise it routes to OpenAI handler.
+func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userAgent := c.GetHeader("User-Agent")
+
+		// Route to Claude handler if User-Agent starts with "claude-cli"
+		if strings.HasPrefix(userAgent, "claude-cli") {
+			// log.Debugf("Routing /v1/models to Claude handler for User-Agent: %s", userAgent)
+			claudeHandler.ClaudeModels(c)
+		} else {
+			// log.Debugf("Routing /v1/models to OpenAI handler for User-Agent: %s", userAgent)
+			openaiHandler.OpenAIModels(c)
+		}
+	}
+}
+
+// Start begins listening for and serving HTTP requests.
+// It's a blocking call and will only return on an unrecoverable error.
+//
+// Returns:
+//   - error: An error if the server fails to start
+func (s *Server) Start() error {
+	log.Debugf("Starting API server on %s", s.server.Addr)
+
+	// Start the HTTP server.
+	if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("failed to start HTTP server: %v", err)
+	}
+
+	return nil
+}
+
+// Stop gracefully shuts down the API server without interrupting any
+// active connections.
+//
+// Parameters:
+//   - ctx: The context for graceful shutdown
+//
+// Returns:
+//   - error: An error if the server fails to stop
+func (s *Server) Stop(ctx context.Context) error {
+	log.Debug("Stopping API server...")
+
+	// Shutdown the HTTP server.
+	if err := s.server.Shutdown(ctx); err != nil {
+		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
+	}
+
+	log.Debug("API server stopped")
+	return nil
+}
+
+// corsMiddleware returns a Gin middleware handler that adds CORS headers
+// to every response, allowing cross-origin requests.
+//
+// Returns:
+//   - gin.HandlerFunc: The CORS middleware handler
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "*")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
+}
+
+func (s *Server) applyAccessConfig(cfg *config.Config) {
+	if s == nil || s.accessManager == nil {
+		return
+	}
+	providers, err := sdkaccess.BuildProviders(cfg)
+	if err != nil {
+		log.Errorf("failed to update request auth providers: %v", err)
+		return
+	}
+	s.accessManager.SetProviders(providers)
+}
+
+// UpdateClients updates the server's client list and configuration.
+// This method is called when the configuration or authentication tokens change.
+//
+// Parameters:
+//   - clients: The new slice of AI service clients
+//   - cfg: The new application configuration
+func (s *Server) UpdateClients(cfg *config.Config) {
+	// Update request logger enabled state if it has changed
+	if s.requestLogger != nil && s.cfg.RequestLog != cfg.RequestLog {
+		if s.loggerToggle != nil {
+			s.loggerToggle(cfg.RequestLog)
+		} else if toggler, ok := s.requestLogger.(interface{ SetEnabled(bool) }); ok {
+			toggler.SetEnabled(cfg.RequestLog)
+		}
+		log.Debugf("request logging updated from %t to %t", s.cfg.RequestLog, cfg.RequestLog)
+	}
+
+	// Update log level dynamically when debug flag changes
+	if s.cfg.Debug != cfg.Debug {
+		util.SetLogLevel(cfg)
+		log.Debugf("debug mode updated from %t to %t", s.cfg.Debug, cfg.Debug)
+	}
+
+	s.cfg = cfg
+	s.handlers.UpdateClients(cfg)
+	if s.mgmt != nil {
+		s.mgmt.SetConfig(cfg)
+		s.mgmt.SetAuthManager(s.handlers.AuthManager)
+	}
+	s.applyAccessConfig(cfg)
+
+	// Count client sources from configuration and auth directory
+	authFiles := util.CountAuthFiles(cfg.AuthDir)
+	glAPIKeyCount := len(cfg.GlAPIKey)
+	claudeAPIKeyCount := len(cfg.ClaudeKey)
+	codexAPIKeyCount := len(cfg.CodexKey)
+	openAICompatCount := 0
+	for i := range cfg.OpenAICompatibility {
+		openAICompatCount += len(cfg.OpenAICompatibility[i].APIKeys)
+	}
+
+	total := authFiles + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
+	log.Infof("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
+		total,
+		authFiles,
+		glAPIKeyCount,
+		claudeAPIKeyCount,
+		codexAPIKeyCount,
+		openAICompatCount,
+	)
+}
+
+// (management handlers moved to internal/api/handlers/management)
+
+// AuthMiddleware returns a Gin middleware handler that authenticates requests
+// using the configured authentication providers. When no providers are available,
+// it allows all requests (legacy behaviour).
+func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if manager == nil {
+			c.Next()
+			return
+		}
+
+		result, err := manager.Authenticate(c.Request.Context(), c.Request)
+		if err == nil {
+			if result != nil {
+				c.Set("apiKey", result.Principal)
+				c.Set("accessProvider", result.Provider)
+				if len(result.Metadata) > 0 {
+					c.Set("accessMetadata", result.Metadata)
+				}
+			}
+			c.Next()
+			return
+		}
+
+		switch {
+		case errors.Is(err, sdkaccess.ErrNoCredentials):
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Missing API key"})
+		case errors.Is(err, sdkaccess.ErrInvalidCredential):
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
+		default:
+			log.Errorf("authentication middleware error: %v", err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Authentication service error"})
+		}
+	}
+}
+
+// legacy clientsToSlice removed; handlers no longer consume legacy client slices

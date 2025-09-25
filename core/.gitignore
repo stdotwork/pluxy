@@ -1,0 +1,14 @@
+config.yaml
+bin/*
+docs/*
+logs/*
+conv/*
+auths/*
+!auths/.gitkeep
+.vscode/*
+.claude/*
+.serena/*
+AGENTS.md
+CLAUDE.md
+*.exe
+temp/*
