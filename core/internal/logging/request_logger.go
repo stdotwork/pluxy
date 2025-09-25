@@ -268,9 +268,10 @@ func (l *FileRequestLogger) generateFilename(url string) string {
 	sanitized := l.sanitizeForFilename(path)
 
 	// Add timestamp
-	timestamp := time.Now().UnixNano()
+	timestamp := time.Now().Format("2006-01-02T150405-.000000000")
+	timestamp = strings.Replace(timestamp, ".", "", -1)
 
-	return fmt.Sprintf("%s-%d.log", sanitized, timestamp)
+	return fmt.Sprintf("%s-%s.log", sanitized, timestamp)
 }
 
 // sanitizeForFilename replaces characters that are not safe for filenames.
