@@ -3,6 +3,7 @@
 package management
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"strings"
@@ -33,6 +34,8 @@ type Handler struct {
 	authManager    *coreauth.Manager
 	usageStats     *usage.RequestStatistics
 	tokenStore     sdkAuth.TokenStore
+
+	localPassword string
 }
 
 // NewHandler creates a new management handler instance.
@@ -56,6 +59,9 @@ func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = ma
 // SetUsageStatistics allows replacing the usage statistics reference.
 func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageStats = stats }
 
+// SetLocalPassword configures the runtime-local password accepted for localhost requests.
+func (h *Handler) SetLocalPassword(password string) { h.localPassword = password }
+
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.
 // Additionally, remote access requires allow-remote-management=true.
@@ -65,10 +71,10 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		clientIP := c.ClientIP()
+		localClient := clientIP == "127.0.0.1" || clientIP == "::1"
 
-		// For remote IPs, enforce allow-remote-management and ban checks
-		if !(clientIP == "127.0.0.1" || clientIP == "::1") {
-			// Check if IP is currently blocked
+		fail := func() {}
+		if !localClient {
 			h.attemptsMu.Lock()
 			ai := h.failedAttempts[clientIP]
 			if ai != nil {
@@ -86,10 +92,24 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 			}
 			h.attemptsMu.Unlock()
 
-			allowRemote := h.cfg.RemoteManagement.AllowRemote
-			if !allowRemote {
+			if !h.cfg.RemoteManagement.AllowRemote {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "remote management disabled"})
 				return
+			}
+
+			fail = func() {
+				h.attemptsMu.Lock()
+				aip := h.failedAttempts[clientIP]
+				if aip == nil {
+					aip = &attemptInfo{}
+					h.failedAttempts[clientIP] = aip
+				}
+				aip.count++
+				if aip.count >= maxFailures {
+					aip.blockedUntil = time.Now().Add(banDuration)
+					aip.count = 0
+				}
+				h.attemptsMu.Unlock()
 			}
 		}
 		secret := h.cfg.RemoteManagement.SecretKey
@@ -112,36 +132,32 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 			provided = c.GetHeader("X-Management-Key")
 		}
 
-		if !(clientIP == "127.0.0.1" || clientIP == "::1") {
-			// For remote IPs, enforce key and track failures
-			fail := func() {
-				h.attemptsMu.Lock()
-				ai := h.failedAttempts[clientIP]
-				if ai == nil {
-					ai = &attemptInfo{}
-					h.failedAttempts[clientIP] = ai
-				}
-				ai.count++
-				if ai.count >= maxFailures {
-					ai.blockedUntil = time.Now().Add(banDuration)
-					ai.count = 0
-				}
-				h.attemptsMu.Unlock()
-			}
-
-			if provided == "" {
+		if provided == "" {
+			if !localClient {
 				fail()
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing management key"})
-				return
 			}
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing management key"})
+			return
+		}
 
-			if err := bcrypt.CompareHashAndPassword([]byte(secret), []byte(provided)); err != nil {
+		if localClient {
+			if lp := h.localPassword; lp != "" {
+				if subtle.ConstantTimeCompare([]byte(provided), []byte(lp)) == 1 {
+					c.Next()
+					return
+				}
+			}
+		}
+
+		if err := bcrypt.CompareHashAndPassword([]byte(secret), []byte(provided)); err != nil {
+			if !localClient {
 				fail()
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid management key"})
-				return
 			}
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid management key"})
+			return
+		}
 
-			// Success: reset failed count for this IP
+		if !localClient {
 			h.attemptsMu.Lock()
 			if ai := h.failedAttempts[clientIP]; ai != nil {
 				ai.count = 0
