@@ -12,14 +12,6 @@ func (h *Handler) GetConfig(c *gin.Context) {
 func (h *Handler) GetDebug(c *gin.Context) { c.JSON(200, gin.H{"debug": h.cfg.Debug}) }
 func (h *Handler) PutDebug(c *gin.Context) { h.updateBoolField(c, func(v bool) { h.cfg.Debug = v }) }
 
-// ForceGPT5Codex
-func (h *Handler) GetForceGPT5Codex(c *gin.Context) {
-	c.JSON(200, gin.H{"gpt-5-codex": h.cfg.ForceGPT5Codex})
-}
-func (h *Handler) PutForceGPT5Codex(c *gin.Context) {
-	h.updateBoolField(c, func(v bool) { h.cfg.ForceGPT5Codex = v })
-}
-
 // Request log
 func (h *Handler) GetRequestLog(c *gin.Context) { c.JSON(200, gin.H{"request-log": h.cfg.RequestLog}) }
 func (h *Handler) PutRequestLog(c *gin.Context) {

@@ -480,9 +480,6 @@ func (w *Watcher) reloadConfig() bool {
 		if oldConfig.RemoteManagement.AllowRemote != newConfig.RemoteManagement.AllowRemote {
 			log.Debugf("  remote-management.allow-remote: %t -> %t", oldConfig.RemoteManagement.AllowRemote, newConfig.RemoteManagement.AllowRemote)
 		}
-		if oldConfig.ForceGPT5Codex != newConfig.ForceGPT5Codex {
-			log.Debugf("  force-gpt-5-codex: %t -> %t", oldConfig.ForceGPT5Codex, newConfig.ForceGPT5Codex)
-		}
 	}
 
 	log.Infof("config successfully reloaded, triggering client reload")
