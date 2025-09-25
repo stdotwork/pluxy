@@ -292,7 +292,7 @@ func (c *GeminiClient) Close(delaySec float64) {
 	c.Running = false
 }
 
-// ensureRunning mirrors the Python decorator behavior and retries on APIError.
+// ensureRunning mirrors the decorator behavior and retries on APIError.
 func (c *GeminiClient) ensureRunning() error {
 	if c.Running {
 		return nil
@@ -419,7 +419,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	}()
 
 	if resp.StatusCode == 429 {
-		// Surface 429 as TemporarilyBlocked to match Python behavior
+		// Surface 429 as TemporarilyBlocked to match reference behavior
 		c.Close(0)
 		return empty, &TemporarilyBlocked{GeminiError{Msg: "Too many requests. IP temporarily blocked."}}
 	}
@@ -499,7 +499,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 				}
 			}
 		}
-		// Parse nested error code to align with Python mapping
+		// Parse nested error code to align with error mapping
 		var top []any
 		// Prefer lastTop from fallback scan; otherwise try parts[2]
 		if len(lastTop) > 0 {
@@ -522,7 +522,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 			}
 		}
 		// Debug("Invalid response: control frames only; no body found")
-		// Close the client to force re-initialization on next request (parity with Python client behavior)
+		// Close the client to force re-initialization on next request (parity with reference client behavior)
 		c.Close(0)
 		return empty, &APIError{Msg: "Failed to generate contents. Invalid response data received."}
 	}
@@ -745,7 +745,7 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 }
 
 // extractErrorCode attempts to navigate the known nested error structure and fetch the integer code.
-// Mirrors Python path: response_json[0][5][2][0][1][0]
+// Mirrors reference path: response_json[0][5][2][0][1][0]
 func extractErrorCode(top []any) (int, bool) {
 	if len(top) == 0 {
 		return 0, false

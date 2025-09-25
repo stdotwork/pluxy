@@ -56,8 +56,19 @@ func DoGeminiWebAuth(cfg *config.Config) {
 
 	secure1psid := strings.TrimSpace(cookieMap["__Secure-1PSID"])
 	secure1psidts := strings.TrimSpace(cookieMap["__Secure-1PSIDTS"])
+	// Fallback: prompt user to input missing values
+	if secure1psid == "" {
+		fmt.Print("Cookie missing __Secure-1PSID. Enter __Secure-1PSID: ")
+		v, _ := reader.ReadString('\n')
+		secure1psid = strings.TrimSpace(v)
+	}
+	if secure1psidts == "" {
+		fmt.Print("Cookie missing __Secure-1PSIDTS. Enter __Secure-1PSIDTS: ")
+		v, _ := reader.ReadString('\n')
+		secure1psidts = strings.TrimSpace(v)
+	}
 	if secure1psid == "" || secure1psidts == "" {
-		fmt.Println("Cookie does not contain __Secure-1PSID or __Secure-1PSIDTS")
+		log.Fatal("__Secure-1PSID and __Secure-1PSIDTS cannot be empty")
 		return
 	}
 
@@ -78,35 +89,33 @@ func DoGeminiWebAuth(cfg *config.Config) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 
 	resp, err := httpClient.Do(req)
+	email := ""
 	if err != nil {
 		fmt.Printf("Request to ListAccounts failed: %v\n", err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("ListAccounts returned status code: %d\n", resp.StatusCode)
-		return
-	}
-
-	var payload []any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		fmt.Printf("Failed to parse ListAccounts response: %v\n", err)
-		return
-	}
-
-	// Expected structure like: ["gaia.l.a.r", [["gaia.l.a",1,"Name","email@example.com", ... ]]]
-	email := ""
-	if len(payload) >= 2 {
-		if accounts, ok := payload[1].([]any); ok && len(accounts) >= 1 {
-			if first, ok := accounts[0].([]any); ok && len(first) >= 4 {
-				if em, ok := first[3].(string); ok {
-					email = strings.TrimSpace(em)
+	} else {
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			fmt.Printf("ListAccounts returned status code: %d\n", resp.StatusCode)
+		} else {
+			var payload []any
+			if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+				fmt.Printf("Failed to parse ListAccounts response: %v\n", err)
+			} else {
+				// Expected structure like: ["gaia.l.a.r", [["gaia.l.a",1,"Name","email@example.com", ... ]]]
+				if len(payload) >= 2 {
+					if accounts, ok := payload[1].([]any); ok && len(accounts) >= 1 {
+						if first, ok := accounts[0].([]any); ok && len(first) >= 4 {
+							if em, ok := first[3].(string); ok {
+								email = strings.TrimSpace(em)
+							}
+						}
+					}
+				}
+				if email == "" {
+					fmt.Println("Failed to parse email from ListAccounts response")
 				}
 			}
 		}
-	}
-	if email == "" {
-		fmt.Println("Failed to parse email from ListAccounts response; fallback to filename-based label")
 	}
 
 	// Generate a filename based on the SHA256 hash of the PSID
@@ -115,10 +124,18 @@ func DoGeminiWebAuth(cfg *config.Config) {
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	fileName := fmt.Sprintf("gemini-web-%s.json", hash[:16])
 
-	// Decide label: prefer email; fallback to file name without .json
+	// Decide label: prefer email; fallback prompt then file name without .json
+	defaultLabel := strings.TrimSuffix(fileName, ".json")
 	label := email
 	if label == "" {
-		label = strings.TrimSuffix(fileName, ".json")
+		fmt.Printf("Enter label for this auth (default: %s): ", defaultLabel)
+		v, _ := reader.ReadString('\n')
+		v = strings.TrimSpace(v)
+		if v != "" {
+			label = v
+		} else {
+			label = defaultLabel
+		}
 	}
 
 	tokenStorage := &gemini.GeminiWebTokenStorage{
