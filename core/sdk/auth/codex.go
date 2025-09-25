@@ -79,22 +79,22 @@ func (a *CodexAuthenticator) Login(ctx context.Context, cfg *config.Config, opts
 	}
 
 	if !opts.NoBrowser {
-		log.Info("Opening browser for Codex authentication")
+		fmt.Println("Opening browser for Codex authentication")
 		if !browser.IsAvailable() {
 			log.Warn("No browser available; please open the URL manually")
 			util.PrintSSHTunnelInstructions(a.CallbackPort)
-			log.Infof("Visit the following URL to continue authentication:\n%s", authURL)
+			fmt.Printf("Visit the following URL to continue authentication:\n%s\n", authURL)
 		} else if err = browser.OpenURL(authURL); err != nil {
 			log.Warnf("Failed to open browser automatically: %v", err)
 			util.PrintSSHTunnelInstructions(a.CallbackPort)
-			log.Infof("Visit the following URL to continue authentication:\n%s", authURL)
+			fmt.Printf("Visit the following URL to continue authentication:\n%s\n", authURL)
 		}
 	} else {
 		util.PrintSSHTunnelInstructions(a.CallbackPort)
-		log.Infof("Visit the following URL to continue authentication:\n%s", authURL)
+		fmt.Printf("Visit the following URL to continue authentication:\n%s\n", authURL)
 	}
 
-	log.Info("Waiting for Codex authentication callback...")
+	fmt.Println("Waiting for Codex authentication callback...")
 
 	result, err := oauthServer.WaitForCallback(5 * time.Minute)
 	if err != nil {
@@ -130,9 +130,9 @@ func (a *CodexAuthenticator) Login(ctx context.Context, cfg *config.Config, opts
 		"email": tokenStorage.Email,
 	}
 
-	log.Info("Codex authentication successful")
+	fmt.Println("Codex authentication successful")
 	if authBundle.APIKey != "" {
-		log.Info("Codex API key obtained and stored")
+		fmt.Println("Codex API key obtained and stored")
 	}
 
 	return &TokenRecord{

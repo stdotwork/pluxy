@@ -136,7 +136,7 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 		return "", err
 	}
 	if verbose {
-		log.Infof("Image saved as %s", dest)
+		fmt.Printf("Image saved as %s\n", dest)
 	}
 	abspath, _ := filepath.Abs(dest)
 	return abspath, nil

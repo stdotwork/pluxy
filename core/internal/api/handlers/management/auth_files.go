@@ -359,7 +359,7 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *sdkAuth.TokenReco
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 	ctx := context.Background()
 
-	log.Info("Initializing Claude authentication...")
+	fmt.Println("Initializing Claude authentication...")
 
 	// Generate PKCE codes
 	pkceCodes, err := claude.GeneratePKCECodes()
@@ -407,7 +407,7 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 			}
 		}
 
-		log.Info("Waiting for authentication callback...")
+		fmt.Println("Waiting for authentication callback...")
 		// Wait up to 5 minutes
 		resultMap, errWait := waitForFile(waitFile, 5*time.Minute)
 		if errWait != nil {
@@ -509,11 +509,11 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 			return
 		}
 
-		log.Infof("Authentication successful! Token saved to %s", savedPath)
+		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
 		if bundle.APIKey != "" {
-			log.Info("API key obtained and saved")
+			fmt.Println("API key obtained and saved")
 		}
-		log.Info("You can now use Claude services through this CLI")
+		fmt.Println("You can now use Claude services through this CLI")
 		delete(oauthStatus, state)
 	}()
 
@@ -527,7 +527,7 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 	// Optional project ID from query
 	projectID := c.Query("project_id")
 
-	log.Info("Initializing Google authentication...")
+	fmt.Println("Initializing Google authentication...")
 
 	// OAuth2 configuration (mirrors internal/auth/gemini)
 	conf := &oauth2.Config{
@@ -549,7 +549,7 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 	go func() {
 		// Wait for callback file written by server route
 		waitFile := filepath.Join(h.cfg.AuthDir, fmt.Sprintf(".oauth-gemini-%s.oauth", state))
-		log.Info("Waiting for authentication callback...")
+		fmt.Println("Waiting for authentication callback...")
 		deadline := time.Now().Add(5 * time.Minute)
 		var authCode string
 		for {
@@ -618,9 +618,9 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 
 		email := gjson.GetBytes(bodyBytes, "email").String()
 		if email != "" {
-			log.Infof("Authenticated user email: %s", email)
+			fmt.Printf("Authenticated user email: %s\n", email)
 		} else {
-			log.Info("Failed to get user email from token")
+			fmt.Println("Failed to get user email from token")
 			oauthStatus[state] = "Failed to get user email from token"
 		}
 
@@ -657,7 +657,7 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 			oauthStatus[state] = "Failed to get authenticated client"
 			return
 		}
-		log.Info("Authentication successful.")
+		fmt.Println("Authentication successful.")
 
 		record := &sdkAuth.TokenRecord{
 			Provider: "gemini",
@@ -676,7 +676,7 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 		}
 
 		delete(oauthStatus, state)
-		log.Infof("You can now use Gemini CLI services through this CLI; token saved to %s", savedPath)
+		fmt.Printf("You can now use Gemini CLI services through this CLI; token saved to %s\n", savedPath)
 	}()
 
 	oauthStatus[state] = ""
@@ -737,14 +737,14 @@ func (h *Handler) CreateGeminiWebToken(c *gin.Context) {
 		return
 	}
 
-	log.Infof("Successfully saved Gemini Web token to: %s", savedPath)
+	fmt.Printf("Successfully saved Gemini Web token to: %s\n", savedPath)
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "file": filepath.Base(savedPath)})
 }
 
 func (h *Handler) RequestCodexToken(c *gin.Context) {
 	ctx := context.Background()
 
-	log.Info("Initializing Codex authentication...")
+	fmt.Println("Initializing Codex authentication...")
 
 	// Generate PKCE codes
 	pkceCodes, err := codex.GeneratePKCECodes()
@@ -884,11 +884,11 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 			log.Fatalf("Failed to save authentication tokens: %v", errSave)
 			return
 		}
-		log.Infof("Authentication successful! Token saved to %s", savedPath)
+		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
 		if bundle.APIKey != "" {
-			log.Info("API key obtained and saved")
+			fmt.Println("API key obtained and saved")
 		}
-		log.Info("You can now use Codex services through this CLI")
+		fmt.Println("You can now use Codex services through this CLI")
 		delete(oauthStatus, state)
 	}()
 
@@ -899,7 +899,7 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 func (h *Handler) RequestQwenToken(c *gin.Context) {
 	ctx := context.Background()
 
-	log.Info("Initializing Qwen authentication...")
+	fmt.Println("Initializing Qwen authentication...")
 
 	state := fmt.Sprintf("gem-%d", time.Now().UnixNano())
 	// Initialize Qwen auth service
@@ -914,7 +914,7 @@ func (h *Handler) RequestQwenToken(c *gin.Context) {
 	authURL := deviceFlow.VerificationURIComplete
 
 	go func() {
-		log.Info("Waiting for authentication...")
+		fmt.Println("Waiting for authentication...")
 		tokenData, errPollForToken := qwenAuth.PollForToken(deviceFlow.DeviceCode, deviceFlow.CodeVerifier)
 		if errPollForToken != nil {
 			oauthStatus[state] = "Authentication failed"
@@ -939,8 +939,8 @@ func (h *Handler) RequestQwenToken(c *gin.Context) {
 			return
 		}
 
-		log.Infof("Authentication successful! Token saved to %s", savedPath)
-		log.Info("You can now use Qwen services through this CLI")
+		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
+		fmt.Println("You can now use Qwen services through this CLI")
 		delete(oauthStatus, state)
 	}()
 

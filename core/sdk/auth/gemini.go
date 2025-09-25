@@ -8,7 +8,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
 	// legacy client removed
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	log "github.com/sirupsen/logrus"
 )
 
 // GeminiAuthenticator implements the login flow for Google Gemini CLI accounts.
@@ -57,7 +56,7 @@ func (a *GeminiAuthenticator) Login(ctx context.Context, cfg *config.Config, opt
 		"project_id": ts.ProjectID,
 	}
 
-	log.Info("Gemini authentication successful")
+	fmt.Println("Gemini authentication successful")
 
 	return &TokenRecord{
 		Provider: a.Provider(),

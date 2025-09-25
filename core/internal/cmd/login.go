@@ -62,8 +62,8 @@ func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 	}
 
 	if savedPath != "" {
-		log.Infof("Authentication saved to %s", savedPath)
+		fmt.Printf("Authentication saved to %s\n", savedPath)
 	}
 
-	log.Info("Gemini authentication successful!")
+	fmt.Println("Gemini authentication successful!")
 }

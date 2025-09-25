@@ -1,6 +1,7 @@
 package misc
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -15,7 +16,7 @@ func LogSavingCredentials(path string) {
 		return
 	}
 	// Use filepath.Clean so logs remain stable even if callers pass redundant separators.
-	log.Infof("Saving credentials to %s", filepath.Clean(path))
+	fmt.Printf("Saving credentials to %s\n", filepath.Clean(path))
 }
 
 // LogCredentialSeparator adds a visual separator to group auth/key processing logs.

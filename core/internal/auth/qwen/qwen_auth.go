@@ -260,7 +260,7 @@ func (qa *QwenAuth) PollForToken(deviceCode, codeVerifier string) (*QwenTokenDat
 					switch errorType {
 					case "authorization_pending":
 						// User has not yet approved the authorization request. Continue polling.
-						log.Infof("Polling attempt %d/%d...\n", attempt+1, maxAttempts)
+						fmt.Printf("Polling attempt %d/%d...\n\n", attempt+1, maxAttempts)
 						time.Sleep(pollInterval)
 						continue
 					case "slow_down":
@@ -269,7 +269,7 @@ func (qa *QwenAuth) PollForToken(deviceCode, codeVerifier string) (*QwenTokenDat
 						if pollInterval > 10*time.Second {
 							pollInterval = 10 * time.Second
 						}
-						log.Infof("Server requested to slow down, increasing poll interval to %v\n", pollInterval)
+						fmt.Printf("Server requested to slow down, increasing poll interval to %v\n\n", pollInterval)
 						time.Sleep(pollInterval)
 						continue
 					case "expired_token":

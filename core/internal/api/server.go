@@ -452,6 +452,14 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		log.Debugf("request logging updated from %t to %t", s.cfg.RequestLog, cfg.RequestLog)
 	}
 
+	if s.cfg.LoggingToFile != cfg.LoggingToFile {
+		if err := logging.ConfigureLogOutput(cfg.LoggingToFile); err != nil {
+			log.Errorf("failed to reconfigure log output: %v", err)
+		} else {
+			log.Debugf("logging_to_file updated from %t to %t", s.cfg.LoggingToFile, cfg.LoggingToFile)
+		}
+	}
+
 	// Update log level dynamically when debug flag changes
 	if s.cfg.Debug != cfg.Debug {
 		util.SetLogLevel(cfg)
@@ -477,7 +485,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	}
 
 	total := authFiles + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
-	log.Infof("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
+	fmt.Printf("server clients and configuration updated: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)\n",
 		total,
 		authFiles,
 		glAPIKeyCount,

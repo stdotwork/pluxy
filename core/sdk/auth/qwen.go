@@ -51,19 +51,19 @@ func (a *QwenAuthenticator) Login(ctx context.Context, cfg *config.Config, opts 
 	authURL := deviceFlow.VerificationURIComplete
 
 	if !opts.NoBrowser {
-		log.Info("Opening browser for Qwen authentication")
+		fmt.Println("Opening browser for Qwen authentication")
 		if !browser.IsAvailable() {
 			log.Warn("No browser available; please open the URL manually")
-			log.Infof("Visit the following URL to continue authentication:\n%s", authURL)
+			fmt.Printf("Visit the following URL to continue authentication:\n%s\n", authURL)
 		} else if err = browser.OpenURL(authURL); err != nil {
 			log.Warnf("Failed to open browser automatically: %v", err)
-			log.Infof("Visit the following URL to continue authentication:\n%s", authURL)
+			fmt.Printf("Visit the following URL to continue authentication:\n%s\n", authURL)
 		}
 	} else {
-		log.Infof("Visit the following URL to continue authentication:\n%s", authURL)
+		fmt.Printf("Visit the following URL to continue authentication:\n%s\n", authURL)
 	}
 
-	log.Info("Waiting for Qwen authentication...")
+	fmt.Println("Waiting for Qwen authentication...")
 
 	tokenData, err := authSvc.PollForToken(deviceFlow.DeviceCode, deviceFlow.CodeVerifier)
 	if err != nil {
@@ -101,7 +101,7 @@ func (a *QwenAuthenticator) Login(ctx context.Context, cfg *config.Config, opts 
 		"email": tokenStorage.Email,
 	}
 
-	log.Info("Qwen authentication successful")
+	fmt.Println("Qwen authentication successful")
 
 	return &TokenRecord{
 		Provider: a.Provider(),

@@ -4,106 +4,30 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/cmd"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	log "github.com/sirupsen/logrus"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var (
-	Version        = "dev"
-	Commit         = "none"
-	BuildDate      = "unknown"
-	logWriter      *lumberjack.Logger
-	ginInfoWriter  *io.PipeWriter
-	ginErrorWriter *io.PipeWriter
+	Version   = "dev"
+	Commit    = "none"
+	BuildDate = "unknown"
 )
 
-// LogFormatter defines a custom log format for logrus.
-// This formatter adds timestamp, log level, and source location information
-// to each log entry for better debugging and monitoring.
-type LogFormatter struct {
-}
-
-// Format renders a single log entry with custom formatting.
-// It includes timestamp, log level, source file and line number, and the log message.
-func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
-	var b *bytes.Buffer
-	if entry.Buffer != nil {
-		b = entry.Buffer
-	} else {
-		b = &bytes.Buffer{}
-	}
-
-	timestamp := entry.Time.Format("2006-01-02 15:04:05")
-	var newLog string
-	// Ensure message doesn't carry trailing newlines; formatter appends one.
-	msg := strings.TrimRight(entry.Message, "\r\n")
-	// Customize the log format to include timestamp, level, caller file/line, and message.
-	newLog = fmt.Sprintf("[%s] [%s] [%s:%d] %s\n", timestamp, entry.Level, filepath.Base(entry.Caller.File), entry.Caller.Line, msg)
-
-	b.WriteString(newLog)
-	return b.Bytes(), nil
-}
-
-// init initializes the logger configuration.
-// It sets up the custom log formatter, enables caller reporting,
-// and configures the log output destination.
+// init initializes the shared logger setup.
 func init() {
-	logDir := "logs"
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "failed to create log directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	logWriter = &lumberjack.Logger{
-		Filename:   filepath.Join(logDir, "main.log"),
-		MaxSize:    10,
-		MaxBackups: 0,
-		MaxAge:     0,
-		Compress:   false,
-	}
-
-	log.SetOutput(logWriter)
-	// Enable reporting the caller function's file and line number.
-	log.SetReportCaller(true)
-	// Set the custom log formatter.
-	log.SetFormatter(&LogFormatter{})
-
-	ginInfoWriter = log.StandardLogger().Writer()
-	gin.DefaultWriter = ginInfoWriter
-	ginErrorWriter = log.StandardLogger().WriterLevel(log.ErrorLevel)
-	gin.DefaultErrorWriter = ginErrorWriter
-	gin.DebugPrintFunc = func(format string, values ...interface{}) {
-		// Trim trailing newlines from Gin's formatted messages to avoid blank lines.
-		// Gin's debug prints usually include a trailing "\n"; our formatter also appends one.
-		// Removing it here ensures a single newline per entry.
-		format = strings.TrimRight(format, "\r\n")
-		log.StandardLogger().Infof(format, values...)
-	}
-	log.RegisterExitHandler(func() {
-		if logWriter != nil {
-			_ = logWriter.Close()
-		}
-		if ginInfoWriter != nil {
-			_ = ginInfoWriter.Close()
-		}
-		if ginErrorWriter != nil {
-			_ = ginErrorWriter.Close()
-		}
-	})
+	logging.SetupBaseLogger()
 }
 
 // main is the entry point of the application.
@@ -111,7 +35,6 @@ func init() {
 // service based on the provided flags (login, codex-login, or server mode).
 func main() {
 	fmt.Printf("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s\n", Version, Commit, BuildDate)
-	log.Infof("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s", Version, Commit, BuildDate)
 
 	// Command-line flags to control the application's behavior.
 	var login bool
@@ -188,6 +111,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
+
+	if err = logging.ConfigureLogOutput(cfg.LoggingToFile); err != nil {
+		log.Fatalf("failed to configure log output: %v", err)
+	}
+
+	log.Infof("CLIProxyAPI Version: %s, Commit: %s, BuiltAt: %s", Version, Commit, BuildDate)
 
 	// Set the log level based on the configuration.
 	util.SetLogLevel(cfg)

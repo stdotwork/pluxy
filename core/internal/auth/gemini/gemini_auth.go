@@ -107,7 +107,7 @@ func (g *GeminiAuth) GetAuthenticatedClient(ctx context.Context, ts *GeminiToken
 
 	// If no token is found in storage, initiate the web-based OAuth flow.
 	if ts.Token == nil {
-		log.Info("Could not load token from file, starting OAuth flow.")
+		fmt.Printf("Could not load token from file, starting OAuth flow.\n")
 		token, err = g.getTokenFromWeb(ctx, conf, noBrowser...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get token from web: %w", err)
@@ -169,9 +169,9 @@ func (g *GeminiAuth) createTokenStorage(ctx context.Context, config *oauth2.Conf
 
 	emailResult := gjson.GetBytes(bodyBytes, "email")
 	if emailResult.Exists() && emailResult.Type == gjson.String {
-		log.Infof("Authenticated user email: %s", emailResult.String())
+		fmt.Printf("Authenticated user email: %s\n", emailResult.String())
 	} else {
-		log.Info("Failed to get user email from token")
+		fmt.Println("Failed to get user email from token")
 	}
 
 	var ifToken map[string]any
@@ -246,19 +246,19 @@ func (g *GeminiAuth) getTokenFromWeb(ctx context.Context, config *oauth2.Config,
 	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
 
 	if len(noBrowser) == 1 && !noBrowser[0] {
-		log.Info("Opening browser for authentication...")
+		fmt.Println("Opening browser for authentication...")
 
 		// Check if browser is available
 		if !browser.IsAvailable() {
 			log.Warn("No browser available on this system")
 			util.PrintSSHTunnelInstructions(8085)
-			log.Infof("Please manually open this URL in your browser:\n\n%s\n", authURL)
+			fmt.Printf("Please manually open this URL in your browser:\n\n%s\n", authURL)
 		} else {
 			if err := browser.OpenURL(authURL); err != nil {
 				authErr := codex.NewAuthenticationError(codex.ErrBrowserOpenFailed, err)
 				log.Warn(codex.GetUserFriendlyMessage(authErr))
 				util.PrintSSHTunnelInstructions(8085)
-				log.Infof("Please manually open this URL in your browser:\n\n%s\n", authURL)
+				fmt.Printf("Please manually open this URL in your browser:\n\n%s\n", authURL)
 
 				// Log platform info for debugging
 				platformInfo := browser.GetPlatformInfo()
@@ -269,10 +269,10 @@ func (g *GeminiAuth) getTokenFromWeb(ctx context.Context, config *oauth2.Config,
 		}
 	} else {
 		util.PrintSSHTunnelInstructions(8085)
-		log.Infof("Please open this URL in your browser:\n\n%s\n", authURL)
+		fmt.Printf("Please open this URL in your browser:\n\n%s\n", authURL)
 	}
 
-	log.Info("Waiting for authentication callback...")
+	fmt.Println("Waiting for authentication callback...")
 
 	// Wait for the authorization code or an error.
 	var authCode string
@@ -296,6 +296,6 @@ func (g *GeminiAuth) getTokenFromWeb(ctx context.Context, config *oauth2.Config,
 		return nil, fmt.Errorf("failed to exchange token: %w", err)
 	}
 
-	log.Info("Authentication successful.")
+	fmt.Println("Authentication successful.")
 	return token, nil
 }

@@ -23,6 +23,9 @@ type Config struct {
 	// Debug enables or disables debug-level logging and other debug features.
 	Debug bool `yaml:"debug" json:"debug"`
 
+	// LoggingToFile controls whether application logs are written to rotating files or stdout.
+	LoggingToFile bool `yaml:"logging-to-file" json:"logging-to-file"`
+
 	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
 
@@ -202,6 +205,7 @@ func LoadConfig(configFile string) (*Config, error) {
 	// Unmarshal the YAML data into the Config struct.
 	var config Config
 	// Set defaults before unmarshal so that absent keys keep defaults.
+	config.LoggingToFile = true
 	config.GeminiWeb.Context = true
 	if err = yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)

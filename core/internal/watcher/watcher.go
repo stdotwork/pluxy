@@ -380,7 +380,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 			log.Debugf("config file content unchanged (hash match), skipping reload")
 			return
 		}
-		log.Infof("config file changed, reloading: %s", w.configPath)
+		fmt.Printf("config file changed, reloading: %s\n", w.configPath)
 		if w.reloadConfig() {
 			w.clientsMutex.Lock()
 			w.lastConfigHash = newHash
@@ -390,7 +390,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	}
 
 	// Handle auth directory changes incrementally (.json only)
-	log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
+	fmt.Printf("auth file changed (%s): %s, processing incrementally\n", event.Op.String(), filepath.Base(event.Name))
 	if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
 		w.addOrUpdateClient(event.Name)
 	} else if event.Op&fsnotify.Remove == fsnotify.Remove {

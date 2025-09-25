@@ -147,7 +147,7 @@ func getAccessToken(baseCookies map[string]string, proxy string, verbose bool, i
 		if len(matches) >= 2 {
 			token := matches[1]
 			if verbose {
-				log.Infof("Gemini access token acquired.")
+				fmt.Println("Gemini access token acquired.")
 			}
 			return token, mergedCookies, nil
 		}
@@ -280,7 +280,7 @@ func (c *GeminiClient) Init(timeoutSec float64, verbose bool) error {
 
 	c.Timeout = time.Duration(timeoutSec * float64(time.Second))
 	if verbose {
-		log.Infof("Gemini client initialized successfully.")
+		fmt.Println("Gemini client initialized successfully.")
 	}
 	return nil
 }

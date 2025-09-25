@@ -120,7 +120,7 @@ func GetIPAddress() string {
 func PrintSSHTunnelInstructions(port int) {
 	ipAddress := GetIPAddress()
 	border := "================================================================================"
-	log.Infof("To authenticate from a remote machine, an SSH tunnel may be required.")
+	fmt.Println("To authenticate from a remote machine, an SSH tunnel may be required.")
 	fmt.Println(border)
 	fmt.Println("  Run one of the following commands on your local machine (NOT the server):")
 	fmt.Println()

@@ -21,7 +21,7 @@ import (
 // Returns:
 //   - An error if the URL cannot be opened, otherwise nil.
 func OpenURL(url string) error {
-	log.Infof("Attempting to open URL in browser: %s", url)
+	fmt.Printf("Attempting to open URL in browser: %s\n", url)
 
 	// Try using the open-golang library first
 	err := open.Run(url)
