@@ -81,6 +81,22 @@ func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, 
 	return state
 }
 
+// Label returns a stable account label for logging and persistence.
+// If a storage file path is known, it uses the file base name (without extension).
+// Otherwise, it falls back to the stable client ID (e.g., "gemini-web-<hash>").
+func (s *GeminiWebState) Label() string {
+	if s == nil {
+		return ""
+	}
+	if s.storagePath != "" {
+		base := strings.TrimSuffix(filepath.Base(s.storagePath), filepath.Ext(s.storagePath))
+		if base != "" {
+			return base
+		}
+	}
+	return s.stableClientID
+}
+
 func (s *GeminiWebState) loadConversationCaches() {
 	if path := s.convPath(); path != "" {
 		if store, err := LoadConvStore(path); err == nil {
