@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -123,19 +121,6 @@ func getAccessToken(baseCookies map[string]string, proxy string, verbose bool, i
 			trySets = append(trySets, merged)
 		} else if verbose {
 			log.Debug("Skipping base cookies: __Secure-1PSIDTS missing")
-		}
-	}
-
-	cacheDir := "temp"
-	_ = os.MkdirAll(cacheDir, 0o755)
-	if v1, ok1 := baseCookies["__Secure-1PSID"]; ok1 {
-		cacheFile := filepath.Join(cacheDir, ".cached_1psidts_"+v1+".txt")
-		if b, err := os.ReadFile(cacheFile); err == nil {
-			cv := strings.TrimSpace(string(b))
-			if cv != "" {
-				merged := map[string]string{"__Secure-1PSID": v1, "__Secure-1PSIDTS": cv}
-				trySets = append(trySets, merged)
-			}
 		}
 	}
 
