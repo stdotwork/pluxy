@@ -53,9 +53,6 @@ type Config struct {
 	// OpenAICompatibility defines OpenAI API compatibility configurations for external providers.
 	OpenAICompatibility []OpenAICompatibility `yaml:"openai-compatibility" json:"openai-compatibility"`
 
-	// AllowLocalhostUnauthenticated allows unauthenticated requests from localhost.
-	AllowLocalhostUnauthenticated bool `yaml:"allow-localhost-unauthenticated" json:"allow-localhost-unauthenticated"`
-
 	// RemoteManagement nests management-related options under 'remote-management'.
 	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
 

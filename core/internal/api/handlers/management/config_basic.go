@@ -26,14 +26,6 @@ func (h *Handler) PutRequestRetry(c *gin.Context) {
 	h.updateIntField(c, func(v int) { h.cfg.RequestRetry = v })
 }
 
-// Allow localhost unauthenticated
-func (h *Handler) GetAllowLocalhost(c *gin.Context) {
-	c.JSON(200, gin.H{"allow-localhost-unauthenticated": h.cfg.AllowLocalhostUnauthenticated})
-}
-func (h *Handler) PutAllowLocalhost(c *gin.Context) {
-	h.updateBoolField(c, func(v bool) { h.cfg.AllowLocalhostUnauthenticated = v })
-}
-
 // Proxy URL
 func (h *Handler) GetProxyURL(c *gin.Context) { c.JSON(200, gin.H{"proxy-url": h.cfg.ProxyURL}) }
 func (h *Handler) PutProxyURL(c *gin.Context) {

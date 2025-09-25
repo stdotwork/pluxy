@@ -474,9 +474,6 @@ func (w *Watcher) reloadConfig() bool {
 		if len(oldConfig.CodexKey) != len(newConfig.CodexKey) {
 			log.Debugf("  codex-api-key count: %d -> %d", len(oldConfig.CodexKey), len(newConfig.CodexKey))
 		}
-		if oldConfig.AllowLocalhostUnauthenticated != newConfig.AllowLocalhostUnauthenticated {
-			log.Debugf("  allow-localhost-unauthenticated: %t -> %t", oldConfig.AllowLocalhostUnauthenticated, newConfig.AllowLocalhostUnauthenticated)
-		}
 		if oldConfig.RemoteManagement.AllowRemote != newConfig.RemoteManagement.AllowRemote {
 			log.Debugf("  remote-management.allow-remote: %t -> %t", oldConfig.RemoteManagement.AllowRemote, newConfig.RemoteManagement.AllowRemote)
 		}

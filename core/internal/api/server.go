@@ -188,11 +188,9 @@ func (s *Server) setupRoutes() {
 	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
 	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
 
-	cfgSupplier := func() *config.Config { return s.cfg }
-
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
-	v1.Use(AuthMiddleware(cfgSupplier, s.accessManager))
+	v1.Use(AuthMiddleware(s.accessManager))
 	{
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
@@ -204,7 +202,7 @@ func (s *Server) setupRoutes() {
 
 	// Gemini compatible API routes
 	v1beta := s.engine.Group("/v1beta")
-	v1beta.Use(AuthMiddleware(cfgSupplier, s.accessManager))
+	v1beta.Use(AuthMiddleware(s.accessManager))
 	{
 		v1beta.GET("/models", geminiHandlers.GeminiModels)
 		v1beta.POST("/models/:action", geminiHandlers.GeminiHandler)
@@ -308,10 +306,6 @@ func (s *Server) setupRoutes() {
 			mgmt.GET("/request-retry", s.mgmt.GetRequestRetry)
 			mgmt.PUT("/request-retry", s.mgmt.PutRequestRetry)
 			mgmt.PATCH("/request-retry", s.mgmt.PutRequestRetry)
-
-			mgmt.GET("/allow-localhost-unauthenticated", s.mgmt.GetAllowLocalhost)
-			mgmt.PUT("/allow-localhost-unauthenticated", s.mgmt.PutAllowLocalhost)
-			mgmt.PATCH("/allow-localhost-unauthenticated", s.mgmt.PutAllowLocalhost)
 
 			mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
 			mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
@@ -487,17 +481,8 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 // AuthMiddleware returns a Gin middleware handler that authenticates requests
 // using the configured authentication providers. When no providers are available,
 // it allows all requests (legacy behaviour).
-func AuthMiddleware(cfgFn func() *config.Config, manager *sdkaccess.Manager) gin.HandlerFunc {
+func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		cfg := cfgFn()
-		if cfg != nil && cfg.AllowLocalhostUnauthenticated {
-			ip := c.ClientIP()
-			if ip == "127.0.0.1" || ip == "::1" || strings.HasPrefix(c.Request.RemoteAddr, "127.0.0.1:") || strings.HasPrefix(c.Request.RemoteAddr, "[::1]:") {
-				c.Next()
-				return
-			}
-		}
-
 		if manager == nil {
 			c.Next()
 			return
