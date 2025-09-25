@@ -2,7 +2,6 @@ package geminiwebapi
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,8 +10,6 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
-	"net/http/cookiejar"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -69,18 +66,9 @@ func (i Image) Save(path string, filename string, cookies map[string]string, ver
 			}
 		}
 	}
-	// Build client with cookie jar so cookies persist across redirects.
-	tr := &http.Transport{}
-	if i.Proxy != "" {
-		if pu, err := url.Parse(i.Proxy); err == nil {
-			tr.Proxy = http.ProxyURL(pu)
-		}
-	}
-	if insecure {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	}
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Transport: tr, Timeout: 120 * time.Second, Jar: jar}
+	// Build client using shared helper to keep proxy/TLS behavior consistent.
+	client := newHTTPClient(httpOptions{ProxyURL: i.Proxy, Insecure: insecure, FollowRedirects: true})
+	client.Timeout = 120 * time.Second
 
 	// Helper to set raw Cookie header using provided cookies (to mirror Python client behavior).
 	buildCookieHeader := func(m map[string]string) string {
@@ -352,23 +340,11 @@ func uploadFile(path string, proxy string, insecure bool) (string, error) {
 	}
 	_ = mw.Close()
 
-	tr := &http.Transport{}
-	if proxy != "" {
-		if pu, errParse := url.Parse(proxy); errParse == nil {
-			tr.Proxy = http.ProxyURL(pu)
-		}
-	}
-	if insecure {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	}
-	client := &http.Client{Transport: tr, Timeout: 300 * time.Second}
+	client := newHTTPClient(httpOptions{ProxyURL: proxy, Insecure: insecure, FollowRedirects: true})
+	client.Timeout = 300 * time.Second
 
 	req, _ := http.NewRequest(http.MethodPost, EndpointUpload, &buf)
-	for k, v := range HeadersUpload {
-		for _, vv := range v {
-			req.Header.Add(k, vv)
-		}
-	}
+	applyHeaders(req, HeadersUpload)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Connection", "keep-alive")
