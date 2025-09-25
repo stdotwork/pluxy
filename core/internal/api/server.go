@@ -340,6 +340,7 @@ func (s *Server) setupRoutes() {
 			mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
 			mgmt.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
 			mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
+			mgmt.POST("/gemini-web-token", s.mgmt.CreateGeminiWebToken)
 			mgmt.GET("/qwen-auth-url", s.mgmt.RequestQwenToken)
 			mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 		}

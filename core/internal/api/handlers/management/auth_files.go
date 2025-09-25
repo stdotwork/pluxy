@@ -2,6 +2,8 @@ package management
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -679,6 +681,55 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 
 	oauthStatus[state] = ""
 	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})
+}
+
+func (h *Handler) CreateGeminiWebToken(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var payload struct {
+		Secure1PSID   string `json:"secure_1psid"`
+		Secure1PSIDTS string `json:"secure_1psidts"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	payload.Secure1PSID = strings.TrimSpace(payload.Secure1PSID)
+	payload.Secure1PSIDTS = strings.TrimSpace(payload.Secure1PSIDTS)
+	if payload.Secure1PSID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "secure_1psid is required"})
+		return
+	}
+	if payload.Secure1PSIDTS == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "secure_1psidts is required"})
+		return
+	}
+
+	sha := sha256.New()
+	sha.Write([]byte(payload.Secure1PSID))
+	hash := hex.EncodeToString(sha.Sum(nil))
+	fileName := fmt.Sprintf("gemini-web-%s.json", hash[:16])
+
+	tokenStorage := &geminiAuth.GeminiWebTokenStorage{
+		Secure1PSID:   payload.Secure1PSID,
+		Secure1PSIDTS: payload.Secure1PSIDTS,
+	}
+
+	record := &sdkAuth.TokenRecord{
+		Provider: "gemini-web",
+		FileName: fileName,
+		Storage:  tokenStorage,
+	}
+
+	savedPath, errSave := h.saveTokenRecord(ctx, record)
+	if errSave != nil {
+		log.Errorf("Failed to save Gemini Web token: %v", errSave)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save token"})
+		return
+	}
+
+	log.Infof("Successfully saved Gemini Web token to: %s", savedPath)
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "file": filepath.Base(savedPath)})
 }
 
 func (h *Handler) RequestCodexToken(c *gin.Context) {
