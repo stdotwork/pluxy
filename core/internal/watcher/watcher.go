@@ -477,6 +477,12 @@ func (w *Watcher) reloadConfig() bool {
 		if oldConfig.RemoteManagement.AllowRemote != newConfig.RemoteManagement.AllowRemote {
 			log.Debugf("  remote-management.allow-remote: %t -> %t", oldConfig.RemoteManagement.AllowRemote, newConfig.RemoteManagement.AllowRemote)
 		}
+		if oldConfig.LoggingToFile != newConfig.LoggingToFile {
+			log.Debugf("  logging-to-file: %t -> %t", oldConfig.LoggingToFile, newConfig.LoggingToFile)
+		}
+		if oldConfig.UsageStatisticsEnabled != newConfig.UsageStatisticsEnabled {
+			log.Debugf("  usage-statistics-enabled: %t -> %t", oldConfig.UsageStatisticsEnabled, newConfig.UsageStatisticsEnabled)
+		}
 	}
 
 	log.Infof("config successfully reloaded, triggering client reload")

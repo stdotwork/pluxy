@@ -280,6 +280,8 @@ The server uses a YAML configuration file (`config.yaml`) located in the project
 | `quota-exceeded.switch-project`         | boolean  | true               | Whether to automatically switch to another project when a quota is exceeded.                                                                                                              |
 | `quota-exceeded.switch-preview-model`   | boolean  | true               | Whether to automatically switch to a preview model when a quota is exceeded.                                                                                                              |
 | `debug`                                 | boolean  | false              | Enable debug mode for verbose logging.                                                                                                                                                    |
+| `logging-to-file`                       | boolean  | true               | Write application logs to rotating files instead of stdout. Set to `false` to log to stdout/stderr.                                                                                      |
+| `usage-statistics-enabled`              | boolean  | true               | Enable in-memory usage aggregation for management APIs. Disable to drop all collected usage metrics.                                                                                    |
 | `auth`                                  | object   | {}                 | Request authentication configuration.                                                                                                                                                     |
 | `auth.providers`                        | object[] | []                 | Authentication providers. Includes built-in `config-api-key` for inline keys.                                                                                                             |
 | `auth.providers.*.name`                 | string   | ""                 | Provider instance name.                                                                                                                                                                   |
@@ -328,6 +330,12 @@ auth-dir: "~/.cli-proxy-api"
 
 # Enable debug logging
 debug: false
+
+# When true, write application logs to rotating files instead of stdout
+logging-to-file: true
+
+# When false, disable in-memory usage statistics aggregation
+usage-statistics-enabled: true
 
 # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/
 proxy-url: ""

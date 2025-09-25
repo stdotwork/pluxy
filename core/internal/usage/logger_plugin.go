@@ -7,13 +7,17 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
+var statisticsEnabled atomic.Bool
+
 func init() {
+	statisticsEnabled.Store(true)
 	coreusage.RegisterPlugin(NewLoggerPlugin())
 }
 
@@ -36,11 +40,20 @@ func NewLoggerPlugin() *LoggerPlugin { return &LoggerPlugin{stats: defaultReques
 //   - ctx: The context for the usage record
 //   - record: The usage record to aggregate
 func (p *LoggerPlugin) HandleUsage(ctx context.Context, record coreusage.Record) {
+	if !statisticsEnabled.Load() {
+		return
+	}
 	if p == nil || p.stats == nil {
 		return
 	}
 	p.stats.Record(ctx, record)
 }
+
+// SetStatisticsEnabled toggles whether in-memory statistics are recorded.
+func SetStatisticsEnabled(enabled bool) { statisticsEnabled.Store(enabled) }
+
+// StatisticsEnabled reports the current recording state.
+func StatisticsEnabled() bool { return statisticsEnabled.Load() }
 
 // RequestStatistics maintains aggregated request metrics in memory.
 type RequestStatistics struct {
@@ -136,6 +149,9 @@ func NewRequestStatistics() *RequestStatistics {
 // Record ingests a new usage record and updates the aggregates.
 func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record) {
 	if s == nil {
+		return
+	}
+	if !statisticsEnabled.Load() {
 		return
 	}
 	timestamp := record.RequestedAt

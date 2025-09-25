@@ -24,6 +24,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -317,6 +318,14 @@ func (s *Server) setupRoutes() {
 			mgmt.PUT("/debug", s.mgmt.PutDebug)
 			mgmt.PATCH("/debug", s.mgmt.PutDebug)
 
+			mgmt.GET("/logging-to-file", s.mgmt.GetLoggingToFile)
+			mgmt.PUT("/logging-to-file", s.mgmt.PutLoggingToFile)
+			mgmt.PATCH("/logging-to-file", s.mgmt.PutLoggingToFile)
+
+			mgmt.GET("/usage-statistics-enabled", s.mgmt.GetUsageStatisticsEnabled)
+			mgmt.PUT("/usage-statistics-enabled", s.mgmt.PutUsageStatisticsEnabled)
+			mgmt.PATCH("/usage-statistics-enabled", s.mgmt.PutUsageStatisticsEnabled)
+
 			mgmt.GET("/proxy-url", s.mgmt.GetProxyURL)
 			mgmt.PUT("/proxy-url", s.mgmt.PutProxyURL)
 			mgmt.PATCH("/proxy-url", s.mgmt.PutProxyURL)
@@ -572,6 +581,13 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 			log.Errorf("failed to reconfigure log output: %v", err)
 		} else {
 			log.Debugf("logging_to_file updated from %t to %t", s.cfg.LoggingToFile, cfg.LoggingToFile)
+		}
+	}
+
+	if s.cfg == nil || s.cfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
+		usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
+		if s.cfg != nil {
+			log.Debugf("usage_statistics_enabled updated from %t to %t", s.cfg.UsageStatisticsEnabled, cfg.UsageStatisticsEnabled)
 		}
 	}
 

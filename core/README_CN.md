@@ -292,6 +292,8 @@ console.log(await claudeResponse.json());
 | `quota-exceeded.switch-project`         | boolean  | true               | 当配额超限时，是否自动切换到另一个项目。                                                |
 | `quota-exceeded.switch-preview-model`   | boolean  | true               | 当配额超限时，是否自动切换到预览模型。                                                 |
 | `debug`                                 | boolean  | false              | 启用调试模式以获取详细日志。                                                      |
+| `logging-to-file`                       | boolean  | true               | 是否将应用日志写入滚动文件；设为 false 时输出到 stdout/stderr。                           |
+| `usage-statistics-enabled`              | boolean  | true               | 是否启用内存中的使用统计；设为 false 时直接丢弃所有统计数据。                               |
 | `auth`                                  | object   | {}                 | 请求鉴权配置。                                                                  |
 | `auth.providers`                        | object[] | []                 | 鉴权提供方列表，内置 `config-api-key` 支持内联密钥。                             |
 | `auth.providers.*.name`                 | string   | ""                 | 提供方实例名称。                                                                |
@@ -339,6 +341,12 @@ auth-dir: "~/.cli-proxy-api"
 
 # 启用调试日志
 debug: false
+
+# 为 true 时将应用日志写入滚动文件而不是 stdout
+logging-to-file: true
+
+# 为 false 时禁用内存中的使用统计并直接丢弃所有数据
+usage-statistics-enabled: true
 
 # 代理URL。支持socks5/http/https协议。例如：socks5://user:pass@192.168.1.1:1080/
 proxy-url: ""
