@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	misc "github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -148,6 +149,8 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		delete(r.clientProviders, clientID)
 	}
 	log.Debugf("Registered client %s from provider %s with %d models", clientID, clientProvider, len(models))
+	// Separator at the end of the registration block (acts as boundary to next group)
+	misc.LogCredentialSeparator()
 }
 
 // UnregisterClient removes a client and decrements counts for its models
@@ -207,6 +210,8 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 		delete(r.clientProviders, clientID)
 	}
 	log.Debugf("Unregistered client %s", clientID)
+	// Separator line after completing client unregistration (after the summary line)
+	misc.LogCredentialSeparator()
 }
 
 // SetModelQuotaExceeded marks a model as quota exceeded for a specific client

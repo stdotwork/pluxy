@@ -561,8 +561,7 @@ func (w *Watcher) reloadClients() {
 
 	w.refreshAuthState()
 
-	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
-		0,
+	log.Infof("full client load complete - %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
 		totalNewClients,
 		authFileCount,
 		glAPIKeyCount,
