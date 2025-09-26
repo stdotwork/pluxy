@@ -129,8 +129,8 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	now := time.Now()
 
 	oldModels, hadExisting := r.clientModels[clientID]
-	oldProvider, hadProvider := r.clientProviders[clientID]
-	providerChanged := hadProvider && oldProvider != provider
+	oldProvider, _ := r.clientProviders[clientID]
+	providerChanged := oldProvider != provider
 	if !hadExisting {
 		// Pure addition path.
 		for _, modelID := range modelIDs {
@@ -205,7 +205,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 		if reg, ok := r.models[id]; ok {
 			reg.Info = cloneModelInfo(model)
 			reg.LastUpdated = now
-			if providerChanged {
+			if providerChanged && provider != "" {
 				if _, newlyAdded := addedSet[id]; newlyAdded {
 					continue
 				}
