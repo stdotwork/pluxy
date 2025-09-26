@@ -169,6 +169,9 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	// Handle provider change for overlapping models before modifications.
 	if providerChanged && oldProvider != "" {
 		for _, id := range modelIDs {
+			if _, existed := oldSet[id]; !existed {
+				continue
+			}
 			if reg, ok := r.models[id]; ok && reg.Providers != nil {
 				if count, okProv := reg.Providers[oldProvider]; okProv {
 					if count <= 1 {
