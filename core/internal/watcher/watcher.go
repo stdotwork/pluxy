@@ -553,6 +553,12 @@ func (w *Watcher) reloadClients() {
 
 	totalNewClients := authFileCount + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
 
+	// Ensure consumers observe the new configuration before auth updates dispatch.
+	if w.reloadCallback != nil {
+		log.Debugf("triggering server update callback before auth refresh")
+		w.reloadCallback(cfg)
+	}
+
 	w.refreshAuthState()
 
 	log.Infof("full client reload complete - old: %d clients, new: %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
@@ -564,12 +570,6 @@ func (w *Watcher) reloadClients() {
 		codexAPIKeyCount,
 		openAICompatCount,
 	)
-
-	// Trigger the callback to update the server
-	if w.reloadCallback != nil {
-		log.Debugf("triggering server update callback")
-		w.reloadCallback(cfg)
-	}
 }
 
 // createClientFromFile creates a single client instance from a given token file path.
