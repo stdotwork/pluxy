@@ -18,7 +18,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/sdk/access/providers/configapikey"
@@ -381,17 +380,6 @@ func (s *Service) Run(ctx context.Context) error {
 		s.coreManager.StartAutoRefresh(context.Background(), interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
 	}
-
-	authFileCount := util.CountAuthFiles(s.cfg.AuthDir)
-	totalNewClients := authFileCount + apiKeyResult.GeminiKeyCount + apiKeyResult.ClaudeKeyCount + apiKeyResult.CodexKeyCount + apiKeyResult.OpenAICompatCount
-	log.Infof("full client load complete - %d clients (%d auth files + %d GL API keys + %d Claude API keys + %d Codex keys + %d OpenAI-compat)",
-		totalNewClients,
-		authFileCount,
-		apiKeyResult.GeminiKeyCount,
-		apiKeyResult.ClaudeKeyCount,
-		apiKeyResult.CodexKeyCount,
-		apiKeyResult.OpenAICompatCount,
-	)
 
 	select {
 	case <-ctx.Done():

@@ -8,6 +8,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Separator used to visually group related log lines.
 var credentialSeparator = strings.Repeat("-", 70)
 
 // LogSavingCredentials emits a consistent log message when persisting auth material.
@@ -21,5 +22,5 @@ func LogSavingCredentials(path string) {
 
 // LogCredentialSeparator adds a visual separator to group auth/key processing logs.
 func LogCredentialSeparator() {
-	log.Info(credentialSeparator)
+	log.Debug(credentialSeparator)
 }
