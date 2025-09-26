@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
 
 // Config represents the application's configuration, loaded from a YAML file.
 type Config struct {
+	config.SDKConfig
 	// Port is the network port on which the API server will listen.
 	Port int `yaml:"port" json:"-"`
 
@@ -29,9 +31,6 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
-	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
-	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
-
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
 	APIKeys []string `yaml:"api-keys" json:"api-keys"`
 
@@ -43,9 +42,6 @@ type Config struct {
 
 	// GlAPIKey is the API key for the generative language API.
 	GlAPIKey []string `yaml:"generative-language-api-key" json:"generative-language-api-key"`
-
-	// RequestLog enables or disables detailed request logging functionality.
-	RequestLog bool `yaml:"request-log" json:"request-log"`
 
 	// RequestRetry defines the retry times when the request failed.
 	RequestRetry int `yaml:"request-retry" json:"request-retry"`
@@ -206,23 +202,23 @@ func LoadConfig(configFile string) (*Config, error) {
 	}
 
 	// Unmarshal the YAML data into the Config struct.
-	var config Config
+	var cfg Config
 	// Set defaults before unmarshal so that absent keys keep defaults.
-	config.LoggingToFile = true
-	config.UsageStatisticsEnabled = true
-	config.GeminiWeb.Context = true
-	if err = yaml.Unmarshal(data, &config); err != nil {
+	cfg.LoggingToFile = true
+	cfg.UsageStatisticsEnabled = true
+	cfg.GeminiWeb.Context = true
+	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
 	// Hash remote management key if plaintext is detected (nested)
 	// We consider a value to be already hashed if it looks like a bcrypt hash ($2a$, $2b$, or $2y$ prefix).
-	if config.RemoteManagement.SecretKey != "" && !looksLikeBcrypt(config.RemoteManagement.SecretKey) {
-		hashed, errHash := hashSecret(config.RemoteManagement.SecretKey)
+	if cfg.RemoteManagement.SecretKey != "" && !looksLikeBcrypt(cfg.RemoteManagement.SecretKey) {
+		hashed, errHash := hashSecret(cfg.RemoteManagement.SecretKey)
 		if errHash != nil {
 			return nil, fmt.Errorf("failed to hash remote management key: %w", errHash)
 		}
-		config.RemoteManagement.SecretKey = hashed
+		cfg.RemoteManagement.SecretKey = hashed
 
 		// Persist the hashed value back to the config file to avoid re-hashing on next startup.
 		// Preserve YAML comments and ordering; update only the nested key.
@@ -230,10 +226,10 @@ func LoadConfig(configFile string) (*Config, error) {
 	}
 
 	// Sync request authentication providers with inline API keys for backwards compatibility.
-	syncInlineAccessProvider(&config)
+	syncInlineAccessProvider(&cfg)
 
 	// Return the populated configuration struct.
-	return &config, nil
+	return &cfg, nil
 }
 
 // SyncInlineAPIKeys updates the inline API key provider and top-level APIKeys field.

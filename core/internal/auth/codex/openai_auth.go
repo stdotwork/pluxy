@@ -37,7 +37,7 @@ type CodexAuth struct {
 // It initializes an HTTP client with proxy settings from the provided configuration.
 func NewCodexAuth(cfg *config.Config) *CodexAuth {
 	return &CodexAuth{
-		httpClient: util.SetProxy(cfg, &http.Client{}),
+		httpClient: util.SetProxy(&cfg.SDKConfig, &http.Client{}),
 	}
 }
 

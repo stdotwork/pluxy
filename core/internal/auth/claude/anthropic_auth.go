@@ -59,7 +59,7 @@ type ClaudeAuth struct {
 //   - *ClaudeAuth: A new Claude authentication service instance
 func NewClaudeAuth(cfg *config.Config) *ClaudeAuth {
 	return &ClaudeAuth{
-		httpClient: util.SetProxy(cfg, &http.Client{}),
+		httpClient: util.SetProxy(&cfg.SDKConfig, &http.Client{}),
 	}
 }
 

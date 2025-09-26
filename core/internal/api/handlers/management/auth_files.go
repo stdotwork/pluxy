@@ -449,7 +449,7 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 		}
 		bodyJSON, _ := json.Marshal(bodyMap)
 
-		httpClient := util.SetProxy(h.cfg, &http.Client{})
+		httpClient := util.SetProxy(&h.cfg.SDKConfig, &http.Client{})
 		req, _ := http.NewRequestWithContext(ctx, "POST", "https://console.anthropic.com/v1/oauth/token", strings.NewReader(string(bodyJSON)))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
@@ -818,7 +818,7 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 			"redirect_uri":  {"http://localhost:1455/auth/callback"},
 			"code_verifier": {pkceCodes.CodeVerifier},
 		}
-		httpClient := util.SetProxy(h.cfg, &http.Client{})
+		httpClient := util.SetProxy(&h.cfg.SDKConfig, &http.Client{})
 		req, _ := http.NewRequestWithContext(ctx, "POST", "https://auth.openai.com/oauth/token", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Accept", "application/json")

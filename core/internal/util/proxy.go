@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/proxy"
 )
@@ -17,7 +17,7 @@ import (
 // SetProxy configures the provided HTTP client with proxy settings from the configuration.
 // It supports SOCKS5, HTTP, and HTTPS proxies. The function modifies the client's transport
 // to route requests through the configured proxy server.
-func SetProxy(cfg *config.Config, httpClient *http.Client) *http.Client {
+func SetProxy(cfg *config.SDKConfig, httpClient *http.Client) *http.Client {
 	var transport *http.Transport
 	// Attempt to parse the proxy URL from the configuration.
 	proxyURL, errParse := url.Parse(cfg.ProxyURL)

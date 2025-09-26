@@ -26,7 +26,7 @@ import (
 //
 // Returns:
 //   - []string: All provider identifiers capable of serving the model, ordered by preference.
-func GetProviderName(modelName string, cfg *config.Config) []string {
+func GetProviderName(modelName string) []string {
 	if modelName == "" {
 		return nil
 	}

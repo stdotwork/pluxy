@@ -75,7 +75,7 @@ func DoGeminiWebAuth(cfg *config.Config) {
 
 			// Build HTTP client with proxy settings respected.
 			httpClient := &http.Client{Timeout: 15 * time.Second}
-			httpClient = util.SetProxy(cfg, httpClient)
+			httpClient = util.SetProxy(&cfg.SDKConfig, httpClient)
 
 			// Request ListAccounts to extract email as label (use POST per upstream behavior).
 			req, err := http.NewRequest(http.MethodPost, "https://accounts.google.com/ListAccounts", nil)
@@ -88,8 +88,8 @@ func DoGeminiWebAuth(cfg *config.Config) {
 				req.Header.Set("Origin", "https://accounts.google.com")
 				req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 
-				resp, err := httpClient.Do(req)
-				if err != nil {
+				resp, errDo := httpClient.Do(req)
+				if errDo != nil {
 					fmt.Println("!! Request to ListAccounts failed:", err)
 				} else {
 					defer func() { _ = resp.Body.Close() }()

@@ -320,7 +320,7 @@ func (e *GeminiExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 	conf := &oauth2.Config{ClientID: clientID, ClientSecret: clientSecret, Endpoint: endpoint}
 
 	// Ensure proxy-aware HTTP client for token refresh
-	httpClient := util.SetProxy(e.cfg, &http.Client{})
+	httpClient := util.SetProxy(&e.cfg.SDKConfig, &http.Client{})
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 
 	// Build base token
