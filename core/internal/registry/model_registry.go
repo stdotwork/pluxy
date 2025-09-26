@@ -102,24 +102,24 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	defer r.mutex.Unlock()
 
 	provider := strings.ToLower(clientProvider)
-	seen := make(map[string]struct{})
-	modelIDs := make([]string, 0, len(models))
+	uniqueModelIDs := make([]string, 0, len(models))
+	rawModelIDs := make([]string, 0, len(models))
 	newModels := make(map[string]*ModelInfo, len(models))
 	newCounts := make(map[string]int, len(models))
 	for _, model := range models {
 		if model == nil || model.ID == "" {
 			continue
 		}
+		rawModelIDs = append(rawModelIDs, model.ID)
 		newCounts[model.ID]++
-		if _, exists := seen[model.ID]; exists {
+		if _, exists := newModels[model.ID]; exists {
 			continue
 		}
-		seen[model.ID] = struct{}{}
-		modelIDs = append(modelIDs, model.ID)
 		newModels[model.ID] = model
+		uniqueModelIDs = append(uniqueModelIDs, model.ID)
 	}
 
-	if len(modelIDs) == 0 {
+	if len(uniqueModelIDs) == 0 {
 		// No models supplied; unregister existing client state if present.
 		r.unregisterClientInternal(clientID)
 		delete(r.clientModels, clientID)
@@ -135,17 +135,17 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	providerChanged := oldProvider != provider
 	if !hadExisting {
 		// Pure addition path.
-		for _, modelID := range modelIDs {
+		for _, modelID := range rawModelIDs {
 			model := newModels[modelID]
 			r.addModelRegistration(modelID, provider, model, now)
 		}
-		r.clientModels[clientID] = modelIDs
+		r.clientModels[clientID] = append([]string(nil), rawModelIDs...)
 		if provider != "" {
 			r.clientProviders[clientID] = provider
 		} else {
 			delete(r.clientProviders, clientID)
 		}
-		log.Debugf("Registered client %s from provider %s with %d models", clientID, clientProvider, len(modelIDs))
+		log.Debugf("Registered client %s from provider %s with %d models", clientID, clientProvider, len(rawModelIDs))
 		misc.LogCredentialSeparator()
 		return
 	}
@@ -156,7 +156,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	}
 
 	added := make([]string, 0)
-	for _, id := range modelIDs {
+	for _, id := range uniqueModelIDs {
 		if oldCounts[id] == 0 {
 			added = append(added, id)
 		}
@@ -232,7 +232,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	for _, id := range added {
 		addedSet[id] = struct{}{}
 	}
-	for _, id := range modelIDs {
+	for _, id := range uniqueModelIDs {
 		model := newModels[id]
 		if reg, ok := r.models[id]; ok {
 			reg.Info = cloneModelInfo(model)
@@ -263,8 +263,8 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	}
 
 	// Update client bookkeeping.
-	if len(modelIDs) > 0 {
-		r.clientModels[clientID] = modelIDs
+	if len(rawModelIDs) > 0 {
+		r.clientModels[clientID] = append([]string(nil), rawModelIDs...)
 	}
 	if provider != "" {
 		r.clientProviders[clientID] = provider
