@@ -194,7 +194,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		loggerToggle:   toggle,
 		configFilePath: configFilePath,
 	}
-	s.applyAccessConfig(cfg)
+	s.applyAccessConfig(nil, cfg)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 	if optionState.localPassword != "" {
@@ -547,16 +547,23 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
-func (s *Server) applyAccessConfig(cfg *config.Config) {
-	if s == nil || s.accessManager == nil {
+func (s *Server) applyAccessConfig(oldCfg, newCfg *config.Config) {
+	if s == nil || s.accessManager == nil || newCfg == nil {
 		return
 	}
-	providers, err := sdkaccess.BuildProviders(cfg)
+	existing := s.accessManager.Providers()
+	providers, added, updated, removed, err := sdkaccess.ReconcileProviders(oldCfg, newCfg, existing)
 	if err != nil {
-		log.Errorf("failed to update request auth providers: %v", err)
+		log.Errorf("failed to reconcile request auth providers: %v", err)
 		return
 	}
 	s.accessManager.SetProviders(providers)
+	if len(added)+len(updated)+len(removed) > 0 {
+		log.Infof("server request auth providers reconciled (added=%d updated=%d removed=%d)", len(added), len(updated), len(removed))
+		log.Debugf("server request auth provider details - added=%v updated=%v removed=%v", added, updated, removed)
+	} else {
+		log.Debug("server request auth providers unchanged after config update")
+	}
 }
 
 // UpdateClients updates the server's client list and configuration.
@@ -566,44 +573,60 @@ func (s *Server) applyAccessConfig(cfg *config.Config) {
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
 func (s *Server) UpdateClients(cfg *config.Config) {
+	oldCfg := s.cfg
+
 	// Update request logger enabled state if it has changed
-	if s.requestLogger != nil && s.cfg.RequestLog != cfg.RequestLog {
+	previousRequestLog := false
+	if oldCfg != nil {
+		previousRequestLog = oldCfg.RequestLog
+	}
+	if s.requestLogger != nil && (oldCfg == nil || previousRequestLog != cfg.RequestLog) {
 		if s.loggerToggle != nil {
 			s.loggerToggle(cfg.RequestLog)
 		} else if toggler, ok := s.requestLogger.(interface{ SetEnabled(bool) }); ok {
 			toggler.SetEnabled(cfg.RequestLog)
 		}
-		log.Debugf("request logging updated from %t to %t", s.cfg.RequestLog, cfg.RequestLog)
-	}
-
-	if s.cfg.LoggingToFile != cfg.LoggingToFile {
-		if err := logging.ConfigureLogOutput(cfg.LoggingToFile); err != nil {
-			log.Errorf("failed to reconfigure log output: %v", err)
+		if oldCfg != nil {
+			log.Debugf("request logging updated from %t to %t", previousRequestLog, cfg.RequestLog)
 		} else {
-			log.Debugf("logging_to_file updated from %t to %t", s.cfg.LoggingToFile, cfg.LoggingToFile)
+			log.Debugf("request logging toggled to %t", cfg.RequestLog)
 		}
 	}
 
-	if s.cfg == nil || s.cfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
+	if oldCfg != nil && oldCfg.LoggingToFile != cfg.LoggingToFile {
+		if err := logging.ConfigureLogOutput(cfg.LoggingToFile); err != nil {
+			log.Errorf("failed to reconfigure log output: %v", err)
+		} else {
+			log.Debugf("logging_to_file updated from %t to %t", oldCfg.LoggingToFile, cfg.LoggingToFile)
+		}
+	}
+
+	if oldCfg == nil || oldCfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
 		usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
-		if s.cfg != nil {
-			log.Debugf("usage_statistics_enabled updated from %t to %t", s.cfg.UsageStatisticsEnabled, cfg.UsageStatisticsEnabled)
+		if oldCfg != nil {
+			log.Debugf("usage_statistics_enabled updated from %t to %t", oldCfg.UsageStatisticsEnabled, cfg.UsageStatisticsEnabled)
+		} else {
+			log.Debugf("usage_statistics_enabled toggled to %t", cfg.UsageStatisticsEnabled)
 		}
 	}
 
 	// Update log level dynamically when debug flag changes
-	if s.cfg.Debug != cfg.Debug {
+	if oldCfg == nil || oldCfg.Debug != cfg.Debug {
 		util.SetLogLevel(cfg)
-		log.Debugf("debug mode updated from %t to %t", s.cfg.Debug, cfg.Debug)
+		if oldCfg != nil {
+			log.Debugf("debug mode updated from %t to %t", oldCfg.Debug, cfg.Debug)
+		} else {
+			log.Debugf("debug mode toggled to %t", cfg.Debug)
+		}
 	}
 
+	s.applyAccessConfig(oldCfg, cfg)
 	s.cfg = cfg
 	s.handlers.UpdateClients(cfg)
 	if s.mgmt != nil {
 		s.mgmt.SetConfig(cfg)
 		s.mgmt.SetAuthManager(s.handlers.AuthManager)
 	}
-	s.applyAccessConfig(cfg)
 
 	// Count client sources from configuration and auth directory
 	authFiles := util.CountAuthFiles(cfg.AuthDir)

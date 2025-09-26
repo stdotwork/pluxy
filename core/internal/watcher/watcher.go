@@ -52,6 +52,39 @@ type Watcher struct {
 	dispatchCancel context.CancelFunc
 }
 
+type stableIDGenerator struct {
+	counters map[string]int
+}
+
+func newStableIDGenerator() *stableIDGenerator {
+	return &stableIDGenerator{counters: make(map[string]int)}
+}
+
+func (g *stableIDGenerator) next(kind string, parts ...string) (string, string) {
+	if g == nil {
+		return kind + ":000000000000", "000000000000"
+	}
+	hasher := sha256.New()
+	hasher.Write([]byte(kind))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		hasher.Write([]byte{0})
+		hasher.Write([]byte(trimmed))
+	}
+	digest := hex.EncodeToString(hasher.Sum(nil))
+	if len(digest) < 12 {
+		digest = fmt.Sprintf("%012s", digest)
+	}
+	short := digest[:12]
+	key := kind + ":" + short
+	index := g.counters[key]
+	g.counters[key] = index + 1
+	if index > 0 {
+		short = fmt.Sprintf("%s-%d", short, index)
+	}
+	return fmt.Sprintf("%s:%s", kind, short), short
+}
+
 // AuthUpdateAction represents the type of change detected in auth sources.
 type AuthUpdateAction string
 
@@ -640,6 +673,7 @@ func (w *Watcher) removeClient(path string) {
 func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 	out := make([]*coreauth.Auth, 0, 32)
 	now := time.Now()
+	idGen := newStableIDGenerator()
 	// Also synthesize auth entries for OpenAI-compatibility providers directly from config
 	w.clientsMutex.RLock()
 	cfg := w.config
@@ -647,14 +681,18 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 	if cfg != nil {
 		// Gemini official API keys -> synthesize auths
 		for i := range cfg.GlAPIKey {
-			k := cfg.GlAPIKey[i]
+			k := strings.TrimSpace(cfg.GlAPIKey[i])
+			if k == "" {
+				continue
+			}
+			id, token := idGen.next("gemini:apikey", k)
 			a := &coreauth.Auth{
-				ID:       fmt.Sprintf("gemini:apikey:%d", i),
+				ID:       id,
 				Provider: "gemini",
 				Label:    "gemini-apikey",
 				Status:   coreauth.StatusActive,
 				Attributes: map[string]string{
-					"source":  fmt.Sprintf("config:gemini#%d", i),
+					"source":  fmt.Sprintf("config:gemini[%s]", token),
 					"api_key": k,
 				},
 				CreatedAt: now,
@@ -665,15 +703,20 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 		// Claude API keys -> synthesize auths
 		for i := range cfg.ClaudeKey {
 			ck := cfg.ClaudeKey[i]
+			key := strings.TrimSpace(ck.APIKey)
+			if key == "" {
+				continue
+			}
+			id, token := idGen.next("claude:apikey", key, ck.BaseURL)
 			attrs := map[string]string{
-				"source":  fmt.Sprintf("config:claude#%d", i),
-				"api_key": ck.APIKey,
+				"source":  fmt.Sprintf("config:claude[%s]", token),
+				"api_key": key,
 			}
 			if ck.BaseURL != "" {
 				attrs["base_url"] = ck.BaseURL
 			}
 			a := &coreauth.Auth{
-				ID:         fmt.Sprintf("claude:apikey:%d", i),
+				ID:         id,
 				Provider:   "claude",
 				Label:      "claude-apikey",
 				Status:     coreauth.StatusActive,
@@ -686,15 +729,20 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 		// Codex API keys -> synthesize auths
 		for i := range cfg.CodexKey {
 			ck := cfg.CodexKey[i]
+			key := strings.TrimSpace(ck.APIKey)
+			if key == "" {
+				continue
+			}
+			id, token := idGen.next("codex:apikey", key, ck.BaseURL)
 			attrs := map[string]string{
-				"source":  fmt.Sprintf("config:codex#%d", i),
-				"api_key": ck.APIKey,
+				"source":  fmt.Sprintf("config:codex[%s]", token),
+				"api_key": key,
 			}
 			if ck.BaseURL != "" {
 				attrs["base_url"] = ck.BaseURL
 			}
 			a := &coreauth.Auth{
-				ID:         fmt.Sprintf("codex:apikey:%d", i),
+				ID:         id,
 				Provider:   "codex",
 				Label:      "codex-apikey",
 				Status:     coreauth.StatusActive,
@@ -710,11 +758,16 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 			if providerName == "" {
 				providerName = "openai-compatibility"
 			}
-			base := compat.BaseURL
+			base := strings.TrimSpace(compat.BaseURL)
 			for j := range compat.APIKeys {
-				key := compat.APIKeys[j]
+				key := strings.TrimSpace(compat.APIKeys[j])
+				if key == "" {
+					continue
+				}
+				idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
+				id, token := idGen.next(idKind, key, base)
 				attrs := map[string]string{
-					"source":       fmt.Sprintf("config:%s#%d", compat.Name, j),
+					"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
 					"base_url":     base,
 					"api_key":      key,
 					"compat_name":  compat.Name,
@@ -724,7 +777,7 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 					attrs["models_hash"] = hash
 				}
 				a := &coreauth.Auth{
-					ID:         fmt.Sprintf("openai-compatibility:%s:%d", compat.Name, j),
+					ID:         id,
 					Provider:   providerName,
 					Label:      compat.Name,
 					Status:     coreauth.StatusActive,
