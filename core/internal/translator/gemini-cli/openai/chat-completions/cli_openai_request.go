@@ -25,7 +25,6 @@ import (
 // Returns:
 //   - []byte: The transformed request data in Gemini CLI API format
 func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bool) []byte {
-	log.Debug("ConvertOpenAIRequestToGeminiCLI")
 	rawJSON := bytes.Clone(inputRawJSON)
 	// Base envelope
 	out := []byte(`{"project":"","request":{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}},"model":"gemini-2.5-pro"}`)
