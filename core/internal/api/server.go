@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/access"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v6/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -25,8 +26,8 @@ import (
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/claude"
-	gemini2 "github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/gemini"
-	openai2 "github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/openai"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/gemini"
+	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/openai"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
@@ -224,11 +225,11 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
-	openaiHandlers := openai2.NewOpenAIAPIHandler(s.handlers)
-	geminiHandlers := gemini2.NewGeminiAPIHandler(s.handlers)
-	geminiCLIHandlers := gemini2.NewGeminiCLIAPIHandler(s.handlers)
+	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
+	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
+	geminiCLIHandlers := gemini.NewGeminiCLIAPIHandler(s.handlers)
 	claudeCodeHandlers := claude.NewClaudeCodeAPIHandler(s.handlers)
-	openaiResponsesHandlers := openai2.NewOpenAIResponsesAPIHandler(s.handlers)
+	openaiResponsesHandlers := openai.NewOpenAIResponsesAPIHandler(s.handlers)
 
 	// OpenAI compatible API routes
 	v1 := s.engine.Group("/v1")
@@ -469,7 +470,7 @@ func (s *Server) watchKeepAlive() {
 // that routes to different handlers based on the User-Agent header.
 // If User-Agent starts with "claude-cli", it routes to Claude handler,
 // otherwise it routes to OpenAI handler.
-func (s *Server) unifiedModelsHandler(openaiHandler *openai2.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
+func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 
@@ -552,7 +553,7 @@ func (s *Server) applyAccessConfig(oldCfg, newCfg *config.Config) {
 		return
 	}
 	existing := s.accessManager.Providers()
-	providers, added, updated, removed, err := sdkaccess.ReconcileProviders(oldCfg, newCfg, existing)
+	providers, added, updated, removed, err := access.ReconcileProviders(oldCfg, newCfg, existing)
 	if err != nil {
 		log.Errorf("failed to reconcile request auth providers: %v", err)
 		return

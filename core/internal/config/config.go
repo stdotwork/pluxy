@@ -31,12 +31,6 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
-	// APIKeys is a list of keys for authenticating clients to this proxy server.
-	APIKeys []string `yaml:"api-keys" json:"api-keys"`
-
-	// Access holds request authentication provider configuration.
-	Access AccessConfig `yaml:"auth" json:"auth"`
-
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 
@@ -61,38 +55,6 @@ type Config struct {
 	// GeminiWeb groups configuration for Gemini Web client
 	GeminiWeb GeminiWebConfig `yaml:"gemini-web" json:"gemini-web"`
 }
-
-// AccessConfig groups request authentication providers.
-type AccessConfig struct {
-	// Providers lists configured authentication providers.
-	Providers []AccessProvider `yaml:"providers" json:"providers"`
-}
-
-// AccessProvider describes a request authentication provider entry.
-type AccessProvider struct {
-	// Name is the instance identifier for the provider.
-	Name string `yaml:"name" json:"name"`
-
-	// Type selects the provider implementation registered via the SDK.
-	Type string `yaml:"type" json:"type"`
-
-	// SDK optionally names a third-party SDK module providing this provider.
-	SDK string `yaml:"sdk,omitempty" json:"sdk,omitempty"`
-
-	// APIKeys lists inline keys for providers that require them.
-	APIKeys []string `yaml:"api-keys,omitempty" json:"api-keys,omitempty"`
-
-	// Config passes provider-specific options to the implementation.
-	Config map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
-}
-
-const (
-	// AccessProviderTypeConfigAPIKey is the built-in provider validating inline API keys.
-	AccessProviderTypeConfigAPIKey = "config-api-key"
-
-	// DefaultAccessProviderName is applied when no provider name is supplied.
-	DefaultAccessProviderName = "config-inline"
-)
 
 // GeminiWebConfig nests Gemini Web related options under 'gemini-web'.
 type GeminiWebConfig struct {
@@ -232,43 +194,6 @@ func LoadConfig(configFile string) (*Config, error) {
 	return &cfg, nil
 }
 
-// SyncInlineAPIKeys updates the inline API key provider and top-level APIKeys field.
-func SyncInlineAPIKeys(cfg *Config, keys []string) {
-	if cfg == nil {
-		return
-	}
-	cloned := append([]string(nil), keys...)
-	cfg.APIKeys = cloned
-	if provider := cfg.ConfigAPIKeyProvider(); provider != nil {
-		if provider.Name == "" {
-			provider.Name = DefaultAccessProviderName
-		}
-		provider.APIKeys = cloned
-		return
-	}
-	cfg.Access.Providers = append(cfg.Access.Providers, AccessProvider{
-		Name:    DefaultAccessProviderName,
-		Type:    AccessProviderTypeConfigAPIKey,
-		APIKeys: cloned,
-	})
-}
-
-// ConfigAPIKeyProvider returns the first inline API key provider if present.
-func (c *Config) ConfigAPIKeyProvider() *AccessProvider {
-	if c == nil {
-		return nil
-	}
-	for i := range c.Access.Providers {
-		if c.Access.Providers[i].Type == AccessProviderTypeConfigAPIKey {
-			if c.Access.Providers[i].Name == "" {
-				c.Access.Providers[i].Name = DefaultAccessProviderName
-			}
-			return &c.Access.Providers[i]
-		}
-	}
-	return nil
-}
-
 func syncInlineAccessProvider(cfg *Config) {
 	if cfg == nil {
 		return
@@ -277,9 +202,9 @@ func syncInlineAccessProvider(cfg *Config) {
 		if len(cfg.APIKeys) == 0 {
 			return
 		}
-		cfg.Access.Providers = append(cfg.Access.Providers, AccessProvider{
-			Name:    DefaultAccessProviderName,
-			Type:    AccessProviderTypeConfigAPIKey,
+		cfg.Access.Providers = append(cfg.Access.Providers, config.AccessProvider{
+			Name:    config.DefaultAccessProviderName,
+			Type:    config.AccessProviderTypeConfigAPIKey,
 			APIKeys: append([]string(nil), cfg.APIKeys...),
 		})
 		return
@@ -289,9 +214,9 @@ func syncInlineAccessProvider(cfg *Config) {
 		if len(cfg.APIKeys) == 0 {
 			return
 		}
-		cfg.Access.Providers = append(cfg.Access.Providers, AccessProvider{
-			Name:    DefaultAccessProviderName,
-			Type:    AccessProviderTypeConfigAPIKey,
+		cfg.Access.Providers = append(cfg.Access.Providers, config.AccessProvider{
+			Name:    config.DefaultAccessProviderName,
+			Type:    config.AccessProviderTypeConfigAPIKey,
 			APIKeys: append([]string(nil), cfg.APIKeys...),
 		})
 		return

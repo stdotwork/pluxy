@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	sdkConfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
 
 // Generic helpers for list[string]
@@ -106,13 +107,13 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 // api-keys
 func (h *Handler) GetAPIKeys(c *gin.Context) { c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys}) }
 func (h *Handler) PutAPIKeys(c *gin.Context) {
-	h.putStringList(c, func(v []string) { config.SyncInlineAPIKeys(h.cfg, v) }, nil)
+	h.putStringList(c, func(v []string) { sdkConfig.SyncInlineAPIKeys(&h.cfg.SDKConfig, v) }, nil)
 }
 func (h *Handler) PatchAPIKeys(c *gin.Context) {
-	h.patchStringList(c, &h.cfg.APIKeys, func() { config.SyncInlineAPIKeys(h.cfg, h.cfg.APIKeys) })
+	h.patchStringList(c, &h.cfg.APIKeys, func() { sdkConfig.SyncInlineAPIKeys(&h.cfg.SDKConfig, h.cfg.APIKeys) })
 }
 func (h *Handler) DeleteAPIKeys(c *gin.Context) {
-	h.deleteFromStringList(c, &h.cfg.APIKeys, func() { config.SyncInlineAPIKeys(h.cfg, h.cfg.APIKeys) })
+	h.deleteFromStringList(c, &h.cfg.APIKeys, func() { sdkConfig.SyncInlineAPIKeys(&h.cfg.SDKConfig, h.cfg.APIKeys) })
 }
 
 // generative-language-api-key
