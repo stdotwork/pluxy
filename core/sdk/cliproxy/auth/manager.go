@@ -15,7 +15,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
-	"sort"
 )
 
 // ProviderExecutor defines the contract required by Manager to execute provider calls.
@@ -796,12 +795,6 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 			continue
 		}
 		candidates = append(candidates, auth.Clone())
-	}
-	// Ensure stable iteration order across requests to make round-robin deterministic.
-	// Go map iteration order is randomized; without sorting, the selector's index-based
-	// rotation may appear non-round-robin.
-	if len(candidates) > 1 {
-		sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
 	}
 	m.mu.RUnlock()
 	if len(candidates) == 0 {
