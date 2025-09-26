@@ -273,8 +273,7 @@ func (r *ModelRegistry) RegisterClient(clientID, clientProvider string, models [
 	}
 
 	if len(added) == 0 && len(removed) == 0 && !providerChanged {
-		// Only metadata (e.g., display name) changed.
-		misc.LogCredentialSeparator()
+		// Only metadata (e.g., display name) changed; skip separator when no log output.
 		return
 	}
 
