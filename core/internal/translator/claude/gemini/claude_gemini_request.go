@@ -8,13 +8,22 @@ package gemini
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+)
+
+var (
+	user    = ""
+	account = ""
+	session = ""
 )
 
 // ConvertGeminiRequestToClaude parses and transforms a Gemini API request into Claude Code API format.
@@ -37,8 +46,23 @@ import (
 //   - []byte: The transformed request data in Claude Code API format
 func ConvertGeminiRequestToClaude(modelName string, inputRawJSON []byte, stream bool) []byte {
 	rawJSON := bytes.Clone(inputRawJSON)
-	// Base Claude Code API template with default max_tokens value
-	out := `{"model":"","max_tokens":32000,"messages":[]}`
+
+	if account == "" {
+		u, _ := uuid.NewRandom()
+		account = u.String()
+	}
+	if session == "" {
+		u, _ := uuid.NewRandom()
+		session = u.String()
+	}
+	if user == "" {
+		sum := sha256.Sum256([]byte(account + session))
+		user = hex.EncodeToString(sum[:])
+	}
+	userID := fmt.Sprintf("user_%s_account_%s_session_%s", user, account, session)
+
+	// Base Claude message payload
+	out := fmt.Sprintf(`{"model":"","max_tokens":32000,"messages":[],"metadata":{"user_id":"%s"}}`, userID)
 
 	root := gjson.ParseBytes(rawJSON)
 

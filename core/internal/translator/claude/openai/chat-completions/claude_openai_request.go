@@ -8,12 +8,22 @@ package chat_completions
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+)
+
+var (
+	user    = ""
+	account = ""
+	session = ""
 )
 
 // ConvertOpenAIRequestToClaude parses and transforms an OpenAI Chat Completions API request into Claude Code API format.
@@ -36,8 +46,22 @@ import (
 func ConvertOpenAIRequestToClaude(modelName string, inputRawJSON []byte, stream bool) []byte {
 	rawJSON := bytes.Clone(inputRawJSON)
 
+	if account == "" {
+		u, _ := uuid.NewRandom()
+		account = u.String()
+	}
+	if session == "" {
+		u, _ := uuid.NewRandom()
+		session = u.String()
+	}
+	if user == "" {
+		sum := sha256.Sum256([]byte(account + session))
+		user = hex.EncodeToString(sum[:])
+	}
+	userID := fmt.Sprintf("user_%s_account_%s_session_%s", user, account, session)
+
 	// Base Claude Code API template with default max_tokens value
-	out := `{"model":"","max_tokens":32000,"messages":[]}`
+	out := fmt.Sprintf(`{"model":"","max_tokens":32000,"messages":[],"metadata":{"user_id":"%s"}}`, userID)
 
 	root := gjson.ParseBytes(rawJSON)
 
