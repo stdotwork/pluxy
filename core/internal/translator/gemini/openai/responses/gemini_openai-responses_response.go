@@ -414,6 +414,25 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 			completed, _ = sjson.Set(completed, "response.output", outputs)
 		}
 
+		// usage mapping
+		if um := root.Get("usageMetadata"); um.Exists() {
+			// input tokens = prompt + thoughts
+			input := um.Get("promptTokenCount").Int() + um.Get("thoughtsTokenCount").Int()
+			completed, _ = sjson.Set(completed, "response.usage.input_tokens", input)
+			// cached_tokens not provided by Gemini; default to 0 for structure compatibility
+			completed, _ = sjson.Set(completed, "response.usage.input_tokens_details.cached_tokens", 0)
+			// output tokens
+			if v := um.Get("candidatesTokenCount"); v.Exists() {
+				completed, _ = sjson.Set(completed, "response.usage.output_tokens", v.Int())
+			}
+			if v := um.Get("thoughtsTokenCount"); v.Exists() {
+				completed, _ = sjson.Set(completed, "response.usage.output_tokens_details.reasoning_tokens", v.Int())
+			}
+			if v := um.Get("totalTokenCount"); v.Exists() {
+				completed, _ = sjson.Set(completed, "response.usage.total_tokens", v.Int())
+			}
+		}
+
 		out = append(out, emitEvent("response.completed", completed))
 	}
 
