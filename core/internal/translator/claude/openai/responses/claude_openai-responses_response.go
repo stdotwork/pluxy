@@ -32,6 +32,10 @@ type claudeToResponsesState struct {
 	ReasoningBuf       strings.Builder
 	ReasoningPartAdded bool
 	ReasoningIndex     int
+	// usage aggregation
+	InputTokens  int64
+	OutputTokens int64
+	UsageSeen    bool
 }
 
 var dataTag = []byte("data:")
@@ -77,6 +81,19 @@ func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName strin
 			st.FuncArgsBuf = make(map[int]*strings.Builder)
 			st.FuncNames = make(map[int]string)
 			st.FuncCallIDs = make(map[int]string)
+			st.InputTokens = 0
+			st.OutputTokens = 0
+			st.UsageSeen = false
+			if usage := msg.Get("usage"); usage.Exists() {
+				if v := usage.Get("input_tokens"); v.Exists() {
+					st.InputTokens = v.Int()
+					st.UsageSeen = true
+				}
+				if v := usage.Get("output_tokens"); v.Exists() {
+					st.OutputTokens = v.Int()
+					st.UsageSeen = true
+				}
+			}
 			// response.created
 			created := `{"type":"response.created","sequence_number":0,"response":{"id":"","object":"response","created_at":0,"status":"in_progress","background":false,"error":null,"instructions":""}}`
 			created, _ = sjson.Set(created, "sequence_number", nextSeq())
@@ -227,7 +244,6 @@ func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName strin
 			out = append(out, emitEvent("response.output_item.done", itemDone))
 			st.InFuncBlock = false
 		} else if st.ReasoningActive {
-			// close reasoning
 			full := st.ReasoningBuf.String()
 			textDone := `{"type":"response.reasoning_summary_text.done","sequence_number":0,"item_id":"","output_index":0,"summary_index":0,"text":""}`
 			textDone, _ = sjson.Set(textDone, "sequence_number", nextSeq())
@@ -244,7 +260,19 @@ func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName strin
 			st.ReasoningActive = false
 			st.ReasoningPartAdded = false
 		}
+	case "message_delta":
+		if usage := root.Get("usage"); usage.Exists() {
+			if v := usage.Get("output_tokens"); v.Exists() {
+				st.OutputTokens = v.Int()
+				st.UsageSeen = true
+			}
+			if v := usage.Get("input_tokens"); v.Exists() {
+				st.InputTokens = v.Int()
+				st.UsageSeen = true
+			}
+		}
 	case "message_stop":
+
 		completed := `{"type":"response.completed","sequence_number":0,"response":{"id":"","object":"response","created_at":0,"status":"completed","background":false,"error":null}}`
 		completed, _ = sjson.Set(completed, "sequence_number", nextSeq())
 		completed, _ = sjson.Set(completed, "response.id", st.ResponseID)
@@ -380,6 +408,24 @@ func ConvertClaudeResponseToOpenAIResponses(ctx context.Context, modelName strin
 		}
 		if len(outputs) > 0 {
 			completed, _ = sjson.Set(completed, "response.output", outputs)
+		}
+
+		reasoningTokens := int64(0)
+		if st.ReasoningBuf.Len() > 0 {
+			reasoningTokens = int64(st.ReasoningBuf.Len() / 4)
+		}
+		usagePresent := st.UsageSeen || reasoningTokens > 0
+		if usagePresent {
+			completed, _ = sjson.Set(completed, "response.usage.input_tokens", st.InputTokens)
+			completed, _ = sjson.Set(completed, "response.usage.input_tokens_details.cached_tokens", 0)
+			completed, _ = sjson.Set(completed, "response.usage.output_tokens", st.OutputTokens)
+			if reasoningTokens > 0 {
+				completed, _ = sjson.Set(completed, "response.usage.output_tokens_details.reasoning_tokens", reasoningTokens)
+			}
+			total := st.InputTokens + st.OutputTokens
+			if total > 0 || st.UsageSeen {
+				completed, _ = sjson.Set(completed, "response.usage.total_tokens", total)
+			}
 		}
 		out = append(out, emitEvent("response.completed", completed))
 	}

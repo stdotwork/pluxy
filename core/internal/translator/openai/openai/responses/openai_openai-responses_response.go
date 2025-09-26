@@ -32,6 +32,13 @@ type oaiToResponsesState struct {
 	// function item done state
 	FuncArgsDone map[int]bool
 	FuncItemDone map[int]bool
+	// usage aggregation
+	PromptTokens     int64
+	CachedTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	ReasoningTokens  int64
+	UsageSeen        bool
 }
 
 func emitRespEvent(event string, payload string) string {
@@ -66,6 +73,35 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		return []string{}
 	}
 
+	if usage := root.Get("usage"); usage.Exists() {
+		if v := usage.Get("prompt_tokens"); v.Exists() {
+			st.PromptTokens = v.Int()
+			st.UsageSeen = true
+		}
+		if v := usage.Get("prompt_tokens_details.cached_tokens"); v.Exists() {
+			st.CachedTokens = v.Int()
+			st.UsageSeen = true
+		}
+		if v := usage.Get("completion_tokens"); v.Exists() {
+			st.CompletionTokens = v.Int()
+			st.UsageSeen = true
+		} else if v := usage.Get("output_tokens"); v.Exists() {
+			st.CompletionTokens = v.Int()
+			st.UsageSeen = true
+		}
+		if v := usage.Get("output_tokens_details.reasoning_tokens"); v.Exists() {
+			st.ReasoningTokens = v.Int()
+			st.UsageSeen = true
+		} else if v := usage.Get("completion_tokens_details.reasoning_tokens"); v.Exists() {
+			st.ReasoningTokens = v.Int()
+			st.UsageSeen = true
+		}
+		if v := usage.Get("total_tokens"); v.Exists() {
+			st.TotalTokens = v.Int()
+			st.UsageSeen = true
+		}
+	}
+
 	nextSeq := func() int { st.Seq++; return st.Seq }
 	var out []string
 
@@ -85,6 +121,12 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 		st.MsgItemDone = make(map[int]bool)
 		st.FuncArgsDone = make(map[int]bool)
 		st.FuncItemDone = make(map[int]bool)
+		st.PromptTokens = 0
+		st.CachedTokens = 0
+		st.CompletionTokens = 0
+		st.TotalTokens = 0
+		st.ReasoningTokens = 0
+		st.UsageSeen = false
 		// response.created
 		created := `{"type":"response.created","sequence_number":0,"response":{"id":"","object":"response","created_at":0,"status":"in_progress","background":false,"error":null}}`
 		created, _ = sjson.Set(created, "sequence_number", nextSeq())
@@ -502,6 +544,19 @@ func ConvertOpenAIChatCompletionsResponseToOpenAIResponses(ctx context.Context, 
 				}
 				if len(outputs) > 0 {
 					completed, _ = sjson.Set(completed, "response.output", outputs)
+				}
+				if st.UsageSeen {
+					completed, _ = sjson.Set(completed, "response.usage.input_tokens", st.PromptTokens)
+					completed, _ = sjson.Set(completed, "response.usage.input_tokens_details.cached_tokens", st.CachedTokens)
+					completed, _ = sjson.Set(completed, "response.usage.output_tokens", st.CompletionTokens)
+					if st.ReasoningTokens > 0 {
+						completed, _ = sjson.Set(completed, "response.usage.output_tokens_details.reasoning_tokens", st.ReasoningTokens)
+					}
+					total := st.TotalTokens
+					if total == 0 {
+						total = st.PromptTokens + st.CompletionTokens
+					}
+					completed, _ = sjson.Set(completed, "response.usage.total_tokens", total)
 				}
 				out = append(out, emitRespEvent("response.completed", completed))
 			}
