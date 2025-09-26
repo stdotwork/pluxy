@@ -37,11 +37,14 @@ func ReconcileProviders(oldCfg, newCfg *config.Config, existing []Provider) (res
 			continue
 		}
 
-		if oldCfgProvider, ok := oldCfgMap[key]; ok && providerConfigEqual(oldCfgProvider, providerCfg) {
-			if existingProvider, ok := existingMap[key]; ok {
-				result = append(result, existingProvider)
-				finalIDs[key] = struct{}{}
-				continue
+		if oldCfgProvider, ok := oldCfgMap[key]; ok {
+			isAliased := oldCfgProvider == providerCfg
+			if !isAliased && providerConfigEqual(oldCfgProvider, providerCfg) {
+				if existingProvider, okExisting := existingMap[key]; okExisting {
+					result = append(result, existingProvider)
+					finalIDs[key] = struct{}{}
+					continue
+				}
 			}
 		}
 
@@ -67,9 +70,23 @@ func ReconcileProviders(oldCfg, newCfg *config.Config, existing []Provider) (res
 		if providerCfg := newCfg.ConfigAPIKeyProvider(); providerCfg != nil {
 			key := providerIdentifier(providerCfg)
 			if key != "" {
-				if oldCfgProvider, ok := oldCfgMap[key]; ok && providerConfigEqual(oldCfgProvider, providerCfg) {
-					if existingProvider, ok := existingMap[key]; ok {
-						result = append(result, existingProvider)
+				if oldCfgProvider, ok := oldCfgMap[key]; ok {
+					isAliased := oldCfgProvider == providerCfg
+					if !isAliased && providerConfigEqual(oldCfgProvider, providerCfg) {
+						if existingProvider, okExisting := existingMap[key]; okExisting {
+							result = append(result, existingProvider)
+						} else {
+							provider, buildErr := buildProvider(providerCfg, newCfg)
+							if buildErr != nil {
+								return nil, nil, nil, nil, buildErr
+							}
+							if _, existed := existingMap[key]; existed {
+								updated = append(updated, key)
+							} else {
+								added = append(added, key)
+							}
+							result = append(result, provider)
+						}
 					} else {
 						provider, buildErr := buildProvider(providerCfg, newCfg)
 						if buildErr != nil {
@@ -87,15 +104,7 @@ func ReconcileProviders(oldCfg, newCfg *config.Config, existing []Provider) (res
 					if buildErr != nil {
 						return nil, nil, nil, nil, buildErr
 					}
-					if _, ok := oldCfgMap[key]; ok {
-						if _, existed := existingMap[key]; existed {
-							updated = append(updated, key)
-						} else {
-							added = append(added, key)
-						}
-					} else {
-						added = append(added, key)
-					}
+					added = append(added, key)
 					result = append(result, provider)
 				}
 				finalIDs[key] = struct{}{}
