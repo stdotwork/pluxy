@@ -54,8 +54,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if util.InArray([]string{"gpt-5", "gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, req.Model) {
 		body, _ = sjson.SetBytes(body, "model", "gpt-5")
 		switch req.Model {
-		case "gpt-5":
-			body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 		case "gpt-5-minimal":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "minimal")
 		case "gpt-5-low":
@@ -68,8 +66,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	} else if util.InArray([]string{"gpt-5-codex", "gpt-5-codex-low", "gpt-5-codex-medium", "gpt-5-codex-high"}, req.Model) {
 		body, _ = sjson.SetBytes(body, "model", "gpt-5-codex")
 		switch req.Model {
-		case "gpt-5-codex":
-			body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 		case "gpt-5-codex-low":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "low")
 		case "gpt-5-codex-medium":
@@ -147,8 +143,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if util.InArray([]string{"gpt-5", "gpt-5-minimal", "gpt-5-low", "gpt-5-medium", "gpt-5-high"}, req.Model) {
 		body, _ = sjson.SetBytes(body, "model", "gpt-5")
 		switch req.Model {
-		case "gpt-5":
-			body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 		case "gpt-5-minimal":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "minimal")
 		case "gpt-5-low":
@@ -161,8 +155,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	} else if util.InArray([]string{"gpt-5-codex", "gpt-5-codex-low", "gpt-5-codex-medium", "gpt-5-codex-high"}, req.Model) {
 		body, _ = sjson.SetBytes(body, "model", "gpt-5-codex")
 		switch req.Model {
-		case "gpt-5-codex":
-			body, _ = sjson.DeleteBytes(body, "reasoning.effort")
 		case "gpt-5-codex-low":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "low")
 		case "gpt-5-codex-medium":
