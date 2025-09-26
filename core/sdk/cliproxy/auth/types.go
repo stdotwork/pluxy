@@ -128,6 +128,7 @@ func (a *Auth) AccountInfo() (string, string) {
 	if a == nil {
 		return "", ""
 	}
+	// For Gemini Web, prefer explicit cookie label for stability.
 	if strings.ToLower(a.Provider) == "gemini-web" {
 		// Prefer explicit label written into auth file (e.g., gemini-web-<hash>)
 		if a.Metadata != nil {
@@ -142,6 +143,22 @@ func (a *Auth) AccountInfo() (string, string) {
 			}
 			if v, ok := a.Metadata["__Secure-1PSID"].(string); ok && v != "" {
 				return "cookie", v
+			}
+		}
+	}
+	// For Gemini CLI, include project ID in the OAuth account info if present.
+	if strings.ToLower(a.Provider) == "gemini-cli" {
+		if a.Metadata != nil {
+			email, _ := a.Metadata["email"].(string)
+			email = strings.TrimSpace(email)
+			if email != "" {
+				if p, ok := a.Metadata["project_id"].(string); ok {
+					p = strings.TrimSpace(p)
+					if p != "" {
+						return "oauth", email + " (" + p + ")"
+					}
+				}
+				return "oauth", email
 			}
 		}
 	}
