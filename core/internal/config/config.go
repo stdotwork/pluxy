@@ -15,7 +15,7 @@ import (
 
 // Config represents the application's configuration, loaded from a YAML file.
 type Config struct {
-	config.SDKConfig
+	config.SDKConfig `yaml:",inline"`
 	// Port is the network port on which the API server will listen.
 	Port int `yaml:"port" json:"-"`
 
