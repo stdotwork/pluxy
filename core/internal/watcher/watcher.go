@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -536,6 +537,12 @@ func (w *Watcher) reloadConfig() bool {
 		if oldConfig.UsageStatisticsEnabled != newConfig.UsageStatisticsEnabled {
 			log.Debugf("  usage-statistics-enabled: %t -> %t", oldConfig.UsageStatisticsEnabled, newConfig.UsageStatisticsEnabled)
 		}
+		if changes := diffOpenAICompatibility(oldConfig.OpenAICompatibility, newConfig.OpenAICompatibility); len(changes) > 0 {
+			log.Debugf("  openai-compatibility:")
+			for _, change := range changes {
+				log.Debugf("    %s", change)
+			}
+		}
 	}
 
 	authDirChanged := oldConfig == nil || oldConfig.AuthDir != newConfig.AuthDir
@@ -933,4 +940,115 @@ func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int) {
 		}
 	}
 	return glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
+}
+
+func diffOpenAICompatibility(oldList, newList []config.OpenAICompatibility) []string {
+	changes := make([]string, 0)
+	oldMap := make(map[string]config.OpenAICompatibility, len(oldList))
+	oldLabels := make(map[string]string, len(oldList))
+	for idx, entry := range oldList {
+		key, label := openAICompatKey(entry, idx)
+		oldMap[key] = entry
+		oldLabels[key] = label
+	}
+	newMap := make(map[string]config.OpenAICompatibility, len(newList))
+	newLabels := make(map[string]string, len(newList))
+	for idx, entry := range newList {
+		key, label := openAICompatKey(entry, idx)
+		newMap[key] = entry
+		newLabels[key] = label
+	}
+	keySet := make(map[string]struct{}, len(oldMap)+len(newMap))
+	for key := range oldMap {
+		keySet[key] = struct{}{}
+	}
+	for key := range newMap {
+		keySet[key] = struct{}{}
+	}
+	orderedKeys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+	for _, key := range orderedKeys {
+		oldEntry, oldOk := oldMap[key]
+		newEntry, newOk := newMap[key]
+		label := oldLabels[key]
+		if label == "" {
+			label = newLabels[key]
+		}
+		switch {
+		case !oldOk:
+			changes = append(changes, fmt.Sprintf("provider added: %s (api-keys=%d, models=%d)", label, countNonEmptyStrings(newEntry.APIKeys), countOpenAIModels(newEntry.Models)))
+		case !newOk:
+			changes = append(changes, fmt.Sprintf("provider removed: %s (api-keys=%d, models=%d)", label, countNonEmptyStrings(oldEntry.APIKeys), countOpenAIModels(oldEntry.Models)))
+		default:
+			if detail := describeOpenAICompatibilityUpdate(oldEntry, newEntry); detail != "" {
+				changes = append(changes, fmt.Sprintf("provider updated: %s %s", label, detail))
+			}
+		}
+	}
+	return changes
+}
+
+func describeOpenAICompatibilityUpdate(oldEntry, newEntry config.OpenAICompatibility) string {
+	oldKeyCount := countNonEmptyStrings(oldEntry.APIKeys)
+	newKeyCount := countNonEmptyStrings(newEntry.APIKeys)
+	oldModelCount := countOpenAIModels(oldEntry.Models)
+	newModelCount := countOpenAIModels(newEntry.Models)
+	details := make([]string, 0, 2)
+	if oldKeyCount != newKeyCount {
+		details = append(details, fmt.Sprintf("api-keys %d -> %d", oldKeyCount, newKeyCount))
+	}
+	if oldModelCount != newModelCount {
+		details = append(details, fmt.Sprintf("models %d -> %d", oldModelCount, newModelCount))
+	}
+	if len(details) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(details, ", ") + ")"
+}
+
+func countNonEmptyStrings(values []string) int {
+	count := 0
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func countOpenAIModels(models []config.OpenAICompatibilityModel) int {
+	count := 0
+	for _, model := range models {
+		name := strings.TrimSpace(model.Name)
+		alias := strings.TrimSpace(model.Alias)
+		if name == "" && alias == "" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func openAICompatKey(entry config.OpenAICompatibility, index int) (string, string) {
+	name := strings.TrimSpace(entry.Name)
+	if name != "" {
+		return "name:" + name, name
+	}
+	base := strings.TrimSpace(entry.BaseURL)
+	if base != "" {
+		return "base:" + base, base
+	}
+	for _, model := range entry.Models {
+		alias := strings.TrimSpace(model.Alias)
+		if alias == "" {
+			alias = strings.TrimSpace(model.Name)
+		}
+		if alias != "" {
+			return "alias:" + alias, alias
+		}
+	}
+	return fmt.Sprintf("index:%d", index), fmt.Sprintf("entry-%d", index+1)
 }
