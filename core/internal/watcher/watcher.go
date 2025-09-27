@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -145,7 +146,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 	go w.processEvents(ctx)
 
 	// Perform an initial full reload based on current config and auth dir
-	w.reloadClients()
+	w.reloadClients(true)
 	return nil
 }
 
@@ -463,6 +464,12 @@ func (w *Watcher) reloadConfig() bool {
 		return false
 	}
 
+	if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(newConfig.AuthDir); errResolveAuthDir != nil {
+		log.Errorf("failed to resolve auth directory from config: %v", errResolveAuthDir)
+	} else {
+		newConfig.AuthDir = resolvedAuthDir
+	}
+
 	w.clientsMutex.Lock()
 	oldConfig := w.config
 	w.config = newConfig
@@ -530,16 +537,24 @@ func (w *Watcher) reloadConfig() bool {
 		if oldConfig.UsageStatisticsEnabled != newConfig.UsageStatisticsEnabled {
 			log.Debugf("  usage-statistics-enabled: %t -> %t", oldConfig.UsageStatisticsEnabled, newConfig.UsageStatisticsEnabled)
 		}
+		if changes := diffOpenAICompatibility(oldConfig.OpenAICompatibility, newConfig.OpenAICompatibility); len(changes) > 0 {
+			log.Debugf("  openai-compatibility:")
+			for _, change := range changes {
+				log.Debugf("    %s", change)
+			}
+		}
 	}
+
+	authDirChanged := oldConfig == nil || oldConfig.AuthDir != newConfig.AuthDir
 
 	log.Infof("config successfully reloaded, triggering client reload")
 	// Reload clients with new config
-	w.reloadClients()
+	w.reloadClients(authDirChanged)
 	return true
 }
 
 // reloadClients performs a full scan and reload of all clients.
-func (w *Watcher) reloadClients() {
+func (w *Watcher) reloadClients(rescanAuth bool) {
 	log.Debugf("starting full client reload process")
 
 	w.clientsMutex.RLock()
@@ -556,33 +571,48 @@ func (w *Watcher) reloadClients() {
 
 	// Create new API key clients based on the new config
 	glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := BuildAPIKeyClients(cfg)
-	log.Debugf("created %d new API key clients", 0)
+	totalAPIKeyClients := glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
+	log.Debugf("loaded %d API key clients", totalAPIKeyClients)
 
-	// Load file-based clients
-	authFileCount := w.loadFileClients(cfg)
-	log.Debugf("loaded %d new file-based clients", 0)
+	var authFileCount int
+	if rescanAuth {
+		// Load file-based clients when explicitly requested (startup or authDir change)
+		authFileCount = w.loadFileClients(cfg)
+		log.Debugf("loaded %d new file-based clients", authFileCount)
+	} else {
+		// Preserve existing auth hashes and only report current known count to avoid redundant scans.
+		w.clientsMutex.RLock()
+		authFileCount = len(w.lastAuthHashes)
+		w.clientsMutex.RUnlock()
+		log.Debugf("skipping auth directory rescan; retaining %d existing auth files", authFileCount)
+	}
 
 	// no legacy file-based clients to unregister
 
 	// Update client maps
-	w.clientsMutex.Lock()
+	if rescanAuth {
+		w.clientsMutex.Lock()
 
-	// Rebuild auth file hash cache for current clients
-	w.lastAuthHashes = make(map[string]string)
-	// Recompute hashes for current auth files
-	_ = filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return nil
+		// Rebuild auth file hash cache for current clients
+		w.lastAuthHashes = make(map[string]string)
+		if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir); errResolveAuthDir != nil {
+			log.Errorf("failed to resolve auth directory for hash cache: %v", errResolveAuthDir)
+		} else if resolvedAuthDir != "" {
+			_ = filepath.Walk(resolvedAuthDir, func(path string, info fs.FileInfo, err error) error {
+				if err != nil {
+					return nil
+				}
+				if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
+					if data, errReadFile := os.ReadFile(path); errReadFile == nil && len(data) > 0 {
+						sum := sha256.Sum256(data)
+						w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
+					}
+				}
+				return nil
+			})
 		}
-		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
-			if data, errReadFile := os.ReadFile(path); errReadFile == nil && len(data) > 0 {
-				sum := sha256.Sum256(data)
-				w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
-			}
-		}
-		return nil
-	})
-	w.clientsMutex.Unlock()
+		w.clientsMutex.Unlock()
+	}
 
 	totalNewClients := authFileCount + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
 
@@ -855,14 +885,13 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 	authFileCount := 0
 	successfulAuthCount := 0
 
-	authDir := cfg.AuthDir
-	if strings.HasPrefix(authDir, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			log.Errorf("failed to get home directory: %v", err)
-			return 0
-		}
-		authDir = filepath.Join(home, authDir[1:])
+	authDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir)
+	if errResolveAuthDir != nil {
+		log.Errorf("failed to resolve auth directory: %v", errResolveAuthDir)
+		return 0
+	}
+	if authDir == "" {
+		return 0
 	}
 
 	errWalk := filepath.Walk(authDir, func(path string, info fs.FileInfo, err error) error {
@@ -911,4 +940,115 @@ func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int) {
 		}
 	}
 	return glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
+}
+
+func diffOpenAICompatibility(oldList, newList []config.OpenAICompatibility) []string {
+	changes := make([]string, 0)
+	oldMap := make(map[string]config.OpenAICompatibility, len(oldList))
+	oldLabels := make(map[string]string, len(oldList))
+	for idx, entry := range oldList {
+		key, label := openAICompatKey(entry, idx)
+		oldMap[key] = entry
+		oldLabels[key] = label
+	}
+	newMap := make(map[string]config.OpenAICompatibility, len(newList))
+	newLabels := make(map[string]string, len(newList))
+	for idx, entry := range newList {
+		key, label := openAICompatKey(entry, idx)
+		newMap[key] = entry
+		newLabels[key] = label
+	}
+	keySet := make(map[string]struct{}, len(oldMap)+len(newMap))
+	for key := range oldMap {
+		keySet[key] = struct{}{}
+	}
+	for key := range newMap {
+		keySet[key] = struct{}{}
+	}
+	orderedKeys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+	for _, key := range orderedKeys {
+		oldEntry, oldOk := oldMap[key]
+		newEntry, newOk := newMap[key]
+		label := oldLabels[key]
+		if label == "" {
+			label = newLabels[key]
+		}
+		switch {
+		case !oldOk:
+			changes = append(changes, fmt.Sprintf("provider added: %s (api-keys=%d, models=%d)", label, countNonEmptyStrings(newEntry.APIKeys), countOpenAIModels(newEntry.Models)))
+		case !newOk:
+			changes = append(changes, fmt.Sprintf("provider removed: %s (api-keys=%d, models=%d)", label, countNonEmptyStrings(oldEntry.APIKeys), countOpenAIModels(oldEntry.Models)))
+		default:
+			if detail := describeOpenAICompatibilityUpdate(oldEntry, newEntry); detail != "" {
+				changes = append(changes, fmt.Sprintf("provider updated: %s %s", label, detail))
+			}
+		}
+	}
+	return changes
+}
+
+func describeOpenAICompatibilityUpdate(oldEntry, newEntry config.OpenAICompatibility) string {
+	oldKeyCount := countNonEmptyStrings(oldEntry.APIKeys)
+	newKeyCount := countNonEmptyStrings(newEntry.APIKeys)
+	oldModelCount := countOpenAIModels(oldEntry.Models)
+	newModelCount := countOpenAIModels(newEntry.Models)
+	details := make([]string, 0, 2)
+	if oldKeyCount != newKeyCount {
+		details = append(details, fmt.Sprintf("api-keys %d -> %d", oldKeyCount, newKeyCount))
+	}
+	if oldModelCount != newModelCount {
+		details = append(details, fmt.Sprintf("models %d -> %d", oldModelCount, newModelCount))
+	}
+	if len(details) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(details, ", ") + ")"
+}
+
+func countNonEmptyStrings(values []string) int {
+	count := 0
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func countOpenAIModels(models []config.OpenAICompatibilityModel) int {
+	count := 0
+	for _, model := range models {
+		name := strings.TrimSpace(model.Name)
+		alias := strings.TrimSpace(model.Alias)
+		if name == "" && alias == "" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func openAICompatKey(entry config.OpenAICompatibility, index int) (string, string) {
+	name := strings.TrimSpace(entry.Name)
+	if name != "" {
+		return "name:" + name, name
+	}
+	base := strings.TrimSpace(entry.BaseURL)
+	if base != "" {
+		return "base:" + base, base
+	}
+	for _, model := range entry.Models {
+		alias := strings.TrimSpace(model.Alias)
+		if alias == "" {
+			alias = strings.TrimSpace(model.Name)
+		}
+		if alias != "" {
+			return "alias:" + alias, alias
+		}
+	}
+	return fmt.Sprintf("index:%d", index), fmt.Sprintf("entry-%d", index+1)
 }

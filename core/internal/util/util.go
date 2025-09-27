@@ -4,6 +4,7 @@
 package util
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -30,23 +31,42 @@ func SetLogLevel(cfg *config.Config) {
 	}
 }
 
-// CountAuthFiles returns the number of JSON auth files located under the provided directory.
-// The function resolves leading tildes to the user's home directory and performs a case-insensitive
-// match on the ".json" suffix so that files saved with uppercase extensions are also counted.
-func CountAuthFiles(authDir string) int {
+// ResolveAuthDir normalizes the auth directory path for consistent reuse throughout the app.
+// It expands a leading tilde (~) to the user's home directory and returns a cleaned path.
+func ResolveAuthDir(authDir string) (string, error) {
 	if authDir == "" {
-		return 0
+		return "", nil
 	}
 	if strings.HasPrefix(authDir, "~") {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			log.Debugf("countAuthFiles: failed to resolve home directory: %v", err)
-			return 0
+			return "", fmt.Errorf("resolve auth dir: %w", err)
 		}
-		authDir = filepath.Join(home, authDir[1:])
+		remainder := strings.TrimPrefix(authDir, "~")
+		remainder = strings.TrimLeft(remainder, "/\\")
+		if remainder == "" {
+			return filepath.Clean(home), nil
+		}
+		normalized := strings.ReplaceAll(remainder, "\\", "/")
+		return filepath.Clean(filepath.Join(home, filepath.FromSlash(normalized))), nil
+	}
+	return filepath.Clean(authDir), nil
+}
+
+// CountAuthFiles returns the number of JSON auth files located under the provided directory.
+// The function resolves leading tildes to the user's home directory and performs a case-insensitive
+// match on the ".json" suffix so that files saved with uppercase extensions are also counted.
+func CountAuthFiles(authDir string) int {
+	dir, err := ResolveAuthDir(authDir)
+	if err != nil {
+		log.Debugf("countAuthFiles: failed to resolve auth directory: %v", err)
+		return 0
+	}
+	if dir == "" {
+		return 0
 	}
 	count := 0
-	walkErr := filepath.WalkDir(authDir, func(path string, d fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			log.Debugf("countAuthFiles: error accessing %s: %v", path, err)
 			return nil

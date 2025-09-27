@@ -115,18 +115,8 @@ func (s *Service) refreshAccessProviders(cfg *config.Config) {
 	oldCfg := s.cfg
 	s.cfgMu.RUnlock()
 
-	existing := s.accessManager.Providers()
-	providers, added, updated, removed, err := access.ReconcileProviders(oldCfg, cfg, existing)
-	if err != nil {
-		log.Errorf("failed to reconcile request auth providers: %v", err)
+	if _, err := access.ApplyAccessProviders(s.accessManager, oldCfg, cfg); err != nil {
 		return
-	}
-	s.accessManager.SetProviders(providers)
-	if len(added)+len(updated)+len(removed) > 0 {
-		log.Debugf("auth providers reconciled (added=%d updated=%d removed=%d)", len(added), len(updated), len(removed))
-		log.Debugf("auth provider changes details - added=%v updated=%v removed=%v", added, updated, removed)
-	} else {
-		log.Debug("auth providers unchanged after config reload")
 	}
 }
 

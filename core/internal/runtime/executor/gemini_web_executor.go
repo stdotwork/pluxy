@@ -200,7 +200,8 @@ func parseGeminiWebToken(auth *cliproxyauth.Auth) (*gemini.GeminiWebTokenStorage
 	if psid == "" || psidts == "" {
 		return nil, fmt.Errorf("gemini-web executor: incomplete cookie metadata")
 	}
-	return &gemini.GeminiWebTokenStorage{Secure1PSID: psid, Secure1PSIDTS: psidts}, nil
+	label := strings.TrimSpace(stringFromMetadata(auth.Metadata, "label"))
+	return &gemini.GeminiWebTokenStorage{Secure1PSID: psid, Secure1PSIDTS: psidts, Label: label}, nil
 }
 
 func stringFromMetadata(meta map[string]any, keys ...string) string {
