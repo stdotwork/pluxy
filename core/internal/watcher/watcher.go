@@ -463,6 +463,12 @@ func (w *Watcher) reloadConfig() bool {
 		return false
 	}
 
+	if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(newConfig.AuthDir); errResolveAuthDir != nil {
+		log.Errorf("failed to resolve auth directory from config: %v", errResolveAuthDir)
+	} else {
+		newConfig.AuthDir = resolvedAuthDir
+	}
+
 	w.clientsMutex.Lock()
 	oldConfig := w.config
 	w.config = newConfig
@@ -582,19 +588,22 @@ func (w *Watcher) reloadClients(rescanAuth bool) {
 
 		// Rebuild auth file hash cache for current clients
 		w.lastAuthHashes = make(map[string]string)
-		// Recompute hashes for current auth files
-		_ = filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
-				if data, errReadFile := os.ReadFile(path); errReadFile == nil && len(data) > 0 {
-					sum := sha256.Sum256(data)
-					w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
+		if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir); errResolveAuthDir != nil {
+			log.Errorf("failed to resolve auth directory for hash cache: %v", errResolveAuthDir)
+		} else if resolvedAuthDir != "" {
+			_ = filepath.Walk(resolvedAuthDir, func(path string, info fs.FileInfo, err error) error {
+				if err != nil {
+					return nil
 				}
-			}
-			return nil
-		})
+				if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
+					if data, errReadFile := os.ReadFile(path); errReadFile == nil && len(data) > 0 {
+						sum := sha256.Sum256(data)
+						w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
+					}
+				}
+				return nil
+			})
+		}
 		w.clientsMutex.Unlock()
 	}
 
@@ -869,14 +878,13 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 	authFileCount := 0
 	successfulAuthCount := 0
 
-	authDir := cfg.AuthDir
-	if strings.HasPrefix(authDir, "~") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			log.Errorf("failed to get home directory: %v", err)
-			return 0
-		}
-		authDir = filepath.Join(home, authDir[1:])
+	authDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir)
+	if errResolveAuthDir != nil {
+		log.Errorf("failed to resolve auth directory: %v", errResolveAuthDir)
+		return 0
+	}
+	if authDir == "" {
+		return 0
 	}
 
 	errWalk := filepath.Walk(authDir, func(path string, info fs.FileInfo, err error) error {
