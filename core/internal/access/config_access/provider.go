@@ -1,27 +1,33 @@
-package configapikey
+package configaccess
 
 import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
-	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
+
+var registerOnce sync.Once
+
+// Register ensures the config-access provider is available to the access manager.
+func Register() {
+	registerOnce.Do(func() {
+		sdkaccess.RegisterProvider(sdkconfig.AccessProviderTypeConfigAPIKey, newProvider)
+	})
+}
 
 type provider struct {
 	name string
 	keys map[string]struct{}
 }
 
-func init() {
-	sdkaccess.RegisterProvider(config.AccessProviderTypeConfigAPIKey, newProvider)
-}
-
-func newProvider(cfg *config.AccessProvider, _ *config.SDKConfig) (sdkaccess.Provider, error) {
+func newProvider(cfg *sdkconfig.AccessProvider, _ *sdkconfig.SDKConfig) (sdkaccess.Provider, error) {
 	name := cfg.Name
 	if name == "" {
-		name = config.DefaultAccessProviderName
+		name = sdkconfig.DefaultAccessProviderName
 	}
 	keys := make(map[string]struct{}, len(cfg.APIKeys))
 	for _, key := range cfg.APIKeys {
@@ -35,7 +41,7 @@ func newProvider(cfg *config.AccessProvider, _ *config.SDKConfig) (sdkaccess.Pro
 
 func (p *provider) Identifier() string {
 	if p == nil || p.name == "" {
-		return config.DefaultAccessProviderName
+		return sdkconfig.DefaultAccessProviderName
 	}
 	return p.name
 }

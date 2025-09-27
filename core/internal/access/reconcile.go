@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	configaccess "github.com/router-for-me/CLIProxyAPI/v6/internal/access/config_access"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	sdkConfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
@@ -20,6 +21,8 @@ func ReconcileProviders(oldCfg, newCfg *config.Config, existing []sdkaccess.Prov
 	if newCfg == nil {
 		return nil, nil, nil, nil, nil
 	}
+
+	configaccess.Register()
 
 	existingMap := make(map[string]sdkaccess.Provider, len(existing))
 	for _, provider := range existing {
