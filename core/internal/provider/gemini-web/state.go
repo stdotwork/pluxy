@@ -88,6 +88,11 @@ func (s *GeminiWebState) Label() string {
 	if s == nil {
 		return ""
 	}
+	if s.token != nil {
+		if lbl := strings.TrimSpace(s.token.Label); lbl != "" {
+			return lbl
+		}
+	}
 	if s.storagePath != "" {
 		base := strings.TrimSuffix(filepath.Base(s.storagePath), filepath.Ext(s.storagePath))
 		if base != "" {
@@ -169,8 +174,12 @@ func (s *GeminiWebState) Refresh(ctx context.Context) error {
 			s.client.Cookies["__Secure-1PSIDTS"] = newTS
 		}
 		s.tokenMu.Unlock()
-		// Detailed debug log: provider and account.
-		log.Debugf("gemini web account %s rotated 1PSIDTS: %s", s.accountID, MaskToken28(newTS))
+		// Detailed debug log: provider and account label.
+		label := strings.TrimSpace(s.Label())
+		if label == "" {
+			label = s.accountID
+		}
+		log.Debugf("gemini web account %s rotated 1PSIDTS: %s", label, MaskToken28(newTS))
 	}
 	s.lastRefresh = time.Now()
 	return nil
