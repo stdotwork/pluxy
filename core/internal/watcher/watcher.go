@@ -145,7 +145,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 	go w.processEvents(ctx)
 
 	// Perform an initial full reload based on current config and auth dir
-	w.reloadClients()
+	w.reloadClients(true)
 	return nil
 }
 
@@ -532,14 +532,16 @@ func (w *Watcher) reloadConfig() bool {
 		}
 	}
 
+	authDirChanged := oldConfig == nil || oldConfig.AuthDir != newConfig.AuthDir
+
 	log.Infof("config successfully reloaded, triggering client reload")
 	// Reload clients with new config
-	w.reloadClients()
+	w.reloadClients(authDirChanged)
 	return true
 }
 
 // reloadClients performs a full scan and reload of all clients.
-func (w *Watcher) reloadClients() {
+func (w *Watcher) reloadClients(rescanAuth bool) {
 	log.Debugf("starting full client reload process")
 
 	w.clientsMutex.RLock()
@@ -556,33 +558,45 @@ func (w *Watcher) reloadClients() {
 
 	// Create new API key clients based on the new config
 	glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := BuildAPIKeyClients(cfg)
-	log.Debugf("created %d new API key clients", 0)
+	totalAPIKeyClients := glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
+	log.Debugf("created %d new API key clients", totalAPIKeyClients)
 
-	// Load file-based clients
-	authFileCount := w.loadFileClients(cfg)
-	log.Debugf("loaded %d new file-based clients", 0)
+	var authFileCount int
+	if rescanAuth {
+		// Load file-based clients when explicitly requested (startup or authDir change)
+		authFileCount = w.loadFileClients(cfg)
+		log.Debugf("loaded %d new file-based clients", authFileCount)
+	} else {
+		// Preserve existing auth hashes and only report current known count to avoid redundant scans.
+		w.clientsMutex.RLock()
+		authFileCount = len(w.lastAuthHashes)
+		w.clientsMutex.RUnlock()
+		log.Debugf("skipping auth directory rescan; retaining %d existing auth files", authFileCount)
+	}
 
 	// no legacy file-based clients to unregister
 
 	// Update client maps
-	w.clientsMutex.Lock()
+	if rescanAuth {
+		w.clientsMutex.Lock()
 
-	// Rebuild auth file hash cache for current clients
-	w.lastAuthHashes = make(map[string]string)
-	// Recompute hashes for current auth files
-	_ = filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
-			if data, errReadFile := os.ReadFile(path); errReadFile == nil && len(data) > 0 {
-				sum := sha256.Sum256(data)
-				w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
+		// Rebuild auth file hash cache for current clients
+		w.lastAuthHashes = make(map[string]string)
+		// Recompute hashes for current auth files
+		_ = filepath.Walk(cfg.AuthDir, func(path string, info fs.FileInfo, err error) error {
+			if err != nil {
+				return nil
 			}
-		}
-		return nil
-	})
-	w.clientsMutex.Unlock()
+			if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".json") {
+				if data, errReadFile := os.ReadFile(path); errReadFile == nil && len(data) > 0 {
+					sum := sha256.Sum256(data)
+					w.lastAuthHashes[path] = hex.EncodeToString(sum[:])
+				}
+			}
+			return nil
+		})
+		w.clientsMutex.Unlock()
+	}
 
 	totalNewClients := authFileCount + glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
 
