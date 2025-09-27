@@ -572,7 +572,7 @@ func (w *Watcher) reloadClients(rescanAuth bool) {
 	// Create new API key clients based on the new config
 	glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount := BuildAPIKeyClients(cfg)
 	totalAPIKeyClients := glAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + openAICompatCount
-	log.Debugf("created %d new API key clients", totalAPIKeyClients)
+	log.Debugf("loaded %d API key clients", totalAPIKeyClients)
 
 	var authFileCount int
 	if rescanAuth {
