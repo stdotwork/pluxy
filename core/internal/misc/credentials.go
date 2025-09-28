@@ -9,7 +9,7 @@ import (
 )
 
 // Separator used to visually group related log lines.
-var credentialSeparator = strings.Repeat("-", 70)
+var credentialSeparator = strings.Repeat("-", 67)
 
 // LogSavingCredentials emits a consistent log message when persisting auth material.
 func LogSavingCredentials(path string) {
