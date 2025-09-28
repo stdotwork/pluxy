@@ -167,11 +167,11 @@ func ApplyAccessProviders(manager *sdkaccess.Manager, oldCfg, newCfg *config.Con
 
 	if len(added)+len(updated)+len(removed) > 0 {
 		log.Debugf("auth providers reconciled (added=%d updated=%d removed=%d)", len(added), len(updated), len(removed))
-		log.Debugf("auth provider changes details - added=%v updated=%v removed=%v", added, updated, removed)
+		log.Debugf("auth providers changes details - added=%v updated=%v removed=%v", added, updated, removed)
 		return true, nil
 	}
 
-	// log.Debug("auth providers unchanged after config update")
+	log.Debug("auth providers unchanged after config update")
 	return false, nil
 }
 
