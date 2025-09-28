@@ -171,7 +171,7 @@ func ApplyAccessProviders(manager *sdkaccess.Manager, oldCfg, newCfg *config.Con
 		return true, nil
 	}
 
-	// log.Debug("auth providers unchanged after config update")
+	log.Debug("auth providers unchanged after config update")
 	return false, nil
 }
 

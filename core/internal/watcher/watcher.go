@@ -456,6 +456,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 
 // reloadConfig reloads the configuration and triggers a full reload
 func (w *Watcher) reloadConfig() bool {
+	log.Debug("=========================== CONFIG RELOAD ============================")
 	log.Debugf("starting config reload from: %s", w.configPath)
 
 	newConfig, errLoadConfig := config.LoadConfig(w.configPath)
@@ -555,7 +556,7 @@ func (w *Watcher) reloadConfig() bool {
 
 // reloadClients performs a full scan and reload of all clients.
 func (w *Watcher) reloadClients(rescanAuth bool) {
-	log.Debugf("starting full client reload process")
+	log.Debugf("starting full client load process")
 
 	w.clientsMutex.RLock()
 	cfg := w.config
@@ -578,7 +579,7 @@ func (w *Watcher) reloadClients(rescanAuth bool) {
 	if rescanAuth {
 		// Load file-based clients when explicitly requested (startup or authDir change)
 		authFileCount = w.loadFileClients(cfg)
-		log.Debugf("loaded %d new file-based clients", authFileCount)
+		log.Debugf("loaded %d file-based clients", authFileCount)
 	} else {
 		// Preserve existing auth hashes and only report current known count to avoid redundant scans.
 		w.clientsMutex.RLock()
