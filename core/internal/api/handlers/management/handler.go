@@ -33,7 +33,7 @@ type Handler struct {
 	failedAttempts map[string]*attemptInfo // keyed by client IP
 	authManager    *coreauth.Manager
 	usageStats     *usage.RequestStatistics
-	tokenStore     sdkAuth.TokenStore
+	tokenStore     coreauth.Store
 
 	localPassword string
 }

@@ -344,7 +344,7 @@ func (h *Handler) disableAuth(ctx context.Context, id string) {
 	}
 }
 
-func (h *Handler) saveTokenRecord(ctx context.Context, record *sdkAuth.TokenRecord) (string, error) {
+func (h *Handler) saveTokenRecord(ctx context.Context, record *coreauth.Auth) (string, error) {
 	if record == nil {
 		return "", fmt.Errorf("token record is nil")
 	}
@@ -353,7 +353,12 @@ func (h *Handler) saveTokenRecord(ctx context.Context, record *sdkAuth.TokenReco
 		store = sdkAuth.GetTokenStore()
 		h.tokenStore = store
 	}
-	return store.Save(ctx, h.cfg, record)
+	if h.cfg != nil {
+		if dirSetter, ok := store.(interface{ SetBaseDir(string) }); ok {
+			dirSetter.SetBaseDir(h.cfg.AuthDir)
+		}
+	}
+	return store.Save(ctx, record)
 }
 
 func (h *Handler) RequestAnthropicToken(c *gin.Context) {
@@ -496,11 +501,12 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 
 		// Create token storage
 		tokenStorage := anthropicAuth.CreateTokenStorage(bundle)
-		record := &sdkAuth.TokenRecord{
+		record := &coreauth.Auth{
+			ID:       fmt.Sprintf("claude-%s.json", tokenStorage.Email),
 			Provider: "claude",
 			FileName: fmt.Sprintf("claude-%s.json", tokenStorage.Email),
 			Storage:  tokenStorage,
-			Metadata: map[string]string{"email": tokenStorage.Email},
+			Metadata: map[string]any{"email": tokenStorage.Email},
 		}
 		savedPath, errSave := h.saveTokenRecord(ctx, record)
 		if errSave != nil {
@@ -659,11 +665,12 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 		}
 		fmt.Println("Authentication successful.")
 
-		record := &sdkAuth.TokenRecord{
+		record := &coreauth.Auth{
+			ID:       fmt.Sprintf("gemini-%s.json", ts.Email),
 			Provider: "gemini",
 			FileName: fmt.Sprintf("gemini-%s.json", ts.Email),
 			Storage:  &ts,
-			Metadata: map[string]string{
+			Metadata: map[string]any{
 				"email":      ts.Email,
 				"project_id": ts.ProjectID,
 			},
@@ -724,7 +731,8 @@ func (h *Handler) CreateGeminiWebToken(c *gin.Context) {
 	// Provide a stable label (gemini-web-<hash>) for logging and identification
 	tokenStorage.Label = strings.TrimSuffix(fileName, ".json")
 
-	record := &sdkAuth.TokenRecord{
+	record := &coreauth.Auth{
+		ID:       fileName,
 		Provider: "gemini-web",
 		FileName: fileName,
 		Storage:  tokenStorage,
@@ -869,11 +877,12 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 
 		// Create token storage and persist
 		tokenStorage := openaiAuth.CreateTokenStorage(bundle)
-		record := &sdkAuth.TokenRecord{
+		record := &coreauth.Auth{
+			ID:       fmt.Sprintf("codex-%s.json", tokenStorage.Email),
 			Provider: "codex",
 			FileName: fmt.Sprintf("codex-%s.json", tokenStorage.Email),
 			Storage:  tokenStorage,
-			Metadata: map[string]string{
+			Metadata: map[string]any{
 				"email":      tokenStorage.Email,
 				"account_id": tokenStorage.AccountID,
 			},
@@ -926,11 +935,12 @@ func (h *Handler) RequestQwenToken(c *gin.Context) {
 		tokenStorage := qwenAuth.CreateTokenStorage(tokenData)
 
 		tokenStorage.Email = fmt.Sprintf("qwen-%d", time.Now().UnixMilli())
-		record := &sdkAuth.TokenRecord{
+		record := &coreauth.Auth{
+			ID:       fmt.Sprintf("qwen-%s.json", tokenStorage.Email),
 			Provider: "qwen",
 			FileName: fmt.Sprintf("qwen-%s.json", tokenStorage.Email),
 			Storage:  tokenStorage,
-			Metadata: map[string]string{"email": tokenStorage.Email},
+			Metadata: map[string]any{"email": tokenStorage.Email},
 		}
 		savedPath, errSave := h.saveTokenRecord(ctx, record)
 		if errSave != nil {

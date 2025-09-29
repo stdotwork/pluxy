@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 )
 
 // banner prints a simple ASCII banner for clarity without ANSI colors.
@@ -173,13 +174,19 @@ func DoGeminiWebAuth(cfg *config.Config) {
 		Secure1PSIDTS: secure1psidts,
 		Label:         label,
 	}
-	record := &sdkAuth.TokenRecord{
+	record := &coreauth.Auth{
+		ID:       fileName,
 		Provider: "gemini-web",
 		FileName: fileName,
 		Storage:  tokenStorage,
 	}
 	store := sdkAuth.GetTokenStore()
-	savedPath, err := store.Save(context.Background(), cfg, record)
+	if cfg != nil {
+		if dirSetter, ok := store.(interface{ SetBaseDir(string) }); ok {
+			dirSetter.SetBaseDir(cfg.AuthDir)
+		}
+	}
+	savedPath, err := store.Save(context.Background(), record)
 	if err != nil {
 		fmt.Println("!! Failed to save Gemini Web token to file:", err)
 		return
