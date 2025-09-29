@@ -78,12 +78,21 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 		textDone, _ = sjson.Set(textDone, "output_index", st.ReasoningIndex)
 		textDone, _ = sjson.Set(textDone, "text", full)
 		out = append(out, emitEvent("response.reasoning_summary_text.done", textDone))
+
 		partDone := `{"type":"response.reasoning_summary_part.done","sequence_number":0,"item_id":"","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}`
 		partDone, _ = sjson.Set(partDone, "sequence_number", nextSeq())
 		partDone, _ = sjson.Set(partDone, "item_id", st.ReasoningItemID)
 		partDone, _ = sjson.Set(partDone, "output_index", st.ReasoningIndex)
 		partDone, _ = sjson.Set(partDone, "part.text", full)
 		out = append(out, emitEvent("response.reasoning_summary_part.done", partDone))
+
+		itemDone := `{"type":"response.output_item.done","sequence_number":0,"output_index":0,"item":{"id":"","type":"reasoning","encrypted_content":"","summary":[{"type":"summary_text","text":""}]}}`
+		itemDone, _ = sjson.Set(itemDone, "sequence_number", nextSeq())
+		itemDone, _ = sjson.Set(itemDone, "item.id", st.ReasoningItemID)
+		itemDone, _ = sjson.Set(itemDone, "output_index", st.ReasoningIndex)
+		itemDone, _ = sjson.Set(itemDone, "item.summary.0.text", full)
+		out = append(out, emitEvent("response.output_item.done", itemDone))
+
 		st.ReasoningClosed = true
 	}
 
