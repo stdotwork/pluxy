@@ -1,15 +1,16 @@
 package conversation
 
 import (
-	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"time"
+    "bytes"
+    "encoding/json"
+    "errors"
+    "os"
+    "path/filepath"
+    "strings"
+    "sync"
+    "time"
 
-	bolt "go.etcd.io/bbolt"
+    bolt "go.etcd.io/bbolt"
 )
 
 const (
@@ -65,67 +66,148 @@ func indexPath() string {
 
 // StoreMatch persists or updates a conversation hash mapping.
 func StoreMatch(hash string, record MatchRecord) error {
-	if strings.TrimSpace(hash) == "" {
-		return errors.New("gemini-web conversation: empty hash")
-	}
-	db, err := openIndex()
-	if err != nil {
-		return err
-	}
-	record.UpdatedAt = time.Now().UTC().Unix()
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	return db.Update(func(tx *bolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketMatches))
-		if err != nil {
-			return err
-		}
-		return bucket.Put([]byte(hash), payload)
-	})
+    if strings.TrimSpace(hash) == "" {
+        return errors.New("gemini-web conversation: empty hash")
+    }
+    db, err := openIndex()
+    if err != nil {
+        return err
+    }
+    record.UpdatedAt = time.Now().UTC().Unix()
+    payload, err := json.Marshal(record)
+    if err != nil {
+        return err
+    }
+    return db.Update(func(tx *bolt.Tx) error {
+        bucket, err := tx.CreateBucketIfNotExists([]byte(bucketMatches))
+        if err != nil {
+            return err
+        }
+        // Namespace by account label to avoid cross-account collisions.
+        label := strings.ToLower(strings.TrimSpace(record.AccountLabel))
+        if label == "" {
+            return errors.New("gemini-web conversation: empty account label")
+        }
+        key := []byte(hash + ":" + label)
+        if err := bucket.Put(key, payload); err != nil {
+            return err
+        }
+        // Best-effort cleanup of legacy single-key format (hash -> MatchRecord).
+        // We do not know its label; leave it for lookup fallback/cleanup elsewhere.
+        return nil
+    })
 }
 
 // LookupMatch retrieves a stored mapping.
+// It prefers namespaced entries (hash:label). If multiple labels exist for the same
+// hash, it returns not found to avoid redirecting to the wrong credential.
+// Falls back to legacy single-key entries if present.
 func LookupMatch(hash string) (MatchRecord, bool, error) {
-	db, err := openIndex()
-	if err != nil {
-		return MatchRecord{}, false, err
-	}
-	var record MatchRecord
-	err = db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte(bucketMatches))
-		if bucket == nil {
-			return nil
-		}
-		raw := bucket.Get([]byte(hash))
-		if len(raw) == 0 {
-			return nil
-		}
-		return json.Unmarshal(raw, &record)
-	})
-	if err != nil {
-		return MatchRecord{}, false, err
-	}
-	if record.AccountLabel == "" || record.PrefixLen <= 0 {
-		return MatchRecord{}, false, nil
-	}
-	return record, true, nil
+    db, err := openIndex()
+    if err != nil {
+        return MatchRecord{}, false, err
+    }
+    var foundOne bool
+    var single MatchRecord
+    err = db.View(func(tx *bolt.Tx) error {
+        bucket := tx.Bucket([]byte(bucketMatches))
+        if bucket == nil {
+            return nil
+        }
+        // Scan namespaced keys with prefix "hash:"
+        prefix := []byte(hash + ":")
+        c := bucket.Cursor()
+        for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+            if len(v) == 0 {
+                continue
+            }
+            var rec MatchRecord
+            if err := json.Unmarshal(v, &rec); err != nil {
+                // Ignore malformed; removal is handled elsewhere.
+                continue
+            }
+            if strings.TrimSpace(rec.AccountLabel) == "" || rec.PrefixLen <= 0 {
+                continue
+            }
+            if foundOne {
+                // More than one distinct label exists for this hash; ambiguous.
+                return nil
+            }
+            single = rec
+            foundOne = true
+        }
+        if foundOne {
+            return nil
+        }
+        // Fallback to legacy single-key format
+        raw := bucket.Get([]byte(hash))
+        if len(raw) == 0 {
+            return nil
+        }
+        return json.Unmarshal(raw, &single)
+    })
+    if err != nil {
+        return MatchRecord{}, false, err
+    }
+    if strings.TrimSpace(single.AccountLabel) == "" || single.PrefixLen <= 0 {
+        return MatchRecord{}, false, nil
+    }
+    return single, true, nil
 }
 
-// RemoveMatch deletes a mapping for the given hash.
+// RemoveMatch deletes all mappings for the given hash (all labels and legacy key).
 func RemoveMatch(hash string) error {
-	db, err := openIndex()
-	if err != nil {
-		return err
-	}
-	return db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte(bucketMatches))
-		if bucket == nil {
-			return nil
-		}
-		return bucket.Delete([]byte(hash))
-	})
+    db, err := openIndex()
+    if err != nil {
+        return err
+    }
+    return db.Update(func(tx *bolt.Tx) error {
+        bucket := tx.Bucket([]byte(bucketMatches))
+        if bucket == nil {
+            return nil
+        }
+        // Delete namespaced entries
+        prefix := []byte(hash + ":")
+        c := bucket.Cursor()
+        for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+            if err := bucket.Delete(k); err != nil {
+                return err
+            }
+        }
+        // Delete legacy entry
+        _ = bucket.Delete([]byte(hash))
+        return nil
+    })
+}
+
+// RemoveMatchForLabel deletes the mapping for the given hash and label only.
+func RemoveMatchForLabel(hash, label string) error {
+    label = strings.ToLower(strings.TrimSpace(label))
+    if strings.TrimSpace(hash) == "" || label == "" {
+        return nil
+    }
+    db, err := openIndex()
+    if err != nil {
+        return err
+    }
+    return db.Update(func(tx *bolt.Tx) error {
+        bucket := tx.Bucket([]byte(bucketMatches))
+        if bucket == nil {
+            return nil
+        }
+        // Remove namespaced key
+        _ = bucket.Delete([]byte(hash + ":" + label))
+        // If legacy single-key exists and matches label, remove it as well.
+        if raw := bucket.Get([]byte(hash)); len(raw) > 0 {
+            var rec MatchRecord
+            if err := json.Unmarshal(raw, &rec); err == nil {
+                if strings.EqualFold(strings.TrimSpace(rec.AccountLabel), label) {
+                    _ = bucket.Delete([]byte(hash))
+                }
+            }
+        }
+        return nil
+    })
 }
 
 // RemoveMatchesByLabel removes all entries associated with the specified label.
