@@ -34,6 +34,7 @@ type GeminiWebState struct {
 	cfg         *config.Config
 	token       *gemini.GeminiWebTokenStorage
 	storagePath string
+	authLabel   string
 
 	stableClientID string
 	accountID      string
@@ -55,11 +56,12 @@ type GeminiWebState struct {
 	pendingMatch   *conversation.MatchResult
 }
 
-func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, storagePath string) *GeminiWebState {
+func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, storagePath, authLabel string) *GeminiWebState {
 	state := &GeminiWebState{
 		cfg:         cfg,
 		token:       token,
 		storagePath: storagePath,
+		authLabel:   strings.TrimSpace(authLabel),
 		convStore:   make(map[string][]string),
 		convData:    make(map[string]ConversationRecord),
 		convIndex:   make(map[string]string),
@@ -116,6 +118,9 @@ func (s *GeminiWebState) Label() string {
 		if lbl := strings.TrimSpace(s.token.Label); lbl != "" {
 			return lbl
 		}
+	}
+	if lbl := strings.TrimSpace(s.authLabel); lbl != "" {
+		return lbl
 	}
 	if s.storagePath != "" {
 		base := strings.TrimSuffix(filepath.Base(s.storagePath), filepath.Ext(s.storagePath))

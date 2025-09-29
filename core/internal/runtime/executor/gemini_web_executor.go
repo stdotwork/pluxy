@@ -196,7 +196,7 @@ func (e *GeminiWebExecutor) stateFor(auth *cliproxyauth.Auth) (*geminiwebapi.Gem
 			storagePath = p
 		}
 	}
-	state := geminiwebapi.NewGeminiWebState(cfg, ts, storagePath)
+	state := geminiwebapi.NewGeminiWebState(cfg, ts, storagePath, auth.Label)
 	runtime := &geminiWebRuntime{state: state}
 	auth.Runtime = runtime
 	return state, nil
