@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,15 +84,27 @@ func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 
 	log.Info("Authentication successful.")
 
-	if errSetup := performGeminiCLISetup(ctx, httpClient, storage, strings.TrimSpace(projectID)); errSetup != nil {
+	projects, errProjects := fetchGCPProjects(ctx, httpClient)
+	if errProjects != nil {
+		log.Fatalf("Failed to get project list: %v", errProjects)
+		return
+	}
+
+	promptFn := options.Prompt
+	if promptFn == nil {
+		promptFn = defaultProjectPrompt()
+	}
+
+	selectedProjectID := promptForProjectSelection(projects, strings.TrimSpace(projectID), promptFn)
+	if strings.TrimSpace(selectedProjectID) == "" {
+		log.Fatal("No project selected; aborting login.")
+		return
+	}
+
+	if errSetup := performGeminiCLISetup(ctx, httpClient, storage, selectedProjectID); errSetup != nil {
 		var projectErr *projectSelectionRequiredError
 		if errors.As(errSetup, &projectErr) {
 			log.Error("Failed to start user onboarding: A project ID is required.")
-			projects, errProjects := fetchGCPProjects(ctx, httpClient)
-			if errProjects != nil {
-				log.Fatalf("Failed to get project list: %v", errProjects)
-				return
-			}
 			showProjectSelectionHelp(storage.Email, projects)
 			return
 		}
@@ -99,7 +112,7 @@ func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 		return
 	}
 
-	storage.Auto = strings.TrimSpace(projectID) == ""
+	storage.Auto = false
 
 	if !storage.Auto && !storage.Checked {
 		isChecked, errCheck := checkCloudAPIIsEnabled(ctx, httpClient, storage.ProjectID)
@@ -298,6 +311,80 @@ func fetchGCPProjects(ctx context.Context, httpClient *http.Client) ([]interface
 	return projects.Projects, nil
 }
 
+// promptForProjectSelection prints available projects and returns the chosen project ID.
+func promptForProjectSelection(projects []interfaces.GCPProjectProjects, presetID string, promptFn func(string) (string, error)) string {
+	trimmedPreset := strings.TrimSpace(presetID)
+	if len(projects) == 0 {
+		if trimmedPreset != "" {
+			return trimmedPreset
+		}
+		fmt.Println("No Google Cloud projects are available for selection.")
+		return ""
+	}
+
+	fmt.Println("Available Google Cloud projects:")
+	defaultIndex := 0
+	for idx, project := range projects {
+		fmt.Printf("[%d] %s (%s)\n", idx+1, project.ProjectID, project.Name)
+		if trimmedPreset != "" && project.ProjectID == trimmedPreset {
+			defaultIndex = idx
+		}
+	}
+
+	defaultID := projects[defaultIndex].ProjectID
+
+	if trimmedPreset != "" {
+		for _, project := range projects {
+			if project.ProjectID == trimmedPreset {
+				return trimmedPreset
+			}
+		}
+		log.Warnf("Provided project ID %s not found in available projects; please choose from the list.", trimmedPreset)
+	}
+
+	for {
+		promptMsg := fmt.Sprintf("Enter project ID [%s]: ", defaultID)
+		answer, errPrompt := promptFn(promptMsg)
+		if errPrompt != nil {
+			log.Errorf("Project selection prompt failed: %v", errPrompt)
+			return defaultID
+		}
+		answer = strings.TrimSpace(answer)
+		if answer == "" {
+			return defaultID
+		}
+
+		for _, project := range projects {
+			if project.ProjectID == answer {
+				return project.ProjectID
+			}
+		}
+
+		if idx, errAtoi := strconv.Atoi(answer); errAtoi == nil {
+			if idx >= 1 && idx <= len(projects) {
+				return projects[idx-1].ProjectID
+			}
+		}
+
+		fmt.Println("Invalid selection, enter a project ID or a number from the list.")
+	}
+}
+
+func defaultProjectPrompt() func(string) (string, error) {
+	reader := bufio.NewReader(os.Stdin)
+	return func(prompt string) (string, error) {
+		fmt.Print(prompt)
+		line, errRead := reader.ReadString('\n')
+		if errRead != nil {
+			if errors.Is(errRead, io.EOF) {
+				return strings.TrimSpace(line), nil
+			}
+			return "", errRead
+		}
+		return strings.TrimSpace(line), nil
+	}
+}
+
 func showProjectSelectionHelp(email string, projects []interfaces.GCPProjectProjects) {
 	if email != "" {
 		log.Infof("Your account %s needs to specify a project ID.", email)
@@ -320,51 +407,62 @@ func showProjectSelectionHelp(email string, projects []interfaces.GCPProjectProj
 }
 
 func checkCloudAPIIsEnabled(ctx context.Context, httpClient *http.Client, projectID string) (bool, error) {
-	payload := fmt.Sprintf(`{"project":"%s","request":{"contents":[{"role":"user","parts":[{"text":"Be concise. What is the capital of France?"}]}],"generationConfig":{"thinkingConfig":{"include_thoughts":false,"thinkingBudget":0}}},"model":"gemini-2.5-flash"}`, projectID)
-
-	url := fmt.Sprintf("%s/%s:%s?alt=sse", geminiCLIEndpoint, geminiCLIVersion, "streamGenerateContent")
-	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
-	if errRequest != nil {
-		return false, fmt.Errorf("failed to create request: %w", errRequest)
+	serviceUsageURL := "https://serviceusage.googleapis.com"
+	requiredServices := []string{
+		"geminicloudassist.googleapis.com", // Gemini Cloud Assist API
+		"cloudaicompanion.googleapis.com",  // Gemini for Google Cloud API
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", geminiCLIUserAgent)
-	req.Header.Set("X-Goog-Api-Client", geminiCLIApiClient)
-	req.Header.Set("Client-Metadata", geminiCLIClientMetadata)
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, errDo := httpClient.Do(req)
-	if errDo != nil {
-		return false, fmt.Errorf("failed to execute request: %w", errDo)
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("response body close error: %v", errClose)
+	for _, service := range requiredServices {
+		checkUrl := fmt.Sprintf("%s/v1/projects/%s/services/%s", serviceUsageURL, projectID, service)
+		req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, checkUrl, nil)
+		if errRequest != nil {
+			return false, fmt.Errorf("failed to create request: %w", errRequest)
 		}
-	}()
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", geminiCLIUserAgent)
+		resp, errDo := httpClient.Do(req)
+		if errDo != nil {
+			return false, fmt.Errorf("failed to execute request: %w", errDo)
+		}
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode == http.StatusForbidden {
-			activationURL := gjson.GetBytes(bodyBytes, "0.error.details.0.metadata.activationUrl").String()
-			if activationURL != "" {
-				log.Warnf("\n\nPlease activate your account with this url:\n\n%s\n\n And execute this command again:\n%s --login --project_id %s", activationURL, os.Args[0], projectID)
-				return false, nil
+		if resp.StatusCode == http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			if gjson.GetBytes(bodyBytes, "state").String() == "ENABLED" {
+				_ = resp.Body.Close()
+				continue
 			}
-			log.Warnf("\n\nPlease copy this message and create an issue.\n\n%s\n\n", strings.TrimSpace(string(bodyBytes)))
-			return false, nil
 		}
-		return false, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
+		_ = resp.Body.Close()
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		// Consume the stream to ensure the request succeeds.
-	}
-	if errScan := scanner.Err(); errScan != nil {
-		return false, fmt.Errorf("stream read failed: %w", errScan)
-	}
+		enableUrl := fmt.Sprintf("%s/v1/projects/%s/services/%s:enable", serviceUsageURL, projectID, service)
+		req, errRequest = http.NewRequestWithContext(ctx, http.MethodPost, enableUrl, strings.NewReader("{}"))
+		if errRequest != nil {
+			return false, fmt.Errorf("failed to create request: %w", errRequest)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", geminiCLIUserAgent)
+		resp, errDo = httpClient.Do(req)
+		if errDo != nil {
+			return false, fmt.Errorf("failed to execute request: %w", errDo)
+		}
 
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		errMessage := string(bodyBytes)
+		errMessageResult := gjson.GetBytes(bodyBytes, "error.message")
+		if errMessageResult.Exists() {
+			errMessage = errMessageResult.String()
+		}
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+			_ = resp.Body.Close()
+			continue
+		} else if resp.StatusCode == http.StatusBadRequest {
+			_ = resp.Body.Close()
+			if strings.Contains(strings.ToLower(errMessage), "already enabled") {
+				continue
+			}
+		}
+		return false, fmt.Errorf("project activation required: %s", errMessage)
+	}
 	return true, nil
 }
 
