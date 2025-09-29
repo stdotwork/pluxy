@@ -8,11 +8,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	conversation "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web/conversation"
 	"github.com/tidwall/gjson"
 )
 
 var (
-	reThink     = regexp.MustCompile(`(?s)^\s*<think>.*?</think>\s*`)
 	reXMLAnyTag = regexp.MustCompile(`(?s)<\s*[^>]+>`)
 )
 
@@ -77,20 +77,13 @@ func BuildPrompt(msgs []RoleText, tagged bool, appendAssistant bool) string {
 
 // RemoveThinkTags strips <think>...</think> blocks from a string.
 func RemoveThinkTags(s string) string {
-	return strings.TrimSpace(reThink.ReplaceAllString(s, ""))
+	return conversation.RemoveThinkTags(s)
 }
 
 // SanitizeAssistantMessages removes think tags from assistant messages.
 func SanitizeAssistantMessages(msgs []RoleText) []RoleText {
-	out := make([]RoleText, 0, len(msgs))
-	for _, m := range msgs {
-		if strings.ToLower(m.Role) == "assistant" {
-			out = append(out, RoleText{Role: m.Role, Text: RemoveThinkTags(m.Text)})
-		} else {
-			out = append(out, m)
-		}
-	}
-	return out
+	cleaned := conversation.SanitizeAssistantMessages(msgs)
+	return cleaned
 }
 
 // AppendXMLWrapHintIfNeeded appends an XML wrap hint to messages containing XML-like blocks.

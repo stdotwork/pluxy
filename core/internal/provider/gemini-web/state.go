@@ -3,8 +3,6 @@ package geminiwebapi
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	conversation "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web/conversation"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/translator/translator"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
@@ -51,6 +50,9 @@ type GeminiWebState struct {
 	convIndex map[string]string
 
 	lastRefresh time.Time
+
+	pendingMatchMu sync.Mutex
+	pendingMatch   *conversation.MatchResult
 }
 
 func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, storagePath string) *GeminiWebState {
@@ -62,7 +64,7 @@ func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, 
 		convData:    make(map[string]ConversationRecord),
 		convIndex:   make(map[string]string),
 	}
-	suffix := Sha256Hex(token.Secure1PSID)
+	suffix := conversation.Sha256Hex(token.Secure1PSID)
 	if len(suffix) > 16 {
 		suffix = suffix[:16]
 	}
@@ -79,6 +81,28 @@ func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, 
 	}
 	state.loadConversationCaches()
 	return state
+}
+
+func (s *GeminiWebState) setPendingMatch(match *conversation.MatchResult) {
+	if s == nil {
+		return
+	}
+	s.pendingMatchMu.Lock()
+	s.pendingMatch = match
+	s.pendingMatchMu.Unlock()
+}
+
+func (s *GeminiWebState) consumePendingMatch() *conversation.MatchResult {
+	s.pendingMatchMu.Lock()
+	defer s.pendingMatchMu.Unlock()
+	match := s.pendingMatch
+	s.pendingMatch = nil
+	return match
+}
+
+// SetPendingMatch makes a cached conversation match available for the next request.
+func (s *GeminiWebState) SetPendingMatch(match *conversation.MatchResult) {
+	s.setPendingMatch(match)
 }
 
 // Label returns a stable account label for logging and persistence.
@@ -232,7 +256,10 @@ func (s *GeminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 	mimesSubset := mimes
 
 	if s.useReusableContext() {
-		reuseMeta, remaining := s.findReusableSession(res.underlying, cleaned)
+		reuseMeta, remaining := s.reuseFromPending(res.underlying, cleaned)
+		if len(reuseMeta) == 0 {
+			reuseMeta, remaining = s.findReusableSession(res.underlying, cleaned)
+		}
 		if len(reuseMeta) > 0 {
 			res.reuse = true
 			meta = reuseMeta
@@ -421,8 +448,16 @@ func (s *GeminiWebState) persistConversation(modelName string, prep *geminiWebPr
 	if !ok {
 		return
 	}
-	stableHash := HashConversation(rec.ClientID, prep.underlying, rec.Messages)
-	accountHash := HashConversation(s.accountID, prep.underlying, rec.Messages)
+	label := strings.TrimSpace(s.Label())
+	if label == "" {
+		label = s.accountID
+	}
+	conversationMsgs := conversation.StoredToMessages(rec.Messages)
+	if err := conversation.StoreConversation(label, prep.underlying, conversationMsgs, metadata); err != nil {
+		log.Debugf("gemini web: failed to persist global conversation index: %v", err)
+	}
+	stableHash := conversation.HashConversationForAccount(rec.ClientID, prep.underlying, rec.Messages)
+	accountHash := conversation.HashConversationForAccount(s.accountID, prep.underlying, rec.Messages)
 
 	s.convMu.Lock()
 	s.convData[stableHash] = rec
@@ -493,6 +528,27 @@ func (s *GeminiWebState) useReusableContext() bool {
 	return s.cfg.GeminiWeb.Context
 }
 
+func (s *GeminiWebState) reuseFromPending(modelName string, msgs []RoleText) ([]string, []RoleText) {
+	match := s.consumePendingMatch()
+	if match == nil {
+		return nil, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(match.Model), strings.TrimSpace(modelName)) {
+		return nil, nil
+	}
+	prefixLen := match.Record.PrefixLen
+	if prefixLen <= 0 || prefixLen > len(msgs) {
+		return nil, nil
+	}
+	metadata := match.Record.Metadata
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	remaining := make([]RoleText, len(msgs)-prefixLen)
+	copy(remaining, msgs[prefixLen:])
+	return metadata, remaining
+}
+
 func (s *GeminiWebState) findReusableSession(modelName string, msgs []RoleText) ([]string, []RoleText) {
 	s.convMu.RLock()
 	items := s.convData
@@ -538,42 +594,6 @@ func appendAPIResponseChunk(ctx context.Context, cfg *config.Config, chunk []byt
 		}
 		ginCtx.Set("API_RESPONSE", data)
 	}
-}
-
-// Persistence helpers --------------------------------------------------
-
-// Sha256Hex computes the SHA256 hash of a string and returns its hex representation.
-func Sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
-
-func ToStoredMessages(msgs []RoleText) []StoredMessage {
-	out := make([]StoredMessage, 0, len(msgs))
-	for _, m := range msgs {
-		out = append(out, StoredMessage{
-			Role:    m.Role,
-			Content: m.Text,
-		})
-	}
-	return out
-}
-
-func HashMessage(m StoredMessage) string {
-	s := fmt.Sprintf(`{"content":%q,"role":%q}`, m.Content, strings.ToLower(m.Role))
-	return Sha256Hex(s)
-}
-
-func HashConversation(clientID, model string, msgs []StoredMessage) string {
-	var b strings.Builder
-	b.WriteString(clientID)
-	b.WriteString("|")
-	b.WriteString(model)
-	for _, m := range msgs {
-		b.WriteString("|")
-		b.WriteString(HashMessage(m))
-	}
-	return Sha256Hex(b.String())
 }
 
 // ConvBoltPath returns the BoltDB file path used for both account metadata and conversation data.
@@ -790,7 +810,7 @@ func BuildConversationRecord(model, clientID string, history []RoleText, output 
 		Model:     model,
 		ClientID:  clientID,
 		Metadata:  metadata,
-		Messages:  ToStoredMessages(final),
+		Messages:  conversation.ToStoredMessages(final),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -800,9 +820,9 @@ func BuildConversationRecord(model, clientID string, history []RoleText, output 
 // FindByMessageListIn looks up a conversation record by hashed message list.
 // It attempts both the stable client ID and a legacy email-based ID.
 func FindByMessageListIn(items map[string]ConversationRecord, index map[string]string, stableClientID, email, model string, msgs []RoleText) (ConversationRecord, bool) {
-	stored := ToStoredMessages(msgs)
-	stableHash := HashConversation(stableClientID, model, stored)
-	fallbackHash := HashConversation(email, model, stored)
+	stored := conversation.ToStoredMessages(msgs)
+	stableHash := conversation.HashConversationForAccount(stableClientID, model, stored)
+	fallbackHash := conversation.HashConversationForAccount(email, model, stored)
 
 	// Try stable hash via index indirection first
 	if key, ok := index["hash:"+stableHash]; ok {
