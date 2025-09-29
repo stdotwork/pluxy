@@ -35,6 +35,14 @@ func extractOpenAIStyle(raw []byte) []Message {
 		if role == "system" {
 			return true
 		}
+		// Ignore OpenAI tool messages to keep hashing aligned with
+		// persistence (which only keeps text/inlineData for Gemini contents).
+		// This avoids mismatches when a tool response is present: the
+		// storage path drops tool payloads while the lookup path would
+		// otherwise include them, causing sticky selection to fail.
+		if role == "tool" {
+			return true
+		}
 		var contentBuilder strings.Builder
 		content := entry.Get("content")
 		if !content.Exists() {
