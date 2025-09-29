@@ -206,30 +206,30 @@ func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
 		return
 	}
 	GlobalModelRegistry().UnregisterClient(id)
-    if existing, ok := s.coreManager.GetByID(id); ok && existing != nil {
-        if strings.EqualFold(existing.Provider, "gemini-web") {
-            // Prefer the stable cookie label stored in metadata when available.
-            var label string
-            if existing.Metadata != nil {
-                if v, ok := existing.Metadata["label"].(string); ok {
-                    label = strings.TrimSpace(v)
-                }
-            }
-            if label == "" {
-                label = strings.TrimSpace(existing.Label)
-            }
-            if label != "" {
-                if err := conversation.RemoveMatchesByLabel(label); err != nil {
-                    log.Debugf("failed to remove gemini web sticky entries for %s: %v", label, err)
-                }
-            }
-        }
-        existing.Disabled = true
-        existing.Status = coreauth.StatusDisabled
-        if _, err := s.coreManager.Update(ctx, existing); err != nil {
-            log.Errorf("failed to disable auth %s: %v", id, err)
-        }
-    }
+	if existing, ok := s.coreManager.GetByID(id); ok && existing != nil {
+		if strings.EqualFold(existing.Provider, "gemini-web") {
+			// Prefer the stable cookie label stored in metadata when available.
+			var label string
+			if existing.Metadata != nil {
+				if v, ok := existing.Metadata["label"].(string); ok {
+					label = strings.TrimSpace(v)
+				}
+			}
+			if label == "" {
+				label = strings.TrimSpace(existing.Label)
+			}
+			if label != "" {
+				if err := conversation.RemoveMatchesByLabel(label); err != nil {
+					log.Debugf("failed to remove gemini web sticky entries for %s: %v", label, err)
+				}
+			}
+		}
+		existing.Disabled = true
+		existing.Status = coreauth.StatusDisabled
+		if _, err := s.coreManager.Update(ctx, existing); err != nil {
+			log.Errorf("failed to disable auth %s: %v", id, err)
+		}
+	}
 }
 
 func (s *Service) ensureExecutorsForAuth(a *coreauth.Auth) {

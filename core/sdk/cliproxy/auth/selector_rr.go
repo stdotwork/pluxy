@@ -64,20 +64,20 @@ func (s *geminiWebStickySelector) Pick(ctx context.Context, provider, model stri
 			if label == "" {
 				continue
 			}
-            auth := findAuthByLabel(auths, label)
-            if auth != nil {
-                if opts.Metadata != nil {
-                    opts.Metadata[conversation.MetadataMatchKey] = &conversation.MatchResult{
-                        Hash:   candidate.Hash,
-                        Record: record,
-                        Model:  normalizedModel,
-                    }
-                }
-                return auth, nil
-            }
-            _ = conversation.RemoveMatchForLabel(candidate.Hash, label)
-        }
-    }
+			auth := findAuthByLabel(auths, label)
+			if auth != nil {
+				if opts.Metadata != nil {
+					opts.Metadata[conversation.MetadataMatchKey] = &conversation.MatchResult{
+						Hash:   candidate.Hash,
+						Record: record,
+						Model:  normalizedModel,
+					}
+				}
+				return auth, nil
+			}
+			_ = conversation.RemoveMatchForLabel(candidate.Hash, label)
+		}
+	}
 
 	return s.base.Pick(ctx, provider, model, opts, auths)
 }
