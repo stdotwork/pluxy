@@ -284,6 +284,7 @@ func hasZSTDEcoding(contentEncoding string) bool {
 func applyClaudeHeaders(r *http.Request, apiKey string, stream bool) {
 	r.Header.Set("Authorization", "Bearer "+apiKey)
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Anthropic-Beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
 
 	var ginHeaders http.Header
 	if ginCtx, ok := r.Context().Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
@@ -292,7 +293,6 @@ func applyClaudeHeaders(r *http.Request, apiKey string, stream bool) {
 
 	misc.EnsureHeader(r.Header, ginHeaders, "Anthropic-Version", "2023-06-01")
 	misc.EnsureHeader(r.Header, ginHeaders, "Anthropic-Dangerous-Direct-Browser-Access", "true")
-	misc.EnsureHeader(r.Header, ginHeaders, "Anthropic-Beta", "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-App", "cli")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Helper-Method", "stream")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Retry-Count", "0")
