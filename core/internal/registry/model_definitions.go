@@ -9,6 +9,14 @@ import "time"
 func GetClaudeModels() []*ModelInfo {
 	return []*ModelInfo{
 		{
+			ID:          "claude-sonnet-4-5-20250929",
+			Object:      "model",
+			Created:     1759104000, // 2025-09-29
+			OwnedBy:     "anthropic",
+			Type:        "claude",
+			DisplayName: "Claude 4.5 Sonnet",
+		},
+		{
 			ID:          "claude-opus-4-1-20250805",
 			Object:      "model",
 			Created:     1722945600, // 2025-08-05
