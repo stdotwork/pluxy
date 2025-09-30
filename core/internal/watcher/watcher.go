@@ -532,6 +532,9 @@ func (w *Watcher) reloadConfig() bool {
 		if oldConfig.RemoteManagement.AllowRemote != newConfig.RemoteManagement.AllowRemote {
 			log.Debugf("  remote-management.allow-remote: %t -> %t", oldConfig.RemoteManagement.AllowRemote, newConfig.RemoteManagement.AllowRemote)
 		}
+		if oldConfig.RemoteManagement.DisableControlPanel != newConfig.RemoteManagement.DisableControlPanel {
+			log.Debugf("  remote-management.disable-control-panel: %t -> %t", oldConfig.RemoteManagement.DisableControlPanel, newConfig.RemoteManagement.DisableControlPanel)
+		}
 		if oldConfig.LoggingToFile != newConfig.LoggingToFile {
 			log.Debugf("  logging-to-file: %t -> %t", oldConfig.LoggingToFile, newConfig.LoggingToFile)
 		}

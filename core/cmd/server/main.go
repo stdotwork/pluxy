@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/cmd"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/translator"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -113,6 +115,13 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 	usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
+
+	staticDir := managementasset.StaticDir(configFilePath)
+	if !cfg.RemoteManagement.DisableControlPanel {
+		go managementasset.EnsureLatestManagementHTML(context.Background(), staticDir)
+	} else {
+		log.Debug("management control panel disabled; skip asset sync")
+	}
 
 	if err = logging.ConfigureLogOutput(cfg.LoggingToFile); err != nil {
 		log.Fatalf("failed to configure log output: %v", err)
