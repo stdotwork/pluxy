@@ -74,7 +74,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		models = append([]string{req.Model}, models...)
 	}
 
-	httpClient := newHTTPClient(ctx, 0)
+	httpClient := newHTTPClient(ctx, e.cfg, auth, 0)
 	respCtx := context.WithValue(ctx, "alt", opts.Alt)
 
 	var lastStatus int
@@ -155,7 +155,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 		models = append([]string{req.Model}, models...)
 	}
 
-	httpClient := newHTTPClient(ctx, 0)
+	httpClient := newHTTPClient(ctx, e.cfg, auth, 0)
 	respCtx := context.WithValue(ctx, "alt", opts.Alt)
 
 	var lastStatus int
@@ -281,7 +281,7 @@ func (e *GeminiCLIExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.
 		models = append([]string{req.Model}, models...)
 	}
 
-	httpClient := newHTTPClient(ctx, 0)
+	httpClient := newHTTPClient(ctx, e.cfg, auth, 0)
 	respCtx := context.WithValue(ctx, "alt", opts.Alt)
 
 	var lastStatus int
@@ -438,15 +438,8 @@ func updateGeminiCLITokenMetadata(auth *cliproxyauth.Auth, base map[string]any, 
 	auth.Metadata["token"] = merged
 }
 
-func newHTTPClient(ctx context.Context, timeout time.Duration) *http.Client {
-	client := &http.Client{}
-	if timeout > 0 {
-		client.Timeout = timeout
-	}
-	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
-		client.Transport = rt
-	}
-	return client
+func newHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, timeout time.Duration) *http.Client {
+	return newProxyAwareHTTPClient(ctx, cfg, auth, timeout)
 }
 
 func cloneMap(in map[string]any) map[string]any {
