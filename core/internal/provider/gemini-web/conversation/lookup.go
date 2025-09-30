@@ -35,6 +35,30 @@ func BuildStorageHashes(model string, msgs []Message) []PrefixHash {
 	}
 	model = NormalizeModel(model)
 	sanitized := SanitizeAssistantMessages(msgs)
-	hash := HashConversationGlobal(model, ToStoredMessages(sanitized))
-	return []PrefixHash{{Hash: hash, PrefixLen: len(sanitized)}}
+	if len(sanitized) == 0 {
+		return nil
+	}
+	result := make([]PrefixHash, 0, len(sanitized))
+	seen := make(map[string]struct{}, len(sanitized))
+	for start := 0; start < len(sanitized); start++ {
+		segment := sanitized[start:]
+		if len(segment) < 2 {
+			continue
+		}
+		tailRole := strings.ToLower(strings.TrimSpace(segment[len(segment)-1].Role))
+		if tailRole != "assistant" && tailRole != "system" {
+			continue
+		}
+		hash := HashConversationGlobal(model, ToStoredMessages(segment))
+		if _, exists := seen[hash]; exists {
+			continue
+		}
+		seen[hash] = struct{}{}
+		result = append(result, PrefixHash{Hash: hash, PrefixLen: len(segment)})
+	}
+	if len(result) == 0 {
+		hash := HashConversationGlobal(model, ToStoredMessages(sanitized))
+		return []PrefixHash{{Hash: hash, PrefixLen: len(sanitized)}}
+	}
+	return result
 }

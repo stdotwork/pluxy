@@ -553,11 +553,44 @@ func (s *GeminiWebState) persistConversation(modelName string, prep *geminiWebPr
 	stableHash := conversation.HashConversationForAccount(rec.ClientID, prep.underlying, rec.Messages)
 	accountHash := conversation.HashConversationForAccount(s.accountID, prep.underlying, rec.Messages)
 
+	suffixSeen := make(map[string]struct{})
+	suffixSeen["hash:"+stableHash] = struct{}{}
+	if accountHash != stableHash {
+		suffixSeen["hash:"+accountHash] = struct{}{}
+	}
+
 	s.convMu.Lock()
 	s.convData[stableHash] = rec
 	s.convIndex["hash:"+stableHash] = stableHash
 	if accountHash != stableHash {
 		s.convIndex["hash:"+accountHash] = stableHash
+	}
+
+	sanitizedHistory := conversation.SanitizeAssistantMessages(conversation.StoredToMessages(rec.Messages))
+	for start := 1; start < len(sanitizedHistory); start++ {
+		segment := sanitizedHistory[start:]
+		if len(segment) < 2 {
+			continue
+		}
+		tailRole := strings.ToLower(strings.TrimSpace(segment[len(segment)-1].Role))
+		if tailRole != "assistant" && tailRole != "system" {
+			continue
+		}
+		storedSegment := conversation.ToStoredMessages(segment)
+		segmentStableHash := conversation.HashConversationForAccount(rec.ClientID, prep.underlying, storedSegment)
+		keyStable := "hash:" + segmentStableHash
+		if _, exists := suffixSeen[keyStable]; !exists {
+			s.convIndex[keyStable] = stableHash
+			suffixSeen[keyStable] = struct{}{}
+		}
+		segmentAccountHash := conversation.HashConversationForAccount(s.accountID, prep.underlying, storedSegment)
+		if segmentAccountHash != segmentStableHash {
+			keyAccount := "hash:" + segmentAccountHash
+			if _, exists := suffixSeen[keyAccount]; !exists {
+				s.convIndex[keyAccount] = stableHash
+				suffixSeen[keyAccount] = struct{}{}
+			}
+		}
 	}
 	dataSnapshot := make(map[string]ConversationRecord, len(s.convData))
 	for k, v := range s.convData {
