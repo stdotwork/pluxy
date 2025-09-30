@@ -79,51 +79,35 @@ func ReconcileProviders(oldCfg, newCfg *config.Config, existing []sdkaccess.Prov
 		finalIDs[key] = struct{}{}
 	}
 
-	if len(result) == 0 && len(newCfg.APIKeys) > 0 {
-		sdkConfig.SyncInlineAPIKeys(&newCfg.SDKConfig, newCfg.APIKeys)
-		if providerCfg := newCfg.ConfigAPIKeyProvider(); providerCfg != nil {
-			key := providerIdentifier(providerCfg)
+	if len(result) == 0 {
+		if inline := sdkConfig.MakeInlineAPIKeyProvider(newCfg.APIKeys); inline != nil {
+			key := providerIdentifier(inline)
 			if key != "" {
 				if oldCfgProvider, ok := oldCfgMap[key]; ok {
-					isAliased := oldCfgProvider == providerCfg
-					if !isAliased && providerConfigEqual(oldCfgProvider, providerCfg) {
+					if providerConfigEqual(oldCfgProvider, inline) {
 						if existingProvider, okExisting := existingMap[key]; okExisting {
 							result = append(result, existingProvider)
-						} else {
-							provider, buildErr := sdkaccess.BuildProvider(providerCfg, &newCfg.SDKConfig)
-							if buildErr != nil {
-								return nil, nil, nil, nil, buildErr
-							}
-							if _, existed := existingMap[key]; existed {
-								appendChange(&updated, key)
-							} else {
-								appendChange(&added, key)
-							}
-							result = append(result, provider)
+							finalIDs[key] = struct{}{}
+							goto inlineDone
 						}
-					} else {
-						provider, buildErr := sdkaccess.BuildProvider(providerCfg, &newCfg.SDKConfig)
-						if buildErr != nil {
-							return nil, nil, nil, nil, buildErr
-						}
-						if _, existed := existingMap[key]; existed {
-							appendChange(&updated, key)
-						} else {
-							appendChange(&added, key)
-						}
-						result = append(result, provider)
 					}
-				} else {
-					provider, buildErr := sdkaccess.BuildProvider(providerCfg, &newCfg.SDKConfig)
-					if buildErr != nil {
-						return nil, nil, nil, nil, buildErr
-					}
-					appendChange(&added, key)
-					result = append(result, provider)
 				}
+				provider, buildErr := sdkaccess.BuildProvider(inline, &newCfg.SDKConfig)
+				if buildErr != nil {
+					return nil, nil, nil, nil, buildErr
+				}
+				if _, existed := existingMap[key]; existed {
+					appendChange(&updated, key)
+				} else if _, hadOld := oldCfgMap[key]; hadOld {
+					appendChange(&updated, key)
+				} else {
+					appendChange(&added, key)
+				}
+				result = append(result, provider)
 				finalIDs[key] = struct{}{}
 			}
 		}
+	inlineDone:
 	}
 
 	removedSet := make(map[string]struct{})
@@ -192,7 +176,7 @@ func accessProviderMap(cfg *config.Config) map[string]*sdkConfig.AccessProvider 
 		result[key] = providerCfg
 	}
 	if len(result) == 0 && len(cfg.APIKeys) > 0 {
-		if provider := cfg.ConfigAPIKeyProvider(); provider != nil {
+		if provider := sdkConfig.MakeInlineAPIKeyProvider(cfg.APIKeys); provider != nil {
 			if key := providerIdentifier(provider); key != "" {
 				result[key] = provider
 			}
@@ -210,6 +194,11 @@ func collectProviderEntries(cfg *config.Config) []*sdkConfig.AccessProvider {
 		}
 		if key := providerIdentifier(providerCfg); key != "" {
 			entries = append(entries, providerCfg)
+		}
+	}
+	if len(entries) == 0 && len(cfg.APIKeys) > 0 {
+		if inline := sdkConfig.MakeInlineAPIKeyProvider(cfg.APIKeys); inline != nil {
+			entries = append(entries, inline)
 		}
 	}
 	return entries

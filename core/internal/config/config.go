@@ -217,33 +217,12 @@ func syncInlineAccessProvider(cfg *Config) {
 	if cfg == nil {
 		return
 	}
-	if len(cfg.Access.Providers) == 0 {
-		if len(cfg.APIKeys) == 0 {
-			return
+	if len(cfg.APIKeys) == 0 {
+		if provider := cfg.ConfigAPIKeyProvider(); provider != nil && len(provider.APIKeys) > 0 {
+			cfg.APIKeys = append([]string(nil), provider.APIKeys...)
 		}
-		cfg.Access.Providers = append(cfg.Access.Providers, config.AccessProvider{
-			Name:    config.DefaultAccessProviderName,
-			Type:    config.AccessProviderTypeConfigAPIKey,
-			APIKeys: append([]string(nil), cfg.APIKeys...),
-		})
-		return
 	}
-	provider := cfg.ConfigAPIKeyProvider()
-	if provider == nil {
-		if len(cfg.APIKeys) == 0 {
-			return
-		}
-		cfg.Access.Providers = append(cfg.Access.Providers, config.AccessProvider{
-			Name:    config.DefaultAccessProviderName,
-			Type:    config.AccessProviderTypeConfigAPIKey,
-			APIKeys: append([]string(nil), cfg.APIKeys...),
-		})
-		return
-	}
-	if len(provider.APIKeys) == 0 && len(cfg.APIKeys) > 0 {
-		provider.APIKeys = append([]string(nil), cfg.APIKeys...)
-	}
-	cfg.APIKeys = append([]string(nil), provider.APIKeys...)
+	cfg.Access.Providers = nil
 }
 
 // looksLikeBcrypt returns true if the provided string appears to be a bcrypt hash.
@@ -264,6 +243,7 @@ func hashSecret(secret string) (string, error) {
 // SaveConfigPreserveComments writes the config back to YAML while preserving existing comments
 // and key ordering by loading the original file into a yaml.Node tree and updating values in-place.
 func SaveConfigPreserveComments(configFile string, cfg *Config) error {
+	persistCfg := sanitizeConfigForPersist(cfg)
 	// Load original YAML as a node tree to preserve comments and ordering.
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -282,7 +262,7 @@ func SaveConfigPreserveComments(configFile string, cfg *Config) error {
 	}
 
 	// Marshal the current cfg to YAML, then unmarshal to a yaml.Node we can merge from.
-	rendered, err := yaml.Marshal(cfg)
+	rendered, err := yaml.Marshal(persistCfg)
 	if err != nil {
 		return err
 	}
@@ -296,6 +276,9 @@ func SaveConfigPreserveComments(configFile string, cfg *Config) error {
 	if generated.Content[0].Kind != yaml.MappingNode {
 		return fmt.Errorf("expected generated root mapping node")
 	}
+
+	// Remove deprecated auth block before merging to avoid persisting it again.
+	removeMapKey(original.Content[0], "auth")
 
 	// Merge generated into original in-place, preserving comments/order of existing nodes.
 	mergeMappingPreserve(original.Content[0], generated.Content[0])
@@ -313,6 +296,16 @@ func SaveConfigPreserveComments(configFile string, cfg *Config) error {
 		return err
 	}
 	return enc.Close()
+}
+
+func sanitizeConfigForPersist(cfg *Config) *Config {
+	if cfg == nil {
+		return nil
+	}
+	clone := *cfg
+	clone.SDKConfig = cfg.SDKConfig
+	clone.SDKConfig.Access = config.AccessConfig{}
+	return &clone
 }
 
 // SaveConfigPreserveCommentsUpdateNestedScalar updates a nested scalar key path like ["a","b"]
@@ -515,5 +508,17 @@ func copyNodeShallow(dst, src *yaml.Node) {
 		}
 	} else {
 		dst.Content = nil
+	}
+}
+
+func removeMapKey(mapNode *yaml.Node, key string) {
+	if mapNode == nil || mapNode.Kind != yaml.MappingNode || key == "" {
+		return
+	}
+	for i := 0; i+1 < len(mapNode.Content); i += 2 {
+		if mapNode.Content[i] != nil && mapNode.Content[i].Value == key {
+			mapNode.Content = append(mapNode.Content[:i], mapNode.Content[i+2:]...)
+			return
+		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	sdkConfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
 
 // Generic helpers for list[string]
@@ -108,13 +107,16 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 // api-keys
 func (h *Handler) GetAPIKeys(c *gin.Context) { c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys}) }
 func (h *Handler) PutAPIKeys(c *gin.Context) {
-	h.putStringList(c, func(v []string) { sdkConfig.SyncInlineAPIKeys(&h.cfg.SDKConfig, v) }, nil)
+	h.putStringList(c, func(v []string) {
+		h.cfg.APIKeys = append([]string(nil), v...)
+		h.cfg.Access.Providers = nil
+	}, nil)
 }
 func (h *Handler) PatchAPIKeys(c *gin.Context) {
-	h.patchStringList(c, &h.cfg.APIKeys, func() { sdkConfig.SyncInlineAPIKeys(&h.cfg.SDKConfig, h.cfg.APIKeys) })
+	h.patchStringList(c, &h.cfg.APIKeys, func() { h.cfg.Access.Providers = nil })
 }
 func (h *Handler) DeleteAPIKeys(c *gin.Context) {
-	h.deleteFromStringList(c, &h.cfg.APIKeys, func() { sdkConfig.SyncInlineAPIKeys(&h.cfg.SDKConfig, h.cfg.APIKeys) })
+	h.deleteFromStringList(c, &h.cfg.APIKeys, func() { h.cfg.Access.Providers = nil })
 }
 
 // generative-language-api-key
@@ -203,7 +205,7 @@ func (h *Handler) DeleteClaudeKey(c *gin.Context) {
 
 // openai-compatibility: []OpenAICompatibility
 func (h *Handler) GetOpenAICompat(c *gin.Context) {
-	c.JSON(200, gin.H{"openai-compatibility": h.cfg.OpenAICompatibility})
+	c.JSON(200, gin.H{"openai-compatibility": normalizedOpenAICompatibilityEntries(h.cfg.OpenAICompatibility)})
 }
 func (h *Handler) PutOpenAICompat(c *gin.Context) {
 	data, err := c.GetRawData()
@@ -380,4 +382,23 @@ func normalizeOpenAICompatibilityEntry(entry *config.OpenAICompatibility) {
 		existing[trimmed] = struct{}{}
 	}
 	entry.APIKeys = nil
+}
+
+func normalizedOpenAICompatibilityEntries(entries []config.OpenAICompatibility) []config.OpenAICompatibility {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]config.OpenAICompatibility, len(entries))
+	for i := range entries {
+		copyEntry := entries[i]
+		if len(copyEntry.APIKeyEntries) > 0 {
+			copyEntry.APIKeyEntries = append([]config.OpenAICompatibilityAPIKey(nil), copyEntry.APIKeyEntries...)
+		}
+		if len(copyEntry.APIKeys) > 0 {
+			copyEntry.APIKeys = append([]string(nil), copyEntry.APIKeys...)
+		}
+		normalizeOpenAICompatibilityEntry(&copyEntry)
+		out[i] = copyEntry
+	}
+	return out
 }
