@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"html"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
+	conversation "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web/conversation"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 )
 
@@ -105,76 +104,20 @@ const (
 	ErrorIPTemporarilyBlocked = 1060
 )
 
-var (
-	GeminiWebAliasOnce sync.Once
-	GeminiWebAliasMap  map[string]string
-)
-
-func EnsureGeminiWebAliasMap() {
-	GeminiWebAliasOnce.Do(func() {
-		GeminiWebAliasMap = make(map[string]string)
-		for _, m := range registry.GetGeminiModels() {
-			if m.ID == "gemini-2.5-flash-lite" {
-				continue
-			} else if m.ID == "gemini-2.5-flash" {
-				GeminiWebAliasMap["gemini-2.5-flash-image-preview"] = "gemini-2.5-flash"
-			}
-			alias := AliasFromModelID(m.ID)
-			GeminiWebAliasMap[strings.ToLower(alias)] = strings.ToLower(m.ID)
-		}
-	})
-}
+func EnsureGeminiWebAliasMap() { conversation.EnsureGeminiWebAliasMap() }
 
 func GetGeminiWebAliasedModels() []*registry.ModelInfo {
-	EnsureGeminiWebAliasMap()
-	aliased := make([]*registry.ModelInfo, 0)
-	for _, m := range registry.GetGeminiModels() {
-		if m.ID == "gemini-2.5-flash-lite" {
-			continue
-		} else if m.ID == "gemini-2.5-flash" {
-			cpy := *m
-			cpy.ID = "gemini-2.5-flash-image-preview"
-			cpy.Name = "gemini-2.5-flash-image-preview"
-			cpy.DisplayName = "Nano Banana"
-			cpy.Description = "Gemini 2.5 Flash Preview Image"
-			aliased = append(aliased, &cpy)
-		}
-		cpy := *m
-		cpy.ID = AliasFromModelID(m.ID)
-		cpy.Name = cpy.ID
-		aliased = append(aliased, &cpy)
-	}
-	return aliased
+	return conversation.GetGeminiWebAliasedModels()
 }
 
-func MapAliasToUnderlying(name string) string {
-	EnsureGeminiWebAliasMap()
-	n := strings.ToLower(name)
-	if u, ok := GeminiWebAliasMap[n]; ok {
-		return u
-	}
-	const suffix = "-web"
-	if strings.HasSuffix(n, suffix) {
-		return strings.TrimSuffix(n, suffix)
-	}
-	return name
-}
+func MapAliasToUnderlying(name string) string { return conversation.MapAliasToUnderlying(name) }
 
-func AliasFromModelID(modelID string) string {
-	return modelID + "-web"
-}
+func AliasFromModelID(modelID string) string { return conversation.AliasFromModelID(modelID) }
 
 // Conversation domain structures -------------------------------------------
-type RoleText struct {
-	Role string
-	Text string
-}
+type RoleText = conversation.Message
 
-type StoredMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
-}
+type StoredMessage = conversation.StoredMessage
 
 type ConversationRecord struct {
 	Model     string          `json:"model"`

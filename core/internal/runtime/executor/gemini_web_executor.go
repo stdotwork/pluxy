@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	geminiwebapi "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web"
+	conversation "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web/conversation"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
@@ -40,12 +41,18 @@ func (e *GeminiWebExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	if err = state.EnsureClient(); err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
+	match := extractGeminiWebMatch(opts.Metadata)
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	mutex := state.GetRequestMutex()
 	if mutex != nil {
 		mutex.Lock()
 		defer mutex.Unlock()
+		if match != nil {
+			state.SetPendingMatch(match)
+		}
+	} else if match != nil {
+		state.SetPendingMatch(match)
 	}
 
 	payload := bytes.Clone(req.Payload)
@@ -72,11 +79,18 @@ func (e *GeminiWebExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	if err = state.EnsureClient(); err != nil {
 		return nil, err
 	}
+	match := extractGeminiWebMatch(opts.Metadata)
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
 	mutex := state.GetRequestMutex()
 	if mutex != nil {
 		mutex.Lock()
+		if match != nil {
+			state.SetPendingMatch(match)
+		}
+	}
+	if mutex == nil && match != nil {
+		state.SetPendingMatch(match)
 	}
 
 	gemBytes, errMsg, prep := state.Send(ctx, req.Model, bytes.Clone(req.Payload), opts)
@@ -182,7 +196,7 @@ func (e *GeminiWebExecutor) stateFor(auth *cliproxyauth.Auth) (*geminiwebapi.Gem
 			storagePath = p
 		}
 	}
-	state := geminiwebapi.NewGeminiWebState(cfg, ts, storagePath)
+	state := geminiwebapi.NewGeminiWebState(cfg, ts, storagePath, auth.Label)
 	runtime := &geminiWebRuntime{state: state}
 	auth.Runtime = runtime
 	return state, nil
@@ -241,4 +255,22 @@ func (e geminiWebError) StatusCode() int {
 		return 0
 	}
 	return e.message.StatusCode
+}
+
+func extractGeminiWebMatch(metadata map[string]any) *conversation.MatchResult {
+	if metadata == nil {
+		return nil
+	}
+	value, ok := metadata[conversation.MetadataMatchKey]
+	if !ok {
+		return nil
+	}
+	switch v := value.(type) {
+	case *conversation.MatchResult:
+		return v
+	case conversation.MatchResult:
+		return &v
+	default:
+		return nil
+	}
 }

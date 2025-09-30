@@ -3,8 +3,6 @@ package geminiwebapi
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	conversation "github.com/router-for-me/CLIProxyAPI/v6/internal/provider/gemini-web/conversation"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/translator/translator"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
@@ -35,6 +34,7 @@ type GeminiWebState struct {
 	cfg         *config.Config
 	token       *gemini.GeminiWebTokenStorage
 	storagePath string
+	authLabel   string
 
 	stableClientID string
 	accountID      string
@@ -51,18 +51,28 @@ type GeminiWebState struct {
 	convIndex map[string]string
 
 	lastRefresh time.Time
+
+	pendingMatchMu sync.Mutex
+	pendingMatch   *conversation.MatchResult
 }
 
-func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, storagePath string) *GeminiWebState {
+type reuseComputation struct {
+	metadata []string
+	history  []RoleText
+	overlap  int
+}
+
+func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, storagePath, authLabel string) *GeminiWebState {
 	state := &GeminiWebState{
 		cfg:         cfg,
 		token:       token,
 		storagePath: storagePath,
+		authLabel:   strings.TrimSpace(authLabel),
 		convStore:   make(map[string][]string),
 		convData:    make(map[string]ConversationRecord),
 		convIndex:   make(map[string]string),
 	}
-	suffix := Sha256Hex(token.Secure1PSID)
+	suffix := conversation.Sha256Hex(token.Secure1PSID)
 	if len(suffix) > 16 {
 		suffix = suffix[:16]
 	}
@@ -81,6 +91,28 @@ func NewGeminiWebState(cfg *config.Config, token *gemini.GeminiWebTokenStorage, 
 	return state
 }
 
+func (s *GeminiWebState) setPendingMatch(match *conversation.MatchResult) {
+	if s == nil {
+		return
+	}
+	s.pendingMatchMu.Lock()
+	s.pendingMatch = match
+	s.pendingMatchMu.Unlock()
+}
+
+func (s *GeminiWebState) consumePendingMatch() *conversation.MatchResult {
+	s.pendingMatchMu.Lock()
+	defer s.pendingMatchMu.Unlock()
+	match := s.pendingMatch
+	s.pendingMatch = nil
+	return match
+}
+
+// SetPendingMatch makes a cached conversation match available for the next request.
+func (s *GeminiWebState) SetPendingMatch(match *conversation.MatchResult) {
+	s.setPendingMatch(match)
+}
+
 // Label returns a stable account label for logging and persistence.
 // If a storage file path is known, it uses the file base name (without extension).
 // Otherwise, it falls back to the stable client ID (e.g., "gemini-web-<hash>").
@@ -92,6 +124,9 @@ func (s *GeminiWebState) Label() string {
 		if lbl := strings.TrimSpace(s.token.Label); lbl != "" {
 			return lbl
 		}
+	}
+	if lbl := strings.TrimSpace(s.authLabel); lbl != "" {
+		return lbl
 	}
 	if s.storagePath != "" {
 		base := strings.TrimSuffix(filepath.Base(s.storagePath), filepath.Ext(s.storagePath))
@@ -124,6 +159,78 @@ func (s *GeminiWebState) convPath() string {
 		base = s.accountID
 	}
 	return ConvBoltPath(base)
+}
+
+func cloneRoleTextSlice(in []RoleText) []RoleText {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]RoleText, len(in))
+	copy(out, in)
+	return out
+}
+
+func cloneStringSlice(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
+func longestHistoryOverlap(history, incoming []RoleText) int {
+	max := len(history)
+	if len(incoming) < max {
+		max = len(incoming)
+	}
+	for overlap := max; overlap > 0; overlap-- {
+		if conversation.EqualMessages(history[len(history)-overlap:], incoming[:overlap]) {
+			return overlap
+		}
+	}
+	return 0
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func storedMessagesToRoleText(stored []conversation.StoredMessage) []RoleText {
+	if len(stored) == 0 {
+		return nil
+	}
+	converted := make([]RoleText, len(stored))
+	for i, msg := range stored {
+		converted[i] = RoleText{Role: msg.Role, Text: msg.Content}
+	}
+	return converted
+}
+
+func (s *GeminiWebState) findConversationByMetadata(model string, metadata []string) ([]RoleText, bool) {
+	if len(metadata) == 0 {
+		return nil, false
+	}
+	s.convMu.RLock()
+	defer s.convMu.RUnlock()
+	for _, rec := range s.convData {
+		if !strings.EqualFold(strings.TrimSpace(rec.Model), strings.TrimSpace(model)) {
+			continue
+		}
+		if !equalStringSlice(rec.Metadata, metadata) {
+			continue
+		}
+		return cloneRoleTextSlice(storedMessagesToRoleText(rec.Messages)), true
+	}
+	return nil, false
 }
 
 func (s *GeminiWebState) GetRequestMutex() *sync.Mutex { return &s.reqMu }
@@ -219,7 +326,7 @@ func (s *GeminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 		return nil, &interfaces.ErrorMessage{StatusCode: 400, Error: fmt.Errorf("bad request: %w", err)}
 	}
 	cleaned := SanitizeAssistantMessages(messages)
-	res.cleaned = cleaned
+	fullCleaned := cloneRoleTextSlice(cleaned)
 	res.underlying = MapAliasToUnderlying(modelName)
 	model, err := ModelFromName(res.underlying)
 	if err != nil {
@@ -232,15 +339,27 @@ func (s *GeminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 	mimesSubset := mimes
 
 	if s.useReusableContext() {
-		reuseMeta, remaining := s.findReusableSession(res.underlying, cleaned)
-		if len(reuseMeta) > 0 {
+		reusePlan := s.reuseFromPending(res.underlying, cleaned)
+		if reusePlan == nil {
+			reusePlan = s.findReusableSession(res.underlying, cleaned)
+		}
+		if reusePlan != nil {
 			res.reuse = true
-			meta = reuseMeta
-			if len(remaining) == 1 {
-				useMsgs = []RoleText{remaining[0]}
-			} else if len(remaining) > 1 {
-				useMsgs = remaining
-			} else if len(cleaned) > 0 {
+			meta = cloneStringSlice(reusePlan.metadata)
+			overlap := reusePlan.overlap
+			if overlap > len(cleaned) {
+				overlap = len(cleaned)
+			} else if overlap < 0 {
+				overlap = 0
+			}
+			delta := cloneRoleTextSlice(cleaned[overlap:])
+			if len(reusePlan.history) > 0 {
+				fullCleaned = append(cloneRoleTextSlice(reusePlan.history), delta...)
+			} else {
+				fullCleaned = append(cloneRoleTextSlice(cleaned[:overlap]), delta...)
+			}
+			useMsgs = delta
+			if len(delta) == 0 && len(cleaned) > 0 {
 				useMsgs = []RoleText{cleaned[len(cleaned)-1]}
 			}
 			if len(useMsgs) == 1 && len(messages) > 0 && len(msgFileIdx) == len(messages) {
@@ -297,6 +416,8 @@ func (s *GeminiWebState) prepare(ctx context.Context, modelName string, rawJSON 
 		}
 		s.convMu.RUnlock()
 	}
+
+	res.cleaned = fullCleaned
 
 	res.tagged = NeedRoleTags(useMsgs)
 	if res.reuse && len(useMsgs) == 1 {
@@ -421,14 +542,55 @@ func (s *GeminiWebState) persistConversation(modelName string, prep *geminiWebPr
 	if !ok {
 		return
 	}
-	stableHash := HashConversation(rec.ClientID, prep.underlying, rec.Messages)
-	accountHash := HashConversation(s.accountID, prep.underlying, rec.Messages)
+	label := strings.TrimSpace(s.Label())
+	if label == "" {
+		label = s.accountID
+	}
+	conversationMsgs := conversation.StoredToMessages(rec.Messages)
+	if err := conversation.StoreConversation(label, prep.underlying, conversationMsgs, metadata); err != nil {
+		log.Debugf("gemini web: failed to persist global conversation index: %v", err)
+	}
+	stableHash := conversation.HashConversationForAccount(rec.ClientID, prep.underlying, rec.Messages)
+	accountHash := conversation.HashConversationForAccount(s.accountID, prep.underlying, rec.Messages)
+
+	suffixSeen := make(map[string]struct{})
+	suffixSeen["hash:"+stableHash] = struct{}{}
+	if accountHash != stableHash {
+		suffixSeen["hash:"+accountHash] = struct{}{}
+	}
 
 	s.convMu.Lock()
 	s.convData[stableHash] = rec
 	s.convIndex["hash:"+stableHash] = stableHash
 	if accountHash != stableHash {
 		s.convIndex["hash:"+accountHash] = stableHash
+	}
+
+	sanitizedHistory := conversation.SanitizeAssistantMessages(conversation.StoredToMessages(rec.Messages))
+	for start := 1; start < len(sanitizedHistory); start++ {
+		segment := sanitizedHistory[start:]
+		if len(segment) < 2 {
+			continue
+		}
+		tailRole := strings.ToLower(strings.TrimSpace(segment[len(segment)-1].Role))
+		if tailRole != "assistant" && tailRole != "system" {
+			continue
+		}
+		storedSegment := conversation.ToStoredMessages(segment)
+		segmentStableHash := conversation.HashConversationForAccount(rec.ClientID, prep.underlying, storedSegment)
+		keyStable := "hash:" + segmentStableHash
+		if _, exists := suffixSeen[keyStable]; !exists {
+			s.convIndex[keyStable] = stableHash
+			suffixSeen[keyStable] = struct{}{}
+		}
+		segmentAccountHash := conversation.HashConversationForAccount(s.accountID, prep.underlying, storedSegment)
+		if segmentAccountHash != segmentStableHash {
+			keyAccount := "hash:" + segmentAccountHash
+			if _, exists := suffixSeen[keyAccount]; !exists {
+				s.convIndex[keyAccount] = stableHash
+				suffixSeen[keyAccount] = struct{}{}
+			}
+		}
 	}
 	dataSnapshot := make(map[string]ConversationRecord, len(s.convData))
 	for k, v := range s.convData {
@@ -493,12 +655,44 @@ func (s *GeminiWebState) useReusableContext() bool {
 	return s.cfg.GeminiWeb.Context
 }
 
-func (s *GeminiWebState) findReusableSession(modelName string, msgs []RoleText) ([]string, []RoleText) {
+func (s *GeminiWebState) reuseFromPending(modelName string, msgs []RoleText) *reuseComputation {
+	match := s.consumePendingMatch()
+	if match == nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(match.Model), strings.TrimSpace(modelName)) {
+		return nil
+	}
+	metadata := cloneStringSlice(match.Record.Metadata)
+	if len(metadata) == 0 {
+		return nil
+	}
+	history, ok := s.findConversationByMetadata(modelName, metadata)
+	if !ok {
+		return nil
+	}
+	overlap := longestHistoryOverlap(history, msgs)
+	return &reuseComputation{metadata: metadata, history: history, overlap: overlap}
+}
+
+func (s *GeminiWebState) findReusableSession(modelName string, msgs []RoleText) *reuseComputation {
 	s.convMu.RLock()
 	items := s.convData
 	index := s.convIndex
 	s.convMu.RUnlock()
-	return FindReusableSessionIn(items, index, s.stableClientID, s.accountID, modelName, msgs)
+	rec, metadata, overlap, ok := FindReusableSessionIn(items, index, s.stableClientID, s.accountID, modelName, msgs)
+	if !ok {
+		return nil
+	}
+	history := cloneRoleTextSlice(storedMessagesToRoleText(rec.Messages))
+	if len(history) == 0 {
+		return nil
+	}
+	// Ensure overlap reflects the actual history alignment.
+	if computed := longestHistoryOverlap(history, msgs); computed > 0 {
+		overlap = computed
+	}
+	return &reuseComputation{metadata: cloneStringSlice(metadata), history: history, overlap: overlap}
 }
 
 func (s *GeminiWebState) getConfiguredGem() *Gem {
@@ -538,42 +732,6 @@ func appendAPIResponseChunk(ctx context.Context, cfg *config.Config, chunk []byt
 		}
 		ginCtx.Set("API_RESPONSE", data)
 	}
-}
-
-// Persistence helpers --------------------------------------------------
-
-// Sha256Hex computes the SHA256 hash of a string and returns its hex representation.
-func Sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
-
-func ToStoredMessages(msgs []RoleText) []StoredMessage {
-	out := make([]StoredMessage, 0, len(msgs))
-	for _, m := range msgs {
-		out = append(out, StoredMessage{
-			Role:    m.Role,
-			Content: m.Text,
-		})
-	}
-	return out
-}
-
-func HashMessage(m StoredMessage) string {
-	s := fmt.Sprintf(`{"content":%q,"role":%q}`, m.Content, strings.ToLower(m.Role))
-	return Sha256Hex(s)
-}
-
-func HashConversation(clientID, model string, msgs []StoredMessage) string {
-	var b strings.Builder
-	b.WriteString(clientID)
-	b.WriteString("|")
-	b.WriteString(model)
-	for _, m := range msgs {
-		b.WriteString("|")
-		b.WriteString(HashMessage(m))
-	}
-	return Sha256Hex(b.String())
 }
 
 // ConvBoltPath returns the BoltDB file path used for both account metadata and conversation data.
@@ -790,7 +948,7 @@ func BuildConversationRecord(model, clientID string, history []RoleText, output 
 		Model:     model,
 		ClientID:  clientID,
 		Metadata:  metadata,
-		Messages:  ToStoredMessages(final),
+		Messages:  conversation.ToStoredMessages(final),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -800,9 +958,9 @@ func BuildConversationRecord(model, clientID string, history []RoleText, output 
 // FindByMessageListIn looks up a conversation record by hashed message list.
 // It attempts both the stable client ID and a legacy email-based ID.
 func FindByMessageListIn(items map[string]ConversationRecord, index map[string]string, stableClientID, email, model string, msgs []RoleText) (ConversationRecord, bool) {
-	stored := ToStoredMessages(msgs)
-	stableHash := HashConversation(stableClientID, model, stored)
-	fallbackHash := HashConversation(email, model, stored)
+	stored := conversation.ToStoredMessages(msgs)
+	stableHash := conversation.HashConversationForAccount(stableClientID, model, stored)
+	fallbackHash := conversation.HashConversationForAccount(email, model, stored)
 
 	// Try stable hash via index indirection first
 	if key, ok := index["hash:"+stableHash]; ok {
@@ -840,9 +998,9 @@ func FindConversationIn(items map[string]ConversationRecord, index map[string]st
 }
 
 // FindReusableSessionIn returns reusable metadata and the remaining message suffix.
-func FindReusableSessionIn(items map[string]ConversationRecord, index map[string]string, stableClientID, email, model string, msgs []RoleText) ([]string, []RoleText) {
+func FindReusableSessionIn(items map[string]ConversationRecord, index map[string]string, stableClientID, email, model string, msgs []RoleText) (ConversationRecord, []string, int, bool) {
 	if len(msgs) < 2 {
-		return nil, nil
+		return ConversationRecord{}, nil, 0, false
 	}
 	searchEnd := len(msgs)
 	for searchEnd >= 2 {
@@ -850,11 +1008,10 @@ func FindReusableSessionIn(items map[string]ConversationRecord, index map[string
 		tail := sub[len(sub)-1]
 		if strings.EqualFold(tail.Role, "assistant") || strings.EqualFold(tail.Role, "system") {
 			if rec, ok := FindConversationIn(items, index, stableClientID, email, model, sub); ok {
-				remain := msgs[searchEnd:]
-				return rec.Metadata, remain
+				return rec, rec.Metadata, searchEnd, true
 			}
 		}
 		searchEnd--
 	}
-	return nil, nil
+	return ConversationRecord{}, nil, 0, false
 }
