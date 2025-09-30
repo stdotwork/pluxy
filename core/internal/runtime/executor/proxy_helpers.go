@@ -87,9 +87,12 @@ func buildProxyTransport(proxyURL string) *http.Transport {
 	// Handle different proxy schemes
 	if parsedURL.Scheme == "socks5" {
 		// Configure SOCKS5 proxy with optional authentication
-		username := parsedURL.User.Username()
-		password, _ := parsedURL.User.Password()
-		proxyAuth := &proxy.Auth{User: username, Password: password}
+		var proxyAuth *proxy.Auth
+		if parsedURL.User != nil {
+			username := parsedURL.User.Username()
+			password, _ := parsedURL.User.Password()
+			proxyAuth = &proxy.Auth{User: username, Password: password}
+		}
 		dialer, errSOCKS5 := proxy.SOCKS5("tcp", parsedURL.Host, proxyAuth, proxy.Direct)
 		if errSOCKS5 != nil {
 			log.Errorf("create SOCKS5 dialer failed: %v", errSOCKS5)

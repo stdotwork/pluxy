@@ -25,9 +25,12 @@ func SetProxy(cfg *config.SDKConfig, httpClient *http.Client) *http.Client {
 		// Handle different proxy schemes.
 		if proxyURL.Scheme == "socks5" {
 			// Configure SOCKS5 proxy with optional authentication.
-			username := proxyURL.User.Username()
-			password, _ := proxyURL.User.Password()
-			proxyAuth := &proxy.Auth{User: username, Password: password}
+			var proxyAuth *proxy.Auth
+			if proxyURL.User != nil {
+				username := proxyURL.User.Username()
+				password, _ := proxyURL.User.Password()
+				proxyAuth = &proxy.Auth{User: username, Password: password}
+			}
 			dialer, errSOCKS5 := proxy.SOCKS5("tcp", proxyURL.Host, proxyAuth, proxy.Direct)
 			if errSOCKS5 != nil {
 				log.Errorf("create SOCKS5 dialer failed: %v", errSOCKS5)
