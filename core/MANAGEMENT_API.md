@@ -95,7 +95,7 @@ If a plaintext key is detected in the config at startup, it will be bcrypt‑has
       ```
     - Response:
       ```json
-      {"debug":true,"proxy-url":"","api-keys":["1...5","JS...W"],"quota-exceeded":{"switch-project":true,"switch-preview-model":true},"generative-language-api-key":["AI...01", "AI...02", "AI...03"],"request-log":true,"request-retry":3,"claude-api-key":[{"api-key":"cr...56","base-url":"https://example.com/api"},{"api-key":"cr...e3","base-url":"http://example.com:3000/api"},{"api-key":"sk-...q2","base-url":"https://example.com"}],"codex-api-key":[{"api-key":"sk...01","base-url":"https://example/v1"}],"openai-compatibility":[{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":["sk...01"],"models":[{"name":"moonshotai/kimi-k2:free","alias":"kimi-k2"}]},{"name":"iflow","base-url":"https://apis.iflow.cn/v1","api-keys":["sk...7e"],"models":[{"name":"deepseek-v3.1","alias":"deepseek-v3.1"},{"name":"glm-4.5","alias":"glm-4.5"},{"name":"kimi-k2","alias":"kimi-k2"}]}]}
+      {"debug":true,"proxy-url":"","api-keys":["1...5","JS...W"],"quota-exceeded":{"switch-project":true,"switch-preview-model":true},"generative-language-api-key":["AI...01","AI...02","AI...03"],"request-log":true,"request-retry":3,"claude-api-key":[{"api-key":"cr...56","base-url":"https://example.com/api","proxy-url":"socks5://proxy.example.com:1080"},{"api-key":"cr...e3","base-url":"http://example.com:3000/api","proxy-url":""},{"api-key":"sk-...q2","base-url":"https://example.com","proxy-url":""}],"codex-api-key":[{"api-key":"sk...01","base-url":"https://example/v1","proxy-url":""}],"openai-compatibility":[{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-key-entries":[{"api-key":"sk...01","proxy-url":""}],"models":[{"name":"moonshotai/kimi-k2:free","alias":"kimi-k2"}]},{"name":"iflow","base-url":"https://apis.iflow.cn/v1","api-key-entries":[{"api-key":"sk...7e","proxy-url":"socks5://proxy.example.com:1080"}],"models":[{"name":"deepseek-v3.1","alias":"deepseek-v3.1"},{"name":"glm-4.5","alias":"glm-4.5"},{"name":"kimi-k2","alias":"kimi-k2"}]}]}
       ```
 
 ### Debug
@@ -335,14 +335,14 @@ These endpoints update the inline `config-api-key` provider inside the `auth.pro
       ```
     - Response:
       ```json
-      { "codex-api-key": [ { "api-key": "sk-a", "base-url": "" } ] }
+      { "codex-api-key": [ { "api-key": "sk-a", "base-url": "", "proxy-url": "" } ] }
       ```
 - PUT `/codex-api-key` — Replace the list
     - Request:
       ```bash
       curl -X PUT -H 'Content-Type: application/json' \
       -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-        -d '[{"api-key":"sk-a"},{"api-key":"sk-b","base-url":"https://c.example.com"}]' \
+        -d '[{"api-key":"sk-a","proxy-url":"socks5://proxy.example.com:1080"},{"api-key":"sk-b","base-url":"https://c.example.com","proxy-url":""}]' \
         http://localhost:8317/v0/management/codex-api-key
       ```
     - Response:
@@ -354,14 +354,14 @@ These endpoints update the inline `config-api-key` provider inside the `auth.pro
       ```bash
       curl -X PATCH -H 'Content-Type: application/json' \
       -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-        -d '{"index":1,"value":{"api-key":"sk-b2","base-url":"https://c.example.com"}}' \
+        -d '{"index":1,"value":{"api-key":"sk-b2","base-url":"https://c.example.com","proxy-url":""}}' \
         http://localhost:8317/v0/management/codex-api-key
       ```
     - Request (by match):
       ```bash
       curl -X PATCH -H 'Content-Type: application/json' \
       -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-        -d '{"match":"sk-a","value":{"api-key":"sk-a","base-url":""}}' \
+        -d '{"match":"sk-a","value":{"api-key":"sk-a","base-url":"","proxy-url":"socks5://proxy.example.com:1080"}}' \
         http://localhost:8317/v0/management/codex-api-key
       ```
     - Response:
@@ -430,22 +430,22 @@ These endpoints update the inline `config-api-key` provider inside the `auth.pro
 
 ### Claude API KEY (object array)
 - GET `/claude-api-key` — List all
-  - Request:
-    ```bash
-    curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/claude-api-key
-    ```
-  - Response:
-    ```json
-    { "claude-api-key": [ { "api-key": "sk-a", "base-url": "" } ] }
-    ```
+    - Request:
+      ```bash
+      curl -H 'Authorization: Bearer <MANAGEMENT_KEY>' http://localhost:8317/v0/management/claude-api-key
+      ```
+    - Response:
+      ```json
+      { "claude-api-key": [ { "api-key": "sk-a", "base-url": "", "proxy-url": "" } ] }
+      ```
 - PUT `/claude-api-key` — Replace the list
-  - Request:
-    ```bash
-    curl -X PUT -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '[{"api-key":"sk-a"},{"api-key":"sk-b","base-url":"https://c.example.com"}]' \
-      http://localhost:8317/v0/management/claude-api-key
-    ```
+    - Request:
+      ```bash
+      curl -X PUT -H 'Content-Type: application/json' \
+      -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
+        -d '[{"api-key":"sk-a","proxy-url":"socks5://proxy.example.com:1080"},{"api-key":"sk-b","base-url":"https://c.example.com","proxy-url":""}]' \
+        http://localhost:8317/v0/management/claude-api-key
+      ```
   - Response:
     ```json
     { "status": "ok" }
@@ -455,16 +455,16 @@ These endpoints update the inline `config-api-key` provider inside the `auth.pro
     ```bash
     curl -X PATCH -H 'Content-Type: application/json' \
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '{"index":1,"value":{"api-key":"sk-b2","base-url":"https://c.example.com"}}' \
-      http://localhost:8317/v0/management/claude-api-key
-    ```
+        -d '{"index":1,"value":{"api-key":"sk-b2","base-url":"https://c.example.com","proxy-url":""}}' \
+        http://localhost:8317/v0/management/claude-api-key
+      ```
   - Request (by match):
     ```bash
     curl -X PATCH -H 'Content-Type: application/json' \
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '{"match":"sk-a","value":{"api-key":"sk-a","base-url":""}}' \
-      http://localhost:8317/v0/management/claude-api-key
-    ```
+        -d '{"match":"sk-a","value":{"api-key":"sk-a","base-url":"","proxy-url":"socks5://proxy.example.com:1080"}}' \
+        http://localhost:8317/v0/management/claude-api-key
+      ```
   - Response:
     ```json
     { "status": "ok" }
@@ -491,14 +491,14 @@ These endpoints update the inline `config-api-key` provider inside the `auth.pro
     ```
   - Response:
     ```json
-    { "openai-compatibility": [ { "name": "openrouter", "base-url": "https://openrouter.ai/api/v1", "api-keys": [], "models": [] } ] }
+    { "openai-compatibility": [ { "name": "openrouter", "base-url": "https://openrouter.ai/api/v1", "api-key-entries": [ { "api-key": "sk", "proxy-url": "" } ], "models": [] } ] }
     ```
 - PUT `/openai-compatibility` — Replace the list
   - Request:
     ```bash
     curl -X PUT -H 'Content-Type: application/json' \
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '[{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":["sk"],"models":[{"name":"m","alias":"a"}]}]' \
+      -d '[{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-key-entries":[{"api-key":"sk","proxy-url":""}],"models":[{"name":"m","alias":"a"}]}]' \
       http://localhost:8317/v0/management/openai-compatibility
     ```
   - Response:
@@ -510,20 +510,23 @@ These endpoints update the inline `config-api-key` provider inside the `auth.pro
     ```bash
     curl -X PATCH -H 'Content-Type: application/json' \
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '{"name":"openrouter","value":{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":[],"models":[]}}' \
+      -d '{"name":"openrouter","value":{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-key-entries":[{"api-key":"sk","proxy-url":""}],"models":[]}}' \
       http://localhost:8317/v0/management/openai-compatibility
     ```
   - Request (by index):
     ```bash
     curl -X PATCH -H 'Content-Type: application/json' \
     -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
-      -d '{"index":0,"value":{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-keys":[],"models":[]}}' \
+      -d '{"index":0,"value":{"name":"openrouter","base-url":"https://openrouter.ai/api/v1","api-key-entries":[{"api-key":"sk","proxy-url":""}],"models":[]}}' \
       http://localhost:8317/v0/management/openai-compatibility
     ```
   - Response:
     ```json
     { "status": "ok" }
     ```
+
+  - Notes:
+    - Legacy `api-keys` input remains accepted; keys are migrated into `api-key-entries` automatically so the legacy field will eventually remain empty in responses.
 - DELETE `/openai-compatibility` — Delete (`?name=` or `?index=`)
   - Request (by name):
     ```bash

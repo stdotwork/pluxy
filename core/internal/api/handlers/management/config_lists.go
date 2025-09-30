@@ -3,6 +3,7 @@ package management
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -221,6 +222,9 @@ func (h *Handler) PutOpenAICompat(c *gin.Context) {
 		}
 		arr = obj.Items
 	}
+	for i := range arr {
+		normalizeOpenAICompatibilityEntry(&arr[i])
+	}
 	h.cfg.OpenAICompatibility = arr
 	h.persist(c)
 }
@@ -234,6 +238,7 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid body"})
 		return
 	}
+	normalizeOpenAICompatibilityEntry(body.Value)
 	if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.OpenAICompatibility) {
 		h.cfg.OpenAICompatibility[*body.Index] = *body.Value
 		h.persist(c)
@@ -346,4 +351,33 @@ func (h *Handler) DeleteCodexKey(c *gin.Context) {
 		}
 	}
 	c.JSON(400, gin.H{"error": "missing api-key or index"})
+}
+
+func normalizeOpenAICompatibilityEntry(entry *config.OpenAICompatibility) {
+	if entry == nil {
+		return
+	}
+	existing := make(map[string]struct{}, len(entry.APIKeyEntries))
+	for i := range entry.APIKeyEntries {
+		trimmed := strings.TrimSpace(entry.APIKeyEntries[i].APIKey)
+		entry.APIKeyEntries[i].APIKey = trimmed
+		if trimmed != "" {
+			existing[trimmed] = struct{}{}
+		}
+	}
+	if len(entry.APIKeys) == 0 {
+		return
+	}
+	for _, legacyKey := range entry.APIKeys {
+		trimmed := strings.TrimSpace(legacyKey)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := existing[trimmed]; ok {
+			continue
+		}
+		entry.APIKeyEntries = append(entry.APIKeyEntries, config.OpenAICompatibilityAPIKey{APIKey: trimmed})
+		existing[trimmed] = struct{}{}
+	}
+	entry.APIKeys = nil
 }
