@@ -746,11 +746,13 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 			if ck.BaseURL != "" {
 				attrs["base_url"] = ck.BaseURL
 			}
+			proxyURL := strings.TrimSpace(ck.ProxyURL)
 			a := &coreauth.Auth{
 				ID:         id,
 				Provider:   "claude",
 				Label:      "claude-apikey",
 				Status:     coreauth.StatusActive,
+				ProxyURL:   proxyURL,
 				Attributes: attrs,
 				CreatedAt:  now,
 				UpdatedAt:  now,
@@ -772,11 +774,13 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 			if ck.BaseURL != "" {
 				attrs["base_url"] = ck.BaseURL
 			}
+			proxyURL := strings.TrimSpace(ck.ProxyURL)
 			a := &coreauth.Auth{
 				ID:         id,
 				Provider:   "codex",
 				Label:      "codex-apikey",
 				Status:     coreauth.StatusActive,
+				ProxyURL:   proxyURL,
 				Attributes: attrs,
 				CreatedAt:  now,
 				UpdatedAt:  now,
@@ -790,33 +794,70 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 				providerName = "openai-compatibility"
 			}
 			base := strings.TrimSpace(compat.BaseURL)
-			for j := range compat.APIKeys {
-				key := strings.TrimSpace(compat.APIKeys[j])
-				if key == "" {
-					continue
+
+			// Handle new APIKeyEntries format (preferred)
+			if len(compat.APIKeyEntries) > 0 {
+				for j := range compat.APIKeyEntries {
+					entry := &compat.APIKeyEntries[j]
+					key := strings.TrimSpace(entry.APIKey)
+					if key == "" {
+						continue
+					}
+					proxyURL := strings.TrimSpace(entry.ProxyURL)
+					idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
+					id, token := idGen.next(idKind, key, base, proxyURL)
+					attrs := map[string]string{
+						"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
+						"base_url":     base,
+						"api_key":      key,
+						"compat_name":  compat.Name,
+						"provider_key": providerName,
+					}
+					if hash := computeOpenAICompatModelsHash(compat.Models); hash != "" {
+						attrs["models_hash"] = hash
+					}
+					a := &coreauth.Auth{
+						ID:         id,
+						Provider:   providerName,
+						Label:      compat.Name,
+						Status:     coreauth.StatusActive,
+						ProxyURL:   proxyURL,
+						Attributes: attrs,
+						CreatedAt:  now,
+						UpdatedAt:  now,
+					}
+					out = append(out, a)
 				}
-				idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
-				id, token := idGen.next(idKind, key, base)
-				attrs := map[string]string{
-					"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
-					"base_url":     base,
-					"api_key":      key,
-					"compat_name":  compat.Name,
-					"provider_key": providerName,
+			} else {
+				// Handle legacy APIKeys format for backward compatibility
+				for j := range compat.APIKeys {
+					key := strings.TrimSpace(compat.APIKeys[j])
+					if key == "" {
+						continue
+					}
+					idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
+					id, token := idGen.next(idKind, key, base)
+					attrs := map[string]string{
+						"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
+						"base_url":     base,
+						"api_key":      key,
+						"compat_name":  compat.Name,
+						"provider_key": providerName,
+					}
+					if hash := computeOpenAICompatModelsHash(compat.Models); hash != "" {
+						attrs["models_hash"] = hash
+					}
+					a := &coreauth.Auth{
+						ID:         id,
+						Provider:   providerName,
+						Label:      compat.Name,
+						Status:     coreauth.StatusActive,
+						Attributes: attrs,
+						CreatedAt:  now,
+						UpdatedAt:  now,
+					}
+					out = append(out, a)
 				}
-				if hash := computeOpenAICompatModelsHash(compat.Models); hash != "" {
-					attrs["models_hash"] = hash
-				}
-				a := &coreauth.Auth{
-					ID:         id,
-					Provider:   providerName,
-					Label:      compat.Name,
-					Status:     coreauth.StatusActive,
-					Attributes: attrs,
-					CreatedAt:  now,
-					UpdatedAt:  now,
-				}
-				out = append(out, a)
 			}
 		}
 	}
@@ -937,7 +978,12 @@ func BuildAPIKeyClients(cfg *config.Config) (int, int, int, int) {
 	if len(cfg.OpenAICompatibility) > 0 {
 		// Do not construct legacy clients for OpenAI-compat providers; these are handled by the stateless executor.
 		for _, compatConfig := range cfg.OpenAICompatibility {
-			openAICompatCount += len(compatConfig.APIKeys)
+			// Count from new APIKeyEntries format if present, otherwise fall back to legacy APIKeys
+			if len(compatConfig.APIKeyEntries) > 0 {
+				openAICompatCount += len(compatConfig.APIKeyEntries)
+			} else {
+				openAICompatCount += len(compatConfig.APIKeys)
+			}
 		}
 	}
 	return glAPIKeyCount, claudeAPIKeyCount, codexAPIKeyCount, openAICompatCount
@@ -980,9 +1026,9 @@ func diffOpenAICompatibility(oldList, newList []config.OpenAICompatibility) []st
 		}
 		switch {
 		case !oldOk:
-			changes = append(changes, fmt.Sprintf("provider added: %s (api-keys=%d, models=%d)", label, countNonEmptyStrings(newEntry.APIKeys), countOpenAIModels(newEntry.Models)))
+			changes = append(changes, fmt.Sprintf("provider added: %s (api-keys=%d, models=%d)", label, countAPIKeys(newEntry), countOpenAIModels(newEntry.Models)))
 		case !newOk:
-			changes = append(changes, fmt.Sprintf("provider removed: %s (api-keys=%d, models=%d)", label, countNonEmptyStrings(oldEntry.APIKeys), countOpenAIModels(oldEntry.Models)))
+			changes = append(changes, fmt.Sprintf("provider removed: %s (api-keys=%d, models=%d)", label, countAPIKeys(oldEntry), countOpenAIModels(oldEntry.Models)))
 		default:
 			if detail := describeOpenAICompatibilityUpdate(oldEntry, newEntry); detail != "" {
 				changes = append(changes, fmt.Sprintf("provider updated: %s %s", label, detail))
@@ -993,8 +1039,8 @@ func diffOpenAICompatibility(oldList, newList []config.OpenAICompatibility) []st
 }
 
 func describeOpenAICompatibilityUpdate(oldEntry, newEntry config.OpenAICompatibility) string {
-	oldKeyCount := countNonEmptyStrings(oldEntry.APIKeys)
-	newKeyCount := countNonEmptyStrings(newEntry.APIKeys)
+	oldKeyCount := countAPIKeys(oldEntry)
+	newKeyCount := countAPIKeys(newEntry)
 	oldModelCount := countOpenAIModels(oldEntry.Models)
 	newModelCount := countOpenAIModels(newEntry.Models)
 	details := make([]string, 0, 2)
@@ -1008,6 +1054,21 @@ func describeOpenAICompatibilityUpdate(oldEntry, newEntry config.OpenAICompatibi
 		return ""
 	}
 	return "(" + strings.Join(details, ", ") + ")"
+}
+
+func countAPIKeys(entry config.OpenAICompatibility) int {
+	// Prefer new APIKeyEntries format
+	if len(entry.APIKeyEntries) > 0 {
+		count := 0
+		for _, keyEntry := range entry.APIKeyEntries {
+			if strings.TrimSpace(keyEntry.APIKey) != "" {
+				count++
+			}
+		}
+		return count
+	}
+	// Fall back to legacy APIKeys format
+	return countNonEmptyStrings(entry.APIKeys)
 }
 
 func countNonEmptyStrings(values []string) int {

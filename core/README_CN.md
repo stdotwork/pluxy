@@ -297,19 +297,24 @@ console.log(await claudeResponse.json());
 | `usage-statistics-enabled`              | boolean  | true               | 是否启用内存中的使用统计；设为 false 时直接丢弃所有统计数据。                               |
 | `api-keys`                              | string[] | []                 | 兼容旧配置的简写，会自动同步到默认 `config-api-key` 提供方。                     |
 | `generative-language-api-key`           | string[] | []                 | 生成式语言API密钥列表。                                                       |
-| `codex-api-key`                         | object   | {}                 | Codex API密钥列表。                                                      |
-| `codex-api-key.api-key`                 | string   | ""                 | Codex API密钥。                                                        |
-| `codex-api-key.base-url`                | string   | ""                 | 自定义的Codex API端点                                                     |
-| `claude-api-key`                        | object   | {}                 | Claude API密钥列表。                                                     |
-| `claude-api-key.api-key`                | string   | ""                 | Claude API密钥。                                                       |
-| `claude-api-key.base-url`               | string   | ""                 | 自定义的Claude API端点，如果您使用第三方的API端点。                                    |
-| `openai-compatibility`                  | object[] | []                 | 上游OpenAI兼容提供商的配置（名称、基础URL、API密钥、模型）。                                |
-| `openai-compatibility.*.name`           | string   | ""                 | 提供商的名称。它将被用于用户代理（User Agent）和其他地方。                                  |
-| `openai-compatibility.*.base-url`       | string   | ""                 | 提供商的基础URL。                                                          |
-| `openai-compatibility.*.api-keys`       | string[] | []                 | 提供商的API密钥。如果需要，可以添加多个密钥。如果允许未经身份验证的访问，则可以省略。                        |
-| `openai-compatibility.*.models`         | object[] | []                 | 实际的模型名称。                                                            |
-| `openai-compatibility.*.models.*.name`  | string   | ""                 | 提供商支持的模型。                                                           |
-| `openai-compatibility.*.models.*.alias` | string   | ""                 | 在API中使用的别名。                                                         |
+| `codex-api-key`                                       | object   | {}                 | Codex API密钥列表。                                                      |
+| `codex-api-key.api-key`                               | string   | ""                 | Codex API密钥。                                                        |
+| `codex-api-key.base-url`                              | string   | ""                 | 自定义的Codex API端点                                                     |
+| `codex-api-key.proxy-url`                             | string   | ""                 | 针对该API密钥的代理URL。会覆盖全局proxy-url设置。支持socks5/http/https协议。                 |
+| `claude-api-key`                                      | object   | {}                 | Claude API密钥列表。                                                     |
+| `claude-api-key.api-key`                              | string   | ""                 | Claude API密钥。                                                       |
+| `claude-api-key.base-url`                             | string   | ""                 | 自定义的Claude API端点，如果您使用第三方的API端点。                                    |
+| `claude-api-key.proxy-url`                            | string   | ""                 | 针对该API密钥的代理URL。会覆盖全局proxy-url设置。支持socks5/http/https协议。                 |
+| `openai-compatibility`                                | object[] | []                 | 上游OpenAI兼容提供商的配置（名称、基础URL、API密钥、模型）。                                |
+| `openai-compatibility.*.name`                         | string   | ""                 | 提供商的名称。它将被用于用户代理（User Agent）和其他地方。                                  |
+| `openai-compatibility.*.base-url`                     | string   | ""                 | 提供商的基础URL。                                                          |
+| `openai-compatibility.*.api-keys`                     | string[] | []                 | (已弃用) 提供商的API密钥。建议改用api-key-entries以获得每密钥代理支持。                       |
+| `openai-compatibility.*.api-key-entries`              | object[] | []                 | API密钥条目，支持可选的每密钥代理配置。优先于api-keys。                                   |
+| `openai-compatibility.*.api-key-entries.*.api-key`    | string   | ""                 | 该条目的API密钥。                                                          |
+| `openai-compatibility.*.api-key-entries.*.proxy-url`  | string   | ""                 | 针对该API密钥的代理URL。会覆盖全局proxy-url设置。支持socks5/http/https协议。                 |
+| `openai-compatibility.*.models`                       | object[] | []                 | 实际的模型名称。                                                            |
+| `openai-compatibility.*.models.*.name`                | string   | ""                 | 提供商支持的模型。                                                           |
+| `openai-compatibility.*.models.*.alias`               | string   | ""                 | 在API中使用的别名。                                                         |
 | `gemini-web`                            | object   | {}                 | Gemini Web 客户端的特定配置。                                                 |
 | `gemini-web.context`                    | boolean  | true               | 是否启用会话上下文重用，以实现连续对话。                                        |
 | `gemini-web.code-mode`                  | boolean  | false              | 是否启用代码模式，优化代码相关任务的响应。                                      |
@@ -373,20 +378,28 @@ generative-language-api-key:
 codex-api-key:
   - api-key: "sk-atSM..."
     base-url: "https://www.example.com" # 第三方 Codex API 中转服务端点
+    proxy-url: "socks5://proxy.example.com:1080" # 可选:针对该密钥的代理设置
 
 # Claude API 密钥
 claude-api-key:
-  - api-key: "sk-atSM..." # 如果使用官方 Claude API，无需设置 base-url
+  - api-key: "sk-atSM..." # 如果使用官方 Claude API,无需设置 base-url
   - api-key: "sk-atSM..."
     base-url: "https://www.example.com" # 第三方 Claude API 中转服务端点
+    proxy-url: "socks5://proxy.example.com:1080" # 可选:针对该密钥的代理设置
 
 # OpenAI 兼容提供商
 openai-compatibility:
   - name: "openrouter" # 提供商的名称；它将被用于用户代理和其它地方。
     base-url: "https://openrouter.ai/api/v1" # 提供商的基础URL。
-    api-keys: # 提供商的API密钥。如果需要，可以添加多个密钥。如果允许未经身份验证的访问，则可以省略。
-      - "sk-or-v1-...b780"
-      - "sk-or-v1-...b781"
+    # 新格式：支持每密钥代理配置(推荐):
+    api-key-entries:
+      - api-key: "sk-or-v1-...b780"
+        proxy-url: "socks5://proxy.example.com:1080" # 可选:针对该密钥的代理设置
+      - api-key: "sk-or-v1-...b781" # 不进行额外代理设置
+    # 旧格式(仍支持，但无法为每个密钥指定代理):
+    # api-keys:
+    #   - "sk-or-v1-...b780"
+    #   - "sk-or-v1-...b781"
     models: # 提供商支持的模型。
       - name: "moonshotai/kimi-k2:free" # 实际的模型名称。
         alias: "kimi-k2" # 在API中使用的别名。
@@ -398,10 +411,26 @@ openai-compatibility:
 
 - name：内部识别名
 - base-url：提供商基础地址
-- api-keys：可选，多密钥轮询（若提供商支持无鉴权可省略）
+- api-key-entries：API密钥条目列表，支持可选的每密钥代理配置（推荐）
+- api-keys：(已弃用) 简单的API密钥列表，不支持代理配置
 - models：将上游模型 `name` 映射为本地可用 `alias`
 
-示例：
+支持每密钥代理配置的示例：
+
+```yaml
+openai-compatibility:
+  - name: "openrouter"
+    base-url: "https://openrouter.ai/api/v1"
+    api-key-entries:
+      - api-key: "sk-or-v1-...b780"
+        proxy-url: "socks5://proxy.example.com:1080"
+      - api-key: "sk-or-v1-...b781"
+    models:
+      - name: "moonshotai/kimi-k2:free"
+        alias: "kimi-k2"
+```
+
+旧格式（仍支持）：
 
 ```yaml
 openai-compatibility:

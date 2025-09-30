@@ -285,19 +285,24 @@ The server uses a YAML configuration file (`config.yaml`) located in the project
 | `usage-statistics-enabled`              | boolean  | true               | Enable in-memory usage aggregation for management APIs. Disable to drop all collected usage metrics.                                                                                    |
 | `api-keys`                              | string[] | []                 | Legacy shorthand for inline API keys. Values are mirrored into the `config-api-key` provider for backwards compatibility.                                                                 |
 | `generative-language-api-key`           | string[] | []                 | List of Generative Language API keys.                                                                                                                                                     |
-| `codex-api-key`                         | object   | {}                 | List of Codex API keys.                                                                                                                                                                   |
-| `codex-api-key.api-key`                 | string   | ""                 | Codex API key.                                                                                                                                                                            |
-| `codex-api-key.base-url`                | string   | ""                 | Custom Codex API endpoint, if you use a third-party API endpoint.                                                                                                                         |
-| `claude-api-key`                        | object   | {}                 | List of Claude API keys.                                                                                                                                                                  |
-| `claude-api-key.api-key`                | string   | ""                 | Claude API key.                                                                                                                                                                           |
-| `claude-api-key.base-url`               | string   | ""                 | Custom Claude API endpoint, if you use a third-party API endpoint.                                                                                                                        |
-| `openai-compatibility`                  | object[] | []                 | Upstream OpenAI-compatible providers configuration (name, base-url, api-keys, models).                                                                                                    |
-| `openai-compatibility.*.name`           | string   | ""                 | The name of the provider. It will be used in the user agent and other places.                                                                                                             |
-| `openai-compatibility.*.base-url`       | string   | ""                 | The base URL of the provider.                                                                                                                                                             |
-| `openai-compatibility.*.api-keys`       | string[] | []                 | The API keys for the provider. Add multiple keys if needed. Omit if unauthenticated access is allowed.                                                                                    |
-| `openai-compatibility.*.models`         | object[] | []                 | The actual model name.                                                                                                                                                                    |
-| `openai-compatibility.*.models.*.name`  | string   | ""                 | The models supported by the provider.                                                                                                                                                     |
-| `openai-compatibility.*.models.*.alias` | string   | ""                 | The alias used in the API.                                                                                                                                                                |
+| `codex-api-key`                                    | object   | {}                 | List of Codex API keys.                                                                                                                                                                   |
+| `codex-api-key.api-key`                            | string   | ""                 | Codex API key.                                                                                                                                                                            |
+| `codex-api-key.base-url`                           | string   | ""                 | Custom Codex API endpoint, if you use a third-party API endpoint.                                                                                                                         |
+| `codex-api-key.proxy-url`                          | string   | ""                 | Proxy URL for this specific API key. Overrides the global proxy-url setting. Supports socks5/http/https protocols.                                                                        |
+| `claude-api-key`                                   | object   | {}                 | List of Claude API keys.                                                                                                                                                                  |
+| `claude-api-key.api-key`                           | string   | ""                 | Claude API key.                                                                                                                                                                           |
+| `claude-api-key.base-url`                          | string   | ""                 | Custom Claude API endpoint, if you use a third-party API endpoint.                                                                                                                        |
+| `claude-api-key.proxy-url`                         | string   | ""                 | Proxy URL for this specific API key. Overrides the global proxy-url setting. Supports socks5/http/https protocols.                                                                        |
+| `openai-compatibility`                             | object[] | []                 | Upstream OpenAI-compatible providers configuration (name, base-url, api-keys, models).                                                                                                    |
+| `openai-compatibility.*.name`                      | string   | ""                 | The name of the provider. It will be used in the user agent and other places.                                                                                                             |
+| `openai-compatibility.*.base-url`                  | string   | ""                 | The base URL of the provider.                                                                                                                                                             |
+| `openai-compatibility.*.api-keys`                  | string[] | []                 | (Deprecated) The API keys for the provider. Use api-key-entries instead for per-key proxy support.                                                                                        |
+| `openai-compatibility.*.api-key-entries`           | object[] | []                 | API key entries with optional per-key proxy configuration. Preferred over api-keys.                                                                                                        |
+| `openai-compatibility.*.api-key-entries.*.api-key` | string   | ""                 | The API key for this entry.                                                                                                                                                               |
+| `openai-compatibility.*.api-key-entries.*.proxy-url` | string | ""                 | Proxy URL for this specific API key. Overrides the global proxy-url setting. Supports socks5/http/https protocols.                                                                      |
+| `openai-compatibility.*.models`                    | object[] | []                 | The actual model name.                                                                                                                                                                    |
+| `openai-compatibility.*.models.*.name`             | string   | ""                 | The models supported by the provider.                                                                                                                                                     |
+| `openai-compatibility.*.models.*.alias`            | string   | ""                 | The alias used in the API.                                                                                                                                                                |
 | `gemini-web`                            | object   | {}                 | Configuration specific to the Gemini Web client.                                                                                                                                          |
 | `gemini-web.context`                    | boolean  | true               | Enables conversation context reuse for continuous dialogue.                                                                                                                               |
 | `gemini-web.code-mode`                  | boolean  | false              | Enables code mode for optimized responses in coding-related tasks.                                                                                                                        |
@@ -361,20 +366,28 @@ generative-language-api-key:
 codex-api-key:
   - api-key: "sk-atSM..."
     base-url: "https://www.example.com" # use the custom codex API endpoint
-  
+    proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
+
 # Claude API keys
 claude-api-key:
   - api-key: "sk-atSM..." # use the official claude API key, no need to set the base url
   - api-key: "sk-atSM..."
     base-url: "https://www.example.com" # use the custom claude API endpoint
+    proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
 
 # OpenAI compatibility providers
 openai-compatibility:
   - name: "openrouter" # The name of the provider; it will be used in the user agent and other places.
     base-url: "https://openrouter.ai/api/v1" # The base URL of the provider.
-    api-keys: # The API keys for the provider. Add multiple keys if needed. Omit if unauthenticated access is allowed.
-      - "sk-or-v1-...b780"
-      - "sk-or-v1-...b781"
+    # New format with per-key proxy support (recommended):
+    api-key-entries:
+      - api-key: "sk-or-v1-...b780"
+        proxy-url: "socks5://proxy.example.com:1080" # optional: per-key proxy override
+      - api-key: "sk-or-v1-...b781" # without proxy-url
+    # Legacy format (still supported, but cannot specify proxy per key):
+    # api-keys:
+    #   - "sk-or-v1-...b780"
+    #   - "sk-or-v1-...b781"
     models: # The models supported by the provider.
       - name: "moonshotai/kimi-k2:free" # The actual model name.
         alias: "kimi-k2" # The alias used in the API.
@@ -386,10 +399,26 @@ Configure upstream OpenAI-compatible providers (e.g., OpenRouter) via `openai-co
 
 - name: provider identifier used internally
 - base-url: provider base URL
-- api-keys: optional list of API keys (omit if provider allows unauthenticated requests)
+- api-key-entries: list of API key entries with optional per-key proxy configuration (recommended)
+- api-keys: (deprecated) simple list of API keys without proxy support
 - models: list of mappings from upstream model `name` to local `alias`
 
-Example:
+Example with per-key proxy support:
+
+```yaml
+openai-compatibility:
+  - name: "openrouter"
+    base-url: "https://openrouter.ai/api/v1"
+    api-key-entries:
+      - api-key: "sk-or-v1-...b780"
+        proxy-url: "socks5://proxy.example.com:1080"
+      - api-key: "sk-or-v1-...b781"
+    models:
+      - name: "moonshotai/kimi-k2:free"
+        alias: "kimi-k2"
+```
+
+Legacy format (still supported):
 
 ```yaml
 openai-compatibility:

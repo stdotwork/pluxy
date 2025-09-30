@@ -107,6 +107,9 @@ type ClaudeKey struct {
 	// BaseURL is the base URL for the Claude API endpoint.
 	// If empty, the default Claude API URL will be used.
 	BaseURL string `yaml:"base-url" json:"base-url"`
+
+	// ProxyURL overrides the global proxy setting for this API key if provided.
+	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
 }
 
 // CodexKey represents the configuration for a Codex API key,
@@ -118,6 +121,9 @@ type CodexKey struct {
 	// BaseURL is the base URL for the Codex API endpoint.
 	// If empty, the default Codex API URL will be used.
 	BaseURL string `yaml:"base-url" json:"base-url"`
+
+	// ProxyURL overrides the global proxy setting for this API key if provided.
+	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
 }
 
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
@@ -130,10 +136,23 @@ type OpenAICompatibility struct {
 	BaseURL string `yaml:"base-url" json:"base-url"`
 
 	// APIKeys are the authentication keys for accessing the external API services.
-	APIKeys []string `yaml:"api-keys" json:"api-keys"`
+	// Deprecated: Use APIKeyEntries instead to support per-key proxy configuration.
+	APIKeys []string `yaml:"api-keys,omitempty" json:"api-keys,omitempty"`
+
+	// APIKeyEntries defines API keys with optional per-key proxy configuration.
+	APIKeyEntries []OpenAICompatibilityAPIKey `yaml:"api-key-entries,omitempty" json:"api-key-entries,omitempty"`
 
 	// Models defines the model configurations including aliases for routing.
 	Models []OpenAICompatibilityModel `yaml:"models" json:"models"`
+}
+
+// OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.
+type OpenAICompatibilityAPIKey struct {
+	// APIKey is the authentication key for accessing the external API services.
+	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// ProxyURL overrides the global proxy setting for this API key if provided.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
 }
 
 // OpenAICompatibilityModel represents a model configuration for OpenAI compatibility,
