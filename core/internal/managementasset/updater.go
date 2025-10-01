@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,7 +28,14 @@ const (
 // ManagementFileName exposes the control panel asset filename.
 const ManagementFileName = managementAssetName
 
-var httpClient = &http.Client{Timeout: 15 * time.Second}
+func newHTTPClient(proxyURL string) *http.Client {
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	sdkCfg := &sdkconfig.SDKConfig{ProxyURL: strings.TrimSpace(proxyURL)}
+	util.SetProxy(sdkCfg, client)
+
+	return client
+}
 
 type releaseAsset struct {
 	Name               string `json:"name"`
@@ -59,7 +68,7 @@ func FilePath(configFilePath string) string {
 
 // EnsureLatestManagementHTML checks the latest management.html asset and updates the local copy when needed.
 // The function is designed to run in a background goroutine and will never panic.
-func EnsureLatestManagementHTML(ctx context.Context, staticDir string) {
+func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -75,6 +84,8 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string) {
 		return
 	}
 
+	client := newHTTPClient(proxyURL)
+
 	localPath := filepath.Join(staticDir, managementAssetName)
 	localHash, err := fileSHA256(localPath)
 	if err != nil {
@@ -84,7 +95,7 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string) {
 		localHash = ""
 	}
 
-	asset, remoteHash, err := fetchLatestAsset(ctx)
+	asset, remoteHash, err := fetchLatestAsset(ctx, client)
 	if err != nil {
 		log.WithError(err).Warn("failed to fetch latest management release information")
 		return
@@ -95,7 +106,7 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string) {
 		return
 	}
 
-	data, downloadedHash, err := downloadAsset(ctx, asset.BrowserDownloadURL)
+	data, downloadedHash, err := downloadAsset(ctx, client, asset.BrowserDownloadURL)
 	if err != nil {
 		log.WithError(err).Warn("failed to download management asset")
 		return
@@ -113,7 +124,7 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string) {
 	log.Infof("management asset updated successfully (hash=%s)", downloadedHash)
 }
 
-func fetchLatestAsset(ctx context.Context) (*releaseAsset, string, error) {
+func fetchLatestAsset(ctx context.Context, client *http.Client) (*releaseAsset, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, managementReleaseURL, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("create release request: %w", err)
@@ -121,7 +132,7 @@ func fetchLatestAsset(ctx context.Context) (*releaseAsset, string, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", httpUserAgent)
 
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("execute release request: %w", err)
 	}
@@ -150,7 +161,7 @@ func fetchLatestAsset(ctx context.Context) (*releaseAsset, string, error) {
 	return nil, "", fmt.Errorf("management asset %s not found in latest release", managementAssetName)
 }
 
-func downloadAsset(ctx context.Context, downloadURL string) ([]byte, string, error) {
+func downloadAsset(ctx context.Context, client *http.Client, downloadURL string) ([]byte, string, error) {
 	if strings.TrimSpace(downloadURL) == "" {
 		return nil, "", fmt.Errorf("empty download url")
 	}
@@ -161,7 +172,7 @@ func downloadAsset(ctx context.Context, downloadURL string) ([]byte, string, err
 	}
 	req.Header.Set("User-Agent", httpUserAgent)
 
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("execute download request: %w", err)
 	}
