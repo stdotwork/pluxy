@@ -76,6 +76,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	}
 
 	body, _ = sjson.SetBytes(body, "stream", true)
+	body, _ = sjson.DeleteBytes(body, "previous_response_id")
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	recordAPIRequest(ctx, e.cfg, body)
@@ -160,6 +161,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "high")
 		}
 	}
+
+	body, _ = sjson.DeleteBytes(body, "previous_response_id")
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
 	recordAPIRequest(ctx, e.cfg, body)
