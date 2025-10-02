@@ -40,8 +40,8 @@ func (e *OpenAICompatExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.A
 
 func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	baseURL, apiKey := e.resolveCredentials(auth)
-	if baseURL == "" || apiKey == "" {
-		return cliproxyexecutor.Response{}, statusErr{code: http.StatusUnauthorized, msg: "missing provider baseURL or apiKey"}
+	if baseURL == "" {
+		return cliproxyexecutor.Response{}, statusErr{code: http.StatusUnauthorized, msg: "missing provider baseURL"}
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 
@@ -60,7 +60,9 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		return cliproxyexecutor.Response{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	httpReq.Header.Set("User-Agent", "cli-proxy-openai-compat")
 
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -89,8 +91,8 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 
 func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
 	baseURL, apiKey := e.resolveCredentials(auth)
-	if baseURL == "" || apiKey == "" {
-		return nil, statusErr{code: http.StatusUnauthorized, msg: "missing provider baseURL or apiKey"}
+	if baseURL == "" {
+		return nil, statusErr{code: http.StatusUnauthorized, msg: "missing provider baseURL"}
 	}
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	from := opts.SourceFormat
@@ -107,7 +109,9 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	httpReq.Header.Set("User-Agent", "cli-proxy-openai-compat")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Cache-Control", "no-cache")
@@ -171,8 +175,8 @@ func (e *OpenAICompatExecutor) resolveCredentials(auth *cliproxyauth.Auth) (base
 		return "", ""
 	}
 	if auth.Attributes != nil {
-		baseURL = auth.Attributes["base_url"]
-		apiKey = auth.Attributes["api_key"]
+		baseURL = strings.TrimSpace(auth.Attributes["base_url"])
+		apiKey = strings.TrimSpace(auth.Attributes["api_key"])
 	}
 	return
 }

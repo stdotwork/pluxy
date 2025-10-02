@@ -799,22 +799,22 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 			base := strings.TrimSpace(compat.BaseURL)
 
 			// Handle new APIKeyEntries format (preferred)
+			createdEntries := 0
 			if len(compat.APIKeyEntries) > 0 {
 				for j := range compat.APIKeyEntries {
 					entry := &compat.APIKeyEntries[j]
 					key := strings.TrimSpace(entry.APIKey)
-					if key == "" {
-						continue
-					}
 					proxyURL := strings.TrimSpace(entry.ProxyURL)
 					idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
 					id, token := idGen.next(idKind, key, base, proxyURL)
 					attrs := map[string]string{
 						"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
 						"base_url":     base,
-						"api_key":      key,
 						"compat_name":  compat.Name,
 						"provider_key": providerName,
+					}
+					if key != "" {
+						attrs["api_key"] = key
 					}
 					if hash := computeOpenAICompatModelsHash(compat.Models); hash != "" {
 						attrs["models_hash"] = hash
@@ -830,6 +830,7 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 						UpdatedAt:  now,
 					}
 					out = append(out, a)
+					createdEntries++
 				}
 			} else {
 				// Handle legacy APIKeys format for backward compatibility
@@ -843,10 +844,10 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 					attrs := map[string]string{
 						"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
 						"base_url":     base,
-						"api_key":      key,
 						"compat_name":  compat.Name,
 						"provider_key": providerName,
 					}
+					attrs["api_key"] = key
 					if hash := computeOpenAICompatModelsHash(compat.Models); hash != "" {
 						attrs["models_hash"] = hash
 					}
@@ -860,7 +861,31 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 						UpdatedAt:  now,
 					}
 					out = append(out, a)
+					createdEntries++
 				}
+			}
+			if createdEntries == 0 {
+				idKind := fmt.Sprintf("openai-compatibility:%s", providerName)
+				id, token := idGen.next(idKind, base)
+				attrs := map[string]string{
+					"source":       fmt.Sprintf("config:%s[%s]", providerName, token),
+					"base_url":     base,
+					"compat_name":  compat.Name,
+					"provider_key": providerName,
+				}
+				if hash := computeOpenAICompatModelsHash(compat.Models); hash != "" {
+					attrs["models_hash"] = hash
+				}
+				a := &coreauth.Auth{
+					ID:         id,
+					Provider:   providerName,
+					Label:      compat.Name,
+					Status:     coreauth.StatusActive,
+					Attributes: attrs,
+					CreatedAt:  now,
+					UpdatedAt:  now,
+				}
+				out = append(out, a)
 			}
 		}
 	}
