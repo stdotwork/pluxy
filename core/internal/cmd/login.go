@@ -409,8 +409,8 @@ func showProjectSelectionHelp(email string, projects []interfaces.GCPProjectProj
 func checkCloudAPIIsEnabled(ctx context.Context, httpClient *http.Client, projectID string) (bool, error) {
 	serviceUsageURL := "https://serviceusage.googleapis.com"
 	requiredServices := []string{
-		"geminicloudassist.googleapis.com", // Gemini Cloud Assist API
-		"cloudaicompanion.googleapis.com",  // Gemini for Google Cloud API
+		// "geminicloudassist.googleapis.com", // Gemini Cloud Assist API
+		"cloudaicompanion.googleapis.com", // Gemini for Google Cloud API
 	}
 	for _, service := range requiredServices {
 		checkUrl := fmt.Sprintf("%s/v1/projects/%s/services/%s", serviceUsageURL, projectID, service)
