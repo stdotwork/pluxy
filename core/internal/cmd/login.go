@@ -154,11 +154,14 @@ func performGeminiCLISetup(ctx context.Context, httpClient *http.Client, storage
 		"pluginType": "GEMINI",
 	}
 
+	trimmedRequest := strings.TrimSpace(requestedProject)
+	explicitProject := trimmedRequest != ""
+
 	loadReqBody := map[string]any{
 		"metadata": metadata,
 	}
-	if requestedProject != "" {
-		loadReqBody["cloudaicompanionProject"] = requestedProject
+	if explicitProject {
+		loadReqBody["cloudaicompanionProject"] = trimmedRequest
 	}
 
 	var loadResp map[string]any
@@ -182,10 +185,17 @@ func performGeminiCLISetup(ctx context.Context, httpClient *http.Client, storage
 		}
 	}
 
-	projectID := strings.TrimSpace(requestedProject)
+	projectID := trimmedRequest
 	if projectID == "" {
 		if id, okProject := loadResp["cloudaicompanionProject"].(string); okProject {
 			projectID = strings.TrimSpace(id)
+		}
+		if projectID == "" {
+			if projectMap, okProject := loadResp["cloudaicompanionProject"].(map[string]any); okProject {
+				if id, okID := projectMap["id"].(string); okID {
+					projectID = strings.TrimSpace(id)
+				}
+			}
 		}
 	}
 	if projectID == "" {
@@ -208,16 +218,30 @@ func performGeminiCLISetup(ctx context.Context, httpClient *http.Client, storage
 		}
 
 		if done, okDone := onboardResp["done"].(bool); okDone && done {
+			responseProjectID := ""
 			if resp, okResp := onboardResp["response"].(map[string]any); okResp {
-				if project, okProject := resp["cloudaicompanionProject"].(map[string]any); okProject {
-					if id, okID := project["id"].(string); okID && strings.TrimSpace(id) != "" {
-						storage.ProjectID = strings.TrimSpace(id)
+				switch projectValue := resp["cloudaicompanionProject"].(type) {
+				case map[string]any:
+					if id, okID := projectValue["id"].(string); okID {
+						responseProjectID = strings.TrimSpace(id)
 					}
+				case string:
+					responseProjectID = strings.TrimSpace(projectValue)
 				}
 			}
-			storage.ProjectID = strings.TrimSpace(storage.ProjectID)
+
+			finalProjectID := projectID
+			if responseProjectID != "" {
+				if explicitProject && !strings.EqualFold(responseProjectID, projectID) {
+					log.Warnf("Gemini onboarding returned project %s instead of requested %s; keeping requested project ID.", responseProjectID, projectID)
+				} else {
+					finalProjectID = responseProjectID
+				}
+			}
+
+			storage.ProjectID = strings.TrimSpace(finalProjectID)
 			if storage.ProjectID == "" {
-				storage.ProjectID = projectID
+				storage.ProjectID = strings.TrimSpace(projectID)
 			}
 			if storage.ProjectID == "" {
 				return fmt.Errorf("onboard user completed without project id")
