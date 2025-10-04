@@ -127,6 +127,8 @@ type Server struct {
 	// management handler
 	mgmt *managementHandlers.Handler
 
+	// managementRoutesRegistered tracks whether the management routes have been attached to the engine.
+	managementRoutesRegistered atomic.Bool
 	// managementRoutesEnabled controls whether management endpoints serve real handlers.
 	managementRoutesEnabled atomic.Bool
 
@@ -207,12 +209,17 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		s.mgmt.SetLocalPassword(optionState.localPassword)
 	}
 	s.localPassword = optionState.localPassword
-	s.managementRoutesEnabled.Store(cfg.RemoteManagement.SecretKey != "")
 
 	// Setup routes
 	s.setupRoutes()
 	if optionState.routerConfigurator != nil {
 		optionState.routerConfigurator(engine, s.handlers, cfg)
+	}
+
+	// Register management routes only when a secret is present at startup.
+	s.managementRoutesEnabled.Store(cfg.RemoteManagement.SecretKey != "")
+	if cfg.RemoteManagement.SecretKey != "" {
+		s.registerManagementRoutes()
 	}
 
 	if optionState.keepAliveEnabled {
@@ -313,7 +320,17 @@ func (s *Server) setupRoutes() {
 		c.String(http.StatusOK, "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>")
 	})
 
-	// Management API routes (delegated to management handlers)
+	// Management routes are registered lazily by registerManagementRoutes when a secret is configured.
+}
+
+func (s *Server) registerManagementRoutes() {
+	if s == nil || s.engine == nil || s.mgmt == nil {
+		return
+	}
+	if !s.managementRoutesRegistered.CompareAndSwap(false, true) {
+		return
+	}
+
 	mgmt := s.engine.Group("/v0/management")
 	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
 	{
@@ -394,14 +411,10 @@ func (s *Server) setupRoutes() {
 
 func (s *Server) managementAvailabilityMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		cfg := s.cfg
-		if cfg == nil || cfg.RemoteManagement.SecretKey == "" {
-			s.managementRoutesEnabled.Store(false)
+		if !s.managementRoutesEnabled.Load() {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
-
-		s.managementRoutesEnabled.Store(true)
 		c.Next()
 	}
 }
@@ -664,13 +677,20 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	newSecretEmpty := cfg.RemoteManagement.SecretKey == ""
 	switch {
 	case prevSecretEmpty && !newSecretEmpty:
+		s.registerManagementRoutes()
 		if s.managementRoutesEnabled.CompareAndSwap(false, true) {
 			log.Info("management routes enabled after secret key update")
+		} else {
+			s.managementRoutesEnabled.Store(true)
 		}
 	case !prevSecretEmpty && newSecretEmpty:
 		if s.managementRoutesEnabled.CompareAndSwap(true, false) {
 			log.Info("management routes disabled after secret key removal")
+		} else {
+			s.managementRoutesEnabled.Store(false)
 		}
+	default:
+		s.managementRoutesEnabled.Store(!newSecretEmpty)
 	}
 
 	s.applyAccessConfig(oldCfg, cfg)
