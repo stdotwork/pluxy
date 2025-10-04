@@ -430,8 +430,15 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 		}
 		fmt.Printf("config file changed, reloading: %s\n", w.configPath)
 		if w.reloadConfig() {
+			finalHash := newHash
+			if updatedData, errRead := os.ReadFile(w.configPath); errRead == nil && len(updatedData) > 0 {
+				sumUpdated := sha256.Sum256(updatedData)
+				finalHash = hex.EncodeToString(sumUpdated[:])
+			} else if errRead != nil {
+				log.WithError(errRead).Debug("failed to compute updated config hash after reload")
+			}
 			w.clientsMutex.Lock()
-			w.lastConfigHash = newHash
+			w.lastConfigHash = finalHash
 			w.clientsMutex.Unlock()
 		}
 		return
@@ -531,6 +538,21 @@ func (w *Watcher) reloadConfig() bool {
 		}
 		if oldConfig.RemoteManagement.AllowRemote != newConfig.RemoteManagement.AllowRemote {
 			log.Debugf("  remote-management.allow-remote: %t -> %t", oldConfig.RemoteManagement.AllowRemote, newConfig.RemoteManagement.AllowRemote)
+		}
+		if oldConfig.RemoteManagement.SecretKey != newConfig.RemoteManagement.SecretKey {
+			switch {
+			case oldConfig.RemoteManagement.SecretKey == "" && newConfig.RemoteManagement.SecretKey != "":
+				log.Debug("  remote-management.secret-key: created")
+			case oldConfig.RemoteManagement.SecretKey != "" && newConfig.RemoteManagement.SecretKey == "":
+				log.Debug("  remote-management.secret-key: deleted")
+			default:
+				log.Debug("  remote-management.secret-key: updated")
+			}
+			if newConfig.RemoteManagement.SecretKey == "" {
+				log.Info("management routes will be disabled after secret key removal")
+			} else {
+				log.Info("management routes will be enabled after secret key update")
+			}
 		}
 		if oldConfig.RemoteManagement.DisableControlPanel != newConfig.RemoteManagement.DisableControlPanel {
 			log.Debugf("  remote-management.disable-control-panel: %t -> %t", oldConfig.RemoteManagement.DisableControlPanel, newConfig.RemoteManagement.DisableControlPanel)
