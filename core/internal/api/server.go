@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -126,6 +127,9 @@ type Server struct {
 	// management handler
 	mgmt *managementHandlers.Handler
 
+	// managementRoutesEnabled controls whether management endpoints serve real handlers.
+	managementRoutesEnabled atomic.Bool
+
 	localPassword string
 
 	keepAliveEnabled   bool
@@ -203,6 +207,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		s.mgmt.SetLocalPassword(optionState.localPassword)
 	}
 	s.localPassword = optionState.localPassword
+	s.managementRoutesEnabled.Store(cfg.RemoteManagement.SecretKey != "")
 
 	// Setup routes
 	s.setupRoutes()
@@ -309,84 +314,91 @@ func (s *Server) setupRoutes() {
 	})
 
 	// Management API routes (delegated to management handlers)
-	// New logic: if remote-management-key is empty, do not expose any management endpoint (404).
-	if s.cfg.RemoteManagement.SecretKey != "" {
-		mgmt := s.engine.Group("/v0/management")
-		mgmt.Use(s.mgmt.Middleware())
-		{
-			mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
-			mgmt.GET("/config", s.mgmt.GetConfig)
+	mgmt := s.engine.Group("/v0/management")
+	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
+	{
+		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
+		mgmt.GET("/config", s.mgmt.GetConfig)
 
-			mgmt.GET("/debug", s.mgmt.GetDebug)
-			mgmt.PUT("/debug", s.mgmt.PutDebug)
-			mgmt.PATCH("/debug", s.mgmt.PutDebug)
+		mgmt.GET("/debug", s.mgmt.GetDebug)
+		mgmt.PUT("/debug", s.mgmt.PutDebug)
+		mgmt.PATCH("/debug", s.mgmt.PutDebug)
 
-			mgmt.GET("/logging-to-file", s.mgmt.GetLoggingToFile)
-			mgmt.PUT("/logging-to-file", s.mgmt.PutLoggingToFile)
-			mgmt.PATCH("/logging-to-file", s.mgmt.PutLoggingToFile)
+		mgmt.GET("/logging-to-file", s.mgmt.GetLoggingToFile)
+		mgmt.PUT("/logging-to-file", s.mgmt.PutLoggingToFile)
+		mgmt.PATCH("/logging-to-file", s.mgmt.PutLoggingToFile)
 
-			mgmt.GET("/usage-statistics-enabled", s.mgmt.GetUsageStatisticsEnabled)
-			mgmt.PUT("/usage-statistics-enabled", s.mgmt.PutUsageStatisticsEnabled)
-			mgmt.PATCH("/usage-statistics-enabled", s.mgmt.PutUsageStatisticsEnabled)
+		mgmt.GET("/usage-statistics-enabled", s.mgmt.GetUsageStatisticsEnabled)
+		mgmt.PUT("/usage-statistics-enabled", s.mgmt.PutUsageStatisticsEnabled)
+		mgmt.PATCH("/usage-statistics-enabled", s.mgmt.PutUsageStatisticsEnabled)
 
-			mgmt.GET("/proxy-url", s.mgmt.GetProxyURL)
-			mgmt.PUT("/proxy-url", s.mgmt.PutProxyURL)
-			mgmt.PATCH("/proxy-url", s.mgmt.PutProxyURL)
-			mgmt.DELETE("/proxy-url", s.mgmt.DeleteProxyURL)
+		mgmt.GET("/proxy-url", s.mgmt.GetProxyURL)
+		mgmt.PUT("/proxy-url", s.mgmt.PutProxyURL)
+		mgmt.PATCH("/proxy-url", s.mgmt.PutProxyURL)
+		mgmt.DELETE("/proxy-url", s.mgmt.DeleteProxyURL)
 
-			mgmt.GET("/quota-exceeded/switch-project", s.mgmt.GetSwitchProject)
-			mgmt.PUT("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
-			mgmt.PATCH("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
+		mgmt.GET("/quota-exceeded/switch-project", s.mgmt.GetSwitchProject)
+		mgmt.PUT("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
+		mgmt.PATCH("/quota-exceeded/switch-project", s.mgmt.PutSwitchProject)
 
-			mgmt.GET("/quota-exceeded/switch-preview-model", s.mgmt.GetSwitchPreviewModel)
-			mgmt.PUT("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
-			mgmt.PATCH("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
+		mgmt.GET("/quota-exceeded/switch-preview-model", s.mgmt.GetSwitchPreviewModel)
+		mgmt.PUT("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
+		mgmt.PATCH("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
 
-			mgmt.GET("/api-keys", s.mgmt.GetAPIKeys)
-			mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
-			mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
-			mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
+		mgmt.GET("/api-keys", s.mgmt.GetAPIKeys)
+		mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
+		mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
+		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
 
-			mgmt.GET("/generative-language-api-key", s.mgmt.GetGlKeys)
-			mgmt.PUT("/generative-language-api-key", s.mgmt.PutGlKeys)
-			mgmt.PATCH("/generative-language-api-key", s.mgmt.PatchGlKeys)
-			mgmt.DELETE("/generative-language-api-key", s.mgmt.DeleteGlKeys)
+		mgmt.GET("/generative-language-api-key", s.mgmt.GetGlKeys)
+		mgmt.PUT("/generative-language-api-key", s.mgmt.PutGlKeys)
+		mgmt.PATCH("/generative-language-api-key", s.mgmt.PatchGlKeys)
+		mgmt.DELETE("/generative-language-api-key", s.mgmt.DeleteGlKeys)
 
-			mgmt.GET("/request-log", s.mgmt.GetRequestLog)
-			mgmt.PUT("/request-log", s.mgmt.PutRequestLog)
-			mgmt.PATCH("/request-log", s.mgmt.PutRequestLog)
+		mgmt.GET("/request-log", s.mgmt.GetRequestLog)
+		mgmt.PUT("/request-log", s.mgmt.PutRequestLog)
+		mgmt.PATCH("/request-log", s.mgmt.PutRequestLog)
 
-			mgmt.GET("/request-retry", s.mgmt.GetRequestRetry)
-			mgmt.PUT("/request-retry", s.mgmt.PutRequestRetry)
-			mgmt.PATCH("/request-retry", s.mgmt.PutRequestRetry)
+		mgmt.GET("/request-retry", s.mgmt.GetRequestRetry)
+		mgmt.PUT("/request-retry", s.mgmt.PutRequestRetry)
+		mgmt.PATCH("/request-retry", s.mgmt.PutRequestRetry)
 
-			mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
-			mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
-			mgmt.PATCH("/claude-api-key", s.mgmt.PatchClaudeKey)
-			mgmt.DELETE("/claude-api-key", s.mgmt.DeleteClaudeKey)
+		mgmt.GET("/claude-api-key", s.mgmt.GetClaudeKeys)
+		mgmt.PUT("/claude-api-key", s.mgmt.PutClaudeKeys)
+		mgmt.PATCH("/claude-api-key", s.mgmt.PatchClaudeKey)
+		mgmt.DELETE("/claude-api-key", s.mgmt.DeleteClaudeKey)
 
-			mgmt.GET("/codex-api-key", s.mgmt.GetCodexKeys)
-			mgmt.PUT("/codex-api-key", s.mgmt.PutCodexKeys)
-			mgmt.PATCH("/codex-api-key", s.mgmt.PatchCodexKey)
-			mgmt.DELETE("/codex-api-key", s.mgmt.DeleteCodexKey)
+		mgmt.GET("/codex-api-key", s.mgmt.GetCodexKeys)
+		mgmt.PUT("/codex-api-key", s.mgmt.PutCodexKeys)
+		mgmt.PATCH("/codex-api-key", s.mgmt.PatchCodexKey)
+		mgmt.DELETE("/codex-api-key", s.mgmt.DeleteCodexKey)
 
-			mgmt.GET("/openai-compatibility", s.mgmt.GetOpenAICompat)
-			mgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
-			mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
-			mgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
+		mgmt.GET("/openai-compatibility", s.mgmt.GetOpenAICompat)
+		mgmt.PUT("/openai-compatibility", s.mgmt.PutOpenAICompat)
+		mgmt.PATCH("/openai-compatibility", s.mgmt.PatchOpenAICompat)
+		mgmt.DELETE("/openai-compatibility", s.mgmt.DeleteOpenAICompat)
 
-			mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
-			mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
-			mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
-			mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
+		mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
+		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
+		mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
+		mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
 
-			mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
-			mgmt.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
-			mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
-			mgmt.POST("/gemini-web-token", s.mgmt.CreateGeminiWebToken)
-			mgmt.GET("/qwen-auth-url", s.mgmt.RequestQwenToken)
-			mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
+		mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
+		mgmt.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
+		mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
+		mgmt.POST("/gemini-web-token", s.mgmt.CreateGeminiWebToken)
+		mgmt.GET("/qwen-auth-url", s.mgmt.RequestQwenToken)
+		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
+	}
+}
+
+func (s *Server) managementAvailabilityMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !s.managementRoutesEnabled.Load() {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
 		}
+		c.Next()
 	}
 }
 
@@ -638,6 +650,22 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 			log.Debugf("debug mode updated from %t to %t", oldCfg.Debug, cfg.Debug)
 		} else {
 			log.Debugf("debug mode toggled to %t", cfg.Debug)
+		}
+	}
+
+	prevSecretEmpty := true
+	if oldCfg != nil {
+		prevSecretEmpty = oldCfg.RemoteManagement.SecretKey == ""
+	}
+	newSecretEmpty := cfg.RemoteManagement.SecretKey == ""
+	switch {
+	case prevSecretEmpty && !newSecretEmpty:
+		if s.managementRoutesEnabled.CompareAndSwap(false, true) {
+			log.Info("management routes enabled after secret key update")
+		}
+	case !prevSecretEmpty && newSecretEmpty:
+		if s.managementRoutesEnabled.CompareAndSwap(true, false) {
+			log.Info("management routes disabled after secret key removal")
 		}
 	}
 
