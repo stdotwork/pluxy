@@ -533,7 +533,12 @@ func (w *Watcher) reloadConfig() bool {
 			log.Debugf("  remote-management.allow-remote: %t -> %t", oldConfig.RemoteManagement.AllowRemote, newConfig.RemoteManagement.AllowRemote)
 		}
 		if oldConfig.RemoteManagement.SecretKey != newConfig.RemoteManagement.SecretKey {
-			log.Debug("  remote-management.secret-key: updated (value hidden)")
+			log.Debug("  remote-management.secret-key: updated")
+			if newConfig.RemoteManagement.SecretKey == "" {
+				log.Info("management routes will be disabled after secret key removal")
+			} else {
+				log.Info("management routes will be enabled after secret key update")
+			}
 		}
 		if oldConfig.RemoteManagement.DisableControlPanel != newConfig.RemoteManagement.DisableControlPanel {
 			log.Debugf("  remote-management.disable-control-panel: %t -> %t", oldConfig.RemoteManagement.DisableControlPanel, newConfig.RemoteManagement.DisableControlPanel)

@@ -331,6 +331,8 @@ func (s *Server) registerManagementRoutes() {
 		return
 	}
 
+	log.Info("management routes registered after secret key configuration")
+
 	mgmt := s.engine.Group("/v0/management")
 	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
 	{
