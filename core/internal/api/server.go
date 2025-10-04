@@ -394,10 +394,14 @@ func (s *Server) setupRoutes() {
 
 func (s *Server) managementAvailabilityMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !s.managementRoutesEnabled.Load() {
+		cfg := s.cfg
+		if cfg == nil || cfg.RemoteManagement.SecretKey == "" {
+			s.managementRoutesEnabled.Store(false)
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
+
+		s.managementRoutesEnabled.Store(true)
 		c.Next()
 	}
 }
