@@ -35,7 +35,7 @@ const DefaultAPIBaseURL = "https://apis.iflow.cn/v1"
 const SuccessRedirectURL = iFlowSuccessRedirectURL
 
 // CallbackPort defines the local port used for OAuth callbacks.
-const CallbackPort = 54546
+const CallbackPort = 11451
 
 // IFlowAuth encapsulates the HTTP client helpers for the OAuth flow.
 type IFlowAuth struct {
