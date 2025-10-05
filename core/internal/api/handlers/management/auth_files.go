@@ -1,6 +1,7 @@
 package management
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -25,6 +26,7 @@ import (
 	iflowauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/iflow"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
 	// legacy client removed
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
@@ -42,9 +44,14 @@ var (
 var lastRefreshKeys = []string{"last_refresh", "lastRefresh", "last_refreshed_at", "lastRefreshedAt"}
 
 const (
-	anthropicCallbackPort = 54545
-	geminiCallbackPort    = 8085
-	codexCallbackPort     = 1455
+	anthropicCallbackPort   = 54545
+	geminiCallbackPort      = 8085
+	codexCallbackPort       = 1455
+	geminiCLIEndpoint       = "https://cloudcode-pa.googleapis.com"
+	geminiCLIVersion        = "v1internal"
+	geminiCLIUserAgent      = "google-api-nodejs-client/9.15.1"
+	geminiCLIApiClient      = "gl-node/22.17.0"
+	geminiCLIClientMetadata = "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI"
 )
 
 type callbackForwarder struct {
@@ -764,6 +771,8 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 			return
 		}
 
+		requestedProjectID := strings.TrimSpace(projectID)
+
 		// Create token storage (mirrors internal/auth/gemini createTokenStorage)
 		httpClient := conf.Client(ctx, token)
 		req, errNewRequest := http.NewRequestWithContext(ctx, "GET", "https://www.googleapis.com/oauth2/v1/userinfo?alt=json", nil)
@@ -823,13 +832,14 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 
 		ts := geminiAuth.GeminiTokenStorage{
 			Token:     ifToken,
-			ProjectID: projectID,
+			ProjectID: requestedProjectID,
 			Email:     email,
+			Auto:      requestedProjectID == "",
 		}
 
 		// Initialize authenticated HTTP client via GeminiAuth to honor proxy settings
 		gemAuth := geminiAuth.NewGeminiAuth()
-		_, errGetClient := gemAuth.GetAuthenticatedClient(ctx, &ts, h.cfg, true)
+		gemClient, errGetClient := gemAuth.GetAuthenticatedClient(ctx, &ts, h.cfg, true)
 		if errGetClient != nil {
 			log.Fatalf("failed to get authenticated client: %v", errGetClient)
 			oauthStatus[state] = "Failed to get authenticated client"
@@ -837,15 +847,44 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 		}
 		fmt.Println("Authentication successful.")
 
+		if errEnsure := ensureGeminiProjectAndOnboard(ctx, gemClient, &ts, requestedProjectID); errEnsure != nil {
+			log.Errorf("Failed to complete Gemini CLI onboarding: %v", errEnsure)
+			oauthStatus[state] = "Failed to complete Gemini CLI onboarding"
+			return
+		}
+
+		if strings.TrimSpace(ts.ProjectID) == "" {
+			log.Error("Onboarding did not return a project ID")
+			oauthStatus[state] = "Failed to resolve project ID"
+			return
+		}
+
+		isChecked, errCheck := checkCloudAPIIsEnabled(ctx, gemClient, ts.ProjectID)
+		if errCheck != nil {
+			log.Errorf("Failed to verify Cloud AI API status: %v", errCheck)
+			oauthStatus[state] = "Failed to verify Cloud AI API status"
+			return
+		}
+		ts.Checked = isChecked
+		if !isChecked {
+			log.Error("Cloud AI API is not enabled for the selected project")
+			oauthStatus[state] = "Cloud AI API not enabled"
+			return
+		}
+
+		recordMetadata := map[string]any{
+			"email":      ts.Email,
+			"project_id": ts.ProjectID,
+			"auto":       ts.Auto,
+			"checked":    ts.Checked,
+		}
+
 		record := &coreauth.Auth{
-			ID:       fmt.Sprintf("gemini-%s.json", ts.Email),
+			ID:       fmt.Sprintf("gemini-%s-%s.json", ts.Email, ts.ProjectID),
 			Provider: "gemini",
-			FileName: fmt.Sprintf("gemini-%s.json", ts.Email),
+			FileName: fmt.Sprintf("gemini-%s-%s.json", ts.Email, ts.ProjectID),
 			Storage:  &ts,
-			Metadata: map[string]any{
-				"email":      ts.Email,
-				"project_id": ts.ProjectID,
-			},
+			Metadata: recordMetadata,
 		}
 		savedPath, errSave := h.saveTokenRecord(ctx, record)
 		if errSave != nil {
@@ -1329,6 +1368,292 @@ func (h *Handler) RequestIFlowToken(c *gin.Context) {
 
 	oauthStatus[state] = ""
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
+}
+
+type projectSelectionRequiredError struct{}
+
+func (e *projectSelectionRequiredError) Error() string {
+	return "gemini cli: project selection required"
+}
+
+func ensureGeminiProjectAndOnboard(ctx context.Context, httpClient *http.Client, storage *geminiAuth.GeminiTokenStorage, requestedProject string) error {
+	if storage == nil {
+		return fmt.Errorf("gemini storage is nil")
+	}
+
+	trimmedRequest := strings.TrimSpace(requestedProject)
+	if trimmedRequest == "" {
+		projects, errProjects := fetchGCPProjects(ctx, httpClient)
+		if errProjects != nil {
+			return fmt.Errorf("fetch project list: %w", errProjects)
+		}
+		if len(projects) == 0 {
+			return fmt.Errorf("no Google Cloud projects available for this account")
+		}
+		trimmedRequest = strings.TrimSpace(projects[0].ProjectID)
+		if trimmedRequest == "" {
+			return fmt.Errorf("resolved project id is empty")
+		}
+		storage.Auto = true
+	} else {
+		storage.Auto = false
+	}
+
+	if err := performGeminiCLISetup(ctx, httpClient, storage, trimmedRequest); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(storage.ProjectID) == "" {
+		storage.ProjectID = trimmedRequest
+	}
+
+	return nil
+}
+
+func performGeminiCLISetup(ctx context.Context, httpClient *http.Client, storage *geminiAuth.GeminiTokenStorage, requestedProject string) error {
+	metadata := map[string]string{
+		"ideType":    "IDE_UNSPECIFIED",
+		"platform":   "PLATFORM_UNSPECIFIED",
+		"pluginType": "GEMINI",
+	}
+
+	trimmedRequest := strings.TrimSpace(requestedProject)
+	explicitProject := trimmedRequest != ""
+
+	loadReqBody := map[string]any{
+		"metadata": metadata,
+	}
+	if explicitProject {
+		loadReqBody["cloudaicompanionProject"] = trimmedRequest
+	}
+
+	var loadResp map[string]any
+	if errLoad := callGeminiCLI(ctx, httpClient, "loadCodeAssist", loadReqBody, &loadResp); errLoad != nil {
+		return fmt.Errorf("load code assist: %w", errLoad)
+	}
+
+	tierID := "legacy-tier"
+	if tiers, okTiers := loadResp["allowedTiers"].([]any); okTiers {
+		for _, rawTier := range tiers {
+			tier, okTier := rawTier.(map[string]any)
+			if !okTier {
+				continue
+			}
+			if isDefault, okDefault := tier["isDefault"].(bool); okDefault && isDefault {
+				if id, okID := tier["id"].(string); okID && strings.TrimSpace(id) != "" {
+					tierID = strings.TrimSpace(id)
+					break
+				}
+			}
+		}
+	}
+
+	projectID := trimmedRequest
+	if projectID == "" {
+		if id, okProject := loadResp["cloudaicompanionProject"].(string); okProject {
+			projectID = strings.TrimSpace(id)
+		}
+		if projectID == "" {
+			if projectMap, okProject := loadResp["cloudaicompanionProject"].(map[string]any); okProject {
+				if id, okID := projectMap["id"].(string); okID {
+					projectID = strings.TrimSpace(id)
+				}
+			}
+		}
+	}
+	if projectID == "" {
+		return &projectSelectionRequiredError{}
+	}
+
+	onboardReqBody := map[string]any{
+		"tierId":                  tierID,
+		"metadata":                metadata,
+		"cloudaicompanionProject": projectID,
+	}
+
+	storage.ProjectID = projectID
+
+	for {
+		var onboardResp map[string]any
+		if errOnboard := callGeminiCLI(ctx, httpClient, "onboardUser", onboardReqBody, &onboardResp); errOnboard != nil {
+			return fmt.Errorf("onboard user: %w", errOnboard)
+		}
+
+		if done, okDone := onboardResp["done"].(bool); okDone && done {
+			responseProjectID := ""
+			if resp, okResp := onboardResp["response"].(map[string]any); okResp {
+				switch projectValue := resp["cloudaicompanionProject"].(type) {
+				case map[string]any:
+					if id, okID := projectValue["id"].(string); okID {
+						responseProjectID = strings.TrimSpace(id)
+					}
+				case string:
+					responseProjectID = strings.TrimSpace(projectValue)
+				}
+			}
+
+			finalProjectID := projectID
+			if responseProjectID != "" {
+				if explicitProject && !strings.EqualFold(responseProjectID, projectID) {
+					log.Warnf("Gemini onboarding returned project %s instead of requested %s; keeping requested project ID.", responseProjectID, projectID)
+				} else {
+					finalProjectID = responseProjectID
+				}
+			}
+
+			storage.ProjectID = strings.TrimSpace(finalProjectID)
+			if storage.ProjectID == "" {
+				storage.ProjectID = strings.TrimSpace(projectID)
+			}
+			if storage.ProjectID == "" {
+				return fmt.Errorf("onboard user completed without project id")
+			}
+			log.Infof("Onboarding complete. Using Project ID: %s", storage.ProjectID)
+			return nil
+		}
+
+		log.Println("Onboarding in progress, waiting 5 seconds...")
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func callGeminiCLI(ctx context.Context, httpClient *http.Client, endpoint string, body any, result any) error {
+	endPointURL := fmt.Sprintf("%s/%s:%s", geminiCLIEndpoint, geminiCLIVersion, endpoint)
+	if strings.HasPrefix(endpoint, "operations/") {
+		endPointURL = fmt.Sprintf("%s/%s", geminiCLIEndpoint, endpoint)
+	}
+
+	var reader io.Reader
+	if body != nil {
+		rawBody, errMarshal := json.Marshal(body)
+		if errMarshal != nil {
+			return fmt.Errorf("marshal request body: %w", errMarshal)
+		}
+		reader = bytes.NewReader(rawBody)
+	}
+
+	req, errRequest := http.NewRequestWithContext(ctx, http.MethodPost, endPointURL, reader)
+	if errRequest != nil {
+		return fmt.Errorf("create request: %w", errRequest)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", geminiCLIUserAgent)
+	req.Header.Set("X-Goog-Api-Client", geminiCLIApiClient)
+	req.Header.Set("Client-Metadata", geminiCLIClientMetadata)
+
+	resp, errDo := httpClient.Do(req)
+	if errDo != nil {
+		return fmt.Errorf("execute request: %w", errDo)
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("response body close error: %v", errClose)
+		}
+	}()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("api request failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	if result == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+
+	if errDecode := json.NewDecoder(resp.Body).Decode(result); errDecode != nil {
+		return fmt.Errorf("decode response body: %w", errDecode)
+	}
+
+	return nil
+}
+
+func fetchGCPProjects(ctx context.Context, httpClient *http.Client) ([]interfaces.GCPProjectProjects, error) {
+	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, "https://cloudresourcemanager.googleapis.com/v1/projects", nil)
+	if errRequest != nil {
+		return nil, fmt.Errorf("could not create project list request: %w", errRequest)
+	}
+
+	resp, errDo := httpClient.Do(req)
+	if errDo != nil {
+		return nil, fmt.Errorf("failed to execute project list request: %w", errDo)
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("response body close error: %v", errClose)
+		}
+	}()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("project list request failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	var projects interfaces.GCPProject
+	if errDecode := json.NewDecoder(resp.Body).Decode(&projects); errDecode != nil {
+		return nil, fmt.Errorf("failed to unmarshal project list: %w", errDecode)
+	}
+
+	return projects.Projects, nil
+}
+
+func checkCloudAPIIsEnabled(ctx context.Context, httpClient *http.Client, projectID string) (bool, error) {
+	serviceUsageURL := "https://serviceusage.googleapis.com"
+	requiredServices := []string{
+		"cloudaicompanion.googleapis.com",
+	}
+	for _, service := range requiredServices {
+		checkURL := fmt.Sprintf("%s/v1/projects/%s/services/%s", serviceUsageURL, projectID, service)
+		req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
+		if errRequest != nil {
+			return false, fmt.Errorf("failed to create request: %w", errRequest)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", geminiCLIUserAgent)
+		resp, errDo := httpClient.Do(req)
+		if errDo != nil {
+			return false, fmt.Errorf("failed to execute request: %w", errDo)
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			if gjson.GetBytes(bodyBytes, "state").String() == "ENABLED" {
+				_ = resp.Body.Close()
+				continue
+			}
+		}
+		_ = resp.Body.Close()
+
+		enableURL := fmt.Sprintf("%s/v1/projects/%s/services/%s:enable", serviceUsageURL, projectID, service)
+		req, errRequest = http.NewRequestWithContext(ctx, http.MethodPost, enableURL, strings.NewReader("{}"))
+		if errRequest != nil {
+			return false, fmt.Errorf("failed to create request: %w", errRequest)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", geminiCLIUserAgent)
+		resp, errDo = httpClient.Do(req)
+		if errDo != nil {
+			return false, fmt.Errorf("failed to execute request: %w", errDo)
+		}
+
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		errMessage := string(bodyBytes)
+		errMessageResult := gjson.GetBytes(bodyBytes, "error.message")
+		if errMessageResult.Exists() {
+			errMessage = errMessageResult.String()
+		}
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+			_ = resp.Body.Close()
+			continue
+		} else if resp.StatusCode == http.StatusBadRequest {
+			_ = resp.Body.Close()
+			if strings.Contains(strings.ToLower(errMessage), "already enabled") {
+				continue
+			}
+		}
+		return false, fmt.Errorf("project activation required: %s", errMessage)
+	}
+	return true, nil
 }
 
 func (h *Handler) GetAuthStatus(c *gin.Context) {

@@ -34,6 +34,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const oauthCallbackSuccessHTML = `<html><head><meta charset="utf-8"><title>Authentication successful</title><script>setTimeout(function(){window.close();},5000);</script></head><body><h1>Authentication successful!</h1><p>You can close this window.</p><p>This window will close automatically in 5 seconds.</p></body></html>`
+
 type serverOptionConfig struct {
 	extraMiddleware      []gin.HandlerFunc
 	engineConfigurator   func(*gin.Engine)
@@ -293,7 +295,7 @@ func (s *Server) setupRoutes() {
 			_ = os.WriteFile(file, []byte(fmt.Sprintf(`{"code":"%s","state":"%s","error":"%s"}`, code, state, errStr)), 0o600)
 		}
 		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(http.StatusOK, "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>")
+		c.String(http.StatusOK, oauthCallbackSuccessHTML)
 	})
 
 	s.engine.GET("/codex/callback", func(c *gin.Context) {
@@ -305,7 +307,7 @@ func (s *Server) setupRoutes() {
 			_ = os.WriteFile(file, []byte(fmt.Sprintf(`{"code":"%s","state":"%s","error":"%s"}`, code, state, errStr)), 0o600)
 		}
 		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(http.StatusOK, "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>")
+		c.String(http.StatusOK, oauthCallbackSuccessHTML)
 	})
 
 	s.engine.GET("/google/callback", func(c *gin.Context) {
@@ -317,7 +319,7 @@ func (s *Server) setupRoutes() {
 			_ = os.WriteFile(file, []byte(fmt.Sprintf(`{"code":"%s","state":"%s","error":"%s"}`, code, state, errStr)), 0o600)
 		}
 		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(http.StatusOK, "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>")
+		c.String(http.StatusOK, oauthCallbackSuccessHTML)
 	})
 
 	s.engine.GET("/iflow/callback", func(c *gin.Context) {
@@ -329,7 +331,7 @@ func (s *Server) setupRoutes() {
 			_ = os.WriteFile(file, []byte(fmt.Sprintf(`{"code":"%s","state":"%s","error":"%s"}`, code, state, errStr)), 0o600)
 		}
 		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(http.StatusOK, "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>")
+		c.String(http.StatusOK, oauthCallbackSuccessHTML)
 	})
 
 	// Management routes are registered lazily by registerManagementRoutes when a secret is configured.
