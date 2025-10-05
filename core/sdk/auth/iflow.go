@@ -102,31 +102,14 @@ func (a *IFlowAuthenticator) Login(ctx context.Context, cfg *config.Config, opts
 
 	tokenStorage := authSvc.CreateTokenStorage(tokenData)
 
-	email := ""
-	if opts.Metadata != nil {
-		email = opts.Metadata["email"]
-		if email == "" {
-			email = opts.Metadata["alias"]
-		}
-	}
-
-	if email == "" && opts.Prompt != nil {
-		email, err = opts.Prompt("Please input your email address or alias for iFlow:")
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	email = strings.TrimSpace(email)
+	email := strings.TrimSpace(tokenStorage.Email)
 	if email == "" {
-		return nil, &EmailRequiredError{Prompt: "Please provide an email address or alias for iFlow."}
+		return nil, fmt.Errorf("iflow authentication failed: missing account identifier")
 	}
 
-	tokenStorage.Email = email
-
-	fileName := fmt.Sprintf("iflow-%s.json", tokenStorage.Email)
+	fileName := fmt.Sprintf("iflow-%s.json", email)
 	metadata := map[string]any{
-		"email":         tokenStorage.Email,
+		"email":         email,
 		"api_key":       tokenStorage.APIKey,
 		"access_token":  tokenStorage.AccessToken,
 		"refresh_token": tokenStorage.RefreshToken,

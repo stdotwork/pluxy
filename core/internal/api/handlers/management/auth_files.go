@@ -1013,13 +1013,17 @@ func (h *Handler) RequestIFlowToken(c *gin.Context) {
 		}
 
 		tokenStorage := authSvc.CreateTokenStorage(tokenData)
-		tokenStorage.Email = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
+		identifier := strings.TrimSpace(tokenStorage.Email)
+		if identifier == "" {
+			identifier = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
+			tokenStorage.Email = identifier
+		}
 		record := &coreauth.Auth{
-			ID:         fmt.Sprintf("iflow-%s.json", tokenStorage.Email),
+			ID:         fmt.Sprintf("iflow-%s.json", identifier),
 			Provider:   "iflow",
-			FileName:   fmt.Sprintf("iflow-%s.json", tokenStorage.Email),
+			FileName:   fmt.Sprintf("iflow-%s.json", identifier),
 			Storage:    tokenStorage,
-			Metadata:   map[string]any{"email": tokenStorage.Email, "api_key": tokenStorage.APIKey},
+			Metadata:   map[string]any{"email": identifier, "api_key": tokenStorage.APIKey},
 			Attributes: map[string]string{"api_key": tokenStorage.APIKey},
 		}
 

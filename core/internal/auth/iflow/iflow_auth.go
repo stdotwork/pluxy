@@ -141,61 +141,69 @@ func (ia *IFlowAuth) doTokenRequest(ctx context.Context, req *http.Request) (*IF
 		return nil, fmt.Errorf("iflow token: missing access token in response")
 	}
 
-	apiKey, errAPI := ia.FetchAPIKey(ctx, tokenResp.AccessToken)
+	info, errAPI := ia.FetchUserInfo(ctx, tokenResp.AccessToken)
 	if errAPI != nil {
-		return nil, fmt.Errorf("iflow token: fetch api key failed: %w", errAPI)
+		return nil, fmt.Errorf("iflow token: fetch user info failed: %w", errAPI)
 	}
-	if strings.TrimSpace(apiKey) == "" {
+	if strings.TrimSpace(info.APIKey) == "" {
 		return nil, fmt.Errorf("iflow token: empty api key returned")
 	}
-	data.APIKey = apiKey
+	email := strings.TrimSpace(info.Email)
+	if email == "" {
+		email = strings.TrimSpace(info.Phone)
+	}
+	if email == "" {
+		return nil, fmt.Errorf("iflow token: missing account email/phone in user info")
+	}
+	data.APIKey = info.APIKey
+	data.Email = email
 
 	return data, nil
 }
 
-// FetchAPIKey retrieves the account API key associated with the provided access token.
-func (ia *IFlowAuth) FetchAPIKey(ctx context.Context, accessToken string) (string, error) {
+// FetchUserInfo retrieves account metadata (including API key) for the provided access token.
+func (ia *IFlowAuth) FetchUserInfo(ctx context.Context, accessToken string) (*userInfoData, error) {
 	if strings.TrimSpace(accessToken) == "" {
-		return "", fmt.Errorf("iflow api key: access token is empty")
+		return nil, fmt.Errorf("iflow api key: access token is empty")
 	}
 
 	endpoint := fmt.Sprintf("%s?accessToken=%s", iFlowUserInfoEndpoint, url.QueryEscape(accessToken))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", fmt.Errorf("iflow api key: create request failed: %w", err)
+		return nil, fmt.Errorf("iflow api key: create request failed: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := ia.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("iflow api key: request failed: %w", err)
+		return nil, fmt.Errorf("iflow api key: request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("iflow api key: read response failed: %w", err)
+		return nil, fmt.Errorf("iflow api key: read response failed: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		log.Debugf("iflow api key failed: status=%d body=%s", resp.StatusCode, string(body))
-		return "", fmt.Errorf("iflow api key: %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("iflow api key: %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var result userInfoResponse
 	if err = json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("iflow api key: decode body failed: %w", err)
+		return nil, fmt.Errorf("iflow api key: decode body failed: %w", err)
 	}
 
 	if !result.Success {
-		return "", fmt.Errorf("iflow api key: request not successful")
+		return nil, fmt.Errorf("iflow api key: request not successful")
 	}
 
 	if result.Data.APIKey == "" {
-		return "", fmt.Errorf("iflow api key: missing api key in response")
+		return nil, fmt.Errorf("iflow api key: missing api key in response")
 	}
 
-	return result.Data.APIKey, nil
+	return &result.Data, nil
 }
 
 // CreateTokenStorage converts token data into persistence storage.
@@ -209,6 +217,7 @@ func (ia *IFlowAuth) CreateTokenStorage(data *IFlowTokenData) *IFlowTokenStorage
 		LastRefresh:  time.Now().Format(time.RFC3339),
 		Expire:       data.Expire,
 		APIKey:       data.APIKey,
+		Email:        data.Email,
 		TokenType:    data.TokenType,
 		Scope:        data.Scope,
 	}
@@ -225,6 +234,9 @@ func (ia *IFlowAuth) UpdateTokenStorage(storage *IFlowTokenStorage, data *IFlowT
 	storage.Expire = data.Expire
 	if data.APIKey != "" {
 		storage.APIKey = data.APIKey
+	}
+	if data.Email != "" {
+		storage.Email = data.Email
 	}
 	storage.TokenType = data.TokenType
 	storage.Scope = data.Scope
@@ -247,13 +259,17 @@ type IFlowTokenData struct {
 	Scope        string
 	Expire       string
 	APIKey       string
+	Email        string
 }
 
 // userInfoResponse represents the structure returned by the user info endpoint.
 type userInfoResponse struct {
-	Success bool `json:"success"`
-	Data    struct {
-		APIKey string `json:"apiKey"`
-		Email  string `json:"email"`
-	} `json:"data"`
+	Success bool         `json:"success"`
+	Data    userInfoData `json:"data"`
+}
+
+type userInfoData struct {
+	APIKey string `json:"apiKey"`
+	Email  string `json:"email"`
+	Phone  string `json:"phone"`
 }
