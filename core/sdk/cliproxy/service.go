@@ -232,8 +232,38 @@ func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
 	}
 }
 
+func openAICompatInfoFromAuth(a *coreauth.Auth) (providerKey string, compatName string, ok bool) {
+	if a == nil {
+		return "", "", false
+	}
+	if len(a.Attributes) > 0 {
+		providerKey = strings.TrimSpace(a.Attributes["provider_key"])
+		compatName = strings.TrimSpace(a.Attributes["compat_name"])
+		if providerKey != "" || compatName != "" {
+			if providerKey == "" {
+				providerKey = compatName
+			}
+			return strings.ToLower(providerKey), compatName, true
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(a.Provider), "openai-compatibility") {
+		return "openai-compatibility", strings.TrimSpace(a.Label), true
+	}
+	return "", "", false
+}
+
 func (s *Service) ensureExecutorsForAuth(a *coreauth.Auth) {
 	if s == nil || a == nil {
+		return
+	}
+	if compatProviderKey, _, isCompat := openAICompatInfoFromAuth(a); isCompat {
+		if compatProviderKey == "" {
+			compatProviderKey = strings.ToLower(strings.TrimSpace(a.Provider))
+		}
+		if compatProviderKey == "" {
+			compatProviderKey = "openai-compatibility"
+		}
+		s.coreManager.RegisterExecutor(executor.NewOpenAICompatExecutor(compatProviderKey, s.cfg))
 		return
 	}
 	switch strings.ToLower(a.Provider) {
@@ -484,6 +514,10 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		}
 	}
 	provider := strings.ToLower(strings.TrimSpace(a.Provider))
+	compatProviderKey, compatDisplayName, compatDetected := openAICompatInfoFromAuth(a)
+	if compatDetected {
+		provider = "openai-compatibility"
+	}
 	var models []*ModelInfo
 	switch provider {
 	case "gemini":
@@ -506,6 +540,15 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 			providerKey := provider
 			compatName := strings.TrimSpace(a.Provider)
 			isCompatAuth := false
+			if compatDetected {
+				if compatProviderKey != "" {
+					providerKey = compatProviderKey
+				}
+				if compatDisplayName != "" {
+					compatName = compatDisplayName
+				}
+				isCompatAuth = true
+			}
 			if strings.EqualFold(providerKey, "openai-compatibility") {
 				isCompatAuth = true
 				if a.Attributes != nil {
