@@ -3,10 +3,7 @@
 // when registering their supported models.
 package registry
 
-import (
-	"strings"
-	"time"
-)
+import "time"
 
 // GetClaudeModels returns the standard Claude model definitions
 func GetClaudeModels() []*ModelInfo {
@@ -327,36 +324,42 @@ func GetQwenModels() []*ModelInfo {
 }
 
 // GetIFlowModels returns supported models for iFlow OAuth accounts.
+
 func GetIFlowModels() []*ModelInfo {
 	created := time.Now().Unix()
-	entries := []string{
-		"tstars2.0",
-		"qwen3-coder-plus",
-		"qwen3-coder",
-		"qwen3-max",
-		"qwen3-vl-plus",
-		"qwen3-max-preview",
-		"kimi-k2-0905",
-		"glm-4.5",
-		"kimi-k2",
-		"deepseek-v3.2",
-		"deepseek-v3.1",
-		"deepseek-r1",
-		"deepseek-v3",
-		"qwen3-32b",
-		"qwen3-235b-a22b-thinking-2507",
-		"qwen3-235b-a22b-instruct",
-		"qwen3-235b",
+	entries := []struct {
+		ID          string
+		DisplayName string
+		Description string
+	}{
+		{ID: "tstars2.0", DisplayName: "TStars-2.0", Description: "iFlow TStars-2.0 multimodal assistant"},
+		{ID: "qwen3-coder-plus", DisplayName: "Qwen3-Coder-Plus", Description: "Qwen3 Coder Plus code generation"},
+		{ID: "qwen3-coder", DisplayName: "Qwen3-Coder-480B-A35B", Description: "Qwen3 Coder 480B A35B"},
+		{ID: "qwen3-max", DisplayName: "Qwen3-Max", Description: "Qwen3 flagship model"},
+		{ID: "qwen3-vl-plus", DisplayName: "Qwen3-VL-Plus", Description: "Qwen3 multimodal vision-language"},
+		{ID: "qwen3-max-preview", DisplayName: "Qwen3-Max-Preview", Description: "Qwen3 Max preview build"},
+		{ID: "kimi-k2-0905", DisplayName: "Kimi-K2-Instruct-0905", Description: "Moonshot Kimi K2 instruct 0905"},
+		{ID: "glm-4.5", DisplayName: "GLM-4.5", Description: "Zhipu GLM 4.5 general model"},
+		{ID: "kimi-k2", DisplayName: "Kimi-K2", Description: "Moonshot Kimi K2 general model"},
+		{ID: "deepseek-v3.2", DisplayName: "DeepSeek-V3.2-Exp", Description: "DeepSeek V3.2 experimental"},
+		{ID: "deepseek-v3.1", DisplayName: "DeepSeek-V3.1-Terminus", Description: "DeepSeek V3.1 Terminus"},
+		{ID: "deepseek-r1", DisplayName: "DeepSeek-R1", Description: "DeepSeek reasoning model R1"},
+		{ID: "deepseek-v3", DisplayName: "DeepSeek-V3-671B", Description: "DeepSeek V3 671B"},
+		{ID: "qwen3-32b", DisplayName: "Qwen3-32B", Description: "Qwen3 32B"},
+		{ID: "qwen3-235b-a22b-thinking-2507", DisplayName: "Qwen3-235B-A22B-Thinking", Description: "Qwen3 235B A22B Thinking (2507)"},
+		{ID: "qwen3-235b-a22b-instruct", DisplayName: "Qwen3-235B-A22B-Instruct", Description: "Qwen3 235B A22B Instruct"},
+		{ID: "qwen3-235b", DisplayName: "Qwen3-235B-A22B", Description: "Qwen3 235B A22B"},
 	}
 	models := make([]*ModelInfo, 0, len(entries))
-	for _, id := range entries {
+	for _, entry := range entries {
 		models = append(models, &ModelInfo{
-			ID:          id,
+			ID:          entry.ID,
 			Object:      "model",
 			Created:     created,
 			OwnedBy:     "iflow",
 			Type:        "iflow",
-			DisplayName: strings.ToUpper(id),
+			DisplayName: entry.DisplayName,
+			Description: entry.Description,
 		})
 	}
 	return models
