@@ -137,14 +137,18 @@ func (ia *IFlowAuth) doTokenRequest(ctx context.Context, req *http.Request) (*IF
 		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}
 
-	if tokenResp.AccessToken != "" {
-		apiKey, errAPI := ia.FetchAPIKey(ctx, tokenResp.AccessToken)
-		if errAPI != nil {
-			log.Warnf("iflow token: failed to fetch API key: %v", errAPI)
-		} else if apiKey != "" {
-			data.APIKey = apiKey
-		}
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("iflow token: missing access token in response")
 	}
+
+	apiKey, errAPI := ia.FetchAPIKey(ctx, tokenResp.AccessToken)
+	if errAPI != nil {
+		return nil, fmt.Errorf("iflow token: fetch api key failed: %w", errAPI)
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return nil, fmt.Errorf("iflow token: empty api key returned")
+	}
+	data.APIKey = apiKey
 
 	return data, nil
 }
