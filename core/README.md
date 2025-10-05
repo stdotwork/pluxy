@@ -258,6 +258,7 @@ console.log(await claudeResponse.json());
 - gemini-2.5-pro
 - gemini-2.5-flash
 - gemini-2.5-flash-lite
+- gemini-2.5-flash-image-preview
 - gpt-5
 - gpt-5-codex
 - claude-opus-4-1-20250805
