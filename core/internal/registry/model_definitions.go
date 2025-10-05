@@ -3,7 +3,10 @@
 // when registering their supported models.
 package registry
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // GetClaudeModels returns the standard Claude model definitions
 func GetClaudeModels() []*ModelInfo {
@@ -321,4 +324,40 @@ func GetQwenModels() []*ModelInfo {
 			SupportedParameters: []string{"temperature", "top_p", "max_tokens", "stream", "stop"},
 		},
 	}
+}
+
+// GetIFlowModels returns supported models for iFlow OAuth accounts.
+func GetIFlowModels() []*ModelInfo {
+	created := time.Now().Unix()
+	entries := []string{
+		"tstars2.0",
+		"qwen3-coder-plus",
+		"qwen3-coder",
+		"qwen3-max",
+		"qwen3-vl-plus",
+		"qwen3-max-preview",
+		"kimi-k2-0905",
+		"glm-4.5",
+		"kimi-k2",
+		"deepseek-v3.2",
+		"deepseek-v3.1",
+		"deepseek-r1",
+		"deepseek-v3",
+		"qwen3-32b",
+		"qwen3-235b-a22b-thinking-2507",
+		"qwen3-235b-a22b-instruct",
+		"qwen3-235b",
+	}
+	models := make([]*ModelInfo, 0, len(entries))
+	for _, id := range entries {
+		models = append(models, &ModelInfo{
+			ID:          id,
+			Object:      "model",
+			Created:     created,
+			OwnedBy:     "iflow",
+			Type:        "iflow",
+			DisplayName: strings.ToUpper(id),
+		})
+	}
+	return models
 }

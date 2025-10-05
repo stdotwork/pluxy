@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
 	geminiAuth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
+	iflowauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/iflow"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
 	// legacy client removed
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
@@ -951,6 +952,89 @@ func (h *Handler) RequestQwenToken(c *gin.Context) {
 
 		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
 		fmt.Println("You can now use Qwen services through this CLI")
+		delete(oauthStatus, state)
+	}()
+
+	oauthStatus[state] = ""
+	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})
+}
+
+func (h *Handler) RequestIFlowToken(c *gin.Context) {
+	ctx := context.Background()
+
+	fmt.Println("Initializing iFlow authentication...")
+
+	state := fmt.Sprintf("ifl-%d", time.Now().UnixNano())
+	authSvc := iflowauth.NewIFlowAuth(h.cfg)
+	oauthServer := iflowauth.NewOAuthServer(iflowauth.CallbackPort)
+	if err := oauthServer.Start(); err != nil {
+		oauthStatus[state] = "Failed to start authentication server"
+		log.Errorf("Failed to start iFlow OAuth server: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to start local oauth server"})
+		return
+	}
+
+	authURL, redirectURI := authSvc.AuthorizationURL(state, iflowauth.CallbackPort)
+
+	go func() {
+		fmt.Println("Waiting for authentication...")
+		defer func() {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := oauthServer.Stop(stopCtx); err != nil {
+				log.Warnf("Failed to stop iFlow OAuth server: %v", err)
+			}
+		}()
+
+		result, err := oauthServer.WaitForCallback(5 * time.Minute)
+		if err != nil {
+			oauthStatus[state] = "Authentication failed"
+			fmt.Printf("Authentication failed: %v\n", err)
+			return
+		}
+
+		if result.Error != "" {
+			oauthStatus[state] = "Authentication failed"
+			fmt.Printf("Authentication failed: %s\n", result.Error)
+			return
+		}
+
+		if result.State != state {
+			oauthStatus[state] = "Authentication failed"
+			fmt.Println("Authentication failed: state mismatch")
+			return
+		}
+
+		tokenData, errExchange := authSvc.ExchangeCodeForTokens(ctx, result.Code, redirectURI)
+		if errExchange != nil {
+			oauthStatus[state] = "Authentication failed"
+			fmt.Printf("Authentication failed: %v\n", errExchange)
+			return
+		}
+
+		tokenStorage := authSvc.CreateTokenStorage(tokenData)
+		tokenStorage.Email = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
+		record := &coreauth.Auth{
+			ID:         fmt.Sprintf("iflow-%s.json", tokenStorage.Email),
+			Provider:   "iflow",
+			FileName:   fmt.Sprintf("iflow-%s.json", tokenStorage.Email),
+			Storage:    tokenStorage,
+			Metadata:   map[string]any{"email": tokenStorage.Email, "api_key": tokenStorage.APIKey},
+			Attributes: map[string]string{"api_key": tokenStorage.APIKey},
+		}
+
+		savedPath, errSave := h.saveTokenRecord(ctx, record)
+		if errSave != nil {
+			oauthStatus[state] = "Failed to save authentication tokens"
+			log.Fatalf("Failed to save authentication tokens: %v", errSave)
+			return
+		}
+
+		fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
+		if tokenStorage.APIKey != "" {
+			fmt.Println("API key obtained and saved")
+		}
+		fmt.Println("You can now use iFlow services through this CLI")
 		delete(oauthStatus, state)
 	}()
 
