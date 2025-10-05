@@ -153,8 +153,8 @@ func ConvertCodexResponseToGemini(_ context.Context, modelName string, originalR
 //   - string: A Gemini-compatible JSON response containing all message content and metadata
 func ConvertCodexResponseToGeminiNonStream(_ context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, _ *any) string {
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
-	buffer := make([]byte, 10240*1024)
-	scanner.Buffer(buffer, 10240*1024)
+	buffer := make([]byte, 20_971_520)
+	scanner.Buffer(buffer, 20_971_520)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		// log.Debug(string(line))

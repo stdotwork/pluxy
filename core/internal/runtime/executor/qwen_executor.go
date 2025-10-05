@@ -126,8 +126,8 @@ func (e *QwenExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		defer close(out)
 		defer func() { _ = resp.Body.Close() }()
 		scanner := bufio.NewScanner(resp.Body)
-		buf := make([]byte, 1024*1024)
-		scanner.Buffer(buf, 1024*1024)
+		buf := make([]byte, 20_971_520)
+		scanner.Buffer(buf, 20_971_520)
 		var param any
 		for scanner.Scan() {
 			line := scanner.Bytes()

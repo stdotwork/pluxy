@@ -181,8 +181,8 @@ func ConvertCodexResponseToClaude(_ context.Context, _ string, originalRequestRa
 //   - string: A Claude Code-compatible JSON response containing all message content and metadata
 func ConvertCodexResponseToClaudeNonStream(_ context.Context, _ string, originalRequestRawJSON, _ []byte, rawJSON []byte, _ *any) string {
 	scanner := bufio.NewScanner(bytes.NewReader(rawJSON))
-	buffer := make([]byte, 10240*1024)
-	scanner.Buffer(buffer, 10240*1024)
+	buffer := make([]byte, 20_971_520)
+	scanner.Buffer(buffer, 20_971_520)
 	revNames := buildReverseMapFromClaudeOriginalShortToOriginal(originalRequestRawJSON)
 
 	for scanner.Scan() {

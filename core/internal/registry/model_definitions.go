@@ -152,6 +152,20 @@ func GetGeminiCLIModels() []*ModelInfo {
 			OutputTokenLimit:           65536,
 			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
 		},
+		{
+			ID:                         "gemini-2.5-flash-image-preview",
+			Object:                     "model",
+			Created:                    time.Now().Unix(),
+			OwnedBy:                    "google",
+			Type:                       "gemini",
+			Name:                       "models/gemini-2.5-flash-image-preview",
+			Version:                    "2.5",
+			DisplayName:                "Gemini 2.5 Flash Image Preview",
+			Description:                "State-of-the-art image generation and editing model.",
+			InputTokenLimit:            1048576,
+			OutputTokenLimit:           8192,
+			SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
+		},
 	}
 }
 
