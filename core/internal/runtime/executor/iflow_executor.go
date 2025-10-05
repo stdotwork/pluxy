@@ -20,7 +20,10 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-const iflowDefaultEndpoint = "/chat/completions"
+const (
+	iflowDefaultEndpoint = "/chat/completions"
+	iflowUserAgent       = "iFlow-Cli"
+)
 
 // IFlowExecutor executes OpenAI-compatible chat completions against the iFlow API using API keys derived from OAuth.
 type IFlowExecutor struct {
@@ -215,6 +218,7 @@ func (e *IFlowExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 func applyIFlowHeaders(r *http.Request, apiKey string, stream bool) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+apiKey)
+	r.Header.Set("User-Agent", iflowUserAgent)
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
 	} else {
