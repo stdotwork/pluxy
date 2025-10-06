@@ -21,9 +21,10 @@ import (
 )
 
 var (
-	Version   = "dev"
-	Commit    = "none"
-	BuildDate = "unknown"
+	Version           = "dev"
+	Commit            = "none"
+	BuildDate         = "unknown"
+	DefaultConfigPath = ""
 )
 
 // init initializes the shared logger setup.
@@ -58,7 +59,7 @@ func main() {
 	flag.BoolVar(&geminiWebAuth, "gemini-web-auth", false, "Auth Gemini Web using cookies")
 	flag.BoolVar(&noBrowser, "no-browser", false, "Don't open browser automatically for OAuth")
 	flag.StringVar(&projectID, "project_id", "", "Project ID (Gemini only, not required)")
-	flag.StringVar(&configPath, "config", "", "Configure File Path")
+	flag.StringVar(&configPath, "config", DefaultConfigPath, "Configure File Path")
 	flag.StringVar(&password, "password", "", "")
 
 	flag.CommandLine.Usage = func() {
