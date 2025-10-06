@@ -8,6 +8,7 @@ package chat_completions
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -100,6 +101,10 @@ func ConvertCliResponseToOpenAI(_ context.Context, _ string, originalRequestRawJ
 			partResult := partResults[i]
 			partTextResult := partResult.Get("text")
 			functionCallResult := partResult.Get("functionCall")
+			inlineDataResult := partResult.Get("inlineData")
+			if !inlineDataResult.Exists() {
+				inlineDataResult = partResult.Get("inline_data")
+			}
 
 			if partTextResult.Exists() {
 				// Handle text content, distinguishing between regular content and reasoning/thoughts.
@@ -125,6 +130,34 @@ func ConvertCliResponseToOpenAI(_ context.Context, _ string, originalRequestRawJ
 				}
 				template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
 				template, _ = sjson.SetRaw(template, "choices.0.delta.tool_calls.-1", functionCallTemplate)
+			} else if inlineDataResult.Exists() {
+				data := inlineDataResult.Get("data").String()
+				if data == "" {
+					continue
+				}
+				mimeType := inlineDataResult.Get("mimeType").String()
+				if mimeType == "" {
+					mimeType = inlineDataResult.Get("mime_type").String()
+				}
+				if mimeType == "" {
+					mimeType = "image/png"
+				}
+				imageURL := fmt.Sprintf("data:%s;base64,%s", mimeType, data)
+				imagePayload, err := json.Marshal(map[string]any{
+					"type": "image_url",
+					"image_url": map[string]string{
+						"url": imageURL,
+					},
+				})
+				if err != nil {
+					continue
+				}
+				imagesResult := gjson.Get(template, "choices.0.delta.images")
+				if !imagesResult.Exists() || !imagesResult.IsArray() {
+					template, _ = sjson.SetRaw(template, "choices.0.delta.images", `[]`)
+				}
+				template, _ = sjson.Set(template, "choices.0.delta.role", "assistant")
+				template, _ = sjson.SetRaw(template, "choices.0.delta.images.-1", string(imagePayload))
 			}
 		}
 	}
