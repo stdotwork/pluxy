@@ -255,7 +255,9 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 			full := filepath.Join(h.cfg.AuthDir, name)
 			if data, errRead := os.ReadFile(full); errRead == nil {
 				typeValue := gjson.GetBytes(data, "type").String()
+				emailValue := gjson.GetBytes(data, "email").String()
 				fileData["type"] = typeValue
+				fileData["email"] = emailValue
 			}
 
 			files = append(files, fileData)
