@@ -225,7 +225,7 @@ func MaskToken28(s string) string {
 }
 
 var NanoBananaModel = map[string]struct{}{
-	"gemini-2.5-flash-image-preview": {},
+	"gemini-2.5-flash-image-web": {},
 }
 
 // NewGeminiClient creates a client. Pass empty strings to auto-detect via browser cookies (not implemented in Go port).
@@ -380,6 +380,15 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	}
 
 	inner := []any{item0, nil, item2}
+	// Attach Gem first to keep index alignment with reference implementation
+	// so the Gemini Web UI can recognize the selected Gem.
+	if gem != nil {
+		// pad with 16 nils then gem ID
+		for i := 0; i < 16; i++ {
+			inner = append(inner, nil)
+		}
+		inner = append(inner, gem.ID)
+	}
 	requestedModel := strings.ToLower(model.Name)
 	if chat != nil && chat.RequestedModel() != "" {
 		requestedModel = chat.RequestedModel()
@@ -387,13 +396,6 @@ func (c *GeminiClient) generateOnce(prompt string, files []string, model Model, 
 	if _, ok := NanoBananaModel[requestedModel]; ok {
 		inner = ensureAnyLen(inner, 49)
 		inner[49] = 14
-	}
-	if gem != nil {
-		// pad with 16 nils then gem ID
-		for i := 0; i < 16; i++ {
-			inner = append(inner, nil)
-		}
-		inner = append(inner, gem.ID)
 	}
 	innerJSON, _ := json.Marshal(inner)
 	outer := []any{nil, string(innerJSON)}

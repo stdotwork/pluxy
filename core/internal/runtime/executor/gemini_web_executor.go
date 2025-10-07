@@ -168,6 +168,8 @@ func (e *GeminiWebExecutor) stateFor(auth *cliproxyauth.Auth) (*geminiwebapi.Gem
 		return nil, fmt.Errorf("gemini-web executor: auth is nil")
 	}
 	if runtime, ok := auth.Runtime.(*geminiWebRuntime); ok && runtime != nil && runtime.state != nil {
+		// Hot-reload: ensure cached state sees the latest config
+		runtime.state.SetConfig(e.cfg)
 		return runtime.state, nil
 	}
 
@@ -175,6 +177,8 @@ func (e *GeminiWebExecutor) stateFor(auth *cliproxyauth.Auth) (*geminiwebapi.Gem
 	defer e.mu.Unlock()
 
 	if runtime, ok := auth.Runtime.(*geminiWebRuntime); ok && runtime != nil && runtime.state != nil {
+		// Hot-reload: ensure cached state sees the latest config
+		runtime.state.SetConfig(e.cfg)
 		return runtime.state, nil
 	}
 

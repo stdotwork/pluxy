@@ -21,7 +21,7 @@ func EnsureGeminiWebAliasMap() {
 				continue
 			}
 			if m.ID == "gemini-2.5-flash" {
-				aliasMap["gemini-2.5-flash-image-preview"] = "gemini-2.5-flash"
+				aliasMap["gemini-2.5-flash-image-web"] = "gemini-2.5-flash"
 			}
 			alias := AliasFromModelID(m.ID)
 			aliasMap[strings.ToLower(alias)] = strings.ToLower(m.ID)
@@ -65,8 +65,8 @@ func GetGeminiWebAliasedModels() []*registry.ModelInfo {
 			continue
 		} else if m.ID == "gemini-2.5-flash" {
 			cpy := *m
-			cpy.ID = "gemini-2.5-flash-image-preview"
-			cpy.Name = "gemini-2.5-flash-image-preview"
+			cpy.ID = "gemini-2.5-flash-image-web"
+			cpy.Name = "gemini-2.5-flash-image-web"
 			cpy.DisplayName = "Nano Banana"
 			cpy.Description = "Gemini 2.5 Flash Preview Image"
 			aliased = append(aliased, &cpy)

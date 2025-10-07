@@ -521,6 +521,9 @@ func (w *Watcher) reloadConfig() bool {
 		if oldConfig.GeminiWeb.DisableContinuationHint != newConfig.GeminiWeb.DisableContinuationHint {
 			log.Debugf("  gemini-web.disable-continuation-hint: %t -> %t", oldConfig.GeminiWeb.DisableContinuationHint, newConfig.GeminiWeb.DisableContinuationHint)
 		}
+		if oldConfig.GeminiWeb.GemMode != newConfig.GeminiWeb.GemMode {
+			log.Debugf("  gemini-web.gem-mode: %s -> %s", oldConfig.GeminiWeb.GemMode, newConfig.GeminiWeb.GemMode)
+		}
 		if oldConfig.GeminiWeb.CodeMode != newConfig.GeminiWeb.CodeMode {
 			log.Debugf("  gemini-web.code-mode: %t -> %t", oldConfig.GeminiWeb.CodeMode, newConfig.GeminiWeb.CodeMode)
 		}
