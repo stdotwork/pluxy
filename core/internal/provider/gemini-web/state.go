@@ -1030,3 +1030,10 @@ func FindReusableSessionIn(items map[string]ConversationRecord, index map[string
 	}
 	return ConversationRecord{}, nil, 0, false
 }
+
+// SetConfig updates the configuration reference used by the state.
+// This allows hot-reload of configuration to take effect for existing
+// runtime states that were cached on auth during previous requests.
+func (s *GeminiWebState) SetConfig(cfg *config.Config) {
+	s.cfg = cfg
+}
