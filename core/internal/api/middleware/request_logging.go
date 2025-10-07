@@ -6,6 +6,7 @@ package middleware
 import (
 	"bytes"
 	"io"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
@@ -17,6 +18,12 @@ import (
 // logger, the middleware has minimal overhead.
 func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/v0/management") || path == "/keep-alive" {
+			c.Next()
+			return
+		}
+
 		// Early return if logging is disabled (zero overhead)
 		if !logger.IsEnabled() {
 			c.Next()
