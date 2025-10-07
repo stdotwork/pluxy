@@ -62,10 +62,19 @@ type GeminiWebConfig struct {
 	// Defaults to true if not set in YAML (see LoadConfig).
 	Context bool `yaml:"context" json:"context"`
 
-	// CodeMode, when true, enables coding mode behaviors for Gemini Web:
-	// - Attach the predefined "Coding partner" Gem
-	// - Enable XML wrapping hint for tool markup
-	// - Merge <think> content into visible content for tool-friendly output
+	// GemMode selects a predefined Gem to attach for Gemini Web requests.
+	// Allowed values:
+	// - "coding-partner"
+	// - "writing-editor"
+	// When empty, no Gem is attached by configuration.
+	// This is independent from CodeMode below, which is kept for backwards compatibility.
+	GemMode string `yaml:"gem-mode" json:"gem-mode"`
+
+	// CodeMode enables legacy coding-mode behaviors for Gemini Web.
+	// Backwards compatibility: when true, the service behaves as before by
+	// attaching the predefined "Coding partner" Gem and enabling extra
+	// conveniences (e.g., XML wrapping hints). Prefer GemMode for selecting
+	// a Gem going forward.
 	CodeMode bool `yaml:"code-mode" json:"code-mode"`
 
 	// MaxCharsPerRequest caps the number of characters (runes) sent to

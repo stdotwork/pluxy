@@ -696,7 +696,22 @@ func (s *GeminiWebState) findReusableSession(modelName string, msgs []RoleText) 
 }
 
 func (s *GeminiWebState) getConfiguredGem() *Gem {
-	if s.cfg != nil && s.cfg.GeminiWeb.CodeMode {
+	if s.cfg == nil {
+		return nil
+	}
+	// New behavior: attach Gem based on explicit GemMode selection.
+	// Only attaches the Gem; does not toggle any other behavior.
+	if gm := strings.ToLower(strings.TrimSpace(s.cfg.GeminiWeb.GemMode)); gm != "" {
+		switch gm {
+		case "coding-partner":
+			return &Gem{ID: "coding-partner", Name: "Coding partner", Predefined: true}
+		case "writing-editor":
+			return &Gem{ID: "writing-editor", Name: "Writing editor", Predefined: true}
+		}
+	}
+	// Backwards compatibility: legacy CodeMode still attaches Coding partner
+	// and may enable extra behaviors elsewhere.
+	if s.cfg.GeminiWeb.CodeMode {
 		return &Gem{ID: "coding-partner", Name: "Coding partner", Predefined: true}
 	}
 	return nil
