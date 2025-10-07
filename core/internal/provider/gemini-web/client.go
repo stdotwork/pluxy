@@ -225,7 +225,7 @@ func MaskToken28(s string) string {
 }
 
 var NanoBananaModel = map[string]struct{}{
-	"gemini-2.5-flash-image-preview": {},
+	"gemini-2.5-flash-image-web": {},
 }
 
 // NewGeminiClient creates a client. Pass empty strings to auto-detect via browser cookies (not implemented in Go port).

@@ -460,10 +460,10 @@ func (s *GeminiWebState) Send(ctx context.Context, modelName string, reqPayload 
 		return nil, s.wrapSendError(err), nil
 	}
 
-	// Hook: For gemini-2.5-flash-image-preview, if the API returns only images without any text,
+	// Hook: For gemini-2.5-flash-image-web, if the API returns only images without any text,
 	// inject a small textual summary so that conversation persistence has non-empty assistant text.
 	// This helps conversation recovery (conv store) to match sessions reliably.
-	if strings.EqualFold(modelName, "gemini-2.5-flash-image-preview") {
+	if strings.EqualFold(modelName, "gemini-2.5-flash-image-web") {
 		if len(output.Candidates) > 0 {
 			c := output.Candidates[output.Chosen]
 			hasNoText := strings.TrimSpace(c.Text) == ""
