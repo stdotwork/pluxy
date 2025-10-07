@@ -1,0 +1,16 @@
+name: Bump Homebrew formula
+
+on:
+  release:
+    types: [ released ]
+
+jobs:
+  homebrew:
+    name: Bump Homebrew formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew Formula
+        uses: dawidd6/action-homebrew-bump-formula@v5
+        with:
+          token: ${{ secrets.HOMEBREW_TOKEN }}
+          formula: cliproxyapi
