@@ -26,6 +26,20 @@ import (
 //   - []byte: The transformed request data in Gemini CLI API format
 func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bool) []byte {
 	rawJSON := bytes.Clone(inputRawJSON)
+	var pathsToDelete []string
+	root := gjson.ParseBytes(rawJSON)
+	util.Walk(root, "", "additionalProperties", &pathsToDelete)
+	util.Walk(root, "", "$schema", &pathsToDelete)
+	util.Walk(root, "", "ref", &pathsToDelete)
+
+	var err error
+	for _, p := range pathsToDelete {
+		rawJSON, err = sjson.DeleteBytes(rawJSON, p)
+		if err != nil {
+			continue
+		}
+	}
+
 	// Base envelope
 	out := []byte(`{"project":"","request":{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}},"model":"gemini-2.5-pro"}`)
 
@@ -232,7 +246,7 @@ func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bo
 	}
 
 	var pathsToType []string
-	root := gjson.ParseBytes(out)
+	root = gjson.ParseBytes(out)
 	util.Walk(root, "", "type", &pathsToType)
 	for _, p := range pathsToType {
 		typeResult := gjson.GetBytes(out, p)

@@ -20,6 +20,7 @@ import (
 // convertCliResponseToOpenAIChatParams holds parameters for response conversion.
 type convertCliResponseToOpenAIChatParams struct {
 	UnixTimestamp int64
+	FunctionIndex int
 }
 
 // ConvertCliResponseToOpenAI translates a single chunk of a streaming response from the
@@ -40,6 +41,7 @@ func ConvertCliResponseToOpenAI(_ context.Context, _ string, originalRequestRawJ
 	if *param == nil {
 		*param = &convertCliResponseToOpenAIChatParams{
 			UnixTimestamp: 0,
+			FunctionIndex: 0,
 		}
 	}
 
@@ -117,13 +119,18 @@ func ConvertCliResponseToOpenAI(_ context.Context, _ string, originalRequestRawJ
 			} else if functionCallResult.Exists() {
 				// Handle function call content.
 				toolCallsResult := gjson.Get(template, "choices.0.delta.tool_calls")
-				if !toolCallsResult.Exists() || !toolCallsResult.IsArray() {
+				functionCallIndex := (*param).(*convertCliResponseToOpenAIChatParams).FunctionIndex
+				(*param).(*convertCliResponseToOpenAIChatParams).FunctionIndex++
+				if toolCallsResult.Exists() && toolCallsResult.IsArray() {
+					functionCallIndex = len(toolCallsResult.Array())
+				} else {
 					template, _ = sjson.SetRaw(template, "choices.0.delta.tool_calls", `[]`)
 				}
 
-				functionCallTemplate := `{"id": "","type": "function","function": {"name": "","arguments": ""}}`
+				functionCallTemplate := `{"id": "","index": 0,"type": "function","function": {"name": "","arguments": ""}}`
 				fcName := functionCallResult.Get("name").String()
 				functionCallTemplate, _ = sjson.Set(functionCallTemplate, "id", fmt.Sprintf("%s-%d", fcName, time.Now().UnixNano()))
+				functionCallTemplate, _ = sjson.Set(functionCallTemplate, "index", functionCallIndex)
 				functionCallTemplate, _ = sjson.Set(functionCallTemplate, "function.name", fcName)
 				if fcArgsResult := functionCallResult.Get("args"); fcArgsResult.Exists() {
 					functionCallTemplate, _ = sjson.Set(functionCallTemplate, "function.arguments", fcArgsResult.Raw)
