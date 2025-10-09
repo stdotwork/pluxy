@@ -262,13 +262,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 		}
 	}
 
-	// Image config passthrough (e.g., aspectRatio)
-	// If the input carries generationConfig.imageConfig, preserve it in the Gemini request.
-	if imgCfg := root.Get("generationConfig.imageConfig"); imgCfg.Exists() && imgCfg.IsObject() {
-		out, _ = sjson.SetRaw(out, "generationConfig.imageConfig", imgCfg.Raw)
-	}
-
-	// OpenRouter-style image_config (snake_case) support at top-level
+	// OpenRouter-style image_config support at top-level
 	if imgCfg := root.Get("image_config"); imgCfg.Exists() && imgCfg.IsObject() {
 		if ar := imgCfg.Get("aspect_ratio"); ar.Exists() && ar.Type == gjson.String {
 			out, _ = sjson.Set(out, "generationConfig.imageConfig.aspectRatio", ar.String())
