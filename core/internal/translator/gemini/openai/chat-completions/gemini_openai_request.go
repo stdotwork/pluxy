@@ -31,6 +31,7 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 	util.Walk(root, "", "additionalProperties", &pathsToDelete)
 	util.Walk(root, "", "$schema", &pathsToDelete)
 	util.Walk(root, "", "ref", &pathsToDelete)
+	util.Walk(root, "", "strict", &pathsToDelete)
 
 	var err error
 	for _, p := range pathsToDelete {
