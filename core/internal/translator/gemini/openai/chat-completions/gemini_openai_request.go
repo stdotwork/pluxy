@@ -79,6 +79,23 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 		out, _ = sjson.SetBytes(out, "generationConfig.topK", tkr.Num)
 	}
 
+	// Map OpenAI modalities -> Gemini generationConfig.responseModalities
+	// e.g. "modalities": ["image", "text"] -> ["Image", "Text"]
+	if mods := gjson.GetBytes(rawJSON, "modalities"); mods.Exists() && mods.IsArray() {
+		var responseMods []string
+		for _, m := range mods.Array() {
+			switch strings.ToLower(m.String()) {
+			case "text":
+				responseMods = append(responseMods, "Text")
+			case "image":
+				responseMods = append(responseMods, "Image")
+			}
+		}
+		if len(responseMods) > 0 {
+			out, _ = sjson.SetBytes(out, "generationConfig.responseModalities", responseMods)
+		}
+	}
+
 	// OpenRouter-style image_config support
 	// If the input uses top-level image_config.aspect_ratio, map it into generationConfig.imageConfig.aspectRatio.
 	if imgCfg := gjson.GetBytes(rawJSON, "image_config"); imgCfg.Exists() && imgCfg.IsObject() {
