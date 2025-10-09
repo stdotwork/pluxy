@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -23,10 +24,16 @@ const (
 	managementReleaseURL = "https://api.github.com/repos/router-for-me/Cli-Proxy-API-Management-Center/releases/latest"
 	managementAssetName  = "management.html"
 	httpUserAgent        = "CLIProxyAPI-management-updater"
+	updateCheckInterval  = 3 * time.Hour
 )
 
 // ManagementFileName exposes the control panel asset filename.
 const ManagementFileName = managementAssetName
+
+var (
+	lastUpdateCheckMu   sync.Mutex
+	lastUpdateCheckTime time.Time
+)
 
 func newHTTPClient(proxyURL string) *http.Client {
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -68,6 +75,7 @@ func FilePath(configFilePath string) string {
 
 // EnsureLatestManagementHTML checks the latest management.html asset and updates the local copy when needed.
 // The function is designed to run in a background goroutine and will never panic.
+// It enforces a 3-hour rate limit to avoid frequent checks on config/auth file changes.
 func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL string) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -78,6 +86,18 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 		log.Debug("management asset sync skipped: empty static directory")
 		return
 	}
+
+	// Rate limiting: check only once every 3 hours
+	lastUpdateCheckMu.Lock()
+	now := time.Now()
+	timeSinceLastCheck := now.Sub(lastUpdateCheckTime)
+	if timeSinceLastCheck < updateCheckInterval {
+		lastUpdateCheckMu.Unlock()
+		log.Debugf("management asset update check skipped: last check was %v ago (interval: %v)", timeSinceLastCheck.Round(time.Second), updateCheckInterval)
+		return
+	}
+	lastUpdateCheckTime = now
+	lastUpdateCheckMu.Unlock()
 
 	if err := os.MkdirAll(staticDir, 0o755); err != nil {
 		log.WithError(err).Warn("failed to prepare static directory for management asset")
