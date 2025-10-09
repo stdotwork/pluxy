@@ -51,7 +51,7 @@ func (e *GeminiCLIExecutor) Identifier() string { return "gemini-cli" }
 func (e *GeminiCLIExecutor) PrepareRequest(_ *http.Request, _ *cliproxyauth.Auth) error { return nil }
 
 func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	tokenSource, baseTokenData, err := prepareGeminiCLITokenSource(ctx, auth)
+	tokenSource, baseTokenData, err := prepareGeminiCLITokenSource(ctx, e.cfg, auth)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
@@ -139,7 +139,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 }
 
 func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
-	tokenSource, baseTokenData, err := prepareGeminiCLITokenSource(ctx, auth)
+	tokenSource, baseTokenData, err := prepareGeminiCLITokenSource(ctx, e.cfg, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +270,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 }
 
 func (e *GeminiCLIExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	tokenSource, baseTokenData, err := prepareGeminiCLITokenSource(ctx, auth)
+	tokenSource, baseTokenData, err := prepareGeminiCLITokenSource(ctx, e.cfg, auth)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
@@ -351,7 +351,7 @@ func (e *GeminiCLIExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth
 	return auth, nil
 }
 
-func prepareGeminiCLITokenSource(ctx context.Context, auth *cliproxyauth.Auth) (oauth2.TokenSource, map[string]any, error) {
+func prepareGeminiCLITokenSource(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) (oauth2.TokenSource, map[string]any, error) {
 	if auth == nil || auth.Metadata == nil {
 		return nil, nil, fmt.Errorf("gemini-cli auth metadata missing")
 	}
@@ -395,8 +395,8 @@ func prepareGeminiCLITokenSource(ctx context.Context, auth *cliproxyauth.Auth) (
 	}
 
 	ctxToken := ctx
-	if rt, ok := ctx.Value("cliproxy.roundtripper").(http.RoundTripper); ok && rt != nil {
-		ctxToken = context.WithValue(ctxToken, oauth2.HTTPClient, &http.Client{Transport: rt})
+	if httpClient := newProxyAwareHTTPClient(ctx, cfg, auth, 0); httpClient != nil {
+		ctxToken = context.WithValue(ctxToken, oauth2.HTTPClient, httpClient)
 	}
 
 	src := conf.TokenSource(ctxToken, &token)

@@ -270,6 +270,7 @@ console.log(await claudeResponse.json());
 - gemini-2.5-pro
 - gemini-2.5-flash
 - gemini-2.5-flash-lite
+- gemini-2.5-flash-image
 - gemini-2.5-flash-image-preview
 - gpt-5
 - gpt-5-codex
@@ -289,6 +290,7 @@ console.log(await claudeResponse.json());
 - deepseek-v3
 - kimi-k2
 - glm-4.5
+- glm-4.6
 - tstars2.0
 - 以及其他 iFlow 支持的模型
 - Gemini 模型在需要时自动切换到对应的 preview 版本

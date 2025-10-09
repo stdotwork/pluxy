@@ -258,6 +258,7 @@ console.log(await claudeResponse.json());
 - gemini-2.5-pro
 - gemini-2.5-flash
 - gemini-2.5-flash-lite
+- gemini-2.5-flash-image
 - gemini-2.5-flash-image-preview
 - gpt-5
 - gpt-5-codex
@@ -277,6 +278,7 @@ console.log(await claudeResponse.json());
 - deepseek-v3
 - kimi-k2
 - glm-4.5
+- glm-4.6
 - tstars2.0
 - And other iFlow-supported models
 - Gemini models auto-switch to preview variants when needed
