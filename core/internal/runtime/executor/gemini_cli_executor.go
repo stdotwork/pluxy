@@ -518,7 +518,7 @@ func geminiModelDisallowsThinking(model string) bool {
 		return false
 	}
 	lower := strings.ToLower(model)
-	for _, marker := range []string{"gemini-2.5-flash-image-preview"} {
+	for _, marker := range []string{"gemini-2.5-flash-image-preview", "gemini-2.5-flash-image"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
