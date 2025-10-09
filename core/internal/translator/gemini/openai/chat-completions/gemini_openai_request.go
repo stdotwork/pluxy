@@ -79,6 +79,12 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 		out, _ = sjson.SetBytes(out, "generationConfig.topK", tkr.Num)
 	}
 
+	// Image config passthrough (e.g., aspectRatio)
+	// If the input carries generationConfig.imageConfig, preserve it in the Gemini request.
+	if imgCfg := gjson.GetBytes(rawJSON, "generationConfig.imageConfig"); imgCfg.Exists() && imgCfg.IsObject() {
+		out, _ = sjson.SetRawBytes(out, "generationConfig.imageConfig", []byte(imgCfg.Raw))
+	}
+
 	// messages -> systemInstruction + contents
 	messages := gjson.GetBytes(rawJSON, "messages")
 	if messages.IsArray() {
