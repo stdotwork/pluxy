@@ -368,6 +368,11 @@ remote-management:
 # 身份验证目录（支持 ~ 表示主目录）。如果你使用Windows，建议设置成`C:/cli-proxy-api/`。
 auth-dir: "~/.cli-proxy-api"
 
+# 请求认证使用的API密钥
+api-keys:
+  - "your-api-key-1"
+  - "your-api-key-2"
+
 # 启用调试日志
 debug: false
 
