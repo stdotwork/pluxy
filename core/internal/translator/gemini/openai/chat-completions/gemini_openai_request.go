@@ -85,6 +85,14 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 		out, _ = sjson.SetRawBytes(out, "generationConfig.imageConfig", []byte(imgCfg.Raw))
 	}
 
+	// OpenRouter-style image_config (snake_case) support
+	// If the input uses top-level image_config.aspect_ratio, map it into generationConfig.imageConfig.aspectRatio.
+	if imgCfg := gjson.GetBytes(rawJSON, "image_config"); imgCfg.Exists() && imgCfg.IsObject() {
+		if ar := imgCfg.Get("aspect_ratio"); ar.Exists() && ar.Type == gjson.String {
+			out, _ = sjson.SetBytes(out, "generationConfig.imageConfig.aspectRatio", ar.Str)
+		}
+	}
+
 	// messages -> systemInstruction + contents
 	messages := gjson.GetBytes(rawJSON, "messages")
 	if messages.IsArray() {
