@@ -5,8 +5,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"syscall"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	"golang.org/x/crypto/bcrypt"
@@ -196,9 +198,11 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Read the entire configuration file into memory.
 	data, err := os.ReadFile(configFile)
 	if err != nil {
-		if optional && os.IsNotExist(err) {
-			// Missing and optional: return empty config.
-			return &Config{}, nil
+		if optional {
+			if os.IsNotExist(err) || errors.Is(err, syscall.EISDIR) {
+				// Missing and optional: return empty config (cloud deploy standby).
+				return &Config{}, nil
+			}
 		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}

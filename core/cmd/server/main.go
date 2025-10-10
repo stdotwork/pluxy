@@ -127,9 +127,12 @@ func main() {
 	// Log if we're running without a config file in cloud deploy mode
 	var configFileExists bool
 	if isCloudDeploy {
-		if _, err = os.Stat(configFilePath); os.IsNotExist(err) {
+		if info, errStat := os.Stat(configFilePath); errStat != nil {
 			// Don't mislead: API server will not start until configuration is provided.
 			log.Info("Cloud deploy mode: No configuration file detected; standing by for configuration (API server not started)")
+			configFileExists = false
+		} else if info.IsDir() {
+			log.Info("Cloud deploy mode: Config path is a directory; standing by for configuration (API server not started)")
 			configFileExists = false
 		} else {
 			log.Info("Cloud deploy mode: Configuration file detected; starting service")
