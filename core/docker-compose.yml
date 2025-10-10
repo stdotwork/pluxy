@@ -10,6 +10,8 @@ services:
         COMMIT: ${COMMIT:-none}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     container_name: cli-proxy-api
+    environment:
+      DEPLOY: ${DEPLOY:-}
     ports:
       - "8317:8317"
       - "8085:8085"
