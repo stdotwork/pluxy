@@ -5,8 +5,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"syscall"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 	"golang.org/x/crypto/bcrypt"
@@ -187,9 +189,21 @@ type OpenAICompatibilityModel struct {
 //   - *Config: The loaded configuration
 //   - error: An error if the configuration could not be loaded
 func LoadConfig(configFile string) (*Config, error) {
+	return LoadConfigOptional(configFile, false)
+}
+
+// LoadConfigOptional reads YAML from configFile.
+// If optional is true and the file is missing, it returns an empty Config.
+func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Read the entire configuration file into memory.
 	data, err := os.ReadFile(configFile)
 	if err != nil {
+		if optional {
+			if os.IsNotExist(err) || errors.Is(err, syscall.EISDIR) {
+				// Missing and optional: return empty config (cloud deploy standby).
+				return &Config{}, nil
+			}
+		}
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 

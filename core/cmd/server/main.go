@@ -96,6 +96,14 @@ func main() {
 	var err error
 	var cfg *config.Config
 	var wd string
+	var isCloudDeploy bool
+
+	// Check for cloud deploy mode only on first execution
+	// Read env var name in uppercase: DEPLOY
+	deployEnv := os.Getenv("DEPLOY")
+	if deployEnv == "cloud" {
+		isCloudDeploy = true
+	}
 
 	// Determine and load the configuration file.
 	// If a config path is provided via flags, it is used directly.
@@ -103,17 +111,33 @@ func main() {
 	var configFilePath string
 	if configPath != "" {
 		configFilePath = configPath
-		cfg, err = config.LoadConfig(configPath)
+		cfg, err = config.LoadConfigOptional(configPath, isCloudDeploy)
 	} else {
 		wd, err = os.Getwd()
 		if err != nil {
 			log.Fatalf("failed to get working directory: %v", err)
 		}
 		configFilePath = filepath.Join(wd, "config.yaml")
-		cfg, err = config.LoadConfig(configFilePath)
+		cfg, err = config.LoadConfigOptional(configFilePath, isCloudDeploy)
 	}
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
+	}
+
+	// Log if we're running without a config file in cloud deploy mode
+	var configFileExists bool
+	if isCloudDeploy {
+		if info, errStat := os.Stat(configFilePath); errStat != nil {
+			// Don't mislead: API server will not start until configuration is provided.
+			log.Info("Cloud deploy mode: No configuration file detected; standing by for configuration (API server not started)")
+			configFileExists = false
+		} else if info.IsDir() {
+			log.Info("Cloud deploy mode: Config path is a directory; standing by for configuration (API server not started)")
+			configFileExists = false
+		} else {
+			log.Info("Cloud deploy mode: Configuration file detected; starting service")
+			configFileExists = true
+		}
 	}
 	usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
 
@@ -161,6 +185,12 @@ func main() {
 	} else if geminiWebAuth {
 		cmd.DoGeminiWebAuth(cfg)
 	} else {
+		// In cloud deploy mode without config file, just wait for shutdown signals
+		if isCloudDeploy && !configFileExists {
+			// No config file available, just wait for shutdown
+			cmd.WaitForCloudDeploy()
+			return
+		}
 		// Start the main proxy service
 		cmd.StartService(cfg, configFilePath, password)
 	}
