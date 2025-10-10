@@ -951,6 +951,11 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 			id = rel
 		}
 
+		proxyURL := ""
+		if p, ok := metadata["proxy_url"].(string); ok {
+			proxyURL = p
+		}
+
 		a := &coreauth.Auth{
 			ID:       id,
 			Provider: provider,
@@ -960,6 +965,7 @@ func (w *Watcher) SnapshotCoreAuths() []*coreauth.Auth {
 				"source": full,
 				"path":   full,
 			},
+			ProxyURL:  proxyURL,
 			Metadata:  metadata,
 			CreatedAt: now,
 			UpdatedAt: now,
