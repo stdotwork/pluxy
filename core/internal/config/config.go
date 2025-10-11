@@ -180,8 +180,8 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Unmarshal the YAML data into the Config struct.
 	var cfg Config
 	// Set defaults before unmarshal so that absent keys keep defaults.
-	cfg.LoggingToFile = true
-	cfg.UsageStatisticsEnabled = true
+	cfg.LoggingToFile = false
+	cfg.UsageStatisticsEnabled = false
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		if optional {
 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
