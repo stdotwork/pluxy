@@ -126,6 +126,9 @@ type Server struct {
 	// configFilePath is the absolute path to the YAML config file for persistence.
 	configFilePath string
 
+	// currentPath is the absolute path to the current working directory.
+	currentPath string
+
 	// management handler
 	mgmt *managementHandlers.Handler
 
@@ -133,6 +136,9 @@ type Server struct {
 	managementRoutesRegistered atomic.Bool
 	// managementRoutesEnabled controls whether management endpoints serve real handlers.
 	managementRoutesEnabled atomic.Bool
+
+	// envManagementSecret indicates whether MANAGEMENT_PASSWORD is configured.
+	envManagementSecret bool
 
 	localPassword string
 
@@ -193,16 +199,26 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 
 	engine.Use(corsMiddleware())
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = configFilePath
+	}
+
+	envAdminPassword, envAdminPasswordSet := os.LookupEnv("MANAGEMENT_PASSWORD")
+	envAdminPassword = strings.TrimSpace(envAdminPassword)
+	envManagementSecret := envAdminPasswordSet && envAdminPassword != ""
 
 	// Create server instance
 	s := &Server{
-		engine:         engine,
-		handlers:       handlers.NewBaseAPIHandlers(&cfg.SDKConfig, authManager),
-		cfg:            cfg,
-		accessManager:  accessManager,
-		requestLogger:  requestLogger,
-		loggerToggle:   toggle,
-		configFilePath: configFilePath,
+		engine:              engine,
+		handlers:            handlers.NewBaseAPIHandlers(&cfg.SDKConfig, authManager),
+		cfg:                 cfg,
+		accessManager:       accessManager,
+		requestLogger:       requestLogger,
+		loggerToggle:        toggle,
+		configFilePath:      configFilePath,
+		currentPath:         wd,
+		envManagementSecret: envManagementSecret,
 	}
 	s.applyAccessConfig(nil, cfg)
 	// Initialize management handler
@@ -218,9 +234,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		optionState.routerConfigurator(engine, s.handlers, cfg)
 	}
 
-	// Register management routes only when a secret is present at startup.
-	s.managementRoutesEnabled.Store(cfg.RemoteManagement.SecretKey != "")
-	if cfg.RemoteManagement.SecretKey != "" {
+	// Register management routes when configuration or environment secrets are available.
+	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret
+	s.managementRoutesEnabled.Store(hasManagementSecret)
+	if hasManagementSecret {
 		s.registerManagementRoutes()
 	}
 
@@ -272,7 +289,6 @@ func (s *Server) setupRoutes() {
 	s.engine.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "CLI Proxy API Server",
-			"version": "1.0.0",
 			"endpoints": []string{
 				"POST /v1/chat/completions",
 				"POST /v1/completions",
@@ -441,8 +457,8 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
-
-	filePath := managementasset.FilePath(s.configFilePath)
+	println(s.currentPath)
+	filePath := managementasset.FilePath(s.currentPath)
 	if strings.TrimSpace(filePath) == "" {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
@@ -450,7 +466,7 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 
 	if _, err := os.Stat(filePath); err != nil {
 		if os.IsNotExist(err) {
-			go managementasset.EnsureLatestManagementHTML(context.Background(), managementasset.StaticDir(s.configFilePath), cfg.ProxyURL)
+			go managementasset.EnsureLatestManagementHTML(context.Background(), managementasset.StaticDir(s.currentPath), cfg.ProxyURL)
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
@@ -691,22 +707,31 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		prevSecretEmpty = oldCfg.RemoteManagement.SecretKey == ""
 	}
 	newSecretEmpty := cfg.RemoteManagement.SecretKey == ""
-	switch {
-	case prevSecretEmpty && !newSecretEmpty:
+	if s.envManagementSecret {
 		s.registerManagementRoutes()
 		if s.managementRoutesEnabled.CompareAndSwap(false, true) {
-			log.Info("management routes enabled after secret key update")
+			log.Info("management routes enabled via MANAGEMENT_PASSWORD")
 		} else {
 			s.managementRoutesEnabled.Store(true)
 		}
-	case !prevSecretEmpty && newSecretEmpty:
-		if s.managementRoutesEnabled.CompareAndSwap(true, false) {
-			log.Info("management routes disabled after secret key removal")
-		} else {
-			s.managementRoutesEnabled.Store(false)
+	} else {
+		switch {
+		case prevSecretEmpty && !newSecretEmpty:
+			s.registerManagementRoutes()
+			if s.managementRoutesEnabled.CompareAndSwap(false, true) {
+				log.Info("management routes enabled after secret key update")
+			} else {
+				s.managementRoutesEnabled.Store(true)
+			}
+		case !prevSecretEmpty && newSecretEmpty:
+			if s.managementRoutesEnabled.CompareAndSwap(true, false) {
+				log.Info("management routes disabled after secret key removal")
+			} else {
+				s.managementRoutesEnabled.Store(false)
+			}
+		default:
+			s.managementRoutesEnabled.Store(!newSecretEmpty)
 		}
-	default:
-		s.managementRoutesEnabled.Store(!newSecretEmpty)
 	}
 
 	s.applyAccessConfig(oldCfg, cfg)
@@ -714,7 +739,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	s.handlers.UpdateClients(&cfg.SDKConfig)
 
 	if !cfg.RemoteManagement.DisableControlPanel {
-		staticDir := managementasset.StaticDir(s.configFilePath)
+		staticDir := managementasset.StaticDir(s.currentPath)
 		go managementasset.EnsureLatestManagementHTML(context.Background(), staticDir, cfg.ProxyURL)
 	}
 	if s.mgmt != nil {

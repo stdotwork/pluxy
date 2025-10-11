@@ -60,7 +60,15 @@ func StaticDir(configFilePath string) string {
 	if configFilePath == "" {
 		return ""
 	}
+
 	base := filepath.Dir(configFilePath)
+	fileInfo, err := os.Stat(configFilePath)
+	if err == nil {
+		if fileInfo.IsDir() {
+			base = configFilePath
+		}
+	}
+
 	return filepath.Join(base, "static")
 }
 

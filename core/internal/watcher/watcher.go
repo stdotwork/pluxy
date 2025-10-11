@@ -29,10 +29,17 @@ import (
 	// "github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	// "github.com/tidwall/gjson"
 )
+
+// gitCommitter captures the subset of git-backed token store capabilities used by the watcher.
+type gitCommitter interface {
+	CommitConfig(ctx context.Context) error
+	CommitPaths(ctx context.Context, message string, paths ...string) error
+}
 
 // Watcher manages file watching for configuration and authentication files
 type Watcher struct {
@@ -51,6 +58,7 @@ type Watcher struct {
 	pendingUpdates map[string]AuthUpdate
 	pendingOrder   []string
 	dispatchCancel context.CancelFunc
+	gitCommitter   gitCommitter
 }
 
 type stableIDGenerator struct {
@@ -114,7 +122,6 @@ func NewWatcher(configPath, authDir string, reloadCallback func(*config.Config))
 	if errNewWatcher != nil {
 		return nil, errNewWatcher
 	}
-
 	w := &Watcher{
 		configPath:     configPath,
 		authDir:        authDir,
@@ -123,6 +130,12 @@ func NewWatcher(configPath, authDir string, reloadCallback func(*config.Config))
 		lastAuthHashes: make(map[string]string),
 	}
 	w.dispatchCond = sync.NewCond(&w.dispatchMu)
+	if store := sdkAuth.GetTokenStore(); store != nil {
+		if committer, ok := store.(gitCommitter); ok {
+			w.gitCommitter = committer
+			log.Debug("gitstore mode detected; watcher will commit changes to remote repository")
+		}
+	}
 	return w, nil
 }
 
@@ -336,6 +349,41 @@ func (w *Watcher) stopDispatch() {
 	w.clientsMutex.Unlock()
 }
 
+func (w *Watcher) commitConfigAsync() {
+	if w == nil || w.gitCommitter == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := w.gitCommitter.CommitConfig(ctx); err != nil {
+			log.Errorf("failed to commit config change: %v", err)
+		}
+	}()
+}
+
+func (w *Watcher) commitAuthAsync(message string, paths ...string) {
+	if w == nil || w.gitCommitter == nil {
+		return
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			filtered = append(filtered, trimmed)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := w.gitCommitter.CommitPaths(ctx, message, filtered...); err != nil {
+			log.Errorf("failed to commit auth changes: %v", err)
+		}
+	}()
+}
+
 func authEqual(a, b *coreauth.Auth) bool {
 	return reflect.DeepEqual(normalizeAuth(a), normalizeAuth(b))
 }
@@ -440,6 +488,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 			w.clientsMutex.Lock()
 			w.lastConfigHash = finalHash
 			w.clientsMutex.Unlock()
+			w.commitConfigAsync()
 		}
 		return
 	}
@@ -691,6 +740,7 @@ func (w *Watcher) addOrUpdateClient(path string) {
 		log.Debugf("triggering server update callback after add/update")
 		w.reloadCallback(cfg)
 	}
+	w.commitAuthAsync(fmt.Sprintf("Sync auth %s", filepath.Base(path)), path)
 }
 
 // removeClient handles the removal of a single client.
@@ -708,6 +758,7 @@ func (w *Watcher) removeClient(path string) {
 		log.Debugf("triggering server update callback after removal")
 		w.reloadCallback(cfg)
 	}
+	w.commitAuthAsync(fmt.Sprintf("Remove auth %s", filepath.Base(path)), path)
 }
 
 // SnapshotCombinedClients returns a snapshot of current combined clients.
