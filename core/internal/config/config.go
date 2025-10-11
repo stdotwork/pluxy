@@ -158,6 +158,7 @@ func LoadConfig(configFile string) (*Config, error) {
 
 // LoadConfigOptional reads YAML from configFile.
 // If optional is true and the file is missing, it returns an empty Config.
+// If optional is true and the file is empty or invalid, it returns an empty Config.
 func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Read the entire configuration file into memory.
 	data, err := os.ReadFile(configFile)
@@ -171,12 +172,21 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	// In cloud deploy mode (optional=true), if file is empty or contains only whitespace, return empty config.
+	if optional && len(data) == 0 {
+		return &Config{}, nil
+	}
+
 	// Unmarshal the YAML data into the Config struct.
 	var cfg Config
 	// Set defaults before unmarshal so that absent keys keep defaults.
 	cfg.LoggingToFile = true
 	cfg.UsageStatisticsEnabled = true
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
+		if optional {
+			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
+			return &Config{}, nil
+		}
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
