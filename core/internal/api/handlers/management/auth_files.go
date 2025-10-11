@@ -3,8 +3,6 @@ package management
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +23,6 @@ import (
 	geminiAuth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
 	iflowauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/iflow"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
-	// legacy client removed
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
@@ -901,65 +898,6 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 
 	oauthStatus[state] = ""
 	c.JSON(200, gin.H{"status": "ok", "url": authURL, "state": state})
-}
-
-func (h *Handler) CreateGeminiWebToken(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	var payload struct {
-		Secure1PSID   string `json:"secure_1psid"`
-		Secure1PSIDTS string `json:"secure_1psidts"`
-		Label         string `json:"label"`
-	}
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
-		return
-	}
-	payload.Secure1PSID = strings.TrimSpace(payload.Secure1PSID)
-	payload.Secure1PSIDTS = strings.TrimSpace(payload.Secure1PSIDTS)
-	payload.Label = strings.TrimSpace(payload.Label)
-	if payload.Secure1PSID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "secure_1psid is required"})
-		return
-	}
-	if payload.Secure1PSIDTS == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "secure_1psidts is required"})
-		return
-	}
-	if payload.Label == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "label is required"})
-		return
-	}
-
-	sha := sha256.New()
-	sha.Write([]byte(payload.Secure1PSID))
-	hash := hex.EncodeToString(sha.Sum(nil))
-	fileName := fmt.Sprintf("gemini-web-%s.json", hash[:16])
-
-	tokenStorage := &geminiAuth.GeminiWebTokenStorage{
-		Secure1PSID:   payload.Secure1PSID,
-		Secure1PSIDTS: payload.Secure1PSIDTS,
-		Label:         payload.Label,
-	}
-	// Provide a stable label (gemini-web-<hash>) for logging and identification
-	tokenStorage.Label = strings.TrimSuffix(fileName, ".json")
-
-	record := &coreauth.Auth{
-		ID:       fileName,
-		Provider: "gemini-web",
-		FileName: fileName,
-		Storage:  tokenStorage,
-	}
-
-	savedPath, errSave := h.saveTokenRecord(ctx, record)
-	if errSave != nil {
-		log.Errorf("Failed to save Gemini Web token: %v", errSave)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save token"})
-		return
-	}
-
-	fmt.Printf("Successfully saved Gemini Web token to: %s\n", savedPath)
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "file": filepath.Base(savedPath)})
 }
 
 func (h *Handler) RequestCodexToken(c *gin.Context) {

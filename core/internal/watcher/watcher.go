@@ -512,21 +512,6 @@ func (w *Watcher) reloadConfig() bool {
 		if oldConfig.RequestRetry != newConfig.RequestRetry {
 			log.Debugf("  request-retry: %d -> %d", oldConfig.RequestRetry, newConfig.RequestRetry)
 		}
-		if oldConfig.GeminiWeb.Context != newConfig.GeminiWeb.Context {
-			log.Debugf("  gemini-web.context: %t -> %t", oldConfig.GeminiWeb.Context, newConfig.GeminiWeb.Context)
-		}
-		if oldConfig.GeminiWeb.MaxCharsPerRequest != newConfig.GeminiWeb.MaxCharsPerRequest {
-			log.Debugf("  gemini-web.max-chars-per-request: %d -> %d", oldConfig.GeminiWeb.MaxCharsPerRequest, newConfig.GeminiWeb.MaxCharsPerRequest)
-		}
-		if oldConfig.GeminiWeb.DisableContinuationHint != newConfig.GeminiWeb.DisableContinuationHint {
-			log.Debugf("  gemini-web.disable-continuation-hint: %t -> %t", oldConfig.GeminiWeb.DisableContinuationHint, newConfig.GeminiWeb.DisableContinuationHint)
-		}
-		if oldConfig.GeminiWeb.GemMode != newConfig.GeminiWeb.GemMode {
-			log.Debugf("  gemini-web.gem-mode: %s -> %s", oldConfig.GeminiWeb.GemMode, newConfig.GeminiWeb.GemMode)
-		}
-		if oldConfig.GeminiWeb.CodeMode != newConfig.GeminiWeb.CodeMode {
-			log.Debugf("  gemini-web.code-mode: %t -> %t", oldConfig.GeminiWeb.CodeMode, newConfig.GeminiWeb.CodeMode)
-		}
 		if len(oldConfig.APIKeys) != len(newConfig.APIKeys) {
 			log.Debugf("  api-keys count: %d -> %d", len(oldConfig.APIKeys), len(newConfig.APIKeys))
 		}

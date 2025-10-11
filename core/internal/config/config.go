@@ -53,42 +53,6 @@ type Config struct {
 
 	// RemoteManagement nests management-related options under 'remote-management'.
 	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
-
-	// GeminiWeb groups configuration for Gemini Web client
-	GeminiWeb GeminiWebConfig `yaml:"gemini-web" json:"gemini-web"`
-}
-
-// GeminiWebConfig nests Gemini Web related options under 'gemini-web'.
-type GeminiWebConfig struct {
-	// Context enables JSON-based conversation reuse.
-	// Defaults to true if not set in YAML (see LoadConfig).
-	Context bool `yaml:"context" json:"context"`
-
-	// GemMode selects a predefined Gem to attach for Gemini Web requests.
-	// Allowed values:
-	// - "coding-partner"
-	// - "writing-editor"
-	// When empty, no Gem is attached by configuration.
-	// This is independent from CodeMode below, which is kept for backwards compatibility.
-	GemMode string `yaml:"gem-mode" json:"gem-mode"`
-
-	// CodeMode enables legacy coding-mode behaviors for Gemini Web.
-	// Backwards compatibility: when true, the service behaves as before by
-	// attaching the predefined "Coding partner" Gem and enabling extra
-	// conveniences (e.g., XML wrapping hints). Prefer GemMode for selecting
-	// a Gem going forward.
-	CodeMode bool `yaml:"code-mode" json:"code-mode"`
-
-	// MaxCharsPerRequest caps the number of characters (runes) sent to
-	// Gemini Web in a single request. Long prompts will be split into
-	// multiple requests with a continuation hint, and only the final
-	// request will carry any files. When unset or <=0, a conservative
-	// default of 1,000,000 will be used.
-	MaxCharsPerRequest int `yaml:"max-chars-per-request" json:"max-chars-per-request"`
-
-	// DisableContinuationHint, when true, disables the continuation hint for split prompts.
-	// The hint is enabled by default.
-	DisableContinuationHint bool `yaml:"disable-continuation-hint,omitempty" json:"disable-continuation-hint,omitempty"`
 }
 
 // RemoteManagement holds management API configuration under 'remote-management'.
@@ -212,7 +176,6 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Set defaults before unmarshal so that absent keys keep defaults.
 	cfg.LoggingToFile = true
 	cfg.UsageStatisticsEnabled = true
-	cfg.GeminiWeb.Context = true
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
