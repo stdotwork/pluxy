@@ -335,7 +335,17 @@ func (h *Handler) PutCodexKeys(c *gin.Context) {
 		}
 		arr = obj.Items
 	}
-	h.cfg.CodexKey = arr
+	// Filter out codex entries with empty base-url (treat as removed)
+	filtered := make([]config.CodexKey, 0, len(arr))
+	for i := range arr {
+		entry := arr[i]
+		entry.BaseURL = strings.TrimSpace(entry.BaseURL)
+		if entry.BaseURL == "" {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	h.cfg.CodexKey = filtered
 	h.persist(c)
 }
 func (h *Handler) PatchCodexKey(c *gin.Context) {
@@ -348,17 +358,42 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid body"})
 		return
 	}
-	if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.CodexKey) {
-		h.cfg.CodexKey[*body.Index] = *body.Value
-		h.persist(c)
-		return
-	}
-	if body.Match != nil {
-		for i := range h.cfg.CodexKey {
-			if h.cfg.CodexKey[i].APIKey == *body.Match {
-				h.cfg.CodexKey[i] = *body.Value
+	// If base-url becomes empty, delete instead of update
+	if strings.TrimSpace(body.Value.BaseURL) == "" {
+		if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.CodexKey) {
+			h.cfg.CodexKey = append(h.cfg.CodexKey[:*body.Index], h.cfg.CodexKey[*body.Index+1:]...)
+			h.persist(c)
+			return
+		}
+		if body.Match != nil {
+			out := make([]config.CodexKey, 0, len(h.cfg.CodexKey))
+			removed := false
+			for i := range h.cfg.CodexKey {
+				if !removed && h.cfg.CodexKey[i].APIKey == *body.Match {
+					removed = true
+					continue
+				}
+				out = append(out, h.cfg.CodexKey[i])
+			}
+			if removed {
+				h.cfg.CodexKey = out
 				h.persist(c)
 				return
+			}
+		}
+	} else {
+		if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.CodexKey) {
+			h.cfg.CodexKey[*body.Index] = *body.Value
+			h.persist(c)
+			return
+		}
+		if body.Match != nil {
+			for i := range h.cfg.CodexKey {
+				if h.cfg.CodexKey[i].APIKey == *body.Match {
+					h.cfg.CodexKey[i] = *body.Value
+					h.persist(c)
+					return
+				}
 			}
 		}
 	}

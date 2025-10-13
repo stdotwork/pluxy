@@ -211,6 +211,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Sanitize OpenAI compatibility providers: drop entries without base-url
 	sanitizeOpenAICompatibility(&cfg)
 
+	// Sanitize Codex keys: drop entries without base-url
+	sanitizeCodexKeys(&cfg)
+
 	// Return the populated configuration struct.
 	return &cfg, nil
 }
@@ -234,6 +237,24 @@ func sanitizeOpenAICompatibility(cfg *Config) {
 		out = append(out, e)
 	}
 	cfg.OpenAICompatibility = out
+}
+
+// sanitizeCodexKeys removes Codex API key entries missing a BaseURL.
+// It trims whitespace and preserves order for remaining entries.
+func sanitizeCodexKeys(cfg *Config) {
+	if cfg == nil || len(cfg.CodexKey) == 0 {
+		return
+	}
+	out := make([]CodexKey, 0, len(cfg.CodexKey))
+	for i := range cfg.CodexKey {
+		e := cfg.CodexKey[i]
+		e.BaseURL = strings.TrimSpace(e.BaseURL)
+		if e.BaseURL == "" {
+			continue
+		}
+		out = append(out, e)
+	}
+	cfg.CodexKey = out
 }
 
 func syncInlineAccessProvider(cfg *Config) {
