@@ -549,12 +549,6 @@ func (w *Watcher) reloadConfig() bool {
 		} else {
 			log.Debugf("no material config field changes detected")
 		}
-		if oldConfig.QuotaExceeded.SwitchProject != newConfig.QuotaExceeded.SwitchProject {
-			log.Debugf("  quota-exceeded.switch-project: %t -> %t", oldConfig.QuotaExceeded.SwitchProject, newConfig.QuotaExceeded.SwitchProject)
-		}
-		if oldConfig.QuotaExceeded.SwitchPreviewModel != newConfig.QuotaExceeded.SwitchPreviewModel {
-			log.Debugf("  quota-exceeded.switch-preview-model: %t -> %t", oldConfig.QuotaExceeded.SwitchPreviewModel, newConfig.QuotaExceeded.SwitchPreviewModel)
-		}
 	}
 
 	authDirChanged := oldConfig == nil || oldConfig.AuthDir != newConfig.AuthDir
