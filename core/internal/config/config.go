@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
@@ -207,8 +208,53 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Sync request authentication providers with inline API keys for backwards compatibility.
 	syncInlineAccessProvider(&cfg)
 
+	// Sanitize OpenAI compatibility providers: drop entries without base-url
+	sanitizeOpenAICompatibility(&cfg)
+
+	// Sanitize Codex keys: drop entries without base-url
+	sanitizeCodexKeys(&cfg)
+
 	// Return the populated configuration struct.
 	return &cfg, nil
+}
+
+// sanitizeOpenAICompatibility removes OpenAI-compatibility provider entries that are
+// not actionable, specifically those missing a BaseURL. It trims whitespace before
+// evaluation and preserves the relative order of remaining entries.
+func sanitizeOpenAICompatibility(cfg *Config) {
+	if cfg == nil || len(cfg.OpenAICompatibility) == 0 {
+		return
+	}
+	out := make([]OpenAICompatibility, 0, len(cfg.OpenAICompatibility))
+	for i := range cfg.OpenAICompatibility {
+		e := cfg.OpenAICompatibility[i]
+		e.Name = strings.TrimSpace(e.Name)
+		e.BaseURL = strings.TrimSpace(e.BaseURL)
+		if e.BaseURL == "" {
+			// Skip providers with no base-url; treated as removed
+			continue
+		}
+		out = append(out, e)
+	}
+	cfg.OpenAICompatibility = out
+}
+
+// sanitizeCodexKeys removes Codex API key entries missing a BaseURL.
+// It trims whitespace and preserves order for remaining entries.
+func sanitizeCodexKeys(cfg *Config) {
+	if cfg == nil || len(cfg.CodexKey) == 0 {
+		return
+	}
+	out := make([]CodexKey, 0, len(cfg.CodexKey))
+	for i := range cfg.CodexKey {
+		e := cfg.CodexKey[i]
+		e.BaseURL = strings.TrimSpace(e.BaseURL)
+		if e.BaseURL == "" {
+			continue
+		}
+		out = append(out, e)
+	}
+	cfg.CodexKey = out
 }
 
 func syncInlineAccessProvider(cfg *Config) {
