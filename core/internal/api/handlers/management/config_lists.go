@@ -227,7 +227,14 @@ func (h *Handler) PutOpenAICompat(c *gin.Context) {
 	for i := range arr {
 		normalizeOpenAICompatibilityEntry(&arr[i])
 	}
-	h.cfg.OpenAICompatibility = arr
+	// Filter out providers with empty base-url -> remove provider entirely
+	filtered := make([]config.OpenAICompatibility, 0, len(arr))
+	for i := range arr {
+		if strings.TrimSpace(arr[i].BaseURL) != "" {
+			filtered = append(filtered, arr[i])
+		}
+	}
+	h.cfg.OpenAICompatibility = filtered
 	h.persist(c)
 }
 func (h *Handler) PatchOpenAICompat(c *gin.Context) {
@@ -241,6 +248,32 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 		return
 	}
 	normalizeOpenAICompatibilityEntry(body.Value)
+	// If base-url becomes empty, delete the provider instead of updating
+	if strings.TrimSpace(body.Value.BaseURL) == "" {
+		if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.OpenAICompatibility) {
+			h.cfg.OpenAICompatibility = append(h.cfg.OpenAICompatibility[:*body.Index], h.cfg.OpenAICompatibility[*body.Index+1:]...)
+			h.persist(c)
+			return
+		}
+		if body.Name != nil {
+			out := make([]config.OpenAICompatibility, 0, len(h.cfg.OpenAICompatibility))
+			removed := false
+			for i := range h.cfg.OpenAICompatibility {
+				if !removed && h.cfg.OpenAICompatibility[i].Name == *body.Name {
+					removed = true
+					continue
+				}
+				out = append(out, h.cfg.OpenAICompatibility[i])
+			}
+			if removed {
+				h.cfg.OpenAICompatibility = out
+				h.persist(c)
+				return
+			}
+		}
+		c.JSON(404, gin.H{"error": "item not found"})
+		return
+	}
 	if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.OpenAICompatibility) {
 		h.cfg.OpenAICompatibility[*body.Index] = *body.Value
 		h.persist(c)
@@ -359,6 +392,8 @@ func normalizeOpenAICompatibilityEntry(entry *config.OpenAICompatibility) {
 	if entry == nil {
 		return
 	}
+	// Trim base-url; empty base-url indicates provider should be removed by sanitization
+	entry.BaseURL = strings.TrimSpace(entry.BaseURL)
 	existing := make(map[string]struct{}, len(entry.APIKeyEntries))
 	for i := range entry.APIKeyEntries {
 		trimmed := strings.TrimSpace(entry.APIKeyEntries[i].APIKey)
