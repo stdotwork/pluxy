@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	configaccess "github.com/router-for-me/CLIProxyAPI/v6/internal/access/config_access"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/cmd"
@@ -101,6 +102,12 @@ func main() {
 	var cfg *config.Config
 	var isCloudDeploy bool
 	var (
+		usePostgresStore  bool
+		pgStoreDSN        string
+		pgStoreSchema     string
+		pgStoreConfigKey  string
+		pgStoreCacheDir   string
+		pgStoreInst       *store.PostgresStore
 		gitStoreLocalPath string
 		useGitStore       bool
 		gitStoreRemoteURL string
@@ -125,6 +132,22 @@ func main() {
 		}
 		return "", false
 	}
+	if value, ok := lookupEnv("PGSTORE_DSN", "pgstore_dsn"); ok {
+		usePostgresStore = true
+		pgStoreDSN = value
+	}
+	if usePostgresStore {
+		if value, ok := lookupEnv("PGSTORE_SCHEMA", "pgstore_schema"); ok {
+			pgStoreSchema = value
+		}
+		if value, ok := lookupEnv("PGSTORE_CONFIG_KEY", "pgstore_config_key"); ok {
+			pgStoreConfigKey = value
+		}
+		if value, ok := lookupEnv("PGSTORE_CACHE_DIR", "pgstore_cache_dir"); ok {
+			pgStoreCacheDir = value
+		}
+		useGitStore = false
+	}
 	if value, ok := lookupEnv("GITSTORE_GIT_URL", "gitstore_git_url"); ok {
 		useGitStore = true
 		gitStoreRemoteURL = value
@@ -147,13 +170,42 @@ func main() {
 	}
 
 	// Determine and load the configuration file.
-	// If gitstore is configured, load from the cloned repository; otherwise use the provided path or default.
+	// Prefer the Postgres store when configured, otherwise fallback to git or local files.
 	var configFilePath string
-	if useGitStore {
+	if usePostgresStore {
+		if pgStoreCacheDir == "" {
+			pgStoreCacheDir = wd
+		}
+		pgStoreCacheDir = filepath.Join(pgStoreCacheDir, "pgstore")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		pgStoreInst, err = store.NewPostgresStore(ctx, store.PostgresStoreConfig{
+			DSN:       pgStoreDSN,
+			Schema:    pgStoreSchema,
+			ConfigKey: pgStoreConfigKey,
+			SpoolDir:  pgStoreCacheDir,
+		})
+		cancel()
+		if err != nil {
+			log.Fatalf("failed to initialize postgres token store: %v", err)
+		}
+		examplePath := filepath.Join(wd, "config.example.yaml")
+		ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+		if errBootstrap := pgStoreInst.Bootstrap(ctx, examplePath); errBootstrap != nil {
+			cancel()
+			log.Fatalf("failed to bootstrap postgres-backed config: %v", errBootstrap)
+		}
+		cancel()
+		configFilePath = pgStoreInst.ConfigPath()
+		cfg, err = config.LoadConfigOptional(configFilePath, isCloudDeploy)
+		if err == nil {
+			cfg.AuthDir = pgStoreInst.AuthDir()
+			log.Infof("postgres-backed token store enabled, workspace path: %s", pgStoreInst.WorkDir())
+		}
+	} else if useGitStore {
 		if gitStoreLocalPath == "" {
 			gitStoreLocalPath = wd
 		}
-		gitStoreRoot = filepath.Join(gitStoreLocalPath, "remote")
+		gitStoreRoot = filepath.Join(gitStoreLocalPath, "gitstore")
 		authDir := filepath.Join(gitStoreRoot, "auths")
 		gitStoreInst = store.NewGitTokenStore(gitStoreRemoteURL, gitStoreUser, gitStorePassword)
 		gitStoreInst.SetBaseDir(authDir)
@@ -172,7 +224,7 @@ func main() {
 			if errCopy := misc.CopyConfigTemplate(examplePath, configFilePath); errCopy != nil {
 				log.Fatalf("failed to bootstrap git-backed config: %v", errCopy)
 			}
-			if errCommit := gitStoreInst.CommitConfig(context.Background()); errCommit != nil {
+			if errCommit := gitStoreInst.PersistConfig(context.Background()); errCommit != nil {
 				log.Fatalf("failed to commit initial git-backed config: %v", errCommit)
 			}
 			log.Infof("git-backed config initialized from template: %s", configFilePath)
@@ -245,7 +297,9 @@ func main() {
 	}
 
 	// Register the shared token store once so all components use the same persistence backend.
-	if useGitStore {
+	if usePostgresStore {
+		sdkAuth.RegisterTokenStore(pgStoreInst)
+	} else if useGitStore {
 		sdkAuth.RegisterTokenStore(gitStoreInst)
 	} else {
 		sdkAuth.RegisterTokenStore(sdkAuth.NewFileTokenStore())
