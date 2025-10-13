@@ -20,19 +20,13 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	// "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/claude"
-	// "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
-	// "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/gemini"
-	// "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/qwen"
-	// "github.com/router-for-me/CLIProxyAPI/v6/internal/client"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	// "github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
+	"gopkg.in/yaml.v3"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
-	// "github.com/tidwall/gjson"
 )
 
 // gitCommitter captures the subset of git-backed token store capabilities used by the watcher.
@@ -59,6 +53,7 @@ type Watcher struct {
 	pendingOrder   []string
 	dispatchCancel context.CancelFunc
 	gitCommitter   gitCommitter
+	oldConfigYaml  []byte
 }
 
 type stableIDGenerator struct {
@@ -174,6 +169,7 @@ func (w *Watcher) SetConfig(cfg *config.Config) {
 	w.clientsMutex.Lock()
 	defer w.clientsMutex.Unlock()
 	w.config = cfg
+	w.oldConfigYaml, _ = yaml.Marshal(cfg)
 }
 
 // SetAuthUpdateQueue sets the queue used to emit auth updates.
@@ -528,7 +524,9 @@ func (w *Watcher) reloadConfig() bool {
 	}
 
 	w.clientsMutex.Lock()
-	oldConfig := w.config
+	var oldConfig *config.Config
+	_ = yaml.Unmarshal(w.oldConfigYaml, &oldConfig)
+	w.oldConfigYaml, _ = yaml.Marshal(newConfig)
 	w.config = newConfig
 	w.clientsMutex.Unlock()
 
@@ -605,6 +603,12 @@ func (w *Watcher) reloadConfig() bool {
 			for _, change := range changes {
 				log.Debugf("    %s", change)
 			}
+		}
+		if oldConfig.QuotaExceeded.SwitchProject != newConfig.QuotaExceeded.SwitchProject {
+			log.Debugf("  quota-exceeded.switch-project: %t -> %t", oldConfig.QuotaExceeded.SwitchProject, newConfig.QuotaExceeded.SwitchProject)
+		}
+		if oldConfig.QuotaExceeded.SwitchPreviewModel != newConfig.QuotaExceeded.SwitchPreviewModel {
+			log.Debugf("  quota-exceeded.switch-preview-model: %t -> %t", oldConfig.QuotaExceeded.SwitchPreviewModel, newConfig.QuotaExceeded.SwitchPreviewModel)
 		}
 	}
 
