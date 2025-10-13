@@ -22,7 +22,7 @@ import (
 const (
 	defaultConfigTable = "config_store"
 	defaultAuthTable   = "auth_store"
-	defaultConfigKey   = "default"
+	defaultConfigKey   = "config"
 )
 
 // PostgresStoreConfig captures configuration required to initialize a Postgres-backed store.
@@ -31,7 +31,6 @@ type PostgresStoreConfig struct {
 	Schema      string
 	ConfigTable string
 	AuthTable   string
-	ConfigKey   string
 	SpoolDir    string
 }
 
@@ -58,9 +57,6 @@ func NewPostgresStore(ctx context.Context, cfg PostgresStoreConfig) (*PostgresSt
 	}
 	if cfg.AuthTable == "" {
 		cfg.AuthTable = defaultAuthTable
-	}
-	if cfg.ConfigKey == "" {
-		cfg.ConfigKey = defaultConfigKey
 	}
 
 	spoolRoot := strings.TrimSpace(cfg.SpoolDir)
@@ -399,7 +395,7 @@ func (s *PostgresStore) PersistConfig(ctx context.Context) error {
 func (s *PostgresStore) syncConfigFromDatabase(ctx context.Context, exampleConfigPath string) error {
 	query := fmt.Sprintf("SELECT content FROM %s WHERE id = $1", s.fullTableName(s.cfg.ConfigTable))
 	var content string
-	err := s.db.QueryRowContext(ctx, query, s.cfg.ConfigKey).Scan(&content)
+	err := s.db.QueryRowContext(ctx, query, defaultConfigKey).Scan(&content)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		if _, errStat := os.Stat(s.configPath); errors.Is(errStat, fs.ErrNotExist) {
@@ -532,7 +528,7 @@ func (s *PostgresStore) persistConfig(ctx context.Context, data []byte) error {
 		ON CONFLICT (id)
 		DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()
 	`, s.fullTableName(s.cfg.ConfigTable))
-	if _, err := s.db.ExecContext(ctx, query, s.cfg.ConfigKey, string(data)); err != nil {
+	if _, err := s.db.ExecContext(ctx, query, defaultConfigKey, string(data)); err != nil {
 		return fmt.Errorf("postgres store: upsert config: %w", err)
 	}
 	return nil
@@ -540,7 +536,7 @@ func (s *PostgresStore) persistConfig(ctx context.Context, data []byte) error {
 
 func (s *PostgresStore) deleteConfigRecord(ctx context.Context) error {
 	query := fmt.Sprintf("DELETE FROM %s WHERE id = $1", s.fullTableName(s.cfg.ConfigTable))
-	if _, err := s.db.ExecContext(ctx, query, s.cfg.ConfigKey); err != nil {
+	if _, err := s.db.ExecContext(ctx, query, defaultConfigKey); err != nil {
 		return fmt.Errorf("postgres store: delete config: %w", err)
 	}
 	return nil
