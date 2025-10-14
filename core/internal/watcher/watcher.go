@@ -35,25 +35,30 @@ type storePersister interface {
 	PersistAuthFiles(ctx context.Context, message string, paths ...string) error
 }
 
+type authDirProvider interface {
+	AuthDir() string
+}
+
 // Watcher manages file watching for configuration and authentication files
 type Watcher struct {
-	configPath     string
-	authDir        string
-	config         *config.Config
-	clientsMutex   sync.RWMutex
-	reloadCallback func(*config.Config)
-	watcher        *fsnotify.Watcher
-	lastAuthHashes map[string]string
-	lastConfigHash string
-	authQueue      chan<- AuthUpdate
-	currentAuths   map[string]*coreauth.Auth
-	dispatchMu     sync.Mutex
-	dispatchCond   *sync.Cond
-	pendingUpdates map[string]AuthUpdate
-	pendingOrder   []string
-	dispatchCancel context.CancelFunc
-	storePersister storePersister
-	oldConfigYaml  []byte
+	configPath      string
+	authDir         string
+	config          *config.Config
+	clientsMutex    sync.RWMutex
+	reloadCallback  func(*config.Config)
+	watcher         *fsnotify.Watcher
+	lastAuthHashes  map[string]string
+	lastConfigHash  string
+	authQueue       chan<- AuthUpdate
+	currentAuths    map[string]*coreauth.Auth
+	dispatchMu      sync.Mutex
+	dispatchCond    *sync.Cond
+	pendingUpdates  map[string]AuthUpdate
+	pendingOrder    []string
+	dispatchCancel  context.CancelFunc
+	storePersister  storePersister
+	mirroredAuthDir string
+	oldConfigYaml   []byte
 }
 
 type stableIDGenerator struct {
@@ -129,6 +134,12 @@ func NewWatcher(configPath, authDir string, reloadCallback func(*config.Config))
 		if persister, ok := store.(storePersister); ok {
 			w.storePersister = persister
 			log.Debug("persistence-capable token store detected; watcher will propagate persisted changes")
+		}
+		if provider, ok := store.(authDirProvider); ok {
+			if fixed := strings.TrimSpace(provider.AuthDir()); fixed != "" {
+				w.mirroredAuthDir = fixed
+				log.Debugf("mirrored auth directory locked to %s", fixed)
+			}
 		}
 	}
 	return w, nil
@@ -517,10 +528,14 @@ func (w *Watcher) reloadConfig() bool {
 		return false
 	}
 
-	if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(newConfig.AuthDir); errResolveAuthDir != nil {
-		log.Errorf("failed to resolve auth directory from config: %v", errResolveAuthDir)
+	if w.mirroredAuthDir != "" {
+		newConfig.AuthDir = w.mirroredAuthDir
 	} else {
-		newConfig.AuthDir = resolvedAuthDir
+		if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(newConfig.AuthDir); errResolveAuthDir != nil {
+			log.Errorf("failed to resolve auth directory from config: %v", errResolveAuthDir)
+		} else {
+			newConfig.AuthDir = resolvedAuthDir
+		}
 	}
 
 	w.clientsMutex.Lock()
