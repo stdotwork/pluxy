@@ -29,31 +29,36 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// gitCommitter captures the subset of git-backed token store capabilities used by the watcher.
-type gitCommitter interface {
-	CommitConfig(ctx context.Context) error
-	CommitPaths(ctx context.Context, message string, paths ...string) error
+// storePersister captures persistence-capable token store methods used by the watcher.
+type storePersister interface {
+	PersistConfig(ctx context.Context) error
+	PersistAuthFiles(ctx context.Context, message string, paths ...string) error
+}
+
+type authDirProvider interface {
+	AuthDir() string
 }
 
 // Watcher manages file watching for configuration and authentication files
 type Watcher struct {
-	configPath     string
-	authDir        string
-	config         *config.Config
-	clientsMutex   sync.RWMutex
-	reloadCallback func(*config.Config)
-	watcher        *fsnotify.Watcher
-	lastAuthHashes map[string]string
-	lastConfigHash string
-	authQueue      chan<- AuthUpdate
-	currentAuths   map[string]*coreauth.Auth
-	dispatchMu     sync.Mutex
-	dispatchCond   *sync.Cond
-	pendingUpdates map[string]AuthUpdate
-	pendingOrder   []string
-	dispatchCancel context.CancelFunc
-	gitCommitter   gitCommitter
-	oldConfigYaml  []byte
+	configPath      string
+	authDir         string
+	config          *config.Config
+	clientsMutex    sync.RWMutex
+	reloadCallback  func(*config.Config)
+	watcher         *fsnotify.Watcher
+	lastAuthHashes  map[string]string
+	lastConfigHash  string
+	authQueue       chan<- AuthUpdate
+	currentAuths    map[string]*coreauth.Auth
+	dispatchMu      sync.Mutex
+	dispatchCond    *sync.Cond
+	pendingUpdates  map[string]AuthUpdate
+	pendingOrder    []string
+	dispatchCancel  context.CancelFunc
+	storePersister  storePersister
+	mirroredAuthDir string
+	oldConfigYaml   []byte
 }
 
 type stableIDGenerator struct {
@@ -126,9 +131,15 @@ func NewWatcher(configPath, authDir string, reloadCallback func(*config.Config))
 	}
 	w.dispatchCond = sync.NewCond(&w.dispatchMu)
 	if store := sdkAuth.GetTokenStore(); store != nil {
-		if committer, ok := store.(gitCommitter); ok {
-			w.gitCommitter = committer
-			log.Debug("gitstore mode detected; watcher will commit changes to remote repository")
+		if persister, ok := store.(storePersister); ok {
+			w.storePersister = persister
+			log.Debug("persistence-capable token store detected; watcher will propagate persisted changes")
+		}
+		if provider, ok := store.(authDirProvider); ok {
+			if fixed := strings.TrimSpace(provider.AuthDir()); fixed != "" {
+				w.mirroredAuthDir = fixed
+				log.Debugf("mirrored auth directory locked to %s", fixed)
+			}
 		}
 	}
 	return w, nil
@@ -345,21 +356,21 @@ func (w *Watcher) stopDispatch() {
 	w.clientsMutex.Unlock()
 }
 
-func (w *Watcher) commitConfigAsync() {
-	if w == nil || w.gitCommitter == nil {
+func (w *Watcher) persistConfigAsync() {
+	if w == nil || w.storePersister == nil {
 		return
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := w.gitCommitter.CommitConfig(ctx); err != nil {
-			log.Errorf("failed to commit config change: %v", err)
+		if err := w.storePersister.PersistConfig(ctx); err != nil {
+			log.Errorf("failed to persist config change: %v", err)
 		}
 	}()
 }
 
-func (w *Watcher) commitAuthAsync(message string, paths ...string) {
-	if w == nil || w.gitCommitter == nil {
+func (w *Watcher) persistAuthAsync(message string, paths ...string) {
+	if w == nil || w.storePersister == nil {
 		return
 	}
 	filtered := make([]string, 0, len(paths))
@@ -374,8 +385,8 @@ func (w *Watcher) commitAuthAsync(message string, paths ...string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := w.gitCommitter.CommitPaths(ctx, message, filtered...); err != nil {
-			log.Errorf("failed to commit auth changes: %v", err)
+		if err := w.storePersister.PersistAuthFiles(ctx, message, filtered...); err != nil {
+			log.Errorf("failed to persist auth changes: %v", err)
 		}
 	}()
 }
@@ -484,7 +495,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 			w.clientsMutex.Lock()
 			w.lastConfigHash = finalHash
 			w.clientsMutex.Unlock()
-			w.commitConfigAsync()
+			w.persistConfigAsync()
 		}
 		return
 	}
@@ -517,10 +528,14 @@ func (w *Watcher) reloadConfig() bool {
 		return false
 	}
 
-	if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(newConfig.AuthDir); errResolveAuthDir != nil {
-		log.Errorf("failed to resolve auth directory from config: %v", errResolveAuthDir)
+	if w.mirroredAuthDir != "" {
+		newConfig.AuthDir = w.mirroredAuthDir
 	} else {
-		newConfig.AuthDir = resolvedAuthDir
+		if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(newConfig.AuthDir); errResolveAuthDir != nil {
+			log.Errorf("failed to resolve auth directory from config: %v", errResolveAuthDir)
+		} else {
+			newConfig.AuthDir = resolvedAuthDir
+		}
 	}
 
 	w.clientsMutex.Lock()
@@ -683,7 +698,7 @@ func (w *Watcher) addOrUpdateClient(path string) {
 		log.Debugf("triggering server update callback after add/update")
 		w.reloadCallback(cfg)
 	}
-	w.commitAuthAsync(fmt.Sprintf("Sync auth %s", filepath.Base(path)), path)
+	w.persistAuthAsync(fmt.Sprintf("Sync auth %s", filepath.Base(path)), path)
 }
 
 // removeClient handles the removal of a single client.
@@ -701,7 +716,7 @@ func (w *Watcher) removeClient(path string) {
 		log.Debugf("triggering server update callback after removal")
 		w.reloadCallback(cfg)
 	}
-	w.commitAuthAsync(fmt.Sprintf("Remove auth %s", filepath.Base(path)), path)
+	w.persistAuthAsync(fmt.Sprintf("Remove auth %s", filepath.Base(path)), path)
 }
 
 // SnapshotCombinedClients returns a snapshot of current combined clients.

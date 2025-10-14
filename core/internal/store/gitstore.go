@@ -359,9 +359,9 @@ func (s *GitTokenStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-// CommitPaths commits and pushes the provided paths to the remote repository.
+// PersistAuthFiles commits and pushes the provided paths to the remote repository.
 // It no-ops when the store is not fully configured or when there are no paths.
-func (s *GitTokenStore) CommitPaths(_ context.Context, message string, paths ...string) error {
+func (s *GitTokenStore) PersistAuthFiles(_ context.Context, message string, paths ...string) error {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -652,8 +652,8 @@ func (s *GitTokenStore) rewriteHeadAsSingleCommit(repo *git.Repository, branch p
 	return nil
 }
 
-// CommitConfig commits and pushes configuration changes to git.
-func (s *GitTokenStore) CommitConfig(_ context.Context) error {
+// PersistConfig commits and pushes configuration changes to git.
+func (s *GitTokenStore) PersistConfig(_ context.Context) error {
 	if err := s.EnsureRepository(); err != nil {
 		return err
 	}
