@@ -326,6 +326,7 @@ func SaveConfigPreserveComments(configFile string, cfg *Config) error {
 
 	// Merge generated into original in-place, preserving comments/order of existing nodes.
 	mergeMappingPreserve(original.Content[0], generated.Content[0])
+	normalizeCollectionNodeStyles(original.Content[0])
 
 	// Write back.
 	f, err := os.Create(configFile)
@@ -564,5 +565,32 @@ func removeMapKey(mapNode *yaml.Node, key string) {
 			mapNode.Content = append(mapNode.Content[:i], mapNode.Content[i+2:]...)
 			return
 		}
+	}
+}
+
+// normalizeCollectionNodeStyles forces YAML collections to use block notation, keeping
+// lists and maps readable. Empty sequences retain flow style ([]) so empty list markers
+// remain compact.
+func normalizeCollectionNodeStyles(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+	switch node.Kind {
+	case yaml.MappingNode:
+		node.Style = 0
+		for i := range node.Content {
+			normalizeCollectionNodeStyles(node.Content[i])
+		}
+	case yaml.SequenceNode:
+		if len(node.Content) == 0 {
+			node.Style = yaml.FlowStyle
+		} else {
+			node.Style = 0
+		}
+		for i := range node.Content {
+			normalizeCollectionNodeStyles(node.Content[i])
+		}
+	default:
+		// Scalars keep their existing style to preserve quoting
 	}
 }
