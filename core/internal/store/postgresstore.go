@@ -425,7 +425,8 @@ func (s *PostgresStore) syncConfigFromDatabase(ctx context.Context, exampleConfi
 		if err = os.MkdirAll(filepath.Dir(s.configPath), 0o700); err != nil {
 			return fmt.Errorf("postgres store: prepare config directory: %w", err)
 		}
-		if err = os.WriteFile(s.configPath, []byte(content), 0o600); err != nil {
+		normalized := normalizeLineEndings(content)
+		if err = os.WriteFile(s.configPath, []byte(normalized), 0o600); err != nil {
 			return fmt.Errorf("postgres store: write config to spool: %w", err)
 		}
 	}
@@ -528,7 +529,8 @@ func (s *PostgresStore) persistConfig(ctx context.Context, data []byte) error {
 		ON CONFLICT (id)
 		DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()
 	`, s.fullTableName(s.cfg.ConfigTable))
-	if _, err := s.db.ExecContext(ctx, query, defaultConfigKey, string(data)); err != nil {
+	normalized := normalizeLineEndings(string(data))
+	if _, err := s.db.ExecContext(ctx, query, defaultConfigKey, normalized); err != nil {
 		return fmt.Errorf("postgres store: upsert config: %w", err)
 	}
 	return nil
@@ -651,4 +653,13 @@ func labelFor(metadata map[string]any) string {
 
 func normalizeAuthID(id string) string {
 	return filepath.ToSlash(filepath.Clean(id))
+}
+
+func normalizeLineEndings(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return s
 }
