@@ -37,6 +37,8 @@ type ConvertOpenAIResponseToAnthropicParams struct {
 	ContentBlocksStopped bool
 	// Track if message_delta has been sent
 	MessageDeltaSent bool
+	// Track if message_start has been sent
+	MessageStarted bool
 }
 
 // ToolCallAccumulator holds the state for accumulating tool call data
@@ -84,20 +86,12 @@ func ConvertOpenAIResponseToClaude(_ context.Context, _ string, originalRequestR
 		return convertOpenAIDoneToAnthropic((*param).(*ConvertOpenAIResponseToAnthropicParams))
 	}
 
-	root := gjson.ParseBytes(rawJSON)
-
-	// Check if this is a streaming chunk or non-streaming response
-	objectType := root.Get("object").String()
-
-	if objectType == "chat.completion.chunk" {
-		// Handle streaming response
-		return convertOpenAIStreamingChunkToAnthropic(rawJSON, (*param).(*ConvertOpenAIResponseToAnthropicParams))
-	} else if objectType == "chat.completion" {
-		// Handle non-streaming response
+	streamResult := gjson.GetBytes(originalRequestRawJSON, "stream")
+	if !streamResult.Exists() || (streamResult.Exists() && streamResult.Type == gjson.False) {
 		return convertOpenAINonStreamingToAnthropic(rawJSON)
+	} else {
+		return convertOpenAIStreamingChunkToAnthropic(rawJSON, (*param).(*ConvertOpenAIResponseToAnthropicParams))
 	}
-
-	return []string{}
 }
 
 // convertOpenAIStreamingChunkToAnthropic converts OpenAI streaming chunk to Anthropic streaming events
@@ -118,7 +112,7 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 
 	// Check if this is the first chunk (has role)
 	if delta := root.Get("choices.0.delta"); delta.Exists() {
-		if role := delta.Get("role"); role.Exists() && role.String() == "assistant" {
+		if role := delta.Get("role"); role.Exists() && role.String() == "assistant" && !param.MessageStarted {
 			// Send message_start event
 			messageStart := map[string]interface{}{
 				"type": "message_start",
@@ -138,6 +132,7 @@ func convertOpenAIStreamingChunkToAnthropic(rawJSON []byte, param *ConvertOpenAI
 			}
 			messageStartJSON, _ := json.Marshal(messageStart)
 			results = append(results, "event: message_start\ndata: "+string(messageStartJSON)+"\n\n")
+			param.MessageStarted = true
 
 			// Don't send content_block_start for text here - wait for actual content
 		}
