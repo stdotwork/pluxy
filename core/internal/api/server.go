@@ -32,6 +32,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers/openai"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v3"
 )
 
 const oauthCallbackSuccessHTML = `<html><head><meta charset="utf-8"><title>Authentication successful</title><script>setTimeout(function(){window.close();},5000);</script></head><body><h1>Authentication successful!</h1><p>You can close this window.</p><p>This window will close automatically in 5 seconds.</p></body></html>`
@@ -115,6 +116,10 @@ type Server struct {
 
 	// cfg holds the current server configuration.
 	cfg *config.Config
+
+	// oldConfigYaml stores a YAML snapshot of the previous configuration for change detection.
+	// This prevents issues when the config object is modified in place by Management API.
+	oldConfigYaml []byte
 
 	// accessManager handles request authentication providers.
 	accessManager *sdkaccess.Manager
@@ -220,6 +225,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		currentPath:         wd,
 		envManagementSecret: envManagementSecret,
 	}
+	// Save initial YAML snapshot
+	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 	s.applyAccessConfig(nil, cfg)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
@@ -654,7 +661,11 @@ func (s *Server) applyAccessConfig(oldCfg, newCfg *config.Config) {
 //   - clients: The new slice of AI service clients
 //   - cfg: The new application configuration
 func (s *Server) UpdateClients(cfg *config.Config) {
-	oldCfg := s.cfg
+	// Reconstruct old config from YAML snapshot to avoid reference sharing issues
+	var oldCfg *config.Config
+	if len(s.oldConfigYaml) > 0 {
+		_ = yaml.Unmarshal(s.oldConfigYaml, &oldCfg)
+	}
 
 	// Update request logger enabled state if it has changed
 	previousRequestLog := false
@@ -735,6 +746,8 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 
 	s.applyAccessConfig(oldCfg, cfg)
 	s.cfg = cfg
+	// Save YAML snapshot for next comparison
+	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 	s.handlers.UpdateClients(&cfg.SDKConfig)
 
 	if !cfg.RemoteManagement.DisableControlPanel {
