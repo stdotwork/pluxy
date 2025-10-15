@@ -1,20 +1,32 @@
+# Binaries
+cli-proxy-api
+*.exe
+
+# Configuration
 config.yaml
+.env
+
+# Generated content
 bin/*
-docs/*
 logs/*
 conv/*
+temp/*
+pgstore/*
+gitstore/*
+objectstore/*
+static/*
+
+# Authentication data
 auths/*
 !auths/.gitkeep
-.vscode/*
-.claude/*
-.serena/*
+
+# Documentation
+docs/*
 AGENTS.md
 CLAUDE.md
 GEMINI.md
-*.exe
-temp/*
-cli-proxy-api
-static/*
-.env
-pgstore/*
-gitstore/*
+
+# Tooling metadata
+.vscode/*
+.claude/*
+.serena/*

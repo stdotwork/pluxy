@@ -469,6 +469,27 @@ openai-compatibility:
 3.  **引导：** 若数据库中无配置记录，会使用 `config.example.yaml` 初始化，并以固定标识 `config` 写入。
 4.  **令牌同步：** 配置与令牌的更改会写入 PostgreSQL，同时数据库中的内容也会反向同步至本地镜像，便于文件监听与管理接口继续工作。
 
+### 对象存储驱动的配置与令牌存储
+
+可以选择使用 S3 兼容的对象存储来托管配置与鉴权数据。
+
+**环境变量**
+
+| 变量                     | 是否必填 | 默认值             | 说明                                                                                                                     |
+|--------------------------|----------|--------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `OBJECTSTORE_ENDPOINT`   | 是       |                    | 对象存储访问端点。可带 `http://` 或 `https://` 前缀指定协议（省略则默认 HTTPS）。                                      |
+| `OBJECTSTORE_BUCKET`     | 是       |                    | 用于存放 `config/config.yaml` 与 `auths/*.json` 的 Bucket 名称。                                                        |
+| `OBJECTSTORE_ACCESS_KEY` | 是       |                    | 对象存储账号的访问密钥 ID。                                                                                              |
+| `OBJECTSTORE_SECRET_KEY` | 是       |                    | 对象存储账号的访问密钥 Secret。                                                                                          |
+| `OBJECTSTORE_LOCAL_PATH` | 否       | 当前工作目录 (CWD) | 本地镜像根目录；服务会写入到 `<值>/objectstore`。                                                                         |
+
+**工作流程**
+
+1. **启动阶段：** 解析端点地址（识别协议前缀），创建 MinIO 兼容客户端并使用 Path-Style 模式，如 Bucket 不存在会自动创建。
+2. **本地镜像：** 在 `<OBJECTSTORE_LOCAL_PATH 或当前工作目录>/objectstore` 维护可写缓存，同步 `config/config.yaml` 与 `auths/`。
+3. **初始化：** 若 Bucket 中缺少配置文件，将以 `config.example.yaml` 为模板生成 `config/config.yaml` 并上传。
+4. **双向同步：** 本地变更会上传到对象存储，同时远端对象也会拉回到本地，保证文件监听、管理 API 与 CLI 命令行为一致。
+
 ### OpenAI 兼容上游提供商
 
 通过 `openai-compatibility` 配置上游 OpenAI 兼容提供商（例如 OpenRouter）。
