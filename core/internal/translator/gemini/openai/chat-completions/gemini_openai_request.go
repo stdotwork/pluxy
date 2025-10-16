@@ -26,21 +26,6 @@ import (
 //   - []byte: The transformed request data in Gemini API format
 func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool) []byte {
 	rawJSON := bytes.Clone(inputRawJSON)
-	var pathsToDelete []string
-	root := gjson.ParseBytes(rawJSON)
-	util.Walk(root, "", "additionalProperties", &pathsToDelete)
-	util.Walk(root, "", "$schema", &pathsToDelete)
-	util.Walk(root, "", "ref", &pathsToDelete)
-	util.Walk(root, "", "strict", &pathsToDelete)
-
-	var err error
-	for _, p := range pathsToDelete {
-		rawJSON, err = sjson.DeleteBytes(rawJSON, p)
-		if err != nil {
-			continue
-		}
-	}
-
 	// Base envelope
 	out := []byte(`{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}}`)
 
@@ -290,19 +275,10 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 			if t.Get("type").String() == "function" {
 				fn := t.Get("function")
 				if fn.Exists() && fn.IsObject() {
-					out, _ = sjson.SetRawBytes(out, fdPath+".-1", []byte(fn.Raw))
+					parametersJsonSchema, _ := util.RenameKey(fn.Raw, "parameters", "parametersJsonSchema")
+					out, _ = sjson.SetRawBytes(out, fdPath+".-1", []byte(parametersJsonSchema))
 				}
 			}
-		}
-	}
-
-	var pathsToType []string
-	root = gjson.ParseBytes(out)
-	util.Walk(root, "", "type", &pathsToType)
-	for _, p := range pathsToType {
-		typeResult := gjson.GetBytes(out, p)
-		if strings.ToLower(typeResult.String()) == "select" {
-			out, _ = sjson.SetBytes(out, p, "STRING")
 		}
 	}
 
