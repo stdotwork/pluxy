@@ -233,6 +233,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if optionState.localPassword != "" {
 		s.mgmt.SetLocalPassword(optionState.localPassword)
 	}
+	s.mgmt.SetLogDirectory(filepath.Join(s.currentPath, "logs"))
 	s.localPassword = optionState.localPassword
 
 	// Setup routes
@@ -411,6 +412,8 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/generative-language-api-key", s.mgmt.PatchGlKeys)
 		mgmt.DELETE("/generative-language-api-key", s.mgmt.DeleteGlKeys)
 
+		mgmt.GET("/logs", s.mgmt.GetLogs)
+		mgmt.DELETE("/logs", s.mgmt.DeleteLogs)
 		mgmt.GET("/request-log", s.mgmt.GetRequestLog)
 		mgmt.PUT("/request-log", s.mgmt.PutRequestLog)
 		mgmt.PATCH("/request-log", s.mgmt.PutRequestLog)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ type Handler struct {
 	localPassword       string
 	allowRemoteOverride bool
 	envSecret           string
+	logDir              string
 }
 
 // NewHandler creates a new management handler instance.
@@ -67,6 +69,19 @@ func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageSt
 
 // SetLocalPassword configures the runtime-local password accepted for localhost requests.
 func (h *Handler) SetLocalPassword(password string) { h.localPassword = password }
+
+// SetLogDirectory updates the directory where main.log should be looked up.
+func (h *Handler) SetLogDirectory(dir string) {
+	if dir == "" {
+		return
+	}
+	if !filepath.IsAbs(dir) {
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
+	}
+	h.logDir = dir
+}
 
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.
