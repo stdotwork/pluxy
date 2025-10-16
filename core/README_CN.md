@@ -96,6 +96,8 @@ CLIProxyAPI 的基于 Web 的管理中心。
 
 如果希望自行托管管理页面，可在配置中将 `remote-management.disable-control-panel` 设为 `true`，服务器将停止下载 `management.html`，并让 `/management.html` 返回 404。
 
+可以通过设置环境变量 `MANAGEMENT_STATIC_PATH` 来指定 `management.html` 的存储目录。
+
 ### 身份验证
 
 您可以分别为 Gemini、OpenAI、Claude、Qwen 和 iFlow 进行身份验证，它们可同时存在于同一个 `auth-dir` 中并参与负载均衡。
