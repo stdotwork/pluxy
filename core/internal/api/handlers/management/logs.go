@@ -116,7 +116,7 @@ func (h *Handler) DeleteLogs(c *gin.Context) {
 		name := entry.Name()
 		fullPath := filepath.Join(dir, name)
 		if name == defaultLogFileName {
-			if errTrunc := os.Truncate(fullPath, 0); errTrunc != nil {
+			if errTrunc := os.Truncate(fullPath, 0); errTrunc != nil && !os.IsNotExist(errTrunc) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to truncate log file: %v", errTrunc)})
 				return
 			}
