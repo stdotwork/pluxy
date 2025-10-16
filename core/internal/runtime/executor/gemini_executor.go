@@ -77,6 +77,9 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("gemini")
 	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), false)
+	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok {
+		body = util.ApplyGeminiThinkingConfig(body, budgetOverride, includeOverride)
+	}
 	body = disableGeminiThinkingConfig(body, req.Model)
 	body = fixGeminiImageAspectRatio(req.Model, body)
 
@@ -136,6 +139,9 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("gemini")
 	body := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), true)
+	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok {
+		body = util.ApplyGeminiThinkingConfig(body, budgetOverride, includeOverride)
+	}
 	body = disableGeminiThinkingConfig(body, req.Model)
 	body = fixGeminiImageAspectRatio(req.Model, body)
 
@@ -208,6 +214,9 @@ func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("gemini")
 	translatedReq := sdktranslator.TranslateRequest(from, to, req.Model, bytes.Clone(req.Payload), false)
+	if budgetOverride, includeOverride, ok := util.GeminiThinkingFromMetadata(req.Metadata); ok {
+		translatedReq = util.ApplyGeminiThinkingConfig(translatedReq, budgetOverride, includeOverride)
+	}
 	translatedReq = disableGeminiThinkingConfig(translatedReq, req.Model)
 	translatedReq = fixGeminiImageAspectRatio(req.Model, translatedReq)
 	respCtx := context.WithValue(ctx, "alt", opts.Alt)
