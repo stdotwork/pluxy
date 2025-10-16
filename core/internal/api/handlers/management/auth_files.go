@@ -1150,126 +1150,50 @@ func (h *Handler) RequestIFlowToken(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to start callback server"})
 			return
 		}
-
-		go func() {
-			defer stopCallbackForwarder(iflowauth.CallbackPort)
-			fmt.Println("Waiting for authentication...")
-
-			waitFile := filepath.Join(h.cfg.AuthDir, fmt.Sprintf(".oauth-iflow-%s.oauth", state))
-			deadline := time.Now().Add(5 * time.Minute)
-			var resultMap map[string]string
-			for {
-				if time.Now().After(deadline) {
-					oauthStatus[state] = "Authentication failed"
-					fmt.Println("Authentication failed: timeout waiting for callback")
-					return
-				}
-				if data, errR := os.ReadFile(waitFile); errR == nil {
-					_ = os.Remove(waitFile)
-					_ = json.Unmarshal(data, &resultMap)
-					break
-				}
-				time.Sleep(500 * time.Millisecond)
-			}
-
-			if errStr := strings.TrimSpace(resultMap["error"]); errStr != "" {
-				oauthStatus[state] = "Authentication failed"
-				fmt.Printf("Authentication failed: %s\n", errStr)
-				return
-			}
-			if resultState := strings.TrimSpace(resultMap["state"]); resultState != state {
-				oauthStatus[state] = "Authentication failed"
-				fmt.Println("Authentication failed: state mismatch")
-				return
-			}
-
-			code := strings.TrimSpace(resultMap["code"])
-			if code == "" {
-				oauthStatus[state] = "Authentication failed"
-				fmt.Println("Authentication failed: code missing")
-				return
-			}
-
-			tokenData, errExchange := authSvc.ExchangeCodeForTokens(ctx, code, redirectURI)
-			if errExchange != nil {
-				oauthStatus[state] = "Authentication failed"
-				fmt.Printf("Authentication failed: %v\n", errExchange)
-				return
-			}
-
-			tokenStorage := authSvc.CreateTokenStorage(tokenData)
-			identifier := strings.TrimSpace(tokenStorage.Email)
-			if identifier == "" {
-				identifier = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
-				tokenStorage.Email = identifier
-			}
-			record := &coreauth.Auth{
-				ID:         fmt.Sprintf("iflow-%s.json", identifier),
-				Provider:   "iflow",
-				FileName:   fmt.Sprintf("iflow-%s.json", identifier),
-				Storage:    tokenStorage,
-				Metadata:   map[string]any{"email": identifier, "api_key": tokenStorage.APIKey},
-				Attributes: map[string]string{"api_key": tokenStorage.APIKey},
-			}
-
-			savedPath, errSave := h.saveTokenRecord(ctx, record)
-			if errSave != nil {
-				oauthStatus[state] = "Failed to save authentication tokens"
-				log.Fatalf("Failed to save authentication tokens: %v", errSave)
-				return
-			}
-
-			fmt.Printf("Authentication successful! Token saved to %s\n", savedPath)
-			if tokenStorage.APIKey != "" {
-				fmt.Println("API key obtained and saved")
-			}
-			fmt.Println("You can now use iFlow services through this CLI")
-			delete(oauthStatus, state)
-		}()
-
-		oauthStatus[state] = ""
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "url": authURL, "state": state})
-		return
-	}
-
-	oauthServer := iflowauth.NewOAuthServer(iflowauth.CallbackPort)
-	if err := oauthServer.Start(); err != nil {
-		oauthStatus[state] = "Failed to start authentication server"
-		log.Errorf("Failed to start iFlow OAuth server: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to start local oauth server"})
-		return
 	}
 
 	go func() {
+		if isWebUI {
+			defer stopCallbackForwarder(iflowauth.CallbackPort)
+		}
 		fmt.Println("Waiting for authentication...")
-		defer func() {
-			stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if err := oauthServer.Stop(stopCtx); err != nil {
-				log.Warnf("Failed to stop iFlow OAuth server: %v", err)
+
+		waitFile := filepath.Join(h.cfg.AuthDir, fmt.Sprintf(".oauth-iflow-%s.oauth", state))
+		deadline := time.Now().Add(5 * time.Minute)
+		var resultMap map[string]string
+		for {
+			if time.Now().After(deadline) {
+				oauthStatus[state] = "Authentication failed"
+				fmt.Println("Authentication failed: timeout waiting for callback")
+				return
 			}
-		}()
-
-		result, err := oauthServer.WaitForCallback(5 * time.Minute)
-		if err != nil {
-			oauthStatus[state] = "Authentication failed"
-			fmt.Printf("Authentication failed: %v\n", err)
-			return
+			if data, errR := os.ReadFile(waitFile); errR == nil {
+				_ = os.Remove(waitFile)
+				_ = json.Unmarshal(data, &resultMap)
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
 
-		if result.Error != "" {
+		if errStr := strings.TrimSpace(resultMap["error"]); errStr != "" {
 			oauthStatus[state] = "Authentication failed"
-			fmt.Printf("Authentication failed: %s\n", result.Error)
+			fmt.Printf("Authentication failed: %s\n", errStr)
 			return
 		}
-
-		if result.State != state {
+		if resultState := strings.TrimSpace(resultMap["state"]); resultState != state {
 			oauthStatus[state] = "Authentication failed"
 			fmt.Println("Authentication failed: state mismatch")
 			return
 		}
 
-		tokenData, errExchange := authSvc.ExchangeCodeForTokens(ctx, result.Code, redirectURI)
+		code := strings.TrimSpace(resultMap["code"])
+		if code == "" {
+			oauthStatus[state] = "Authentication failed"
+			fmt.Println("Authentication failed: code missing")
+			return
+		}
+
+		tokenData, errExchange := authSvc.ExchangeCodeForTokens(ctx, code, redirectURI)
 		if errExchange != nil {
 			oauthStatus[state] = "Authentication failed"
 			fmt.Printf("Authentication failed: %v\n", errExchange)
