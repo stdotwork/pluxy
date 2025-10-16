@@ -96,7 +96,6 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 
 	body, _ = sjson.DeleteBytes(body, "session_id")
 
-	recordAPIRequest(ctx, e.cfg, body)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
@@ -107,13 +106,32 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	} else if bearer != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	}
+	var authID, authLabel, authType, authValue string
+	if auth != nil {
+		authID = auth.ID
+		authLabel = auth.Label
+		authType, authValue = auth.AccountInfo()
+	}
+	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
+		URL:       url,
+		Method:    http.MethodPost,
+		Headers:   httpReq.Header.Clone(),
+		Body:      body,
+		Provider:  e.Identifier(),
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		AuthType:  authType,
+		AuthValue: authValue,
+	})
 
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
 		return cliproxyexecutor.Response{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	recordAPIResponseMetadata(ctx, e.cfg, resp.StatusCode, resp.Header.Clone())
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		appendAPIResponseChunk(ctx, e.cfg, b)
@@ -122,6 +140,7 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
 		return cliproxyexecutor.Response{}, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, data)
@@ -154,7 +173,6 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 
 	body, _ = sjson.DeleteBytes(body, "session_id")
 
-	recordAPIRequest(ctx, e.cfg, body)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -165,12 +183,31 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	} else {
 		httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	}
+	var authID, authLabel, authType, authValue string
+	if auth != nil {
+		authID = auth.ID
+		authLabel = auth.Label
+		authType, authValue = auth.AccountInfo()
+	}
+	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
+		URL:       url,
+		Method:    http.MethodPost,
+		Headers:   httpReq.Header.Clone(),
+		Body:      body,
+		Provider:  e.Identifier(),
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		AuthType:  authType,
+		AuthValue: authValue,
+	})
 
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
 		return nil, err
 	}
+	recordAPIResponseMetadata(ctx, e.cfg, resp.StatusCode, resp.Header.Clone())
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
@@ -202,6 +239,7 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			out <- cliproxyexecutor.StreamChunk{Payload: []byte(lines[i])}
 		}
 		if err = scanner.Err(); err != nil {
+			recordAPIResponseError(ctx, e.cfg, err)
 			out <- cliproxyexecutor.StreamChunk{Err: err}
 		}
 	}()
@@ -224,7 +262,6 @@ func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	translatedReq, _ = sjson.DeleteBytes(translatedReq, "generationConfig")
 
 	url := fmt.Sprintf("%s/%s/models/%s:%s", glEndpoint, glAPIVersion, req.Model, "countTokens")
-	recordAPIRequest(ctx, e.cfg, translatedReq)
 
 	requestBody := bytes.NewReader(translatedReq)
 
@@ -238,16 +275,36 @@ func (e *GeminiExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	} else {
 		httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	}
+	var authID, authLabel, authType, authValue string
+	if auth != nil {
+		authID = auth.ID
+		authLabel = auth.Label
+		authType, authValue = auth.AccountInfo()
+	}
+	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
+		URL:       url,
+		Method:    http.MethodPost,
+		Headers:   httpReq.Header.Clone(),
+		Body:      translatedReq,
+		Provider:  e.Identifier(),
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		AuthType:  authType,
+		AuthValue: authValue,
+	})
 
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
 		return cliproxyexecutor.Response{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	recordAPIResponseMetadata(ctx, e.cfg, resp.StatusCode, resp.Header.Clone())
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
 		return cliproxyexecutor.Response{}, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, data)
