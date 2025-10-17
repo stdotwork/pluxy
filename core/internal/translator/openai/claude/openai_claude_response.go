@@ -466,7 +466,7 @@ func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, origina
 		},
 	}
 
-	var contentBlocks []interface{}
+	contentBlocks := make([]interface{}, 0)
 	hasToolCall := false
 
 	if choices := root.Get("choices"); choices.Exists() && choices.IsArray() && len(choices.Array()) > 0 {
@@ -477,80 +477,90 @@ func ConvertOpenAIResponseToClaudeNonStream(_ context.Context, _ string, origina
 		}
 
 		if message := choice.Get("message"); message.Exists() {
-			if contentArray := message.Get("content"); contentArray.Exists() && contentArray.IsArray() {
-				var textBuilder strings.Builder
-				var thinkingBuilder strings.Builder
+			if contentResult := message.Get("content"); contentResult.Exists() {
+				if contentResult.IsArray() {
+					var textBuilder strings.Builder
+					var thinkingBuilder strings.Builder
 
-				flushText := func() {
-					if textBuilder.Len() == 0 {
-						return
+					flushText := func() {
+						if textBuilder.Len() == 0 {
+							return
+						}
+						contentBlocks = append(contentBlocks, map[string]interface{}{
+							"type": "text",
+							"text": textBuilder.String(),
+						})
+						textBuilder.Reset()
 					}
-					contentBlocks = append(contentBlocks, map[string]interface{}{
-						"type": "text",
-						"text": textBuilder.String(),
-					})
-					textBuilder.Reset()
-				}
 
-				flushThinking := func() {
-					if thinkingBuilder.Len() == 0 {
-						return
+					flushThinking := func() {
+						if thinkingBuilder.Len() == 0 {
+							return
+						}
+						contentBlocks = append(contentBlocks, map[string]interface{}{
+							"type":     "thinking",
+							"thinking": thinkingBuilder.String(),
+						})
+						thinkingBuilder.Reset()
 					}
-					contentBlocks = append(contentBlocks, map[string]interface{}{
-						"type":     "thinking",
-						"thinking": thinkingBuilder.String(),
-					})
-					thinkingBuilder.Reset()
-				}
 
-				for _, item := range contentArray.Array() {
-					typeStr := item.Get("type").String()
-					switch typeStr {
-					case "text":
-						flushThinking()
-						textBuilder.WriteString(item.Get("text").String())
-					case "tool_calls":
-						flushThinking()
-						flushText()
-						toolCalls := item.Get("tool_calls")
-						if toolCalls.IsArray() {
-							toolCalls.ForEach(func(_, tc gjson.Result) bool {
-								hasToolCall = true
-								toolUse := map[string]interface{}{
-									"type": "tool_use",
-									"id":   tc.Get("id").String(),
-									"name": tc.Get("function.name").String(),
-								}
+					for _, item := range contentResult.Array() {
+						typeStr := item.Get("type").String()
+						switch typeStr {
+						case "text":
+							flushThinking()
+							textBuilder.WriteString(item.Get("text").String())
+						case "tool_calls":
+							flushThinking()
+							flushText()
+							toolCalls := item.Get("tool_calls")
+							if toolCalls.IsArray() {
+								toolCalls.ForEach(func(_, tc gjson.Result) bool {
+									hasToolCall = true
+									toolUse := map[string]interface{}{
+										"type": "tool_use",
+										"id":   tc.Get("id").String(),
+										"name": tc.Get("function.name").String(),
+									}
 
-								argsStr := util.FixJSON(tc.Get("function.arguments").String())
-								if argsStr != "" {
-									var parsed interface{}
-									if err := json.Unmarshal([]byte(argsStr), &parsed); err == nil {
-										toolUse["input"] = parsed
+									argsStr := util.FixJSON(tc.Get("function.arguments").String())
+									if argsStr != "" {
+										var parsed interface{}
+										if err := json.Unmarshal([]byte(argsStr), &parsed); err == nil {
+											toolUse["input"] = parsed
+										} else {
+											toolUse["input"] = map[string]interface{}{}
+										}
 									} else {
 										toolUse["input"] = map[string]interface{}{}
 									}
-								} else {
-									toolUse["input"] = map[string]interface{}{}
-								}
 
-								contentBlocks = append(contentBlocks, toolUse)
-								return true
-							})
+									contentBlocks = append(contentBlocks, toolUse)
+									return true
+								})
+							}
+						case "reasoning":
+							flushText()
+							if thinking := item.Get("text"); thinking.Exists() {
+								thinkingBuilder.WriteString(thinking.String())
+							}
+						default:
+							flushThinking()
+							flushText()
 						}
-					case "reasoning":
-						flushText()
-						if thinking := item.Get("text"); thinking.Exists() {
-							thinkingBuilder.WriteString(thinking.String())
-						}
-					default:
-						flushThinking()
-						flushText()
+					}
+
+					flushThinking()
+					flushText()
+				} else if contentResult.Type == gjson.String {
+					textContent := contentResult.String()
+					if textContent != "" {
+						contentBlocks = append(contentBlocks, map[string]interface{}{
+							"type": "text",
+							"text": textContent,
+						})
 					}
 				}
-
-				flushThinking()
-				flushText()
 			}
 
 			if toolCalls := message.Get("tool_calls"); toolCalls.Exists() && toolCalls.IsArray() {
