@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,13 @@ const (
 	quotaBackoffBase      = time.Second
 	quotaBackoffMax       = 30 * time.Minute
 )
+
+var quotaCooldownDisabled atomic.Bool
+
+// SetQuotaCooldownDisabled toggles quota cooldown scheduling globally.
+func SetQuotaCooldownDisabled(disable bool) {
+	quotaCooldownDisabled.Store(disable)
+}
 
 // Result captures execution outcome used to adjust auth state.
 type Result struct {
@@ -535,7 +543,10 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					shouldSuspendModel = true
 				case 429:
 					cooldown, nextLevel := nextQuotaCooldown(state.Quota.BackoffLevel)
-					next := now.Add(cooldown)
+					var next time.Time
+					if cooldown > 0 {
+						next = now.Add(cooldown)
+					}
 					state.NextRetryAfter = next
 					state.Quota = QuotaState{
 						Exceeded:      true,
@@ -750,9 +761,13 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, now time.Time) {
 		auth.Quota.Exceeded = true
 		auth.Quota.Reason = "quota"
 		cooldown, nextLevel := nextQuotaCooldown(auth.Quota.BackoffLevel)
-		auth.Quota.NextRecoverAt = now.Add(cooldown)
+		var next time.Time
+		if cooldown > 0 {
+			next = now.Add(cooldown)
+		}
+		auth.Quota.NextRecoverAt = next
 		auth.Quota.BackoffLevel = nextLevel
-		auth.NextRetryAfter = auth.Quota.NextRecoverAt
+		auth.NextRetryAfter = next
 	case 408, 500, 502, 503, 504:
 		auth.StatusMessage = "transient upstream error"
 		auth.NextRetryAfter = now.Add(1 * time.Minute)
@@ -767,6 +782,9 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, now time.Time) {
 func nextQuotaCooldown(prevLevel int) (time.Duration, int) {
 	if prevLevel < 0 {
 		prevLevel = 0
+	}
+	if quotaCooldownDisabled.Load() {
+		return 0, prevLevel
 	}
 	cooldown := quotaBackoffBase * time.Duration(1<<prevLevel)
 	if cooldown < quotaBackoffBase {

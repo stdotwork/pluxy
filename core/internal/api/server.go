@@ -233,6 +233,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 	s.applyAccessConfig(nil, cfg)
 	managementasset.SetCurrentConfig(cfg)
+	auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 	if optionState.localPassword != "" {
@@ -713,6 +714,15 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 			log.Debugf("usage_statistics_enabled updated from %t to %t", oldCfg.UsageStatisticsEnabled, cfg.UsageStatisticsEnabled)
 		} else {
 			log.Debugf("usage_statistics_enabled toggled to %t", cfg.UsageStatisticsEnabled)
+		}
+	}
+
+	if oldCfg == nil || oldCfg.DisableCooling != cfg.DisableCooling {
+		auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
+		if oldCfg != nil {
+			log.Debugf("disable_cooling updated from %t to %t", oldCfg.DisableCooling, cfg.DisableCooling)
+		} else {
+			log.Debugf("disable_cooling toggled to %t", cfg.DisableCooling)
 		}
 	}
 
