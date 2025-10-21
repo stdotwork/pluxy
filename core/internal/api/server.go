@@ -232,6 +232,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Save initial YAML snapshot
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 	s.applyAccessConfig(nil, cfg)
+	managementasset.SetCurrentConfig(cfg)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 	if optionState.localPassword != "" {
@@ -759,6 +760,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 
 	s.applyAccessConfig(oldCfg, cfg)
 	s.cfg = cfg
+	managementasset.SetCurrentConfig(cfg)
 	// Save YAML snapshot for next comparison
 	s.oldConfigYaml, _ = yaml.Marshal(cfg)
 	s.handlers.UpdateClients(&cfg.SDKConfig)
