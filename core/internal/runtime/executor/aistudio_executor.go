@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -87,7 +88,7 @@ func (e *AistudioExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth,
 	reporter.publish(ctx, parseGeminiUsage(wsResp.Body))
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, body.toFormat, opts.SourceFormat, req.Model, bytes.Clone(opts.OriginalRequest), bytes.Clone(translatedReq), bytes.Clone(wsResp.Body), &param)
-	resp = cliproxyexecutor.Response{Payload: []byte(out)}
+	resp = cliproxyexecutor.Response{Payload: ensureColonSpacedJSON([]byte(out))}
 	return resp, nil
 }
 
@@ -156,7 +157,7 @@ func (e *AistudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 					}
 					lines := sdktranslator.TranslateStream(ctx, body.toFormat, opts.SourceFormat, req.Model, bytes.Clone(opts.OriginalRequest), translatedReq, bytes.Clone(filtered), &param)
 					for i := range lines {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(lines[i])}
+						out <- cliproxyexecutor.StreamChunk{Payload: ensureColonSpacedJSON([]byte(lines[i]))}
 					}
 					break
 				}
@@ -172,7 +173,7 @@ func (e *AistudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 				}
 				lines := sdktranslator.TranslateStream(ctx, body.toFormat, opts.SourceFormat, req.Model, bytes.Clone(opts.OriginalRequest), translatedReq, bytes.Clone(event.Payload), &param)
 				for i := range lines {
-					out <- cliproxyexecutor.StreamChunk{Payload: []byte(lines[i])}
+					out <- cliproxyexecutor.StreamChunk{Payload: ensureColonSpacedJSON([]byte(lines[i]))}
 				}
 				reporter.publish(ctx, parseGeminiUsage(event.Payload))
 				return
@@ -345,4 +346,51 @@ func stripUsageMetadataFromJSON(rawJSON []byte) ([]byte, bool) {
 		return rawJSON, false
 	}
 	return cleaned, true
+}
+
+// ensureColonSpacedJSON normalizes JSON objects so that colons are followed by a single space while
+// keeping the payload otherwise compact. Non-JSON inputs are returned unchanged.
+func ensureColonSpacedJSON(payload []byte) []byte {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return payload
+	}
+
+	var decoded any
+	if err := json.Unmarshal(trimmed, &decoded); err != nil {
+		return payload
+	}
+
+	indented, err := json.MarshalIndent(decoded, "", "  ")
+	if err != nil {
+		return payload
+	}
+
+	compacted := make([]byte, 0, len(indented))
+	inString := false
+	skipSpace := false
+
+	for i := 0; i < len(indented); i++ {
+		ch := indented[i]
+		if ch == '"' && (i == 0 || indented[i-1] != '\\') {
+			inString = !inString
+		}
+
+		if !inString {
+			if ch == '\n' || ch == '\r' {
+				skipSpace = true
+				continue
+			}
+			if skipSpace {
+				if ch == ' ' || ch == '\t' {
+					continue
+				}
+				skipSpace = false
+			}
+		}
+
+		compacted = append(compacted, ch)
+	}
+
+	return compacted
 }
