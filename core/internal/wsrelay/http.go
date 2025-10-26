@@ -35,8 +35,8 @@ type StreamEvent struct {
 	Err     error
 }
 
-// RoundTrip executes a non-streaming HTTP request using the websocket provider.
-func (m *Manager) RoundTrip(ctx context.Context, provider string, req *HTTPRequest) (*HTTPResponse, error) {
+// NonStream executes a non-streaming HTTP request using the websocket provider.
+func (m *Manager) NonStream(ctx context.Context, provider string, req *HTTPRequest) (*HTTPResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("wsrelay: request is nil")
 	}
