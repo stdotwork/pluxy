@@ -192,6 +192,10 @@ func (e *AistudioExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
+
+	body.payload, _ = sjson.DeleteBytes(body.payload, "generationConfig")
+	body.payload, _ = sjson.DeleteBytes(body.payload, "tools")
+
 	endpoint := e.buildEndpoint(req.Model, "countTokens", "")
 	wsReq := &wsrelay.HTTPRequest{
 		Method:  http.MethodPost,
