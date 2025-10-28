@@ -428,7 +428,7 @@ openai-compatibility:
     # api-keys:
     #   - "sk-or-v1-...b780"
     #   - "sk-or-v1-...b781"
-    models: # 提供商支持的模型。
+    models: # 提供商支持的模型。或者你可以使用类似 openrouter://moonshotai/kimi-k2:free 这样的格式来请求未在这里定义的模型
       - name: "moonshotai/kimi-k2:free" # 实际的模型名称。
         alias: "kimi-k2" # 在API中使用的别名。
 ```
