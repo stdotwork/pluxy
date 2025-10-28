@@ -225,7 +225,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	envManagementSecret := envAdminPasswordSet && envAdminPassword != ""
 
 	// Create server instance
-		providerNames := make([]string, 0, len(cfg.OpenAICompatibility))
+	providerNames := make([]string, 0, len(cfg.OpenAICompatibility))
 	for _, p := range cfg.OpenAICompatibility {
 		providerNames = append(providerNames, p.Name)
 	}
@@ -914,5 +914,3 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 		}
 	}
 }
-
-// legacy clientsToSlice removed; handlers no longer consume legacy client slices
