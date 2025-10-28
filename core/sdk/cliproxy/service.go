@@ -237,9 +237,6 @@ func (s *Service) wsOnDisconnected(channelID string, reason error) {
 	}
 	ctx := context.Background()
 	s.applyCoreAuthRemoval(ctx, channelID)
-	if s.coreManager != nil {
-		s.coreManager.UnregisterExecutor(channelID)
-	}
 }
 
 func (s *Service) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.Auth) {
