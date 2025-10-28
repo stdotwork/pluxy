@@ -73,7 +73,7 @@ func (e *AIStudioExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth,
 		AuthValue: authValue,
 	})
 
-	wsResp, err := e.relay.NonStream(ctx, e.provider, wsReq)
+	wsResp, err := e.relay.NonStream(ctx, authID, wsReq)
 	if err != nil {
 		recordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
@@ -124,7 +124,7 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-	wsStream, err := e.relay.Stream(ctx, e.provider, wsReq)
+	wsStream, err := e.relay.Stream(ctx, authID, wsReq)
 	if err != nil {
 		recordAPIResponseError(ctx, e.cfg, err)
 		return nil, err
@@ -221,7 +221,7 @@ func (e *AIStudioExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.A
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-	resp, err := e.relay.NonStream(ctx, e.provider, wsReq)
+	resp, err := e.relay.NonStream(ctx, authID, wsReq)
 	if err != nil {
 		recordAPIResponseError(ctx, e.cfg, err)
 		return cliproxyexecutor.Response{}, err
