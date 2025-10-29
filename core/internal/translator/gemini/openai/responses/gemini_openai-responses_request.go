@@ -243,7 +243,10 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 		out, _ = sjson.Set(out, "generationConfig.stopSequences", sequences)
 	}
 
-	if reasoningEffort := root.Get("reasoning.effort"); reasoningEffort.Exists() && util.ModelSupportsThinking(modelName) {
+	// OpenAI official reasoning fields take precedence
+	hasOfficialThinking := root.Get("reasoning.effort").Exists()
+	if hasOfficialThinking && util.ModelSupportsThinking(modelName) {
+		reasoningEffort := root.Get("reasoning.effort")
 		switch reasoningEffort.String() {
 		case "none":
 			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.include_thoughts", false)
@@ -260,6 +263,19 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", util.NormalizeThinkingBudget(modelName, 32768))
 		default:
 			out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", -1)
+		}
+	}
+
+	// Cherry Studio extension (applies only when official fields are missing)
+	if !hasOfficialThinking && util.ModelSupportsThinking(modelName) {
+		if tc := root.Get("extra_body.google.thinking_config"); tc.Exists() && tc.IsObject() {
+			if v := tc.Get("thinking_budget"); v.Exists() {
+				budget := util.NormalizeThinkingBudget(modelName, int(v.Int()))
+				out, _ = sjson.Set(out, "generationConfig.thinkingConfig.thinkingBudget", budget)
+			}
+			if v := tc.Get("include_thoughts"); v.Exists() {
+				out, _ = sjson.Set(out, "generationConfig.thinkingConfig.include_thoughts", v.Bool())
+			}
 		}
 	}
 	return []byte(out)

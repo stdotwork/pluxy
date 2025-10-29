@@ -33,8 +33,10 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 	out, _ = sjson.SetBytes(out, "model", modelName)
 
 	// Reasoning effort -> thinkingBudget/include_thoughts
+	// Note: OpenAI official fields take precedence over extra_body.google.thinking_config
 	re := gjson.GetBytes(rawJSON, "reasoning_effort")
-	if re.Exists() && util.ModelSupportsThinking(modelName) {
+	hasOfficialThinking := re.Exists()
+	if hasOfficialThinking && util.ModelSupportsThinking(modelName) {
 		switch re.String() {
 		case "none":
 			out, _ = sjson.DeleteBytes(out, "generationConfig.thinkingConfig.include_thoughts")
@@ -49,6 +51,20 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 			out, _ = sjson.SetBytes(out, "generationConfig.thinkingConfig.thinkingBudget", util.NormalizeThinkingBudget(modelName, 32768))
 		default:
 			out, _ = sjson.SetBytes(out, "generationConfig.thinkingConfig.thinkingBudget", -1)
+		}
+	}
+
+	// Cherry Studio extension extra_body.google.thinking_config (effective only when official fields are absent)
+	if !hasOfficialThinking && util.ModelSupportsThinking(modelName) {
+		if tc := gjson.GetBytes(rawJSON, "extra_body.google.thinking_config"); tc.Exists() && tc.IsObject() {
+			if v := tc.Get("thinking_budget"); v.Exists() {
+				// Normalize budget to model range
+				budget := util.NormalizeThinkingBudget(modelName, int(v.Int()))
+				out, _ = sjson.SetBytes(out, "generationConfig.thinkingConfig.thinkingBudget", budget)
+			}
+			if v := tc.Get("include_thoughts"); v.Exists() {
+				out, _ = sjson.SetBytes(out, "generationConfig.thinkingConfig.include_thoughts", v.Bool())
+			}
 		}
 	}
 
