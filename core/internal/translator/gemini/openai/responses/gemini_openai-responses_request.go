@@ -15,8 +15,8 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 	_ = modelName // Unused but required by interface
 	_ = stream    // Unused but required by interface
 
-	// Base Gemini API template
-	out := `{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}}`
+	// Base Gemini API template (do not include thinkingConfig by default)
+	out := `{"contents":[]}`
 
 	root := gjson.ParseBytes(rawJSON)
 

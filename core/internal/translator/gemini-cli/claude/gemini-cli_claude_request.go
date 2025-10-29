@@ -135,8 +135,8 @@ func ConvertClaudeRequestToCLI(modelName string, inputRawJSON []byte, _ bool) []
 		tools = make([]client.ToolDeclaration, 0)
 	}
 
-	// Build output Gemini CLI request JSON
-	out := `{"model":"","request":{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}}}`
+	// Build output Gemini CLI request JSON (no default thinkingConfig)
+	out := `{"model":"","request":{"contents":[]}}`
 	out, _ = sjson.Set(out, "model", modelName)
 	if systemInstruction != nil {
 		b, _ := json.Marshal(systemInstruction)
@@ -151,21 +151,23 @@ func ConvertClaudeRequestToCLI(modelName string, inputRawJSON []byte, _ bool) []
 		out, _ = sjson.SetRaw(out, "request.tools", string(b))
 	}
 
-	// Map reasoning and sampling configs
+	// Map reasoning and sampling configs: only set thinkingConfig when explicitly requested
 	reasoningEffortResult := gjson.GetBytes(rawJSON, "reasoning_effort")
-	if reasoningEffortResult.String() == "none" {
-		out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.include_thoughts", false)
-		out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", 0)
-	} else if reasoningEffortResult.String() == "auto" {
-		out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
-	} else if reasoningEffortResult.String() == "low" {
-		out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", 1024)
-	} else if reasoningEffortResult.String() == "medium" {
-		out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", 8192)
-	} else if reasoningEffortResult.String() == "high" {
-		out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", 24576)
-	} else {
-		out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
+	if reasoningEffortResult.Exists() {
+		if reasoningEffortResult.String() == "none" {
+			out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.include_thoughts", false)
+			out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", 0)
+		} else if reasoningEffortResult.String() == "auto" {
+			out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
+		} else if reasoningEffortResult.String() == "low" {
+			out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", 1024)
+		} else if reasoningEffortResult.String() == "medium" {
+			out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", 8192)
+		} else if reasoningEffortResult.String() == "high" {
+			out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", 24576)
+		} else {
+			out, _ = sjson.Set(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
+		}
 	}
 	if v := gjson.GetBytes(rawJSON, "temperature"); v.Exists() && v.Type == gjson.Number {
 		out, _ = sjson.Set(out, "request.generationConfig.temperature", v.Num)

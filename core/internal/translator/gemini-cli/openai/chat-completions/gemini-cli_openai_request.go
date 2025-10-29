@@ -26,8 +26,8 @@ import (
 //   - []byte: The transformed request data in Gemini CLI API format
 func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bool) []byte {
 	rawJSON := bytes.Clone(inputRawJSON)
-	// Base envelope
-	out := []byte(`{"project":"","request":{"contents":[],"generationConfig":{"thinkingConfig":{"include_thoughts":true}}},"model":"gemini-2.5-pro"}`)
+	// Base envelope (no default thinkingConfig)
+	out := []byte(`{"project":"","request":{"contents":[]},"model":"gemini-2.5-pro"}`)
 
 	// Model
 	out, _ = sjson.SetBytes(out, "model", modelName)
@@ -50,8 +50,6 @@ func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bo
 		default:
 			out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
 		}
-	} else {
-		out, _ = sjson.SetBytes(out, "request.generationConfig.thinkingConfig.thinkingBudget", -1)
 	}
 
 	// Temperature/top_p/top_k
