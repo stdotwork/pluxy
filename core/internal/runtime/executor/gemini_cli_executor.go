@@ -97,7 +97,7 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 	var lastStatus int
 	var lastBody []byte
 
-	for _, attemptModel := range models {
+	for idx, attemptModel := range models {
 		payload := append([]byte(nil), basePayload...)
 		if action == "countTokens" {
 			payload = deleteJSONField(payload, "project")
@@ -170,7 +170,11 @@ func (e *GeminiCLIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth
 		lastBody = append([]byte(nil), data...)
 		log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, string(data))
 		if httpResp.StatusCode == 429 {
-			log.Debugf("gemini cli executor: rate limited, retrying with next model")
+			if idx+1 < len(models) {
+				log.Debugf("gemini cli executor: rate limited, retrying with next model: %s", models[idx+1])
+			} else {
+				log.Debug("gemini cli executor: rate limited, no additional fallback model")
+			}
 			continue
 		}
 
@@ -228,7 +232,7 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	var lastStatus int
 	var lastBody []byte
 
-	for _, attemptModel := range models {
+	for idx, attemptModel := range models {
 		payload := append([]byte(nil), basePayload...)
 		payload = setJSONField(payload, "project", projectID)
 		payload = setJSONField(payload, "model", attemptModel)
@@ -290,7 +294,11 @@ func (e *GeminiCLIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 			lastBody = append([]byte(nil), data...)
 			log.Debugf("request error, error status: %d, error body: %s", httpResp.StatusCode, string(data))
 			if httpResp.StatusCode == 429 {
-				log.Debugf("gemini cli executor: rate limited, retrying with next model")
+				if idx+1 < len(models) {
+					log.Debugf("gemini cli executor: rate limited, retrying with next model: %s", models[idx+1])
+				} else {
+					log.Debug("gemini cli executor: rate limited, no additional fallback model")
+				}
 				continue
 			}
 			err = statusErr{code: httpResp.StatusCode, msg: string(data)}
