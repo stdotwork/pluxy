@@ -296,7 +296,7 @@ func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bo
 							continue
 						}
 					}
-
+					fnRaw, _ = sjson.Delete(fnRaw, "strict")
 					tmp, errSet := sjson.SetRawBytes(out, fdPath+".-1", []byte(fnRaw))
 					if errSet != nil {
 						log.Warnf("Failed to append tool declaration for '%s': %v", fn.Get("name").String(), errSet)
