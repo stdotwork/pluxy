@@ -574,6 +574,7 @@ func mergeNodePreserve(dst, src *yaml.Node) {
 			dst.Tag = "!!seq"
 			dst.Content = nil
 		}
+		reorderSequenceForMerge(dst, src)
 		// Update elements in place
 		minContent := len(dst.Content)
 		if len(src.Content) < minContent {
@@ -654,6 +655,152 @@ func copyNodeShallow(dst, src *yaml.Node) {
 		}
 	} else {
 		dst.Content = nil
+	}
+}
+
+func reorderSequenceForMerge(dst, src *yaml.Node) {
+	if dst == nil || src == nil {
+		return
+	}
+	if len(dst.Content) == 0 {
+		return
+	}
+	if len(src.Content) == 0 {
+		return
+	}
+	original := append([]*yaml.Node(nil), dst.Content...)
+	used := make([]bool, len(original))
+	ordered := make([]*yaml.Node, len(src.Content))
+	for i := range src.Content {
+		if idx := matchSequenceElement(original, used, src.Content[i]); idx >= 0 {
+			ordered[i] = original[idx]
+			used[idx] = true
+		}
+	}
+	dst.Content = ordered
+}
+
+func matchSequenceElement(original []*yaml.Node, used []bool, target *yaml.Node) int {
+	if target == nil {
+		return -1
+	}
+	switch target.Kind {
+	case yaml.MappingNode:
+		id := sequenceElementIdentity(target)
+		if id != "" {
+			for i := range original {
+				if used[i] || original[i] == nil || original[i].Kind != yaml.MappingNode {
+					continue
+				}
+				if sequenceElementIdentity(original[i]) == id {
+					return i
+				}
+			}
+		}
+	case yaml.ScalarNode:
+		val := strings.TrimSpace(target.Value)
+		if val != "" {
+			for i := range original {
+				if used[i] || original[i] == nil || original[i].Kind != yaml.ScalarNode {
+					continue
+				}
+				if strings.TrimSpace(original[i].Value) == val {
+					return i
+				}
+			}
+		}
+	}
+	// Fallback to structural equality to preserve nodes lacking explicit identifiers.
+	for i := range original {
+		if used[i] || original[i] == nil {
+			continue
+		}
+		if nodesStructurallyEqual(original[i], target) {
+			return i
+		}
+	}
+	return -1
+}
+
+func sequenceElementIdentity(node *yaml.Node) string {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return ""
+	}
+	identityKeys := []string{"id", "name", "alias", "api-key", "api_key", "apikey", "key", "provider", "model"}
+	for _, k := range identityKeys {
+		if v := mappingScalarValue(node, k); v != "" {
+			return k + "=" + v
+		}
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keyNode := node.Content[i]
+		valNode := node.Content[i+1]
+		if keyNode == nil || valNode == nil || valNode.Kind != yaml.ScalarNode {
+			continue
+		}
+		val := strings.TrimSpace(valNode.Value)
+		if val != "" {
+			return strings.ToLower(strings.TrimSpace(keyNode.Value)) + "=" + val
+		}
+	}
+	return ""
+}
+
+func mappingScalarValue(node *yaml.Node, key string) string {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return ""
+	}
+	lowerKey := strings.ToLower(key)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keyNode := node.Content[i]
+		valNode := node.Content[i+1]
+		if keyNode == nil || valNode == nil || valNode.Kind != yaml.ScalarNode {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(keyNode.Value)) == lowerKey {
+			return strings.TrimSpace(valNode.Value)
+		}
+	}
+	return ""
+}
+
+func nodesStructurallyEqual(a, b *yaml.Node) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Kind != b.Kind {
+		return false
+	}
+	switch a.Kind {
+	case yaml.MappingNode:
+		if len(a.Content) != len(b.Content) {
+			return false
+		}
+		for i := 0; i+1 < len(a.Content); i += 2 {
+			if !nodesStructurallyEqual(a.Content[i], b.Content[i]) {
+				return false
+			}
+			if !nodesStructurallyEqual(a.Content[i+1], b.Content[i+1]) {
+				return false
+			}
+		}
+		return true
+	case yaml.SequenceNode:
+		if len(a.Content) != len(b.Content) {
+			return false
+		}
+		for i := range a.Content {
+			if !nodesStructurallyEqual(a.Content[i], b.Content[i]) {
+				return false
+			}
+		}
+		return true
+	case yaml.ScalarNode:
+		return strings.TrimSpace(a.Value) == strings.TrimSpace(b.Value)
+	case yaml.AliasNode:
+		return nodesStructurallyEqual(a.Alias, b.Alias)
+	default:
+		return strings.TrimSpace(a.Value) == strings.TrimSpace(b.Value)
 	}
 }
 

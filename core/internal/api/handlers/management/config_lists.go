@@ -116,7 +116,7 @@ func sanitizeStringSlice(in []string) []string {
 
 func geminiKeyStringsFromConfig(cfg *config.Config) []string {
 	if cfg == nil || len(cfg.GeminiKey) == 0 {
-		return nil
+		return []string{}
 	}
 	out := make([]string, 0, len(cfg.GeminiKey))
 	for i := range cfg.GeminiKey {
