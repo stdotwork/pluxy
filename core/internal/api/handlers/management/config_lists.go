@@ -87,10 +87,10 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 			return
 		}
 	}
-	if val := c.Query("value"); val != "" {
+	if val := strings.TrimSpace(c.Query("value")); val != "" {
 		out := make([]string, 0, len(*target))
 		for _, v := range *target {
-			if v != val {
+			if strings.TrimSpace(v) != val {
 				out = append(out, v)
 			}
 		}
@@ -102,6 +102,53 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 		return
 	}
 	c.JSON(400, gin.H{"error": "missing index or value"})
+}
+
+func sanitizeStringSlice(in []string) []string {
+	out := make([]string, 0, len(in))
+	for i := range in {
+		if trimmed := strings.TrimSpace(in[i]); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func geminiKeyStringsFromConfig(cfg *config.Config) []string {
+	if cfg == nil || len(cfg.GeminiKey) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(cfg.GeminiKey))
+	for i := range cfg.GeminiKey {
+		if key := strings.TrimSpace(cfg.GeminiKey[i].APIKey); key != "" {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+func (h *Handler) applyLegacyKeys(keys []string) {
+	if h == nil || h.cfg == nil {
+		return
+	}
+	sanitized := sanitizeStringSlice(keys)
+	existing := make(map[string]config.GeminiKey, len(h.cfg.GeminiKey))
+	for _, entry := range h.cfg.GeminiKey {
+		if key := strings.TrimSpace(entry.APIKey); key != "" {
+			existing[key] = entry
+		}
+	}
+	newList := make([]config.GeminiKey, 0, len(sanitized))
+	for _, key := range sanitized {
+		if entry, ok := existing[key]; ok {
+			newList = append(newList, entry)
+		} else {
+			newList = append(newList, config.GeminiKey{APIKey: key})
+		}
+	}
+	h.cfg.GeminiKey = newList
+	h.cfg.GlAPIKey = sanitized
+	h.cfg.SyncGeminiKeys()
 }
 
 // api-keys
@@ -121,20 +168,20 @@ func (h *Handler) DeleteAPIKeys(c *gin.Context) {
 
 // generative-language-api-key
 func (h *Handler) GetGlKeys(c *gin.Context) {
-	c.JSON(200, gin.H{"generative-language-api-key": h.cfg.GlAPIKey})
+	c.JSON(200, gin.H{"generative-language-api-key": geminiKeyStringsFromConfig(h.cfg)})
 }
 func (h *Handler) PutGlKeys(c *gin.Context) {
 	h.putStringList(c, func(v []string) {
-		h.cfg.GlAPIKey = append([]string(nil), v...)
-	}, func() {
-		h.cfg.SyncGeminiKeys()
-	})
+		h.applyLegacyKeys(v)
+	}, nil)
 }
 func (h *Handler) PatchGlKeys(c *gin.Context) {
-	h.patchStringList(c, &h.cfg.GlAPIKey, func() { h.cfg.SyncGeminiKeys() })
+	target := append([]string(nil), geminiKeyStringsFromConfig(h.cfg)...)
+	h.patchStringList(c, &target, func() { h.applyLegacyKeys(target) })
 }
 func (h *Handler) DeleteGlKeys(c *gin.Context) {
-	h.deleteFromStringList(c, &h.cfg.GlAPIKey, func() { h.cfg.SyncGeminiKeys() })
+	target := append([]string(nil), geminiKeyStringsFromConfig(h.cfg)...)
+	h.deleteFromStringList(c, &target, func() { h.applyLegacyKeys(target) })
 }
 
 // gemini-api-key: []GeminiKey

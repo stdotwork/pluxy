@@ -303,56 +303,40 @@ func (cfg *Config) SyncGeminiKeys() {
 		return
 	}
 
-	if len(cfg.GeminiKey) > 0 {
-		out := make([]GeminiKey, 0, len(cfg.GeminiKey))
-		for i := range cfg.GeminiKey {
-			entry := cfg.GeminiKey[i]
-			entry.APIKey = strings.TrimSpace(entry.APIKey)
-			entry.BaseURL = strings.TrimSpace(entry.BaseURL)
-			entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
-			if entry.APIKey == "" {
-				continue
-			}
-			if len(entry.Headers) > 0 {
-				clean := make(map[string]string, len(entry.Headers))
-				for hk, hv := range entry.Headers {
-					key := strings.TrimSpace(hk)
-					val := strings.TrimSpace(hv)
-					if key == "" || val == "" {
-						continue
-					}
-					clean[key] = val
-				}
-				if len(clean) == 0 {
-					entry.Headers = nil
-				} else {
-					entry.Headers = clean
-				}
-			}
-			out = append(out, entry)
+	seen := make(map[string]struct{}, len(cfg.GeminiKey))
+	out := cfg.GeminiKey[:0]
+	for i := range cfg.GeminiKey {
+		entry := cfg.GeminiKey[i]
+		entry.APIKey = strings.TrimSpace(entry.APIKey)
+		if entry.APIKey == "" {
+			continue
 		}
-		cfg.GeminiKey = out
+		entry.BaseURL = strings.TrimSpace(entry.BaseURL)
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+		entry.Headers = normalizeGeminiHeaders(entry.Headers)
+		if _, exists := seen[entry.APIKey]; exists {
+			continue
+		}
+		seen[entry.APIKey] = struct{}{}
+		out = append(out, entry)
 	}
+	cfg.GeminiKey = out
 
-	if len(cfg.GeminiKey) == 0 && len(cfg.GlAPIKey) > 0 {
-		out := make([]GeminiKey, 0, len(cfg.GlAPIKey))
-		for i := range cfg.GlAPIKey {
-			key := strings.TrimSpace(cfg.GlAPIKey[i])
+	if len(cfg.GlAPIKey) > 0 {
+		for _, raw := range cfg.GlAPIKey {
+			key := strings.TrimSpace(raw)
 			if key == "" {
 				continue
 			}
-			out = append(out, GeminiKey{APIKey: key})
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			cfg.GeminiKey = append(cfg.GeminiKey, GeminiKey{APIKey: key})
+			seen[key] = struct{}{}
 		}
-		cfg.GeminiKey = out
 	}
 
-	cfg.GlAPIKey = cfg.GlAPIKey[:0]
-	if len(cfg.GeminiKey) > 0 {
-		cfg.GlAPIKey = make([]string, 0, len(cfg.GeminiKey))
-		for i := range cfg.GeminiKey {
-			cfg.GlAPIKey = append(cfg.GlAPIKey, cfg.GeminiKey[i].APIKey)
-		}
-	}
+	cfg.GlAPIKey = nil
 }
 
 func syncInlineAccessProvider(cfg *Config) {
@@ -370,6 +354,25 @@ func syncInlineAccessProvider(cfg *Config) {
 // looksLikeBcrypt returns true if the provided string appears to be a bcrypt hash.
 func looksLikeBcrypt(s string) bool {
 	return len(s) > 4 && (s[:4] == "$2a$" || s[:4] == "$2b$" || s[:4] == "$2y$")
+}
+
+func normalizeGeminiHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	clean := make(map[string]string, len(headers))
+	for k, v := range headers {
+		key := strings.TrimSpace(k)
+		val := strings.TrimSpace(v)
+		if key == "" || val == "" {
+			continue
+		}
+		clean[key] = val
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	return clean
 }
 
 // hashSecret hashes the given secret using bcrypt.
