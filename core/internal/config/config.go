@@ -544,6 +544,9 @@ func mergeMappingPreserve(dst, src *yaml.Node) {
 			dv := dst.Content[idx+1]
 			mergeNodePreserve(dv, sv)
 		} else {
+			if shouldSkipEmptyCollectionOnPersist(sk.Value, sv) {
+				continue
+			}
 			// Append new key/value pair by deep-copying from src
 			dst.Content = append(dst.Content, deepCopyNode(sk), deepCopyNode(sv))
 		}
@@ -621,6 +624,33 @@ func findMapKeyIndex(mapNode *yaml.Node, key string) int {
 		}
 	}
 	return -1
+}
+
+func shouldSkipEmptyCollectionOnPersist(key string, node *yaml.Node) bool {
+	switch key {
+	case "generative-language-api-key",
+		"gemini-api-key",
+		"claude-api-key",
+		"codex-api-key",
+		"openai-compatibility":
+		return isEmptyCollectionNode(node)
+	default:
+		return false
+	}
+}
+
+func isEmptyCollectionNode(node *yaml.Node) bool {
+	if node == nil {
+		return true
+	}
+	switch node.Kind {
+	case yaml.SequenceNode:
+		return len(node.Content) == 0
+	case yaml.ScalarNode:
+		return node.Tag == "!!null"
+	default:
+		return false
+	}
 }
 
 // deepCopyNode creates a deep copy of a yaml.Node graph.
