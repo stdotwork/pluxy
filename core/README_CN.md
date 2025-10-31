@@ -334,7 +334,12 @@ console.log(await claudeResponse.json());
 | `logging-to-file`                       | boolean  | true               | 是否将应用日志写入滚动文件；设为 false 时输出到 stdout/stderr。                           |
 | `usage-statistics-enabled`              | boolean  | true               | 是否启用内存中的使用统计；设为 false 时直接丢弃所有统计数据。                               |
 | `api-keys`                              | string[] | []                 | 兼容旧配置的简写，会自动同步到默认 `config-api-key` 提供方。                     |
-| `generative-language-api-key`           | string[] | []                 | 生成式语言API密钥列表。                                                       |
+| `gemini-api-key`                        | object[] | []                 | Gemini API 密钥配置，支持为每个密钥设置可选的 `base-url` 与 `proxy-url`。         |
+| `gemini-api-key.*.api-key`              | string   | ""                 | Gemini API 密钥。                                                              |
+| `gemini-api-key.*.base-url`             | string   | ""                 | 可选的 Gemini API 端点覆盖地址。                                              |
+| `gemini-api-key.*.headers`              | object   | {}                 | 可选的额外 HTTP 头部，仅在访问覆盖后的 Gemini 端点时发送。                     |
+| `gemini-api-key.*.proxy-url`            | string   | ""                 | 可选的单独代理设置，会覆盖全局 `proxy-url`。                                   |
+| `generative-language-api-key`           | string[] | []                 | （兼容项）不带扩展配置的生成式语言 API 密钥列表。                              |
 | `codex-api-key`                                       | object   | {}                 | Codex API密钥列表。                                                      |
 | `codex-api-key.api-key`                               | string   | ""                 | Codex API密钥。                                                        |
 | `codex-api-key.base-url`                              | string   | ""                 | 自定义的Codex API端点                                                     |
@@ -407,12 +412,18 @@ quota-exceeded:
    switch-project: true # 当配额超限时是否自动切换到另一个项目
    switch-preview-model: true # 当配额超限时是否自动切换到预览模型
 
-# AIStduio Gemini API 的 API 密钥
+# Gemini API 密钥（推荐）
+gemini-api-key:
+  - api-key: "AIzaSy...01"
+    base-url: "https://generativelanguage.googleapis.com"
+    headers:
+      X-Custom-Header: "custom-value"
+    proxy-url: "socks5://proxy.example.com:1080"
+  - api-key: "AIzaSy...02"
+
+# AIStudio Gemini API 的遗留密钥配置
 generative-language-api-key:
   - "AIzaSy...01"
-  - "AIzaSy...02"
-  - "AIzaSy...03"
-  - "AIzaSy...04"
 
 # Codex API 密钥
 codex-api-key:
@@ -569,9 +580,9 @@ openai-compatibility:
 
 `auth-dir` 参数指定身份验证令牌的存储位置。当您运行登录命令时，应用程序将在此目录中创建包含 Google 账户身份验证令牌的 JSON 文件。多个账户可用于轮询。
 
-### 官方生成式语言 API
+### Gemini API 配置
 
-`generative-language-api-key` 参数允许您定义可用于验证对官方 AIStudio Gemini API 请求的 API 密钥列表。
+使用 `gemini-api-key` 参数来配置 Gemini API 密钥；每个条目都可以选择性地提供 `base-url`、`headers` 与 `proxy-url`。`headers` 仅会附加到访问覆盖后 Gemini 端点的请求，不会转发给代理服务器。当 `base-url` 留空时，其行为与遗留的 `generative-language-api-key` 列表一致。旧字段仍受支持，会自动同步到新的结构中以保持兼容性。
 
 ## 热更新
 

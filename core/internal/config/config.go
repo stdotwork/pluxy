@@ -43,8 +43,11 @@ type Config struct {
 	// WebsocketAuth enables or disables authentication for the WebSocket API.
 	WebsocketAuth bool `yaml:"ws-auth" json:"ws-auth"`
 
-	// GlAPIKey is the API key for the generative language API.
+	// GlAPIKey exposes the legacy generative language API key list for backward compatibility.
 	GlAPIKey []string `yaml:"generative-language-api-key" json:"generative-language-api-key"`
+
+	// GeminiKey defines Gemini API key configurations with optional routing overrides.
+	GeminiKey []GeminiKey `yaml:"gemini-api-key" json:"gemini-api-key"`
 
 	// RequestRetry defines the retry times when the request failed.
 	RequestRetry int `yaml:"request-retry" json:"request-retry"`
@@ -120,6 +123,22 @@ type CodexKey struct {
 
 	// ProxyURL overrides the global proxy setting for this API key if provided.
 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
+}
+
+// GeminiKey represents the configuration for a Gemini API key,
+// including optional overrides for upstream base URL, proxy routing, and headers.
+type GeminiKey struct {
+	// APIKey is the authentication key for accessing Gemini API services.
+	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// BaseURL optionally overrides the Gemini API endpoint.
+	BaseURL string `yaml:"base-url,omitempty" json:"base-url,omitempty"`
+
+	// ProxyURL optionally overrides the global proxy for this API key.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// Headers optionally adds extra HTTP headers for requests sent with this key.
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 }
 
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
@@ -227,6 +246,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Sync request authentication providers with inline API keys for backwards compatibility.
 	syncInlineAccessProvider(&cfg)
 
+	// Normalize Gemini API key configuration and migrate legacy entries.
+	cfg.SyncGeminiKeys()
+
 	// Sanitize OpenAI compatibility providers: drop entries without base-url
 	sanitizeOpenAICompatibility(&cfg)
 
@@ -274,6 +296,63 @@ func sanitizeCodexKeys(cfg *Config) {
 		out = append(out, e)
 	}
 	cfg.CodexKey = out
+}
+
+func (cfg *Config) SyncGeminiKeys() {
+	if cfg == nil {
+		return
+	}
+
+	if len(cfg.GeminiKey) > 0 {
+		out := make([]GeminiKey, 0, len(cfg.GeminiKey))
+		for i := range cfg.GeminiKey {
+			entry := cfg.GeminiKey[i]
+			entry.APIKey = strings.TrimSpace(entry.APIKey)
+			entry.BaseURL = strings.TrimSpace(entry.BaseURL)
+			entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+			if entry.APIKey == "" {
+				continue
+			}
+			if len(entry.Headers) > 0 {
+				clean := make(map[string]string, len(entry.Headers))
+				for hk, hv := range entry.Headers {
+					key := strings.TrimSpace(hk)
+					val := strings.TrimSpace(hv)
+					if key == "" || val == "" {
+						continue
+					}
+					clean[key] = val
+				}
+				if len(clean) == 0 {
+					entry.Headers = nil
+				} else {
+					entry.Headers = clean
+				}
+			}
+			out = append(out, entry)
+		}
+		cfg.GeminiKey = out
+	}
+
+	if len(cfg.GeminiKey) == 0 && len(cfg.GlAPIKey) > 0 {
+		out := make([]GeminiKey, 0, len(cfg.GlAPIKey))
+		for i := range cfg.GlAPIKey {
+			key := strings.TrimSpace(cfg.GlAPIKey[i])
+			if key == "" {
+				continue
+			}
+			out = append(out, GeminiKey{APIKey: key})
+		}
+		cfg.GeminiKey = out
+	}
+
+	cfg.GlAPIKey = cfg.GlAPIKey[:0]
+	if len(cfg.GeminiKey) > 0 {
+		cfg.GlAPIKey = make([]string, 0, len(cfg.GeminiKey))
+		for i := range cfg.GeminiKey {
+			cfg.GlAPIKey = append(cfg.GlAPIKey, cfg.GeminiKey[i].APIKey)
+		}
+	}
 }
 
 func syncInlineAccessProvider(cfg *Config) {

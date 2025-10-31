@@ -124,10 +124,137 @@ func (h *Handler) GetGlKeys(c *gin.Context) {
 	c.JSON(200, gin.H{"generative-language-api-key": h.cfg.GlAPIKey})
 }
 func (h *Handler) PutGlKeys(c *gin.Context) {
-	h.putStringList(c, func(v []string) { h.cfg.GlAPIKey = v }, nil)
+	h.putStringList(c, func(v []string) {
+		h.cfg.GlAPIKey = append([]string(nil), v...)
+	}, func() {
+		h.cfg.SyncGeminiKeys()
+	})
 }
-func (h *Handler) PatchGlKeys(c *gin.Context)  { h.patchStringList(c, &h.cfg.GlAPIKey, nil) }
-func (h *Handler) DeleteGlKeys(c *gin.Context) { h.deleteFromStringList(c, &h.cfg.GlAPIKey, nil) }
+func (h *Handler) PatchGlKeys(c *gin.Context) {
+	h.patchStringList(c, &h.cfg.GlAPIKey, func() { h.cfg.SyncGeminiKeys() })
+}
+func (h *Handler) DeleteGlKeys(c *gin.Context) {
+	h.deleteFromStringList(c, &h.cfg.GlAPIKey, func() { h.cfg.SyncGeminiKeys() })
+}
+
+// gemini-api-key: []GeminiKey
+func (h *Handler) GetGeminiKeys(c *gin.Context) {
+	c.JSON(200, gin.H{"gemini-api-key": h.cfg.GeminiKey})
+}
+func (h *Handler) PutGeminiKeys(c *gin.Context) {
+	data, err := c.GetRawData()
+	if err != nil {
+		c.JSON(400, gin.H{"error": "failed to read body"})
+		return
+	}
+	var arr []config.GeminiKey
+	if err = json.Unmarshal(data, &arr); err != nil {
+		var obj struct {
+			Items []config.GeminiKey `json:"items"`
+		}
+		if err2 := json.Unmarshal(data, &obj); err2 != nil || len(obj.Items) == 0 {
+			c.JSON(400, gin.H{"error": "invalid body"})
+			return
+		}
+		arr = obj.Items
+	}
+	h.cfg.GeminiKey = append([]config.GeminiKey(nil), arr...)
+	h.cfg.SyncGeminiKeys()
+	h.persist(c)
+}
+func (h *Handler) PatchGeminiKey(c *gin.Context) {
+	var body struct {
+		Index *int              `json:"index"`
+		Match *string           `json:"match"`
+		Value *config.GeminiKey `json:"value"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Value == nil {
+		c.JSON(400, gin.H{"error": "invalid body"})
+		return
+	}
+	value := *body.Value
+	value.APIKey = strings.TrimSpace(value.APIKey)
+	value.BaseURL = strings.TrimSpace(value.BaseURL)
+	value.ProxyURL = strings.TrimSpace(value.ProxyURL)
+	if value.APIKey == "" {
+		// Treat empty API key as delete.
+		if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.GeminiKey) {
+			h.cfg.GeminiKey = append(h.cfg.GeminiKey[:*body.Index], h.cfg.GeminiKey[*body.Index+1:]...)
+			h.cfg.SyncGeminiKeys()
+			h.persist(c)
+			return
+		}
+		if body.Match != nil {
+			match := strings.TrimSpace(*body.Match)
+			if match != "" {
+				out := make([]config.GeminiKey, 0, len(h.cfg.GeminiKey))
+				removed := false
+				for i := range h.cfg.GeminiKey {
+					if !removed && h.cfg.GeminiKey[i].APIKey == match {
+						removed = true
+						continue
+					}
+					out = append(out, h.cfg.GeminiKey[i])
+				}
+				if removed {
+					h.cfg.GeminiKey = out
+					h.cfg.SyncGeminiKeys()
+					h.persist(c)
+					return
+				}
+			}
+		}
+		c.JSON(404, gin.H{"error": "item not found"})
+		return
+	}
+
+	if body.Index != nil && *body.Index >= 0 && *body.Index < len(h.cfg.GeminiKey) {
+		h.cfg.GeminiKey[*body.Index] = value
+		h.cfg.SyncGeminiKeys()
+		h.persist(c)
+		return
+	}
+	if body.Match != nil {
+		match := strings.TrimSpace(*body.Match)
+		for i := range h.cfg.GeminiKey {
+			if h.cfg.GeminiKey[i].APIKey == match {
+				h.cfg.GeminiKey[i] = value
+				h.cfg.SyncGeminiKeys()
+				h.persist(c)
+				return
+			}
+		}
+	}
+	c.JSON(404, gin.H{"error": "item not found"})
+}
+func (h *Handler) DeleteGeminiKey(c *gin.Context) {
+	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
+		out := make([]config.GeminiKey, 0, len(h.cfg.GeminiKey))
+		for _, v := range h.cfg.GeminiKey {
+			if v.APIKey != val {
+				out = append(out, v)
+			}
+		}
+		if len(out) != len(h.cfg.GeminiKey) {
+			h.cfg.GeminiKey = out
+			h.cfg.SyncGeminiKeys()
+			h.persist(c)
+		} else {
+			c.JSON(404, gin.H{"error": "item not found"})
+		}
+		return
+	}
+	if idxStr := c.Query("index"); idxStr != "" {
+		var idx int
+		if _, err := fmt.Sscanf(idxStr, "%d", &idx); err == nil && idx >= 0 && idx < len(h.cfg.GeminiKey) {
+			h.cfg.GeminiKey = append(h.cfg.GeminiKey[:idx], h.cfg.GeminiKey[idx+1:]...)
+			h.cfg.SyncGeminiKeys()
+			h.persist(c)
+			return
+		}
+	}
+	c.JSON(400, gin.H{"error": "missing api-key or index"})
+}
 
 // claude-api-key: []ClaudeKey
 func (h *Handler) GetClaudeKeys(c *gin.Context) {
