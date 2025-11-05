@@ -99,7 +99,7 @@ func ConvertClaudeRequestToCLI(modelName string, inputRawJSON []byte, _ bool) []
 							if len(toolCallIDs) > 1 {
 								funcName = strings.Join(toolCallIDs[0:len(toolCallIDs)-1], "-")
 							}
-							responseData := contentResult.Get("content").String()
+							responseData := contentResult.Get("content").Raw
 							functionResponse := client.FunctionResponse{Name: funcName, Response: map[string]interface{}{"result": responseData}}
 							clientContent.Parts = append(clientContent.Parts, client.Part{FunctionResponse: &functionResponse})
 						}
@@ -127,6 +127,7 @@ func ConvertClaudeRequestToCLI(modelName string, inputRawJSON []byte, _ bool) []
 				inputSchema := inputSchemaResult.Raw
 				tool, _ := sjson.Delete(toolResult.Raw, "input_schema")
 				tool, _ = sjson.SetRaw(tool, "parametersJsonSchema", inputSchema)
+				tool, _ = sjson.Delete(tool, "strict")
 				var toolDeclaration any
 				if err := json.Unmarshal([]byte(tool), &toolDeclaration); err == nil {
 					tools[0].FunctionDeclarations = append(tools[0].FunctionDeclarations, toolDeclaration)

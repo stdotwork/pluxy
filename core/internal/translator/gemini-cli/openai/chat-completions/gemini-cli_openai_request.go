@@ -149,11 +149,7 @@ func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bo
 				toolCallID := m.Get("tool_call_id").String()
 				if toolCallID != "" {
 					c := m.Get("content")
-					if c.Type == gjson.String {
-						toolResponses[toolCallID] = c.String()
-					} else if c.IsObject() && c.Get("type").String() == "text" {
-						toolResponses[toolCallID] = c.Get("text").String()
-					}
+					toolResponses[toolCallID] = c.Raw
 				}
 			}
 		}
@@ -254,7 +250,7 @@ func ConvertOpenAIRequestToGeminiCLI(modelName string, inputRawJSON []byte, _ bo
 								if resp == "" {
 									resp = "{}"
 								}
-								toolNode, _ = sjson.SetRawBytes(toolNode, "parts."+itoa(pp)+".functionResponse.response", []byte(`{"result":`+quoteIfNeeded(resp)+`}`))
+								toolNode, _ = sjson.SetBytes(toolNode, "parts."+itoa(pp)+".functionResponse.response.result", []byte(resp))
 								pp++
 							}
 						}
