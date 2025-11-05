@@ -120,6 +120,7 @@ func ConvertClaudeRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 				inputSchema := inputSchemaResult.Raw
 				tool, _ := sjson.Delete(toolResult.Raw, "input_schema")
 				tool, _ = sjson.SetRaw(tool, "parametersJsonSchema", inputSchema)
+				tool, _ = sjson.Delete(tool, "strict")
 				var toolDeclaration any
 				if err := json.Unmarshal([]byte(tool), &toolDeclaration); err == nil {
 					tools[0].FunctionDeclarations = append(tools[0].FunctionDeclarations, toolDeclaration)
