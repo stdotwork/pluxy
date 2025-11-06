@@ -123,7 +123,28 @@ func GeminiModels() []*ModelInfo {
 func GetGeminiModels() []*ModelInfo { return GeminiModels() }
 
 // GetGeminiCLIModels returns the standard Gemini model definitions
-func GetGeminiCLIModels() []*ModelInfo { return GeminiModels() }
+func GetGeminiCLIModels() []*ModelInfo {
+	base := GeminiModels()
+	return append(base,
+		[]*ModelInfo{
+			{
+				ID:                         "gemini-3-pro-preview-11-2025",
+				Object:                     "model",
+				Created:                    time.Now().Unix(),
+				OwnedBy:                    "google",
+				Type:                       "gemini",
+				Name:                       "models/gemini-3-pro-preview-11-2025",
+				Version:                    "3",
+				DisplayName:                "Gemini 3 Pro Preview 11-2025",
+				Description:                "Latest preview of Gemini Pro",
+				InputTokenLimit:            1048576,
+				OutputTokenLimit:           65536,
+				SupportedGenerationMethods: []string{"generateContent", "countTokens", "createCachedContent", "batchGenerateContent"},
+				Thinking:                   &ThinkingSupport{Min: 128, Max: 32768, ZeroAllowed: false, DynamicAllowed: true},
+			},
+		}...,
+	)
+}
 
 // GetAIStudioModels returns the Gemini model definitions for AI Studio integrations
 func GetAIStudioModels() []*ModelInfo {
