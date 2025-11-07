@@ -292,6 +292,11 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if auth == nil {
 		return nil
 	}
+	runtimeOnly := isRuntimeOnlyAuth(auth)
+	path := strings.TrimSpace(authAttribute(auth, "path"))
+	if path == "" && !runtimeOnly {
+		return nil
+	}
 	name := strings.TrimSpace(auth.FileName)
 	if name == "" {
 		name = auth.ID
@@ -306,7 +311,7 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 		"status_message": auth.StatusMessage,
 		"disabled":       auth.Disabled,
 		"unavailable":    auth.Unavailable,
-		"runtime_only":   isRuntimeOnlyAuth(auth),
+		"runtime_only":   runtimeOnly,
 		"source":         "memory",
 		"size":           int64(0),
 	}
@@ -331,7 +336,7 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if !auth.LastRefreshedAt.IsZero() {
 		entry["last_refresh"] = auth.LastRefreshedAt
 	}
-	if path := strings.TrimSpace(authAttribute(auth, "path")); path != "" {
+	if path != "" {
 		entry["path"] = path
 		entry["source"] = "file"
 		if info, err := os.Stat(path); err == nil {
