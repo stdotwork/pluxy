@@ -438,6 +438,7 @@ func GetIFlowModels() []*ModelInfo {
 		{ID: "qwen3-235b-a22b-thinking-2507", DisplayName: "Qwen3-235B-A22B-Thinking", Description: "Qwen3 235B A22B Thinking (2507)"},
 		{ID: "qwen3-235b-a22b-instruct", DisplayName: "Qwen3-235B-A22B-Instruct", Description: "Qwen3 235B A22B Instruct"},
 		{ID: "qwen3-235b", DisplayName: "Qwen3-235B-A22B", Description: "Qwen3 235B A22B"},
+		{ID: "minimax-m2", DisplayName: "MiniMax-M2", Description: "MiniMax M2"},
 	}
 	models := make([]*ModelInfo, 0, len(entries))
 	for _, entry := range entries {
