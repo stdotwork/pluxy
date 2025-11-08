@@ -82,6 +82,8 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "medium")
 		case "gpt-5-codex-mini-high":
 			body, _ = sjson.SetBytes(body, "reasoning.effort", "high")
+		default:
+			body, _ = sjson.SetBytes(body, "reasoning.effort", "medium")
 		}
 	}
 
