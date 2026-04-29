@@ -1031,7 +1031,6 @@
     "thinking_budget": "Thinking Budget",
     "time": "Latency",
     "avg_time": "Avg Latency",
-    "total_time": "Total Latency",
     "latency_unit_hint": "Durations use backend field {{field}} and are interpreted as {{unit}} before formatting.",
     "duration_unit_d": "d",
     "duration_unit_h": "h",

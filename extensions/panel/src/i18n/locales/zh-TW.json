@@ -1057,7 +1057,6 @@
     "thinking_budget": "思考預算",
     "time": "延遲",
     "avg_time": "平均延遲",
-    "total_time": "總延遲",
     "latency_unit_hint": "耗時取自後端欄位 {{field}}，按 {{unit}} 解讀後再格式化顯示。",
     "duration_unit_d": "天",
     "duration_unit_h": "時",
