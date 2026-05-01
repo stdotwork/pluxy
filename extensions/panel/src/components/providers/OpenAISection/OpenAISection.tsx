@@ -18,16 +18,16 @@ import iconOpenaiLight from '@/assets/icons/openai-light.svg';
 import iconOpenaiDark from '@/assets/icons/openai-dark.svg';
 import type { OpenAIProviderConfig } from '@/types';
 import { maskApiKey } from '@/utils/format';
-import { calculateStatusBarData, type KeyStats } from '@/utils/usage';
-import { type UsageDetailsByAuthIndex, type UsageDetailsBySource } from '@/utils/usageIndex';
+import { statusBarDataFromRecentRequests } from '@/utils/recentRequests';
 import styles from '@/pages/AiProvidersPage.module.scss';
 import { ProviderStatusBar } from '../ProviderStatusBar';
 import { usePageTransitionLayer } from '@/components/common/PageTransitionLayer';
 import {
-  collectOpenAIProviderUsageDetails,
+  getOpenAIProviderRecentStats,
+  getOpenAIProviderRecentStatusData,
   getOpenAIProviderKey,
-  getOpenAIProviderStats,
-  getStatsForIdentity,
+  getProviderRecentStats,
+  type ProviderRecentUsageMap,
 } from '../utils';
 
 type SortOption = 'name' | 'priority' | 'recent-success';
@@ -40,13 +40,11 @@ interface FloatingToolbarStyle {
   visible: boolean;
 }
 
-const EMPTY_STATUS_BAR = calculateStatusBarData([]);
+const EMPTY_STATUS_BAR = statusBarDataFromRecentRequests([]);
 
 interface OpenAISectionProps {
   configs: OpenAIProviderConfig[];
-  keyStats: KeyStats;
-  usageDetailsBySource: UsageDetailsBySource;
-  usageDetailsByAuthIndex: UsageDetailsByAuthIndex;
+  usageByProvider: ProviderRecentUsageMap;
   loading: boolean;
   disableControls: boolean;
   isSwitching: boolean;
@@ -72,9 +70,7 @@ const getApiKeyEntryRenderKey = (
 
 export function OpenAISection({
   configs,
-  keyStats,
-  usageDetailsBySource,
-  usageDetailsByAuthIndex,
+  usageByProvider,
   loading,
   disableControls,
   isSwitching,
@@ -253,20 +249,15 @@ export function OpenAISection({
     : t('ai_providers.model_search_placeholder');
 
   const statusBarCache = useMemo(() => {
-    const cache = new Map<string, ReturnType<typeof calculateStatusBarData>>();
+    const cache = new Map<string, ReturnType<typeof statusBarDataFromRecentRequests>>();
 
     configs.forEach((provider, index) => {
       const providerKey = getOpenAIProviderKey(provider, index);
-      cache.set(
-        providerKey,
-        calculateStatusBarData(
-          collectOpenAIProviderUsageDetails(provider, usageDetailsBySource, usageDetailsByAuthIndex)
-        )
-      );
+      cache.set(providerKey, getOpenAIProviderRecentStatusData(provider, usageByProvider));
     });
 
     return cache;
-  }, [configs, usageDetailsByAuthIndex, usageDetailsBySource]);
+  }, [configs, usageByProvider]);
 
   const sortOptions = useMemo(
     () => [
@@ -288,7 +279,12 @@ export function OpenAISection({
     const direction = sortDirection === 'desc' ? -1 : 1;
     const providerStats =
       sortOption === 'recent-success'
-        ? new Map(sorted.map(({ config }) => [config, getOpenAIProviderStats(config, keyStats)]))
+        ? new Map(
+            sorted.map(({ config }) => [
+              config,
+              getOpenAIProviderRecentStats(config, usageByProvider),
+            ])
+          )
         : null;
 
     switch (sortOption) {
@@ -326,7 +322,7 @@ export function OpenAISection({
     }
 
     return sorted;
-  }, [configs, sortOption, sortDirection, keyStats, selectedModels]);
+  }, [configs, sortOption, sortDirection, usageByProvider, selectedModels]);
 
   const toggleModelSelection = (modelName: string) => {
     setSelectedModels((prev) => {
@@ -528,7 +524,7 @@ export function OpenAISection({
   );
 
   const renderProviderCard = ({ config: provider, originalIndex }: IndexedOpenAIProvider) => {
-    const stats = getOpenAIProviderStats(provider, keyStats);
+    const stats = getOpenAIProviderRecentStats(provider, usageByProvider);
     const headerEntries = Object.entries(provider.headers || {});
     const apiKeyEntries = provider.apiKeyEntries || [];
     const statusData =
@@ -580,9 +576,11 @@ export function OpenAISection({
               </div>
               <div className={styles.apiKeyEntryList}>
                 {apiKeyEntries.map((entry, entryIndex) => {
-                  const entryStats = getStatsForIdentity(
-                    { authIndex: entry.authIndex, apiKey: entry.apiKey },
-                    keyStats
+                  const entryStats = getProviderRecentStats(
+                    usageByProvider,
+                    provider.name,
+                    entry.apiKey,
+                    provider.baseUrl
                   );
                   return (
                     <div

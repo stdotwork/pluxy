@@ -6,18 +6,14 @@ import type {
   OpenAIProviderConfig,
 } from '@/types';
 import {
-  buildCandidateUsageSourceIds,
-  normalizeAuthIndex,
-  type KeyStatBucket,
-  type KeyStats,
-  type UsageDetail,
-} from '@/utils/usage';
-import {
-  collectUsageDetailsForAuthIndices,
-  collectUsageDetailsForCandidates,
-  type UsageDetailsByAuthIndex,
-  type UsageDetailsBySource,
-} from '@/utils/usageIndex';
+  buildRecentRequestCompositeKey,
+  mergeRecentRequestBucketGroups,
+  normalizeRecentRequestAuthIndex,
+  statusBarDataFromRecentRequests,
+  sumRecentRequests,
+  type RecentRequestBucket,
+  type StatusBarData,
+} from '@/utils/recentRequests';
 import type { AmpcodeFormState, AmpcodeUpstreamApiKeyEntry, ModelEntry } from './types';
 
 export const DISABLE_ALL_MODELS_RULE = '*';
@@ -103,161 +99,76 @@ export const buildClaudeMessagesEndpoint = (baseUrl: string): string => {
   return `${trimmed}/v1/messages`;
 };
 
-// 根据 source (apiKey) 获取统计数据 - 与旧版逻辑一致
-export const getStatsBySource = (
-  apiKey: string,
-  keyStats: KeyStats,
-  prefix?: string
-): KeyStatBucket => {
-  const bySource = keyStats.bySource ?? {};
-  const candidates = buildCandidateUsageSourceIds({ apiKey, prefix });
-  if (!candidates.length) {
-    return { success: 0, failure: 0 };
-  }
+export type ProviderRecentUsageMap = Map<string, Map<string, RecentRequestBucket[]>>;
 
-  let success = 0;
-  let failure = 0;
-  candidates.forEach((candidate) => {
-    const stats = bySource[candidate];
-    if (!stats) return;
-    success += stats.success;
-    failure += stats.failure;
-  });
+const normalizeProviderRecentKey = (value: unknown): string =>
+  String(value ?? '').trim().toLowerCase();
 
-  return { success, failure };
-};
-
-type UsageIdentity = {
-  authIndex?: unknown;
-  apiKey?: string;
-  prefix?: string;
-};
-
-export const getStatsForIdentity = (
-  identity: UsageIdentity,
-  keyStats: KeyStats
-): KeyStatBucket => {
-  const authIndexKey = normalizeAuthIndex(identity.authIndex);
-  if (authIndexKey) {
-    const stats = keyStats.byAuthIndex?.[authIndexKey];
-    if (stats) {
-      return { success: stats.success, failure: stats.failure };
-    }
-  }
-
-  return getStatsBySource(identity.apiKey ?? '', keyStats, identity.prefix);
-};
-
-export const collectUsageDetailsForIdentity = (
-  identity: UsageIdentity,
-  usageDetailsBySource: UsageDetailsBySource,
-  usageDetailsByAuthIndex: UsageDetailsByAuthIndex
-): UsageDetail[] => {
-  const authIndexKey = normalizeAuthIndex(identity.authIndex);
-  if (authIndexKey) {
-    const details = collectUsageDetailsForAuthIndices(usageDetailsByAuthIndex, [authIndexKey]);
-    if (details.length > 0) {
-      return details;
-    }
-  }
-
-  const candidates = buildCandidateUsageSourceIds({
-    apiKey: identity.apiKey,
-    prefix: identity.prefix,
-  });
-  if (!candidates.length) {
+export function getProviderRecentBuckets(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): RecentRequestBucket[] {
+  if (!String(apiKey ?? '').trim()) {
     return [];
   }
 
-  return collectUsageDetailsForCandidates(usageDetailsBySource, candidates);
-};
+  const providerKey = normalizeProviderRecentKey(provider);
+  const compositeKey = buildRecentRequestCompositeKey(baseUrl, apiKey);
+  return usageByProvider.get(providerKey)?.get(compositeKey) ?? [];
+}
 
-const mergeUsageDetails = (groups: UsageDetail[][]): UsageDetail[] => {
-  let firstDetails: UsageDetail[] | null = null;
-  let merged: UsageDetail[] | null = null;
+export function getProviderRecentStats(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): { success: number; failure: number } {
+  return sumRecentRequests(getProviderRecentBuckets(usageByProvider, provider, apiKey, baseUrl));
+}
 
-  groups.forEach((details) => {
-    if (!details.length) return;
-    if (!firstDetails) {
-      firstDetails = details;
-      return;
-    }
-    if (!merged) {
-      merged = [...firstDetails];
-    }
-    merged.push(...details);
-  });
+export function getProviderRecentStatusData(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): StatusBarData {
+  return statusBarDataFromRecentRequests(
+    getProviderRecentBuckets(usageByProvider, provider, apiKey, baseUrl)
+  );
+}
 
-  return merged ?? firstDetails ?? [];
-};
-
-// 对于 OpenAI 提供商，汇总所有 apiKeyEntries 的统计 - 与旧版逻辑一致
-export const getOpenAIProviderStats = (
+export function collectOpenAIProviderRecentBuckets(
   provider: OpenAIProviderConfig,
-  keyStats: KeyStats
-): KeyStatBucket => {
-  let success = 0;
-  let failure = 0;
-
+  usageByProvider: ProviderRecentUsageMap
+): RecentRequestBucket[] {
   if (!provider.apiKeyEntries?.length) {
-    const stats = getStatsForIdentity(
-      { authIndex: provider.authIndex, prefix: provider.prefix },
-      keyStats
-    );
-    return { success: stats.success, failure: stats.failure };
+    return [];
   }
 
-  if (!normalizeAuthIndex(provider.authIndex) && provider.prefix) {
-    const prefixStats = getStatsBySource('', keyStats, provider.prefix);
-    success += prefixStats.success;
-    failure += prefixStats.failure;
-  }
+  const groups = provider.apiKeyEntries.map((entry) =>
+    getProviderRecentBuckets(usageByProvider, provider.name, entry.apiKey, provider.baseUrl)
+  );
 
-  provider.apiKeyEntries.forEach((entry) => {
-    const stats = getStatsForIdentity({ authIndex: entry.authIndex, apiKey: entry.apiKey }, keyStats);
-    success += stats.success;
-    failure += stats.failure;
-  });
+  return mergeRecentRequestBucketGroups(groups);
+}
 
-  return { success, failure };
-};
-
-export const collectOpenAIProviderUsageDetails = (
+export function getOpenAIProviderRecentStats(
   provider: OpenAIProviderConfig,
-  usageDetailsBySource: UsageDetailsBySource,
-  usageDetailsByAuthIndex: UsageDetailsByAuthIndex
-): UsageDetail[] => {
-  if (!provider.apiKeyEntries?.length) {
-    return collectUsageDetailsForIdentity(
-      { authIndex: provider.authIndex, prefix: provider.prefix },
-      usageDetailsBySource,
-      usageDetailsByAuthIndex
-    );
-  }
+  usageByProvider: ProviderRecentUsageMap
+): { success: number; failure: number } {
+  return sumRecentRequests(collectOpenAIProviderRecentBuckets(provider, usageByProvider));
+}
 
-  const groups: UsageDetail[][] = [];
-  if (!normalizeAuthIndex(provider.authIndex) && provider.prefix) {
-    groups.push(
-      collectUsageDetailsForIdentity(
-        { prefix: provider.prefix },
-        usageDetailsBySource,
-        usageDetailsByAuthIndex
-      )
-    );
-  }
-
-  provider.apiKeyEntries.forEach((entry) => {
-    groups.push(
-      collectUsageDetailsForIdentity(
-        { authIndex: entry.authIndex, apiKey: entry.apiKey },
-        usageDetailsBySource,
-        usageDetailsByAuthIndex
-      )
-    );
-  });
-
-  return mergeUsageDetails(groups);
-};
+export function getOpenAIProviderRecentStatusData(
+  provider: OpenAIProviderConfig,
+  usageByProvider: ProviderRecentUsageMap
+): StatusBarData {
+  return statusBarDataFromRecentRequests(
+    collectOpenAIProviderRecentBuckets(provider, usageByProvider)
+  );
+}
 
 export const getProviderConfigKey = (
   config: {
@@ -268,7 +179,7 @@ export const getProviderConfigKey = (
   },
   index: number
 ): string => {
-  const authIndexKey = normalizeAuthIndex(config.authIndex);
+  const authIndexKey = normalizeRecentRequestAuthIndex(config.authIndex);
   if (authIndexKey) {
     return authIndexKey;
   }
@@ -276,7 +187,7 @@ export const getProviderConfigKey = (
 };
 
 export const getOpenAIProviderKey = (provider: OpenAIProviderConfig, index: number): string => {
-  const authIndexKey = normalizeAuthIndex(provider.authIndex);
+  const authIndexKey = normalizeRecentRequestAuthIndex(provider.authIndex);
   if (authIndexKey) {
     return authIndexKey;
   }
@@ -284,7 +195,7 @@ export const getOpenAIProviderKey = (provider: OpenAIProviderConfig, index: numb
 };
 
 export const getOpenAIEntryKey = (entry: ApiKeyEntry, index: number): string => {
-  const authIndexKey = normalizeAuthIndex(entry.authIndex);
+  const authIndexKey = normalizeRecentRequestAuthIndex(entry.authIndex);
   if (authIndexKey) {
     return authIndexKey;
   }
