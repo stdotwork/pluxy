@@ -13,7 +13,7 @@ import { ProviderStatusBar } from '../ProviderStatusBar';
 import {
   getProviderConfigKey,
   getProviderRecentBuckets,
-  getProviderRecentStats,
+  getProviderTotalStats,
   hasDisableAllModelsRule,
   type ProviderRecentUsageMap,
 } from '../utils';
@@ -96,7 +96,7 @@ export function VertexSection({
             />
           )}
           renderContent={(item, index) => {
-            const stats = getProviderRecentStats(
+            const stats = getProviderTotalStats(
               usageByProvider,
               'vertex',
               item.apiKey,

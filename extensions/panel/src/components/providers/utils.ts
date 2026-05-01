@@ -12,6 +12,7 @@ import {
   statusBarDataFromRecentRequests,
   sumRecentRequests,
   type RecentRequestBucket,
+  type RecentRequestUsageEntry,
   type StatusBarData,
 } from '@/utils/recentRequests';
 import type { AmpcodeFormState, AmpcodeUpstreamApiKeyEntry, ModelEntry } from './types';
@@ -99,10 +100,31 @@ export const buildClaudeMessagesEndpoint = (baseUrl: string): string => {
   return `${trimmed}/v1/messages`;
 };
 
-export type ProviderRecentUsageMap = Map<string, Map<string, RecentRequestBucket[]>>;
+export type ProviderRecentUsageMap = Map<string, Map<string, RecentRequestUsageEntry>>;
+
+const EMPTY_RECENT_USAGE_ENTRY: RecentRequestUsageEntry = {
+  success: 0,
+  failed: 0,
+  recentRequests: [],
+};
 
 const normalizeProviderRecentKey = (value: unknown): string =>
   String(value ?? '').trim().toLowerCase();
+
+export function getProviderRecentUsageEntry(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): RecentRequestUsageEntry {
+  if (!String(apiKey ?? '').trim()) {
+    return EMPTY_RECENT_USAGE_ENTRY;
+  }
+
+  const providerKey = normalizeProviderRecentKey(provider);
+  const compositeKey = buildRecentRequestCompositeKey(baseUrl, apiKey);
+  return usageByProvider.get(providerKey)?.get(compositeKey) ?? EMPTY_RECENT_USAGE_ENTRY;
+}
 
 export function getProviderRecentBuckets(
   usageByProvider: ProviderRecentUsageMap,
@@ -110,13 +132,31 @@ export function getProviderRecentBuckets(
   apiKey?: string,
   baseUrl?: string
 ): RecentRequestBucket[] {
-  if (!String(apiKey ?? '').trim()) {
-    return [];
-  }
+  return getProviderRecentUsageEntry(
+    usageByProvider,
+    provider,
+    apiKey,
+    baseUrl
+  ).recentRequests;
+}
 
-  const providerKey = normalizeProviderRecentKey(provider);
-  const compositeKey = buildRecentRequestCompositeKey(baseUrl, apiKey);
-  return usageByProvider.get(providerKey)?.get(compositeKey) ?? [];
+export function getProviderTotalStats(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): { success: number; failure: number } {
+  const entry = getProviderRecentUsageEntry(usageByProvider, provider, apiKey, baseUrl);
+  return { success: entry.success, failure: entry.failed };
+}
+
+export function getProviderRecentWindowStats(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): { success: number; failure: number } {
+  return sumRecentRequests(getProviderRecentBuckets(usageByProvider, provider, apiKey, baseUrl));
 }
 
 export function getProviderRecentStats(
@@ -125,7 +165,7 @@ export function getProviderRecentStats(
   apiKey?: string,
   baseUrl?: string
 ): { success: number; failure: number } {
-  return sumRecentRequests(getProviderRecentBuckets(usageByProvider, provider, apiKey, baseUrl));
+  return getProviderTotalStats(usageByProvider, provider, apiKey, baseUrl);
 }
 
 export function getProviderRecentStatusData(
@@ -155,6 +195,35 @@ export function collectOpenAIProviderRecentBuckets(
 }
 
 export function getOpenAIProviderRecentStats(
+  provider: OpenAIProviderConfig,
+  usageByProvider: ProviderRecentUsageMap
+): { success: number; failure: number } {
+  return getOpenAIProviderTotalStats(provider, usageByProvider);
+}
+
+export function getOpenAIProviderTotalStats(
+  provider: OpenAIProviderConfig,
+  usageByProvider: ProviderRecentUsageMap
+): { success: number; failure: number } {
+  return (provider.apiKeyEntries || []).reduce(
+    (total, entry) => {
+      const usageEntry = getProviderRecentUsageEntry(
+        usageByProvider,
+        provider.name,
+        entry.apiKey,
+        provider.baseUrl
+      );
+
+      return {
+        success: total.success + usageEntry.success,
+        failure: total.failure + usageEntry.failed,
+      };
+    },
+    { success: 0, failure: 0 }
+  );
+}
+
+export function getOpenAIProviderRecentWindowStats(
   provider: OpenAIProviderConfig,
   usageByProvider: ProviderRecentUsageMap
 ): { success: number; failure: number } {

@@ -23,10 +23,11 @@ import styles from '@/pages/AiProvidersPage.module.scss';
 import { ProviderStatusBar } from '../ProviderStatusBar';
 import { usePageTransitionLayer } from '@/components/common/PageTransitionLayer';
 import {
-  getOpenAIProviderRecentStats,
+  getOpenAIProviderRecentWindowStats,
   getOpenAIProviderRecentStatusData,
+  getOpenAIProviderTotalStats,
   getOpenAIProviderKey,
-  getProviderRecentStats,
+  getProviderTotalStats,
   type ProviderRecentUsageMap,
 } from '../utils';
 
@@ -282,7 +283,7 @@ export function OpenAISection({
         ? new Map(
             sorted.map(({ config }) => [
               config,
-              getOpenAIProviderRecentStats(config, usageByProvider),
+              getOpenAIProviderRecentWindowStats(config, usageByProvider),
             ])
           )
         : null;
@@ -524,7 +525,7 @@ export function OpenAISection({
   );
 
   const renderProviderCard = ({ config: provider, originalIndex }: IndexedOpenAIProvider) => {
-    const stats = getOpenAIProviderRecentStats(provider, usageByProvider);
+    const stats = getOpenAIProviderTotalStats(provider, usageByProvider);
     const headerEntries = Object.entries(provider.headers || {});
     const apiKeyEntries = provider.apiKeyEntries || [];
     const statusData =
@@ -576,7 +577,7 @@ export function OpenAISection({
               </div>
               <div className={styles.apiKeyEntryList}>
                 {apiKeyEntries.map((entry, entryIndex) => {
-                  const entryStats = getProviderRecentStats(
+                  const entryStats = getProviderTotalStats(
                     usageByProvider,
                     provider.name,
                     entry.apiKey,
