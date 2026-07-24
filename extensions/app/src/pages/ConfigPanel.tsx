@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   AlertCircle,
   Check,
@@ -56,8 +57,18 @@ export function ConfigPanelPage() {
   const copyTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    let disposed = false;
+    let stop: (() => void) | null = null;
     void loadSettings();
+    void listen('config-files-changed', () => {
+      if (!disposed) void loadSettings();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
     return () => {
+      disposed = true;
+      stop?.();
       if (noticeTimerRef.current !== null) {
         window.clearTimeout(noticeTimerRef.current);
       }

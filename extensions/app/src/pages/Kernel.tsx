@@ -198,6 +198,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    let unlistenConfig: (() => void) | null = null;
 
     listen<CoreInstallTask>('core-install-progress', (event) => {
       applyInstallTask(event.payload);
@@ -215,6 +216,16 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
           setMessageType('error');
         }
       });
+
+    void listen('config-files-changed', () => {
+      if (disposed) return;
+      void loadGuiSettings();
+      void refreshStatus();
+      if (view === 'home') void loadHomeApiKey();
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlistenConfig = stop;
+    });
 
     loadPlatform();
     loadBundledCore();
@@ -234,6 +245,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     return () => {
       disposed = true;
       unlisten?.();
+      unlistenConfig?.();
       if (processNoticeTimerRef.current !== null) {
         window.clearTimeout(processNoticeTimerRef.current);
       }
