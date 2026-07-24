@@ -7,13 +7,14 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { PageTransition } from '@/components/common/PageTransition';
 import { MainRoutes } from '@/router/MainRoutes';
-import { pluginsApi } from '@/services/api';
+import { authFilesApi, pluginsApi } from '@/services/api';
 import {
   IconSidebarAuthFiles,
   IconSidebarConfig,
@@ -69,6 +70,7 @@ interface SidebarNavLinkItem {
   metaKey?: string;
   label?: string;
   meta?: string;
+  badge?: number;
   icon: ReactNode;
 }
 
@@ -317,6 +319,12 @@ export function MainLayout() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [authFilesCount, setAuthFilesCount] = useState<number | null>(null);
+  const [railTooltip, setRailTooltip] = useState<{
+    label: string;
+    meta?: string;
+    top: number;
+  } | null>(null);
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [pluginResources, setPluginResources] = useState<PluginResourceEntry[]>([]);
@@ -449,9 +457,24 @@ export function MainLayout() {
     }
   }, [connectionStatus, supportsPlugin]);
 
+  const loadAuthFilesCount = useCallback(async () => {
+    if (connectionStatus !== 'connected') {
+      setAuthFilesCount(null);
+      return;
+    }
+
+    try {
+      const response = await authFilesApi.list();
+      setAuthFilesCount(Array.isArray(response?.files) ? response.files.length : null);
+    } catch {
+      setAuthFilesCount(null);
+    }
+  }, [connectionStatus]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadPluginResources();
+      void loadAuthFilesCount();
     }, 0);
 
     window.addEventListener(PLUGIN_RESOURCES_REFRESH_EVENT, loadPluginResources);
@@ -460,7 +483,7 @@ export function MainLayout() {
       window.clearTimeout(timer);
       window.removeEventListener(PLUGIN_RESOURCES_REFRESH_EVENT, loadPluginResources);
     };
-  }, [apiBase, loadPluginResources]);
+  }, [apiBase, loadPluginResources, loadAuthFilesCount]);
 
   const pluginResourceGroups = pluginResources.reduce<
     Array<{ pluginID: string; pluginTitle: string; entries: PluginResourceEntry[] }>
@@ -550,6 +573,7 @@ export function MainLayout() {
           path: '/auth-files',
           labelKey: 'nav.auth_files',
           metaKey: 'nav_meta.auth_files',
+          badge: authFilesCount ?? undefined,
           icon: sidebarIcons.authFiles,
         },
         {
@@ -668,6 +692,7 @@ export function MainLayout() {
     const results = await Promise.allSettled([
       fetchConfig(true),
       loadPluginResources(),
+      loadAuthFilesCount(),
       triggerHeaderRefresh(),
     ]);
     const rejected = results.find((result) => result.status === 'rejected');
@@ -696,6 +721,22 @@ export function MainLayout() {
     });
   }, []);
 
+  const showRailTooltip = useCallback(
+    (event: ReactMouseEvent<HTMLElement>, label: string, meta?: string) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      setRailTooltip({ label, meta, top: rect.top + rect.height / 2 });
+    },
+    []
+  );
+  const hideRailTooltip = useCallback(() => setRailTooltip(null), []);
+
+  const renderNavBadge = (badge?: number) =>
+    typeof badge === 'number' && badge > 0 ? (
+      <span className="nav-badge" aria-hidden="true">
+        {badge}
+      </span>
+    ) : null;
+
   const renderNavLink = (item: SidebarNavLinkItem, className = 'nav-item') => {
     const itemLabel = item.label ?? (item.labelKey ? t(item.labelKey) : '');
     const itemMeta = item.meta ?? (item.metaKey ? t(item.metaKey) : '');
@@ -705,15 +746,26 @@ export function MainLayout() {
         key={item.path}
         to={item.path}
         className={({ isActive }) => `${className} ${isActive ? 'active' : ''}`}
-        onClick={() => setSidebarOpen(false)}
-        title={showSidebarLabels ? undefined : itemLabel}
+        onClick={() => {
+          setSidebarOpen(false);
+          hideRailTooltip();
+        }}
+        aria-label={showSidebarLabels ? undefined : itemLabel}
+        onMouseEnter={
+          showSidebarLabels ? undefined : (event) => showRailTooltip(event, itemLabel, itemMeta)
+        }
+        onMouseLeave={showSidebarLabels ? undefined : hideRailTooltip}
       >
         <span className="nav-icon">{item.icon}</span>
-        {showSidebarLabels && (
-          <span className="nav-text">
-            <span className="nav-label">{itemLabel}</span>
-            {itemMeta ? <span className="nav-meta">{itemMeta}</span> : null}
-          </span>
+        {showSidebarLabels ? (
+          <>
+            <span className="nav-text">
+              <span className="nav-label">{itemLabel}</span>
+            </span>
+            {renderNavBadge(item.badge)}
+          </>
+        ) : (
+          renderNavBadge(item.badge)
         )}
       </NavLink>
     );
@@ -735,15 +787,18 @@ export function MainLayout() {
             isOpen ? 'open' : ''
           }`}
           onClick={() => togglePluginResourceDrawer(item.id)}
-          title={showSidebarLabels ? undefined : item.label}
+          aria-label={showSidebarLabels ? undefined : item.label}
           aria-expanded={isOpen}
+          onMouseEnter={
+            showSidebarLabels ? undefined : (event) => showRailTooltip(event, item.label, item.meta)
+          }
+          onMouseLeave={showSidebarLabels ? undefined : hideRailTooltip}
         >
           <span className="nav-icon">{item.icon}</span>
           {showSidebarLabels && (
             <>
               <span className="nav-text">
                 <span className="nav-label">{item.label}</span>
-                {item.meta ? <span className="nav-meta">{item.meta}</span> : null}
               </span>
               <span className="nav-drawer-caret" aria-hidden="true">
                 <IconChevronDown size={14} />
@@ -776,17 +831,12 @@ export function MainLayout() {
         <button
           type="button"
           className="sidebar-toggle-floating"
-          onClick={() => setSidebarCollapsed((prev) => !prev)}
-          title={
-            sidebarCollapsed
-              ? t('sidebar.expand', { defaultValue: '展开' })
-              : t('sidebar.collapse', { defaultValue: '收起' })
-          }
-          aria-label={
-            sidebarCollapsed
-              ? t('sidebar.expand', { defaultValue: '展开' })
-              : t('sidebar.collapse', { defaultValue: '收起' })
-          }
+          onClick={() => {
+            hideRailTooltip();
+            setSidebarCollapsed((prev) => !prev);
+          }}
+          title={sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+          aria-label={sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
         >
           {sidebarCollapsed ? headerIcons.chevronRight : headerIcons.chevronLeft}
         </button>
@@ -939,9 +989,16 @@ export function MainLayout() {
         <aside
           className={`sidebar ${sidebarOpen ? 'open' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}
         >
-          <div className="sidebar-brand" title={fullBrandName}>
-            <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="sidebar-brand-logo" />
-            {showSidebarLabels && <span className="sidebar-brand-title">{abbrBrandName}</span>}
+          <div className="sidebar-header">
+            <div className="sidebar-brand" title={fullBrandName}>
+              <img src={INLINE_LOGO_JPEG} alt="CPAMC logo" className="sidebar-brand-logo" />
+              {showSidebarLabels && (
+                <span className="sidebar-brand-text">
+                  <span className="sidebar-brand-title">{abbrBrandName}</span>
+                  <span className="sidebar-brand-subtitle">{t('sidebar.subtitle')}</span>
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="nav-section">
@@ -959,7 +1016,17 @@ export function MainLayout() {
               </div>
             ))}
           </div>
+
         </aside>
+
+        {!showSidebarLabels && railTooltip && (
+          <div className="nav-tooltip" role="tooltip" style={{ top: railTooltip.top }}>
+            <span className="nav-tooltip-label">{railTooltip.label}</span>
+            {railTooltip.meta ? (
+              <span className="nav-tooltip-meta">{railTooltip.meta}</span>
+            ) : null}
+          </div>
+        )}
 
         <div
           className={`content${isLogsPage ? ' content-logs' : ''}${

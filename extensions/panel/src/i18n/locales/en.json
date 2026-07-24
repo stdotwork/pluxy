@@ -1294,7 +1294,10 @@
   },
   "sidebar": {
     "toggle_expand": "Expand sidebar",
-    "toggle_collapse": "Collapse sidebar"
+    "toggle_collapse": "Collapse sidebar",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "subtitle": "CLI Proxy API Console"
   },
   "footer": {
     "api_version": "CLI Proxy API Version",

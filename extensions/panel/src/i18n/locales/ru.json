@@ -1272,7 +1272,10 @@
   },
   "sidebar": {
     "toggle_expand": "Развернуть боковую панель",
-    "toggle_collapse": "Свернуть боковую панель"
+    "toggle_collapse": "Свернуть боковую панель",
+    "expand": "Развернуть",
+    "collapse": "Свернуть",
+    "subtitle": "Консоль управления CLI Proxy API"
   },
   "footer": {
     "api_version": "Версия CLI Proxy API",
