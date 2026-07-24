@@ -1376,6 +1376,8 @@ mod tests {
             port: 8317,
             allow_lan: false,
             run_on_startup: false,
+            window_width: None,
+            window_height: None,
             auth_dir: String::new(),
             api_keys: Vec::new(),
             management_secret_key: "123456".to_string(),
@@ -1420,6 +1422,7 @@ mod tests {
         assert_eq!(busy_timeout, 5_000);
         assert_eq!(foreign_keys, 1);
         assert!(root.join(USAGE_DATABASE_FILE).is_file());
+        drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1441,6 +1444,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(count, 1);
+        drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1492,6 +1496,7 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(marker, "2");
+        drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1519,6 +1524,7 @@ mod tests {
         assert_eq!(analysis.models[0].key, "gpt-b");
         assert_eq!(events.total, 1);
         assert_eq!(events.items[0].id, "request-2");
+        drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
 }
