@@ -1275,7 +1275,8 @@
     "toggle_collapse": "Свернуть боковую панель",
     "expand": "Развернуть",
     "collapse": "Свернуть",
-    "subtitle": "Консоль управления CLI Proxy API"
+    "subtitle": "Консоль управления CLI Proxy API",
+    "auth_files_count": "Файлов аутентификации: {{count}}"
   },
   "footer": {
     "api_version": "Версия CLI Proxy API",
