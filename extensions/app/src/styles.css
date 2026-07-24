@@ -908,14 +908,37 @@ input:focus-visible {
   background: #f4f1ea;
 }
 
-.control-action-row {
-  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
+.button-row.control-action-row,
+.button-row.version-action-row {
+  --kernel-action-button-min: clamp(112px, 12ch, 156px);
+
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, var(--kernel-action-button-min)), 1fr)
+  );
   grid-auto-flow: row;
+  grid-auto-columns: unset;
+  grid-auto-rows: minmax(42px, auto);
+  align-items: stretch;
 }
 
-.version-action-row {
-  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
-  grid-auto-flow: row;
+.button-row.version-action-row {
+  --kernel-action-button-min: clamp(120px, 15ch, 176px);
+}
+
+.control-action-row > button,
+.version-action-row > button {
+  width: 100%;
+  min-height: 42px;
+  height: auto;
+  padding-block: 7px;
+  overflow: hidden;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-align: center;
+  text-overflow: clip;
+  text-wrap: balance;
+  white-space: normal;
 }
 
 .software-update-details {

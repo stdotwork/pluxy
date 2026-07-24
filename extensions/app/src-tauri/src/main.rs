@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::{
     env, fs,
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket},
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -73,7 +73,8 @@ const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
 const CODEX_MODEL_CATALOG_FILE: &str = "cpa-gui-model-catalog.json";
 const DEFAULT_CODEX_CONTEXT_WINDOW: u64 = 128_000;
 const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";
-const AGENT_MODIFICATION_STATE_VERSION: u8 = 1;
+const LEGACY_AGENT_MODIFICATION_STATE_VERSION: u8 = 1;
+const AGENT_MODIFICATION_STATE_VERSION: u8 = 2;
 const AGENT_PHASE_APPLYING: &str = "applying";
 const AGENT_PHASE_ACTIVE: &str = "active";
 const AGENT_PHASE_RESTORING: &str = "restoring";
@@ -2960,6 +2961,12 @@ fn inspect_codex_agent_config(path: &Path, port: u16) -> Result<(bool, Option<St
         .and_then(toml::Value::as_table);
     let configured = root.get("model_provider").and_then(toml::Value::as_str)
         == Some(MANAGED_AGENT_PROVIDER_ID)
+        && root.get("model_catalog_json").and_then(toml::Value::as_str)
+            == Some(CODEX_MODEL_CATALOG_FILE)
+        && provider
+            .and_then(|provider| provider.get("name"))
+            .and_then(toml::Value::as_str)
+            == Some("EasyCLIProxyAPI")
         && provider
             .and_then(|provider| provider.get("base_url"))
             .and_then(toml::Value::as_str)
@@ -3396,35 +3403,207 @@ fn build_codex_agent_config(
 ) -> Result<String, String> {
     use toml_edit::{value, Document, Item, Table};
 
-    let mut document = match existing.map(str::trim).filter(|value| !value.is_empty()) {
+    let mut document = match existing.filter(|value| !value.trim().is_empty()) {
         Some(value) => value
             .parse::<Document>()
             .map_err(|error| format!("Codex config.toml 格式无效: {error}"))?,
         None => Document::new(),
     };
-    document["model_provider"] = value(MANAGED_AGENT_PROVIDER_ID);
-    document["model"] = value(model);
-    document["model_catalog_json"] = value(CODEX_MODEL_CATALOG_FILE);
+    set_codex_table_item(
+        document.as_table_mut(),
+        "model_provider",
+        value(MANAGED_AGENT_PROVIDER_ID),
+    );
+    set_codex_table_item(document.as_table_mut(), "model", value(model));
+    set_codex_table_item(
+        document.as_table_mut(),
+        "model_catalog_json",
+        value(CODEX_MODEL_CATALOG_FILE),
+    );
     if !document.contains_key("model_providers") {
         document["model_providers"] = Item::Table(Table::new());
     }
     let providers = document["model_providers"]
         .as_table_mut()
         .ok_or_else(|| "Codex model_providers 必须是 TOML 表".to_string())?;
-    let mut provider = providers
-        .get(MANAGED_AGENT_PROVIDER_ID)
-        .and_then(Item::as_table)
-        .cloned()
-        .unwrap_or_default();
-    provider["name"] = value("EasyCLIProxyAPI");
-    provider["base_url"] = value(base_url);
-    provider["wire_api"] = value("responses");
-    provider["experimental_bearer_token"] = value(api_key);
-    providers.insert(MANAGED_AGENT_PROVIDER_ID, Item::Table(provider));
+    if !providers.contains_key(MANAGED_AGENT_PROVIDER_ID) {
+        providers.insert(MANAGED_AGENT_PROVIDER_ID, Item::Table(Table::new()));
+    }
+    let provider = providers
+        .get_mut(MANAGED_AGENT_PROVIDER_ID)
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| "Codex cpa-gui provider 必须是 TOML 表".to_string())?;
+    set_codex_table_item(provider, "name", value("EasyCLIProxyAPI"));
+    set_codex_table_item(provider, "base_url", value(base_url));
+    set_codex_table_item(provider, "wire_api", value("responses"));
+    set_codex_table_item(provider, "experimental_bearer_token", value(api_key));
     let rendered = document.to_string();
     toml::from_str::<toml::Value>(&rendered)
         .map_err(|error| format!("验证 Codex 配置失败: {error}"))?;
     Ok(rendered)
+}
+
+const CODEX_MANAGED_ROOT_KEYS: [&str; 3] = ["model_provider", "model", "model_catalog_json"];
+const CODEX_MANAGED_PROVIDER_KEYS: [&str; 4] =
+    ["name", "base_url", "wire_api", "experimental_bearer_token"];
+
+fn set_codex_table_item(table: &mut toml_edit::Table, key: &str, mut item: toml_edit::Item) {
+    if let (Some(current), Some(next)) = (
+        table.get(key).and_then(toml_edit::Item::as_value),
+        item.as_value_mut(),
+    ) {
+        *next.decor_mut() = current.decor().clone();
+    }
+    *table.entry(key).or_insert(toml_edit::Item::None) = item;
+}
+
+fn restore_codex_table_item(
+    current: &mut toml_edit::Table,
+    original: Option<&toml_edit::Table>,
+    key: &str,
+) {
+    let original_item = original.and_then(|table| table.get(key)).cloned();
+    if let Some(item) = original_item {
+        let existed = current.contains_key(key);
+        let original_key_decor = original.and_then(|table| table.key_decor(key)).cloned();
+        set_codex_table_item(current, key, item);
+        if !existed {
+            if let (Some(current_decor), Some(original_decor)) =
+                (current.key_decor_mut(key), original_key_decor)
+            {
+                *current_decor = original_decor;
+            }
+        }
+    } else {
+        current.remove(key);
+    }
+}
+
+fn parse_codex_document(content: Option<&str>, label: &str) -> Result<toml_edit::Document, String> {
+    use toml_edit::Document;
+
+    match content.filter(|value| !value.trim().is_empty()) {
+        Some(value) => value
+            .parse::<Document>()
+            .map_err(|error| format!("{label} 格式无效: {error}")),
+        None => Ok(Document::new()),
+    }
+}
+
+fn codex_provider_table(document: &toml_edit::Document) -> Option<&toml_edit::Table> {
+    document
+        .as_table()
+        .get("model_providers")
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+        .and_then(toml_edit::Item::as_table)
+}
+
+fn ensure_codex_provider_table(
+    document: &mut toml_edit::Document,
+) -> Result<&mut toml_edit::Table, String> {
+    use toml_edit::{Item, Table};
+
+    let root = document.as_table_mut();
+    if !root.contains_key("model_providers") {
+        root.insert("model_providers", Item::Table(Table::new()));
+    }
+    let providers = root
+        .get_mut("model_providers")
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| "Codex model_providers 必须是 TOML 表".to_string())?;
+    if !providers.contains_key(MANAGED_AGENT_PROVIDER_ID) {
+        providers.insert(MANAGED_AGENT_PROVIDER_ID, Item::Table(Table::new()));
+    }
+    providers
+        .get_mut(MANAGED_AGENT_PROVIDER_ID)
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| "Codex cpa-gui provider 必须是 TOML 表".to_string())
+}
+
+fn build_restored_codex_agent_config(
+    current: Option<&str>,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    use toml_edit::Item;
+
+    let mut current_document = parse_codex_document(current, "当前 Codex config.toml")?;
+    let original_document = original
+        .map(|content| parse_codex_document(Some(content), "原始 Codex config.toml"))
+        .transpose()?;
+
+    for key in CODEX_MANAGED_ROOT_KEYS {
+        restore_codex_table_item(
+            current_document.as_table_mut(),
+            original_document
+                .as_ref()
+                .map(|document| document.as_table()),
+            key,
+        );
+    }
+
+    let original_provider_items = CODEX_MANAGED_PROVIDER_KEYS
+        .into_iter()
+        .map(|key| {
+            (
+                key,
+                original_document
+                    .as_ref()
+                    .and_then(codex_provider_table)
+                    .and_then(|provider| provider.get(key))
+                    .cloned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let needs_provider = original_provider_items
+        .iter()
+        .any(|(_, item)| item.is_some());
+
+    if needs_provider {
+        let provider = ensure_codex_provider_table(&mut current_document)?;
+        let original_provider = original_document.as_ref().and_then(codex_provider_table);
+        for (key, item) in &original_provider_items {
+            if item.is_some() {
+                restore_codex_table_item(provider, original_provider, key);
+            } else {
+                provider.remove(key);
+            }
+        }
+    } else if let Some(providers) = current_document
+        .as_table_mut()
+        .get_mut("model_providers")
+        .and_then(Item::as_table_mut)
+    {
+        if let Some(provider) = providers
+            .get_mut(MANAGED_AGENT_PROVIDER_ID)
+            .and_then(Item::as_table_mut)
+        {
+            for key in CODEX_MANAGED_PROVIDER_KEYS {
+                provider.remove(key);
+            }
+            if provider.is_empty() {
+                providers.remove(MANAGED_AGENT_PROVIDER_ID);
+            }
+        }
+    }
+
+    let remove_providers = current_document
+        .as_table()
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .is_some_and(toml_edit::Table::is_empty);
+    if remove_providers {
+        current_document.as_table_mut().remove("model_providers");
+    }
+
+    let rendered = current_document.to_string();
+    toml::from_str::<toml::Value>(&rendered)
+        .map_err(|error| format!("验证恢复后的 Codex 配置失败: {error}"))?;
+    if original.is_none() && rendered.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(rendered))
+    }
 }
 
 fn build_codex_model_catalog(models: &[CodexModelCatalogSpec]) -> Result<String, String> {
@@ -3719,6 +3898,42 @@ fn read_agent_bytes(path: &Path) -> Result<Option<Vec<u8>>, String> {
         .map_err(|error| format!("读取智能体配置失败 {}: {error}", path_to_string(path)))
 }
 
+fn read_agent_original_bytes(file: &AgentModificationFile) -> Result<Option<Vec<u8>>, String> {
+    if !file.existed_before {
+        return Ok(None);
+    }
+    let original_sha256 = file
+        .original_sha256
+        .as_deref()
+        .ok_or_else(|| format!("原配置备份缺少校验值: {}", path_to_string(&file.path)))?;
+    let bytes = fs::read(&file.backup_path).map_err(|error| {
+        format!(
+            "读取原配置备份失败 {}: {error}",
+            path_to_string(&file.backup_path)
+        )
+    })?;
+    if sha256_bytes(&bytes) != original_sha256 {
+        return Err(format!(
+            "原配置备份校验失败: {}",
+            path_to_string(&file.backup_path)
+        ));
+    }
+    Ok(Some(bytes))
+}
+
+fn read_agent_original_text(file: &AgentModificationFile) -> Result<Option<String>, String> {
+    read_agent_original_bytes(file)?
+        .map(|bytes| {
+            String::from_utf8(bytes).map_err(|_| {
+                format!(
+                    "原 Codex 配置不是 UTF-8 文本: {}",
+                    path_to_string(&file.path)
+                )
+            })
+        })
+        .transpose()
+}
+
 fn write_agent_state(path: &Path, record: &AgentModificationRecord) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -3736,7 +3951,9 @@ fn validate_agent_record(
     paths: &[PathBuf],
     record: &AgentModificationRecord,
 ) -> Result<(), String> {
-    if record.version != AGENT_MODIFICATION_STATE_VERSION || record.client != client.id() {
+    let supported_version = record.version == AGENT_MODIFICATION_STATE_VERSION
+        || record.version == LEGACY_AGENT_MODIFICATION_STATE_VERSION;
+    if !supported_version || record.client != client.id() {
         return Err("智能体备份状态版本或客户端不匹配".to_string());
     }
     if ![
@@ -3776,12 +3993,15 @@ fn load_agent_record(
     if !state_path.is_file() {
         return Ok(None);
     }
-    let record: AgentModificationRecord = serde_json::from_str(
+    let mut record: AgentModificationRecord = serde_json::from_str(
         &fs::read_to_string(&state_path)
             .map_err(|error| format!("读取智能体备份状态失败: {error}"))?,
     )
     .map_err(|error| format!("解析智能体备份状态失败: {error}"))?;
     validate_agent_record(client, paths, &record)?;
+    if record.version == LEGACY_AGENT_MODIFICATION_STATE_VERSION {
+        record.version = AGENT_MODIFICATION_STATE_VERSION;
+    }
     Ok(Some(record))
 }
 
@@ -3838,6 +4058,23 @@ fn record_matches_original(record: &AgentModificationRecord) -> Result<bool, Str
     Ok(true)
 }
 
+fn codex_record_needs_resync(
+    record: &AgentModificationRecord,
+    configured: bool,
+    current_model: Option<&str>,
+) -> Result<bool, String> {
+    if !configured || current_model != Some(record.model.as_str()) {
+        return Ok(true);
+    }
+    for file in record.files.iter().skip(1) {
+        let current_sha256 = read_agent_bytes(&file.path)?.as_deref().map(sha256_bytes);
+        if current_sha256.as_deref() != Some(file.managed_sha256.as_str()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn inspect_agent_modification(
     client: AgentClient,
     home: &Path,
@@ -3863,11 +4100,12 @@ fn inspect_agent_modification(
         return match load_agent_record(client, &paths) {
             Ok(Some(record)) => {
                 let backup_available = record_backup_available(&record);
-                let conflicts = record_conflict_files(&record);
                 let state = if record.phase != AGENT_PHASE_ACTIVE {
                     "recovery"
+                } else if client == AgentClient::Codex {
+                    "active"
                 } else {
-                    match conflicts {
+                    match record_conflict_files(&record) {
                         Ok(conflicts) if conflicts.is_empty() => "active",
                         Ok(_) => AGENT_MODIFICATION_STATE_CONFLICT,
                         Err(_) => "recovery",
@@ -3881,6 +4119,12 @@ fn inspect_agent_modification(
                     warnings.push("配置已被其他程序修改，关闭接管时需要确认强制恢复".to_string());
                 } else if state == "recovery" {
                     warnings.push("上次配置操作未完整结束，可关闭开关恢复原配置".to_string());
+                } else if client == AgentClient::Codex
+                    && codex_record_needs_resync(&record, configured, current_model).unwrap_or(true)
+                {
+                    warnings.push(
+                        "Codex 受管配置已发生变化，将在下次更新或启动时自动重新同步".to_string(),
+                    );
                 }
                 AgentModificationInspection {
                     enabled: true,
@@ -4293,10 +4537,29 @@ fn extend_agent_record_for_updates(
 }
 
 fn restore_snapshots(snapshots: &[FileSnapshot]) -> Result<(), String> {
+    restore_snapshots_with_direct_path(snapshots, None)
+}
+
+fn write_agent_bytes(
+    path: &Path,
+    content: &[u8],
+    direct_write_path: Option<&Path>,
+) -> Result<(), String> {
+    if direct_write_path == Some(path) {
+        write_bytes_directly(path, content)
+    } else {
+        write_bytes_atomically(path, content)
+    }
+}
+
+fn restore_snapshots_with_direct_path(
+    snapshots: &[FileSnapshot],
+    direct_write_path: Option<&Path>,
+) -> Result<(), String> {
     let mut errors = Vec::new();
     for (path, bytes) in snapshots.iter().rev() {
         let result = match bytes {
-            Some(bytes) => write_bytes_atomically(path, bytes),
+            Some(bytes) => write_agent_bytes(path, bytes, direct_write_path),
             None if path.exists() => fs::remove_file(path)
                 .map_err(|error| format!("删除配置失败 {}: {error}", path_to_string(path))),
             None => Ok(()),
@@ -4312,7 +4575,81 @@ fn restore_snapshots(snapshots: &[FileSnapshot]) -> Result<(), String> {
     }
 }
 
-fn apply_agent_updates(updates: &[AgentFileUpdate]) -> Result<Vec<String>, String> {
+fn apply_agent_file_replacements(
+    replacements: &[(PathBuf, Option<Vec<u8>>)],
+    direct_write_path: Option<&Path>,
+) -> Result<Vec<String>, String> {
+    let snapshots = replacements
+        .iter()
+        .map(|(path, _)| Ok((path.clone(), read_agent_bytes(path)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut changed = Vec::new();
+    for (path, replacement) in replacements {
+        let current = read_agent_bytes(path)?;
+        let result = match replacement {
+            Some(bytes) if current.as_deref() == Some(bytes.as_slice()) => Ok(()),
+            Some(bytes) => {
+                changed.push(path_to_string(path));
+                write_agent_bytes(path, bytes, direct_write_path)
+            }
+            None if current.is_some() => {
+                changed.push(path_to_string(path));
+                fs::remove_file(path)
+                    .map_err(|error| format!("删除配置失败 {}: {error}", path_to_string(path)))
+            }
+            None => Ok(()),
+        };
+        if let Err(error) = result {
+            let rollback = restore_snapshots_with_direct_path(&snapshots, direct_write_path);
+            return Err(match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => format!("{error}；回滚失败: {rollback_error}"),
+            });
+        }
+    }
+    Ok(changed)
+}
+
+fn restore_codex_agent_record_files(
+    record: &AgentModificationRecord,
+) -> Result<Vec<String>, String> {
+    let config_file = record
+        .files
+        .first()
+        .ok_or_else(|| "Codex 配置状态缺少 config.toml".to_string())?;
+    let current_config = read_agent_bytes(&config_file.path)?
+        .map(|bytes| {
+            String::from_utf8(bytes).map_err(|_| {
+                format!(
+                    "当前 Codex 配置不是 UTF-8 文本: {}",
+                    path_to_string(&config_file.path)
+                )
+            })
+        })
+        .transpose()?;
+    let original_config = read_agent_original_text(config_file)?;
+    let restored_config =
+        build_restored_codex_agent_config(current_config.as_deref(), original_config.as_deref())?;
+
+    let mut replacements = vec![(
+        config_file.path.clone(),
+        restored_config.map(String::into_bytes),
+    )];
+    for file in record.files.iter().skip(1) {
+        replacements.push((file.path.clone(), read_agent_original_bytes(file)?));
+    }
+    apply_agent_file_replacements(&replacements, Some(&config_file.path))
+}
+
+fn apply_agent_updates(
+    client: AgentClient,
+    updates: &[AgentFileUpdate],
+) -> Result<Vec<String>, String> {
+    let direct_write_path = if client == AgentClient::Codex {
+        updates.first().map(|update| update.path.as_path())
+    } else {
+        None
+    };
     let snapshots = updates
         .iter()
         .map(|update| Ok((update.path.clone(), read_agent_bytes(&update.path)?)))
@@ -4323,8 +4660,8 @@ fn apply_agent_updates(updates: &[AgentFileUpdate]) -> Result<Vec<String>, Strin
         if read_agent_bytes(&update.path)?.as_deref() == Some(next) {
             continue;
         }
-        if let Err(error) = write_bytes_atomically(&update.path, next) {
-            let rollback = restore_snapshots(&snapshots);
+        if let Err(error) = write_agent_bytes(&update.path, next, direct_write_path) {
+            let rollback = restore_snapshots_with_direct_path(&snapshots, direct_write_path);
             return Err(match rollback {
                 Ok(()) => error,
                 Err(rollback_error) => format!("{error}；回滚失败: {rollback_error}"),
@@ -4335,7 +4672,15 @@ fn apply_agent_updates(updates: &[AgentFileUpdate]) -> Result<Vec<String>, Strin
     Ok(changed)
 }
 
-fn restore_agent_record_files(record: &AgentModificationRecord) -> Result<Vec<String>, String> {
+fn restore_agent_record_files(
+    client: AgentClient,
+    record: &AgentModificationRecord,
+) -> Result<Vec<String>, String> {
+    let direct_write_path = if client == AgentClient::Codex {
+        record.files.first().map(|file| file.path.as_path())
+    } else {
+        None
+    };
     let snapshots = record
         .files
         .iter()
@@ -4360,7 +4705,7 @@ fn restore_agent_record_files(record: &AgentModificationRecord) -> Result<Vec<St
                 Ok(())
             } else {
                 changed.push(path_to_string(&file.path));
-                write_bytes_atomically(&file.path, &backup)
+                write_agent_bytes(&file.path, &backup, direct_write_path)
             }
         } else if file.path.exists() {
             changed.push(path_to_string(&file.path));
@@ -4371,7 +4716,7 @@ fn restore_agent_record_files(record: &AgentModificationRecord) -> Result<Vec<St
             Ok(())
         };
         if let Err(error) = result {
-            let rollback = restore_snapshots(&snapshots);
+            let rollback = restore_snapshots_with_direct_path(&snapshots, direct_write_path);
             return Err(match rollback {
                 Ok(()) => error,
                 Err(rollback_error) => format!("{error}；回滚失败: {rollback_error}"),
@@ -4449,6 +4794,7 @@ fn enable_agent_modification(
     let paths = agent_config_paths(client, home);
     let state_path = agent_state_path(&paths)?;
     if let Some(record) = load_agent_record(client, &paths)? {
+        write_agent_state(&state_path, &record)?;
         return Ok(action_result(
             "enabled",
             true,
@@ -4489,7 +4835,7 @@ fn enable_agent_modification(
             Err(cleanup_error) => format!("{error}；{cleanup_error}"),
         });
     }
-    match apply_agent_updates(&updates) {
+    match apply_agent_updates(client, &updates) {
         Ok(changed) => {
             record.phase = AGENT_PHASE_ACTIVE.to_string();
             write_agent_state(&state_path, &record)?;
@@ -4501,7 +4847,7 @@ fn enable_agent_modification(
                 Vec::new(),
             ))
         }
-        Err(error) => match restore_agent_record_files(&record) {
+        Err(error) => match restore_agent_record_files(client, &record) {
             Ok(_) => {
                 let _ = cleanup_agent_record(&state_path, &record);
                 Err(error)
@@ -4544,6 +4890,22 @@ fn disable_agent_modification(
         }
     };
 
+    if client == AgentClient::Codex {
+        record.phase = AGENT_PHASE_RESTORING.to_string();
+        write_agent_state(&state_path, &record)?;
+        return match restore_codex_agent_record_files(&record) {
+            Ok(changed) => {
+                cleanup_agent_record(&state_path, &record)?;
+                Ok(action_result("disabled", false, None, changed, Vec::new()))
+            }
+            Err(error) => {
+                record.phase = AGENT_PHASE_RECOVERY.to_string();
+                let _ = write_agent_state(&state_path, &record);
+                Err(format!("恢复原配置失败: {error}"))
+            }
+        };
+    }
+
     if record_matches_original(&record)? {
         cleanup_agent_record(&state_path, &record)?;
         return Ok(action_result(
@@ -4568,7 +4930,7 @@ fn disable_agent_modification(
 
     record.phase = AGENT_PHASE_RESTORING.to_string();
     write_agent_state(&state_path, &record)?;
-    match restore_agent_record_files(&record) {
+    match restore_agent_record_files(client, &record) {
         Ok(changed) => {
             cleanup_agent_record(&state_path, &record)?;
             Ok(action_result("disabled", false, None, changed, Vec::new()))
@@ -4608,12 +4970,14 @@ fn update_agent_modification(
     if record.phase != AGENT_PHASE_ACTIVE {
         return Err("上次配置操作尚未完整结束，请先关闭开关恢复原配置".to_string());
     }
-    let conflicts = record_conflict_files(&record)?;
-    if !conflicts.is_empty() {
-        return Err(format!(
-            "配置已被其他程序修改，无法更新: {}",
-            conflicts.join("、")
-        ));
+    if client != AgentClient::Codex {
+        let conflicts = record_conflict_files(&record)?;
+        if !conflicts.is_empty() {
+            return Err(format!(
+                "配置已被其他程序修改，无法更新: {}",
+                conflicts.join("、")
+            ));
+        }
     }
 
     let updates = build_agent_updates(client, home, port, model, models, codex_models)?;
@@ -4633,7 +4997,7 @@ fn update_agent_modification(
             Err(rollback_error) => format!("{error}；恢复模型目录备份失败: {rollback_error}"),
         });
     }
-    match apply_agent_updates(&updates) {
+    match apply_agent_updates(client, &updates) {
         Ok(changed) => {
             next.phase = AGENT_PHASE_ACTIVE.to_string();
             write_agent_state(&state_path, &next)?;
@@ -8567,6 +8931,26 @@ fn apply_gui_managed_settings(content: &str, config: &GuiConfigFile) -> Result<S
     Ok(updated)
 }
 
+fn write_bytes_directly(path: &Path, content: &[u8]) -> Result<(), String> {
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("创建配置目录失败 {}: {error}", path_to_string(directory)))?;
+
+    let write_result = (|| -> io::Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(content)?;
+        file.set_len(content.len() as u64)?;
+        file.sync_all()
+    })();
+
+    write_result.map_err(|error| format!("直接写入配置失败 {}: {error}", path_to_string(path)))
+}
+
 fn write_bytes_atomically(path: &Path, content: &[u8]) -> Result<(), String> {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -11673,12 +12057,30 @@ mod tests {
     }
 
     #[test]
-    fn agent_modification_backs_up_updates_conflicts_and_restores_exact_bytes() {
-        let home = agent_test_home("codex-roundtrip");
+    fn codex_agent_modification_merges_external_edits_and_restores_managed_fields() {
+        let home = agent_test_home("codex-organic-merge");
         let path = home.join(".codex/config.toml");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let original = b"# original comment\napproval_policy = \"on-request\"\n";
+        let original = br#"# original comment
+model_provider = "user-provider"
+model = "user-model"
+model_catalog_json = "user-catalog.json"
+approval_policy = "on-request"
+
+[model_providers.user-provider]
+name = "User Provider"
+base_url = "https://example.com/v1"
+
+[model_providers.cpa-gui]
+name = "Existing CPA"
+base_url = "https://existing.invalid/v1"
+wire_api = "chat"
+        experimental_bearer_token = "existing-token"
+custom_option = "keep-original"
+"#;
         fs::write(&path, original).unwrap();
+        let hard_link = path.with_file_name("config-hard-link.toml");
+        fs::hard_link(&path, &hard_link).unwrap();
 
         let available_models = test_agent_models(&["gpt-one", "gpt-two", "gpt-three"]);
         let codex_models = test_codex_models(&["gpt-one", "gpt-two", "gpt-three"]);
@@ -11698,27 +12100,45 @@ mod tests {
         assert_eq!(fs::read(&backup).unwrap(), original);
         assert!(state.is_file());
         assert!(catalog_path.is_file());
+        assert_eq!(fs::read(&hard_link).unwrap(), fs::read(&path).unwrap());
+        assert!(fs::read_to_string(&hard_link)
+            .unwrap()
+            .contains(MANAGED_AGENT_PROVIDER_ID));
 
-        let updated = update_agent_modification(
+        let mut externally_edited = fs::read_to_string(&path)
+            .unwrap()
+            .parse::<toml_edit::Document>()
+            .unwrap();
+        externally_edited["approval_policy"] = toml_edit::value("never");
+        externally_edited["custom_after_enable"] = toml_edit::value(true);
+        externally_edited["model_provider"] = toml_edit::value("external-provider");
+        externally_edited["model"] = toml_edit::value("external-model");
+        let provider = externally_edited["model_providers"]
+            .as_table_mut()
+            .unwrap()
+            .get_mut(MANAGED_AGENT_PROVIDER_ID)
+            .and_then(toml_edit::Item::as_table_mut)
+            .unwrap();
+        provider["base_url"] = toml_edit::value("https://external.invalid/v1");
+        provider["custom_option"] = toml_edit::value("keep-updated");
+        fs::write(&path, externally_edited.to_string()).unwrap();
+
+        let (configured, current_model) = inspect_codex_agent_config(&path, 8317).unwrap();
+        let inspection = inspect_agent_modification(
             AgentClient::Codex,
             &home,
             8317,
-            "gpt-two",
-            &available_models,
-            Some(&codex_models),
-        )
-        .unwrap();
-        assert_eq!(updated.outcome, "updated");
-        assert_eq!(fs::read(&backup).unwrap(), original);
-        assert!(fs::read_to_string(&path).unwrap().contains("gpt-two"));
+            configured,
+            current_model.as_deref(),
+        );
+        assert!(inspection.enabled);
+        assert_eq!(inspection.state, "active");
+        assert!(inspection
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("自动重新同步")));
 
-        fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(b"# external change\n")
-            .unwrap();
-        assert!(update_agent_modification(
+        let updated = update_agent_modification(
             AgentClient::Codex,
             &home,
             8317,
@@ -11726,20 +12146,100 @@ mod tests {
             &available_models,
             Some(&codex_models),
         )
-        .unwrap_err()
-        .contains("其他程序修改"));
+        .unwrap();
+        assert_eq!(updated.outcome, "updated");
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert_eq!(fs::read(&hard_link).unwrap(), fs::read(&path).unwrap());
+        let managed: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            managed["model_provider"].as_str(),
+            Some(MANAGED_AGENT_PROVIDER_ID)
+        );
+        assert_eq!(managed["model"].as_str(), Some("gpt-three"));
+        assert_eq!(managed["approval_policy"].as_str(), Some("never"));
+        assert_eq!(managed["custom_after_enable"].as_bool(), Some(true));
+        assert_eq!(
+            managed["model_providers"][MANAGED_AGENT_PROVIDER_ID]["base_url"].as_str(),
+            Some("http://127.0.0.1:8317/v1")
+        );
+        assert_eq!(
+            managed["model_providers"][MANAGED_AGENT_PROVIDER_ID]["custom_option"].as_str(),
+            Some("keep-updated")
+        );
 
-        let conflict = disable_agent_modification(AgentClient::Codex, &home, 8317, false).unwrap();
-        assert_eq!(conflict.outcome, "restore-conflict");
-        assert_eq!(conflict.conflict_files, vec![path_to_string(&path)]);
-        assert!(state.is_file());
-
-        let restored = disable_agent_modification(AgentClient::Codex, &home, 8317, true).unwrap();
+        let restored = disable_agent_modification(AgentClient::Codex, &home, 8317, false).unwrap();
         assert_eq!(restored.outcome, "disabled");
-        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(restored.conflict_files.is_empty());
+        let restored_content = fs::read_to_string(&path).unwrap();
+        let restored_value: toml::Value = toml::from_str(&restored_content).unwrap();
+        assert!(restored_content.contains("# original comment"));
+        assert_eq!(
+            restored_value["model_provider"].as_str(),
+            Some("user-provider")
+        );
+        assert_eq!(restored_value["model"].as_str(), Some("user-model"));
+        assert_eq!(
+            restored_value["model_catalog_json"].as_str(),
+            Some("user-catalog.json")
+        );
+        assert_eq!(restored_value["approval_policy"].as_str(), Some("never"));
+        assert_eq!(restored_value["custom_after_enable"].as_bool(), Some(true));
+        assert_eq!(
+            restored_value["model_providers"][MANAGED_AGENT_PROVIDER_ID]["name"].as_str(),
+            Some("Existing CPA")
+        );
+        assert_eq!(
+            restored_value["model_providers"][MANAGED_AGENT_PROVIDER_ID]["base_url"].as_str(),
+            Some("https://existing.invalid/v1")
+        );
+        assert_eq!(
+            restored_value["model_providers"][MANAGED_AGENT_PROVIDER_ID]["custom_option"].as_str(),
+            Some("keep-updated")
+        );
+        assert_eq!(
+            restored_value["model_providers"]["user-provider"]["base_url"].as_str(),
+            Some("https://example.com/v1")
+        );
+        assert_eq!(fs::read(&hard_link).unwrap(), fs::read(&path).unwrap());
         assert!(!catalog_path.exists());
         assert!(!backup.exists());
         assert!(!state.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn codex_disable_keeps_user_configuration_added_after_enable() {
+        let home = agent_test_home("codex-created-config");
+        let path = home.join(".codex/config.toml");
+        let models = test_agent_models(&["gpt-test"]);
+        let codex_models = test_codex_models(&["gpt-test"]);
+
+        enable_agent_modification(
+            AgentClient::Codex,
+            &home,
+            8317,
+            "gpt-test",
+            &models,
+            Some(&codex_models),
+        )
+        .unwrap();
+        let mut edited = fs::read_to_string(&path)
+            .unwrap()
+            .parse::<toml_edit::Document>()
+            .unwrap();
+        edited["approval_policy"] = toml_edit::value("never");
+        fs::write(&path, edited.to_string()).unwrap();
+
+        let result = disable_agent_modification(AgentClient::Codex, &home, 8317, false).unwrap();
+        assert_eq!(result.outcome, "disabled");
+        let restored_content = fs::read_to_string(&path).unwrap();
+        let restored: toml::Value = toml::from_str(&restored_content).unwrap();
+        assert_eq!(restored["approval_policy"].as_str(), Some("never"));
+        assert!(restored.get("model_provider").is_none());
+        assert!(restored.get("model").is_none());
+        assert!(restored.get("model_catalog_json").is_none());
+        assert!(restored.get("model_providers").is_none());
+        assert!(!codex_model_catalog_path(&home).exists());
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -11824,7 +12324,7 @@ mod tests {
         fs::write(
             &path,
             build_codex_agent_config(
-                None,
+                Some(std::str::from_utf8(original).unwrap()),
                 "http://127.0.0.1:9999/v1",
                 DEFAULT_API_KEY,
                 "gpt-legacy",
@@ -11874,14 +12374,20 @@ mod tests {
         fs::write(agent_backup_path(&path).unwrap(), original_config).unwrap();
         fs::write(
             &path,
-            build_codex_agent_config(None, "http://127.0.0.1:8317/v1", DEFAULT_API_KEY, "gpt-old")
-                .unwrap(),
+            build_codex_agent_config(
+                Some(std::str::from_utf8(original_config).unwrap()),
+                "http://127.0.0.1:8317/v1",
+                DEFAULT_API_KEY,
+                "gpt-old",
+            )
+            .unwrap(),
         )
         .unwrap();
         fs::write(&catalog_path, original_catalog).unwrap();
-        let record = build_legacy_agent_record(AgentClient::Codex, &home, 8317, "gpt-old")
+        let mut record = build_legacy_agent_record(AgentClient::Codex, &home, 8317, "gpt-old")
             .unwrap()
             .unwrap();
+        record.version = LEGACY_AGENT_MODIFICATION_STATE_VERSION;
         assert_eq!(record.files.len(), 1);
         write_agent_state(
             &agent_state_path(std::slice::from_ref(&path)).unwrap(),
@@ -11903,6 +12409,7 @@ mod tests {
         let upgraded = load_agent_record(AgentClient::Codex, std::slice::from_ref(&path))
             .unwrap()
             .unwrap();
+        assert_eq!(upgraded.version, AGENT_MODIFICATION_STATE_VERSION);
         assert_eq!(upgraded.files.len(), 2);
         assert_eq!(
             fs::read(agent_backup_path(&path).unwrap()).unwrap(),
@@ -11912,6 +12419,7 @@ mod tests {
             fs::read(agent_backup_path(&catalog_path).unwrap()).unwrap(),
             original_catalog
         );
+        fs::write(&catalog_path, b"{\"models\":[]}\n").unwrap();
 
         disable_agent_modification(AgentClient::Codex, &home, 8317, false).unwrap();
         assert_eq!(fs::read(&path).unwrap(), original_config);
@@ -11976,10 +12484,10 @@ mod tests {
         )
         .unwrap();
 
-        apply_agent_updates(&updates).unwrap();
+        apply_agent_updates(AgentClient::ClaudeDesktop, &updates).unwrap();
         assert!(first.is_file());
         assert!(second.is_file());
-        restore_agent_record_files(&record).unwrap();
+        restore_agent_record_files(AgentClient::ClaudeDesktop, &record).unwrap();
         assert_eq!(fs::read_to_string(&first).unwrap(), "{\"original\":true}\n");
         assert!(!second.exists());
         fs::remove_dir_all(home).unwrap();
@@ -12043,7 +12551,7 @@ mod tests {
             },
         ];
 
-        assert!(apply_agent_updates(&updates).is_err());
+        assert!(apply_agent_updates(AgentClient::ClaudeDesktop, &updates).is_err());
         assert_eq!(fs::read_to_string(&first).unwrap(), "original\n");
         fs::remove_dir_all(home).unwrap();
     }
