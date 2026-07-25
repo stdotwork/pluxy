@@ -344,6 +344,7 @@ struct PortableAppManifest {
 struct PendingAppUpdate {
     version: String,
     asset: PortableUpdateAsset,
+    #[cfg_attr(not(windows), allow(dead_code))]
     arch: String,
 }
 
@@ -979,6 +980,7 @@ impl AppUpdateState {
         Ok(pending)
     }
 
+    #[cfg(windows)]
     fn update_task<F>(&self, update: F) -> AppUpdateTask
     where
         F: FnOnce(&mut AppUpdateTask),
@@ -6752,7 +6754,7 @@ async fn download_and_stage_portable_app_update(
     #[cfg(not(windows))]
     {
         let _ = (app, pending, token);
-        return Err("应用内自动升级当前仅支持 Windows 便携版".to_string());
+        Err("应用内自动升级当前仅支持 Windows 便携版".to_string())
     }
 
     #[cfg(windows)]
@@ -6919,6 +6921,7 @@ async fn download_portable_update_archive(
     Ok(())
 }
 
+#[cfg(windows)]
 fn update_app_task<F>(app: &tauri::AppHandle, update: F)
 where
     F: FnOnce(&mut AppUpdateTask),
@@ -12832,11 +12835,13 @@ mod tests {
 
     #[test]
     fn agent_api_key_uses_first_configured_key_and_falls_back_when_empty() {
-        let mut config = GuiConfigFile::default();
-        config.api_keys = vec![GuiApiKeyEntry {
-            key: "custom-agent-key".to_string(),
-            remark: String::new(),
-        }];
+        let mut config = GuiConfigFile {
+            api_keys: vec![GuiApiKeyEntry {
+                key: "custom-agent-key".to_string(),
+                remark: String::new(),
+            }],
+            ..GuiConfigFile::default()
+        };
         assert_eq!(effective_agent_api_key(&config), "custom-agent-key");
 
         config.api_keys.clear();
