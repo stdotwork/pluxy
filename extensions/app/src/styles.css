@@ -908,14 +908,37 @@ input:focus-visible {
   background: #f4f1ea;
 }
 
-.control-action-row {
-  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
+.button-row.control-action-row,
+.button-row.version-action-row {
+  --kernel-action-button-min: clamp(112px, 12ch, 156px);
+
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, var(--kernel-action-button-min)), 1fr)
+  );
   grid-auto-flow: row;
+  grid-auto-columns: unset;
+  grid-auto-rows: minmax(42px, auto);
+  align-items: stretch;
 }
 
-.version-action-row {
-  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
-  grid-auto-flow: row;
+.button-row.version-action-row {
+  --kernel-action-button-min: clamp(120px, 15ch, 176px);
+}
+
+.control-action-row > button,
+.version-action-row > button {
+  width: 100%;
+  min-height: 42px;
+  height: auto;
+  padding-block: 7px;
+  overflow: hidden;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-align: center;
+  text-overflow: clip;
+  text-wrap: balance;
+  white-space: normal;
 }
 
 .software-update-details {
@@ -3808,7 +3831,7 @@ input:focus-visible {
 
 .agent-config-panel {
   display: grid;
-  grid-template-rows: 44px 40px 70px 138px 72px minmax(48px, 1fr);
+  grid-template-rows: 44px 40px 70px 138px minmax(72px, auto) minmax(48px, 1fr);
   align-content: stretch;
   gap: 14px;
 }
@@ -4220,43 +4243,55 @@ input:focus-visible {
   color: #9f2d20;
 }
 
-.agent-modification-switch {
-  display: flex;
+.agent-modification-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.85fr);
   align-items: center;
-  justify-content: space-between;
   gap: 18px;
   min-height: 72px;
   padding: 13px 15px;
   border: 1px solid #e3e1db;
   border-radius: 8px;
   background: #fffdf8;
-  height: 72px;
 }
 
-.agent-modification-switch.enabled {
+.agent-modification-actions.enabled {
   border-color: #b6d3bd;
   background: #f3f8f4;
 }
 
-.agent-modification-switch > div {
+.agent-modification-copy {
   display: grid;
   min-width: 0;
   gap: 4px;
 }
 
-.agent-modification-switch strong {
+.agent-modification-copy strong {
   color: #2d2a26;
   font-size: 13px;
 }
 
-.agent-modification-switch > div > span {
+.agent-modification-copy > span {
   color: #7a746c;
   font-size: 11px;
   line-height: 1.45;
 }
 
-.agent-modification-switch .switch-control {
-  flex: none;
+.agent-modification-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.agent-modification-buttons button {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  height: auto;
+  padding: 8px 10px;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .agent-restore-dialog {
@@ -5321,6 +5356,11 @@ input:focus-visible {
     grid-template-columns: 200px minmax(0, 1fr);
   }
 
+  .agent-modification-actions {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
   .usage-filter-panel {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -5494,7 +5534,7 @@ input:focus-visible {
   }
 
   .agent-model-section,
-  .agent-modification-switch {
+  .agent-modification-actions {
     height: auto;
   }
 
@@ -5609,8 +5649,7 @@ input:focus-visible {
 
   .agent-config-heading,
   .agent-config-footer,
-  .agent-section-heading,
-  .agent-modification-switch {
+  .agent-section-heading {
     align-items: stretch;
     flex-direction: column;
   }

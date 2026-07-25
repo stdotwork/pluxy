@@ -9,6 +9,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -44,7 +45,7 @@ type AgentClientId =
   | 'openclaw'
   | 'hermes';
 
-type AgentModificationState = 'inactive' | 'active' | 'conflict' | 'recovery';
+type AgentModificationState = 'unconfigured' | 'applied' | 'external-changed' | 'invalid';
 
 type AgentConfigStatus = {
   id: AgentClientId;
@@ -72,7 +73,7 @@ type AgentLaunchTarget = {
 };
 
 type AgentConfigActionResult = {
-  outcome: 'enabled' | 'disabled' | 'updated' | 'restore-conflict';
+  outcome: 'applied' | 'default';
   enabled: boolean;
   model: string | null;
   changedFiles: string[];
@@ -202,9 +203,9 @@ const listStatusText = (status: AgentConfigStatus | undefined) => {
   if (!status) return translate(locale, 'agents.list.detecting');
   if (!status.supportedPlatform) return translate(locale, 'agents.list.unsupported');
   if (!status.installed) return translate(locale, 'agents.list.notInstalled');
-  if (status.modificationState === 'conflict') return translate(locale, 'agents.list.conflict');
-  if (status.modificationState === 'recovery') return translate(locale, 'agents.list.recovery');
-  if (status.modificationEnabled) return translate(locale, 'agents.list.modified', { model: status.appliedModel ?? '—' });
+  if (status.modificationState === 'external-changed') return translate(locale, 'agents.status.externalChanged');
+  if (status.modificationState === 'invalid') return translate(locale, 'agents.status.invalid');
+  if (status.modificationState === 'applied') return translate(locale, 'agents.list.modified', { model: status.appliedModel ?? '—' });
   return status.version
     ? translate(locale, 'agents.list.installedVersion', { version: status.version })
     : translate(locale, 'agents.list.installed');
@@ -462,11 +463,12 @@ export function AgentsPage() {
   const [launchTargetByClient, setLaunchTargetByClient] = useState<Partial<Record<AgentClientId, string>>>({});
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'launch' | null>(null);
+  const busy = busyAction !== null;
   const [error, setError] = useState('');
   const [modelError, setModelError] = useState('');
   const [notice, setNotice] = useState('');
-  const [restoreConflict, setRestoreConflict] = useState<string[] | null>(null);
+  const [defaultConfirmOpen, setDefaultConfirmOpen] = useState(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -515,6 +517,24 @@ export function AgentsPage() {
   }, [loadModels, loadStatuses]);
 
   useEffect(() => {
+    let disposed = false;
+    let stop: (() => void) | null = null;
+    void listen('config-files-changed', () => {
+      if (disposed) return;
+      void Promise.all([loadStatuses(true), loadModels()]).catch((requestError) => {
+        if (!disposed) setError(String(requestError));
+      });
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [loadModels, loadStatuses]);
+
+  useEffect(() => {
     writeSelectedAgentClient(selected);
   }, [selected]);
 
@@ -545,14 +565,13 @@ export function AgentsPage() {
   ) ?? activeLaunchTargets[0] ?? null;
   const appliedModel = activeStatus?.appliedModel ?? activeStatus?.currentModel ?? '';
   const draftChanged = Boolean(
-    activeStatus?.modificationEnabled
-      && selectedModel.trim()
+    selectedModel.trim()
+      && appliedModel.trim()
       && selectedModel.trim() !== appliedModel.trim(),
   );
   const canEnable = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
-      && activeStatus.configValid
       && !modelLoading
       && selectedModelOption,
   );
@@ -560,7 +579,7 @@ export function AgentsPage() {
     activeStatus?.supportedPlatform
       && activeStatus.installed
       && activeStatus.modificationEnabled
-      && activeStatus.modificationState === 'active'
+      && activeStatus.modificationState === 'applied'
       && selectedLaunchTarget,
   );
 
@@ -595,69 +614,61 @@ export function AgentsPage() {
     return model.name;
   };
 
-  const setModificationEnabled = async (enabled: boolean, forceRestore = false) => {
-    const model = enabled ? requireSelectedModel() : selectedModel.trim();
-    if (enabled && !model) return;
-    setBusy(true);
+  const applyConfigurationChanges = async () => {
+    const model = requireSelectedModel();
+    if (!model) return;
+    setBusyAction('apply');
     setError('');
     setNotice('');
     try {
-      const result = await invoke<AgentConfigActionResult>('set_agent_config_enabled', {
+      await invoke<AgentConfigActionResult>('apply_agent_config', {
         client: selected,
-        model: model ?? '',
-        enabled,
-        forceRestore,
+        model,
       });
-      if (result.outcome === 'restore-conflict') {
-        setRestoreConflict(result.conflictFiles);
-        return;
-      }
-      setRestoreConflict(null);
-      setNotice(result.enabled
-        ? t('agents.notice.enabled', { name: activeDefinition.name })
-        : t('agents.notice.restored', { name: activeDefinition.name }));
+      setNotice(t('agents.notice.applied', { name: activeDefinition.name }));
       await loadStatuses(true);
     } catch (requestError) {
       setError(String(requestError));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
+    }
+  };
+
+  const resetConfigurationToDefault = async () => {
+    const model = requireSelectedModel();
+    if (!model) return;
+    setBusyAction('default');
+    setError('');
+    setNotice('');
+    try {
+      await invoke<AgentConfigActionResult>('reset_agent_config_to_default', {
+        client: selected,
+        model,
+      });
+      setDefaultConfirmOpen(false);
+      setNotice(t('agents.notice.defaultWritten', { name: activeDefinition.name }));
+      await loadStatuses(true);
+    } catch (requestError) {
+      setError(String(requestError));
+    } finally {
+      setBusyAction(null);
     }
   };
 
   const launchAgent = async () => {
-    setBusy(true);
+    setBusyAction('launch');
     setError('');
     setNotice('');
     try {
-      let appliedBeforeLaunch = false;
-      const shouldSyncModelCatalog = Boolean(
-        activeStatus?.modificationEnabled && selectedModelOption,
-      );
-      if (draftChanged || shouldSyncModelCatalog) {
-        if (activeStatus?.modificationState !== 'active') {
-          throw new Error(t('agents.error.conflict'));
-        }
-        const model = requireSelectedModel();
-        if (!model) return;
-        await invoke<AgentConfigActionResult>('update_agent_config', {
-          client: selected,
-          model,
-        });
-        appliedBeforeLaunch = true;
+      if (draftChanged) {
+        throw new Error(t('agents.error.applyFirst'));
       }
       await invoke('launch_agent', { client: selected, target: selectedLaunchTarget?.id });
-      setNotice(appliedBeforeLaunch
-        ? draftChanged
-          ? t('agents.notice.appliedLaunch', { name: activeDefinition.name })
-          : t('agents.notice.syncedLaunch', { name: activeDefinition.name })
-        : activeStatus?.modificationEnabled
-          ? t('agents.notice.managedLaunch', { name: activeDefinition.name })
-          : t('agents.notice.launched', { name: activeDefinition.name }));
-      if (appliedBeforeLaunch) await loadStatuses(true);
+      setNotice(t('agents.notice.managedLaunch', { name: activeDefinition.name }));
     } catch (requestError) {
       setError(String(requestError));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
 
@@ -667,18 +678,18 @@ export function AgentsPage() {
       ? t('agents.status.unsupported')
       : !activeStatus.installed
         ? t('agents.status.notInstalled')
-        : activeStatus.modificationState === 'conflict'
-          ? t('agents.status.conflict')
-          : activeStatus.modificationState === 'recovery'
-            ? t('agents.status.recovery')
-            : activeStatus.modificationEnabled
-              ? t('agents.status.modified')
-              : t('agents.status.original');
-  const statusTone = activeStatus?.modificationState === 'conflict'
-    || activeStatus?.modificationState === 'recovery'
+        : activeStatus.modificationState === 'external-changed'
+          ? t('agents.status.externalChanged')
+          : activeStatus.modificationState === 'invalid'
+            ? t('agents.status.invalid')
+            : activeStatus.modificationState === 'applied'
+              ? t('agents.status.applied')
+              : t('agents.status.unconfigured');
+  const statusTone = activeStatus?.modificationState === 'external-changed'
+    || activeStatus?.modificationState === 'invalid'
     || !activeStatus?.supportedPlatform
     ? 'error'
-    : activeStatus?.modificationEnabled
+    : activeStatus?.modificationState === 'applied'
       ? 'success'
       : '';
 
@@ -777,50 +788,66 @@ export function AgentsPage() {
                   ? modelError
                   : models.length === 0
                     ? t('agents.model.cannotConfigure')
-                    : activeStatus?.modificationEnabled
+                    : activeStatus?.modificationState === 'applied'
                       ? t('agents.model.current', { model: appliedModel || '—' })
                       : t('agents.model.firstSelection', { count: models.length })}
             </span>
           </section>
 
-          <section className={`agent-modification-switch ${activeStatus?.modificationEnabled ? 'enabled' : ''}`}>
-            <div>
+          <section className={`agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
+            <div className="agent-modification-copy">
               <strong>{t('agents.modify.title')}</strong>
-              <span>{activeStatus?.modificationEnabled
-                ? activeStatus.modificationState === 'conflict'
-                  ? t('agents.modify.conflict')
-                  : activeStatus.modificationState === 'recovery'
-                    ? t('agents.modify.recovery')
-                    : t('agents.modify.managed')
-                : t('agents.modify.disabled')}</span>
+              <span>{activeStatus?.modificationState === 'external-changed'
+                ? t('agents.modify.externalChanged')
+                : activeStatus?.modificationState === 'invalid'
+                  ? t('agents.modify.invalid')
+                  : activeStatus?.modificationState === 'applied'
+                    ? t('agents.modify.applied')
+                    : t('agents.modify.unconfigured')}</span>
             </div>
-            <label className="switch-control" title={t('agents.modify.title')}>
-              <input
-                type="checkbox"
-                checked={Boolean(activeStatus?.modificationEnabled)}
-                disabled={busy || (!activeStatus?.modificationEnabled && !canEnable)}
-                onChange={(event) => void setModificationEnabled(event.currentTarget.checked)}
-              />
-              <span className="switch-track" />
-            </label>
+            <div className="agent-modification-buttons">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void applyConfigurationChanges()}
+                disabled={
+                  busy
+                  || !canEnable
+                }
+              >
+                {busyAction === 'apply' ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
+                {t('agents.modify.apply')}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setDefaultConfirmOpen(true)}
+                disabled={busy || !canEnable}
+              >
+                {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
+                {t('agents.modify.default')}
+              </button>
+            </div>
           </section>
 
           <div className="agent-config-footer">
             <div>
-              {activeStatus?.modificationEnabled ? <Check size={16} /> : <Sparkles size={16} />}
-              <span>{activeStatus?.modificationEnabled
+              {activeStatus?.modificationState === 'applied' ? <Check size={16} /> : <Sparkles size={16} />}
+              <span>{activeStatus?.modificationState === 'applied'
                 ? draftChanged
                   ? t('agents.footer.changed')
-                  : t('agents.footer.restore')
+                  : t('agents.footer.applied')
+                : activeStatus?.modificationState === 'external-changed'
+                  ? t('agents.footer.externalChanged')
+                  : activeStatus?.modificationState === 'invalid'
+                    ? t('agents.footer.invalidManaged')
                 : !activeStatus?.supportedPlatform
                   ? t('agents.footer.unsupported')
                   : !activeStatus.installed
                     ? t('agents.footer.installFirst')
                     : activeStatus.launchTargets.length === 0
                       ? t('agents.footer.noCommand')
-                      : !activeStatus.configValid
-                        ? t('agents.footer.invalidConfig')
-                        : t('agents.footer.enableFirst')}</span>
+                      : t('agents.footer.enableFirst')}</span>
             </div>
             <div className="agent-launch-actions">
               {activeLaunchTargets.length > 1 ? (
@@ -849,34 +876,36 @@ export function AgentsPage() {
                 disabled={
                   busy
                   || !canLaunch
-                  || (draftChanged && activeStatus?.modificationState !== 'active')
+                  || draftChanged
                 }
-                title={activeStatus?.modificationEnabled
-                  ? selectedLaunchTarget?.detail
-                  : t('agents.launch.enableFirst')}
+                title={draftChanged
+                  ? t('agents.launch.applyFirst')
+                  : activeStatus?.modificationState === 'applied'
+                    ? selectedLaunchTarget?.detail
+                    : t('agents.launch.enableFirst')}
               >
-                {busy ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
-                {busy ? t('agents.launch.starting') : selectedLaunchTarget ? t('agents.launch.start', { target: selectedLaunchTarget.label }) : t('agents.launch.unavailable')}
+                {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
+                {busyAction === 'launch' ? t('agents.launch.starting') : selectedLaunchTarget ? t('agents.launch.start', { target: selectedLaunchTarget.label }) : t('agents.launch.unavailable')}
               </button>
             </div>
           </div>
         </section>
       </div>
 
-      {restoreConflict ? (
+      {defaultConfirmOpen ? (
         <div className="config-dialog-backdrop">
-          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-restore-title">
+          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-default-title">
             <div className="config-dialog-heading">
-              <div><AlertTriangle size={19} /><h2 id="agent-restore-title">{t('agents.restore.title')}</h2></div>
+              <div><AlertTriangle size={19} /><h2 id="agent-default-title">{t('agents.default.title')}</h2></div>
             </div>
             <p>
-              {t('agents.restore.description', { count: restoreConflict.length })}
+              {t('agents.default.description', { name: activeDefinition.name })}
             </p>
             <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" onClick={() => setRestoreConflict(null)} disabled={busy}>{t('common.cancel')}</button>
-              <button type="button" className="danger-button" onClick={() => void setModificationEnabled(false, true)} disabled={busy}>
-                {busy ? <LoaderCircle size={16} className="spin" /> : null}
-                {t('agents.restore.confirm')}
+              <button type="button" className="secondary-button" onClick={() => setDefaultConfirmOpen(false)} disabled={busy}>{t('common.cancel')}</button>
+              <button type="button" className="danger-button" onClick={() => void resetConfigurationToDefault()} disabled={busy}>
+                {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : null}
+                {t('agents.default.confirm')}
               </button>
             </div>
           </section>
