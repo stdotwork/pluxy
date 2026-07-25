@@ -215,6 +215,7 @@ struct AgentConfigStatusCache {
 
 struct AgentConfigStatusCacheEntry {
     port: u16,
+    api_key_sha256: String,
     statuses: Vec<AgentConfigStatus>,
 }
 
@@ -226,24 +227,34 @@ struct ConfigFilesChangedPayload {
 }
 
 impl AgentConfigStatusCache {
-    fn get(&self, port: u16) -> Result<Option<Vec<AgentConfigStatus>>, String> {
+    fn get(&self, port: u16, api_key: &str) -> Result<Option<Vec<AgentConfigStatus>>, String> {
+        let api_key_sha256 = sha256_bytes(api_key.as_bytes());
         self.entry
             .lock()
             .map(|entry| {
                 entry
                     .as_ref()
-                    .filter(|entry| entry.port == port)
+                    .filter(|entry| entry.port == port && entry.api_key_sha256 == api_key_sha256)
                     .map(|entry| entry.statuses.clone())
             })
             .map_err(|_| "智能体配置状态缓存锁已损坏".to_string())
     }
 
-    fn replace(&self, port: u16, statuses: Vec<AgentConfigStatus>) -> Result<(), String> {
+    fn replace(
+        &self,
+        port: u16,
+        api_key: &str,
+        statuses: Vec<AgentConfigStatus>,
+    ) -> Result<(), String> {
         let mut current = self
             .entry
             .lock()
             .map_err(|_| "智能体配置状态缓存锁已损坏".to_string())?;
-        *current = Some(AgentConfigStatusCacheEntry { port, statuses });
+        *current = Some(AgentConfigStatusCacheEntry {
+            port,
+            api_key_sha256: sha256_bytes(api_key.as_bytes()),
+            statuses,
+        });
         Ok(())
     }
 
@@ -1344,6 +1355,7 @@ fn resolve_windows_close_request(
 fn inspect_agent_config_statuses(
     app: &tauri::AppHandle,
     port: u16,
+    api_key: &str,
 ) -> Result<Vec<AgentConfigStatus>, String> {
     let home = app
         .path()
@@ -1358,7 +1370,7 @@ fn inspect_agent_config_statuses(
         AgentClient::Hermes,
     ]
     .into_iter()
-    .map(|client| inspect_agent_config(client, &home, port))
+    .map(|client| inspect_agent_config(client, &home, port, api_key))
     .collect())
 }
 
@@ -1371,9 +1383,11 @@ fn refresh_agent_config_status_cache(
         .refresh_lock
         .lock()
         .map_err(|_| "智能体配置状态刷新锁已损坏".to_string())?;
-    let port = gui_config_state.snapshot()?.port;
-    let statuses = inspect_agent_config_statuses(app, port)?;
-    cache.replace(port, statuses.clone())?;
+    let config = gui_config_state.snapshot()?;
+    let port = config.port;
+    let api_key = effective_agent_api_key(&config);
+    let statuses = inspect_agent_config_statuses(app, port, api_key)?;
+    cache.replace(port, api_key, statuses.clone())?;
     Ok(statuses)
 }
 
@@ -1388,8 +1402,9 @@ fn get_agent_config_statuses(
             .refresh_lock
             .lock()
             .map_err(|_| "智能体配置状态刷新锁已损坏".to_string())?;
-        let port = gui_config_state.snapshot()?.port;
-        if let Some(statuses) = cache.get(port)? {
+        let config = gui_config_state.snapshot()?;
+        let port = config.port;
+        if let Some(statuses) = cache.get(port, effective_agent_api_key(&config))? {
             return Ok(statuses);
         }
     }
@@ -1410,7 +1425,7 @@ async fn get_agent_models(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<Vec<AgentModelOption>, String> {
     let config = gui_config_state.snapshot()?;
-    fetch_agent_models(config.port).await
+    fetch_agent_models(config.port, effective_agent_api_key(&config)).await
 }
 
 #[tauri::command]
@@ -1428,7 +1443,8 @@ async fn get_thinking_alias_sources(
 ) -> Result<Vec<ThinkingAliasSource>, String> {
     let config = gui_config_state.snapshot()?;
     let content = fetch_management_config_yaml(&config).await?;
-    let available_models = fetch_agent_models(config.port).await?;
+    let available_models =
+        fetch_agent_models(config.port, effective_agent_api_key(&config)).await?;
     let definitions = fetch_codex_model_definitions(&config)
         .await
         .unwrap_or_default();
@@ -1455,7 +1471,8 @@ async fn create_thinking_alias(
     let alias = validate_thinking_alias_model_id(&alias, "别名模型")?;
     let effort = validate_thinking_alias_effort(&effort)?;
     let content = fetch_management_config_yaml(&config).await?;
-    let available_models = fetch_agent_models(config.port).await?;
+    let available_models =
+        fetch_agent_models(config.port, effective_agent_api_key(&config)).await?;
     let definitions = fetch_codex_model_definitions(&config)
         .await
         .unwrap_or_default();
@@ -1504,7 +1521,7 @@ async fn delete_thinking_alias(
     thinking_aliases_from_yaml(&updated)
 }
 
-async fn fetch_agent_models(port: u16) -> Result<Vec<AgentModelOption>, String> {
+async fn fetch_agent_models(port: u16, api_key: &str) -> Result<Vec<AgentModelOption>, String> {
     if port == 0 {
         return Err("内核端口无效".to_string());
     }
@@ -1522,7 +1539,7 @@ async fn fetch_agent_models(port: u16) -> Result<Vec<AgentModelOption>, String> 
     for (index, endpoint) in endpoints.iter().enumerate() {
         let response = client
             .get(endpoint)
-            .bearer_auth(DEFAULT_API_KEY)
+            .bearer_auth(api_key)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .send()
@@ -1565,8 +1582,9 @@ async fn apply_agent_config(
         .home_dir()
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
     let config = gui_config_state.snapshot()?;
-    validate_agent_can_enable(client, &home, config.port)?;
-    let available_models = fetch_agent_models(config.port).await?;
+    let api_key = effective_agent_api_key(&config);
+    validate_agent_can_enable(client, &home, config.port, api_key)?;
+    let available_models = fetch_agent_models(config.port, api_key).await?;
     let model = resolve_available_agent_model(&available_models, &validate_agent_model(&model)?)?;
     let codex_models = if client == AgentClient::Codex {
         Some(fetch_codex_model_catalog_specs(&config, &available_models).await)
@@ -1580,6 +1598,7 @@ async fn apply_agent_config(
         client,
         &home,
         config.port,
+        api_key,
         &model,
         &available_models,
         codex_models.as_deref(),
@@ -1599,8 +1618,9 @@ async fn reset_agent_config_to_default(
         .home_dir()
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
     let config = gui_config_state.snapshot()?;
-    validate_agent_can_enable(client, &home, config.port)?;
-    let available_models = fetch_agent_models(config.port).await?;
+    let api_key = effective_agent_api_key(&config);
+    validate_agent_can_enable(client, &home, config.port, api_key)?;
+    let available_models = fetch_agent_models(config.port, api_key).await?;
     let model = resolve_available_agent_model(&available_models, &validate_agent_model(&model)?)?;
     let codex_models = if client == AgentClient::Codex {
         Some(fetch_codex_model_catalog_specs(&config, &available_models).await)
@@ -1614,6 +1634,7 @@ async fn reset_agent_config_to_default(
         client,
         &home,
         config.port,
+        api_key,
         &model,
         codex_models.as_deref(),
     )
@@ -1635,10 +1656,11 @@ async fn set_agent_config_enabled(
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
     let config = gui_config_state.snapshot()?;
     let port = config.port;
+    let api_key = effective_agent_api_key(&config);
 
     if enabled {
-        validate_agent_can_enable(client, &home, port)?;
-        let available_models = fetch_agent_models(port).await?;
+        validate_agent_can_enable(client, &home, port, api_key)?;
+        let available_models = fetch_agent_models(port, api_key).await?;
         let model =
             resolve_available_agent_model(&available_models, &validate_agent_model(&model)?)?;
         let codex_models = if client == AgentClient::Codex {
@@ -1653,6 +1675,7 @@ async fn set_agent_config_enabled(
             client,
             &home,
             port,
+            api_key,
             &model,
             &available_models,
             codex_models.as_deref(),
@@ -1680,7 +1703,8 @@ async fn update_agent_config(
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
     let config = gui_config_state.snapshot()?;
     let port = config.port;
-    let available_models = fetch_agent_models(port).await?;
+    let api_key = effective_agent_api_key(&config);
+    let available_models = fetch_agent_models(port, api_key).await?;
     let model = resolve_available_agent_model(&available_models, &validate_agent_model(&model)?)?;
     let codex_models = if client == AgentClient::Codex {
         Some(fetch_codex_model_catalog_specs(&config, &available_models).await)
@@ -1694,6 +1718,7 @@ async fn update_agent_config(
         client,
         &home,
         port,
+        api_key,
         &model,
         &available_models,
         codex_models.as_deref(),
@@ -1715,8 +1740,9 @@ fn launch_agent(
         .path()
         .home_dir()
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
-    let port = gui_config_state.snapshot()?.port;
-    let status = inspect_agent_config(client, &home, port);
+    let config = gui_config_state.snapshot()?;
+    let port = config.port;
+    let status = inspect_agent_config(client, &home, port, effective_agent_api_key(&config));
     validate_agent_launch_modification(
         client,
         status.modification_enabled,
@@ -1789,7 +1815,7 @@ fn validate_agent_can_enable_legacy(
             client.name()
         ));
     }
-    let detection = inspect_agent_config(client, home, port);
+    let detection = inspect_agent_config(client, home, port, DEFAULT_API_KEY);
     if !detection.installed {
         return Err(format!("未检测到 {}，请先安装后再配置", client.name()));
     }
@@ -1801,14 +1827,19 @@ fn validate_agent_can_enable_legacy(
     Ok(())
 }
 
-fn validate_agent_can_enable(client: AgentClient, home: &Path, port: u16) -> Result<(), String> {
+fn validate_agent_can_enable(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(), String> {
     if !client.supported_platform() {
         return Err(format!(
             "{} is not supported on the current platform",
             client.name()
         ));
     }
-    let detection = inspect_agent_config(client, home, port);
+    let detection = inspect_agent_config(client, home, port, api_key);
     if !detection.installed {
         return Err(format!("{} is not installed", client.name()));
     }
@@ -2153,10 +2184,15 @@ fn hermes_agent_config_path(home: &Path) -> PathBuf {
     home.join(".hermes/config.yaml")
 }
 
-fn inspect_agent_config(client: AgentClient, home: &Path, port: u16) -> AgentConfigStatus {
+fn inspect_agent_config(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+) -> AgentConfigStatus {
     let paths = agent_config_paths(client, home);
     let config_exists = paths.iter().any(|path| path.is_file());
-    let result = inspect_agent_managed_config(client, &paths, port);
+    let result = inspect_agent_managed_config(client, &paths, port, api_key);
     let (configured, current_model, config_valid, error) = match result {
         Ok((configured, model)) => (configured, model, true, None),
         Err(error) => (false, None, false, Some(error)),
@@ -2266,17 +2302,18 @@ fn inspect_agent_managed_config(
     client: AgentClient,
     paths: &[PathBuf],
     port: u16,
+    api_key: &str,
 ) -> Result<(bool, Option<String>), String> {
     match client {
-        AgentClient::ClaudeCode => inspect_claude_agent_config(&paths[0], port),
+        AgentClient::ClaudeCode => inspect_claude_agent_config(&paths[0], port, api_key),
         AgentClient::ClaudeDesktop if client.supported_platform() => {
-            inspect_claude_desktop_agent_config(paths, port)
+            inspect_claude_desktop_agent_config(paths, port, api_key)
         }
         AgentClient::ClaudeDesktop => Ok((false, None)),
-        AgentClient::Codex => inspect_codex_agent_config(&paths[0], port),
-        AgentClient::OpenCode => inspect_opencode_agent_config(&paths[0], port),
-        AgentClient::OpenClaw => inspect_openclaw_agent_config(&paths[0], port),
-        AgentClient::Hermes => inspect_hermes_agent_config(&paths[0], port),
+        AgentClient::Codex => inspect_codex_agent_config(&paths[0], port, api_key),
+        AgentClient::OpenCode => inspect_opencode_agent_config(&paths[0], port, api_key),
+        AgentClient::OpenClaw => inspect_openclaw_agent_config(&paths[0], port, api_key),
+        AgentClient::Hermes => inspect_hermes_agent_config(&paths[0], port, api_key),
     }
 }
 
@@ -3078,7 +3115,11 @@ fn launch_cli_agent(
     Err(format!("当前平台不支持启动 {label}"))
 }
 
-fn inspect_claude_agent_config(path: &Path, port: u16) -> Result<(bool, Option<String>), String> {
+fn inspect_claude_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
     if !path.is_file() {
         return Ok((false, None));
     }
@@ -3096,7 +3137,7 @@ fn inspect_claude_agent_config(path: &Path, port: u16) -> Result<(bool, Option<S
         && env
             .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
             .and_then(serde_json::Value::as_str)
-            == Some(DEFAULT_API_KEY);
+            == Some(api_key);
     let model = env
         .and_then(|env| env.get("ANTHROPIC_MODEL"))
         .and_then(serde_json::Value::as_str)
@@ -3110,6 +3151,7 @@ fn inspect_claude_agent_config(path: &Path, port: u16) -> Result<(bool, Option<S
 fn inspect_claude_desktop_agent_config(
     paths: &[PathBuf],
     port: u16,
+    api_key: &str,
 ) -> Result<(bool, Option<String>), String> {
     if paths.len() != 4 || !paths.iter().any(|path| path.is_file()) {
         return Ok((false, None));
@@ -3134,7 +3176,7 @@ fn inspect_claude_desktop_agent_config(
         && profile
             .get("inferenceGatewayApiKey")
             .and_then(serde_json::Value::as_str)
-            == Some(DEFAULT_API_KEY)
+            == Some(api_key)
         && meta.get("appliedId").and_then(serde_json::Value::as_str)
             == Some(CLAUDE_DESKTOP_PROFILE_ID);
     let model = profile
@@ -3169,7 +3211,11 @@ fn read_agent_json_or_empty(path: &Path, label: &str) -> Result<serde_json::Valu
     Ok(value)
 }
 
-fn inspect_codex_agent_config(path: &Path, port: u16) -> Result<(bool, Option<String>), String> {
+fn inspect_codex_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
     if !path.is_file() {
         return Ok((false, None));
     }
@@ -3198,7 +3244,7 @@ fn inspect_codex_agent_config(path: &Path, port: u16) -> Result<(bool, Option<St
         && provider
             .and_then(|provider| provider.get("experimental_bearer_token"))
             .and_then(toml::Value::as_str)
-            == Some(DEFAULT_API_KEY)
+            == Some(api_key)
         && provider
             .and_then(|provider| provider.get("wire_api"))
             .and_then(toml::Value::as_str)
@@ -3212,7 +3258,11 @@ fn inspect_codex_agent_config(path: &Path, port: u16) -> Result<(bool, Option<St
     Ok((configured, model))
 }
 
-fn inspect_opencode_agent_config(path: &Path, port: u16) -> Result<(bool, Option<String>), String> {
+fn inspect_opencode_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
     if !path.is_file() {
         return Ok((false, None));
     }
@@ -3233,7 +3283,7 @@ fn inspect_opencode_agent_config(path: &Path, port: u16) -> Result<(bool, Option
             .and_then(|provider| provider.get("options"))
             .and_then(|options| options.get("apiKey"))
             .and_then(serde_json::Value::as_str)
-            == Some(DEFAULT_API_KEY);
+            == Some(api_key);
     let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
     let model = root
         .get("model")
@@ -3245,7 +3295,11 @@ fn inspect_opencode_agent_config(path: &Path, port: u16) -> Result<(bool, Option
     Ok((configured, model))
 }
 
-fn inspect_openclaw_agent_config(path: &Path, port: u16) -> Result<(bool, Option<String>), String> {
+fn inspect_openclaw_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
     if !path.is_file() {
         return Ok((false, None));
     }
@@ -3265,7 +3319,7 @@ fn inspect_openclaw_agent_config(path: &Path, port: u16) -> Result<(bool, Option
         && provider
             .and_then(|provider| provider.get("apiKey"))
             .and_then(serde_json::Value::as_str)
-            == Some(DEFAULT_API_KEY);
+            == Some(api_key);
     let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
     let model = root
         .get("agents")
@@ -3280,7 +3334,11 @@ fn inspect_openclaw_agent_config(path: &Path, port: u16) -> Result<(bool, Option
     Ok((configured, model))
 }
 
-fn inspect_hermes_agent_config(path: &Path, port: u16) -> Result<(bool, Option<String>), String> {
+fn inspect_hermes_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
     if !path.is_file() {
         return Ok((false, None));
     }
@@ -3305,7 +3363,7 @@ fn inspect_hermes_agent_config(path: &Path, port: u16) -> Result<(bool, Option<S
         && provider
             .and_then(|provider| provider.get("api_key"))
             .and_then(serde_yaml::Value::as_str)
-            == Some(DEFAULT_API_KEY)
+            == Some(api_key)
         && root
             .get("model")
             .and_then(|model| model.get("provider"))
@@ -3326,6 +3384,7 @@ fn build_agent_updates(
     client: AgentClient,
     home: &Path,
     port: u16,
+    api_key: &str,
     model: &str,
     models: &[AgentModelOption],
     codex_models: Option<&[CodexModelCatalogSpec]>,
@@ -3336,11 +3395,8 @@ fn build_agent_updates(
     match client {
         AgentClient::ClaudeCode => {
             let before = read_optional_text(&paths[0])?;
-            let after =
-                build_claude_agent_config(before.as_deref(), &root_base, DEFAULT_API_KEY, model)
-                    .or_else(|_| {
-                        build_claude_agent_config(None, &root_base, DEFAULT_API_KEY, model)
-                    })?;
+            let after = build_claude_agent_config(before.as_deref(), &root_base, api_key, model)
+                .or_else(|_| build_claude_agent_config(None, &root_base, api_key, model))?;
             Ok(vec![AgentFileUpdate {
                 path: paths[0].clone(),
                 after,
@@ -3370,18 +3426,12 @@ fn build_agent_updates(
                     after: build_claude_desktop_profile(
                         profile_before.as_deref(),
                         &root_base,
-                        DEFAULT_API_KEY,
+                        api_key,
                         model,
                         models,
                     )
                     .or_else(|_| {
-                        build_claude_desktop_profile(
-                            None,
-                            &root_base,
-                            DEFAULT_API_KEY,
-                            model,
-                            models,
-                        )
+                        build_claude_desktop_profile(None, &root_base, api_key, model, models)
                     })?,
                 },
                 AgentFileUpdate {
@@ -3394,10 +3444,8 @@ fn build_agent_updates(
         AgentClient::Codex => {
             let before = read_optional_text(&paths[0])?;
             let after =
-                build_codex_agent_config(before.as_deref(), &openai_base, DEFAULT_API_KEY, model)
-                    .or_else(|_| {
-                    build_codex_agent_config(None, &openai_base, DEFAULT_API_KEY, model)
-                })?;
+                build_codex_agent_config(before.as_deref(), &openai_base, api_key, model)
+                    .or_else(|_| build_codex_agent_config(None, &openai_base, api_key, model))?;
             let mut updates = vec![AgentFileUpdate {
                 path: paths[0].clone(),
                 after,
@@ -3415,13 +3463,11 @@ fn build_agent_updates(
             let after = build_opencode_agent_config(
                 before.as_deref(),
                 &openai_base,
-                DEFAULT_API_KEY,
+                api_key,
                 model,
                 models,
             )
-            .or_else(|_| {
-                build_opencode_agent_config(None, &openai_base, DEFAULT_API_KEY, model, models)
-            })?;
+            .or_else(|_| build_opencode_agent_config(None, &openai_base, api_key, model, models))?;
             Ok(vec![AgentFileUpdate {
                 path: paths[0].clone(),
                 after,
@@ -3432,13 +3478,11 @@ fn build_agent_updates(
             let after = build_openclaw_agent_config(
                 before.as_deref(),
                 &openai_base,
-                DEFAULT_API_KEY,
+                api_key,
                 model,
                 models,
             )
-            .or_else(|_| {
-                build_openclaw_agent_config(None, &openai_base, DEFAULT_API_KEY, model, models)
-            })?;
+            .or_else(|_| build_openclaw_agent_config(None, &openai_base, api_key, model, models))?;
             Ok(vec![AgentFileUpdate {
                 path: paths[0].clone(),
                 after,
@@ -3446,16 +3490,11 @@ fn build_agent_updates(
         }
         AgentClient::Hermes => {
             let before = read_optional_text(&paths[0])?;
-            let after = build_hermes_agent_config(
-                before.as_deref(),
-                &openai_base,
-                DEFAULT_API_KEY,
-                model,
-                models,
-            )
-            .or_else(|_| {
-                build_hermes_agent_config(None, &openai_base, DEFAULT_API_KEY, model, models)
-            })?;
+            let after =
+                build_hermes_agent_config(before.as_deref(), &openai_base, api_key, model, models)
+                    .or_else(|_| {
+                        build_hermes_agent_config(None, &openai_base, api_key, model, models)
+                    })?;
             Ok(vec![AgentFileUpdate {
                 path: paths[0].clone(),
                 after,
@@ -4967,6 +5006,7 @@ fn inspect_agent_modification(
 fn fresh_agent_contents(
     client: AgentClient,
     port: u16,
+    api_key: &str,
     model: &str,
 ) -> Result<Vec<String>, String> {
     let root_base = format!("http://127.0.0.1:{port}");
@@ -4977,41 +5017,38 @@ fn fresh_agent_contents(
     }];
     match client {
         AgentClient::ClaudeCode => Ok(vec![build_claude_agent_config(
-            None,
-            &root_base,
-            DEFAULT_API_KEY,
-            model,
+            None, &root_base, api_key, model,
         )?]),
         AgentClient::ClaudeDesktop => Ok(vec![
             build_claude_desktop_deployment_config(None)?,
             build_claude_desktop_deployment_config(None)?,
-            build_claude_desktop_profile(None, &root_base, DEFAULT_API_KEY, model, &models)?,
+            build_claude_desktop_profile(None, &root_base, api_key, model, &models)?,
             build_claude_desktop_meta(None)?,
         ]),
         AgentClient::Codex => Ok(vec![build_codex_agent_config(
             None,
             &openai_base,
-            DEFAULT_API_KEY,
+            api_key,
             model,
         )?]),
         AgentClient::OpenCode => Ok(vec![build_opencode_agent_config(
             None,
             &openai_base,
-            DEFAULT_API_KEY,
+            api_key,
             model,
             &models,
         )?]),
         AgentClient::OpenClaw => Ok(vec![build_openclaw_agent_config(
             None,
             &openai_base,
-            DEFAULT_API_KEY,
+            api_key,
             model,
             &models,
         )?]),
         AgentClient::Hermes => Ok(vec![build_hermes_agent_config(
             None,
             &openai_base,
-            DEFAULT_API_KEY,
+            api_key,
             model,
             &models,
         )?]),
@@ -5061,7 +5098,7 @@ fn build_legacy_agent_record(
     model: &str,
 ) -> Result<Option<AgentModificationRecord>, String> {
     let paths = agent_config_paths(client, home);
-    let generated = fresh_agent_contents(client, port, model)?;
+    let generated = fresh_agent_contents(client, port, DEFAULT_API_KEY, model)?;
     if generated.len() != paths.len() {
         return Ok(None);
     }
@@ -5547,11 +5584,12 @@ fn apply_agent_configuration(
     client: AgentClient,
     home: &Path,
     port: u16,
+    api_key: &str,
     model: &str,
     models: &[AgentModelOption],
     codex_models: Option<&[CodexModelCatalogSpec]>,
 ) -> Result<AgentConfigActionResult, String> {
-    let updates = build_agent_updates(client, home, port, model, models, codex_models)?;
+    let updates = build_agent_updates(client, home, port, api_key, model, models, codex_models)?;
     commit_agent_configuration(client, home, model, &updates, "applied")
 }
 
@@ -5559,11 +5597,12 @@ fn reset_agent_configuration_to_default(
     client: AgentClient,
     home: &Path,
     port: u16,
+    api_key: &str,
     model: &str,
     codex_models: Option<&[CodexModelCatalogSpec]>,
 ) -> Result<AgentConfigActionResult, String> {
     let paths = agent_config_paths(client, home);
-    let contents = fresh_agent_contents(client, port, model)?;
+    let contents = fresh_agent_contents(client, port, api_key, model)?;
     if paths.len() != contents.len() {
         return Err("智能体默认配置文件数量不匹配".to_string());
     }
@@ -5717,7 +5756,7 @@ fn enable_agent_modification(
             Vec::new(),
         ));
     }
-    let (_, current_model) = inspect_agent_managed_config(client, &paths, port)?;
+    let (_, current_model) = inspect_agent_managed_config(client, &paths, port, DEFAULT_API_KEY)?;
     if agent_has_managed_marker(client, &paths)? {
         if let Some(current_model) = current_model.as_deref() {
             if let Some(record) = build_legacy_agent_record(client, home, port, current_model)? {
@@ -5736,7 +5775,15 @@ fn enable_agent_modification(
         );
     }
 
-    let updates = build_agent_updates(client, home, port, model, models, codex_models)?;
+    let updates = build_agent_updates(
+        client,
+        home,
+        port,
+        DEFAULT_API_KEY,
+        model,
+        models,
+        codex_models,
+    )?;
     let update_paths = updates
         .iter()
         .map(|update| update.path.clone())
@@ -5787,7 +5834,7 @@ fn disable_agent_modification(
     let mut record = match load_agent_record(client, &paths)? {
         Some(record) => record,
         None => {
-            let (_, model) = inspect_agent_managed_config(client, &paths, port)?;
+            let (_, model) = inspect_agent_managed_config(client, &paths, port, DEFAULT_API_KEY)?;
             if !agent_has_managed_marker(client, &paths)? {
                 return Ok(action_result(
                     "disabled",
@@ -5872,7 +5919,8 @@ fn update_agent_modification(
     let record = match load_agent_record(client, &paths)? {
         Some(record) => record,
         None => {
-            let (_, current_model) = inspect_agent_managed_config(client, &paths, port)?;
+            let (_, current_model) =
+                inspect_agent_managed_config(client, &paths, port, DEFAULT_API_KEY)?;
             if !agent_has_managed_marker(client, &paths)? {
                 return Err("请先应用配置修改".to_string());
             }
@@ -5896,7 +5944,15 @@ fn update_agent_modification(
         }
     }
 
-    let updates = build_agent_updates(client, home, port, model, models, codex_models)?;
+    let updates = build_agent_updates(
+        client,
+        home,
+        port,
+        DEFAULT_API_KEY,
+        model,
+        models,
+        codex_models,
+    )?;
     let (mut next, backup_snapshots) = extend_agent_record_for_updates(&record, &updates)?;
     next.phase = AGENT_PHASE_APPLYING.to_string();
     next.model = model.to_string();
@@ -10200,6 +10256,15 @@ fn gui_api_key_values(entries: &[GuiApiKeyEntry]) -> Vec<String> {
     entries.iter().map(|entry| entry.key.clone()).collect()
 }
 
+fn effective_agent_api_key(config: &GuiConfigFile) -> &str {
+    config
+        .api_keys
+        .iter()
+        .map(|entry| entry.key.trim())
+        .find(|key| !key.is_empty())
+        .unwrap_or(DEFAULT_API_KEY)
+}
+
 fn merge_core_api_keys_with_gui_metadata(
     existing: &[GuiApiKeyEntry],
     core_api_keys: &[String],
@@ -12750,18 +12815,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_status_cache_requires_matching_port() {
+    fn agent_status_cache_requires_matching_port_and_api_key() {
         let cache = AgentConfigStatusCache::default();
-        cache.replace(8317, Vec::new()).unwrap();
+        cache.replace(8317, "agent-key", Vec::new()).unwrap();
 
         assert!(cache
-            .get(8317)
+            .get(8317, "agent-key")
             .unwrap()
             .is_some_and(|statuses| statuses.is_empty()));
-        assert!(cache.get(8318).unwrap().is_none());
+        assert!(cache.get(8318, "agent-key").unwrap().is_none());
+        assert!(cache.get(8317, "different-key").unwrap().is_none());
 
         cache.clear().unwrap();
-        assert!(cache.get(8317).unwrap().is_none());
+        assert!(cache.get(8317, "agent-key").unwrap().is_none());
+    }
+
+    #[test]
+    fn agent_api_key_uses_first_configured_key_and_falls_back_when_empty() {
+        let mut config = GuiConfigFile::default();
+        config.api_keys = vec![GuiApiKeyEntry {
+            key: "custom-agent-key".to_string(),
+            remark: String::new(),
+        }];
+        assert_eq!(effective_agent_api_key(&config), "custom-agent-key");
+
+        config.api_keys.clear();
+        assert_eq!(effective_agent_api_key(&config), DEFAULT_API_KEY);
     }
 
     fn agent_test_home(name: &str) -> PathBuf {
@@ -12803,11 +12882,13 @@ mod tests {
         .unwrap();
         let models = test_agent_models(&["gpt-test"]);
         let codex_models = test_codex_models(&["gpt-test"]);
+        let api_key = "custom-agent-key";
 
         let result = apply_agent_configuration(
             AgentClient::Codex,
             &home,
             8317,
+            api_key,
             "gpt-test",
             &models,
             Some(&codex_models),
@@ -12819,6 +12900,7 @@ mod tests {
         assert!(applied.contains("user_setting = \"keep\""));
         assert!(applied.contains("[model_providers.other]"));
         assert!(applied.contains("model = \"gpt-test\""));
+        assert!(applied.contains("experimental_bearer_token = \"custom-agent-key\""));
         assert!(!agent_backup_path(&path).unwrap().exists());
         assert!(!agent_backup_path(&codex_model_catalog_path(&home))
             .unwrap()
@@ -12847,6 +12929,7 @@ mod tests {
             AgentClient::Codex,
             &home,
             8317,
+            api_key,
             "gpt-test",
             &models,
             Some(&codex_models),
@@ -12860,6 +12943,7 @@ mod tests {
             AgentClient::Codex,
             &home,
             8317,
+            api_key,
             "gpt-test",
             Some(&codex_models),
         )
@@ -12879,8 +12963,16 @@ mod tests {
         fs::write(&path, "{ invalid json").unwrap();
         let models = test_agent_models(&["model-a"]);
 
-        apply_agent_configuration(AgentClient::OpenCode, &home, 8317, "model-a", &models, None)
-            .unwrap();
+        apply_agent_configuration(
+            AgentClient::OpenCode,
+            &home,
+            8317,
+            DEFAULT_API_KEY,
+            "model-a",
+            &models,
+            None,
+        )
+        .unwrap();
 
         let root =
             serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -12950,6 +13042,7 @@ mod tests {
                 client,
                 &home,
                 8317,
+                DEFAULT_API_KEY,
                 "model-a",
                 &models,
                 (client == AgentClient::Codex).then_some(codex_models.as_slice()),
@@ -13876,7 +13969,8 @@ custom_option = "keep-original"
         provider["custom_option"] = toml_edit::value("keep-updated");
         fs::write(&path, externally_edited.to_string()).unwrap();
 
-        let (configured, current_model) = inspect_codex_agent_config(&path, 8317).unwrap();
+        let (configured, current_model) =
+            inspect_codex_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap();
         let inspection = inspect_agent_modification(
             AgentClient::Codex,
             &home,
