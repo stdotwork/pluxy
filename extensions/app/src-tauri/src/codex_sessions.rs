@@ -339,8 +339,8 @@ pub(crate) fn repair_before_codex_launch(
 fn repair_before_codex_launch_from_home(
     codex_home: &Path,
 ) -> Result<CodexSessionRepairResult, String> {
-    validate_managed_codex_provider(&codex_home)?;
-    match repair_codex_session_metadata_from_home(&codex_home, |_| {}) {
+    validate_managed_codex_provider(codex_home)?;
+    match repair_codex_session_metadata_from_home(codex_home, |_| {}) {
         Ok(result) => Ok(result),
         Err(error) if is_locked_error_message(&error) => Ok(CodexSessionRepairResult {
             target_provider: MANAGED_AGENT_PROVIDER_ID.to_string(),
@@ -735,8 +735,7 @@ fn delete_one_session(
             });
         }
         let backup_dir = create_delete_backup(codex_home, session_id, &plans)?;
-        let mut committed_databases = 0usize;
-        for plan in &plans {
+        for (committed_databases, plan) in plans.iter().enumerate() {
             if let Err(error) = apply_database_delete_plan(plan, session_id) {
                 let status = if committed_databases > 0 {
                     "partial"
@@ -752,7 +751,6 @@ fn delete_one_session(
                     backup_path: Some(backup_dir.to_string_lossy().to_string()),
                 });
             }
-            committed_databases += 1;
         }
         let mut rollout_errors = Vec::new();
         let mut rollout_paths = plans
@@ -1505,8 +1503,8 @@ fn normalize_workspace_path(value: &str) -> Option<String> {
     if lower.starts_with(r"\\?\unc\") {
         return Some(format!(r"\\{}", value[8..].replace('/', r"\")));
     }
-    if value.starts_with(r"\\?\") {
-        return Some(value[4..].replace('\\', "/"));
+    if let Some(stripped) = value.strip_prefix(r"\\?\") {
+        return Some(stripped.replace('\\', "/"));
     }
     Some(value.to_string())
 }
