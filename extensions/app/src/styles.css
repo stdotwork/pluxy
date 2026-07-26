@@ -3722,12 +3722,15 @@ input:focus-visible {
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
 }
 
-.agent-client-list,
+.agent-client-list {
+  min-height: 960px;
+}
+
 .agent-config-panel {
-  min-height: 540px;
+  min-height: 0;
 }
 
 .agents-page {
@@ -3871,7 +3874,7 @@ input:focus-visible {
 
 .agent-config-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
   align-content: start;
   gap: 14px;
 }
