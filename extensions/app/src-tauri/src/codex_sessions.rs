@@ -152,6 +152,13 @@ pub(crate) struct SessionIndexCleanupResult {
     backup_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatGptCloseResult {
+    was_running: bool,
+    closed_processes: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SetRepairOnLaunchRequest {
@@ -313,6 +320,13 @@ pub(crate) fn set_codex_session_repair_on_launch(
     Ok(RepairOnLaunchSetting {
         enabled: config.codex_session_repair_on_launch,
     })
+}
+
+#[tauri::command]
+pub(crate) async fn close_chatgpt_app() -> Result<ChatGptCloseResult, String> {
+    tauri::async_runtime::spawn_blocking(close_chatgpt_app_processes)
+        .await
+        .map_err(|error| format!("关闭 ChatGPT App 任务失败: {error}"))?
 }
 
 pub(crate) fn repair_before_codex_launch(
@@ -2099,10 +2113,20 @@ fn ensure_codex_apps_stopped() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn codex_app_process_ids() -> Result<Vec<u32>, String> {
+    windows_app_process_ids(&["ChatGPT.exe", "Codex.exe"])
+}
+
+#[cfg(target_os = "windows")]
+fn chatgpt_app_process_ids() -> Result<Vec<u32>, String> {
+    windows_app_process_ids(&["ChatGPT.exe"])
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_process_ids(names: &[&str]) -> Result<Vec<u32>, String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     let mut ids = Vec::new();
-    for name in ["ChatGPT.exe", "Codex.exe"] {
+    for name in names {
         let filter = format!("IMAGENAME eq {name}");
         let output = Command::new("tasklist")
             .args(["/FI", &filter, "/FO", "CSV", "/NH"])
@@ -2115,28 +2139,42 @@ fn codex_app_process_ids() -> Result<Vec<u32>, String> {
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        ids.extend(
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter_map(|line| {
-                    let columns = line
-                        .trim()
-                        .trim_matches('"')
-                        .split("\",\"")
-                        .collect::<Vec<_>>();
-                    columns.get(1)?.parse::<u32>().ok()
-                }),
-        );
+        ids.extend(parse_windows_tasklist_process_ids(&output.stdout));
     }
     ids.sort_unstable();
     ids.dedup();
     Ok(ids)
 }
 
+#[cfg(target_os = "windows")]
+fn parse_windows_tasklist_process_ids(output: &[u8]) -> Vec<u32> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let columns = line
+                .trim()
+                .trim_matches('"')
+                .split("\",\"")
+                .collect::<Vec<_>>();
+            columns.get(1)?.parse::<u32>().ok()
+        })
+        .collect()
+}
+
 #[cfg(not(target_os = "windows"))]
 fn codex_app_process_ids() -> Result<Vec<u32>, String> {
+    unix_app_process_ids(&["ChatGPT", "Codex"])
+}
+
+#[cfg(not(target_os = "windows"))]
+fn chatgpt_app_process_ids() -> Result<Vec<u32>, String> {
+    unix_app_process_ids(&["ChatGPT"])
+}
+
+#[cfg(not(target_os = "windows"))]
+fn unix_app_process_ids(names: &[&str]) -> Result<Vec<u32>, String> {
     let mut ids = Vec::new();
-    for name in ["ChatGPT", "Codex"] {
+    for name in names {
         let output = Command::new("pgrep")
             .args(["-x", name])
             .output()
@@ -2161,12 +2199,121 @@ fn codex_app_process_ids() -> Result<Vec<u32>, String> {
     Ok(ids)
 }
 
+#[cfg(target_os = "windows")]
+fn close_chatgpt_app_processes() -> Result<ChatGptCloseResult, String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let process_ids = chatgpt_app_process_ids()?;
+    if process_ids.is_empty() {
+        return Ok(ChatGptCloseResult {
+            was_running: false,
+            closed_processes: 0,
+        });
+    }
+
+    let output = Command::new("taskkill")
+        .args(["/IM", "ChatGPT.exe", "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|error| format!("无法关闭 ChatGPT.exe: {error}"))?;
+    let mut remaining = chatgpt_app_process_ids()?;
+    for _ in 0..20 {
+        if remaining.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        remaining = chatgpt_app_process_ids()?;
+    }
+    if !remaining.is_empty() {
+        let detail = String::from_utf8_lossy(if output.stderr.is_empty() {
+            &output.stdout
+        } else {
+            &output.stderr
+        });
+        return Err(format!(
+            "ChatGPT App 未能完全关闭（剩余进程：{}）{}{}",
+            remaining
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join("、"),
+            if detail.trim().is_empty() { "" } else { "：" },
+            detail.trim()
+        ));
+    }
+
+    Ok(ChatGptCloseResult {
+        was_running: true,
+        closed_processes: process_ids.len(),
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn close_chatgpt_app_processes() -> Result<ChatGptCloseResult, String> {
+    let process_ids = chatgpt_app_process_ids()?;
+    if process_ids.is_empty() {
+        return Ok(ChatGptCloseResult {
+            was_running: false,
+            closed_processes: 0,
+        });
+    }
+
+    let mut terminate = Command::new("kill");
+    terminate.arg("-TERM");
+    for process_id in &process_ids {
+        terminate.arg(process_id.to_string());
+    }
+    let _ = terminate.status();
+
+    for _ in 0..20 {
+        if chatgpt_app_process_ids()?.is_empty() {
+            return Ok(ChatGptCloseResult {
+                was_running: true,
+                closed_processes: process_ids.len(),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let remaining = chatgpt_app_process_ids()?;
+    let mut force = Command::new("kill");
+    force.arg("-KILL");
+    for process_id in &remaining {
+        force.arg(process_id.to_string());
+    }
+    let _ = force.status();
+    std::thread::sleep(Duration::from_millis(100));
+    let remaining = chatgpt_app_process_ids()?;
+    if !remaining.is_empty() {
+        return Err(format!(
+            "ChatGPT App 未能完全关闭（剩余进程：{}）",
+            remaining
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
+    }
+
+    Ok(ChatGptCloseResult {
+        was_running: true,
+        closed_processes: process_ids.len(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_tasklist_parser_accepts_csv_rows_and_ignores_status_messages() {
+        let output = b"\"ChatGPT.exe\",\"1234\",\"Console\",\"1\",\"10,000 K\"\r\nINFO: No tasks are running which match the specified criteria.\r\n\"ChatGPT.exe\",\"5678\",\"Console\",\"1\",\"20,000 K\"\r\n";
+        assert_eq!(parse_windows_tasklist_process_ids(output), vec![1234, 5678]);
+    }
 
     fn test_root(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(

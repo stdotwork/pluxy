@@ -18,6 +18,7 @@ import {
   ChevronDown,
   LoaderCircle,
   Play,
+  Power,
   RefreshCw,
   Search,
   Sparkles,
@@ -81,6 +82,11 @@ type AgentConfigActionResult = {
   model: string | null;
   changedFiles: string[];
   conflictFiles: string[];
+};
+
+type ChatGptCloseResult = {
+  wasRunning: boolean;
+  closedProcesses: number;
 };
 
 type AgentDefinition = {
@@ -489,7 +495,7 @@ export function AgentsPage() {
   const [launchTargetByClient, setLaunchTargetByClient] = useState<Partial<Record<AgentClientId, string>>>({});
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
-  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'clear' | 'launch' | null>(null);
+  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'clear' | 'launch' | 'close-app' | null>(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
   const [modelError, setModelError] = useState('');
@@ -501,6 +507,9 @@ export function AgentsPage() {
   const [clearError, setClearError] = useState('');
   const [clearNotice, setClearNotice] = useState('');
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [closeAppError, setCloseAppError] = useState('');
+  const [closeAppNotice, setCloseAppNotice] = useState('');
+  const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -582,6 +591,9 @@ export function AgentsPage() {
     setClearError('');
     setClearNotice('');
     setClearConfirmOpen(false);
+    setCloseAppError('');
+    setCloseAppNotice('');
+    setCloseAppConfirmOpen(false);
   }, [selected]);
 
   useEffect(() => {
@@ -624,10 +636,41 @@ export function AgentsPage() {
   const canLaunch = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
-      && activeStatus.modificationEnabled
-      && activeStatus.modificationState === 'applied'
-      && selectedLaunchTarget,
+      && selectedLaunchTarget
+      && (selected === 'codex'
+        || (activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
   );
+  const modelHint = modelSelectionError
+    || modelError
+    || (modelLoading
+      ? t('agents.model.readingAvailable')
+      : models.length === 0
+        ? ''
+        : activeStatus?.modificationState === 'applied'
+          ? t('agents.model.current', { model: appliedModel || '—' })
+          : t('agents.model.firstSelection', { count: models.length }));
+  const modificationDescription = activeStatus?.modificationState === 'external-changed'
+    ? t('agents.modify.externalChanged')
+    : activeStatus?.modificationState === 'invalid'
+      ? t('agents.modify.invalid')
+      : activeStatus?.modificationState === 'applied'
+        ? t('agents.modify.applied')
+        : '';
+  const footerMessage = activeStatus?.modificationState === 'applied'
+    ? draftChanged
+      ? t('agents.footer.changed')
+      : t('agents.footer.applied')
+    : activeStatus?.modificationState === 'external-changed'
+      ? t('agents.footer.externalChanged')
+      : activeStatus?.modificationState === 'invalid'
+        ? t('agents.footer.invalidManaged')
+        : !activeStatus?.supportedPlatform
+          ? t('agents.footer.unsupported')
+          : !activeStatus.installed
+            ? t('agents.footer.installFirst')
+            : activeStatus.launchTargets.length === 0
+              ? t('agents.footer.noCommand')
+              : '';
 
   const refreshModels = () => {
     void loadModels();
@@ -728,12 +771,29 @@ export function AgentsPage() {
     setBusyAction('launch');
     setLaunchError('');
     try {
-      if (draftChanged) {
+      if (selected !== 'codex' && draftChanged) {
         throw new Error(t('agents.error.applyFirst'));
       }
       await invoke('launch_agent', { client: selected, target: selectedLaunchTarget?.id });
     } catch (requestError) {
       setLaunchError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const closeChatGptApp = async () => {
+    setBusyAction('close-app');
+    setCloseAppError('');
+    setCloseAppNotice('');
+    try {
+      const result = await invoke<ChatGptCloseResult>('close_chatgpt_app');
+      setCloseAppConfirmOpen(false);
+      setCloseAppNotice(result.wasRunning
+        ? t('agents.closeApp.success', { count: result.closedProcesses })
+        : t('agents.closeApp.notRunning'));
+    } catch (requestError) {
+      setCloseAppError(String(requestError));
     } finally {
       setBusyAction(null);
     }
@@ -757,6 +817,16 @@ export function AgentsPage() {
   const closeClearConfirmation = () => {
     setClearError('');
     setClearConfirmOpen(false);
+  };
+
+  const openCloseAppConfirmation = () => {
+    setCloseAppError('');
+    setCloseAppConfirmOpen(true);
+  };
+
+  const closeCloseAppConfirmation = () => {
+    setCloseAppError('');
+    setCloseAppConfirmOpen(false);
   };
 
   const availableSubpages = agentSubpages.filter(
@@ -864,7 +934,7 @@ export function AgentsPage() {
 
               <section className="agent-core-setting-section agent-model-section">
                 <div className="agent-section-heading">
-                  <div><strong>{t('agents.useModel')}</strong><span>{t('agents.useModelDescription')}</span></div>
+                  <div><strong>{t('agents.useModel')}</strong></div>
                   {draftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
                 </div>
                 <AgentModelPicker
@@ -876,34 +946,22 @@ export function AgentsPage() {
                   onChange={selectModel}
                   onRefresh={refreshModels}
                 />
-                <span
-                  className={`agent-model-hint ${modelSelectionError || modelError ? 'error' : ''}`}
-                  role={modelSelectionError || modelError ? 'alert' : undefined}
-                  aria-live="polite"
-                >
-                  {modelSelectionError
-                    || modelError
-                    || (modelLoading
-                      ? t('agents.model.readingAvailable')
-                      : models.length === 0
-                        ? t('agents.model.cannotConfigure')
-                        : activeStatus?.modificationState === 'applied'
-                          ? t('agents.model.current', { model: appliedModel || '—' })
-                          : t('agents.model.firstSelection', { count: models.length }))}
-                </span>
+                {modelHint ? (
+                  <span
+                    className={`agent-model-hint ${modelSelectionError || modelError ? 'error' : ''}`}
+                    role={modelSelectionError || modelError ? 'alert' : undefined}
+                    aria-live="polite"
+                  >
+                    {modelHint}
+                  </span>
+                ) : null}
               </section>
 
               <section className={`agent-core-setting-section agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
                 <div className="agent-section-heading">
                   <div>
                     <strong>{t('agents.modify.title')}</strong>
-                    <span>{activeStatus?.modificationState === 'external-changed'
-                      ? t('agents.modify.externalChanged')
-                      : activeStatus?.modificationState === 'invalid'
-                        ? t('agents.modify.invalid')
-                        : activeStatus?.modificationState === 'applied'
-                          ? t('agents.modify.applied')
-                          : t('agents.modify.unconfigured')}</span>
+                    {modificationDescription ? <span>{modificationDescription}</span> : null}
                   </div>
                 </div>
                 <div className="agent-modification-control">
@@ -957,24 +1015,12 @@ export function AgentsPage() {
               {selected === 'codex' ? <CodexSessionAutoRestoreCard /> : null}
 
               <div className="agent-config-footer">
-                <div className="agent-config-summary">
-                  {activeStatus?.modificationState === 'applied' ? <Check size={16} /> : <Sparkles size={16} />}
-                  <span>{activeStatus?.modificationState === 'applied'
-                    ? draftChanged
-                      ? t('agents.footer.changed')
-                      : t('agents.footer.applied')
-                    : activeStatus?.modificationState === 'external-changed'
-                      ? t('agents.footer.externalChanged')
-                      : activeStatus?.modificationState === 'invalid'
-                        ? t('agents.footer.invalidManaged')
-                        : !activeStatus?.supportedPlatform
-                          ? t('agents.footer.unsupported')
-                          : !activeStatus.installed
-                            ? t('agents.footer.installFirst')
-                            : activeStatus.launchTargets.length === 0
-                              ? t('agents.footer.noCommand')
-                              : t('agents.footer.enableFirst')}</span>
-                </div>
+                {footerMessage ? (
+                  <div className="agent-config-summary">
+                    {activeStatus?.modificationState === 'applied' ? <Check size={16} /> : <Sparkles size={16} />}
+                    <span>{footerMessage}</span>
+                  </div>
+                ) : null}
                 <div className="agent-launch-control">
                   <div className="agent-launch-actions">
                     {activeLaunchTargets.length > 1 ? (
@@ -1003,21 +1049,39 @@ export function AgentsPage() {
                       disabled={
                         busy
                         || !canLaunch
-                        || draftChanged
+                        || (selected !== 'codex' && draftChanged)
                       }
-                      title={draftChanged
-                        ? t('agents.launch.applyFirst')
-                        : activeStatus?.modificationState === 'applied'
-                          ? selectedLaunchTarget?.detail
-                          : t('agents.launch.enableFirst')}
+                      title={selected === 'codex'
+                        ? selectedLaunchTarget?.detail
+                        : draftChanged
+                          ? t('agents.launch.applyFirst')
+                          : activeStatus?.modificationState === 'applied'
+                            ? selectedLaunchTarget?.detail
+                            : t('agents.launch.enableFirst')}
                     >
                       {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
                       {busyAction === 'launch' ? t('agents.launch.starting') : selectedLaunchTarget ? t('agents.launch.start', { target: selectedLaunchTarget.label }) : t('agents.launch.unavailable')}
                     </button>
+                    {selected === 'codex' ? (
+                      <button
+                        type="button"
+                        className="danger-button agent-close-app-button"
+                        onClick={openCloseAppConfirmation}
+                        disabled={busy}
+                      >
+                        {busyAction === 'close-app' ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}
+                        {busyAction === 'close-app' ? t('agents.launch.closingChatgpt') : t('agents.launch.closeChatgpt')}
+                      </button>
+                    ) : null}
                   </div>
                   {launchError ? (
                     <span className="agent-inline-message error" role="alert" aria-live="polite">
                       {launchError}
+                    </span>
+                  ) : null}
+                  {closeAppNotice ? (
+                    <span className="agent-inline-message" role="status" aria-live="polite">
+                      {closeAppNotice}
                     </span>
                   ) : null}
                 </div>
@@ -1080,6 +1144,29 @@ export function AgentsPage() {
               <button type="button" className="danger-button" onClick={() => void clearCodexConfiguration()} disabled={busy}>
                 {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
                 {t('agents.clear.confirm')}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {closeAppConfirmOpen ? (
+        <div className="config-dialog-backdrop">
+          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-close-app-title">
+            <div className="config-dialog-heading">
+              <div><AlertTriangle size={19} /><h2 id="agent-close-app-title">{t('agents.closeApp.title')}</h2></div>
+            </div>
+            <p>{t('agents.closeApp.description')}</p>
+            {closeAppError ? (
+              <span className="agent-inline-message error" role="alert" aria-live="polite">
+                {closeAppError}
+              </span>
+            ) : null}
+            <div className="config-dialog-actions two-actions">
+              <button type="button" className="secondary-button" onClick={closeCloseAppConfirmation} disabled={busy}>{t('common.cancel')}</button>
+              <button type="button" className="danger-button" onClick={() => void closeChatGptApp()} disabled={busy}>
+                {busyAction === 'close-app' ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}
+                {t('agents.closeApp.confirm')}
               </button>
             </div>
           </section>

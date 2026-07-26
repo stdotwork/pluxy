@@ -77,7 +77,6 @@ export function CodexSessionAutoRestoreCard() {
       <div className="agent-section-heading">
         <div>
           <strong>{t('agents.sessions.autoRepair')}</strong>
-          <span>{t('agents.sessions.autoRestoreDescription')}</span>
         </div>
         <label className="codex-auto-restore-toggle">
           {loading || saving ? <LoaderCircle size={14} className="spin" aria-hidden="true" /> : null}

@@ -1773,7 +1773,7 @@ async fn launch_agent(
         status.modification_enabled,
         &status.modification_state,
     )?;
-    if client == AgentClient::Codex && config.codex_session_repair_on_launch {
+    if client == AgentClient::Codex && config.codex_session_repair_on_launch && status.configured {
         let repair_home = home.clone();
         tauri::async_runtime::spawn_blocking(move || {
             codex_sessions::repair_before_codex_launch(&repair_home)
@@ -1827,7 +1827,7 @@ fn validate_agent_launch_modification(
     enabled: bool,
     state: &str,
 ) -> Result<(), String> {
-    if enabled && state == "applied" {
+    if client == AgentClient::Codex || (enabled && state == "applied") {
         return Ok(());
     }
     Err(format!(
@@ -12869,7 +12869,8 @@ fn main() {
             codex_sessions::preview_codex_session_index_cleanup,
             codex_sessions::apply_codex_session_index_cleanup,
             codex_sessions::get_codex_session_repair_on_launch,
-            codex_sessions::set_codex_session_repair_on_launch
+            codex_sessions::set_codex_session_repair_on_launch,
+            codex_sessions::close_chatgpt_app
         ])
         .build(tauri::generate_context!())
         .expect("failed to build app");
@@ -15437,13 +15438,20 @@ custom_option = "keep-original"
     }
 
     #[test]
-    fn agent_launch_requires_an_active_managed_configuration() {
+    fn codex_launch_is_independent_from_managed_configuration_state() {
         assert!(validate_agent_launch_modification(AgentClient::Codex, true, "applied").is_ok());
-        assert!(validate_agent_launch_modification(AgentClient::Codex, false, "applied").is_err());
+        assert!(
+            validate_agent_launch_modification(AgentClient::Codex, false, "unconfigured").is_ok()
+        );
         assert!(
             validate_agent_launch_modification(AgentClient::Codex, true, "external-changed",)
+                .is_ok()
+        );
+        assert!(
+            validate_agent_launch_modification(AgentClient::OpenCode, false, "unconfigured")
                 .is_err()
         );
+        assert!(validate_agent_launch_modification(AgentClient::OpenCode, true, "applied").is_ok());
     }
 
     #[test]
