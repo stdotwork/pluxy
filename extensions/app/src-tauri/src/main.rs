@@ -1588,6 +1588,7 @@ async fn apply_agent_config(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
     model: String,
+    oauth_configuration: bool,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
     let home = app
@@ -1607,7 +1608,7 @@ async fn apply_agent_config(
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
-    apply_agent_configuration(
+    apply_agent_configuration_with_oauth(
         client,
         &home,
         config.port,
@@ -1615,6 +1616,7 @@ async fn apply_agent_config(
         &model,
         &available_models,
         codex_models.as_deref(),
+        oauth_configuration,
     )
 }
 
@@ -1624,6 +1626,7 @@ async fn reset_agent_config_to_default(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
     model: String,
+    oauth_configuration: bool,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
     let home = app
@@ -1643,13 +1646,14 @@ async fn reset_agent_config_to_default(
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
-    reset_agent_configuration_to_default(
+    reset_agent_configuration_to_default_with_oauth(
         client,
         &home,
         config.port,
         api_key,
         &model,
         codex_models.as_deref(),
+        oauth_configuration,
     )
 }
 
@@ -3293,6 +3297,15 @@ fn inspect_codex_agent_config(
         .and_then(toml::Value::as_table)
         .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
         .and_then(toml::Value::as_table);
+    let uses_api_key = provider
+        .and_then(|provider| provider.get("experimental_bearer_token"))
+        .and_then(toml::Value::as_str)
+        == Some(api_key);
+    let uses_oauth = provider
+        .and_then(|provider| provider.get("requires_openai_auth"))
+        .and_then(toml::Value::as_bool)
+        == Some(true)
+        && provider.is_some_and(|provider| !provider.contains_key("experimental_bearer_token"));
     let configured = root.get("model_provider").and_then(toml::Value::as_str)
         == Some(MANAGED_AGENT_PROVIDER_ID)
         && root.get("model_catalog_json").and_then(toml::Value::as_str)
@@ -3305,10 +3318,7 @@ fn inspect_codex_agent_config(
             .and_then(|provider| provider.get("base_url"))
             .and_then(toml::Value::as_str)
             == Some(expected_base.as_str())
-        && provider
-            .and_then(|provider| provider.get("experimental_bearer_token"))
-            .and_then(toml::Value::as_str)
-            == Some(api_key)
+        && (uses_api_key || uses_oauth)
         && provider
             .and_then(|provider| provider.get("wire_api"))
             .and_then(toml::Value::as_str)
@@ -3444,6 +3454,7 @@ fn inspect_hermes_agent_config(
     Ok((configured, model))
 }
 
+#[cfg(test)]
 fn build_agent_updates(
     client: AgentClient,
     home: &Path,
@@ -3452,6 +3463,28 @@ fn build_agent_updates(
     model: &str,
     models: &[AgentModelOption],
     codex_models: Option<&[CodexModelCatalogSpec]>,
+) -> Result<Vec<AgentFileUpdate>, String> {
+    build_agent_updates_with_oauth(
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        models,
+        codex_models,
+        false,
+    )
+}
+
+fn build_agent_updates_with_oauth(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    model: &str,
+    models: &[AgentModelOption],
+    codex_models: Option<&[CodexModelCatalogSpec]>,
+    oauth_configuration: bool,
 ) -> Result<Vec<AgentFileUpdate>, String> {
     let paths = agent_config_paths(client, home);
     let root_base = format!("http://127.0.0.1:{port}");
@@ -3507,9 +3540,22 @@ fn build_agent_updates(
         }
         AgentClient::Codex => {
             let before = read_optional_text(&paths[0])?;
-            let after =
-                build_codex_agent_config(before.as_deref(), &openai_base, api_key, model)
-                    .or_else(|_| build_codex_agent_config(None, &openai_base, api_key, model))?;
+            let after = build_codex_agent_config_with_oauth(
+                before.as_deref(),
+                &openai_base,
+                api_key,
+                model,
+                oauth_configuration,
+            )
+            .or_else(|_| {
+                build_codex_agent_config_with_oauth(
+                    None,
+                    &openai_base,
+                    api_key,
+                    model,
+                    oauth_configuration,
+                )
+            })?;
             let mut updates = vec![AgentFileUpdate {
                 path: paths[0].clone(),
                 after,
@@ -3779,11 +3825,22 @@ fn build_claude_desktop_meta(existing: Option<&str>) -> Result<String, String> {
     render_agent_json(root, "Claude Desktop 配置索引")
 }
 
+#[cfg(test)]
 fn build_codex_agent_config(
     existing: Option<&str>,
     base_url: &str,
     api_key: &str,
     model: &str,
+) -> Result<String, String> {
+    build_codex_agent_config_with_oauth(existing, base_url, api_key, model, false)
+}
+
+fn build_codex_agent_config_with_oauth(
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    oauth_configuration: bool,
 ) -> Result<String, String> {
     use toml_edit::{value, Document, Item, Table};
 
@@ -3828,7 +3885,13 @@ fn build_codex_agent_config(
     set_codex_table_item(provider, "name", value("EasyCLIProxyAPI"));
     set_codex_table_item(provider, "base_url", value(base_url));
     set_codex_table_item(provider, "wire_api", value("responses"));
-    set_codex_table_item(provider, "experimental_bearer_token", value(api_key));
+    if oauth_configuration {
+        provider.remove("experimental_bearer_token");
+        set_codex_table_item(provider, "requires_openai_auth", value(true));
+    } else {
+        provider.remove("requires_openai_auth");
+        set_codex_table_item(provider, "experimental_bearer_token", value(api_key));
+    }
     let rendered = document.to_string();
     toml::from_str::<toml::Value>(&rendered)
         .map_err(|error| format!("验证 Codex 配置失败: {error}"))?;
@@ -3838,8 +3901,13 @@ fn build_codex_agent_config(
 #[cfg(test)]
 const CODEX_MANAGED_ROOT_KEYS: [&str; 3] = ["model_provider", "model", "model_catalog_json"];
 #[cfg(test)]
-const CODEX_MANAGED_PROVIDER_KEYS: [&str; 4] =
-    ["name", "base_url", "wire_api", "experimental_bearer_token"];
+const CODEX_MANAGED_PROVIDER_KEYS: [&str; 5] = [
+    "name",
+    "base_url",
+    "wire_api",
+    "experimental_bearer_token",
+    "requires_openai_auth",
+];
 
 fn set_codex_table_item(table: &mut toml_edit::Table, key: &str, mut item: toml_edit::Item) {
     if let (Some(current), Some(next)) = (
@@ -4477,16 +4545,22 @@ fn agent_managed_projection(
                 .get("model_providers")
                 .and_then(toml::Value::as_table)
                 .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
-            let provider_projection = ["name", "base_url", "wire_api", "experimental_bearer_token"]
-                .into_iter()
-                .map(|key| {
-                    let value = provider
-                        .and_then(|provider| provider.get(key))
-                        .and_then(|value| serde_json::to_value(value).ok())
-                        .unwrap_or(serde_json::Value::Null);
-                    (key.to_string(), value)
-                })
-                .collect::<serde_json::Map<_, _>>();
+            let provider_projection = [
+                "name",
+                "base_url",
+                "wire_api",
+                "experimental_bearer_token",
+                "requires_openai_auth",
+            ]
+            .into_iter()
+            .map(|key| {
+                let value = provider
+                    .and_then(|provider| provider.get(key))
+                    .and_then(|value| serde_json::to_value(value).ok())
+                    .unwrap_or(serde_json::Value::Null);
+                (key.to_string(), value)
+            })
+            .collect::<serde_json::Map<_, _>>();
             let root_value = |key: &str| {
                 root.get(key)
                     .and_then(|value| serde_json::to_value(value).ok())
@@ -5067,11 +5141,22 @@ fn inspect_agent_modification(
     }
 }
 
+#[cfg(test)]
 fn fresh_agent_contents(
     client: AgentClient,
     port: u16,
     api_key: &str,
     model: &str,
+) -> Result<Vec<String>, String> {
+    fresh_agent_contents_with_oauth(client, port, api_key, model, false)
+}
+
+fn fresh_agent_contents_with_oauth(
+    client: AgentClient,
+    port: u16,
+    api_key: &str,
+    model: &str,
+    oauth_configuration: bool,
 ) -> Result<Vec<String>, String> {
     let root_base = format!("http://127.0.0.1:{port}");
     let openai_base = format!("{root_base}/v1");
@@ -5089,11 +5174,12 @@ fn fresh_agent_contents(
             build_claude_desktop_profile(None, &root_base, api_key, model, &models)?,
             build_claude_desktop_meta(None)?,
         ]),
-        AgentClient::Codex => Ok(vec![build_codex_agent_config(
+        AgentClient::Codex => Ok(vec![build_codex_agent_config_with_oauth(
             None,
             &openai_base,
             api_key,
             model,
+            oauth_configuration,
         )?]),
         AgentClient::OpenCode => Ok(vec![build_opencode_agent_config(
             None,
@@ -5653,10 +5739,42 @@ fn apply_agent_configuration(
     models: &[AgentModelOption],
     codex_models: Option<&[CodexModelCatalogSpec]>,
 ) -> Result<AgentConfigActionResult, String> {
-    let updates = build_agent_updates(client, home, port, api_key, model, models, codex_models)?;
+    apply_agent_configuration_with_oauth(
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        models,
+        codex_models,
+        false,
+    )
+}
+
+fn apply_agent_configuration_with_oauth(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    model: &str,
+    models: &[AgentModelOption],
+    codex_models: Option<&[CodexModelCatalogSpec]>,
+    oauth_configuration: bool,
+) -> Result<AgentConfigActionResult, String> {
+    let updates = build_agent_updates_with_oauth(
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        models,
+        codex_models,
+        oauth_configuration,
+    )?;
     commit_agent_configuration(client, home, model, &updates, "applied")
 }
 
+#[cfg(test)]
 fn reset_agent_configuration_to_default(
     client: AgentClient,
     home: &Path,
@@ -5665,8 +5783,29 @@ fn reset_agent_configuration_to_default(
     model: &str,
     codex_models: Option<&[CodexModelCatalogSpec]>,
 ) -> Result<AgentConfigActionResult, String> {
+    reset_agent_configuration_to_default_with_oauth(
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        codex_models,
+        false,
+    )
+}
+
+fn reset_agent_configuration_to_default_with_oauth(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    model: &str,
+    codex_models: Option<&[CodexModelCatalogSpec]>,
+    oauth_configuration: bool,
+) -> Result<AgentConfigActionResult, String> {
     let paths = agent_config_paths(client, home);
-    let contents = fresh_agent_contents(client, port, api_key, model)?;
+    let contents =
+        fresh_agent_contents_with_oauth(client, port, api_key, model, oauth_configuration)?;
     if paths.len() != contents.len() {
         return Err("智能体默认配置文件数量不匹配".to_string());
     }
@@ -13381,6 +13520,30 @@ mod tests {
                 .as_str(),
             Some(DEFAULT_API_KEY)
         );
+    }
+
+    #[test]
+    fn codex_oauth_configuration_uses_openai_auth_without_bearer_token() {
+        let rendered = build_codex_agent_config_with_oauth(
+            Some("[model_providers.cpa-gui]\nexperimental_bearer_token = \"old-key\"\n"),
+            "http://127.0.0.1:8317/v1",
+            DEFAULT_API_KEY,
+            "gpt-test",
+            true,
+        )
+        .unwrap();
+        let value = toml::from_str::<toml::Value>(&rendered).unwrap();
+        let provider = value["model_providers"][MANAGED_AGENT_PROVIDER_ID]
+            .as_table()
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .get("requires_openai_auth")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert!(!provider.contains_key("experimental_bearer_token"));
     }
 
     #[test]

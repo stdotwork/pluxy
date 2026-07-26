@@ -4858,6 +4858,49 @@ input:focus-visible {
   text-align: left;
 }
 
+.agent-oauth-configuration {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid #d8d2c8;
+  border-radius: 9px;
+  background: #faf8f4;
+  color: #5f5a53;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.agent-oauth-configuration:hover {
+  border-color: #bdb5a9;
+  background: #f6f2ec;
+}
+
+.agent-oauth-configuration:has(input:focus-visible) {
+  border-color: #8d8377;
+  box-shadow: 0 0 0 3px rgba(45, 42, 38, 0.1);
+}
+
+.agent-oauth-configuration:has(input:checked) {
+  border-color: #9db8a5;
+  background: #f3f8f4;
+  color: #2f6b3f;
+}
+
+.agent-oauth-configuration:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.agent-oauth-configuration .switch-control {
+  flex: none;
+}
+
 .agent-modification-buttons {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -5928,8 +5971,9 @@ input:focus-visible {
 
 @container agent-panel (min-width: 900px) {
   .agent-core-config {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-    align-items: start;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 8px;
+    align-items: stretch;
   }
 
   .agent-status-grid,
@@ -5941,10 +5985,12 @@ input:focus-visible {
 
   .agent-model-section {
     grid-column: 1;
+    height: 100%;
   }
 
   .agent-modification-actions {
     grid-column: 2;
+    height: 100%;
   }
 }
 

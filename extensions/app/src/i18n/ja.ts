@@ -457,6 +457,7 @@ export const jaOverrides = {
   'agents.model.current': '現在適用中：{model}',
   'agents.model.firstSelection': '利用可能なモデル {count} 件。初回は先頭を選択します',
   'agents.modify.title': '設定変更',
+  'agents.modify.oauthConfiguration': 'OAuth 設定方式',
   'agents.modify.apply': '設定変更を適用',
   'agents.modify.default': 'デフォルト設定',
   'agents.modify.clear': '設定を消去',

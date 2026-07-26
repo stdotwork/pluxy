@@ -510,6 +510,7 @@ export function AgentsPage() {
   const [closeAppError, setCloseAppError] = useState('');
   const [closeAppNotice, setCloseAppNotice] = useState('');
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
+  const [oauthConfiguration, setOauthConfiguration] = useState(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -723,6 +724,7 @@ export function AgentsPage() {
       await invoke<AgentConfigActionResult>('apply_agent_config', {
         client: selected,
         model,
+        oauthConfiguration,
       });
       await reloadStatusesAfterAction();
     } catch (requestError) {
@@ -741,6 +743,7 @@ export function AgentsPage() {
       await invoke<AgentConfigActionResult>('reset_agent_config_to_default', {
         client: selected,
         model,
+        oauthConfiguration,
       });
       setDefaultConfirmOpen(false);
       await reloadStatusesAfterAction();
@@ -965,6 +968,25 @@ export function AgentsPage() {
                   </div>
                 </div>
                 <div className="agent-modification-control">
+                  {selected === 'codex' ? (
+                    <label
+                      className="agent-oauth-configuration"
+                      title={t('agents.modify.oauthConfiguration')}
+                    >
+                      <span>{t('agents.modify.oauthConfiguration')}</span>
+                      <span className="switch-control">
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          checked={oauthConfiguration}
+                          onChange={(event) => setOauthConfiguration(event.currentTarget.checked)}
+                          disabled={busy}
+                          aria-label={t('agents.modify.oauthConfiguration')}
+                        />
+                        <span className="switch-track" />
+                      </span>
+                    </label>
+                  ) : null}
                   <div className={`agent-modification-buttons ${selected === 'codex' ? 'codex' : ''}`}>
                     <button
                       type="button"
