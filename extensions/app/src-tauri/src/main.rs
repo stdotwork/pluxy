@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod codex_sessions;
 mod usage;
 
 use flate2::read::GzDecoder;
@@ -439,6 +440,7 @@ struct GuiConfigFile {
     usage_statistics_enabled: bool,
     plugins_enabled: bool,
     routing_strategy: String,
+    codex_session_repair_on_launch: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -501,6 +503,7 @@ impl Default for GuiConfigFile {
             usage_statistics_enabled: true,
             plugins_enabled: false,
             routing_strategy: "round-robin".to_string(),
+            codex_session_repair_on_launch: false,
         }
     }
 }
@@ -515,6 +518,7 @@ struct GuiConfigPresence {
     auth_dir: Option<String>,
     api_keys: Option<Vec<GuiApiKeyInput>>,
     management_secret_key: Option<String>,
+    codex_session_repair_on_launch: Option<bool>,
     usage_statistics_enabled: Option<bool>,
     plugins_enabled: Option<bool>,
     routing_strategy: Option<String>,
@@ -1154,6 +1158,13 @@ impl GuiConfigState {
         })
     }
 
+    fn set_codex_session_repair_on_launch(&self, enabled: bool) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.codex_session_repair_on_launch = enabled;
+            Ok(())
+        })
+    }
+
     fn set_locale(&self, locale: String) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.locale = normalize_app_locale(&locale).to_string();
@@ -1728,7 +1739,7 @@ async fn update_agent_config(
 }
 
 #[tauri::command]
-fn launch_agent(
+async fn launch_agent(
     app: tauri::AppHandle,
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
@@ -1750,6 +1761,14 @@ fn launch_agent(
         status.modification_enabled,
         &status.modification_state,
     )?;
+    if client == AgentClient::Codex && config.codex_session_repair_on_launch {
+        let repair_home = home.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            codex_sessions::repair_before_codex_launch(&repair_home)
+        })
+        .await
+        .map_err(|error| format!("启动前会话修复任务失败: {error}"))??;
+    }
     let requested_target = target
         .as_deref()
         .map(str::trim)
@@ -10214,6 +10233,9 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     if presence.locale.is_none() {
         changed = true;
     }
+    if presence.codex_session_repair_on_launch.is_none() {
+        changed = true;
+    }
     changed |= sanitize_gui_config(&mut config)?;
     validate_gui_config(&config)?;
     if changed {
@@ -10521,6 +10543,10 @@ fn write_gui_config_to_path(config: &GuiConfigFile, config_path: &Path) -> Resul
         ),
         ("plugins-enabled", value(config.plugins_enabled)),
         ("routing-strategy", value(config.routing_strategy.as_str())),
+        (
+            "codex-session-repair-on-launch",
+            value(config.codex_session_repair_on_launch),
+        ),
     ] {
         set_codex_table_item(root, key, item);
     }
@@ -12792,7 +12818,14 @@ fn main() {
             usage::get_usage_events,
             start_core_process,
             stop_core_process,
-            restart_core_process
+            restart_core_process,
+            codex_sessions::list_codex_sessions,
+            codex_sessions::delete_codex_sessions,
+            codex_sessions::repair_codex_session_metadata,
+            codex_sessions::preview_codex_session_index_cleanup,
+            codex_sessions::apply_codex_session_index_cleanup,
+            codex_sessions::get_codex_session_repair_on_launch,
+            codex_sessions::set_codex_session_repair_on_launch
         ])
         .build(tauri::generate_context!())
         .expect("failed to build app");
@@ -13092,6 +13125,7 @@ mod tests {
             auth_dir: path_to_string(&home.join("custom-auth")),
             management_secret_key: "custom-secret".to_string(),
             usage_statistics_enabled: false,
+            codex_session_repair_on_launch: true,
             ..GuiConfigFile::default()
         };
 
@@ -13104,6 +13138,7 @@ mod tests {
         assert!(content.contains("host = \"0.0.0.0\""));
         assert!(content.contains("management-secret-key = \"custom-secret\""));
         assert!(content.contains("usage-statistics-enabled = false"));
+        assert!(content.contains("codex-session-repair-on-launch = true"));
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -13169,6 +13204,7 @@ mod tests {
         assert!(content.contains("management-secret-key = \"123456\""));
         assert!(content.contains("plugins-enabled = false"));
         assert!(content.contains("routing-strategy = \"round-robin\""));
+        assert!(content.contains("codex-session-repair-on-launch = false"));
     }
 
     #[test]
@@ -14960,6 +14996,7 @@ custom_option = "keep-original"
             usage_statistics_enabled: false,
             plugins_enabled: true,
             routing_strategy: "fill-first".to_string(),
+            codex_session_repair_on_launch: false,
         };
         let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
 

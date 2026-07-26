@@ -1385,6 +1385,7 @@ mod tests {
             usage_statistics_enabled: true,
             plugins_enabled: false,
             routing_strategy: "round-robin".to_string(),
+            codex_session_repair_on_launch: false,
         };
         let record = normalize_usage_record(
             serde_json::json!({

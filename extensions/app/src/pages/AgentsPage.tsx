@@ -17,7 +17,6 @@ import {
   Check,
   ChevronDown,
   LoaderCircle,
-  MessageSquare,
   Play,
   RefreshCw,
   Search,
@@ -37,6 +36,8 @@ import {
 } from '../services/agentModelPicker';
 import type { ModelOption } from '../services/modelService';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
+import { CodexSessionAutoRestoreCard } from './CodexSessionAutoRestoreCard';
+import { CodexSessionsPanel } from './CodexSessionsPanel';
 
 type AgentClientId =
   | 'claude-code'
@@ -828,7 +829,7 @@ export function AgentsPage() {
                 </div>
               ) : null}
 
-              <section className="agent-model-section">
+              <section className="agent-core-setting-section agent-model-section">
                 <div className="agent-section-heading">
                   <div><strong>{t('agents.useModel')}</strong><span>{t('agents.useModelDescription')}</span></div>
                   {draftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
@@ -859,16 +860,18 @@ export function AgentsPage() {
                 </span>
               </section>
 
-              <section className={`agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
-                <div className="agent-modification-copy">
-                  <strong>{t('agents.modify.title')}</strong>
-                  <span>{activeStatus?.modificationState === 'external-changed'
-                    ? t('agents.modify.externalChanged')
-                    : activeStatus?.modificationState === 'invalid'
-                      ? t('agents.modify.invalid')
-                      : activeStatus?.modificationState === 'applied'
-                        ? t('agents.modify.applied')
-                        : t('agents.modify.unconfigured')}</span>
+              <section className={`agent-core-setting-section agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
+                <div className="agent-section-heading">
+                  <div>
+                    <strong>{t('agents.modify.title')}</strong>
+                    <span>{activeStatus?.modificationState === 'external-changed'
+                      ? t('agents.modify.externalChanged')
+                      : activeStatus?.modificationState === 'invalid'
+                        ? t('agents.modify.invalid')
+                        : activeStatus?.modificationState === 'applied'
+                          ? t('agents.modify.applied')
+                          : t('agents.modify.unconfigured')}</span>
+                  </div>
                 </div>
                 <div className="agent-modification-control">
                   <div className="agent-modification-buttons">
@@ -901,6 +904,8 @@ export function AgentsPage() {
                   ) : null}
                 </div>
               </section>
+
+              {selected === 'codex' ? <CodexSessionAutoRestoreCard /> : null}
 
               <div className="agent-config-footer">
                 <div className="agent-config-summary">
@@ -978,15 +983,7 @@ export function AgentsPage() {
               role="tabpanel"
               aria-labelledby="agent-subpage-tab-sessions"
             >
-              <div className="agent-sessions-empty">
-                <span className="agent-sessions-icon" aria-hidden="true">
-                  <MessageSquare size={22} />
-                </span>
-                <div>
-                  <h3>{t('agents.sessions.title')}</h3>
-                  <p>{t('agents.sessions.description')}</p>
-                </div>
-              </div>
+              <CodexSessionsPanel managedProviderActive={activeStatus?.modificationState === 'applied'} />
             </div>
           ) : null}
         </section>
