@@ -754,6 +754,12 @@ struct AgentFileUpdate {
     after: String,
 }
 
+struct AgentConfigurationOptions<'a> {
+    models: &'a [AgentModelOption],
+    codex_models: Option<&'a [CodexModelCatalogSpec]>,
+    oauth_configuration: bool,
+}
+
 type FileSnapshot = (PathBuf, Option<Vec<u8>>);
 #[cfg(test)]
 type AgentRecordExtension = (AgentModificationRecord, Vec<FileSnapshot>);
@@ -1614,9 +1620,11 @@ async fn apply_agent_config(
         config.port,
         api_key,
         &model,
-        &available_models,
-        codex_models.as_deref(),
-        oauth_configuration,
+        AgentConfigurationOptions {
+            models: &available_models,
+            codex_models: codex_models.as_deref(),
+            oauth_configuration,
+        },
     )
 }
 
@@ -3470,9 +3478,11 @@ fn build_agent_updates(
         port,
         api_key,
         model,
-        models,
-        codex_models,
-        false,
+        AgentConfigurationOptions {
+            models,
+            codex_models,
+            oauth_configuration: false,
+        },
     )
 }
 
@@ -3482,10 +3492,13 @@ fn build_agent_updates_with_oauth(
     port: u16,
     api_key: &str,
     model: &str,
-    models: &[AgentModelOption],
-    codex_models: Option<&[CodexModelCatalogSpec]>,
-    oauth_configuration: bool,
+    options: AgentConfigurationOptions<'_>,
 ) -> Result<Vec<AgentFileUpdate>, String> {
+    let AgentConfigurationOptions {
+        models,
+        codex_models,
+        oauth_configuration,
+    } = options;
     let paths = agent_config_paths(client, home);
     let root_base = format!("http://127.0.0.1:{port}");
     let openai_base = format!("{root_base}/v1");
@@ -5745,9 +5758,11 @@ fn apply_agent_configuration(
         port,
         api_key,
         model,
-        models,
-        codex_models,
-        false,
+        AgentConfigurationOptions {
+            models,
+            codex_models,
+            oauth_configuration: false,
+        },
     )
 }
 
@@ -5757,20 +5772,9 @@ fn apply_agent_configuration_with_oauth(
     port: u16,
     api_key: &str,
     model: &str,
-    models: &[AgentModelOption],
-    codex_models: Option<&[CodexModelCatalogSpec]>,
-    oauth_configuration: bool,
+    options: AgentConfigurationOptions<'_>,
 ) -> Result<AgentConfigActionResult, String> {
-    let updates = build_agent_updates_with_oauth(
-        client,
-        home,
-        port,
-        api_key,
-        model,
-        models,
-        codex_models,
-        oauth_configuration,
-    )?;
+    let updates = build_agent_updates_with_oauth(client, home, port, api_key, model, options)?;
     commit_agent_configuration(client, home, model, &updates, "applied")
 }
 
