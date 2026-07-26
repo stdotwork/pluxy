@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import claudeIcon from '../assets/icons/claude.svg';
@@ -488,7 +489,7 @@ export function AgentsPage() {
   const [launchTargetByClient, setLaunchTargetByClient] = useState<Partial<Record<AgentClientId, string>>>({});
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
-  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'launch' | null>(null);
+  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'clear' | 'launch' | null>(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
   const [modelError, setModelError] = useState('');
@@ -497,6 +498,9 @@ export function AgentsPage() {
   const [launchError, setLaunchError] = useState('');
   const [defaultError, setDefaultError] = useState('');
   const [defaultConfirmOpen, setDefaultConfirmOpen] = useState(false);
+  const [clearError, setClearError] = useState('');
+  const [clearNotice, setClearNotice] = useState('');
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -575,6 +579,9 @@ export function AgentsPage() {
     setLaunchError('');
     setDefaultError('');
     setDefaultConfirmOpen(false);
+    setClearError('');
+    setClearNotice('');
+    setClearConfirmOpen(false);
   }, [selected]);
 
   useEffect(() => {
@@ -701,6 +708,22 @@ export function AgentsPage() {
     }
   };
 
+  const clearCodexConfiguration = async () => {
+    setBusyAction('clear');
+    setClearError('');
+    setClearNotice('');
+    try {
+      await invoke<string[]>('clear_codex_config');
+      setClearConfirmOpen(false);
+      setClearNotice(t('agents.clear.success'));
+      await reloadStatusesAfterAction();
+    } catch (requestError) {
+      setClearError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const launchAgent = async () => {
     setBusyAction('launch');
     setLaunchError('');
@@ -724,6 +747,16 @@ export function AgentsPage() {
   const closeDefaultConfirmation = () => {
     setDefaultError('');
     setDefaultConfirmOpen(false);
+  };
+
+  const openClearConfirmation = () => {
+    setClearError('');
+    setClearConfirmOpen(true);
+  };
+
+  const closeClearConfirmation = () => {
+    setClearError('');
+    setClearConfirmOpen(false);
   };
 
   const availableSubpages = agentSubpages.filter(
@@ -874,7 +907,7 @@ export function AgentsPage() {
                   </div>
                 </div>
                 <div className="agent-modification-control">
-                  <div className="agent-modification-buttons">
+                  <div className={`agent-modification-buttons ${selected === 'codex' ? 'codex' : ''}`}>
                     <button
                       type="button"
                       className="primary-button"
@@ -896,10 +929,26 @@ export function AgentsPage() {
                       {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
                       {t('agents.modify.default')}
                     </button>
+                    {selected === 'codex' ? (
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={openClearConfirmation}
+                        disabled={busy}
+                      >
+                        {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
+                        {t('agents.modify.clear')}
+                      </button>
+                    ) : null}
                   </div>
                   {configurationError ? (
                     <span className="agent-inline-message error" role="alert" aria-live="polite">
                       {configurationError}
+                    </span>
+                  ) : null}
+                  {clearNotice ? (
+                    <span className="agent-inline-message" role="status" aria-live="polite">
+                      {clearNotice}
                     </span>
                   ) : null}
                 </div>
@@ -1008,6 +1057,29 @@ export function AgentsPage() {
               <button type="button" className="danger-button" onClick={() => void resetConfigurationToDefault()} disabled={busy}>
                 {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : null}
                 {t('agents.default.confirm')}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {clearConfirmOpen ? (
+        <div className="config-dialog-backdrop">
+          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-clear-title">
+            <div className="config-dialog-heading">
+              <div><AlertTriangle size={19} /><h2 id="agent-clear-title">{t('agents.clear.title')}</h2></div>
+            </div>
+            <p>{t('agents.clear.description')}</p>
+            {clearError ? (
+              <span className="agent-inline-message error" role="alert" aria-live="polite">
+                {clearError}
+              </span>
+            ) : null}
+            <div className="config-dialog-actions two-actions">
+              <button type="button" className="secondary-button" onClick={closeClearConfirmation} disabled={busy}>{t('common.cancel')}</button>
+              <button type="button" className="danger-button" onClick={() => void clearCodexConfiguration()} disabled={busy}>
+                {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
+                {t('agents.clear.confirm')}
               </button>
             </div>
           </section>

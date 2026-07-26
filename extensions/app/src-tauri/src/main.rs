@@ -1654,6 +1654,18 @@ async fn reset_agent_config_to_default(
 }
 
 #[tauri::command]
+fn clear_codex_config(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("无法获取用户目录: {error}"))?;
+    let _guard = AGENT_CONFIG_FILE_LOCK
+        .lock()
+        .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
+    clear_codex_config_files(&home)
+}
+
+#[tauri::command]
 async fn set_agent_config_enabled(
     app: tauri::AppHandle,
     gui_config_state: tauri::State<'_, GuiConfigState>,
@@ -2135,6 +2147,37 @@ fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBuf> {
         AgentClient::OpenClaw => vec![home.join(".openclaw/openclaw.json")],
         AgentClient::Hermes => vec![hermes_agent_config_path(home)],
     }
+}
+
+fn remove_codex_config_file(path: &Path) -> Result<bool, String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "删除 Codex 配置文件失败 {}: {error}",
+            path_to_string(path)
+        )),
+    }
+}
+
+fn clear_codex_config_files(home: &Path) -> Result<Vec<String>, String> {
+    let codex_dir = home.join(".codex");
+    let config_path = codex_dir.join("config.toml");
+    let targets = [codex_dir.join("auth.json"), config_path.clone()];
+    let mut deleted = Vec::new();
+
+    for path in targets {
+        if remove_codex_config_file(&path)? {
+            deleted.push(path_to_string(&path));
+        }
+    }
+
+    // The state file belongs to this app. Remove it after the Codex files are
+    // cleared so the UI does not report the deliberate deletion as an external edit.
+    let state_path = agent_state_path(std::slice::from_ref(&config_path))?;
+    remove_codex_config_file(&state_path)?;
+
+    Ok(deleted)
 }
 
 fn codex_model_catalog_path(home: &Path) -> PathBuf {
@@ -12782,6 +12825,7 @@ fn main() {
             delete_thinking_alias,
             apply_agent_config,
             reset_agent_config_to_default,
+            clear_codex_config,
             set_agent_config_enabled,
             update_agent_config,
             launch_agent,
@@ -12990,6 +13034,31 @@ mod tests {
         assert!(!reset.contains("user_setting"));
         assert!(!reset.contains("model_providers.other"));
         assert!(reset.contains("model = \"gpt-test\""));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn clear_codex_config_removes_only_requested_config_files_and_application_state() {
+        let home = agent_test_home("clear-codex-config");
+        let codex_dir = home.join(".codex");
+        fs::create_dir_all(&codex_dir).unwrap();
+        let auth_path = codex_dir.join("auth.json");
+        let config_path = codex_dir.join("config.toml");
+        let state_path = agent_state_path(std::slice::from_ref(&config_path)).unwrap();
+        let preserved_path = codex_dir.join("history.jsonl");
+        fs::write(&auth_path, "{}").unwrap();
+        fs::write(&config_path, "model = \"gpt-test\"\n").unwrap();
+        fs::write(&state_path, "{}").unwrap();
+        fs::write(&preserved_path, "keep").unwrap();
+
+        let deleted = clear_codex_config_files(&home).unwrap();
+
+        assert_eq!(deleted.len(), 2);
+        assert!(!auth_path.exists());
+        assert!(!config_path.exists());
+        assert!(!state_path.exists());
+        assert_eq!(fs::read_to_string(&preserved_path).unwrap(), "keep");
+        assert!(clear_codex_config_files(&home).unwrap().is_empty());
         fs::remove_dir_all(home).unwrap();
     }
 
