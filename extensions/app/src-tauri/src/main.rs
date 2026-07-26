@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod codex_sessions;
 mod usage;
 
 use flate2::read::GzDecoder;
@@ -439,6 +440,7 @@ struct GuiConfigFile {
     usage_statistics_enabled: bool,
     plugins_enabled: bool,
     routing_strategy: String,
+    codex_session_repair_on_launch: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -501,6 +503,7 @@ impl Default for GuiConfigFile {
             usage_statistics_enabled: true,
             plugins_enabled: false,
             routing_strategy: "round-robin".to_string(),
+            codex_session_repair_on_launch: false,
         }
     }
 }
@@ -515,6 +518,7 @@ struct GuiConfigPresence {
     auth_dir: Option<String>,
     api_keys: Option<Vec<GuiApiKeyInput>>,
     management_secret_key: Option<String>,
+    codex_session_repair_on_launch: Option<bool>,
     usage_statistics_enabled: Option<bool>,
     plugins_enabled: Option<bool>,
     routing_strategy: Option<String>,
@@ -1154,6 +1158,13 @@ impl GuiConfigState {
         })
     }
 
+    fn set_codex_session_repair_on_launch(&self, enabled: bool) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.codex_session_repair_on_launch = enabled;
+            Ok(())
+        })
+    }
+
     fn set_locale(&self, locale: String) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.locale = normalize_app_locale(&locale).to_string();
@@ -1577,6 +1588,7 @@ async fn apply_agent_config(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
     model: String,
+    oauth_configuration: bool,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
     let home = app
@@ -1596,7 +1608,7 @@ async fn apply_agent_config(
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
-    apply_agent_configuration(
+    apply_agent_configuration_with_oauth(
         client,
         &home,
         config.port,
@@ -1604,6 +1616,7 @@ async fn apply_agent_config(
         &model,
         &available_models,
         codex_models.as_deref(),
+        oauth_configuration,
     )
 }
 
@@ -1613,6 +1626,7 @@ async fn reset_agent_config_to_default(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
     model: String,
+    oauth_configuration: bool,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
     let home = app
@@ -1632,14 +1646,27 @@ async fn reset_agent_config_to_default(
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
-    reset_agent_configuration_to_default(
+    reset_agent_configuration_to_default_with_oauth(
         client,
         &home,
         config.port,
         api_key,
         &model,
         codex_models.as_deref(),
+        oauth_configuration,
     )
+}
+
+#[tauri::command]
+fn clear_codex_config(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("无法获取用户目录: {error}"))?;
+    let _guard = AGENT_CONFIG_FILE_LOCK
+        .lock()
+        .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
+    clear_codex_config_files(&home)
 }
 
 #[tauri::command]
@@ -1728,7 +1755,7 @@ async fn update_agent_config(
 }
 
 #[tauri::command]
-fn launch_agent(
+async fn launch_agent(
     app: tauri::AppHandle,
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
@@ -1750,6 +1777,14 @@ fn launch_agent(
         status.modification_enabled,
         &status.modification_state,
     )?;
+    if client == AgentClient::Codex && config.codex_session_repair_on_launch && status.configured {
+        let repair_home = home.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            codex_sessions::repair_before_codex_launch(&repair_home)
+        })
+        .await
+        .map_err(|error| format!("启动前会话修复任务失败: {error}"))??;
+    }
     let requested_target = target
         .as_deref()
         .map(str::trim)
@@ -1796,7 +1831,7 @@ fn validate_agent_launch_modification(
     enabled: bool,
     state: &str,
 ) -> Result<(), String> {
-    if enabled && state == "applied" {
+    if client == AgentClient::Codex || (enabled && state == "applied") {
         return Ok(());
     }
     Err(format!(
@@ -2116,6 +2151,37 @@ fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBuf> {
         AgentClient::OpenClaw => vec![home.join(".openclaw/openclaw.json")],
         AgentClient::Hermes => vec![hermes_agent_config_path(home)],
     }
+}
+
+fn remove_codex_config_file(path: &Path) -> Result<bool, String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "删除 Codex 配置文件失败 {}: {error}",
+            path_to_string(path)
+        )),
+    }
+}
+
+fn clear_codex_config_files(home: &Path) -> Result<Vec<String>, String> {
+    let codex_dir = home.join(".codex");
+    let config_path = codex_dir.join("config.toml");
+    let targets = [codex_dir.join("auth.json"), config_path.clone()];
+    let mut deleted = Vec::new();
+
+    for path in targets {
+        if remove_codex_config_file(&path)? {
+            deleted.push(path_to_string(&path));
+        }
+    }
+
+    // The state file belongs to this app. Remove it after the Codex files are
+    // cleared so the UI does not report the deliberate deletion as an external edit.
+    let state_path = agent_state_path(std::slice::from_ref(&config_path))?;
+    remove_codex_config_file(&state_path)?;
+
+    Ok(deleted)
 }
 
 fn codex_model_catalog_path(home: &Path) -> PathBuf {
@@ -3231,6 +3297,15 @@ fn inspect_codex_agent_config(
         .and_then(toml::Value::as_table)
         .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
         .and_then(toml::Value::as_table);
+    let uses_api_key = provider
+        .and_then(|provider| provider.get("experimental_bearer_token"))
+        .and_then(toml::Value::as_str)
+        == Some(api_key);
+    let uses_oauth = provider
+        .and_then(|provider| provider.get("requires_openai_auth"))
+        .and_then(toml::Value::as_bool)
+        == Some(true)
+        && provider.is_some_and(|provider| !provider.contains_key("experimental_bearer_token"));
     let configured = root.get("model_provider").and_then(toml::Value::as_str)
         == Some(MANAGED_AGENT_PROVIDER_ID)
         && root.get("model_catalog_json").and_then(toml::Value::as_str)
@@ -3243,10 +3318,7 @@ fn inspect_codex_agent_config(
             .and_then(|provider| provider.get("base_url"))
             .and_then(toml::Value::as_str)
             == Some(expected_base.as_str())
-        && provider
-            .and_then(|provider| provider.get("experimental_bearer_token"))
-            .and_then(toml::Value::as_str)
-            == Some(api_key)
+        && (uses_api_key || uses_oauth)
         && provider
             .and_then(|provider| provider.get("wire_api"))
             .and_then(toml::Value::as_str)
@@ -3382,6 +3454,7 @@ fn inspect_hermes_agent_config(
     Ok((configured, model))
 }
 
+#[cfg(test)]
 fn build_agent_updates(
     client: AgentClient,
     home: &Path,
@@ -3390,6 +3463,28 @@ fn build_agent_updates(
     model: &str,
     models: &[AgentModelOption],
     codex_models: Option<&[CodexModelCatalogSpec]>,
+) -> Result<Vec<AgentFileUpdate>, String> {
+    build_agent_updates_with_oauth(
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        models,
+        codex_models,
+        false,
+    )
+}
+
+fn build_agent_updates_with_oauth(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    model: &str,
+    models: &[AgentModelOption],
+    codex_models: Option<&[CodexModelCatalogSpec]>,
+    oauth_configuration: bool,
 ) -> Result<Vec<AgentFileUpdate>, String> {
     let paths = agent_config_paths(client, home);
     let root_base = format!("http://127.0.0.1:{port}");
@@ -3445,9 +3540,22 @@ fn build_agent_updates(
         }
         AgentClient::Codex => {
             let before = read_optional_text(&paths[0])?;
-            let after =
-                build_codex_agent_config(before.as_deref(), &openai_base, api_key, model)
-                    .or_else(|_| build_codex_agent_config(None, &openai_base, api_key, model))?;
+            let after = build_codex_agent_config_with_oauth(
+                before.as_deref(),
+                &openai_base,
+                api_key,
+                model,
+                oauth_configuration,
+            )
+            .or_else(|_| {
+                build_codex_agent_config_with_oauth(
+                    None,
+                    &openai_base,
+                    api_key,
+                    model,
+                    oauth_configuration,
+                )
+            })?;
             let mut updates = vec![AgentFileUpdate {
                 path: paths[0].clone(),
                 after,
@@ -3717,11 +3825,22 @@ fn build_claude_desktop_meta(existing: Option<&str>) -> Result<String, String> {
     render_agent_json(root, "Claude Desktop 配置索引")
 }
 
+#[cfg(test)]
 fn build_codex_agent_config(
     existing: Option<&str>,
     base_url: &str,
     api_key: &str,
     model: &str,
+) -> Result<String, String> {
+    build_codex_agent_config_with_oauth(existing, base_url, api_key, model, false)
+}
+
+fn build_codex_agent_config_with_oauth(
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    oauth_configuration: bool,
 ) -> Result<String, String> {
     use toml_edit::{value, Document, Item, Table};
 
@@ -3766,7 +3885,13 @@ fn build_codex_agent_config(
     set_codex_table_item(provider, "name", value("EasyCLIProxyAPI"));
     set_codex_table_item(provider, "base_url", value(base_url));
     set_codex_table_item(provider, "wire_api", value("responses"));
-    set_codex_table_item(provider, "experimental_bearer_token", value(api_key));
+    if oauth_configuration {
+        provider.remove("experimental_bearer_token");
+        set_codex_table_item(provider, "requires_openai_auth", value(true));
+    } else {
+        provider.remove("requires_openai_auth");
+        set_codex_table_item(provider, "experimental_bearer_token", value(api_key));
+    }
     let rendered = document.to_string();
     toml::from_str::<toml::Value>(&rendered)
         .map_err(|error| format!("验证 Codex 配置失败: {error}"))?;
@@ -3776,8 +3901,13 @@ fn build_codex_agent_config(
 #[cfg(test)]
 const CODEX_MANAGED_ROOT_KEYS: [&str; 3] = ["model_provider", "model", "model_catalog_json"];
 #[cfg(test)]
-const CODEX_MANAGED_PROVIDER_KEYS: [&str; 4] =
-    ["name", "base_url", "wire_api", "experimental_bearer_token"];
+const CODEX_MANAGED_PROVIDER_KEYS: [&str; 5] = [
+    "name",
+    "base_url",
+    "wire_api",
+    "experimental_bearer_token",
+    "requires_openai_auth",
+];
 
 fn set_codex_table_item(table: &mut toml_edit::Table, key: &str, mut item: toml_edit::Item) {
     if let (Some(current), Some(next)) = (
@@ -4415,16 +4545,22 @@ fn agent_managed_projection(
                 .get("model_providers")
                 .and_then(toml::Value::as_table)
                 .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
-            let provider_projection = ["name", "base_url", "wire_api", "experimental_bearer_token"]
-                .into_iter()
-                .map(|key| {
-                    let value = provider
-                        .and_then(|provider| provider.get(key))
-                        .and_then(|value| serde_json::to_value(value).ok())
-                        .unwrap_or(serde_json::Value::Null);
-                    (key.to_string(), value)
-                })
-                .collect::<serde_json::Map<_, _>>();
+            let provider_projection = [
+                "name",
+                "base_url",
+                "wire_api",
+                "experimental_bearer_token",
+                "requires_openai_auth",
+            ]
+            .into_iter()
+            .map(|key| {
+                let value = provider
+                    .and_then(|provider| provider.get(key))
+                    .and_then(|value| serde_json::to_value(value).ok())
+                    .unwrap_or(serde_json::Value::Null);
+                (key.to_string(), value)
+            })
+            .collect::<serde_json::Map<_, _>>();
             let root_value = |key: &str| {
                 root.get(key)
                     .and_then(|value| serde_json::to_value(value).ok())
@@ -5005,11 +5141,22 @@ fn inspect_agent_modification(
     }
 }
 
+#[cfg(test)]
 fn fresh_agent_contents(
     client: AgentClient,
     port: u16,
     api_key: &str,
     model: &str,
+) -> Result<Vec<String>, String> {
+    fresh_agent_contents_with_oauth(client, port, api_key, model, false)
+}
+
+fn fresh_agent_contents_with_oauth(
+    client: AgentClient,
+    port: u16,
+    api_key: &str,
+    model: &str,
+    oauth_configuration: bool,
 ) -> Result<Vec<String>, String> {
     let root_base = format!("http://127.0.0.1:{port}");
     let openai_base = format!("{root_base}/v1");
@@ -5027,11 +5174,12 @@ fn fresh_agent_contents(
             build_claude_desktop_profile(None, &root_base, api_key, model, &models)?,
             build_claude_desktop_meta(None)?,
         ]),
-        AgentClient::Codex => Ok(vec![build_codex_agent_config(
+        AgentClient::Codex => Ok(vec![build_codex_agent_config_with_oauth(
             None,
             &openai_base,
             api_key,
             model,
+            oauth_configuration,
         )?]),
         AgentClient::OpenCode => Ok(vec![build_opencode_agent_config(
             None,
@@ -5591,10 +5739,42 @@ fn apply_agent_configuration(
     models: &[AgentModelOption],
     codex_models: Option<&[CodexModelCatalogSpec]>,
 ) -> Result<AgentConfigActionResult, String> {
-    let updates = build_agent_updates(client, home, port, api_key, model, models, codex_models)?;
+    apply_agent_configuration_with_oauth(
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        models,
+        codex_models,
+        false,
+    )
+}
+
+fn apply_agent_configuration_with_oauth(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    model: &str,
+    models: &[AgentModelOption],
+    codex_models: Option<&[CodexModelCatalogSpec]>,
+    oauth_configuration: bool,
+) -> Result<AgentConfigActionResult, String> {
+    let updates = build_agent_updates_with_oauth(
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        models,
+        codex_models,
+        oauth_configuration,
+    )?;
     commit_agent_configuration(client, home, model, &updates, "applied")
 }
 
+#[cfg(test)]
 fn reset_agent_configuration_to_default(
     client: AgentClient,
     home: &Path,
@@ -5603,8 +5783,29 @@ fn reset_agent_configuration_to_default(
     model: &str,
     codex_models: Option<&[CodexModelCatalogSpec]>,
 ) -> Result<AgentConfigActionResult, String> {
+    reset_agent_configuration_to_default_with_oauth(
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        codex_models,
+        false,
+    )
+}
+
+fn reset_agent_configuration_to_default_with_oauth(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    model: &str,
+    codex_models: Option<&[CodexModelCatalogSpec]>,
+    oauth_configuration: bool,
+) -> Result<AgentConfigActionResult, String> {
     let paths = agent_config_paths(client, home);
-    let contents = fresh_agent_contents(client, port, api_key, model)?;
+    let contents =
+        fresh_agent_contents_with_oauth(client, port, api_key, model, oauth_configuration)?;
     if paths.len() != contents.len() {
         return Err("智能体默认配置文件数量不匹配".to_string());
     }
@@ -10214,6 +10415,9 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     if presence.locale.is_none() {
         changed = true;
     }
+    if presence.codex_session_repair_on_launch.is_none() {
+        changed = true;
+    }
     changed |= sanitize_gui_config(&mut config)?;
     validate_gui_config(&config)?;
     if changed {
@@ -10521,6 +10725,10 @@ fn write_gui_config_to_path(config: &GuiConfigFile, config_path: &Path) -> Resul
         ),
         ("plugins-enabled", value(config.plugins_enabled)),
         ("routing-strategy", value(config.routing_strategy.as_str())),
+        (
+            "codex-session-repair-on-launch",
+            value(config.codex_session_repair_on_launch),
+        ),
     ] {
         set_codex_table_item(root, key, item);
     }
@@ -12756,6 +12964,7 @@ fn main() {
             delete_thinking_alias,
             apply_agent_config,
             reset_agent_config_to_default,
+            clear_codex_config,
             set_agent_config_enabled,
             update_agent_config,
             launch_agent,
@@ -12792,7 +13001,15 @@ fn main() {
             usage::get_usage_events,
             start_core_process,
             stop_core_process,
-            restart_core_process
+            restart_core_process,
+            codex_sessions::list_codex_sessions,
+            codex_sessions::delete_codex_sessions,
+            codex_sessions::repair_codex_session_metadata,
+            codex_sessions::preview_codex_session_index_cleanup,
+            codex_sessions::apply_codex_session_index_cleanup,
+            codex_sessions::get_codex_session_repair_on_launch,
+            codex_sessions::set_codex_session_repair_on_launch,
+            codex_sessions::close_chatgpt_app
         ])
         .build(tauri::generate_context!())
         .expect("failed to build app");
@@ -12961,6 +13178,31 @@ mod tests {
     }
 
     #[test]
+    fn clear_codex_config_removes_only_requested_config_files_and_application_state() {
+        let home = agent_test_home("clear-codex-config");
+        let codex_dir = home.join(".codex");
+        fs::create_dir_all(&codex_dir).unwrap();
+        let auth_path = codex_dir.join("auth.json");
+        let config_path = codex_dir.join("config.toml");
+        let state_path = agent_state_path(std::slice::from_ref(&config_path)).unwrap();
+        let preserved_path = codex_dir.join("history.jsonl");
+        fs::write(&auth_path, "{}").unwrap();
+        fs::write(&config_path, "model = \"gpt-test\"\n").unwrap();
+        fs::write(&state_path, "{}").unwrap();
+        fs::write(&preserved_path, "keep").unwrap();
+
+        let deleted = clear_codex_config_files(&home).unwrap();
+
+        assert_eq!(deleted.len(), 2);
+        assert!(!auth_path.exists());
+        assert!(!config_path.exists());
+        assert!(!state_path.exists());
+        assert_eq!(fs::read_to_string(&preserved_path).unwrap(), "keep");
+        assert!(clear_codex_config_files(&home).unwrap().is_empty());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
     fn direct_agent_apply_rebuilds_an_unparseable_file_without_backup() {
         let home = agent_test_home("invalid-apply");
         let path = home.join(".config/opencode/opencode.json");
@@ -13092,6 +13334,7 @@ mod tests {
             auth_dir: path_to_string(&home.join("custom-auth")),
             management_secret_key: "custom-secret".to_string(),
             usage_statistics_enabled: false,
+            codex_session_repair_on_launch: true,
             ..GuiConfigFile::default()
         };
 
@@ -13104,6 +13347,7 @@ mod tests {
         assert!(content.contains("host = \"0.0.0.0\""));
         assert!(content.contains("management-secret-key = \"custom-secret\""));
         assert!(content.contains("usage-statistics-enabled = false"));
+        assert!(content.contains("codex-session-repair-on-launch = true"));
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -13169,6 +13413,7 @@ mod tests {
         assert!(content.contains("management-secret-key = \"123456\""));
         assert!(content.contains("plugins-enabled = false"));
         assert!(content.contains("routing-strategy = \"round-robin\""));
+        assert!(content.contains("codex-session-repair-on-launch = false"));
     }
 
     #[test]
@@ -13275,6 +13520,30 @@ mod tests {
                 .as_str(),
             Some(DEFAULT_API_KEY)
         );
+    }
+
+    #[test]
+    fn codex_oauth_configuration_uses_openai_auth_without_bearer_token() {
+        let rendered = build_codex_agent_config_with_oauth(
+            Some("[model_providers.cpa-gui]\nexperimental_bearer_token = \"old-key\"\n"),
+            "http://127.0.0.1:8317/v1",
+            DEFAULT_API_KEY,
+            "gpt-test",
+            true,
+        )
+        .unwrap();
+        let value = toml::from_str::<toml::Value>(&rendered).unwrap();
+        let provider = value["model_providers"][MANAGED_AGENT_PROVIDER_ID]
+            .as_table()
+            .unwrap();
+
+        assert_eq!(
+            provider
+                .get("requires_openai_auth")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert!(!provider.contains_key("experimental_bearer_token"));
     }
 
     #[test]
@@ -14960,6 +15229,7 @@ custom_option = "keep-original"
             usage_statistics_enabled: false,
             plugins_enabled: true,
             routing_strategy: "fill-first".to_string(),
+            codex_session_repair_on_launch: false,
         };
         let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
 
@@ -15331,13 +15601,20 @@ custom_option = "keep-original"
     }
 
     #[test]
-    fn agent_launch_requires_an_active_managed_configuration() {
+    fn codex_launch_is_independent_from_managed_configuration_state() {
         assert!(validate_agent_launch_modification(AgentClient::Codex, true, "applied").is_ok());
-        assert!(validate_agent_launch_modification(AgentClient::Codex, false, "applied").is_err());
+        assert!(
+            validate_agent_launch_modification(AgentClient::Codex, false, "unconfigured").is_ok()
+        );
         assert!(
             validate_agent_launch_modification(AgentClient::Codex, true, "external-changed",)
+                .is_ok()
+        );
+        assert!(
+            validate_agent_launch_modification(AgentClient::OpenCode, false, "unconfigured")
                 .is_err()
         );
+        assert!(validate_agent_launch_modification(AgentClient::OpenCode, true, "applied").is_ok());
     }
 
     #[test]

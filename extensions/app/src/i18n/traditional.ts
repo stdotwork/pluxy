@@ -2,6 +2,7 @@ const phraseReplacements: ReadonlyArray<readonly [string, string]> = [
   ['繁体中文', '繁體中文'],
   ['简体中文', '簡體中文'],
   ['智能体', '智慧代理'],
+  ['会话', '工作階段'],
   ['使用记录', '使用記錄'],
   ['认证文件', '認證檔案'],
   ['配置文件', '設定檔'],

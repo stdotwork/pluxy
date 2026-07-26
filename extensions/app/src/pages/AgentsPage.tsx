@@ -18,9 +18,11 @@ import {
   ChevronDown,
   LoaderCircle,
   Play,
+  Power,
   RefreshCw,
   Search,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import claudeIcon from '../assets/icons/claude.svg';
@@ -36,6 +38,8 @@ import {
 } from '../services/agentModelPicker';
 import type { ModelOption } from '../services/modelService';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
+import { CodexSessionAutoRestoreCard } from './CodexSessionAutoRestoreCard';
+import { CodexSessionsPanel } from './CodexSessionsPanel';
 
 type AgentClientId =
   | 'claude-code'
@@ -80,12 +84,25 @@ type AgentConfigActionResult = {
   conflictFiles: string[];
 };
 
+type ChatGptCloseResult = {
+  wasRunning: boolean;
+  closedProcesses: number;
+};
+
 type AgentDefinition = {
   id: AgentClientId;
   name: string;
   icon?: string;
   Icon?: ComponentType<{ size?: number; 'aria-hidden'?: boolean }>;
   descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes';
+};
+
+type AgentSubpageId = 'core' | 'sessions';
+
+type AgentSubpageDefinition = {
+  id: AgentSubpageId;
+  labelKey: 'agents.tabs.core' | 'agents.tabs.sessions';
+  clients?: readonly AgentClientId[];
 };
 
 const agentDefinitions: AgentDefinition[] = [
@@ -126,6 +143,20 @@ const agentDefinitions: AgentDefinition[] = [
     descriptionKey: 'agents.description.hermes',
   },
 ];
+
+const agentSubpages: AgentSubpageDefinition[] = [
+  {
+    id: 'core',
+    labelKey: 'agents.tabs.core',
+  },
+  {
+    id: 'sessions',
+    labelKey: 'agents.tabs.sessions',
+    clients: ['codex'],
+  },
+];
+
+const DEFAULT_AGENT_SUBPAGE: AgentSubpageId = 'core';
 
 const AGENT_MODEL_SELECTIONS_KEY = 'cpa-gui.agent-model-selections.v1';
 const AGENT_SELECTED_CLIENT_KEY = 'cpa-gui.agent-selected-client.v1';
@@ -455,6 +486,7 @@ function AgentModelPicker({
 export function AgentsPage() {
   const { t } = useI18n();
   const [selected, setSelected] = useState<AgentClientId>(readSelectedAgentClient);
+  const [activeSubpage, setActiveSubpage] = useState<AgentSubpageId>(DEFAULT_AGENT_SUBPAGE);
   const [statuses, setStatuses] = useState<AgentConfigStatus[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelByClient, setModelByClient] = useState<Partial<Record<AgentClientId, string>>>(
@@ -463,12 +495,22 @@ export function AgentsPage() {
   const [launchTargetByClient, setLaunchTargetByClient] = useState<Partial<Record<AgentClientId, string>>>({});
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
-  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'launch' | null>(null);
+  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'clear' | 'launch' | 'close-app' | null>(null);
   const busy = busyAction !== null;
-  const [error, setError] = useState('');
+  const [detectionError, setDetectionError] = useState('');
   const [modelError, setModelError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [modelSelectionError, setModelSelectionError] = useState('');
+  const [configurationError, setConfigurationError] = useState('');
+  const [launchError, setLaunchError] = useState('');
+  const [defaultError, setDefaultError] = useState('');
   const [defaultConfirmOpen, setDefaultConfirmOpen] = useState(false);
+  const [clearError, setClearError] = useState('');
+  const [clearNotice, setClearNotice] = useState('');
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [closeAppError, setCloseAppError] = useState('');
+  const [closeAppNotice, setCloseAppNotice] = useState('');
+  const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
+  const [oauthConfiguration, setOauthConfiguration] = useState(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -484,6 +526,7 @@ export function AgentsPage() {
     try {
       const nextModels = await invoke<ModelOption[]>('get_agent_models');
       setModels(nextModels);
+      setModelSelectionError('');
       setModelByClient((current) => {
         const next = reconcileAgentModelSelections(current, nextModels);
         writeAgentModelSelections(next);
@@ -498,11 +541,11 @@ export function AgentsPage() {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    setError('');
+    setDetectionError('');
     try {
       await Promise.all([loadStatuses(true), loadModels()]);
     } catch (requestError) {
-      setError(String(requestError));
+      setDetectionError(String(requestError));
     } finally {
       setLoading(false);
     }
@@ -510,9 +553,9 @@ export function AgentsPage() {
 
   useEffect(() => {
     setLoading(true);
-    setError('');
+    setDetectionError('');
     void Promise.all([loadStatuses(), loadModels()])
-      .catch((requestError) => setError(String(requestError)))
+      .catch((requestError) => setDetectionError(String(requestError)))
       .finally(() => setLoading(false));
   }, [loadModels, loadStatuses]);
 
@@ -521,8 +564,9 @@ export function AgentsPage() {
     let stop: (() => void) | null = null;
     void listen('config-files-changed', () => {
       if (disposed) return;
+      setDetectionError('');
       void Promise.all([loadStatuses(true), loadModels()]).catch((requestError) => {
-        if (!disposed) setError(String(requestError));
+        if (!disposed) setDetectionError(String(requestError));
       });
     }).then((unlisten) => {
       if (disposed) unlisten();
@@ -536,6 +580,21 @@ export function AgentsPage() {
 
   useEffect(() => {
     writeSelectedAgentClient(selected);
+  }, [selected]);
+
+  useEffect(() => {
+    setActiveSubpage(DEFAULT_AGENT_SUBPAGE);
+    setModelSelectionError('');
+    setConfigurationError('');
+    setLaunchError('');
+    setDefaultError('');
+    setDefaultConfirmOpen(false);
+    setClearError('');
+    setClearNotice('');
+    setClearConfirmOpen(false);
+    setCloseAppError('');
+    setCloseAppNotice('');
+    setCloseAppConfirmOpen(false);
   }, [selected]);
 
   useEffect(() => {
@@ -578,18 +637,59 @@ export function AgentsPage() {
   const canLaunch = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
-      && activeStatus.modificationEnabled
-      && activeStatus.modificationState === 'applied'
-      && selectedLaunchTarget,
+      && selectedLaunchTarget
+      && (selected === 'codex'
+        || (activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
   );
+  const modelHint = modelSelectionError
+    || modelError
+    || (modelLoading
+      ? t('agents.model.readingAvailable')
+      : models.length === 0
+        ? ''
+        : activeStatus?.modificationState === 'applied'
+          ? t('agents.model.current', { model: appliedModel || '—' })
+          : t('agents.model.firstSelection', { count: models.length }));
+  const modificationDescription = activeStatus?.modificationState === 'external-changed'
+    ? t('agents.modify.externalChanged')
+    : activeStatus?.modificationState === 'invalid'
+      ? t('agents.modify.invalid')
+      : activeStatus?.modificationState === 'applied'
+        ? t('agents.modify.applied')
+        : '';
+  const footerMessage = activeStatus?.modificationState === 'applied'
+    ? draftChanged
+      ? t('agents.footer.changed')
+      : t('agents.footer.applied')
+    : activeStatus?.modificationState === 'external-changed'
+      ? t('agents.footer.externalChanged')
+      : activeStatus?.modificationState === 'invalid'
+        ? t('agents.footer.invalidManaged')
+        : !activeStatus?.supportedPlatform
+          ? t('agents.footer.unsupported')
+          : !activeStatus.installed
+            ? t('agents.footer.installFirst')
+            : activeStatus.launchTargets.length === 0
+              ? t('agents.footer.noCommand')
+              : '';
 
   const refreshModels = () => {
     void loadModels();
   };
 
+  const reloadStatusesAfterAction = async () => {
+    setDetectionError('');
+    try {
+      await loadStatuses(true);
+    } catch (requestError) {
+      setDetectionError(String(requestError));
+    }
+  };
+
   const selectModel = (value: string) => {
     const model = findAgentModel(models, value);
     if (!model) return;
+    setModelSelectionError('');
     setModelByClient((current) => {
       const next = { ...current, [selected]: model.name };
       writeAgentModelSelections(next);
@@ -599,36 +699,36 @@ export function AgentsPage() {
 
   const requireSelectedModel = () => {
     if (modelLoading) {
-      setError(t('agents.error.modelsLoading'));
+      setModelSelectionError(t('agents.error.modelsLoading'));
       return null;
     }
     if (models.length === 0) {
-      setError(modelError || t('agents.error.noModels'));
+      setModelSelectionError(modelError || t('agents.error.noModels'));
       return null;
     }
     const model = findAgentModel(models, selectedModel);
     if (!model) {
-      setError(t('agents.error.selectionGone'));
+      setModelSelectionError(t('agents.error.selectionGone'));
       return null;
     }
+    setModelSelectionError('');
     return model.name;
   };
 
   const applyConfigurationChanges = async () => {
+    setConfigurationError('');
     const model = requireSelectedModel();
     if (!model) return;
     setBusyAction('apply');
-    setError('');
-    setNotice('');
     try {
       await invoke<AgentConfigActionResult>('apply_agent_config', {
         client: selected,
         model,
+        oauthConfiguration,
       });
-      setNotice(t('agents.notice.applied', { name: activeDefinition.name }));
-      await loadStatuses(true);
+      await reloadStatusesAfterAction();
     } catch (requestError) {
-      setError(String(requestError));
+      setConfigurationError(String(requestError));
     } finally {
       setBusyAction(null);
     }
@@ -638,18 +738,33 @@ export function AgentsPage() {
     const model = requireSelectedModel();
     if (!model) return;
     setBusyAction('default');
-    setError('');
-    setNotice('');
+    setDefaultError('');
     try {
       await invoke<AgentConfigActionResult>('reset_agent_config_to_default', {
         client: selected,
         model,
+        oauthConfiguration,
       });
       setDefaultConfirmOpen(false);
-      setNotice(t('agents.notice.defaultWritten', { name: activeDefinition.name }));
-      await loadStatuses(true);
+      await reloadStatusesAfterAction();
     } catch (requestError) {
-      setError(String(requestError));
+      setDefaultError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const clearCodexConfiguration = async () => {
+    setBusyAction('clear');
+    setClearError('');
+    setClearNotice('');
+    try {
+      await invoke<string[]>('clear_codex_config');
+      setClearConfirmOpen(false);
+      setClearNotice(t('agents.clear.success'));
+      await reloadStatusesAfterAction();
+    } catch (requestError) {
+      setClearError(String(requestError));
     } finally {
       setBusyAction(null);
     }
@@ -657,41 +772,69 @@ export function AgentsPage() {
 
   const launchAgent = async () => {
     setBusyAction('launch');
-    setError('');
-    setNotice('');
+    setLaunchError('');
     try {
-      if (draftChanged) {
+      if (selected !== 'codex' && draftChanged) {
         throw new Error(t('agents.error.applyFirst'));
       }
       await invoke('launch_agent', { client: selected, target: selectedLaunchTarget?.id });
-      setNotice(t('agents.notice.managedLaunch', { name: activeDefinition.name }));
     } catch (requestError) {
-      setError(String(requestError));
+      setLaunchError(String(requestError));
     } finally {
       setBusyAction(null);
     }
   };
 
-  const statusLabel = loading
-    ? t('agents.status.detecting')
-    : !activeStatus?.supportedPlatform
-      ? t('agents.status.unsupported')
-      : !activeStatus.installed
-        ? t('agents.status.notInstalled')
-        : activeStatus.modificationState === 'external-changed'
-          ? t('agents.status.externalChanged')
-          : activeStatus.modificationState === 'invalid'
-            ? t('agents.status.invalid')
-            : activeStatus.modificationState === 'applied'
-              ? t('agents.status.applied')
-              : t('agents.status.unconfigured');
-  const statusTone = activeStatus?.modificationState === 'external-changed'
-    || activeStatus?.modificationState === 'invalid'
-    || !activeStatus?.supportedPlatform
-    ? 'error'
-    : activeStatus?.modificationState === 'applied'
-      ? 'success'
-      : '';
+  const closeChatGptApp = async () => {
+    setBusyAction('close-app');
+    setCloseAppError('');
+    setCloseAppNotice('');
+    try {
+      const result = await invoke<ChatGptCloseResult>('close_chatgpt_app');
+      setCloseAppConfirmOpen(false);
+      setCloseAppNotice(result.wasRunning
+        ? t('agents.closeApp.success', { count: result.closedProcesses })
+        : t('agents.closeApp.notRunning'));
+    } catch (requestError) {
+      setCloseAppError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const openDefaultConfirmation = () => {
+    setDefaultError('');
+    setDefaultConfirmOpen(true);
+  };
+
+  const closeDefaultConfirmation = () => {
+    setDefaultError('');
+    setDefaultConfirmOpen(false);
+  };
+
+  const openClearConfirmation = () => {
+    setClearError('');
+    setClearConfirmOpen(true);
+  };
+
+  const closeClearConfirmation = () => {
+    setClearError('');
+    setClearConfirmOpen(false);
+  };
+
+  const openCloseAppConfirmation = () => {
+    setCloseAppError('');
+    setCloseAppConfirmOpen(true);
+  };
+
+  const closeCloseAppConfirmation = () => {
+    setCloseAppError('');
+    setCloseAppConfirmOpen(false);
+  };
+
+  const availableSubpages = agentSubpages.filter(
+    (subpage) => !subpage.clients || subpage.clients.includes(selected),
+  );
 
   return (
     <section className="page management-page agents-page">
@@ -700,16 +843,18 @@ export function AgentsPage() {
           <span>Agent Clients</span>
           <h1>{t('agents.title')}</h1>
         </div>
-        <button type="button" className="secondary-button compact-button" onClick={() => void refresh()} disabled={loading || busy}>
-          <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          {t('agents.redetect')}
-        </button>
+        <div className="agent-header-actions">
+          {detectionError ? (
+            <span className="agent-inline-message error" role="alert" aria-live="polite">
+              {detectionError}
+            </span>
+          ) : null}
+          <button type="button" className="secondary-button compact-button" onClick={() => void refresh()} disabled={loading || busy}>
+            <RefreshCw size={16} className={loading ? 'spin' : ''} />
+            {t('agents.redetect')}
+          </button>
+        </div>
       </header>
-
-      <div className="agent-feedback-slot" aria-live="polite">
-        {error ? <div className="management-alert error">{error}</div> : null}
-        {!error && notice ? <div className="management-alert success">{notice}</div> : null}
-      </div>
 
       <div className="agent-workbench">
         <aside className="panel agent-client-list">
@@ -725,7 +870,10 @@ export function AgentsPage() {
                   type="button"
                   className={selected === agent.id ? 'active' : ''}
                   key={agent.id}
-                  onClick={() => setSelected(agent.id)}
+                  onClick={() => {
+                    setActiveSubpage(DEFAULT_AGENT_SUBPAGE);
+                    setSelected(agent.id);
+                  }}
                   disabled={busy}
                 >
                   <span className="agent-client-icon"><AgentMark definition={agent} /></span>
@@ -741,154 +889,238 @@ export function AgentsPage() {
         </aside>
 
         <section className="panel agent-config-panel">
-          <div className="agent-config-heading">
-            <div className="agent-config-title">
-              <span className="agent-logo"><AgentMark definition={activeDefinition} size={24} /></span>
-              <div><h2>{activeDefinition.name}</h2><span>{t(activeDefinition.descriptionKey)}</span></div>
-            </div>
-            <span className={`state-pill ${statusTone}`}>{statusLabel}</span>
-          </div>
-
-          <div className="agent-config-message-slot">
-            {activeStatus?.error ? <div className="management-alert error">{activeStatus.error}</div> : null}
-            {activeStatus?.warnings.length && !activeStatus.error ? (
-              <div className="agent-warning-line">{activeStatus.warnings.join('；')}</div>
-            ) : null}
-          </div>
-
-          <div className="agent-status-grid">
-            <div>
-              <span><BadgeCheck size={14} />{t('agents.installStatus')}</span>
-              <strong>{activeStatus?.installed ? t('agents.clientDetected') : t('agents.clientNotDetected')}</strong>
-            </div>
-            <div>
-              <span>{t('agents.clientVersion')}</span>
-              <strong title={activeStatus?.version ?? undefined}>{activeStatus?.version ?? t('agents.notFetched')}</strong>
-            </div>
-          </div>
-
-          <section className="agent-model-section">
-            <div className="agent-section-heading">
-              <div><strong>{t('agents.useModel')}</strong><span>{t('agents.useModelDescription')}</span></div>
-              {draftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
-            </div>
-            <AgentModelPicker
-              models={models}
-              value={selectedModel}
-              loading={modelLoading}
-              error={modelError}
-              disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
-              onChange={selectModel}
-              onRefresh={refreshModels}
-            />
-            <span className="agent-model-hint">
-              {modelLoading
-                ? t('agents.model.readingAvailable')
-                : modelError && models.length === 0
-                  ? modelError
-                  : models.length === 0
-                    ? t('agents.model.cannotConfigure')
-                    : activeStatus?.modificationState === 'applied'
-                      ? t('agents.model.current', { model: appliedModel || '—' })
-                      : t('agents.model.firstSelection', { count: models.length })}
-            </span>
-          </section>
-
-          <section className={`agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
-            <div className="agent-modification-copy">
-              <strong>{t('agents.modify.title')}</strong>
-              <span>{activeStatus?.modificationState === 'external-changed'
-                ? t('agents.modify.externalChanged')
-                : activeStatus?.modificationState === 'invalid'
-                  ? t('agents.modify.invalid')
-                  : activeStatus?.modificationState === 'applied'
-                    ? t('agents.modify.applied')
-                    : t('agents.modify.unconfigured')}</span>
-            </div>
-            <div className="agent-modification-buttons">
+          <div className="agent-subpage-tabs" role="tablist" aria-label={t('agents.tabs.label')}>
+            {availableSubpages.map((subpage) => (
               <button
                 type="button"
-                className="primary-button"
-                onClick={() => void applyConfigurationChanges()}
-                disabled={
-                  busy
-                  || !canEnable
-                }
+                id={`agent-subpage-tab-${subpage.id}`}
+                role="tab"
+                className={activeSubpage === subpage.id ? 'active' : ''}
+                aria-selected={activeSubpage === subpage.id}
+                aria-controls={`agent-subpage-panel-${subpage.id}`}
+                tabIndex={activeSubpage === subpage.id ? 0 : -1}
+                key={subpage.id}
+                onClick={() => setActiveSubpage(subpage.id)}
               >
-                {busyAction === 'apply' ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
-                {t('agents.modify.apply')}
+                {t(subpage.labelKey)}
               </button>
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setDefaultConfirmOpen(true)}
-                disabled={busy || !canEnable}
-              >
-                {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
-                {t('agents.modify.default')}
-              </button>
-            </div>
-          </section>
+            ))}
+          </div>
 
-          <div className="agent-config-footer">
-            <div>
-              {activeStatus?.modificationState === 'applied' ? <Check size={16} /> : <Sparkles size={16} />}
-              <span>{activeStatus?.modificationState === 'applied'
-                ? draftChanged
-                  ? t('agents.footer.changed')
-                  : t('agents.footer.applied')
-                : activeStatus?.modificationState === 'external-changed'
-                  ? t('agents.footer.externalChanged')
-                  : activeStatus?.modificationState === 'invalid'
-                    ? t('agents.footer.invalidManaged')
-                : !activeStatus?.supportedPlatform
-                  ? t('agents.footer.unsupported')
-                  : !activeStatus.installed
-                    ? t('agents.footer.installFirst')
-                    : activeStatus.launchTargets.length === 0
-                      ? t('agents.footer.noCommand')
-                      : t('agents.footer.enableFirst')}</span>
-            </div>
-            <div className="agent-launch-actions">
-              {activeLaunchTargets.length > 1 ? (
-                <div className="agent-launch-targets" aria-label={t('agents.launchMethods')}>
-                  {activeLaunchTargets.map((target) => (
-                    <button
-                      type="button"
-                      className={target.id === selectedLaunchTarget?.id ? 'active' : ''}
-                      key={target.id}
-                      onClick={() => setLaunchTargetByClient((current) => ({
-                        ...current,
-                        [selected]: target.id,
-                      }))}
-                      disabled={busy}
-                      title={target.detail}
-                    >
-                      {target.label.replace('Codex ', '')}
-                    </button>
-                  ))}
+          {activeSubpage === 'core' ? (
+            <div
+              className="agent-core-config"
+              id="agent-subpage-panel-core"
+              role="tabpanel"
+              aria-labelledby="agent-subpage-tab-core"
+            >
+              <div className="agent-status-grid">
+                <div>
+                  <span><BadgeCheck size={14} />{t('agents.installStatus')}</span>
+                  <strong>{activeStatus?.installed ? t('agents.clientDetected') : t('agents.clientNotDetected')}</strong>
+                </div>
+                <div>
+                  <span>{t('agents.clientVersion')}</span>
+                  <strong title={activeStatus?.version ?? undefined}>{activeStatus?.version ?? t('agents.notFetched')}</strong>
+                </div>
+              </div>
+
+              {activeStatus?.error || activeStatus?.warnings.length ? (
+                <div className="agent-status-messages" aria-live="polite">
+                  {activeStatus.error ? (
+                    <span className="agent-inline-message error" role="alert">{activeStatus.error}</span>
+                  ) : (
+                    <span className="agent-inline-message warning">{activeStatus.warnings.join('；')}</span>
+                  )}
                 </div>
               ) : null}
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => void launchAgent()}
-                disabled={
-                  busy
-                  || !canLaunch
-                  || draftChanged
-                }
-                title={draftChanged
-                  ? t('agents.launch.applyFirst')
-                  : activeStatus?.modificationState === 'applied'
-                    ? selectedLaunchTarget?.detail
-                    : t('agents.launch.enableFirst')}
-              >
-                {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
-                {busyAction === 'launch' ? t('agents.launch.starting') : selectedLaunchTarget ? t('agents.launch.start', { target: selectedLaunchTarget.label }) : t('agents.launch.unavailable')}
-              </button>
+
+              <section className="agent-core-setting-section agent-model-section">
+                <div className="agent-section-heading">
+                  <div><strong>{t('agents.useModel')}</strong></div>
+                  {draftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                </div>
+                <AgentModelPicker
+                  models={models}
+                  value={selectedModel}
+                  loading={modelLoading}
+                  error={modelError}
+                  disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
+                  onChange={selectModel}
+                  onRefresh={refreshModels}
+                />
+                {modelHint ? (
+                  <span
+                    className={`agent-model-hint ${modelSelectionError || modelError ? 'error' : ''}`}
+                    role={modelSelectionError || modelError ? 'alert' : undefined}
+                    aria-live="polite"
+                  >
+                    {modelHint}
+                  </span>
+                ) : null}
+              </section>
+
+              <section className={`agent-core-setting-section agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
+                <div className="agent-section-heading">
+                  <div>
+                    <strong>{t('agents.modify.title')}</strong>
+                    {modificationDescription ? <span>{modificationDescription}</span> : null}
+                  </div>
+                </div>
+                <div className="agent-modification-control">
+                  {selected === 'codex' ? (
+                    <label
+                      className="agent-oauth-configuration"
+                      title={t('agents.modify.oauthConfiguration')}
+                    >
+                      <span>{t('agents.modify.oauthConfiguration')}</span>
+                      <span className="switch-control">
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          checked={oauthConfiguration}
+                          onChange={(event) => setOauthConfiguration(event.currentTarget.checked)}
+                          disabled={busy}
+                          aria-label={t('agents.modify.oauthConfiguration')}
+                        />
+                        <span className="switch-track" />
+                      </span>
+                    </label>
+                  ) : null}
+                  <div className={`agent-modification-buttons ${selected === 'codex' ? 'codex' : ''}`}>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => void applyConfigurationChanges()}
+                      disabled={
+                        busy
+                        || !canEnable
+                      }
+                    >
+                      {busyAction === 'apply' ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
+                      {t('agents.modify.apply')}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={openDefaultConfirmation}
+                      disabled={busy || !canEnable}
+                    >
+                      {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
+                      {t('agents.modify.default')}
+                    </button>
+                    {selected === 'codex' ? (
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={openClearConfirmation}
+                        disabled={busy}
+                      >
+                        {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
+                        {t('agents.modify.clear')}
+                      </button>
+                    ) : null}
+                  </div>
+                  {configurationError ? (
+                    <span className="agent-inline-message error" role="alert" aria-live="polite">
+                      {configurationError}
+                    </span>
+                  ) : null}
+                  {clearNotice ? (
+                    <span className="agent-inline-message" role="status" aria-live="polite">
+                      {clearNotice}
+                    </span>
+                  ) : null}
+                </div>
+              </section>
+
+              {selected === 'codex' ? <CodexSessionAutoRestoreCard /> : null}
+
+              <div className="agent-config-footer">
+                {footerMessage ? (
+                  <div className="agent-config-summary">
+                    {activeStatus?.modificationState === 'applied' ? <Check size={16} /> : <Sparkles size={16} />}
+                    <span>{footerMessage}</span>
+                  </div>
+                ) : null}
+                <div className="agent-launch-control">
+                  <div className="agent-launch-actions">
+                    {activeLaunchTargets.length > 1 ? (
+                      <div className="agent-launch-targets" aria-label={t('agents.launchMethods')}>
+                        {activeLaunchTargets.map((target) => (
+                          <button
+                            type="button"
+                            className={target.id === selectedLaunchTarget?.id ? 'active' : ''}
+                            key={target.id}
+                            onClick={() => setLaunchTargetByClient((current) => ({
+                              ...current,
+                              [selected]: target.id,
+                            }))}
+                            disabled={busy}
+                            title={target.detail}
+                          >
+                            {target.label.replace('Codex ', '')}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => void launchAgent()}
+                      disabled={
+                        busy
+                        || !canLaunch
+                        || (selected !== 'codex' && draftChanged)
+                      }
+                      title={selected === 'codex'
+                        ? selectedLaunchTarget?.detail
+                        : draftChanged
+                          ? t('agents.launch.applyFirst')
+                          : activeStatus?.modificationState === 'applied'
+                            ? selectedLaunchTarget?.detail
+                            : t('agents.launch.enableFirst')}
+                    >
+                      {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
+                      {busyAction === 'launch' ? t('agents.launch.starting') : selectedLaunchTarget ? t('agents.launch.start', { target: selectedLaunchTarget.label }) : t('agents.launch.unavailable')}
+                    </button>
+                    {selected === 'codex' ? (
+                      <button
+                        type="button"
+                        className="danger-button agent-close-app-button"
+                        onClick={openCloseAppConfirmation}
+                        disabled={busy}
+                      >
+                        {busyAction === 'close-app' ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}
+                        {busyAction === 'close-app' ? t('agents.launch.closingChatgpt') : t('agents.launch.closeChatgpt')}
+                      </button>
+                    ) : null}
+                  </div>
+                  {launchError ? (
+                    <span className="agent-inline-message error" role="alert" aria-live="polite">
+                      {launchError}
+                    </span>
+                  ) : null}
+                  {closeAppNotice ? (
+                    <span className="agent-inline-message" role="status" aria-live="polite">
+                      {closeAppNotice}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
             </div>
-          </div>
+          ) : null}
+
+          {selected === 'codex' && activeSubpage === 'sessions' ? (
+            <div
+              className="agent-sessions-page"
+              id="agent-subpage-panel-sessions"
+              role="tabpanel"
+              aria-labelledby="agent-subpage-tab-sessions"
+            >
+              <CodexSessionsPanel managedProviderActive={activeStatus?.modificationState === 'applied'} />
+            </div>
+          ) : null}
         </section>
       </div>
 
@@ -901,11 +1133,62 @@ export function AgentsPage() {
             <p>
               {t('agents.default.description', { name: activeDefinition.name })}
             </p>
+            {defaultError ? (
+              <span className="agent-inline-message error" role="alert" aria-live="polite">
+                {defaultError}
+              </span>
+            ) : null}
             <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" onClick={() => setDefaultConfirmOpen(false)} disabled={busy}>{t('common.cancel')}</button>
+              <button type="button" className="secondary-button" onClick={closeDefaultConfirmation} disabled={busy}>{t('common.cancel')}</button>
               <button type="button" className="danger-button" onClick={() => void resetConfigurationToDefault()} disabled={busy}>
                 {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : null}
                 {t('agents.default.confirm')}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {clearConfirmOpen ? (
+        <div className="config-dialog-backdrop">
+          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-clear-title">
+            <div className="config-dialog-heading">
+              <div><AlertTriangle size={19} /><h2 id="agent-clear-title">{t('agents.clear.title')}</h2></div>
+            </div>
+            <p>{t('agents.clear.description')}</p>
+            {clearError ? (
+              <span className="agent-inline-message error" role="alert" aria-live="polite">
+                {clearError}
+              </span>
+            ) : null}
+            <div className="config-dialog-actions two-actions">
+              <button type="button" className="secondary-button" onClick={closeClearConfirmation} disabled={busy}>{t('common.cancel')}</button>
+              <button type="button" className="danger-button" onClick={() => void clearCodexConfiguration()} disabled={busy}>
+                {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
+                {t('agents.clear.confirm')}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {closeAppConfirmOpen ? (
+        <div className="config-dialog-backdrop">
+          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-close-app-title">
+            <div className="config-dialog-heading">
+              <div><AlertTriangle size={19} /><h2 id="agent-close-app-title">{t('agents.closeApp.title')}</h2></div>
+            </div>
+            <p>{t('agents.closeApp.description')}</p>
+            {closeAppError ? (
+              <span className="agent-inline-message error" role="alert" aria-live="polite">
+                {closeAppError}
+              </span>
+            ) : null}
+            <div className="config-dialog-actions two-actions">
+              <button type="button" className="secondary-button" onClick={closeCloseAppConfirmation} disabled={busy}>{t('common.cancel')}</button>
+              <button type="button" className="danger-button" onClick={() => void closeChatGptApp()} disabled={busy}>
+                {busyAction === 'close-app' ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}
+                {t('agents.closeApp.confirm')}
               </button>
             </div>
           </section>
