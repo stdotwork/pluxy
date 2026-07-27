@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::Arc;
 use std::{
+    collections::HashSet,
     env, fs,
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
@@ -436,6 +437,7 @@ struct GuiConfigFile {
     auth_dir: String,
     #[serde(deserialize_with = "deserialize_gui_api_keys")]
     api_keys: Vec<GuiApiKeyEntry>,
+    api_access_remarks: Vec<GuiApiAccessRemark>,
     management_secret_key: String,
     usage_statistics_enabled: bool,
     plugins_enabled: bool,
@@ -457,6 +459,30 @@ enum WindowsCloseAction {
 struct GuiApiKeyEntry {
     key: String,
     #[serde(default)]
+    remark: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct GuiApiAccessRemark {
+    provider_section: String,
+    api_key_hash: String,
+    remark: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiAccessRemarkQuery {
+    provider_section: String,
+    api_keys: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiAccessRemarkUpdate {
+    provider_section: String,
+    previous_api_keys: Vec<String>,
+    api_keys: Vec<String>,
     remark: String,
 }
 
@@ -500,6 +526,7 @@ impl Default for GuiConfigFile {
                 .map(|path| path_to_string(&path))
                 .unwrap_or_else(|| OAUTH_DIR_NAME.to_string()),
             api_keys: vec![default_api_key_entry()],
+            api_access_remarks: Vec::new(),
             // Keep plaintext here for management API auth. Core hashes the
             // value written into config.yaml on startup.
             management_secret_key: DEFAULT_MANAGEMENT_SECRET_KEY.to_string(),
@@ -523,6 +550,7 @@ struct GuiConfigPresence {
     host: Option<String>,
     auth_dir: Option<String>,
     api_keys: Option<Vec<GuiApiKeyInput>>,
+    api_access_remarks: Option<Vec<GuiApiAccessRemark>>,
     management_secret_key: Option<String>,
     codex_session_repair_on_launch: Option<bool>,
     usage_statistics_enabled: Option<bool>,
@@ -1389,6 +1417,75 @@ fn get_gui_settings(
 ) -> Result<GuiSettings, String> {
     let config = gui_config_state.snapshot()?;
     Ok(GuiSettings::from(&config))
+}
+
+#[tauri::command]
+fn resolve_api_access_remarks(
+    queries: Vec<ApiAccessRemarkQuery>,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<Vec<String>, String> {
+    let config = gui_config_state.snapshot()?;
+    queries
+        .into_iter()
+        .map(|query| {
+            validate_api_access_provider_section(&query.provider_section)?;
+            Ok(query
+                .api_keys
+                .iter()
+                .filter_map(|key| api_access_key_hash(key))
+                .find_map(|hash| {
+                    config.api_access_remarks.iter().find(|entry| {
+                        entry.provider_section == query.provider_section
+                            && entry.api_key_hash == hash
+                    })
+                })
+                .map(|entry| entry.remark.clone())
+                .unwrap_or_default())
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn save_api_access_remark(
+    update: ApiAccessRemarkUpdate,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<(), String> {
+    validate_api_access_provider_section(&update.provider_section)?;
+    let remark = update.remark.trim().to_string();
+    validate_api_key_remark(&remark)?;
+    let previous_hashes = update
+        .previous_api_keys
+        .iter()
+        .filter_map(|key| api_access_key_hash(key))
+        .collect::<HashSet<_>>();
+    let next_hashes = update
+        .api_keys
+        .iter()
+        .filter_map(|key| api_access_key_hash(key))
+        .collect::<HashSet<_>>();
+    let hashes_to_replace = previous_hashes
+        .union(&next_hashes)
+        .cloned()
+        .collect::<HashSet<_>>();
+    let provider_section = update.provider_section;
+
+    gui_config_state.update(|config| {
+        config.api_access_remarks.retain(|entry| {
+            entry.provider_section != provider_section
+                || !hashes_to_replace.contains(&entry.api_key_hash)
+        });
+        if !remark.is_empty() {
+            config
+                .api_access_remarks
+                .extend(next_hashes.iter().map(|hash| GuiApiAccessRemark {
+                    provider_section: provider_section.clone(),
+                    api_key_hash: hash.clone(),
+                    remark: remark.clone(),
+                }));
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -10328,6 +10425,52 @@ fn validate_api_key_remark(remark: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_api_access_provider_section(section: &str) -> Result<(), String> {
+    if matches!(
+        section,
+        "gemini-api-key" | "codex-api-key" | "claude-api-key" | "openai-compatibility"
+    ) {
+        Ok(())
+    } else {
+        Err("API 接入类型无效".to_string())
+    }
+}
+
+fn api_access_key_hash(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| sha256_bytes(value.as_bytes()))
+}
+
+fn usage_provider_section(provider: &str) -> Option<&'static str> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "codex" => Some("codex-api-key"),
+        "claude" => Some("claude-api-key"),
+        "gemini" | "aistudio" => Some("gemini-api-key"),
+        "openai" | "openai-compatibility" => Some("openai-compatibility"),
+        _ => None,
+    }
+}
+
+impl GuiConfigFile {
+    fn api_access_remark_for_source(&self, provider: &str, source: &str) -> Option<&str> {
+        let hash = api_access_key_hash(source)?;
+        let preferred_section = usage_provider_section(provider);
+        self.api_access_remarks
+            .iter()
+            .find(|entry| {
+                preferred_section == Some(entry.provider_section.as_str())
+                    && entry.api_key_hash == hash
+                    && !entry.remark.is_empty()
+            })
+            .or_else(|| {
+                self.api_access_remarks
+                    .iter()
+                    .find(|entry| entry.api_key_hash == hash && !entry.remark.is_empty())
+            })
+            .map(|entry| entry.remark.as_str())
+    }
+}
+
 fn validate_management_secret_key(secret_key: &str) -> Result<(), String> {
     if secret_key.chars().count() > 512 {
         return Err("管理密钥不能超过 512 个字符".to_string());
@@ -11184,6 +11327,22 @@ fn write_gui_config_to_path(config: &GuiConfigFile, config_path: &Path) -> Resul
         api_keys.push(Value::InlineTable(table));
     }
     set_codex_table_item(root, "api-keys", Item::Value(Value::Array(api_keys)));
+    let mut api_access_remarks = Array::new();
+    for entry in &config.api_access_remarks {
+        let mut table = InlineTable::new();
+        table.insert(
+            "provider-section",
+            Value::from(entry.provider_section.as_str()),
+        );
+        table.insert("api-key-hash", Value::from(entry.api_key_hash.as_str()));
+        table.insert("remark", Value::from(entry.remark.as_str()));
+        api_access_remarks.push(Value::InlineTable(table));
+    }
+    set_codex_table_item(
+        root,
+        "api-access-remarks",
+        Item::Value(Value::Array(api_access_remarks)),
+    );
 
     let content = document.to_string();
     toml::from_str::<GuiConfigFile>(&content)
@@ -11206,6 +11365,18 @@ fn validate_gui_config(config: &GuiConfigFile) -> Result<(), String> {
     }
     for entry in &config.api_keys {
         validate_core_api_key(&entry.key)?;
+        validate_api_key_remark(&entry.remark)?;
+    }
+    for entry in &config.api_access_remarks {
+        validate_api_access_provider_section(&entry.provider_section)?;
+        if entry.api_key_hash.len() != 64
+            || !entry
+                .api_key_hash
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            return Err("API 接入备注的密钥指纹无效".to_string());
+        }
         validate_api_key_remark(&entry.remark)?;
     }
     validate_management_secret_key(&config.management_secret_key)?;
@@ -13397,6 +13568,8 @@ fn main() {
             detect_core_platform,
             get_core_status,
             get_gui_settings,
+            resolve_api_access_remarks,
+            save_api_access_remark,
             set_app_locale,
             resolve_windows_close_request,
             get_agent_config_statuses,
@@ -15768,6 +15941,7 @@ custom_option = "keep-original"
                     remark: "测试密钥".to_string(),
                 },
             ],
+            api_access_remarks: Vec::new(),
             management_secret_key: String::new(),
             usage_statistics_enabled: false,
             plugins_enabled: true,
