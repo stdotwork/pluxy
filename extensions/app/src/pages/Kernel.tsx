@@ -123,11 +123,8 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
   const [checkingLatest, setCheckingLatest] = useState(Boolean(latestCheckPromise));
   const [allowLanAccess, setAllowLanAccess] = useState(false);
   const [customPort, setCustomPort] = useState('8317');
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [settingsError, setSettingsError] = useState('');
   const [installing, setInstalling] = useState(false);
   const [processBusy, setProcessBusy] = useState(false);
-  const [networkBusy, setNetworkBusy] = useState(false);
   const [processNotice, setProcessNotice] = useState<{
     message: string;
     tone: MessageType;
@@ -145,8 +142,6 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
   const [lanIpChecked, setLanIpChecked] = useState(false);
   const installDialogRef = useRef<HTMLDivElement>(null);
   const savedPortRef = useRef(8317);
-  const savedAllowLanRef = useRef(false);
-  const settingsSaveRequestRef = useRef(0);
   const processNoticeTimerRef = useRef<number | null>(null);
   const copiedApiTimerRef = useRef<number | null>(null);
 
@@ -347,13 +342,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
       setAllowLanAccess(settings.allowLan);
       setCustomPort(String(settings.port));
       savedPortRef.current = settings.port;
-      savedAllowLanRef.current = settings.allowLan;
-      setSettingsError('');
-    } catch (error) {
-      setSettingsError(String(error));
-    } finally {
-      setSettingsLoaded(true);
-    }
+    } catch {}
   };
 
   const loadHomeApiKey = async () => {
@@ -365,73 +354,6 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
       setHomeApiKey(undefined);
       setHomeApiKeyError(true);
     }
-  };
-
-  const saveNetworkSettings = async (
-    allowLan: boolean,
-    port: number,
-    restartAfterSave = false,
-  ) => {
-    const requestId = ++settingsSaveRequestRef.current;
-
-    try {
-      const settings = await invoke<GuiSettings>('save_gui_settings', {
-        settings: { allowLan, port },
-      });
-      if (requestId !== settingsSaveRequestRef.current) {
-        return;
-      }
-      setAllowLanAccess(settings.allowLan);
-      setCustomPort(String(settings.port));
-      savedPortRef.current = settings.port;
-      savedAllowLanRef.current = settings.allowLan;
-      setSettingsError('');
-
-      if (restartAfterSave) {
-        if (coreStatus?.running) {
-          await runCoreProcessCommand('restart_core_process', {
-            success: t('kernel.notice.networkRestarted'),
-            failure: t('kernel.notice.networkRestartFailed'),
-          });
-        } else {
-          showProcessNotice(t('kernel.notice.networkNextStart'), 'info');
-        }
-      }
-    } catch (error) {
-      if (requestId !== settingsSaveRequestRef.current) {
-        return;
-      }
-      setAllowLanAccess(savedAllowLanRef.current);
-      setCustomPort(String(savedPortRef.current));
-      setSettingsError(String(error));
-      if (restartAfterSave) {
-        showProcessNotice(t('kernel.notice.networkSaveFailed', { error: String(error) }), 'error');
-      }
-    }
-  };
-
-  const updateAllowLanAccess = (allowLan: boolean) => {
-    const editedPort = Number(customPort);
-    const port =
-      Number.isInteger(editedPort) && editedPort >= 1 && editedPort <= 65535
-        ? editedPort
-        : savedPortRef.current;
-    setAllowLanAccess(allowLan);
-    setNetworkBusy(true);
-    void saveNetworkSettings(allowLan, port, true).finally(() => setNetworkBusy(false));
-  };
-
-  const commitCustomPort = () => {
-    const port = Number(customPort);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setCustomPort(String(savedPortRef.current));
-      setSettingsError(t('kernel.error.port'));
-      return;
-    }
-
-    setNetworkBusy(true);
-    void saveNetworkSettings(allowLanAccess, port, port !== savedPortRef.current)
-      .finally(() => setNetworkBusy(false));
   };
 
   const loadPlatform = async () => {
@@ -746,7 +668,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
               <h2>{t('kernel.control.title')}</h2>
             </div>
             <span className={`state-pill ${statusTone}`} title={statusError || undefined}>
-              {processBusy || networkBusy ? t('common.processing') : statusLabel}
+              {processBusy ? t('common.processing') : statusLabel}
             </span>
           </div>
 
@@ -764,48 +686,15 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
               <dd>{coreStatus?.processId || t('kernel.control.noPid')}</dd>
             </div>
             <div className="panel-detail-row">
-              <dt>{t('kernel.control.allowLan')}</dt>
-              <dd className="detail-control-cell">
-                <span className="switch-control" title={t('kernel.control.lanRestartHint')}>
-                  <input
-                    type="checkbox"
-                    aria-label={t('kernel.control.allowLanAria')}
-                    disabled={!settingsLoaded || networkBusy || processBusy}
-                    checked={allowLanAccess}
-                    onChange={(event) => updateAllowLanAccess(event.currentTarget.checked)}
-                  />
-                  <span className="switch-track" />
-                </span>
+              <dt>{t('kernel.overview.coreVersion')}</dt>
+              <dd>
+                {currentVersion
+                  || (coreInstalled ? t('common.unavailable') : t('kernel.status.notInstalled'))}
               </dd>
             </div>
             <div className="panel-detail-row">
-              <dt>
-                <label htmlFor="custom-port">{t('kernel.control.port')}</label>
-              </dt>
-              <dd className="detail-control-cell">
-                <input
-                  id="custom-port"
-                  className={`compact-text-input ${settingsError ? 'error' : ''}`}
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={5}
-                  placeholder={t('kernel.control.portPlaceholder')}
-                  title={settingsError || t('kernel.control.portRange')}
-                  aria-invalid={Boolean(settingsError)}
-                  disabled={!settingsLoaded || networkBusy || processBusy}
-                  value={customPort}
-                  onChange={(event) =>
-                    setCustomPort(event.currentTarget.value.replace(/\D/g, '').slice(0, 5))
-                  }
-                  onBlur={commitCustomPort}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.currentTarget.blur();
-                    }
-                  }}
-                />
-              </dd>
+              <dt>{t('kernel.overview.appVersion')}</dt>
+              <dd>{currentAppVersion}</dd>
             </div>
           </dl>
 
@@ -813,7 +702,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
             <button
               type="button"
               className={coreRunning ? 'danger-button' : 'primary-button'}
-              disabled={!coreInstalled || installing || processBusy || networkBusy}
+              disabled={!coreInstalled || installing || processBusy}
               onClick={() =>
                 void runCoreProcessCommand(
                   coreRunning ? 'stop_core_process' : 'start_core_process',
@@ -826,7 +715,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
             <button
               type="button"
               className="secondary-button"
-              disabled={!coreInstalled || !coreRunning || installing || processBusy || networkBusy}
+              disabled={!coreInstalled || !coreRunning || installing || processBusy}
               onClick={() =>
                 void runCoreProcessCommand('restart_core_process', { success: t('kernel.notice.restarted') })
               }
@@ -836,7 +725,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
             <button
               type="button"
               className="secondary-button"
-              disabled={processBusy || networkBusy}
+              disabled={processBusy}
               onClick={() => void refreshStatus()}
             >
               {t('kernel.control.refresh')}
@@ -860,9 +749,11 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
                         : t('appUpdate.phase.checking'))}
                 </p>
               </div>
-              <span className={`state-pill ${appUpdate?.updateAvailable ? 'update' : appUpdateError ? 'error' : 'success'}`}>
-                {appUpdate?.autoUpdateSupported ? t('appUpdate.portableReady') : t('appUpdate.manualOnly')}
-              </span>
+              {!appUpdate?.autoUpdateSupported && (
+                <span className={`state-pill ${appUpdateError ? 'error' : 'success'}`}>
+                  {t('appUpdate.manualFallback')}
+                </span>
+              )}
             </div>
 
             <dl className="panel-detail-grid software-update-details">

@@ -440,6 +440,9 @@ struct GuiConfigFile {
     usage_statistics_enabled: bool,
     plugins_enabled: bool,
     routing_strategy: String,
+    proxy_url: String,
+    routing_session_affinity: bool,
+    routing_session_affinity_ttl: String,
     codex_session_repair_on_launch: bool,
 }
 
@@ -503,6 +506,9 @@ impl Default for GuiConfigFile {
             usage_statistics_enabled: true,
             plugins_enabled: false,
             routing_strategy: "round-robin".to_string(),
+            proxy_url: String::new(),
+            routing_session_affinity: false,
+            routing_session_affinity_ttl: String::new(),
             codex_session_repair_on_launch: false,
         }
     }
@@ -522,6 +528,9 @@ struct GuiConfigPresence {
     usage_statistics_enabled: Option<bool>,
     plugins_enabled: Option<bool>,
     routing_strategy: Option<String>,
+    proxy_url: Option<String>,
+    routing_session_affinity: Option<bool>,
+    routing_session_affinity_ttl: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -771,6 +780,16 @@ struct GuiNetworkSettings {
     allow_lan: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiNetworkRoutingSettings {
+    port: u16,
+    allow_lan: bool,
+    proxy_url: String,
+    routing_session_affinity: bool,
+    routing_session_affinity_ttl: String,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CoreConfigSettings {
@@ -786,6 +805,9 @@ struct CoreConfigSettings {
     usage_statistics_enabled: bool,
     plugins_enabled: bool,
     routing_strategy: String,
+    proxy_url: String,
+    routing_session_affinity: bool,
+    routing_session_affinity_ttl: String,
     // Kept for internal config migration/tests; never exposed to the WebView.
     #[allow(dead_code)]
     #[serde(skip_serializing)]
@@ -804,8 +826,13 @@ struct CoreApiKeyView {
 struct CoreConfigView {
     api_keys: Vec<CoreApiKeyView>,
     management_secret_configured: bool,
+    port: u16,
+    allow_lan: bool,
     plugins_enabled: bool,
     routing_strategy: String,
+    proxy_url: String,
+    routing_session_affinity: bool,
+    routing_session_affinity_ttl: String,
 }
 
 impl Default for CoreInstallTask {
@@ -1157,6 +1184,25 @@ impl GuiConfigState {
         })
     }
 
+    fn update_network_routing(
+        &self,
+        port: u16,
+        allow_lan: bool,
+        proxy_url: &str,
+        routing_session_affinity: bool,
+        routing_session_affinity_ttl: &str,
+    ) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.port = port;
+            config.allow_lan = allow_lan;
+            config.host = if allow_lan { "0.0.0.0" } else { "127.0.0.1" }.to_string();
+            config.proxy_url = proxy_url.to_string();
+            config.routing_session_affinity = routing_session_affinity;
+            config.routing_session_affinity_ttl = routing_session_affinity_ttl.to_string();
+            Ok(())
+        })
+    }
+
     fn set_run_on_startup(&self, run_on_startup: bool) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.run_on_startup = run_on_startup;
@@ -1223,6 +1269,9 @@ impl GuiConfigState {
             }
             config.plugins_enabled = settings.plugins_enabled;
             config.routing_strategy = settings.routing_strategy.clone();
+            config.proxy_url = settings.proxy_url.clone();
+            config.routing_session_affinity = settings.routing_session_affinity;
+            config.routing_session_affinity_ttl = settings.routing_session_affinity_ttl.clone();
             Ok(())
         })
     }
@@ -1264,6 +1313,9 @@ impl From<&GuiConfigFile> for CoreConfigSettings {
             usage_statistics_enabled: config.usage_statistics_enabled,
             plugins_enabled: config.plugins_enabled,
             routing_strategy: config.routing_strategy.clone(),
+            proxy_url: config.proxy_url.clone(),
+            routing_session_affinity: config.routing_session_affinity,
+            routing_session_affinity_ttl: config.routing_session_affinity_ttl.clone(),
             management_secret_key: Some(config.management_secret_key.clone()),
         }
     }
@@ -1281,8 +1333,13 @@ impl From<&GuiConfigFile> for CoreConfigView {
                 })
                 .collect(),
             management_secret_configured: !config.management_secret_key.is_empty(),
+            port: config.port,
+            allow_lan: config.allow_lan,
             plugins_enabled: config.plugins_enabled,
             routing_strategy: config.routing_strategy.clone(),
+            proxy_url: config.proxy_url.clone(),
+            routing_session_affinity: config.routing_session_affinity,
+            routing_session_affinity_ttl: config.routing_session_affinity_ttl.clone(),
         }
     }
 }
@@ -6277,6 +6334,62 @@ fn save_gui_settings(
 }
 
 #[tauri::command]
+fn save_network_routing_settings(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    cache: tauri::State<'_, AgentConfigStatusCache>,
+    settings: GuiNetworkRoutingSettings,
+) -> Result<CoreConfigView, String> {
+    if settings.port == 0 {
+        return Err("端口必须在 1 到 65535 之间".to_string());
+    }
+    let proxy_url = normalize_optional_config_string(settings.proxy_url, "代理 URL")?;
+    let routing_session_affinity_ttl =
+        normalize_optional_config_string(settings.routing_session_affinity_ttl, "会话粘性 TTL")?;
+
+    let _refresh_guard = cache
+        .refresh_lock
+        .lock()
+        .map_err(|_| "智能体配置状态刷新锁已损坏".to_string())?;
+    let previous = gui_config_state.snapshot()?;
+    let mut next = previous.clone();
+    next.port = settings.port;
+    next.allow_lan = settings.allow_lan;
+    next.host = if settings.allow_lan {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    }
+    .to_string();
+    next.proxy_url = proxy_url.clone();
+    next.routing_session_affinity = settings.routing_session_affinity;
+    next.routing_session_affinity_ttl = routing_session_affinity_ttl.clone();
+    validate_gui_config(&next)?;
+
+    patch_core_network_routing_settings(&next)?;
+    let config = match gui_config_state.update_network_routing(
+        settings.port,
+        settings.allow_lan,
+        &proxy_url,
+        settings.routing_session_affinity,
+        &routing_session_affinity_ttl,
+    ) {
+        Ok(config) => config,
+        Err(error) => {
+            let rollback_error = patch_core_network_routing_settings(&previous).err();
+            return Err(config_update_error_with_rollback(error, rollback_error));
+        }
+    };
+
+    if config.port != previous.port {
+        if let Err(error) = cache.clear() {
+            eprintln!("清空智能体配置状态缓存失败: {error}");
+        }
+    }
+
+    Ok(CoreConfigView::from(&config))
+}
+
+#[tauri::command]
 fn get_core_config_settings(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<CoreConfigView, String> {
@@ -6437,6 +6550,65 @@ fn set_core_routing_strategy(
     settings.routing_strategy = strategy;
     patch_core_routing_strategy(&settings.routing_strategy)?;
     let config = gui_config_state.sync_core_settings(&settings)?;
+    Ok(CoreConfigView::from(&config))
+}
+
+#[tauri::command]
+fn set_core_proxy_url(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    proxy_url: String,
+) -> Result<CoreConfigView, String> {
+    let proxy_url = normalize_optional_config_string(proxy_url, "代理 URL")?;
+    let mut settings = current_core_config_settings(gui_config_state.inner())?;
+    let previous_proxy_url = settings.proxy_url.clone();
+    settings.proxy_url = proxy_url;
+    patch_core_proxy_url(&settings.proxy_url)?;
+    let config = match gui_config_state.sync_core_settings(&settings) {
+        Ok(config) => config,
+        Err(error) => {
+            let rollback_error = patch_core_proxy_url(&previous_proxy_url).err();
+            return Err(config_update_error_with_rollback(error, rollback_error));
+        }
+    };
+    Ok(CoreConfigView::from(&config))
+}
+
+#[tauri::command]
+fn set_core_session_affinity(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    enabled: bool,
+) -> Result<CoreConfigView, String> {
+    let mut settings = current_core_config_settings(gui_config_state.inner())?;
+    let previous_enabled = settings.routing_session_affinity;
+    settings.routing_session_affinity = enabled;
+    patch_core_session_affinity(settings.routing_session_affinity)?;
+    let config = match gui_config_state.sync_core_settings(&settings) {
+        Ok(config) => config,
+        Err(error) => {
+            let rollback_error = patch_core_session_affinity(previous_enabled).err();
+            return Err(config_update_error_with_rollback(error, rollback_error));
+        }
+    };
+    Ok(CoreConfigView::from(&config))
+}
+
+#[tauri::command]
+fn set_core_session_affinity_ttl(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    ttl: String,
+) -> Result<CoreConfigView, String> {
+    let ttl = normalize_optional_config_string(ttl, "会话粘性 TTL")?;
+    let mut settings = current_core_config_settings(gui_config_state.inner())?;
+    let previous_ttl = settings.routing_session_affinity_ttl.clone();
+    settings.routing_session_affinity_ttl = ttl;
+    patch_core_session_affinity_ttl(&settings.routing_session_affinity_ttl)?;
+    let config = match gui_config_state.sync_core_settings(&settings) {
+        Ok(config) => config,
+        Err(error) => {
+            let rollback_error = patch_core_session_affinity_ttl(&previous_ttl).err();
+            return Err(config_update_error_with_rollback(error, rollback_error));
+        }
+    };
     Ok(CoreConfigView::from(&config))
 }
 
@@ -8124,6 +8296,21 @@ fn patch_core_network_settings(config: &GuiConfigFile) -> Result<(), String> {
     write_yaml_if_changed(&config_path, &updated).map(|_| ())
 }
 
+fn patch_core_network_routing_settings(config: &GuiConfigFile) -> Result<(), String> {
+    let _config_guard = lock_core_config_file()?;
+    let config_path = core_install_dir()?.join(CORE_CONFIG_FILE);
+    if !config_path.is_file() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&config_path)
+        .map_err(|err| format!("读取内核配置失败 {}: {err}", path_to_string(&config_path)))?;
+    let Some(updated) = patch_core_network_routing_yaml(&content, config)? else {
+        return Ok(());
+    };
+    write_yaml_if_changed(&config_path, &updated).map(|_| ())
+}
+
 fn lock_core_config_file() -> Result<std::sync::MutexGuard<'static, ()>, String> {
     CORE_CONFIG_FILE_LOCK
         .lock()
@@ -8197,6 +8384,40 @@ fn patch_core_routing_strategy(strategy: &str) -> Result<(), String> {
     })
 }
 
+fn patch_core_proxy_url(proxy_url: &str) -> Result<(), String> {
+    let proxy_url = proxy_url.to_string();
+    patch_existing_core_config(move |document| {
+        set_core_yaml_top_level_value(
+            document,
+            "proxy-url",
+            serde_norway::Value::String(proxy_url),
+        )
+    })
+}
+
+fn patch_core_session_affinity(enabled: bool) -> Result<(), String> {
+    patch_existing_core_config(move |document| {
+        set_core_yaml_nested_value(
+            document,
+            "routing",
+            "session-affinity",
+            serde_norway::Value::Bool(enabled),
+        )
+    })
+}
+
+fn patch_core_session_affinity_ttl(ttl: &str) -> Result<(), String> {
+    let ttl = ttl.to_string();
+    patch_existing_core_config(move |document| {
+        set_core_yaml_nested_value(
+            document,
+            "routing",
+            "session-affinity-ttl",
+            serde_norway::Value::String(ttl),
+        )
+    })
+}
+
 fn patch_existing_core_config<F>(update: F) -> Result<(), String>
 where
     F: FnOnce(&mut serde_norway::Value) -> Result<bool, String>,
@@ -8261,6 +8482,34 @@ fn render_yaml_value_changes(
                 replace_yaml_sequence_value(&editable_content, &change.path, &change.value)?;
         } else {
             remaining_changes.push(change);
+        }
+    }
+    let mut missing_nested_groups: Vec<(String, Vec<(String, serde_norway::Value)>)> = Vec::new();
+    for change in &remaining_changes {
+        if change.path.len() != 2
+            || yaml_value_at_path(original, &change.path).is_some()
+            || yaml_value_at_path(original, &change.path[..1])
+                .and_then(serde_norway::Value::as_mapping)
+                .is_none()
+        {
+            continue;
+        }
+        let section = change.path[0].clone();
+        let entry = (change.path[1].clone(), change.value.clone());
+        if let Some((_, entries)) = missing_nested_groups
+            .iter_mut()
+            .find(|(existing, _)| existing == &section)
+        {
+            entries.push(entry);
+        } else {
+            missing_nested_groups.push((section, vec![entry]));
+        }
+    }
+    for (section, entries) in missing_nested_groups {
+        if let Some(updated_content) =
+            insert_yaml_block_mapping_values(&editable_content, &section, &entries)?
+        {
+            editable_content = updated_content;
         }
     }
     let file = editable_content
@@ -8384,6 +8633,61 @@ fn yaml_value_at_path<'a>(
     path.iter().try_fold(root, |current, key| {
         current.as_mapping()?.get(yaml_key(key))
     })
+}
+
+fn insert_yaml_block_mapping_values(
+    content: &str,
+    section: &str,
+    entries: &[(String, serde_norway::Value)],
+) -> Result<Option<String>, String> {
+    let mut offset = 0;
+    let mut section_end = None;
+    let mut child_indent = None;
+    for line in content.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\r', '\n']);
+        let trimmed = body.trim_start_matches([' ', '\t']);
+        let indent = body.len().saturating_sub(trimmed.len());
+        if section_end.is_none() {
+            let section_header = trimmed
+                .split_once('#')
+                .map(|(value, _)| value)
+                .unwrap_or(trimmed)
+                .trim_end();
+            if indent == 0 && section_header == format!("{section}:") {
+                section_end = Some(offset + line.len());
+            }
+        } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            if indent == 0 {
+                break;
+            }
+            child_indent.get_or_insert(indent);
+        }
+        offset += line.len();
+    }
+    let Some(section_end) = section_end else {
+        return Ok(None);
+    };
+    let newline = if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let indent = " ".repeat(child_indent.unwrap_or(2));
+    let mut insertion = String::new();
+    for (key, value) in entries {
+        let value = serde_json::to_string(value)
+            .map_err(|error| format!("序列化内核配置值失败: {error}"))?;
+        insertion.push_str(&indent);
+        insertion.push_str(key);
+        insertion.push_str(": ");
+        insertion.push_str(&value);
+        insertion.push_str(newline);
+    }
+    let mut updated = String::with_capacity(content.len() + insertion.len());
+    updated.push_str(&content[..section_end]);
+    updated.push_str(&insertion);
+    updated.push_str(&content[section_end..]);
+    Ok(Some(updated))
 }
 
 fn replace_yaml_sequence_value(
@@ -8833,6 +9137,35 @@ fn core_config_settings_from_value(
         })
         .transpose()?
         .unwrap_or_else(|| "round-robin".to_string());
+    let proxy_url = yaml_mapping_value(root, "proxy-url")
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| "proxy-url 必须是字符串".to_string())
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let routing_session_affinity = nested_yaml_value(root, &["routing", "session-affinity"])
+        .or_else(|| nested_yaml_value(root, &["routing", "sessionAffinity"]))
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| "routing.session-affinity 必须是布尔值".to_string())
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let routing_session_affinity_ttl =
+        nested_yaml_value(root, &["routing", "session-affinity-ttl"])
+            .or_else(|| nested_yaml_value(root, &["routing", "sessionAffinityTTL"]))
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "routing.session-affinity-ttl 必须是字符串".to_string())
+            })
+            .transpose()?
+            .unwrap_or_default();
 
     Ok(CoreConfigSettings {
         host,
@@ -8845,6 +9178,9 @@ fn core_config_settings_from_value(
         usage_statistics_enabled,
         plugins_enabled,
         routing_strategy,
+        proxy_url,
+        routing_session_affinity,
+        routing_session_affinity_ttl,
         management_secret_key,
     })
 }
@@ -10028,6 +10364,21 @@ fn validate_routing_strategy(strategy: &str) -> Result<(), String> {
     Err("路由策略只支持 round-robin 或 fill-first".to_string())
 }
 
+fn normalize_optional_config_string(value: String, field_name: &str) -> Result<String, String> {
+    let value = value.trim().to_string();
+    if value.chars().any(char::is_control) {
+        return Err(format!("{field_name} 不能包含控制字符"));
+    }
+    Ok(value)
+}
+
+fn config_update_error_with_rollback(error: String, rollback_error: Option<String>) -> String {
+    match rollback_error {
+        Some(rollback_error) => format!("{error}；回滚内核配置也失败: {rollback_error}"),
+        None => error,
+    }
+}
+
 fn merge_core_config_yaml(
     template: &str,
     current: Option<&str>,
@@ -10054,6 +10405,34 @@ fn patch_core_network_yaml(
     patch_core_yaml_document(content, |document| {
         let original = document.clone();
         apply_network_settings(document, config)?;
+        Ok(*document != original)
+    })
+}
+
+fn patch_core_network_routing_yaml(
+    content: &str,
+    config: &GuiConfigFile,
+) -> Result<Option<String>, String> {
+    patch_core_yaml_document(content, |document| {
+        let original = document.clone();
+        apply_network_settings(document, config)?;
+        set_core_yaml_top_level_value(
+            document,
+            "proxy-url",
+            serde_norway::Value::String(config.proxy_url.clone()),
+        )?;
+        set_core_yaml_nested_value(
+            document,
+            "routing",
+            "session-affinity",
+            serde_norway::Value::Bool(config.routing_session_affinity),
+        )?;
+        set_core_yaml_nested_value(
+            document,
+            "routing",
+            "session-affinity-ttl",
+            serde_norway::Value::String(config.routing_session_affinity_ttl.clone()),
+        )?;
         Ok(*document != original)
     })
 }
@@ -10138,6 +10517,23 @@ fn apply_gui_managed_settings(content: &str, config: &GuiConfigFile) -> Result<S
             "routing",
             "strategy",
             serde_norway::Value::String(config.routing_strategy.clone()),
+        )?;
+        changed |= set_core_yaml_top_level_value(
+            document,
+            "proxy-url",
+            serde_norway::Value::String(config.proxy_url.clone()),
+        )?;
+        changed |= set_core_yaml_nested_value(
+            document,
+            "routing",
+            "session-affinity",
+            serde_norway::Value::Bool(config.routing_session_affinity),
+        )?;
+        changed |= set_core_yaml_nested_value(
+            document,
+            "routing",
+            "session-affinity-ttl",
+            serde_norway::Value::String(config.routing_session_affinity_ttl.clone()),
         )?;
         Ok(changed)
     })?
@@ -10361,7 +10757,10 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
         || presence.management_secret_key.is_none()
         || presence.usage_statistics_enabled.is_none()
         || presence.plugins_enabled.is_none()
-        || presence.routing_strategy.is_none();
+        || presence.routing_strategy.is_none()
+        || presence.proxy_url.is_none()
+        || presence.routing_session_affinity.is_none()
+        || presence.routing_session_affinity_ttl.is_none();
     if missing_core_settings && !gui_parse_failed {
         if let Ok(core_settings) = read_installed_core_config_settings() {
             if presence.host.is_none() {
@@ -10399,6 +10798,15 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
             }
             if presence.routing_strategy.is_none() {
                 config.routing_strategy = core_settings.routing_strategy;
+            }
+            if presence.proxy_url.is_none() {
+                config.proxy_url = core_settings.proxy_url;
+            }
+            if presence.routing_session_affinity.is_none() {
+                config.routing_session_affinity = core_settings.routing_session_affinity;
+            }
+            if presence.routing_session_affinity_ttl.is_none() {
+                config.routing_session_affinity_ttl = core_settings.routing_session_affinity_ttl;
             }
         }
         changed = true;
@@ -10454,6 +10862,9 @@ fn apply_core_settings_to_gui_config(
     config.usage_statistics_enabled = core_settings.usage_statistics_enabled;
     config.plugins_enabled = core_settings.plugins_enabled;
     config.routing_strategy = core_settings.routing_strategy.clone();
+    config.proxy_url = core_settings.proxy_url.clone();
+    config.routing_session_affinity = core_settings.routing_session_affinity;
+    config.routing_session_affinity_ttl = core_settings.routing_session_affinity_ttl.clone();
 }
 
 fn default_api_key_entry() -> GuiApiKeyEntry {
@@ -10677,6 +11088,16 @@ fn sanitize_gui_config(config: &mut GuiConfigFile) -> Result<bool, String> {
     if config.api_keys != original_api_keys {
         changed = true;
     }
+    let proxy_url = config.proxy_url.trim().to_string();
+    if config.proxy_url != proxy_url {
+        config.proxy_url = proxy_url;
+        changed = true;
+    }
+    let routing_session_affinity_ttl = config.routing_session_affinity_ttl.trim().to_string();
+    if config.routing_session_affinity_ttl != routing_session_affinity_ttl {
+        config.routing_session_affinity_ttl = routing_session_affinity_ttl;
+        changed = true;
+    }
     let window_size = configured_window_size(config);
     let normalized_width = window_size.map(|size| size.width);
     let normalized_height = window_size.map(|size| size.height);
@@ -10729,6 +11150,15 @@ fn write_gui_config_to_path(config: &GuiConfigFile, config_path: &Path) -> Resul
         ),
         ("plugins-enabled", value(config.plugins_enabled)),
         ("routing-strategy", value(config.routing_strategy.as_str())),
+        ("proxy-url", value(config.proxy_url.as_str())),
+        (
+            "routing-session-affinity",
+            value(config.routing_session_affinity),
+        ),
+        (
+            "routing-session-affinity-ttl",
+            value(config.routing_session_affinity_ttl.as_str()),
+        ),
         (
             "codex-session-repair-on-launch",
             value(config.codex_session_repair_on_launch),
@@ -10780,6 +11210,16 @@ fn validate_gui_config(config: &GuiConfigFile) -> Result<(), String> {
     }
     validate_management_secret_key(&config.management_secret_key)?;
     validate_routing_strategy(config.routing_strategy.trim())?;
+    if config.proxy_url.chars().any(char::is_control) {
+        return Err("代理 URL 不能包含控制字符".to_string());
+    }
+    if config
+        .routing_session_affinity_ttl
+        .chars()
+        .any(char::is_control)
+    {
+        return Err("会话粘性 TTL 不能包含控制字符".to_string());
+    }
     Ok(())
 }
 
@@ -12974,6 +13414,7 @@ fn main() {
             launch_agent,
             get_lan_ipv4,
             save_gui_settings,
+            save_network_routing_settings,
             get_core_config_settings,
             add_core_api_key,
             update_core_api_key,
@@ -12985,6 +13426,9 @@ fn main() {
             download_auth_file,
             set_core_plugins_enabled,
             set_core_routing_strategy,
+            set_core_proxy_url,
+            set_core_session_affinity,
+            set_core_session_affinity_ttl,
             start_oauth_login,
             get_oauth_status,
             submit_oauth_callback,
@@ -14815,6 +15259,9 @@ custom_option = "keep-original"
             usage_statistics_enabled: false,
             plugins_enabled: true,
             routing_strategy: "fill-first".to_string(),
+            proxy_url: "http://127.0.0.1:8080".to_string(),
+            routing_session_affinity: true,
+            routing_session_affinity_ttl: "45m".to_string(),
             management_secret_key: Some("management-secret".to_string()),
         };
 
@@ -14832,6 +15279,9 @@ custom_option = "keep-original"
         assert!(!config.usage_statistics_enabled);
         assert!(config.plugins_enabled);
         assert_eq!(config.routing_strategy, "fill-first");
+        assert_eq!(config.proxy_url, "http://127.0.0.1:8080");
+        assert!(config.routing_session_affinity);
+        assert_eq!(config.routing_session_affinity_ttl, "45m");
         assert!(config.run_on_startup);
     }
 
@@ -14931,6 +15381,35 @@ custom_option = "keep-original"
         let input = "host: 127.0.0.1\nport: 8317\n";
 
         assert!(patch_core_network_yaml(input, &config).unwrap().is_none());
+    }
+
+    #[test]
+    fn confirmed_network_routing_patch_updates_all_fields_together() {
+        let config = GuiConfigFile {
+            port: 9527,
+            allow_lan: true,
+            host: "0.0.0.0".to_string(),
+            proxy_url: "socks5://127.0.0.1:7890".to_string(),
+            routing_session_affinity: true,
+            routing_session_affinity_ttl: "2h".to_string(),
+            ..GuiConfigFile::default()
+        };
+        let input = "# network\nhost: 127.0.0.1\nport: 8317\nproxy-url: \"\"\n# routing\nrouting:\n  strategy: round-robin\n# unrelated\ndebug: true\n";
+        let updated = patch_core_network_routing_yaml(input, &config)
+            .unwrap()
+            .expect("confirmed settings should change");
+        let document = serde_norway::from_str::<serde_norway::Value>(&updated).unwrap();
+
+        assert_eq!(document["host"], "0.0.0.0");
+        assert_eq!(document["port"], 9527);
+        assert_eq!(document["proxy-url"], "socks5://127.0.0.1:7890");
+        assert_eq!(document["routing"]["session-affinity"], true);
+        assert_eq!(document["routing"]["session-affinity-ttl"], "2h");
+        assert_eq!(document["routing"]["strategy"], "round-robin");
+        assert_eq!(document["debug"], true);
+        assert!(updated.contains("# network"));
+        assert!(updated.contains("# routing"));
+        assert!(updated.contains("# unrelated"));
     }
 
     #[test]
@@ -15181,6 +15660,66 @@ custom_option = "keep-original"
     }
 
     #[test]
+    fn core_config_reads_proxy_and_session_affinity_fields() {
+        let canonical = serde_norway::from_str::<serde_norway::Value>(
+            "proxy-url: socks5://127.0.0.1:7890\nrouting:\n  session-affinity: true\n  session-affinity-ttl: 2h\n",
+        )
+        .unwrap();
+        let settings = core_config_settings_from_value(&canonical).unwrap();
+        assert_eq!(settings.proxy_url, "socks5://127.0.0.1:7890");
+        assert!(settings.routing_session_affinity);
+        assert_eq!(settings.routing_session_affinity_ttl, "2h");
+
+        let aliases = serde_norway::from_str::<serde_norway::Value>(
+            "routing:\n  sessionAffinity: true\n  sessionAffinityTTL: 30m\n",
+        )
+        .unwrap();
+        let settings = core_config_settings_from_value(&aliases).unwrap();
+        assert!(settings.routing_session_affinity);
+        assert_eq!(settings.routing_session_affinity_ttl, "30m");
+
+        let defaults =
+            core_config_settings_from_value(&serde_norway::from_str("{}").unwrap()).unwrap();
+        assert_eq!(defaults.proxy_url, "");
+        assert!(!defaults.routing_session_affinity);
+        assert_eq!(defaults.routing_session_affinity_ttl, "");
+    }
+
+    #[test]
+    fn managed_session_settings_use_canonical_yaml_and_preserve_unrelated_content() {
+        let input = "# global proxy\nproxy-url: old\n# routing options\nrouting:\n  strategy: round-robin\n  sessionAffinity: false\n  sessionAffinityTTL: 10m\n# unrelated option\ndebug: true\n";
+        let config = GuiConfigFile {
+            proxy_url: "http://127.0.0.1:8080".to_string(),
+            routing_session_affinity: true,
+            routing_session_affinity_ttl: "1h".to_string(),
+            ..GuiConfigFile::default()
+        };
+        let rendered = apply_gui_managed_settings(input, &config).unwrap();
+        let document = serde_norway::from_str::<serde_norway::Value>(&rendered).unwrap();
+
+        assert_eq!(document["proxy-url"], "http://127.0.0.1:8080");
+        assert_eq!(document["routing"]["session-affinity"], true);
+        assert_eq!(document["routing"]["session-affinity-ttl"], "1h");
+        assert!(rendered.contains("# global proxy"));
+        assert!(rendered.contains("# unrelated option"));
+        assert_eq!(document["debug"], true);
+    }
+
+    #[test]
+    fn optional_core_strings_are_trimmed_and_reject_control_characters() {
+        assert_eq!(
+            normalize_optional_config_string("  socks5://proxy:7890  ".to_string(), "代理 URL")
+                .unwrap(),
+            "socks5://proxy:7890"
+        );
+        assert_eq!(
+            normalize_optional_config_string(" 1h ".to_string(), "TTL").unwrap(),
+            "1h"
+        );
+        assert!(normalize_optional_config_string("bad\nvalue".to_string(), "代理 URL").is_err());
+    }
+
+    #[test]
     fn core_config_validates_keys_and_routing_strategy() {
         assert!(validate_core_api_key("sk-valid_123").is_ok());
         assert!(validate_core_api_key("").is_err());
@@ -15233,6 +15772,9 @@ custom_option = "keep-original"
             usage_statistics_enabled: false,
             plugins_enabled: true,
             routing_strategy: "fill-first".to_string(),
+            proxy_url: "socks5://127.0.0.1:7890".to_string(),
+            routing_session_affinity: true,
+            routing_session_affinity_ttl: "1h".to_string(),
             codex_session_repair_on_launch: false,
         };
         let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
@@ -15252,6 +15794,9 @@ custom_option = "keep-original"
         assert_eq!(document["api-keys"][1], "gui-key");
         assert_eq!(document["plugins"]["enabled"], true, "{merged}");
         assert_eq!(document["routing"]["strategy"], "fill-first");
+        assert_eq!(document["proxy-url"], "socks5://127.0.0.1:7890");
+        assert_eq!(document["routing"]["session-affinity"], true);
+        assert_eq!(document["routing"]["session-affinity-ttl"], "1h");
         assert_eq!(document["usage-statistics-enabled"], false);
         assert_eq!(document["new-option"], serde_norway::Value::Bool(true));
         assert_eq!(

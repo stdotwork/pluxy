@@ -1385,6 +1385,9 @@ mod tests {
             usage_statistics_enabled: true,
             plugins_enabled: false,
             routing_strategy: "round-robin".to_string(),
+            proxy_url: String::new(),
+            routing_session_affinity: false,
+            routing_session_affinity_ttl: String::new(),
             codex_session_repair_on_launch: false,
         };
         let record = normalize_usage_record(

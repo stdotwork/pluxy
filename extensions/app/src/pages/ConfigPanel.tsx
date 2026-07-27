@@ -5,9 +5,12 @@ import {
   AlertCircle,
   Check,
   Copy,
+  Clock3,
   Eye,
   EyeOff,
   KeyRound,
+  Link2,
+  Network,
   Pencil,
   Plus,
   Plug,
@@ -17,12 +20,18 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { useCoreRuntime, type CoreStatus } from '../coreRuntime';
 import { useI18n } from '../i18n';
 
 type CoreConfigSettings = {
   apiKeys: CoreApiKey[];
+  port: number;
+  allowLan: boolean;
   pluginsEnabled: boolean;
   routingStrategy: string;
+  proxyUrl: string;
+  routingSessionAffinity: boolean;
+  routingSessionAffinityTtl: string;
 };
 
 type CoreApiKey = {
@@ -30,7 +39,14 @@ type CoreApiKey = {
   remark: string;
 };
 
-type ConfigAction = 'add-key' | 'update-key' | 'delete-key' | 'plugins' | 'routing' | null;
+type ConfigAction =
+  | 'add-key'
+  | 'update-key'
+  | 'delete-key'
+  | 'plugins'
+  | 'routing'
+  | 'network'
+  | null;
 type NoticeTone = 'success' | 'error';
 
 const ROUTING_OPTIONS = [
@@ -40,6 +56,7 @@ const ROUTING_OPTIONS = [
 
 export function ConfigPanelPage() {
   const { t } = useI18n();
+  const { status: coreStatus, publishStatus, refreshStatus } = useCoreRuntime();
   const [settings, setSettings] = useState<CoreConfigSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -53,6 +70,12 @@ export function ConfigPanelPage() {
   const [formError, setFormError] = useState('');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [notice, setNotice] = useState<{ message: string; tone: NoticeTone } | null>(null);
+  const [portDraft, setPortDraft] = useState('8317');
+  const [allowLanDraft, setAllowLanDraft] = useState(false);
+  const [proxyUrlDraft, setProxyUrlDraft] = useState('');
+  const [sessionAffinityDraft, setSessionAffinityDraft] = useState(false);
+  const [sessionTtlDraft, setSessionTtlDraft] = useState('');
+  const [portError, setPortError] = useState('');
   const noticeTimerRef = useRef<number | null>(null);
   const copyTimerRef = useRef<number | null>(null);
 
@@ -89,12 +112,24 @@ export function ConfigPanelPage() {
     }, 3200);
   };
 
-  async function loadSettings() {
+  const applySettings = (result: CoreConfigSettings, syncNetworkDrafts = true) => {
+    setSettings(result);
+    if (syncNetworkDrafts) {
+      setPortDraft(String(result.port));
+      setAllowLanDraft(result.allowLan);
+      setProxyUrlDraft(result.proxyUrl);
+      setSessionAffinityDraft(result.routingSessionAffinity);
+      setSessionTtlDraft(result.routingSessionAffinityTtl);
+      setPortError('');
+    }
+  };
+
+  async function loadSettings(syncNetworkDrafts = true) {
     setLoading(true);
     setLoadError('');
     try {
       const result = await invoke<CoreConfigSettings>('get_core_config_settings');
-      setSettings(result);
+      applySettings(result, syncNetworkDrafts);
     } catch (error) {
       setSettings(null);
       setLoadError(String(error));
@@ -112,13 +147,14 @@ export function ConfigPanelPage() {
     setBusyAction(action);
     try {
       const result = await invoke<CoreConfigSettings>(command, args);
-      setSettings(result);
+      applySettings(result, false);
       setLoadError('');
       showNotice(successMessage, 'success');
       return true;
     } catch (error) {
-      showNotice(String(error), 'error');
-      void loadSettings();
+      if (settings) applySettings(settings, false);
+      showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
+      void loadSettings(false);
       return false;
     } finally {
       setBusyAction(null);
@@ -250,7 +286,64 @@ export function ConfigPanelPage() {
     );
   };
 
+  const saveNetworkRoutingSettings = async () => {
+    if (!settings || busyAction !== null) return;
+    const port = Number(portDraft);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setPortError(t('config.error.portRange'));
+      showNotice(t('config.error.portRange'), 'error');
+      return;
+    }
+
+    const proxyUrl = proxyUrlDraft.trim();
+    const routingSessionAffinityTtl = sessionTtlDraft.trim();
+    const networkChanged = port !== settings.port || allowLanDraft !== settings.allowLan;
+    setPortError('');
+    setBusyAction('network');
+    try {
+      const result = await invoke<CoreConfigSettings>('save_network_routing_settings', {
+        settings: {
+          port,
+          allowLan: allowLanDraft,
+          proxyUrl,
+          routingSessionAffinity: sessionAffinityDraft,
+          routingSessionAffinityTtl,
+        },
+      });
+      applySettings(result);
+      setLoadError('');
+
+      if (networkChanged && coreStatus?.running) {
+        try {
+          const status = await invoke<CoreStatus>('restart_core_process');
+          publishStatus(status);
+          showNotice(t('config.notice.networkRestarted'), 'success');
+        } catch (error) {
+          await refreshStatus();
+          showNotice(t('config.error.networkRestartFailed', { error: String(error) }), 'error');
+        }
+      } else if (networkChanged) {
+        showNotice(t('config.notice.networkNextStart'), 'success');
+      } else {
+        showNotice(t('config.notice.networkUpdated'), 'success');
+      }
+    } catch (error) {
+      applySettings(settings);
+      showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
+      void loadSettings();
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const controlsDisabled = loading || settings === null || busyAction !== null;
+  const networkRoutingDirty = Boolean(settings) && (
+    portDraft !== String(settings?.port)
+    || allowLanDraft !== settings?.allowLan
+    || proxyUrlDraft.trim() !== settings?.proxyUrl
+    || sessionAffinityDraft !== settings?.routingSessionAffinity
+    || sessionTtlDraft.trim() !== settings?.routingSessionAffinityTtl
+  );
   const selectedDeleteKey =
     deleteIndex === null ? '' : settings?.apiKeys[deleteIndex]?.apiKey || '';
   const deletingLastKey = deleteIndex !== null && settings?.apiKeys.length === 1;
@@ -295,7 +388,7 @@ export function ConfigPanelPage() {
                 <AlertCircle size={24} aria-hidden="true" />
                 <strong>{t('config.unavailable')}</strong>
                 <span title={loadError}>{loadError}</span>
-                <button type="button" className="secondary-button compact-button" onClick={loadSettings}>
+                <button type="button" className="secondary-button compact-button" onClick={() => void loadSettings()}>
                   <RefreshCw size={16} aria-hidden="true" />
                   {t('common.retry')}
                 </button>
@@ -425,6 +518,146 @@ export function ConfigPanelPage() {
           </section>
         </div>
       </div>
+
+      <section className="panel config-network-panel">
+        <div className="config-panel-heading">
+          <div className="config-heading-title">
+            <Network size={18} aria-hidden="true" />
+            <h2>{t('config.network.title')}</h2>
+          </div>
+          <div className="config-heading-actions">
+            <span className={`state-pill ${settings !== null && !networkRoutingDirty ? 'success' : ''}`}>
+              {loading
+                ? t('common.loading')
+                : settings === null
+                  ? t('common.unavailable')
+                  : busyAction === 'network'
+                    ? t('config.network.saving')
+                    : networkRoutingDirty
+                      ? t('config.network.unsaved')
+                      : t('config.network.saved')}
+            </span>
+            <button
+              type="button"
+              className="primary-button compact-button"
+              disabled={controlsDisabled || !networkRoutingDirty}
+              onClick={() => void saveNetworkRoutingSettings()}
+            >
+              <Check size={16} aria-hidden="true" />
+              {busyAction === 'network'
+                ? t('config.network.saving')
+                : t('config.network.confirmSave')}
+            </button>
+          </div>
+        </div>
+
+        <div className="config-network-grid">
+          <label className="config-network-field config-network-port-field">
+            <span>{t('config.network.port')}</span>
+            <input
+              className={`config-network-input ${portError ? 'error' : ''}`}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={5}
+              value={portDraft}
+              disabled={controlsDisabled}
+              aria-invalid={Boolean(portError)}
+              title={portError || t('config.network.portHint')}
+              onChange={(event) => {
+                setPortDraft(event.currentTarget.value.replace(/\D/g, '').slice(0, 5));
+                setPortError('');
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && settings) {
+                  setPortDraft(String(settings.port));
+                  setPortError('');
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+            <small>{t('config.network.portHint')}</small>
+          </label>
+
+          <div className="config-network-field config-network-toggle">
+            <div>
+              <span>{t('config.network.allowLan')}</span>
+              <small>{t('config.network.allowLanHint')}</small>
+            </div>
+            <label className="switch-control" title={t('config.network.allowLan')}>
+              <input
+                type="checkbox"
+                aria-label={t('config.network.allowLan')}
+                checked={allowLanDraft}
+                disabled={controlsDisabled}
+                onChange={(event) => setAllowLanDraft(event.currentTarget.checked)}
+              />
+              <span className="switch-track" />
+            </label>
+          </div>
+
+          <label className="config-network-field">
+            <span className="config-network-label">
+              <Link2 size={15} aria-hidden="true" />
+              {t('config.network.proxyUrl')}
+            </span>
+            <input
+              className="config-network-input"
+              type="text"
+              value={proxyUrlDraft}
+              disabled={controlsDisabled}
+              placeholder={t('config.network.proxyPlaceholder')}
+              onChange={(event) => setProxyUrlDraft(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && settings) {
+                  setProxyUrlDraft(settings.proxyUrl);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+            <small>{t('config.network.proxyHint')}</small>
+          </label>
+
+          <div className="config-network-field config-network-toggle">
+            <div>
+              <span>{t('config.network.sessionAffinity')}</span>
+              <small>{t('config.network.sessionAffinityHint')}</small>
+            </div>
+            <label className="switch-control" title={t('config.network.sessionAffinity')}>
+              <input
+                type="checkbox"
+                aria-label={t('config.network.sessionAffinity')}
+                checked={sessionAffinityDraft}
+                disabled={controlsDisabled}
+                onChange={(event) => setSessionAffinityDraft(event.currentTarget.checked)}
+              />
+              <span className="switch-track" />
+            </label>
+          </div>
+
+          <label className="config-network-field">
+            <span className="config-network-label">
+              <Clock3 size={15} aria-hidden="true" />
+              {t('config.network.sessionTtl')}
+            </span>
+            <input
+              className="config-network-input"
+              type="text"
+              value={sessionTtlDraft}
+              disabled={controlsDisabled}
+              placeholder="1h"
+              onChange={(event) => setSessionTtlDraft(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && settings) {
+                  setSessionTtlDraft(settings.routingSessionAffinityTtl);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+            <small>{t('config.network.sessionTtlHint')}</small>
+          </label>
+        </div>
+      </section>
 
       {addDialogOpen ? (
         <div className="config-dialog-backdrop" onMouseDown={(event) => {

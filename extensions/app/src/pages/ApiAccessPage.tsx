@@ -529,7 +529,10 @@ export const buildProviderRecord = (
   return applyAdvancedFields(next, section, draft);
 };
 
-const providerIdentityMatches = (row: ProviderRow, record: Record<string, unknown>) => {
+const providerIdentityMatches = (
+  row: ProviderRecordIdentity,
+  record: Record<string, unknown>,
+) => {
   if (definitionFor(row.section).openAi) {
     return readString(record, 'name') === row.name;
   }
@@ -537,6 +540,56 @@ const providerIdentityMatches = (row: ProviderRow, record: Record<string, unknow
     readString(record, 'api-key', 'apiKey') === row.apiKey
     && readString(record, 'base-url', 'baseUrl') === row.baseUrl
   );
+};
+
+type ProviderRecordIdentity = Pick<
+  ProviderRow,
+  'section' | 'index' | 'name' | 'apiKey' | 'baseUrl'
+>;
+
+const providerPrimaryIdentityMatches = (
+  row: ProviderRecordIdentity,
+  record: Record<string, unknown>,
+) => definitionFor(row.section).openAi
+  ? readString(record, 'name') === row.name
+  : readString(record, 'api-key', 'apiKey') === row.apiKey;
+
+export const resolveProviderRecordIndex = (
+  records: Record<string, unknown>[],
+  row: ProviderRecordIdentity,
+) => {
+  const exactIndex = records.findIndex((record) => providerIdentityMatches(row, record));
+  if (exactIndex >= 0) return exactIndex;
+
+  const indexedRecord = records[row.index];
+  if (indexedRecord && providerPrimaryIdentityMatches(row, indexedRecord)) {
+    return row.index;
+  }
+
+  const primaryMatches = records
+    .map((record, index) => ({ record, index }))
+    .filter(({ record }) => providerPrimaryIdentityMatches(row, record));
+  return primaryMatches.length === 1 ? primaryMatches[0].index : -1;
+};
+
+export const providerRecordWithDisabledState = (
+  section: ProviderSection,
+  record: Record<string, unknown>,
+  disabled: boolean,
+) => {
+  const nextRecord = stripResponseFields(record);
+  if (definitionFor(section).openAi) {
+    nextRecord.disabled = disabled;
+    return nextRecord;
+  }
+
+  const excludedModels = Array.isArray(nextRecord['excluded-models'])
+    ? nextRecord['excluded-models'].map(String).filter((model) => model.trim() !== '*')
+    : [];
+  if (disabled) excludedModels.push('*');
+  if (excludedModels.length > 0) nextRecord['excluded-models'] = excludedModels;
+  else delete nextRecord['excluded-models'];
+  return nextRecord;
 };
 
 export function ApiAccessPage() {
@@ -682,9 +735,7 @@ export function ApiAccessPage() {
       let nextList: Record<string, unknown>[];
 
       if (editingRow) {
-        const targetIndex = current.findIndex((record) =>
-          providerIdentityMatches(editingRow, record),
-        );
+        const targetIndex = resolveProviderRecordIndex(current, editingRow);
         if (targetIndex < 0) {
           throw new Error(t('apiAccess.error.stale'));
         }
@@ -749,7 +800,7 @@ export function ApiAccessPage() {
     try {
       const latestConfig = await managementApi.get('/config');
       const latestRows = sectionRecordsFromConfig(latestConfig, row.section);
-      const targetIndex = latestRows.findIndex((record) => providerIdentityMatches(row, record));
+      const targetIndex = resolveProviderRecordIndex(latestRows, row);
       if (targetIndex < 0) {
         throw new Error(t('apiAccess.error.stale'));
       }
@@ -765,17 +816,15 @@ export function ApiAccessPage() {
           value: { disabled: !currentlyDisabled },
         });
       } else {
-        const nextRecord = stripResponseFields(latestRecord);
-        const excludedModels = Array.isArray(nextRecord['excluded-models'])
-          ? nextRecord['excluded-models'].map(String).filter((model) => model.trim() !== '*')
-          : [];
-        if (!currentlyDisabled) excludedModels.push('*');
-        if (excludedModels.length > 0) nextRecord['excluded-models'] = excludedModels;
-        else delete nextRecord['excluded-models'];
-        await managementApi.patch(`/${row.section}`, {
-          index: targetIndex,
-          value: nextRecord,
-        });
+        const nextRecord = providerRecordWithDisabledState(
+          row.section,
+          latestRecord,
+          !currentlyDisabled,
+        );
+        const nextRows = latestRows.map((record, index) =>
+          index === targetIndex ? nextRecord : stripResponseFields(record),
+        );
+        await managementApi.put(`/${row.section}`, nextRows);
       }
       setNotice(currentlyDisabled ? t('apiAccess.notice.enabled') : t('apiAccess.notice.disabled'));
       await loadProviders();

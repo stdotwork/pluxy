@@ -10,7 +10,9 @@ import {
   modelSelectionForDiscovery,
   parseProviderHeaders,
   providerCategoryMatchesRecord,
+  providerRecordWithDisabledState,
   providerSectionOrder,
+  resolveProviderRecordIndex,
   sectionRecordsFromConfig,
   stripResponseFields,
 } from '../src/pages/ApiAccessPage';
@@ -207,6 +209,54 @@ describe('API 接入配置合并', () => {
     });
 
     expect(result['excluded-models']).toEqual(['claude-old-*', '*']);
+  });
+
+  it('重新启用仅含全停用规则的普通提供商时删除停用规则', () => {
+    const result = providerRecordWithDisabledState(
+      'claude-api-key',
+      {
+        'api-key': 'claude-key',
+        'excluded-models': ['*'],
+        custom: { keep: true },
+        'auth-index': 'runtime-only',
+      },
+      false,
+    );
+
+    expect(result['excluded-models']).toBeUndefined();
+    expect(result.custom).toEqual({ keep: true });
+    expect(result['auth-index']).toBeUndefined();
+  });
+
+  it('切换普通提供商时保留其他模型排除规则且不会重复追加停用规则', () => {
+    const disabled = providerRecordWithDisabledState(
+      'codex-api-key',
+      {
+        'api-key': 'codex-key',
+        'excluded-models': ['preview-*', '*'],
+      },
+      true,
+    );
+    const enabled = providerRecordWithDisabledState('codex-api-key', disabled, false);
+
+    expect(disabled['excluded-models']).toEqual(['preview-*', '*']);
+    expect(enabled['excluded-models']).toEqual(['preview-*']);
+  });
+
+  it('运行时补全默认 Base URL 后仍能按原始索引找到配置记录', () => {
+    const records = [
+      { 'api-key': 'first-key', 'base-url': 'https://first.example' },
+      { 'api-key': 'target-key' },
+    ];
+    const index = resolveProviderRecordIndex(records, {
+      section: 'claude-api-key',
+      index: 1,
+      name: 'Claude',
+      apiKey: 'target-key',
+      baseUrl: 'https://api.anthropic.com',
+    });
+
+    expect(index).toBe(1);
   });
 
   it('校验自定义请求头格式', () => {
