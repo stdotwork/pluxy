@@ -573,7 +573,7 @@ struct AgentConfigActionResult {
     conflict_files: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentModelOption {
     name: String,
@@ -1594,6 +1594,7 @@ async fn apply_agent_config(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
     model: String,
+    models: Vec<AgentModelOption>,
     oauth_configuration: bool,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
@@ -1604,10 +1605,9 @@ async fn apply_agent_config(
     let config = gui_config_state.snapshot()?;
     let api_key = effective_agent_api_key(&config);
     validate_agent_can_enable(client, &home, config.port, api_key)?;
-    let available_models = fetch_agent_models(config.port, api_key).await?;
-    let model = resolve_available_agent_model(&available_models, &validate_agent_model(&model)?)?;
+    let model = resolve_available_agent_model(&models, &validate_agent_model(&model)?)?;
     let codex_models = if client == AgentClient::Codex {
-        Some(fetch_codex_model_catalog_specs(&config, &available_models).await)
+        Some(fetch_codex_model_catalog_specs(&config, &models).await)
     } else {
         None
     };
@@ -1621,7 +1621,7 @@ async fn apply_agent_config(
         api_key,
         &model,
         AgentConfigurationOptions {
-            models: &available_models,
+            models: &models,
             codex_models: codex_models.as_deref(),
             oauth_configuration,
         },
@@ -1634,6 +1634,7 @@ async fn reset_agent_config_to_default(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
     model: String,
+    models: Vec<AgentModelOption>,
     oauth_configuration: bool,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
@@ -1644,10 +1645,9 @@ async fn reset_agent_config_to_default(
     let config = gui_config_state.snapshot()?;
     let api_key = effective_agent_api_key(&config);
     validate_agent_can_enable(client, &home, config.port, api_key)?;
-    let available_models = fetch_agent_models(config.port, api_key).await?;
-    let model = resolve_available_agent_model(&available_models, &validate_agent_model(&model)?)?;
+    let model = resolve_available_agent_model(&models, &validate_agent_model(&model)?)?;
     let codex_models = if client == AgentClient::Codex {
-        Some(fetch_codex_model_catalog_specs(&config, &available_models).await)
+        Some(fetch_codex_model_catalog_specs(&config, &models).await)
     } else {
         None
     };
