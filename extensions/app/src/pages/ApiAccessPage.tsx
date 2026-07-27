@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   Check,
   Edit3,
@@ -67,11 +68,13 @@ type ProviderRow = {
   disabled: boolean;
   priority: number | null;
   authIndex: string;
+  remark: string;
 };
 
 export type ProviderDraft = {
   name: string;
   apiKey: string;
+  remark: string;
   baseUrl: string;
   priority: string;
   models: ModelOption[];
@@ -182,8 +185,12 @@ const rowFromRecord = (
     authIndex: entry
       ? readString(entry, 'auth-index', 'authIndex')
       : readString(record, 'auth-index', 'authIndex'),
+    remark: '',
   };
 };
+
+const providerRemarkIdentity = (section: ProviderSection, apiKeys: string[]) =>
+  `${section}\u0000${apiKeys.join('\u0000')}`;
 
 export const stripResponseFields = (record: Record<string, unknown>) => {
   const next = { ...record };
@@ -316,6 +323,7 @@ const thinkingLevelsFromModels = (models: ModelOption[]): string[] => {
 const draftFromRow = (row: ProviderRow): ProviderDraft => ({
   name: row.name,
   apiKey: definitionFor(row.section).openAi ? row.apiKeys.join('\n') : row.apiKey,
+  remark: row.remark,
   baseUrl: row.baseUrl,
   priority: row.priority === null ? '' : String(row.priority),
   models: row.models,
@@ -351,6 +359,7 @@ const draftFromRow = (row: ProviderRow): ProviderDraft => ({
 const emptyProviderDraft = (): ProviderDraft => ({
   name: '',
   apiKey: '',
+  remark: '',
   baseUrl: '',
   priority: '',
   models: [],
@@ -529,7 +538,10 @@ export const buildProviderRecord = (
   return applyAdvancedFields(next, section, draft);
 };
 
-const providerIdentityMatches = (row: ProviderRow, record: Record<string, unknown>) => {
+const providerIdentityMatches = (
+  row: ProviderRecordIdentity,
+  record: Record<string, unknown>,
+) => {
   if (definitionFor(row.section).openAi) {
     return readString(record, 'name') === row.name;
   }
@@ -537,6 +549,56 @@ const providerIdentityMatches = (row: ProviderRow, record: Record<string, unknow
     readString(record, 'api-key', 'apiKey') === row.apiKey
     && readString(record, 'base-url', 'baseUrl') === row.baseUrl
   );
+};
+
+type ProviderRecordIdentity = Pick<
+  ProviderRow,
+  'section' | 'index' | 'name' | 'apiKey' | 'baseUrl'
+>;
+
+const providerPrimaryIdentityMatches = (
+  row: ProviderRecordIdentity,
+  record: Record<string, unknown>,
+) => definitionFor(row.section).openAi
+  ? readString(record, 'name') === row.name
+  : readString(record, 'api-key', 'apiKey') === row.apiKey;
+
+export const resolveProviderRecordIndex = (
+  records: Record<string, unknown>[],
+  row: ProviderRecordIdentity,
+) => {
+  const exactIndex = records.findIndex((record) => providerIdentityMatches(row, record));
+  if (exactIndex >= 0) return exactIndex;
+
+  const indexedRecord = records[row.index];
+  if (indexedRecord && providerPrimaryIdentityMatches(row, indexedRecord)) {
+    return row.index;
+  }
+
+  const primaryMatches = records
+    .map((record, index) => ({ record, index }))
+    .filter(({ record }) => providerPrimaryIdentityMatches(row, record));
+  return primaryMatches.length === 1 ? primaryMatches[0].index : -1;
+};
+
+export const providerRecordWithDisabledState = (
+  section: ProviderSection,
+  record: Record<string, unknown>,
+  disabled: boolean,
+) => {
+  const nextRecord = stripResponseFields(record);
+  if (definitionFor(section).openAi) {
+    nextRecord.disabled = disabled;
+    return nextRecord;
+  }
+
+  const excludedModels = Array.isArray(nextRecord['excluded-models'])
+    ? nextRecord['excluded-models'].map(String).filter((model) => model.trim() !== '*')
+    : [];
+  if (disabled) excludedModels.push('*');
+  if (excludedModels.length > 0) nextRecord['excluded-models'] = excludedModels;
+  else delete nextRecord['excluded-models'];
+  return nextRecord;
 };
 
 export function ApiAccessPage() {
@@ -551,6 +613,7 @@ export function ApiAccessPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<ProviderRow | null>(null);
   const [dialogDraft, setDialogDraft] = useState<ProviderDraft>(emptyProviderDraft);
+  const [apiAccessRemarks, setApiAccessRemarks] = useState<Record<string, string>>({});
   const activeDefinition = definitionFor(activeCategory);
   const activeSection = activeDefinition.section;
 
@@ -594,20 +657,51 @@ export function ApiAccessPage() {
     void loadProviders();
   }, [loadProviders]);
 
+  useEffect(() => {
+    const providerRows = (Object.entries(records) as [ProviderSection, Record<string, unknown>[]][])
+      .flatMap(([section, items]) => items.map((record, index) => rowFromRecord(section, record, index)));
+    if (providerRows.length === 0) {
+      setApiAccessRemarks({});
+      return;
+    }
+    let disposed = false;
+    void invoke<string[]>('resolve_api_access_remarks', {
+      queries: providerRows.map((row) => ({
+        providerSection: row.section,
+        apiKeys: row.apiKeys,
+      })),
+    }).then((remarks) => {
+      if (disposed) return;
+      setApiAccessRemarks(Object.fromEntries(providerRows.map((row, index) => [
+        providerRemarkIdentity(row.section, row.apiKeys),
+        remarks[index] ?? '',
+      ])));
+    }).catch(() => {
+      if (!disposed) setApiAccessRemarks({});
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [records]);
+
   const rows = useMemo(
     () =>
       records[activeSection]
         .map((record, index) => rowFromRecord(activeSection, record, index))
+        .map((row) => ({
+          ...row,
+          remark: apiAccessRemarks[providerRemarkIdentity(row.section, row.apiKeys)] ?? '',
+        }))
         .filter((row) => providerCategoryMatchesRecord(activeCategory, row.record))
         .filter((row) => {
           const query = filter.trim().toLowerCase();
           if (!query) return true;
-          return [row.name, row.apiKey, row.baseUrl, row.models.map((model) => model.name).join(' ')]
+          return [row.name, row.remark, row.apiKey, row.baseUrl, row.models.map((model) => model.name).join(' ')]
             .join(' ')
             .toLowerCase()
             .includes(query);
         }),
-    [activeCategory, activeSection, filter, records],
+    [activeCategory, activeSection, apiAccessRemarks, filter, records],
   );
 
   const openCreate = () => {
@@ -647,6 +741,10 @@ export function ApiAccessPage() {
       );
       return false;
     }
+    if (Array.from(preparedDraft.remark.trim()).length > 80 || /[\u0000-\u001f\u007f]/.test(preparedDraft.remark)) {
+      setError(t('apiAccess.error.remarkInvalid'));
+      return false;
+    }
     let baseUrl = preparedDraft.baseUrl.trim();
     let providerHeaders: Record<string, string> = {};
     try {
@@ -682,9 +780,7 @@ export function ApiAccessPage() {
       let nextList: Record<string, unknown>[];
 
       if (editingRow) {
-        const targetIndex = current.findIndex((record) =>
-          providerIdentityMatches(editingRow, record),
-        );
+        const targetIndex = resolveProviderRecordIndex(current, editingRow);
         if (targetIndex < 0) {
           throw new Error(t('apiAccess.error.stale'));
         }
@@ -711,6 +807,14 @@ export function ApiAccessPage() {
       }
 
       await managementApi.put(`/${activeSection}`, nextList.map(stripResponseFields));
+      await invoke('save_api_access_remark', {
+        update: {
+          providerSection: activeSection,
+          previousApiKeys: editingRow?.apiKeys ?? [],
+          apiKeys: parsedApiKeys,
+          remark: draftToSave.remark,
+        },
+      });
       setNotice(editingRow ? t('apiAccess.notice.updated') : t('apiAccess.notice.added'));
       await loadProviders();
       return true;
@@ -734,6 +838,14 @@ export function ApiAccessPage() {
           query: { 'api-key': row.apiKey, 'base-url': row.baseUrl },
         });
       }
+      await invoke('save_api_access_remark', {
+        update: {
+          providerSection: row.section,
+          previousApiKeys: row.apiKeys,
+          apiKeys: [],
+          remark: '',
+        },
+      });
       setNotice(t('apiAccess.notice.deleted'));
       await loadProviders();
     } catch (requestError) {
@@ -749,7 +861,7 @@ export function ApiAccessPage() {
     try {
       const latestConfig = await managementApi.get('/config');
       const latestRows = sectionRecordsFromConfig(latestConfig, row.section);
-      const targetIndex = latestRows.findIndex((record) => providerIdentityMatches(row, record));
+      const targetIndex = resolveProviderRecordIndex(latestRows, row);
       if (targetIndex < 0) {
         throw new Error(t('apiAccess.error.stale'));
       }
@@ -765,17 +877,15 @@ export function ApiAccessPage() {
           value: { disabled: !currentlyDisabled },
         });
       } else {
-        const nextRecord = stripResponseFields(latestRecord);
-        const excludedModels = Array.isArray(nextRecord['excluded-models'])
-          ? nextRecord['excluded-models'].map(String).filter((model) => model.trim() !== '*')
-          : [];
-        if (!currentlyDisabled) excludedModels.push('*');
-        if (excludedModels.length > 0) nextRecord['excluded-models'] = excludedModels;
-        else delete nextRecord['excluded-models'];
-        await managementApi.patch(`/${row.section}`, {
-          index: targetIndex,
-          value: nextRecord,
-        });
+        const nextRecord = providerRecordWithDisabledState(
+          row.section,
+          latestRecord,
+          !currentlyDisabled,
+        );
+        const nextRows = latestRows.map((record, index) =>
+          index === targetIndex ? nextRecord : stripResponseFields(record),
+        );
+        await managementApi.put(`/${row.section}`, nextRows);
       }
       setNotice(currentlyDisabled ? t('apiAccess.notice.enabled') : t('apiAccess.notice.disabled'));
       await loadProviders();
@@ -859,7 +969,7 @@ export function ApiAccessPage() {
                 <article className="real-provider-row" key={`${row.section}-${row.index}-${row.authIndex}`}>
                   <div className="provider-row-main">
                     <div className="provider-row-title">
-                      <strong title={row.name}>{row.name}</strong>
+                      <strong title={row.remark || row.name}>{row.remark || row.name}</strong>
                     </div>
                     <code title={definitionFor(row.section).openAi ? t('apiAccess.keys.count', { count: row.apiKeys.length }) : undefined}>
                       {definitionFor(row.section).openAi && row.apiKeys.length > 1
@@ -967,7 +1077,7 @@ function ApiProviderDialog({
     && visibleModelOptions.every((model) => selectedModelNames.has(model.name.toLowerCase()));
 
   const updateTextField = (
-    field: 'name' | 'apiKey' | 'baseUrl' | 'priority' | 'prefix' | 'headersText' | 'excludedModelsText' | 'testModel' | 'cloakMode' | 'cloakSensitiveWordsText',
+    field: 'name' | 'apiKey' | 'remark' | 'baseUrl' | 'priority' | 'prefix' | 'headersText' | 'excludedModelsText' | 'testModel' | 'cloakMode' | 'cloakSensitiveWordsText',
     value: string,
   ) => {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -1140,6 +1250,7 @@ function ApiProviderDialog({
             <input autoFocus type="password" value={draft.apiKey} onChange={(event) => updateTextField('apiKey', event.currentTarget.value)} placeholder="sk-..." />
           )}
         </label>
+        <label><span>{t('apiAccess.field.remark')}</span><input value={draft.remark} maxLength={80} onChange={(event) => updateTextField('remark', event.currentTarget.value)} placeholder={t('apiAccess.remarkPlaceholder')} /></label>
         <label><span>Base URL</span><input value={draft.baseUrl} onChange={(event) => updateTextField('baseUrl', event.currentTarget.value)} placeholder={activeSection === 'codex-api-key' || activeSection === 'openai-compatibility' ? t('apiAccess.baseRequiredPlaceholder') : t('apiAccess.baseOptionalPlaceholder')} /></label>
         {activeCategory === 'deepseek' ? (
           <div className="provider-preset-summary">

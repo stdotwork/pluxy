@@ -511,6 +511,7 @@ export function AgentsPage() {
   const [closeAppNotice, setCloseAppNotice] = useState('');
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
   const [oauthConfiguration, setOauthConfiguration] = useState(false);
+  const autoLoadedModelClientRef = useRef<AgentClientId | null>(null);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -543,21 +544,27 @@ export function AgentsPage() {
     setLoading(true);
     setDetectionError('');
     try {
-      await Promise.all([loadStatuses(true), loadModels()]);
+      await loadStatuses(true);
     } catch (requestError) {
       setDetectionError(String(requestError));
     } finally {
       setLoading(false);
     }
-  }, [loadModels, loadStatuses]);
+  }, [loadStatuses]);
 
   useEffect(() => {
     setLoading(true);
     setDetectionError('');
-    void Promise.all([loadStatuses(), loadModels()])
+    void loadStatuses()
       .catch((requestError) => setDetectionError(String(requestError)))
       .finally(() => setLoading(false));
-  }, [loadModels, loadStatuses]);
+  }, [loadStatuses]);
+
+  useEffect(() => {
+    if (autoLoadedModelClientRef.current === selected) return;
+    autoLoadedModelClientRef.current = selected;
+    void loadModels();
+  }, [loadModels, selected]);
 
   useEffect(() => {
     let disposed = false;
@@ -565,7 +572,7 @@ export function AgentsPage() {
     void listen('config-files-changed', () => {
       if (disposed) return;
       setDetectionError('');
-      void Promise.all([loadStatuses(true), loadModels()]).catch((requestError) => {
+      void loadStatuses(true).catch((requestError) => {
         if (!disposed) setDetectionError(String(requestError));
       });
     }).then((unlisten) => {
@@ -576,7 +583,7 @@ export function AgentsPage() {
       disposed = true;
       stop?.();
     };
-  }, [loadModels, loadStatuses]);
+  }, [loadStatuses]);
 
   useEffect(() => {
     writeSelectedAgentClient(selected);
@@ -724,6 +731,7 @@ export function AgentsPage() {
       await invoke<AgentConfigActionResult>('apply_agent_config', {
         client: selected,
         model,
+        models,
         oauthConfiguration,
       });
       await reloadStatusesAfterAction();
@@ -743,6 +751,7 @@ export function AgentsPage() {
       await invoke<AgentConfigActionResult>('reset_agent_config_to_default', {
         client: selected,
         model,
+        models,
         oauthConfiguration,
       });
       setDefaultConfirmOpen(false);

@@ -2,13 +2,14 @@ import { describe, expect, test } from 'bun:test';
 import { appUpdateIndicatorState } from '../src/appUpdateModel';
 import { canOpenAppPage, isAlwaysAvailablePage } from '../src/navigation';
 
-describe('首页与版本管理导航', () => {
-  test('内核停止时仅首页和版本管理始终可进入', () => {
+describe('首页、配置与版本管理导航', () => {
+  test('内核停止时首页、配置和版本管理始终可进入', () => {
     expect(isAlwaysAvailablePage('home')).toBe(true);
     expect(isAlwaysAvailablePage('versions')).toBe(true);
+    expect(isAlwaysAvailablePage('config')).toBe(true);
     expect(canOpenAppPage('home', false)).toBe(true);
     expect(canOpenAppPage('versions', false)).toBe(true);
-    expect(canOpenAppPage('config', false)).toBe(false);
+    expect(canOpenAppPage('config', false)).toBe(true);
     expect(canOpenAppPage('quota', false)).toBe(false);
   });
 

@@ -98,6 +98,8 @@ pub(crate) struct UsageRecord {
     #[serde(default)]
     source: String,
     #[serde(default)]
+    source_display: String,
+    #[serde(default)]
     auth_index: String,
     #[serde(default)]
     failed: bool,
@@ -769,6 +771,7 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
         latency_ms: u64_field(object, "latency_ms"),
         ttft_ms: optional_u64_field(object, "ttft_ms"),
         source: string_field(object, "source").unwrap_or_default(),
+        source_display: String::new(),
         auth_index: string_field(object, "auth_index").unwrap_or_default(),
         failed: object
             .get("failed")
@@ -959,21 +962,38 @@ fn load_usage_overview(
 }
 
 #[tauri::command]
-pub(crate) fn get_usage_analysis(query: UsageQuery) -> Result<UsageAnalysis, String> {
+pub(crate) fn get_usage_analysis(
+    query: UsageQuery,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<UsageAnalysis, String> {
     let connection = open_usage_database()?;
-    load_usage_analysis(&connection, &query)
+    let config = gui_config_state.snapshot()?;
+    load_usage_analysis(&connection, &query, &config)
 }
 
 fn load_usage_analysis(
     connection: &Connection,
     query: &UsageQuery,
+    config: &GuiConfigFile,
 ) -> Result<UsageAnalysis, String> {
     Ok(UsageAnalysis {
         models: load_simple_categories(connection, query, "model", "unknown")?,
         providers: load_simple_categories(connection, query, "provider", "未知 Provider")?,
-        sources: load_simple_categories(connection, query, "source", "未知来源")?,
+        sources: load_source_categories(connection, query, config)?,
         api_keys: load_api_key_categories(connection, query)?,
     })
+}
+
+fn load_source_categories(
+    connection: &Connection,
+    query: &UsageQuery,
+    config: &GuiConfigFile,
+) -> Result<Vec<UsageCategory>, String> {
+    let mut categories = load_simple_categories(connection, query, "source", "未知来源")?;
+    for category in &mut categories {
+        category.label = usage_source_display(config, "", &category.key);
+    }
+    Ok(categories)
 }
 
 fn load_simple_categories(
@@ -1047,17 +1067,7 @@ fn load_api_key_categories(
             let key = row.get::<_, String>(0)?;
             let remark = row.get::<_, String>(1)?;
             let display = row.get::<_, String>(2)?;
-            let label = if !remark.is_empty() {
-                if display.is_empty() {
-                    remark
-                } else {
-                    format!("{remark} · {display}")
-                }
-            } else if !display.is_empty() {
-                display
-            } else {
-                "未记录密钥".to_string()
-            };
+            let label = api_key_category_label(remark, display);
             Ok(UsageCategory {
                 key,
                 label,
@@ -1073,14 +1083,19 @@ fn load_api_key_categories(
 }
 
 #[tauri::command]
-pub(crate) fn get_usage_events(query: UsageQuery) -> Result<UsageEventPage, String> {
+pub(crate) fn get_usage_events(
+    query: UsageQuery,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<UsageEventPage, String> {
     let connection = open_usage_database()?;
-    load_usage_events(&connection, &query)
+    let config = gui_config_state.snapshot()?;
+    load_usage_events(&connection, &query, &config)
 }
 
 fn load_usage_events(
     connection: &Connection,
     query: &UsageQuery,
+    config: &GuiConfigFile,
 ) -> Result<UsageEventPage, String> {
     let filter = build_usage_filter(query);
     let total_sql = format!("SELECT COUNT(*) FROM usage_events{}", filter.clause);
@@ -1117,11 +1132,14 @@ fn load_usage_events(
     let mut statement = connection
         .prepare(&sql)
         .map_err(|error| format!("准备 SQLite 使用事件查询失败: {error}"))?;
-    let items = statement
+    let mut items = statement
         .query_map(params_from_iter(values.iter()), usage_record_from_row)
         .map_err(|error| format!("查询 SQLite 使用事件失败: {error}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("读取 SQLite 使用事件失败: {error}"))?;
+    for item in &mut items {
+        item.source_display = usage_source_display(config, &item.provider, &item.source);
+    }
     Ok(UsageEventPage {
         items,
         total,
@@ -1138,6 +1156,7 @@ fn usage_record_from_row(row: &Row<'_>) -> rusqlite::Result<UsageRecord> {
         latency_ms: from_sql_i64(row.get(2)?),
         ttft_ms: row.get::<_, Option<i64>>(3)?.map(from_sql_i64),
         source: row.get(4)?,
+        source_display: String::new(),
         auth_index: row.get(5)?,
         failed: row.get::<_, i64>(6)? != 0,
         provider: row.get(7)?,
@@ -1296,6 +1315,38 @@ fn mask_api_key(value: &str) -> String {
     format!("{start}••••{end}")
 }
 
+fn api_key_category_label(remark: String, display: String) -> String {
+    if !remark.is_empty() {
+        remark
+    } else if !display.is_empty() {
+        mask_api_key(&display)
+    } else {
+        "未记录密钥".to_string()
+    }
+}
+
+fn usage_source_display(config: &GuiConfigFile, provider: &str, source: &str) -> String {
+    let source = source.trim();
+    if source.is_empty() {
+        return "未知来源".to_string();
+    }
+    if let Some(remark) = config.api_access_remark_for_source(provider, source) {
+        return remark.to_string();
+    }
+    let character_count = source.chars().count();
+    let looks_like_secret = !source.contains('@')
+        && !source.chars().any(char::is_whitespace)
+        && (source.starts_with("sk-")
+            || source.starts_with("AIza")
+            || source.starts_with("key-")
+            || character_count >= 48);
+    if looks_like_secret {
+        mask_api_key(source)
+    } else {
+        source.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1331,6 +1382,7 @@ mod tests {
             latency_ms: 100,
             ttft_ms: Some(20),
             source: "source".to_string(),
+            source_display: String::new(),
             auth_index: "auth".to_string(),
             failed: false,
             provider: "openai".to_string(),
@@ -1364,6 +1416,39 @@ mod tests {
     }
 
     #[test]
+    fn api_key_category_uses_either_remark_or_masked_key() {
+        assert_eq!(
+            api_key_category_label("生产环境".to_string(), "12••••".to_string()),
+            "生产环境"
+        );
+        assert_eq!(
+            api_key_category_label(String::new(), "123456".to_string()),
+            "12••••"
+        );
+    }
+
+    #[test]
+    fn usage_source_prefers_api_access_remark_and_masks_secret_fallbacks() {
+        let key = "sk-1234567890abcdefghijklmnopqrstuvwxyz";
+        let mut config = GuiConfigFile::default();
+        config.api_access_remarks.push(crate::GuiApiAccessRemark {
+            provider_section: "codex-api-key".to_string(),
+            api_key_hash: hash_text(key),
+            remark: "生产环境".to_string(),
+        });
+
+        assert_eq!(usage_source_display(&config, "codex", key), "生产环境");
+        assert_eq!(
+            usage_source_display(&GuiConfigFile::default(), "codex", key),
+            "sk-1••••wxyz"
+        );
+        assert_eq!(
+            usage_source_display(&config, "codex", "account@example.com"),
+            "account@example.com"
+        );
+    }
+
+    #[test]
     fn local_hour_key_uses_year_month_day_and_hour() {
         let record = sample_record("id", "2026-07-17T20:30:00+08:00", "model");
         assert_eq!(record_local_hour(&record).len(), "2026-07-17-20".len());
@@ -1381,10 +1466,14 @@ mod tests {
             window_height: None,
             auth_dir: String::new(),
             api_keys: Vec::new(),
+            api_access_remarks: Vec::new(),
             management_secret_key: "123456".to_string(),
             usage_statistics_enabled: true,
             plugins_enabled: false,
             routing_strategy: "round-robin".to_string(),
+            proxy_url: String::new(),
+            routing_session_affinity: false,
+            routing_session_affinity_ttl: String::new(),
             codex_session_repair_on_launch: false,
         };
         let record = normalize_usage_record(
@@ -1519,8 +1608,9 @@ mod tests {
         };
 
         let overview = load_usage_overview(&connection, &query).unwrap();
-        let analysis = load_usage_analysis(&connection, &query).unwrap();
-        let events = load_usage_events(&connection, &query).unwrap();
+        let config = GuiConfigFile::default();
+        let analysis = load_usage_analysis(&connection, &query, &config).unwrap();
+        let events = load_usage_events(&connection, &query, &config).unwrap();
 
         assert_eq!(overview.total_requests, 1);
         assert_eq!(overview.failure_count, 1);
