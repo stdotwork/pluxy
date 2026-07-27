@@ -969,14 +969,13 @@ export function ApiAccessPage() {
                 <article className="real-provider-row" key={`${row.section}-${row.index}-${row.authIndex}`}>
                   <div className="provider-row-main">
                     <div className="provider-row-title">
-                      <strong title={row.name}>{row.name}</strong>
+                      <strong title={row.remark || row.name}>{row.remark || row.name}</strong>
                     </div>
                     <code title={definitionFor(row.section).openAi ? t('apiAccess.keys.count', { count: row.apiKeys.length }) : undefined}>
                       {definitionFor(row.section).openAi && row.apiKeys.length > 1
                         ? t('apiAccess.keys.summary', { key: maskSecret(row.apiKey), count: row.apiKeys.length })
                         : maskSecret(row.apiKey)}
                     </code>
-                    {row.remark ? <span className="provider-row-remark" title={row.remark}>{t('apiAccess.remarkValue', { remark: row.remark })}</span> : null}
                     <span className="provider-row-url" title={row.baseUrl || undefined}>{row.baseUrl || t('apiAccess.defaultUrl')}</span>
                     {row.models.length > 0 ? <span className="provider-row-models" title={row.models.map((model) => model.name).join(', ')}>{t('apiAccess.models.summary', { count: row.models.length, models: row.models.slice(0, 3).map((model) => model.name).join(', ') })}</span> : null}
                   </div>

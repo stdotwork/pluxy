@@ -1067,17 +1067,7 @@ fn load_api_key_categories(
             let key = row.get::<_, String>(0)?;
             let remark = row.get::<_, String>(1)?;
             let display = row.get::<_, String>(2)?;
-            let label = if !remark.is_empty() {
-                if display.is_empty() {
-                    remark
-                } else {
-                    format!("{remark} · {display}")
-                }
-            } else if !display.is_empty() {
-                display
-            } else {
-                "未记录密钥".to_string()
-            };
+            let label = api_key_category_label(remark, display);
             Ok(UsageCategory {
                 key,
                 label,
@@ -1325,6 +1315,16 @@ fn mask_api_key(value: &str) -> String {
     format!("{start}••••{end}")
 }
 
+fn api_key_category_label(remark: String, display: String) -> String {
+    if !remark.is_empty() {
+        remark
+    } else if !display.is_empty() {
+        mask_api_key(&display)
+    } else {
+        "未记录密钥".to_string()
+    }
+}
+
 fn usage_source_display(config: &GuiConfigFile, provider: &str, source: &str) -> String {
     let source = source.trim();
     if source.is_empty() {
@@ -1413,6 +1413,18 @@ mod tests {
     fn masks_api_keys_without_exposing_the_full_value() {
         assert_eq!(mask_api_key("123456"), "12••••");
         assert_eq!(mask_api_key("sk-1234567890"), "sk-1••••7890");
+    }
+
+    #[test]
+    fn api_key_category_uses_either_remark_or_masked_key() {
+        assert_eq!(
+            api_key_category_label("生产环境".to_string(), "12••••".to_string()),
+            "生产环境"
+        );
+        assert_eq!(
+            api_key_category_label(String::new(), "123456".to_string()),
+            "12••••"
+        );
     }
 
     #[test]
