@@ -372,14 +372,14 @@ function AnalysisView({ analysis, overview }: { analysis: UsageAnalysis; overvie
     failures: point.failure,
     tokens: point.tokens,
   })).sort((left, right) => right.tokens - left.tokens);
-  return <div className="usage-analysis-grid"><CategoryPanel title={t('usage.analysis.models')} items={analysis.models} /><CategoryPanel title="Provider" items={analysis.providers} /><CategoryPanel title={t('usage.analysis.sources')} items={analysis.sources} /><CategoryPanel title={t('usage.analysis.keys')} items={analysis.apiKeys} /><CategoryPanel title={t('usage.analysis.hours')} items={hours} /></div>;
+  return <div className="usage-analysis-grid"><CategoryPanel title={t('usage.analysis.models')} items={analysis.models} /><CategoryPanel title="Provider" items={analysis.providers} /><CategoryPanel title={t('usage.analysis.sources')} items={analysis.sources} compactLabels /><CategoryPanel title={t('usage.analysis.keys')} items={analysis.apiKeys} /><CategoryPanel title={t('usage.analysis.hours')} items={hours} /></div>;
 }
 
-function CategoryPanel({ title, items }: { title: string; items: UsageCategory[] }) {
+function CategoryPanel({ title, items, compactLabels = false }: { title: string; items: UsageCategory[]; compactLabels?: boolean }) {
   const { t } = useI18n();
   const max = Math.max(...items.map((item) => item.tokens), 1);
   const total = items.reduce((sum, item) => sum + item.tokens, 0);
-  return <section className="panel usage-category-panel"><div className="usage-section-heading"><div><strong>{title}</strong><span>{t('usage.analysis.sortedByTokens')}</span></div></div>{items.length ? <div className="usage-category-list">{items.slice(0, 10).map((item) => <div key={item.key}><span><strong title={item.label}>{item.label}</strong><small>{t('usage.analysis.itemMeta', { requests: compactNumber(item.requests), percent: total ? (item.tokens * 100 / total).toFixed(1) : '0.0', tokens: compactNumber(item.tokens) })}</small></span><i><b style={{ width: `${item.tokens * 100 / max}%` }} /></i></div>)}</div> : <UsageEmpty />}</section>;
+  return <section className={`panel usage-category-panel${compactLabels ? ' compact-labels' : ''}`}><div className="usage-section-heading"><div><strong>{title}</strong><span>{t('usage.analysis.sortedByTokens')}</span></div></div>{items.length ? <div className="usage-category-list">{items.slice(0, 10).map((item) => <div key={item.key}><span><strong title={item.label}>{item.label}</strong><small>{t('usage.analysis.itemMeta', { requests: compactNumber(item.requests), percent: total ? (item.tokens * 100 / total).toFixed(1) : '0.0', tokens: compactNumber(item.tokens) })}</small></span><i><b style={{ width: `${item.tokens * 100 / max}%` }} /></i></div>)}</div> : <UsageEmpty />}</section>;
 }
 
 function EventsView({ events, onPage }: { events: UsageEventPage; onPage: (page: number) => void }) {

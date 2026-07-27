@@ -5391,6 +5391,11 @@ input:focus-visible {
   min-height: 290px;
 }
 
+.usage-category-panel.compact-labels .usage-category-list strong {
+  flex: 0 1 auto;
+  max-width: min(46%, 160px);
+}
+
 .usage-events-panel {
   display: grid;
   gap: 10px;
