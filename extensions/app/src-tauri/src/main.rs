@@ -7726,7 +7726,7 @@ async fn install_core_version_inner(
         .strip_prefix(&staging_dir)
         .map_err(|err| format!("计算内核二进制相对路径失败: {err}"))?
         .to_path_buf();
-    preserve_core_runtime_files(&install_dir, &staging_dir)?;
+    migrate_core_config_for_update(&install_dir, &staging_dir)?;
     preserve_bundled_core_assets(&install_dir, &staging_dir)?;
     write_core_metadata(
         &staging_dir,
@@ -7789,7 +7789,7 @@ fn install_bundled_core_inner(
         .strip_prefix(&staging_dir)
         .map_err(|error| format!("计算内置内核二进制路径失败: {error}"))?
         .to_path_buf();
-    preserve_core_runtime_files(&install_dir, &staging_dir)?;
+    migrate_core_config_for_update(&install_dir, &staging_dir)?;
     preserve_bundled_core_assets(&install_dir, &staging_dir)?;
     preserve_selected_bundled_core_asset(archive_path, &staging_dir)?;
     write_core_metadata(
@@ -10527,18 +10527,34 @@ fn merge_core_config_yaml(
     current: Option<&str>,
     config: &GuiConfigFile,
 ) -> Result<String, String> {
+    let merged = merge_core_config_fields(template, current)?;
+    apply_gui_managed_settings(&merged, config)
+}
+
+fn merge_core_config_fields(template: &str, current: Option<&str>) -> Result<String, String> {
     let template_value = serde_norway::from_str::<serde_norway::Value>(template)
         .map_err(|err| format!("解析内核配置模板失败: {err}"))?;
+    if !template_value.is_mapping() {
+        return Err("内核配置模板根节点必须是 YAML 映射".to_string());
+    }
     let mut merged = template_value.clone();
 
     if let Some(current) = current {
-        if let Ok(current) = serde_norway::from_str::<serde_norway::Value>(current) {
-            merge_yaml_values(&mut merged, current);
+        let current = serde_norway::from_str::<serde_norway::Value>(current)
+            .map_err(|err| format!("解析现有内核配置失败，为避免配置丢失已停止写入: {err}"))?;
+        if !current.is_mapping() {
+            return Err("现有内核配置根节点必须是 YAML 映射，已停止写入".to_string());
         }
+        merge_yaml_values(&mut merged, current);
     }
 
-    let merged = render_yaml_value_changes(template, &template_value, &merged)?;
-    apply_gui_managed_settings(&merged, config)
+    let rendered = render_yaml_value_changes(template, &template_value, &merged)?;
+    let rendered_value = serde_norway::from_str::<serde_norway::Value>(&rendered)
+        .map_err(|err| format!("验证迁移后的内核配置失败: {err}"))?;
+    if !rendered_value.is_mapping() {
+        return Err("迁移后的内核配置根节点必须是 YAML 映射".to_string());
+    }
+    Ok(rendered)
 }
 
 fn patch_core_network_yaml(
@@ -11628,15 +11644,43 @@ fn preserve_selected_bundled_core_asset(
     Ok(())
 }
 
-fn preserve_core_runtime_files(source_dir: &Path, target_dir: &Path) -> Result<(), String> {
+fn migrate_core_config_for_update(source_dir: &Path, target_dir: &Path) -> Result<(), String> {
     if !source_dir.is_dir() {
         return Ok(());
     }
-    let source = source_dir.join(CORE_CONFIG_FILE);
-    if source.is_file() {
-        fs::copy(&source, target_dir.join(CORE_CONFIG_FILE))
-            .map_err(|error| format!("保留内核配置文件失败: {error}"))?;
+    let old_config_path = source_dir.join(CORE_CONFIG_FILE);
+    if !old_config_path.is_file() {
+        return Ok(());
     }
+
+    let template_path = target_dir.join(CORE_EXAMPLE_CONFIG_FILE);
+    if !template_path.is_file() {
+        return Err(format!(
+            "新版内核缺少配置模板，已取消更新: {}",
+            path_to_string(&template_path)
+        ));
+    }
+    let old_config = fs::read_to_string(&old_config_path).map_err(|error| {
+        format!(
+            "读取旧版内核配置失败 {}: {error}",
+            path_to_string(&old_config_path)
+        )
+    })?;
+    let template = fs::read_to_string(&template_path).map_err(|error| {
+        format!(
+            "读取新版内核配置模板失败 {}: {error}",
+            path_to_string(&template_path)
+        )
+    })?;
+    let migrated = merge_core_config_fields(&template, Some(&old_config))
+        .map_err(|error| format!("迁移旧版内核配置失败，已取消更新以防止配置丢失: {error}"))?;
+    let config_path = target_dir.join(CORE_CONFIG_FILE);
+    fs::write(&config_path, migrated).map_err(|error| {
+        format!(
+            "写入迁移后的新版内核配置失败 {}: {error}",
+            path_to_string(&config_path)
+        )
+    })?;
     Ok(())
 }
 
@@ -16372,18 +16416,60 @@ custom_option = "keep-original"
     }
 
     #[test]
-    fn replacing_a_core_preserves_the_existing_configuration_bytes() {
-        let root = agent_test_home("core-config-preserve");
+    fn replacing_a_core_migrates_old_fields_into_the_new_template() {
+        let root = agent_test_home("core-config-migrate");
         let source = root.join("source");
         let target = root.join("target");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&target).unwrap();
-        let original = b"host: 127.0.0.1\n# keep this comment\ndebug: true\n";
-        fs::write(source.join(CORE_CONFIG_FILE), original).unwrap();
+        let old_config = "# Old comment\nhost: 127.0.0.1\nport: 9527\nnested:\n  keep: old\n  old-only: retained\nlist:\n  - old-a\n  - old-b\nextra: true\n";
+        let new_template = "# New template\nhost: \"\"\nport: 8317\nnested:\n  keep: new-default\n  added: new-field\nlist:\n  - new-default\nnew-option: true\n";
+        fs::write(source.join(CORE_CONFIG_FILE), old_config).unwrap();
+        fs::write(target.join(CORE_EXAMPLE_CONFIG_FILE), new_template).unwrap();
 
-        preserve_core_runtime_files(&source, &target).unwrap();
+        migrate_core_config_for_update(&source, &target).unwrap();
 
-        assert_eq!(fs::read(target.join(CORE_CONFIG_FILE)).unwrap(), original);
+        let migrated = fs::read_to_string(target.join(CORE_CONFIG_FILE)).unwrap();
+        let document = serde_norway::from_str::<serde_norway::Value>(&migrated).unwrap();
+        assert!(migrated.contains("# New template"));
+        assert_eq!(document["host"], "127.0.0.1");
+        assert_eq!(document["port"], 9527);
+        assert_eq!(document["nested"]["keep"], "old");
+        assert_eq!(document["nested"]["added"], "new-field");
+        assert_eq!(document["nested"]["old-only"], "retained");
+        assert_eq!(document["list"][0], "old-a");
+        assert_eq!(document["list"][1], "old-b");
+        assert_eq!(document["new-option"], true);
+        assert_eq!(document["extra"], true);
+        assert_eq!(
+            fs::read_to_string(target.join(CORE_EXAMPLE_CONFIG_FILE)).unwrap(),
+            new_template
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replacing_a_core_rejects_invalid_old_config_without_overwriting_staging() {
+        let root = agent_test_home("core-config-migrate-invalid");
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(source.join(CORE_CONFIG_FILE), "host: [invalid\n").unwrap();
+        fs::write(
+            target.join(CORE_EXAMPLE_CONFIG_FILE),
+            "host: \"\"\nport: 8317\n",
+        )
+        .unwrap();
+        fs::write(target.join(CORE_CONFIG_FILE), "staged: untouched\n").unwrap();
+
+        let error = migrate_core_config_for_update(&source, &target).unwrap_err();
+
+        assert!(error.contains("已取消更新以防止配置丢失"));
+        assert_eq!(
+            fs::read_to_string(target.join(CORE_CONFIG_FILE)).unwrap(),
+            "staged: untouched\n"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
