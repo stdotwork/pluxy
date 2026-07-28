@@ -5218,7 +5218,7 @@ input:focus-visible {
 .usage-stat-grid {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -5249,8 +5249,9 @@ input:focus-visible {
   overflow: hidden;
   color: #8a847c;
   font-size: 10px;
+  line-height: 1.45;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .usage-trend-panel,

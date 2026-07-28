@@ -35,7 +35,9 @@ type UsageOverview = {
   totalTokens: number;
   rpm: number;
   tpm: number;
+  tps: number;
   averageLatencyMs: number;
+  cacheHitRate: number;
   timeline: TimelinePoint[];
 };
 
@@ -342,7 +344,8 @@ function OverviewView({ overview }: { overview: UsageOverview }) {
     { icon: Activity, label: t('usage.stat.requests'), value: compactNumber(overview.totalRequests), meta: t('usage.stat.requestMeta', { success: overview.successCount, failed: overview.failureCount }) },
     { icon: Sparkles, label: t('usage.stat.tokens'), value: compactNumber(overview.totalTokens), meta: t('usage.stat.tokenMeta', { input: compactNumber(overview.inputTokens), output: compactNumber(overview.outputTokens) }) },
     { icon: ShieldCheck, label: t('usage.stat.successRate'), value: `${overview.successRate.toFixed(1)}%`, meta: t('usage.stat.reasoningMeta', { tokens: compactNumber(overview.reasoningTokens) }) },
-    { icon: Clock3, label: t('usage.stat.averageLatency'), value: `${Math.round(overview.averageLatencyMs)} ms`, meta: `${overview.rpm.toFixed(2)} RPM · ${compactNumber(overview.tpm)} TPM` },
+    { icon: Clock3, label: t('usage.stat.tps'), value: `${overview.tps.toFixed(1)} TPS`, meta: t('usage.stat.performanceMeta', { rpm: overview.rpm.toFixed(2), tpm: compactNumber(overview.tpm), latency: Math.round(overview.averageLatencyMs) }) },
+    { icon: Database, label: t('usage.stat.cacheHitRate'), value: `${(overview.cacheHitRate * 100).toFixed(1)}%`, meta: t('usage.stat.cacheHitMeta', { hit: compactNumber(overview.cacheReadTokens), input: compactNumber(overview.inputTokens) }) },
   ];
   return <div className="usage-overview-layout">
     <div className="usage-stat-grid">{cards.map(({ icon: Icon, label, value, meta }) => <article className="panel usage-stat-card" key={label}><span><Icon size={16} />{label}</span><strong>{value}</strong><small>{meta}</small></article>)}</div>

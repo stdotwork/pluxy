@@ -184,7 +184,9 @@ pub(crate) struct UsageOverview {
     total_tokens: u64,
     rpm: f64,
     tpm: f64,
+    tps: f64,
     average_latency_ms: f64,
+    cache_hit_rate: f64,
     timeline: Vec<UsageTimelinePoint>,
 }
 
@@ -718,6 +720,7 @@ fn is_generated_usage_event(value: &Value) -> bool {
                     "output_tokens",
                     "reasoning_tokens",
                     "cached_tokens",
+                    "cache_tokens",
                     "cache_read_tokens",
                     "cache_creation_tokens",
                     "total_tokens",
@@ -745,13 +748,17 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
         .map(|entry| entry.remark.clone())
         .unwrap_or_default();
     let tokens_object = object.get("tokens").and_then(Value::as_object);
+    let raw_cache_read_tokens = token_u64(tokens_object, "cache_read_tokens");
+    let cache_creation_tokens = token_u64(tokens_object, "cache_creation_tokens");
+    let compatible_cached_tokens = token_u64(tokens_object, "cached_tokens")
+        .max(token_u64(tokens_object, "cache_tokens"))
+        .saturating_sub(raw_cache_read_tokens.saturating_add(cache_creation_tokens));
     let mut tokens = UsageTokenStats {
         input_tokens: token_u64(tokens_object, "input_tokens"),
         output_tokens: token_u64(tokens_object, "output_tokens"),
         reasoning_tokens: token_u64(tokens_object, "reasoning_tokens"),
-        cache_read_tokens: token_u64(tokens_object, "cache_read_tokens")
-            .max(token_u64(tokens_object, "cached_tokens")),
-        cache_creation_tokens: token_u64(tokens_object, "cache_creation_tokens"),
+        cache_read_tokens: raw_cache_read_tokens.saturating_add(compatible_cached_tokens),
+        cache_creation_tokens,
         total_tokens: token_u64(tokens_object, "total_tokens"),
     };
     if tokens.total_tokens == 0 {
@@ -876,6 +883,10 @@ fn load_usage_overview(
             COALESCE(SUM(cache_creation_tokens), 0),
             COALESCE(SUM(total_tokens), 0),
             COALESCE(SUM(latency_ms), 0),
+            COALESCE(AVG(CASE
+                WHEN output_tokens > 0 AND latency_ms > 0
+                THEN CAST(output_tokens AS REAL) * 1000.0 / latency_ms
+            END), 0.0),
             MIN(timestamp_ms),
             MAX(timestamp_ms)
         FROM usage_events{}
@@ -898,8 +909,9 @@ fn load_usage_overview(
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
                     row.get::<_, i64>(9)?,
-                    row.get::<_, Option<i64>>(10)?,
+                    row.get::<_, f64>(10)?,
                     row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<i64>>(12)?,
                 ))
             },
         )
@@ -954,7 +966,12 @@ fn load_usage_overview(
             overview.success_count as f64 * 100.0 / overview.total_requests as f64;
         overview.average_latency_ms =
             from_sql_i64(summary.9) as f64 / overview.total_requests as f64;
-        let minutes = query_window_minutes(query, summary.10, summary.11);
+        overview.tps = summary.10;
+        if overview.input_tokens > 0 {
+            overview.cache_hit_rate =
+                (overview.cache_read_tokens as f64 / overview.input_tokens as f64).min(1.0);
+        }
+        let minutes = query_window_minutes(query, summary.11, summary.12);
         overview.rpm = overview.total_requests as f64 / minutes;
         overview.tpm = overview.total_tokens as f64 / minutes;
     }
@@ -1483,7 +1500,13 @@ mod tests {
                 "api_key": "secret-client-key",
                 "response_headers": { "authorization": ["secret-upstream-token"] },
                 "model": "gpt-test",
-                "tokens": { "input_tokens": 10, "output_tokens": 20 }
+                "tokens": {
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "cached_tokens": 7,
+                    "cache_read_tokens": 5,
+                    "cache_creation_tokens": 2
+                }
             }),
             &config,
         )
@@ -1493,6 +1516,7 @@ mod tests {
         assert!(!rendered.contains("secret-client-key"));
         assert!(!rendered.contains("secret-upstream-token"));
         assert_eq!(record.tokens.total_tokens, 30);
+        assert_eq!(record.tokens.cache_read_tokens, 5);
         assert!(!record.api_key_hash.is_empty());
     }
 
@@ -1614,6 +1638,8 @@ mod tests {
 
         assert_eq!(overview.total_requests, 1);
         assert_eq!(overview.failure_count, 1);
+        assert_eq!(overview.tps, 200.0);
+        assert_eq!(overview.cache_hit_rate, 0.2);
         assert_eq!(analysis.models[0].key, "gpt-b");
         assert_eq!(events.total, 1);
         assert_eq!(events.items[0].id, "request-2");
