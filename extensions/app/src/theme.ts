@@ -1,6 +1,25 @@
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+
 export type AppTheme = 'light' | 'dark';
 
 const STORAGE_KEY = 'easy-cli-proxy-api.theme';
+const WINDOW_BACKGROUND: Record<AppTheme, string> = {
+  light: '#faf9f5',
+  dark: '#101419',
+};
+
+async function applyNativeTheme(theme: AppTheme): Promise<void> {
+  const background = WINDOW_BACKGROUND[theme];
+  const currentWindow = getCurrentWindow();
+  const currentWebview = getCurrentWebview();
+
+  await Promise.allSettled([
+    currentWindow.setTheme(theme),
+    currentWindow.setBackgroundColor(background),
+    currentWebview.setBackgroundColor(background),
+  ]);
+}
 
 export function detectInitialTheme(): AppTheme {
   if (typeof window === 'undefined') return 'light';
@@ -18,6 +37,11 @@ export function detectInitialTheme(): AppTheme {
 export function applyTheme(theme: AppTheme): void {
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
+  document.documentElement.style.backgroundColor = WINDOW_BACKGROUND[theme];
+  if (document.body) {
+    document.body.style.backgroundColor = WINDOW_BACKGROUND[theme];
+  }
+  void applyNativeTheme(theme);
 }
 
 export function saveTheme(theme: AppTheme): void {
@@ -28,4 +52,3 @@ export function saveTheme(theme: AppTheme): void {
     // The in-memory theme still works when persistent storage is unavailable.
   }
 }
-
