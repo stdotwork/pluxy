@@ -5,6 +5,10 @@ export type MessageVariables = Record<string, string | number>;
 
 export const zhCN = {
   'app.language': '语言',
+  'app.theme.light': '日间模式',
+  'app.theme.dark': '夜间模式',
+  'app.theme.switchToLight': '切换到日间模式',
+  'app.theme.switchToDark': '切换到夜间模式',
   'app.desktopConsole': '桌面控制台',
   'app.navigation': '主导航',
   'app.nav.home': '首页',
@@ -849,6 +853,10 @@ export type MessageKey = keyof typeof zhCN;
 
 export const en: Record<MessageKey, string> = {
   'app.language': 'Language',
+  'app.theme.light': 'Light mode',
+  'app.theme.dark': 'Dark mode',
+  'app.theme.switchToLight': 'Switch to light mode',
+  'app.theme.switchToDark': 'Switch to dark mode',
   'app.desktopConsole': 'Desktop Console',
   'app.navigation': 'Main navigation',
   'app.nav.home': 'Home',

@@ -14,10 +14,12 @@ import {
   Languages,
   LogIn,
   MessageCircle,
+  Moon,
   Network,
   PackageOpen,
   ServerCog,
   Settings,
+  Sun,
   X,
 } from 'lucide-react';
 import appLogo from './assets/logo.jpg';
@@ -35,6 +37,7 @@ import { languageOptions, useI18n } from './i18n';
 import { AppUpdateDialog, AppUpdateProvider, useAppUpdate } from './appUpdate';
 import { appUpdateIndicatorState } from './appUpdateModel';
 import { canOpenAppPage, isAlwaysAvailablePage } from './navigation';
+import { detectInitialTheme, saveTheme, type AppTheme } from './theme';
 
 const CONTACT_URL = 'https://qm.qq.com/q/3queDaIG';
 
@@ -132,6 +135,7 @@ function AppContent() {
   const { info: appUpdateInfo, hasUpdate, processing: appUpdateProcessing } = useAppUpdate();
   const [active, setActive] = useState<PageId>('home');
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
+  const [theme, setTheme] = useState<AppTheme>(detectInitialTheme);
   const [windowsClosePrompt, setWindowsClosePrompt] = useState<WindowsClosePrompt | null>(null);
   const closeDialogRef = useRef<HTMLElement>(null);
   const languageMenuRef = useRef<HTMLDivElement>(null);
@@ -142,6 +146,10 @@ function AppContent() {
   const ActivePage = activePage.component;
   const selectedLanguage = languageOptions.find((option) => option.value === locale)
     ?? languageOptions[0];
+
+  useEffect(() => {
+    saveTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     if (!canOpenAppPage(active, coreRunning)) {
@@ -300,6 +308,22 @@ function AppContent() {
           </nav>
 
           <div className="sidebar-bottom">
+            <button
+              type="button"
+              className="sidebar-theme-toggle"
+              aria-label={theme === 'dark' ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
+              aria-pressed={theme === 'dark'}
+              title={theme === 'dark' ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
+              onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
+            >
+              {theme === 'dark'
+                ? <Moon size={16} aria-hidden="true" />
+                : <Sun size={16} aria-hidden="true" />}
+              <span>{theme === 'dark' ? t('app.theme.dark') : t('app.theme.light')}</span>
+              <i className="theme-switch-track" aria-hidden="true">
+                <b />
+              </i>
+            </button>
             <div ref={languageMenuRef} className="sidebar-language">
               <button
                 ref={languageButtonRef}
