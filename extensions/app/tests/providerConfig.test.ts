@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   allModelSelectionForDiscovery,
+  applyProviderRemarkIdentity,
   applyProviderPreset,
   buildProviderRecord,
   createProviderDraft,
@@ -43,6 +44,7 @@ describe('API 接入配置合并', () => {
     const result = buildProviderRecord('openai-compatibility', prepared);
 
     expect(draft.name).toBe('DeepSeek');
+    expect(draft.remark).toBe('DeepSeek');
     expect(draft.baseUrl).toBe(DEEPSEEK_BASE_URL);
     expect(draft.models).toEqual([]);
     expect(result).toMatchObject({
@@ -64,6 +66,17 @@ describe('API 接入配置合并', () => {
         },
       ],
     });
+  });
+
+  it('OpenAI 兼容接入使用备注自动生成内核要求的名称', () => {
+    const draft = applyProviderRemarkIdentity('openai-compatibility', {
+      ...createProviderDraft('openai-compatibility'),
+      name: '不再使用的名称',
+      remark: '生产环境',
+    });
+
+    expect(draft.remark).toBe('生产环境');
+    expect(draft.name).toBe('生产环境');
   });
 
   it('DeepSeek 接入单独归类，不在 OpenAI 兼容列表重复显示', () => {
