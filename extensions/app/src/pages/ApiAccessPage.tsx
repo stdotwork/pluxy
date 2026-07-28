@@ -323,7 +323,7 @@ const thinkingLevelsFromModels = (models: ModelOption[]): string[] => {
 const draftFromRow = (row: ProviderRow): ProviderDraft => ({
   name: row.name,
   apiKey: definitionFor(row.section).openAi ? row.apiKeys.join('\n') : row.apiKey,
-  remark: row.remark,
+  remark: row.remark || (definitionFor(row.section).openAi ? row.name : ''),
   baseUrl: row.baseUrl,
   priority: row.priority === null ? '' : String(row.priority),
   models: row.models,
@@ -383,10 +383,18 @@ export const createProviderDraft = (category: ProviderCategory): ProviderDraft =
   return {
     ...draft,
     name: 'DeepSeek',
+    remark: 'DeepSeek',
     baseUrl: DEEPSEEK_BASE_URL,
     thinkingLevels: [...DEEPSEEK_THINKING_LEVELS],
   };
 };
+
+export const applyProviderRemarkIdentity = (
+  category: ProviderCategory,
+  draft: ProviderDraft,
+): ProviderDraft => definitionFor(category).openAi
+  ? { ...draft, name: draft.remark.trim() }
+  : draft;
 
 export const applyProviderPreset = (
   category: ProviderCategory,
@@ -696,7 +704,7 @@ export function ApiAccessPage() {
         .filter((row) => {
           const query = filter.trim().toLowerCase();
           if (!query) return true;
-          return [row.name, row.remark, row.apiKey, row.baseUrl, row.models.map((model) => model.name).join(' ')]
+          return [row.remark || row.name, row.apiKey, row.baseUrl, row.models.map((model) => model.name).join(' ')]
             .join(' ')
             .toLowerCase()
             .includes(query);
@@ -721,7 +729,10 @@ export function ApiAccessPage() {
 
   const saveProvider = async (nextDraft: ProviderDraft): Promise<boolean> => {
     const definition = activeDefinition;
-    const preparedDraft = applyProviderPreset(activeCategory, nextDraft);
+    const preparedDraft = applyProviderRemarkIdentity(
+      activeCategory,
+      applyProviderPreset(activeCategory, nextDraft),
+    );
     const baseUrlRequired = definition.openAi || definition.section === 'codex-api-key';
     const parsedApiKeys = preparedDraft.apiKey
       .split(/\r?\n/)
@@ -729,7 +740,7 @@ export function ApiAccessPage() {
       .filter(Boolean);
     if (
       parsedApiKeys.length === 0
-      || (definition.openAi && !preparedDraft.name.trim())
+      || (definition.openAi && !preparedDraft.remark.trim())
       || (baseUrlRequired && !preparedDraft.baseUrl.trim())
     ) {
       setError(
@@ -827,7 +838,7 @@ export function ApiAccessPage() {
   };
 
   const deleteRow = async (row: ProviderRow) => {
-    if (!window.confirm(t('apiAccess.deleteConfirm', { name: row.name }))) return;
+    if (!window.confirm(t('apiAccess.deleteConfirm', { remark: row.remark || row.name }))) return;
     setBusy(true);
     setError('');
     try {
@@ -992,7 +1003,7 @@ export function ApiAccessPage() {
                           checked={!row.disabled}
                           onChange={() => void toggleProvider(row)}
                           disabled={busy}
-                          aria-label={t('apiAccess.toggleAria', { name: row.name, action: row.disabled ? t('common.enable') : t('common.disable') })}
+                          aria-label={t('apiAccess.toggleAria', { remark: row.remark || row.name, action: row.disabled ? t('common.enable') : t('common.disable') })}
                         />
                         <span className="switch-track" />
                       </span>
@@ -1077,7 +1088,7 @@ function ApiProviderDialog({
     && visibleModelOptions.every((model) => selectedModelNames.has(model.name.toLowerCase()));
 
   const updateTextField = (
-    field: 'name' | 'apiKey' | 'remark' | 'baseUrl' | 'priority' | 'prefix' | 'headersText' | 'excludedModelsText' | 'testModel' | 'cloakMode' | 'cloakSensitiveWordsText',
+    field: 'apiKey' | 'remark' | 'baseUrl' | 'priority' | 'prefix' | 'headersText' | 'excludedModelsText' | 'testModel' | 'cloakMode' | 'cloakSensitiveWordsText',
     value: string,
   ) => {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -1239,18 +1250,15 @@ function ApiProviderDialog({
             <X size={18} />
           </button>
         </div>
-        {definition.openAi ? (
-          <label><span>{t('apiAccess.field.name')}</span><input autoFocus value={draft.name} onChange={(event) => updateTextField('name', event.currentTarget.value)} placeholder="openrouter" /></label>
-        ) : null}
+        <label><span>{t('apiAccess.field.remark')}</span><input autoFocus={definition.openAi} value={draft.remark} maxLength={80} onChange={(event) => updateTextField('remark', event.currentTarget.value)} placeholder={t('apiAccess.remarkPlaceholder')} /></label>
         <label className={definition.openAi ? 'multiline-field' : undefined}>
           <span>{definition.openAi ? t('apiAccess.field.keysMany') : t('apiAccess.field.key')}</span>
           {definition.openAi ? (
             <textarea value={draft.apiKey} onChange={(event) => updateTextField('apiKey', event.currentTarget.value)} placeholder={'sk-...\nsk-...'} rows={3} />
           ) : (
-            <input autoFocus type="password" value={draft.apiKey} onChange={(event) => updateTextField('apiKey', event.currentTarget.value)} placeholder="sk-..." />
+            <input autoFocus={!definition.openAi} type="password" value={draft.apiKey} onChange={(event) => updateTextField('apiKey', event.currentTarget.value)} placeholder="sk-..." />
           )}
         </label>
-        <label><span>{t('apiAccess.field.remark')}</span><input value={draft.remark} maxLength={80} onChange={(event) => updateTextField('remark', event.currentTarget.value)} placeholder={t('apiAccess.remarkPlaceholder')} /></label>
         <label><span>Base URL</span><input value={draft.baseUrl} onChange={(event) => updateTextField('baseUrl', event.currentTarget.value)} placeholder={activeSection === 'codex-api-key' || activeSection === 'openai-compatibility' ? t('apiAccess.baseRequiredPlaceholder') : t('apiAccess.baseOptionalPlaceholder')} /></label>
         {activeCategory === 'deepseek' ? (
           <div className="provider-preset-summary">
