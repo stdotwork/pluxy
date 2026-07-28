@@ -5211,15 +5211,23 @@ input:focus-visible {
 
 .usage-overview-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.6fr);
-  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .usage-stat-grid {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
+}
+
+.usage-trend-panel {
+  grid-column: 1 / 5;
+}
+
+.usage-health-panel {
+  grid-column: 5 / 7;
 }
 
 .usage-stat-card {
@@ -5422,8 +5430,9 @@ input:focus-visible {
 
 .usage-events-table {
   width: 100%;
-  min-width: 1320px;
+  min-width: 1140px;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 10px;
 }
 
@@ -5449,20 +5458,85 @@ input:focus-visible {
 .usage-events-table th:first-child,
 .usage-events-table th:nth-child(2),
 .usage-events-table th:nth-child(3),
-.usage-events-table th:nth-child(4),
-.usage-events-table th:nth-child(5),
 .usage-events-table td:first-child,
 .usage-events-table td:nth-child(2),
-.usage-events-table td:nth-child(3),
-.usage-events-table td:nth-child(4),
+.usage-events-table td:nth-child(3) {
+  text-align: left;
+}
+
+.usage-events-table th:first-child {
+  width: 120px;
+}
+
+.usage-events-table th:nth-child(2) {
+  width: 120px;
+}
+
+.usage-events-table th:nth-child(3) {
+  width: 120px;
+}
+
+.usage-events-table th:nth-child(4) {
+  width: 120px;
+}
+
+.usage-events-table th:nth-child(5) {
+  width: 78px;
+}
+
+.usage-events-table th:nth-child(n + 6):nth-child(-n + 10) {
+  width: 64px;
+  text-align: center;
+}
+
+.usage-events-table td:nth-child(n + 6):nth-child(-n + 10) {
+  text-align: center;
+}
+
+.usage-events-table th:nth-child(11) {
+  width: 72px;
+}
+
+.usage-events-table th:nth-child(12) {
+  width: 85px;
+}
+
+.usage-events-table th:nth-child(13) {
+  width: 70px;
+}
+
+.usage-events-table th:nth-child(-n + 5),
+.usage-events-table td:nth-child(-n + 5) {
+  padding-left: 12px;
+  padding-right: 12px;
+  text-align: left;
+}
+
+.usage-events-table th:nth-child(5),
 .usage-events-table td:nth-child(5) {
+  padding-right: 2px;
+}
+
+.usage-events-table th:nth-child(4),
+.usage-events-table td:nth-child(4) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-events-table th:nth-child(6),
+.usage-events-table td:nth-child(6) {
+  padding-left: 2px;
   text-align: left;
 }
 
 .usage-events-table .usage-stacked-cell {
-  display: grid;
-  align-content: center;
   max-width: 180px;
+  vertical-align: middle;
+}
+
+.usage-events-table .usage-stacked-cell > strong,
+.usage-events-table .usage-stacked-cell > small {
+  display: block;
 }
 
 .usage-events-table td strong,
@@ -5500,6 +5574,140 @@ input:focus-visible {
 .usage-pagination button {
   min-width: 78px;
   min-height: 32px;
+}
+
+.usage-pricing-panel {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding: 12px;
+}
+
+.usage-pricing-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.usage-pricing-summary {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.usage-pricing-summary strong {
+  color: #2d2a26;
+  font-size: 22px;
+}
+
+.usage-pricing-summary span {
+  color: #8a847c;
+  font-size: 10px;
+}
+
+.usage-pricing-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.usage-pricing-actions input {
+  width: 220px;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid #d5d2cb;
+  border-radius: 6px;
+  background: #fff;
+  color: #2d2a26;
+  font-size: 11px;
+}
+
+.usage-pricing-actions button,
+.usage-price-editor-actions button {
+  gap: 6px;
+}
+
+.usage-price-editor {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #ddd8ce;
+  border-radius: 8px;
+  background: #f8f5ee;
+}
+
+.usage-price-editor label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.usage-price-editor label > span {
+  color: #6f6961;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.usage-price-editor input {
+  min-width: 0;
+  height: 36px;
+  padding: 0 9px;
+  border: 1px solid #d5d2cb;
+  border-radius: 6px;
+  background: #fff;
+  color: #2d2a26;
+  font-size: 11px;
+}
+
+.usage-price-editor-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.usage-pricing-table-wrap {
+  min-height: 390px;
+}
+
+.usage-pricing-table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.usage-pricing-table th,
+.usage-pricing-table td {
+  height: 44px;
+  padding: 7px 9px;
+  border-bottom: 1px solid #eeeae2;
+  color: #5f5a53;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.usage-pricing-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: #f4f1ea;
+  color: #7a746c;
+  font-weight: 700;
+}
+
+.usage-pricing-table th:first-child,
+.usage-pricing-table td:first-child {
+  text-align: left;
+}
+
+.usage-price-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
 }
 
 .real-auth-files-panel {
@@ -6230,6 +6438,16 @@ input:focus-visible {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .usage-overview-layout {
+    grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.6fr);
+    gap: 12px;
+  }
+
+  .usage-trend-panel,
+  .usage-health-panel {
+    grid-column: auto;
+  }
+
   .usage-stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -6363,6 +6581,24 @@ input:focus-visible {
 
   .usage-filter-panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-pricing-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .usage-pricing-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .usage-pricing-actions input {
+    width: 100%;
+  }
+
+  .usage-price-editor {
+    grid-template-columns: 1fr;
   }
 
   .thinking-alias-workbench {
