@@ -10532,6 +10532,31 @@ fn merge_core_config_yaml(
 }
 
 fn merge_core_config_fields(template: &str, current: Option<&str>) -> Result<String, String> {
+    let current_value = current
+        .map(|current| {
+            let current = serde_norway::from_str::<serde_norway::Value>(current)
+                .map_err(|err| format!("解析现有内核配置失败，为避免配置丢失已停止写入: {err}"))?;
+            if !current.is_mapping() {
+                return Err("现有内核配置根节点必须是 YAML 映射，已停止写入".to_string());
+            }
+            Ok(current)
+        })
+        .transpose()?;
+    merge_core_config_value(template, current_value)
+}
+
+fn merge_core_config_fields_tolerant(template: &str, current: &str) -> Result<String, String> {
+    let current = match serde_norway::from_str::<serde_norway::Value>(current) {
+        Ok(current) if current.is_mapping() => current,
+        _ => recover_parseable_top_level_yaml_fields(current),
+    };
+    merge_core_config_value(template, Some(current))
+}
+
+fn merge_core_config_value(
+    template: &str,
+    current: Option<serde_norway::Value>,
+) -> Result<String, String> {
     let template_value = serde_norway::from_str::<serde_norway::Value>(template)
         .map_err(|err| format!("解析内核配置模板失败: {err}"))?;
     if !template_value.is_mapping() {
@@ -10540,11 +10565,6 @@ fn merge_core_config_fields(template: &str, current: Option<&str>) -> Result<Str
     let mut merged = template_value.clone();
 
     if let Some(current) = current {
-        let current = serde_norway::from_str::<serde_norway::Value>(current)
-            .map_err(|err| format!("解析现有内核配置失败，为避免配置丢失已停止写入: {err}"))?;
-        if !current.is_mapping() {
-            return Err("现有内核配置根节点必须是 YAML 映射，已停止写入".to_string());
-        }
         merge_yaml_values(&mut merged, current);
     }
 
@@ -10555,6 +10575,75 @@ fn merge_core_config_fields(template: &str, current: Option<&str>) -> Result<Str
         return Err("迁移后的内核配置根节点必须是 YAML 映射".to_string());
     }
     Ok(rendered)
+}
+
+fn recover_parseable_top_level_yaml_fields(content: &str) -> serde_norway::Value {
+    let lines = yaml_line_ranges(content);
+    let boundaries = lines
+        .iter()
+        .copied()
+        .filter(|range| is_top_level_yaml_boundary(yaml_line_content(content, *range)))
+        .collect::<Vec<_>>();
+    let mut recovered = serde_norway::Mapping::new();
+
+    for (index, (start, _)) in boundaries.iter().copied().enumerate() {
+        let line = yaml_line_content(content, boundaries[index]);
+        if !is_top_level_yaml_mapping_field(line) {
+            continue;
+        }
+        let end = boundaries
+            .get(index + 1)
+            .map(|(next_start, _)| *next_start)
+            .unwrap_or(content.len());
+        let Ok(value) = serde_norway::from_str::<serde_norway::Value>(&content[start..end]) else {
+            continue;
+        };
+        let Some(mapping) = value.as_mapping() else {
+            continue;
+        };
+        for (key, value) in mapping {
+            recovered.insert(key.clone(), value.clone());
+        }
+    }
+
+    serde_norway::Value::Mapping(recovered)
+}
+
+fn is_top_level_yaml_boundary(line: &str) -> bool {
+    if line.is_empty()
+        || line.chars().next().is_some_and(char::is_whitespace)
+        || line.starts_with('#')
+        || is_indentationless_yaml_sequence_item(line)
+    {
+        return false;
+    }
+    !matches!(line.trim(), "---" | "...") && !line.starts_with('%')
+}
+
+fn is_top_level_yaml_mapping_field(line: &str) -> bool {
+    let mut single_quoted = false;
+    let mut double_quoted = false;
+    let mut escaped = false;
+    for (index, character) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if double_quoted && character == '\\' {
+            escaped = true;
+            continue;
+        }
+        match character {
+            '\'' if !double_quoted => single_quoted = !single_quoted,
+            '"' if !single_quoted => double_quoted = !double_quoted,
+            ':' if !single_quoted && !double_quoted => {
+                let rest = &line[index + character.len_utf8()..];
+                return rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace);
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn patch_core_network_yaml(
@@ -11660,20 +11749,23 @@ fn migrate_core_config_for_update(source_dir: &Path, target_dir: &Path) -> Resul
             path_to_string(&template_path)
         ));
     }
-    let old_config = fs::read_to_string(&old_config_path).map_err(|error| {
-        format!(
-            "读取旧版内核配置失败 {}: {error}",
-            path_to_string(&old_config_path)
-        )
-    })?;
+    let old_config = match fs::read(&old_config_path) {
+        Ok(content) => String::from_utf8_lossy(&content).into_owned(),
+        Err(error) => {
+            eprintln!(
+                "读取旧版内核配置失败，将使用新版默认配置继续更新 {}: {error}",
+                path_to_string(&old_config_path)
+            );
+            String::new()
+        }
+    };
     let template = fs::read_to_string(&template_path).map_err(|error| {
         format!(
             "读取新版内核配置模板失败 {}: {error}",
             path_to_string(&template_path)
         )
     })?;
-    let migrated = merge_core_config_fields(&template, Some(&old_config))
-        .map_err(|error| format!("迁移旧版内核配置失败，已取消更新以防止配置丢失: {error}"))?;
+    let migrated = merge_core_config_fields_tolerant(&template, &old_config)?;
     let config_path = target_dir.join(CORE_CONFIG_FILE);
     fs::write(&config_path, migrated).map_err(|error| {
         format!(
@@ -16449,27 +16541,34 @@ custom_option = "keep-original"
     }
 
     #[test]
-    fn replacing_a_core_rejects_invalid_old_config_without_overwriting_staging() {
+    fn replacing_a_core_discards_invalid_fields_and_continues_migration() {
         let root = agent_test_home("core-config-migrate-invalid");
         let source = root.join("source");
         let target = root.join("target");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&target).unwrap();
-        fs::write(source.join(CORE_CONFIG_FILE), "host: [invalid\n").unwrap();
+        fs::write(
+            source.join(CORE_CONFIG_FILE),
+            "host: 127.0.0.1\nbroken: [invalid\nport: 9527\napi-keys:\n- old-a\n- old-b\n",
+        )
+        .unwrap();
         fs::write(
             target.join(CORE_EXAMPLE_CONFIG_FILE),
-            "host: \"\"\nport: 8317\n",
+            "host: \"\"\nbroken: new-default\nport: 8317\napi-keys:\n  - new-default\nnew-option: true\n",
         )
         .unwrap();
         fs::write(target.join(CORE_CONFIG_FILE), "staged: untouched\n").unwrap();
 
-        let error = migrate_core_config_for_update(&source, &target).unwrap_err();
+        migrate_core_config_for_update(&source, &target).unwrap();
 
-        assert!(error.contains("已取消更新以防止配置丢失"));
-        assert_eq!(
-            fs::read_to_string(target.join(CORE_CONFIG_FILE)).unwrap(),
-            "staged: untouched\n"
-        );
+        let migrated = fs::read_to_string(target.join(CORE_CONFIG_FILE)).unwrap();
+        let document = serde_norway::from_str::<serde_norway::Value>(&migrated).unwrap();
+        assert_eq!(document["host"], "127.0.0.1");
+        assert_eq!(document["broken"], "new-default");
+        assert_eq!(document["port"], 9527);
+        assert_eq!(document["api-keys"][0], "old-a");
+        assert_eq!(document["api-keys"][1], "old-b");
+        assert_eq!(document["new-option"], true);
         fs::remove_dir_all(root).unwrap();
     }
 
