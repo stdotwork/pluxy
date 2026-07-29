@@ -732,7 +732,6 @@ fn persist_queue_items(
     let records = items
         .into_iter()
         .filter(Value::is_object)
-        .filter(is_generated_usage_event)
         .map(|item| normalize_usage_record(item, config))
         .collect::<Result<Vec<_>, _>>()?;
     if records.is_empty() {
@@ -821,34 +820,6 @@ fn insert_usage_records_in_transaction(
         );
     }
     Ok(inserted)
-}
-
-fn is_generated_usage_event(value: &Value) -> bool {
-    if value.get("generate").and_then(Value::as_bool) == Some(false) {
-        return false;
-    }
-    let legacy_websocket_prewarm = value
-        .get("executor_type")
-        .and_then(Value::as_str)
-        .is_some_and(|value| value.trim() == "CodexWebsocketsExecutor")
-        && value
-            .get("tokens")
-            .and_then(Value::as_object)
-            .is_some_and(|tokens| {
-                [
-                    "input_tokens",
-                    "output_tokens",
-                    "reasoning_tokens",
-                    "cached_tokens",
-                    "cache_tokens",
-                    "cache_read_tokens",
-                    "cache_creation_tokens",
-                    "total_tokens",
-                ]
-                .into_iter()
-                .all(|key| u64_field(tokens, key) == 0)
-            });
-    !legacy_websocket_prewarm
 }
 
 fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageRecord, String> {
@@ -2261,6 +2232,71 @@ mod tests {
         assert_eq!(record.tokens.total_tokens, 30);
         assert_eq!(record.tokens.cache_read_tokens, 5);
         assert!(!record.api_key_hash.is_empty());
+    }
+
+    #[test]
+    fn persists_successful_health_checks_and_zero_token_websocket_events() {
+        let root = test_root("queue-events-without-generation");
+        initialize_usage_storage_at(&root).unwrap();
+        let config = GuiConfigFile::default();
+        let inserted = persist_queue_items(
+            &root,
+            vec![
+                serde_json::json!({
+                    "timestamp": "2026-07-29T10:00:00+08:00",
+                    "request_id": "cherry-health-check",
+                    "generate": false,
+                    "failed": false,
+                    "provider": "openai",
+                    "model": "gpt-test",
+                    "endpoint": "POST /v1/chat/completions",
+                    "tokens": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-07-29T10:00:01+08:00",
+                    "request_id": "websocket-zero-token",
+                    "failed": false,
+                    "provider": "codex",
+                    "model": "gpt-test",
+                    "executor_type": "CodexWebsocketsExecutor",
+                    "tokens": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0
+                    }
+                }),
+            ],
+            &config,
+        )
+        .unwrap();
+        let connection = open_usage_database_at(&root).unwrap();
+        let events = load_usage_events(
+            &connection,
+            &UsageQuery {
+                failed: Some(false),
+                ..UsageQuery::default()
+            },
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(inserted, 2);
+        assert_eq!(events.total, 2);
+        assert!(events.items.iter().all(|event| !event.failed));
+        assert!(events
+            .items
+            .iter()
+            .any(|event| event.request_id == "cherry-health-check"));
+        assert!(events
+            .items
+            .iter()
+            .any(|event| event.request_id == "websocket-zero-token"));
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

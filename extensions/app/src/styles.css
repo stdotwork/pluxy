@@ -5782,6 +5782,8 @@ input:focus-visible {
   padding-right: 2px;
 }
 
+.usage-events-table th:nth-child(3),
+.usage-events-table td:nth-child(3),
 .usage-events-table th:nth-child(4),
 .usage-events-table td:nth-child(4) {
   overflow: hidden;
