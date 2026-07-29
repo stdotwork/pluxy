@@ -3457,30 +3457,16 @@ input:focus-visible {
   display: grid;
   grid-template-columns: minmax(480px, 1.4fr) minmax(320px, 0.6fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 
-.thinking-alias-left-stack {
-  display: grid;
-  min-width: 0;
-  gap: 16px;
-}
-
-.thinking-alias-builder {
-  min-height: 330px;
-}
-
-.thinking-alias-name-panel {
-  min-height: 250px;
-}
-
+.thinking-alias-editor-panel,
 .thinking-alias-list-panel {
-  height: clamp(360px, calc(100vh - 330px), 460px);
-  min-height: 360px;
+  height: clamp(600px, calc(100vh - 250px), 720px);
+  min-height: 600px;
 }
 
-.thinking-alias-builder,
-.thinking-alias-name-panel {
+.thinking-alias-editor-panel {
   position: relative;
   z-index: 2;
   display: flex;
@@ -3488,6 +3474,17 @@ input:focus-visible {
   gap: 12px;
   padding: 16px;
   overflow: visible;
+}
+
+.thinking-alias-section-divider {
+  height: 1px;
+  flex: none;
+  margin: 2px 0;
+  background: var(--theme-e3e1db);
+}
+
+.thinking-alias-secondary-heading {
+  padding-top: 2px;
 }
 
 .thinking-alias-panel-heading {
@@ -6879,8 +6876,7 @@ input:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .thinking-alias-builder,
-  .thinking-alias-name-panel,
+  .thinking-alias-editor-panel,
   .thinking-alias-list-panel {
     height: auto;
     min-height: 0;

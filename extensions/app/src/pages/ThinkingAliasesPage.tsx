@@ -254,8 +254,7 @@ export function ThinkingAliasesPage() {
       </div>
 
       <div className="thinking-alias-workbench">
-        <div className="thinking-alias-left-stack">
-          <section className="panel thinking-alias-builder">
+        <section className="panel thinking-alias-editor-panel">
             <div className="thinking-alias-panel-heading">
               <span><GitFork size={18} /></span>
               <div>
@@ -417,10 +416,9 @@ export function ThinkingAliasesPage() {
               <small>{t('aliases.customHelp')}</small>
             </div> : null}
             </div>
-          </section>
+            <div className="thinking-alias-section-divider" aria-hidden="true" />
 
-          <section className="panel thinking-alias-name-panel">
-            <div className="thinking-alias-panel-heading">
+            <div className="thinking-alias-panel-heading thinking-alias-secondary-heading">
               <span><BrainCircuit size={18} /></span>
               <div>
                 <h2>{t('aliases.modelAlias.title')}</h2>
@@ -462,8 +460,7 @@ export function ThinkingAliasesPage() {
               {busyAction === 'create' ? <LoaderCircle size={16} className="spin" /> : <GitFork size={16} />}
               {busyAction === 'create' ? t('aliases.creating') : t('aliases.create')}
             </button>
-          </section>
-        </div>
+        </section>
 
         <section className="panel thinking-alias-list-panel">
           <div className="thinking-alias-list-heading">
