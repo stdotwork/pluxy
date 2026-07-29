@@ -418,14 +418,6 @@ export function ThinkingAliasesPage() {
             </div>
             <div className="thinking-alias-section-divider" aria-hidden="true" />
 
-            <div className="thinking-alias-panel-heading thinking-alias-secondary-heading">
-              <span><BrainCircuit size={18} /></span>
-              <div>
-                <h2>{t('aliases.modelAlias.title')}</h2>
-                <p>{t('aliases.modelAlias.description')}</p>
-              </div>
-            </div>
-
             <div className="thinking-alias-field">
               <div className="thinking-field-heading">
                 <strong>{t('aliases.aliasName.title')}</strong>

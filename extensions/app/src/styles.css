@@ -3483,10 +3483,6 @@ input:focus-visible {
   background: var(--theme-e3e1db);
 }
 
-.thinking-alias-secondary-heading {
-  padding-top: 2px;
-}
-
 .thinking-alias-panel-heading {
   display: flex;
   align-items: center;

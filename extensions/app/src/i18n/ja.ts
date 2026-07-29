@@ -207,8 +207,6 @@ export const jaOverrides = {
   'aliases.deleted': '{alias} を削除しました',
   'aliases.create.title': '推論エイリアスを作成',
   'aliases.create.description': 'Codex OAuth、Codex API、OpenAI 互換接続に対応',
-  'aliases.modelAlias.title': 'モデルエイリアス',
-  'aliases.modelAlias.description': 'クライアントが使用する名前を入力し、最終マッピングを確認します',
   'aliases.originalModel': '元のモデル',
   'aliases.loadingModels': 'モデルを読み込んでいます',
   'aliases.searchModel': '元のモデルを検索して選択',
