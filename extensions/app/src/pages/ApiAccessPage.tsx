@@ -383,7 +383,6 @@ export const createProviderDraft = (category: ProviderCategory): ProviderDraft =
   return {
     ...draft,
     name: 'DeepSeek',
-    remark: 'DeepSeek',
     baseUrl: DEEPSEEK_BASE_URL,
     thinkingLevels: [...DEEPSEEK_THINKING_LEVELS],
   };

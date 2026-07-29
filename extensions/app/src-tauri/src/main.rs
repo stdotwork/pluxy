@@ -69,7 +69,10 @@ const LEGACY_GUI_CONFIG_FILE: &str = "cpa-gui.yaml";
 const MIN_MAIN_WINDOW_WIDTH: u32 = 640;
 const MIN_MAIN_WINDOW_HEIGHT: u32 = 600;
 const MAX_SAVED_WINDOW_DIMENSION: u32 = 16_384;
+const DEFAULT_MAIN_WINDOW_WIDTH: u32 = 1551;
+const DEFAULT_MAIN_WINDOW_HEIGHT: u32 = 893;
 const OAUTH_DIR_NAME: &str = "oauth";
+const DEFAULT_AUTH_DIR: &str = "../oauth";
 const DEFAULT_API_KEY: &str = "123456";
 const DEFAULT_API_KEY_INITIAL_REMARK: &str = "默认密钥";
 const DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
@@ -518,13 +521,9 @@ impl Default for GuiConfigFile {
             allow_lan: false,
             host: "127.0.0.1".to_string(),
             run_on_startup: false,
-            window_width: None,
-            window_height: None,
-            auth_dir: env::current_exe()
-                .ok()
-                .and_then(|path| path.parent().map(|parent| parent.join(OAUTH_DIR_NAME)))
-                .map(|path| path_to_string(&path))
-                .unwrap_or_else(|| OAUTH_DIR_NAME.to_string()),
+            window_width: Some(DEFAULT_MAIN_WINDOW_WIDTH),
+            window_height: Some(DEFAULT_MAIN_WINDOW_HEIGHT),
+            auth_dir: DEFAULT_AUTH_DIR.to_string(),
             api_keys: vec![default_api_key_entry()],
             api_access_remarks: Vec::new(),
             // Keep plaintext here for management API auth. Core hashes the
@@ -7897,11 +7896,12 @@ fn start_core_process_inner(
     process_state: &CoreProcessState,
     gui_config: &GuiConfigFile,
 ) -> Result<(), String> {
-    if !gui_config.auth_dir.trim().is_empty() {
-        fs::create_dir_all(&gui_config.auth_dir)
-            .map_err(|error| format!("创建凭证目录失败 {}: {error}", gui_config.auth_dir))?;
-    }
     let install_dir = core_install_dir()?;
+    if !gui_config.auth_dir.trim().is_empty() {
+        let auth_dir = auth_dir_path_for_core(&gui_config.auth_dir, &install_dir);
+        fs::create_dir_all(&auth_dir)
+            .map_err(|error| format!("创建凭证目录失败 {}: {error}", path_to_string(&auth_dir)))?;
+    }
     let binary_path = find_core_binary(&install_dir)
         .ok_or_else(|| "未安装 CPA 内核，请先安装最新版".to_string())?;
 
@@ -10599,6 +10599,21 @@ fn fixed_oauth_dir() -> Result<PathBuf, String> {
     Ok(core_base_dir()?.join(OAUTH_DIR_NAME))
 }
 
+fn auth_dir_path_for_core(auth_dir: &str, install_dir: &Path) -> PathBuf {
+    if auth_dir.trim() == DEFAULT_AUTH_DIR {
+        return install_dir
+            .parent()
+            .map(|parent| parent.join(OAUTH_DIR_NAME))
+            .unwrap_or_else(|| install_dir.join(auth_dir));
+    }
+    let auth_dir = PathBuf::from(auth_dir);
+    if auth_dir.is_absolute() {
+        auth_dir
+    } else {
+        install_dir.join(auth_dir)
+    }
+}
+
 fn should_import_core_api_keys(had_existing_gui_config: bool, core_api_keys: &[String]) -> bool {
     had_existing_gui_config || !core_api_keys.is_empty()
 }
@@ -10747,8 +10762,10 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
         write_gui_config(&config)?;
     }
     if !config.auth_dir.trim().is_empty() {
-        fs::create_dir_all(&config.auth_dir)
-            .map_err(|error| format!("创建凭证目录失败 {}: {error}", config.auth_dir))?;
+        let install_dir = core_install_dir()?;
+        let auth_dir = auth_dir_path_for_core(&config.auth_dir, &install_dir);
+        fs::create_dir_all(&auth_dir)
+            .map_err(|error| format!("创建凭证目录失败 {}: {error}", path_to_string(&auth_dir)))?;
     }
     Ok(config)
 }
@@ -10980,8 +10997,11 @@ fn sanitize_gui_config(config: &mut GuiConfigFile) -> Result<bool, String> {
         config.allow_lan = allow_lan;
         changed = true;
     }
-    if config.auth_dir.trim().is_empty() {
-        config.auth_dir = path_to_string(&fixed_oauth_dir()?);
+    let legacy_default_auth_dir = fixed_oauth_dir()?;
+    if config.auth_dir.trim().is_empty()
+        || Path::new(config.auth_dir.trim()) == legacy_default_auth_dir
+    {
+        config.auth_dir = DEFAULT_AUTH_DIR.to_string();
         changed = true;
     }
     let original_api_keys = config.api_keys.clone();
@@ -13830,7 +13850,9 @@ mod tests {
         assert!(content.contains("port = 8317"));
         assert!(content.contains("allow-lan = false"));
         assert!(content.contains("run-on-startup = false"));
-        assert!(content.contains("auth-dir = "));
+        assert!(content.contains("window-width = 1551"));
+        assert!(content.contains("window-height = 893"));
+        assert!(content.contains("auth-dir = \"../oauth\""));
         assert!(content.contains("[[api-keys]]"));
         assert!(content.contains("key = \"123456\""));
         assert!(content.contains("remark = \"默认密钥\""));
@@ -15197,6 +15219,24 @@ custom_option = "keep-original"
         let merged = merge_core_config_yaml("auth-dir: ~/.cli-proxy-api\n", None, &config).unwrap();
         let document = serde_norway::from_str::<serde_norway::Value>(&merged).unwrap();
         assert_eq!(document["auth-dir"], config.auth_dir);
+    }
+
+    #[test]
+    fn default_auth_directory_is_relative_and_legacy_absolute_value_is_migrated() {
+        let base_dir = agent_test_home("relative-default-auth-dir");
+        let install_dir = base_dir.join("cpa-core");
+        assert_eq!(
+            auth_dir_path_for_core(DEFAULT_AUTH_DIR, &install_dir),
+            base_dir.join(OAUTH_DIR_NAME)
+        );
+
+        let mut config = GuiConfigFile {
+            auth_dir: path_to_string(&fixed_oauth_dir().unwrap()),
+            ..GuiConfigFile::default()
+        };
+        assert!(sanitize_gui_config(&mut config).unwrap());
+        assert_eq!(config.auth_dir, DEFAULT_AUTH_DIR);
+        fs::remove_dir_all(base_dir).unwrap();
     }
 
     #[test]
