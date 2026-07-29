@@ -58,7 +58,7 @@ export const managementApi = {
       data,
     });
   },
-  downloadAuthFile: (name: string) => invoke<string>('download_auth_file', { name }),
+  openAuthFilesDirectory: () => invoke<void>('open_auth_files_directory'),
 };
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

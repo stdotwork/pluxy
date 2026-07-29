@@ -2,9 +2,10 @@ import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from '
 import {
   Check,
   Copy,
-  Download,
   FileDown,
+  FolderOpen,
   LoaderCircle,
+  Pencil,
   RefreshCw,
   Search,
   Trash2,
@@ -45,6 +46,8 @@ import {
   authFileName,
   dedupeAuthFiles,
   isRuntimeOnlyAuthFile,
+  normalizeAuthFilePriorityInput,
+  parseAuthFilePriority,
 } from '../services/authFiles';
 import {
   exclusionsForOpenOAuthModels,
@@ -56,6 +59,13 @@ import {
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 
 type AuthFile = Record<string, unknown>;
+
+type PriorityEditor = {
+  fileName: string;
+  originalPriority: number;
+  value: string;
+  error: string;
+};
 
 const providerIcons: Record<string, string> = {
   antigravity: antigravityIcon,
@@ -144,6 +154,7 @@ export function AuthFileManagementPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [copied, setCopied] = useState('');
+  const [priorityEditor, setPriorityEditor] = useState<PriorityEditor | null>(null);
   const [oauthModelProvider, setOauthModelProvider] = useState('');
   const [oauthModelProviderLabel, setOauthModelProviderLabel] = useState('');
   const [oauthModels, setOauthModels] = useState<OAuthModelDefinition[]>([]);
@@ -361,6 +372,51 @@ export function AuthFileManagementPage() {
     }
   };
 
+  const openPriorityEditor = (file: AuthFile) => {
+    const priority = parseAuthFilePriority(file.priority);
+    setPriorityEditor({
+      fileName: fileName(file),
+      originalPriority: priority ?? 0,
+      value: priority === undefined || priority === 0 ? '' : String(priority),
+      error: '',
+    });
+  };
+
+  const closePriorityEditor = () => {
+    if (!busy) setPriorityEditor(null);
+  };
+
+  const savePriority = async () => {
+    if (!priorityEditor || busy) return;
+    const priority = normalizeAuthFilePriorityInput(priorityEditor.value);
+    if (priority === null) {
+      setPriorityEditor((current) => current
+        ? { ...current, error: t('authFiles.priority.invalid') }
+        : current);
+      return;
+    }
+    if (priority === priorityEditor.originalPriority) {
+      setPriorityEditor(null);
+      return;
+    }
+
+    const name = priorityEditor.fileName;
+    setBusy(true);
+    setError('');
+    try {
+      await managementApi.patch('/auth-files/fields', { name, priority });
+      setPriorityEditor(null);
+      setNotice(t('authFiles.priority.updated', { name }));
+      await loadFiles();
+    } catch (requestError) {
+      setPriorityEditor((current) => current
+        ? { ...current, error: String(requestError) }
+        : current);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const deleteFile = async (file: AuthFile) => {
     const name = fileName(file);
     if (isRuntimeOnly(file)) {
@@ -396,23 +452,11 @@ export function AuthFileManagementPage() {
     }
   };
 
-  const downloadFile = async (file: AuthFile) => {
-    const name = fileName(file);
-    if (isRuntimeOnly(file)) {
-      setError(t('authFiles.runtimeDownloadError'));
-      return;
-    }
+  const openAuthFilesDirectory = async () => {
     setBusy(true);
     setError('');
     try {
-      const content = await managementApi.downloadAuthFile(name);
-      const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = name;
-      anchor.click();
-      URL.revokeObjectURL(url);
-      setNotice(t('authFiles.downloaded'));
+      await managementApi.openAuthFilesDirectory();
     } catch (requestError) {
       setError(String(requestError));
     } finally {
@@ -485,6 +529,7 @@ export function AuthFileManagementPage() {
               const name = fileName(file);
               const icon = providerIcons[providerKey(file)] ?? geminiIcon;
               const disabled = readBoolean(file, 'disabled');
+              const priority = parseAuthFilePriority(file.priority) ?? 0;
               return (
                 <article className={`real-auth-file-row ${disabled ? 'disabled' : ''}`} key={`${name}-${readString(file, 'auth_index', 'authIndex')}`}>
                   <img src={icon} alt="" className="provider-logo" />
@@ -500,8 +545,9 @@ export function AuthFileManagementPage() {
                   <div className="auth-file-actions">
                     {quotaProviderForFile(file) ? <button type="button" className="secondary-button compact-button" onClick={() => void refreshQuota(file)} disabled={busy || disabled || quotas[quotaKey(file)]?.status === 'loading'}>{disabled ? t('authFiles.status.disabled') : quotas[quotaKey(file)]?.status === 'loading' ? t('authFiles.quota.querying') : quotas[quotaKey(file)]?.status === 'success' ? t('authFiles.quota.refresh') : t('authFiles.quota.fetch')}</button> : null}
                     {providerKey(file) ? <button type="button" className="secondary-button compact-button" onClick={() => void openOauthModels(file)} disabled={busy} title={t('authFiles.models.settings')}>{t('authFiles.models.button')}</button> : null}
+                    <button type="button" className="secondary-button compact-button auth-file-priority-button" onClick={() => openPriorityEditor(file)} disabled={busy} title={t('authFiles.priority.hint')}><Pencil size={14} />{t('authFiles.priority.button', { priority })}</button>
                     <button type="button" className="icon-button quiet" onClick={() => void copyName(name)} disabled={busy} title={t('authFiles.copyName')}>{copied === name ? <Check size={16} /> : <Copy size={16} />}</button>
-                    <button type="button" className="icon-button quiet" onClick={() => void downloadFile(file)} disabled={busy || isRuntimeOnly(file)} title={t('common.download')}><Download size={16} /></button>
+                    <button type="button" className="icon-button quiet" onClick={() => void openAuthFilesDirectory()} disabled={busy} title={t('authFiles.openDirectory')}><FolderOpen size={16} /></button>
                     <button type="button" className="secondary-button compact-button" onClick={() => void toggleStatus(file)} disabled={busy}>{disabled ? t('common.enable') : t('common.disable')}</button>
                     <button type="button" className="icon-button danger" onClick={() => void deleteFile(file)} disabled={busy || isRuntimeOnly(file)} title={t('common.delete')}><Trash2 size={16} /></button>
                   </div>
@@ -513,6 +559,51 @@ export function AuthFileManagementPage() {
         )}
       </section>
       {runtimeCount > 0 ? <p className="page-footnote">{t('authFiles.runtimeFootnote', { count: runtimeCount })}</p> : null}
+
+      {priorityEditor ? (
+        <div className="config-dialog-backdrop" onMouseDown={(event) => event.currentTarget === event.target && closePriorityEditor()}>
+          <form
+            className="config-dialog auth-priority-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="auth-priority-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void savePriority();
+            }}
+          >
+            <div className="config-dialog-heading">
+              <div><Pencil size={19} /><h2 id="auth-priority-title">{t('authFiles.priority.title')}</h2></div>
+              <button type="button" className="icon-button quiet" onClick={closePriorityEditor} disabled={busy} title={t('common.close')}><X size={18} /></button>
+            </div>
+            <div className="auth-priority-target" title={priorityEditor.fileName}>{priorityEditor.fileName}</div>
+            <label className="auth-priority-field" htmlFor="auth-file-priority-input">
+              <span>{t('authFiles.priority.label')}</span>
+              <input
+                id="auth-file-priority-input"
+                autoFocus
+                type="text"
+                inputMode="numeric"
+                value={priorityEditor.value}
+                placeholder={t('authFiles.priority.placeholder')}
+                disabled={busy}
+                aria-invalid={Boolean(priorityEditor.error)}
+                onChange={(event) => setPriorityEditor((current) => current
+                  ? { ...current, value: event.currentTarget.value, error: '' }
+                  : current)}
+              />
+              <small>{t('authFiles.priority.hint')}</small>
+            </label>
+            <div className={`config-form-message ${priorityEditor.error ? 'error' : ''}`} role={priorityEditor.error ? 'alert' : undefined}>
+              {priorityEditor.error || ' '}
+            </div>
+            <div className="config-dialog-actions two-actions">
+              <button type="button" className="secondary-button" onClick={closePriorityEditor} disabled={busy}>{t('common.cancel')}</button>
+              <button type="submit" className="primary-button" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{busy ? t('common.saving') : t('common.save')}</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       {oauthModelProvider ? (
         <div className="model-discovery-backdrop" onMouseDown={(event) => event.currentTarget === event.target && !oauthModelSaving && closeOauthModels()}>

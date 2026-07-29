@@ -85,10 +85,6 @@ type AgentConfigActionResult = {
   conflictFiles: string[];
 };
 
-type CodexModelCatalogUpdateResult = {
-  outcome: 'updated' | 'unchanged';
-};
-
 type ChatGptCloseResult = {
   wasRunning: boolean;
   closedProcesses: number;
@@ -488,13 +484,11 @@ export function AgentsPage() {
   const [launchTargetByClient, setLaunchTargetByClient] = useState<Partial<Record<AgentClientId, string>>>({});
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
-  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'clear' | 'launch' | 'close-app' | 'catalog' | null>(null);
+  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'clear' | 'launch' | 'close-app' | null>(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
   const [modelError, setModelError] = useState('');
   const [modelSelectionError, setModelSelectionError] = useState('');
-  const [catalogUpdateError, setCatalogUpdateError] = useState('');
-  const [catalogUpdateNotice, setCatalogUpdateNotice] = useState('');
   const [configurationError, setConfigurationError] = useState('');
   const [launchError, setLaunchError] = useState('');
   const [defaultError, setDefaultError] = useState('');
@@ -592,8 +586,6 @@ export function AgentsPage() {
   useEffect(() => {
     setActiveSubpage(DEFAULT_AGENT_SUBPAGE);
     setModelSelectionError('');
-    setCatalogUpdateError('');
-    setCatalogUpdateNotice('');
     setConfigurationError('');
     setLaunchError('');
     setDefaultError('');
@@ -686,23 +678,6 @@ export function AgentsPage() {
 
   const refreshModels = () => {
     void loadModels(selected);
-  };
-
-  const updateCodexModelCatalog = async () => {
-    setCatalogUpdateError('');
-    setCatalogUpdateNotice('');
-    setBusyAction('catalog');
-    try {
-      const result = await invoke<CodexModelCatalogUpdateResult>('update_codex_model_catalog');
-      setCatalogUpdateNotice(result.outcome === 'updated'
-        ? t('agents.catalog.updated')
-        : t('agents.catalog.unchanged'));
-      await loadModels('codex');
-    } catch (requestError) {
-      setCatalogUpdateError(String(requestError));
-    } finally {
-      setBusyAction(null);
-    }
   };
 
   const reloadStatusesAfterAction = async () => {
@@ -988,31 +963,6 @@ export function AgentsPage() {
                   >
                     {modelHint}
                   </span>
-                ) : null}
-                {selected === 'codex' ? (
-                  <div className="agent-catalog-update-control">
-                    <button
-                      type="button"
-                      className="secondary-button compact-button"
-                      onClick={() => void updateCodexModelCatalog()}
-                      disabled={busy}
-                    >
-                      <RefreshCw size={15} className={busyAction === 'catalog' ? 'spin' : ''} />
-                      {busyAction === 'catalog'
-                        ? t('agents.catalog.updating')
-                        : t('agents.catalog.update')}
-                    </button>
-                    {catalogUpdateError ? (
-                      <span className="agent-inline-message error" role="alert" aria-live="polite">
-                        {catalogUpdateError}
-                      </span>
-                    ) : null}
-                    {catalogUpdateNotice ? (
-                      <span className="agent-inline-message" role="status" aria-live="polite">
-                        {catalogUpdateNotice}
-                      </span>
-                    ) : null}
-                  </div>
                 ) : null}
               </section>
 

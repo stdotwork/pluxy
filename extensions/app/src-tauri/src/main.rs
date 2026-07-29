@@ -6537,27 +6537,35 @@ async fn upload_auth_file(
 }
 
 #[tauri::command]
-async fn download_auth_file(
+fn open_auth_files_directory(
     gui_config_state: tauri::State<'_, GuiConfigState>,
-    name: String,
-) -> Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("认证文件名不能为空".to_string());
-    }
-
+) -> Result<(), String> {
     let config = gui_config_state.snapshot()?;
-    let client = management_http_client()?;
-    let mut query = std::collections::HashMap::new();
-    query.insert("name".to_string(), name.to_string());
-    let response = client
-        .get(management_endpoint(&config, "auth-files/download")?)
-        .header("Authorization", management_authorization(&config)?)
-        .query(&query)
-        .send()
-        .await
-        .map_err(|err| format!("下载认证文件失败: {err}"))?;
-    read_management_text(response).await
+    let install_dir = core_install_dir()?;
+    let auth_dir = auth_dir_path_for_core(&config.auth_dir, &install_dir);
+    fs::create_dir_all(&auth_dir)
+        .map_err(|error| format!("创建凭证目录失败 {}: {error}", path_to_string(&auth_dir)))?;
+    open_directory_in_file_manager(&auth_dir)
+}
+
+fn open_directory_in_file_manager(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new(windows_explorer_executable());
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command.arg(path);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure_background_command(&mut command);
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("打开凭证目录失败 {}: {error}", path_to_string(path)))
 }
 
 #[tauri::command]
@@ -13488,7 +13496,7 @@ fn main() {
             clear_core_management_secret_key,
             management_request,
             upload_auth_file,
-            download_auth_file,
+            open_auth_files_directory,
             set_core_plugins_enabled,
             set_core_routing_strategy,
             set_core_proxy_url,
