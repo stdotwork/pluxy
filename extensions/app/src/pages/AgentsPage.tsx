@@ -211,17 +211,6 @@ const writeAgentModelSelections = (
   }
 };
 
-const reconcileAgentModelSelections = (
-  current: Partial<Record<AgentClientId, string>>,
-  models: ModelOption[],
-) => {
-  return agentDefinitions.reduce<Partial<Record<AgentClientId, string>>>((result, agent) => {
-    const existing = current[agent.id] ?? '';
-    result[agent.id] = resolveAgentModelSelection(models, existing);
-    return result;
-  }, {});
-};
-
 function AgentMark({ definition, size = 26 }: { definition: AgentDefinition; size?: number }) {
   if (definition.icon) {
     return <img src={definition.icon} alt="" className="provider-logo" />;
@@ -511,7 +500,7 @@ export function AgentsPage() {
   const [closeAppNotice, setCloseAppNotice] = useState('');
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
-  const autoLoadedModelClientRef = useRef<AgentClientId | null>(null);
+  const modelRequestRef = useRef(0);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -521,22 +510,29 @@ export function AgentsPage() {
     setStatuses(nextStatuses);
   }, []);
 
-  const loadModels = useCallback(async () => {
+  const loadModels = useCallback(async (client: AgentClientId) => {
+    const requestId = modelRequestRef.current + 1;
+    modelRequestRef.current = requestId;
     setModelLoading(true);
     setModelError('');
+    setModels([]);
     try {
-      const nextModels = await invoke<ModelOption[]>('get_agent_models');
+      const nextModels = await invoke<ModelOption[]>('get_agent_models', { client });
+      if (modelRequestRef.current !== requestId) return;
       setModels(nextModels);
       setModelSelectionError('');
       setModelByClient((current) => {
-        const next = reconcileAgentModelSelections(current, nextModels);
+        const next = {
+          ...current,
+          [client]: resolveAgentModelSelection(nextModels, current[client] ?? ''),
+        };
         writeAgentModelSelections(next);
         return next;
       });
     } catch (requestError) {
-      setModelError(String(requestError));
+      if (modelRequestRef.current === requestId) setModelError(String(requestError));
     } finally {
-      setModelLoading(false);
+      if (modelRequestRef.current === requestId) setModelLoading(false);
     }
   }, []);
 
@@ -561,9 +557,7 @@ export function AgentsPage() {
   }, [loadStatuses]);
 
   useEffect(() => {
-    if (autoLoadedModelClientRef.current === selected) return;
-    autoLoadedModelClientRef.current = selected;
-    void loadModels();
+    void loadModels(selected);
   }, [loadModels, selected]);
 
   useEffect(() => {
@@ -683,7 +677,7 @@ export function AgentsPage() {
             : '';
 
   const refreshModels = () => {
-    void loadModels();
+    void loadModels(selected);
   };
 
   const reloadStatusesAfterAction = async () => {
@@ -733,7 +727,6 @@ export function AgentsPage() {
       await invoke<AgentConfigActionResult>('apply_agent_config', {
         client: selected,
         model,
-        models,
         oauthConfiguration,
       });
       await reloadStatusesAfterAction();
@@ -754,7 +747,6 @@ export function AgentsPage() {
       await invoke<AgentConfigActionResult>('reset_agent_config_to_default', {
         client: selected,
         model,
-        models,
         oauthConfiguration,
       });
       setDefaultConfirmOpen(false);
