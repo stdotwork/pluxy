@@ -51,6 +51,10 @@ const RELEASE_DOWNLOAD_PREFIX: &str =
 const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-windows.json";
 const APP_RELEASE_DOWNLOAD_PREFIX: &str =
     "https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/";
+const CODEX_MODEL_CATALOG_URL: &str = "https://raw.githubusercontent.com/router-for-me/EasyCLIProxyAPI/main/src-tauri/resources/codex_models/model-catalog.json";
+const CODEX_MODEL_CATALOG_OVERRIDE_DIR: &str = "codex_models";
+const CODEX_MODEL_CATALOG_SOURCE_FILE: &str = "model-catalog.json";
+const MAX_CODEX_MODEL_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 const APP_UPDATE_PROGRESS_EVENT: &str = "app-update-progress";
 const PORTABLE_APP_MANIFEST_FILE: &str = "portable-app.json";
 #[cfg(windows)]
@@ -608,6 +612,12 @@ struct AgentConfigActionResult {
     model: Option<String>,
     changed_files: Vec<String>,
     conflict_files: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexModelCatalogUpdateResult {
+    outcome: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1595,6 +1605,100 @@ async fn get_agent_models(
     let client = AgentClient::parse(&client)?;
     let config = gui_config_state.snapshot()?;
     Ok(fetch_prepared_agent_models(client, &config).await?.models)
+}
+
+#[tauri::command]
+async fn update_codex_model_catalog(
+    app: tauri::AppHandle,
+) -> Result<CodexModelCatalogUpdateResult, String> {
+    update_codex_model_catalog_inner(&app).await
+}
+
+async fn update_codex_model_catalog_inner(
+    app: &tauri::AppHandle,
+) -> Result<CodexModelCatalogUpdateResult, String> {
+    let client = reqwest::Client::builder()
+        .redirect(github_https_redirect_policy())
+        .connect_timeout(Duration::from_secs(8))
+        .read_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(25))
+        .build()
+        .map_err(|error| format!("创建 Codex 模型目录更新客户端失败: {error}"))?;
+    let response = client
+        .get(CODEX_MODEL_CATALOG_URL)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+        .send()
+        .await
+        .map_err(|error| format!("从 GitHub 读取 Codex 模型目录失败: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "从 GitHub 读取 Codex 模型目录失败: HTTP {}",
+            status.as_u16()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_CODEX_MODEL_CATALOG_BYTES as u64)
+    {
+        return Err(format!(
+            "GitHub Codex 模型目录超过 {} MiB 限制",
+            MAX_CODEX_MODEL_CATALOG_BYTES / 1024 / 1024
+        ));
+    }
+
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("读取 GitHub Codex 模型目录失败: {error}"))?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_CODEX_MODEL_CATALOG_BYTES {
+            return Err(format!(
+                "GitHub Codex 模型目录超过 {} MiB 限制",
+                MAX_CODEX_MODEL_CATALOG_BYTES / 1024 / 1024
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let catalog_json = String::from_utf8(bytes)
+        .map_err(|_| "GitHub Codex 模型目录不是有效的 UTF-8 文件".to_string())?;
+    codex_catalog::validate_catalog_json(&catalog_json)
+        .map_err(|error| format!("GitHub Codex 模型目录校验失败: {error}"))?;
+
+    if codex_catalog::current_catalog_json()? == catalog_json {
+        return Ok(CodexModelCatalogUpdateResult {
+            outcome: "unchanged".to_string(),
+        });
+    }
+
+    let path = codex_model_catalog_override_path(app)?;
+    write_bytes_atomically(&path, catalog_json.as_bytes())?;
+    let changed = codex_catalog::activate_catalog_json(&catalog_json)?;
+    Ok(CodexModelCatalogUpdateResult {
+        outcome: if changed { "updated" } else { "unchanged" }.to_string(),
+    })
+}
+
+fn codex_model_catalog_override_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法获取应用数据目录: {error}"))?;
+    Ok(app_data
+        .join(CODEX_MODEL_CATALOG_OVERRIDE_DIR)
+        .join(CODEX_MODEL_CATALOG_SOURCE_FILE))
+}
+
+fn load_codex_model_catalog_override(app: &tauri::AppHandle) -> Result<(), String> {
+    let path = codex_model_catalog_override_path(app)?;
+    if !path.is_file() {
+        return Ok(());
+    }
+    let catalog_json = fs::read_to_string(&path)
+        .map_err(|error| format!("读取本地 Codex 模型目录更新文件失败: {error}"))?;
+    codex_catalog::activate_catalog_json(&catalog_json)
+        .map_err(|error| format!("本地 Codex 模型目录更新文件无效: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -6671,6 +6775,7 @@ fn github_https_redirect_policy() -> reqwest::redirect::Policy {
             url.host_str(),
             Some(
                 "github.com"
+                    | "raw.githubusercontent.com"
                     | "objects.githubusercontent.com"
                     | "release-assets.githubusercontent.com"
             )
@@ -13272,6 +13377,15 @@ fn main() {
             if let Err(error) = codex_catalog::validate_embedded_catalog() {
                 eprintln!("Codex 内置模型目录无效: {error}");
             }
+            if let Err(error) = load_codex_model_catalog_override(app.handle()) {
+                eprintln!("加载 Codex 模型目录更新文件失败，将使用内置目录: {error}");
+            }
+            let catalog_update_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = update_codex_model_catalog_inner(&catalog_update_app).await {
+                    eprintln!("后台更新 Codex 模型目录失败，继续使用当前目录: {error}");
+                }
+            });
             if let Err(error) = restore_main_window_size(app.handle()) {
                 eprintln!("{error}");
             }
@@ -13352,6 +13466,7 @@ fn main() {
             get_agent_config_statuses,
             refresh_agent_config_statuses,
             get_agent_models,
+            update_codex_model_catalog,
             get_thinking_aliases,
             get_thinking_alias_sources,
             create_thinking_alias,

@@ -1,11 +1,11 @@
 use crate::AgentModelOption;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 const MODEL_CATALOG_JSON: &str = include_str!("../resources/codex_models/model-catalog.json");
 
-static SOURCES: OnceLock<Result<CatalogSources, String>> = OnceLock::new();
+static CATALOG_STATE: OnceLock<Result<RwLock<CatalogState>, String>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CodexRuntimeModel {
@@ -34,6 +34,12 @@ struct CatalogSources {
 }
 
 #[derive(Clone, Debug)]
+struct CatalogState {
+    sources: CatalogSources,
+    json: String,
+}
+
+#[derive(Clone, Debug)]
 struct Template {
     value: Map<String, Value>,
     order: usize,
@@ -46,7 +52,31 @@ struct CatalogEntry {
 }
 
 pub(crate) fn validate_embedded_catalog() -> Result<(), String> {
-    sources().map(|_| ())
+    catalog_state().map(|_| ())
+}
+
+pub(crate) fn activate_catalog_json(catalog_json: &str) -> Result<bool, String> {
+    let parsed = parse_sources(catalog_json)?;
+    let mut state = catalog_state()?
+        .write()
+        .map_err(|_| "Codex 模型目录内存锁已损坏".to_string())?;
+    if state.json == catalog_json {
+        return Ok(false);
+    }
+    state.sources = parsed;
+    state.json = catalog_json.to_string();
+    Ok(true)
+}
+
+pub(crate) fn validate_catalog_json(catalog_json: &str) -> Result<(), String> {
+    parse_sources(catalog_json).map(|_| ())
+}
+
+pub(crate) fn current_catalog_json() -> Result<String, String> {
+    let state = catalog_state()?
+        .read()
+        .map_err(|_| "Codex 模型目录内存锁已损坏".to_string())?;
+    Ok(state.json.clone())
 }
 
 pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeModel>, String> {
@@ -113,12 +143,22 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
 pub(crate) fn prepare_catalog(
     runtime_models: &[CodexRuntimeModel],
 ) -> Result<PreparedCodexCatalog, String> {
-    prepare_catalog_with_sources(runtime_models, sources()?)
+    let state = catalog_state()?
+        .read()
+        .map_err(|_| "Codex 模型目录内存锁已损坏".to_string())?;
+    prepare_catalog_with_sources(runtime_models, &state.sources)
 }
 
-fn sources() -> Result<&'static CatalogSources, String> {
-    SOURCES
-        .get_or_init(|| parse_sources(MODEL_CATALOG_JSON))
+fn catalog_state() -> Result<&'static RwLock<CatalogState>, String> {
+    CATALOG_STATE
+        .get_or_init(|| {
+            parse_sources(MODEL_CATALOG_JSON).map(|sources| {
+                RwLock::new(CatalogState {
+                    sources,
+                    json: MODEL_CATALOG_JSON.to_string(),
+                })
+            })
+        })
         .as_ref()
         .map_err(Clone::clone)
 }
@@ -686,7 +726,8 @@ mod tests {
     #[test]
     fn embedded_catalog_is_valid() {
         validate_embedded_catalog().unwrap();
-        let sources = sources().unwrap();
+        let state = catalog_state().unwrap().read().unwrap();
+        let sources = &state.sources;
         assert_eq!(sources.templates.len(), 10);
         let fallback_prompt = string_value(&sources.fallback, "base_instructions");
         assert!(fallback_prompt.starts_with(

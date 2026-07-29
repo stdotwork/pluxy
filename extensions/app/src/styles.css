@@ -4934,6 +4934,18 @@ input:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.agent-catalog-update-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.agent-catalog-update-control .agent-inline-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .agent-pending-badge {
   flex: none;
   padding: 4px 8px;
@@ -7160,6 +7172,11 @@ input:focus-visible {
 
   .agent-config-footer,
   .agent-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-catalog-update-control {
     align-items: stretch;
     flex-direction: column;
   }
