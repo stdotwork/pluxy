@@ -13,6 +13,12 @@ import codexIcon from '../assets/icons/codex.svg';
 import grokIcon from '../assets/icons/grok.svg';
 import kimiIcon from '../assets/icons/kimi-light.svg';
 import { useI18n } from '../i18n';
+import {
+  changedOAuthAuthFileNames,
+  snapshotAuthFiles,
+  type AuthFileSnapshot,
+} from '../services/authFiles';
+import { managementApi, responseList } from '../services/managementApi';
 
 type OAuthProviderId = 'codex' | 'claude' | 'antigravity' | 'kimi' | 'xai';
 type OAuthFlowStatus = 'idle' | 'waiting' | 'success' | 'error';
@@ -69,6 +75,7 @@ export function OAuthLoginPage() {
   const pollingTimers = useRef<Partial<Record<OAuthProviderId, number>>>({});
   const pollingRequests = useRef<Partial<Record<OAuthProviderId, boolean>>>({});
   const successResetTimers = useRef<Partial<Record<OAuthProviderId, number>>>({});
+  const credentialSnapshots = useRef<Partial<Record<OAuthProviderId, AuthFileSnapshot>>>({});
   const noticeTimerRef = useRef<number | null>(null);
 
   const showNotice = useCallback((message: string, tone: 'success' | 'error' | 'info') => {
@@ -118,6 +125,7 @@ export function OAuthLoginPage() {
   const resetProviderAttempt = useCallback(
     (provider: OAuthProviderId) => {
       clearProviderTimers(provider);
+      delete credentialSnapshots.current[provider];
       setStates((current) => ({ ...current, [provider]: { status: 'idle' } }));
     },
     [clearProviderTimers],
@@ -144,6 +152,24 @@ export function OAuthLoginPage() {
     [clearProviderTimers, resetProviderAttempt, updateProviderState],
   );
 
+  const captureCredentialSnapshot = useCallback(async (provider: OAuthProviderId) => {
+    const payload = await managementApi.get('/auth-files');
+    credentialSnapshots.current[provider] = snapshotAuthFiles(responseList(payload, 'files'));
+  }, []);
+
+  const applyDefaultCredentialPriority = useCallback(async (provider: OAuthProviderId) => {
+    const before = credentialSnapshots.current[provider];
+    delete credentialSnapshots.current[provider];
+    if (!before) return;
+
+    const payload = await managementApi.get('/auth-files');
+    const names = changedOAuthAuthFileNames(before, responseList(payload, 'files'), provider);
+    await Promise.all(names.map((name) => managementApi.patch('/auth-files/fields', {
+      name,
+      priority: 0,
+    })));
+  }, []);
+
   const startPolling = useCallback(
     (provider: OAuthProviderId, state: string) => {
       clearPollingTimer(provider);
@@ -154,8 +180,19 @@ export function OAuthLoginPage() {
           const result = await invoke<OAuthStatusResult>('get_oauth_status', { state });
           const status = (result.status || '').toLowerCase();
           if (status === 'ok') {
+            let priorityError = '';
+            try {
+              await applyDefaultCredentialPriority(provider);
+            } catch (error) {
+              priorityError = String(error);
+            }
             completeProviderAuth(provider);
-            showNotice(t('oauth.loginSuccess', { provider: providerLabel(provider) }), 'success');
+            showNotice(
+              priorityError
+                ? t('oauth.priorityApplyFailed', { error: priorityError })
+                : t('oauth.loginSuccess', { provider: providerLabel(provider) }),
+              priorityError ? 'error' : 'success',
+            );
           } else if (status === 'error') {
             updateProviderState(provider, {
               status: 'error',
@@ -188,7 +225,7 @@ export function OAuthLoginPage() {
         OAUTH_POLL_INTERVAL_MS,
       );
     },
-    [clearPollingTimer, completeProviderAuth, showNotice, t, updateProviderState],
+    [applyDefaultCredentialPriority, clearPollingTimer, completeProviderAuth, showNotice, t, updateProviderState],
   );
 
   useEffect(() => {
@@ -217,6 +254,7 @@ export function OAuthLoginPage() {
     });
 
     try {
+      await captureCredentialSnapshot(provider);
       const result = await invoke<OAuthStartResult>('start_oauth_login', { provider });
       if (!result.state) {
         updateProviderState(provider, {
@@ -247,6 +285,7 @@ export function OAuthLoginPage() {
         );
       }
     } catch (error) {
+      delete credentialSnapshots.current[provider];
       updateProviderState(provider, {
         status: 'error',
         error: String(error),

@@ -2,12 +2,73 @@ import { readBoolean, readString } from './managementApi';
 import { getCurrentLocale, translate } from '../i18n';
 
 export type AuthFileRecord = Record<string, unknown>;
+export type AuthFileSnapshot = Map<string, string>;
 
 export const authFileName = (file: AuthFileRecord) =>
   readString(file, 'name') || translate(getCurrentLocale(), 'authFiles.unnamed');
 
 export const isRuntimeOnlyAuthFile = (file: AuthFileRecord) =>
   readBoolean(file, 'runtime_only', 'runtimeOnly');
+
+export const parseAuthFilePriority = (value: unknown): number | undefined => {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) ? value : undefined;
+  }
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  if (!/^-?\d+$/.test(normalized)) return undefined;
+  const priority = Number(normalized);
+  return Number.isSafeInteger(priority) ? priority : undefined;
+};
+
+export const normalizeAuthFilePriorityInput = (value: string): number | null => {
+  const normalized = value.trim();
+  if (!normalized) return 0;
+  return parseAuthFilePriority(normalized) ?? null;
+};
+
+const normalizeOAuthProvider = (value: string) => {
+  const provider = value.trim().toLowerCase();
+  if (provider === 'anthropic') return 'claude';
+  if (provider === 'openai') return 'codex';
+  return provider;
+};
+
+const authFileProvider = (file: AuthFileRecord) =>
+  normalizeOAuthProvider(readString(file, 'provider', 'type'));
+
+export const snapshotAuthFiles = (files: AuthFileRecord[]): AuthFileSnapshot => {
+  const grouped = new Map<string, string[]>();
+  files.forEach((file) => {
+    const name = readString(file, 'name');
+    if (!name) return;
+    const fingerprints = grouped.get(name) ?? [];
+    fingerprints.push(JSON.stringify(file));
+    grouped.set(name, fingerprints);
+  });
+  return new Map(Array.from(grouped, ([name, fingerprints]) => [
+    name,
+    fingerprints.sort().join('\n'),
+  ]));
+};
+
+export const changedOAuthAuthFileNames = (
+  before: AuthFileSnapshot,
+  files: AuthFileRecord[],
+  provider: string,
+) => {
+  const expectedProvider = normalizeOAuthProvider(provider);
+  const after = snapshotAuthFiles(files);
+  const names = new Set<string>();
+  files.forEach((file) => {
+    const name = readString(file, 'name');
+    if (!name || authFileProvider(file) !== expectedProvider) return;
+    const priority = parseAuthFilePriority(file.priority);
+    if (priority !== undefined && priority !== 0) return;
+    if (before.get(name) !== after.get(name)) names.add(name);
+  });
+  return Array.from(names);
+};
 
 const hasMeaningfulValue = (value: unknown) => {
   if (value === null || value === undefined) return false;

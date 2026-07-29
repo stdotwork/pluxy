@@ -248,46 +248,22 @@ export function ThinkingAliasesPage() {
 
   return (
     <section className="page management-page thinking-alias-page">
-      <header className="management-header">
-        <div>
-          <span>Model Alias</span>
-          <h1>{t('aliases.title')}</h1>
-        </div>
-      </header>
-
       <div className="thinking-alias-feedback" aria-live="polite">
         {error ? <div className="management-alert error">{error}</div> : null}
         {!error && notice ? <div className="management-alert success">{notice}</div> : null}
       </div>
 
-      <div className="thinking-alias-guide">
-        <BrainCircuit size={20} />
-        <div className="thinking-alias-guide-copy">
-          <strong>{t('aliases.intro.title')}</strong>
-          <p>{t('aliases.intro.description')}</p>
-          <span>{t('aliases.intro.badge')}</span>
-        </div>
-        <div className="thinking-alias-flow" aria-label={t('aliases.flow.aria')}>
-          <span><small>{t('aliases.flow.original')}</small><code>deepseek-v4-pro</code></span>
-          <ArrowRight size={14} />
-          <div>
-            <span><small>{t('aliases.flow.direct')}</small><code>{t('aliases.flow.directValue')}</code></span>
-            <span><small>{t('aliases.flow.alias')}</small><code>{t('aliases.flow.aliasValue')}</code></span>
-          </div>
-        </div>
-      </div>
-
       <div className="thinking-alias-workbench">
-        <section className="panel thinking-alias-builder">
-          <div className="thinking-alias-panel-heading">
-            <span><GitFork size={18} /></span>
-            <div>
-              <h2>{t('aliases.create.title')}</h2>
-              <p>{t('aliases.create.description')}</p>
+        <section className="panel thinking-alias-editor-panel">
+            <div className="thinking-alias-panel-heading">
+              <span><GitFork size={18} /></span>
+              <div>
+                <h2>{t('aliases.create.title')}</h2>
+                <p>{t('aliases.create.description')}</p>
+              </div>
             </div>
-          </div>
 
-          <div className="thinking-alias-field thinking-model-field">
+            <div className="thinking-alias-field thinking-model-field">
             <label htmlFor="thinking-model-search">{t('aliases.originalModel')}</label>
             <div className="thinking-model-picker" ref={modelPickerRef}>
               <div className="thinking-model-search">
@@ -379,9 +355,9 @@ export function ThinkingAliasesPage() {
             ) : (
               <small className="thinking-model-hint">{t('aliases.sourceHint')}</small>
             )}
-          </div>
+            </div>
 
-          <div className="thinking-alias-field">
+            <div className="thinking-alias-field">
             <div className="thinking-field-heading">
               <strong>{t('aliases.effort.title')}</strong>
               <span>{t('aliases.effort.description')}</span>
@@ -439,42 +415,43 @@ export function ThinkingAliasesPage() {
               </button>
               <small>{t('aliases.customHelp')}</small>
             </div> : null}
-          </div>
-
-          <div className="thinking-alias-field">
-            <div className="thinking-field-heading">
-              <strong>{t('aliases.aliasName.title')}</strong>
-              <span>{t('aliases.aliasName.description')}</span>
             </div>
-            <input
-              id="thinking-alias-name"
-              className="thinking-alias-input"
-              value={alias}
-              onChange={(event) => setAlias(event.currentTarget.value)}
-              placeholder={selectedSource
-                ? t('aliases.aliasName.example', { model: selectedSource.model, effort: normalizedEffort || 'high' })
-                : t('aliases.aliasName.selectFirst')}
-              disabled={Boolean(busyAlias)}
-            />
-          </div>
+            <div className="thinking-alias-section-divider" aria-hidden="true" />
 
-          <div className="thinking-alias-preview">
-            <BrainCircuit size={18} />
-            <div>
-              <span>{selectedSource?.model || t('aliases.notSelected')} <ArrowRight size={13} /> {alias || t('aliases.enterAlias')}</span>
-              <code>{selectedSource?.protocol === 'openai' ? 'reasoning_effort' : 'reasoning.effort'} = {normalizedEffort || t('aliases.notSet')}</code>
+            <div className="thinking-alias-field">
+              <div className="thinking-field-heading">
+                <strong>{t('aliases.aliasName.title')}</strong>
+                <span>{t('aliases.aliasName.description')}</span>
+              </div>
+              <input
+                id="thinking-alias-name"
+                className="thinking-alias-input"
+                value={alias}
+                onChange={(event) => setAlias(event.currentTarget.value)}
+                placeholder={selectedSource
+                  ? t('aliases.aliasName.example', { model: selectedSource.model, effort: normalizedEffort || 'high' })
+                  : t('aliases.aliasName.selectFirst')}
+                disabled={Boolean(busyAlias)}
+              />
             </div>
-          </div>
 
-          <button
-            type="button"
-            className="primary-button thinking-alias-create"
-            onClick={() => void createAlias()}
-            disabled={loading || Boolean(busyAlias) || !selectedSource || !effort.trim() || !alias.trim()}
-          >
-            {busyAction === 'create' ? <LoaderCircle size={16} className="spin" /> : <GitFork size={16} />}
-            {busyAction === 'create' ? t('aliases.creating') : t('aliases.create')}
-          </button>
+            <div className="thinking-alias-preview">
+              <BrainCircuit size={18} />
+              <div>
+                <span>{selectedSource?.model || t('aliases.notSelected')} <ArrowRight size={13} /> {alias || t('aliases.enterAlias')}</span>
+                <code>{selectedSource?.protocol === 'openai' ? 'reasoning_effort' : 'reasoning.effort'} = {normalizedEffort || t('aliases.notSet')}</code>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="primary-button thinking-alias-create"
+              onClick={() => void createAlias()}
+              disabled={loading || Boolean(busyAlias) || !selectedSource || !effort.trim() || !alias.trim()}
+            >
+              {busyAction === 'create' ? <LoaderCircle size={16} className="spin" /> : <GitFork size={16} />}
+              {busyAction === 'create' ? t('aliases.creating') : t('aliases.create')}
+            </button>
         </section>
 
         <section className="panel thinking-alias-list-panel">

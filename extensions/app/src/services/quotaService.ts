@@ -540,24 +540,8 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
   });
 };
 
-const resolveProjectId = async (file: AuthFile): Promise<string> => {
-  const direct = readString(file, 'project_id', 'projectId');
-  if (direct) return direct;
-  try {
-    const content = await managementApi.downloadAuthFile(fileName(file));
-    const parsed = JSON.parse(content) as Record<string, unknown>;
-    const direct = readString(parsed, 'project_id', 'projectId');
-    if (direct) return direct;
-    for (const container of [parsed.installed, parsed.web]) {
-      if (!isRecord(container)) continue;
-      const nested = readString(container, 'project_id', 'projectId');
-      if (nested) return nested;
-    }
-    return '';
-  } catch {
-    return '';
-  }
-};
+const resolveProjectId = (file: AuthFile): string =>
+  readString(file, 'project_id', 'projectId');
 
 const decodeJwtPayload = (value: unknown): Record<string, unknown> | null => {
   if (isRecord(value)) return value;
@@ -614,18 +598,8 @@ const codexAccountIdFromRecord = (record: Record<string, unknown>): string => {
   return '';
 };
 
-const resolveCodexAccountId = async (file: AuthFile): Promise<string> => {
-  const direct = codexAccountIdFromRecord(file);
-  if (direct) return direct;
-
-  try {
-    const content = await managementApi.downloadAuthFile(fileName(file));
-    const parsed = JSON.parse(content);
-    return isRecord(parsed) ? codexAccountIdFromRecord(parsed) : '';
-  } catch {
-    return '';
-  }
-};
+const resolveCodexAccountId = (file: AuthFile): string =>
+  codexAccountIdFromRecord(file);
 
 const xaiUserIdFromRecord = (record: Record<string, unknown>): string => {
   const nestedRecords = [record, record.metadata, record.attributes]
@@ -642,17 +616,8 @@ const xaiUserIdFromRecord = (record: Record<string, unknown>): string => {
   return '';
 };
 
-const resolveXaiUserId = async (file: AuthFile): Promise<string> => {
-  const direct = xaiUserIdFromRecord(file);
-  if (direct) return direct;
-  try {
-    const content = await managementApi.downloadAuthFile(fileName(file));
-    const parsed = JSON.parse(content);
-    return isRecord(parsed) ? xaiUserIdFromRecord(parsed) : '';
-  } catch {
-    return '';
-  }
-};
+const resolveXaiUserId = (file: AuthFile): string =>
+  xaiUserIdFromRecord(file);
 
 const requestQuotaPayload = async (
   authIndex: string,
