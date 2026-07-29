@@ -14,12 +14,10 @@ import {
   Languages,
   LogIn,
   MessageCircle,
-  Moon,
   Network,
   PackageOpen,
   ServerCog,
   Settings,
-  Sun,
   X,
 } from 'lucide-react';
 import appLogo from './assets/logo.jpg';
@@ -308,22 +306,30 @@ function AppContent() {
           </nav>
 
           <div className="sidebar-bottom">
-            <button
-              type="button"
-              className="sidebar-theme-toggle"
-              aria-label={theme === 'dark' ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
-              aria-pressed={theme === 'dark'}
-              title={theme === 'dark' ? t('app.theme.switchToLight') : t('app.theme.switchToDark')}
-              onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
+            <div
+              className="sidebar-theme-selector"
+              role="group"
+              aria-label={`${t('app.theme.light')} / ${t('app.theme.dark')}`}
             >
-              {theme === 'dark'
-                ? <Moon size={16} aria-hidden="true" />
-                : <Sun size={16} aria-hidden="true" />}
-              <span>{theme === 'dark' ? t('app.theme.dark') : t('app.theme.light')}</span>
-              <i className="theme-switch-track" aria-hidden="true">
-                <b />
-              </i>
-            </button>
+              <button
+                type="button"
+                className={theme === 'light' ? 'active' : ''}
+                aria-pressed={theme === 'light'}
+                title={t('app.theme.switchToLight')}
+                onClick={() => setTheme('light')}
+              >
+                {t('app.theme.light')}
+              </button>
+              <button
+                type="button"
+                className={theme === 'dark' ? 'active' : ''}
+                aria-pressed={theme === 'dark'}
+                title={t('app.theme.switchToDark')}
+                onClick={() => setTheme('dark')}
+              >
+                {t('app.theme.dark')}
+              </button>
+            </div>
             <div ref={languageMenuRef} className="sidebar-language">
               <button
                 ref={languageButtonRef}

@@ -584,6 +584,7 @@ struct AgentConfigStatus {
     config_valid: bool,
     configured: bool,
     current_model: Option<String>,
+    oauth_configuration: bool,
     modification_enabled: bool,
     modification_state: String,
     backup_available: bool,
@@ -2422,9 +2423,11 @@ fn inspect_agent_config(
     let paths = agent_config_paths(client, home);
     let config_exists = paths.iter().any(|path| path.is_file());
     let result = inspect_agent_managed_config(client, &paths, port, api_key);
-    let (configured, current_model, config_valid, error) = match result {
-        Ok((configured, model)) => (configured, model, true, None),
-        Err(error) => (false, None, false, Some(error)),
+    let (configured, current_model, oauth_configuration, config_valid, error) = match result {
+        Ok((configured, model, oauth_configuration)) => {
+            (configured, model, oauth_configuration, true, None)
+        }
+        Err(error) => (false, None, false, false, Some(error)),
     };
     let launch_targets = agent_launch_targets(client, home);
     let executable = find_agent_executable(client, home);
@@ -2458,6 +2461,7 @@ fn inspect_agent_config(
         config_valid,
         configured,
         current_model,
+        oauth_configuration,
         modification_enabled: modification.enabled,
         modification_state: modification.state,
         backup_available: modification.backup_available,
@@ -2498,17 +2502,22 @@ fn inspect_agent_managed_config(
     paths: &[PathBuf],
     port: u16,
     api_key: &str,
-) -> Result<(bool, Option<String>), String> {
+) -> Result<(bool, Option<String>, bool), String> {
     match client {
-        AgentClient::ClaudeCode => inspect_claude_agent_config(&paths[0], port, api_key),
+        AgentClient::ClaudeCode => inspect_claude_agent_config(&paths[0], port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
         AgentClient::ClaudeDesktop if client.supported_platform() => {
             inspect_claude_desktop_agent_config(paths, port, api_key)
+                .map(|(configured, model)| (configured, model, false))
         }
-        AgentClient::ClaudeDesktop => Ok((false, None)),
+        AgentClient::ClaudeDesktop => Ok((false, None, false)),
         AgentClient::Codex => inspect_codex_agent_config(&paths[0], port, api_key),
-        AgentClient::OpenCode => inspect_opencode_agent_config(&paths[0], port, api_key),
-        AgentClient::OpenClaw => inspect_openclaw_agent_config(&paths[0], port, api_key),
-        AgentClient::Hermes => inspect_hermes_agent_config(&paths[0], port, api_key),
+        AgentClient::OpenCode => inspect_opencode_agent_config(&paths[0], port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
+        AgentClient::OpenClaw => inspect_openclaw_agent_config(&paths[0], port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
+        AgentClient::Hermes => inspect_hermes_agent_config(&paths[0], port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
     }
 }
 
@@ -3410,9 +3419,9 @@ fn inspect_codex_agent_config(
     path: &Path,
     port: u16,
     api_key: &str,
-) -> Result<(bool, Option<String>), String> {
+) -> Result<(bool, Option<String>, bool), String> {
     if !path.is_file() {
-        return Ok((false, None));
+        return Ok((false, None, false));
     }
     let root: toml::Value = toml::from_str(
         &fs::read_to_string(path).map_err(|error| format!("读取 Codex 配置失败: {error}"))?,
@@ -3428,11 +3437,10 @@ fn inspect_codex_agent_config(
         .and_then(|provider| provider.get("experimental_bearer_token"))
         .and_then(toml::Value::as_str)
         == Some(api_key);
-    let uses_oauth = provider
+    let oauth_configuration = provider
         .and_then(|provider| provider.get("requires_openai_auth"))
         .and_then(toml::Value::as_bool)
-        == Some(true)
-        && provider.is_some_and(|provider| !provider.contains_key("experimental_bearer_token"));
+        == Some(true);
     let configured = root.get("model_provider").and_then(toml::Value::as_str)
         == Some(MANAGED_AGENT_PROVIDER_ID)
         && root.get("model_catalog_json").and_then(toml::Value::as_str)
@@ -3445,7 +3453,7 @@ fn inspect_codex_agent_config(
             .and_then(|provider| provider.get("base_url"))
             .and_then(toml::Value::as_str)
             == Some(expected_base.as_str())
-        && (uses_api_key || uses_oauth)
+        && uses_api_key
         && provider
             .and_then(|provider| provider.get("wire_api"))
             .and_then(toml::Value::as_str)
@@ -3456,7 +3464,7 @@ fn inspect_codex_agent_config(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    Ok((configured, model))
+    Ok((configured, model, oauth_configuration))
 }
 
 fn inspect_opencode_agent_config(
@@ -4017,12 +4025,11 @@ fn build_codex_agent_config_with_oauth(
     set_codex_table_item(provider, "name", value("EasyCLIProxyAPI"));
     set_codex_table_item(provider, "base_url", value(base_url));
     set_codex_table_item(provider, "wire_api", value("responses"));
+    set_codex_table_item(provider, "experimental_bearer_token", value(api_key));
     if oauth_configuration {
-        provider.remove("experimental_bearer_token");
         set_codex_table_item(provider, "requires_openai_auth", value(true));
     } else {
         provider.remove("requires_openai_auth");
-        set_codex_table_item(provider, "experimental_bearer_token", value(api_key));
     }
     let rendered = document.to_string();
     toml::from_str::<toml::Value>(&rendered)
@@ -5771,7 +5778,8 @@ fn enable_agent_modification(
             Vec::new(),
         ));
     }
-    let (_, current_model) = inspect_agent_managed_config(client, &paths, port, DEFAULT_API_KEY)?;
+    let (_, current_model, _) =
+        inspect_agent_managed_config(client, &paths, port, DEFAULT_API_KEY)?;
     if agent_has_managed_marker(client, &paths)? {
         if let Some(current_model) = current_model.as_deref() {
             if let Some(record) = build_legacy_agent_record(client, home, port, current_model)? {
@@ -5849,7 +5857,8 @@ fn disable_agent_modification(
     let mut record = match load_agent_record(client, &paths)? {
         Some(record) => record,
         None => {
-            let (_, model) = inspect_agent_managed_config(client, &paths, port, DEFAULT_API_KEY)?;
+            let (_, model, _) =
+                inspect_agent_managed_config(client, &paths, port, DEFAULT_API_KEY)?;
             if !agent_has_managed_marker(client, &paths)? {
                 return Ok(action_result(
                     "disabled",
@@ -5934,7 +5943,7 @@ fn update_agent_modification(
     let record = match load_agent_record(client, &paths)? {
         Some(record) => record,
         None => {
-            let (_, current_model) =
+            let (_, current_model, _) =
                 inspect_agent_managed_config(client, &paths, port, DEFAULT_API_KEY)?;
             if !agent_has_managed_marker(client, &paths)? {
                 return Err("请先应用配置修改".to_string());
@@ -13938,7 +13947,9 @@ mod tests {
     }
 
     #[test]
-    fn codex_oauth_configuration_uses_openai_auth_without_bearer_token() {
+    fn codex_oauth_configuration_uses_openai_auth_with_bearer_token() {
+        let home = agent_test_home("codex-oauth-configuration");
+        let path = home.join(".codex/config.toml");
         let rendered = build_codex_agent_config_with_oauth(
             Some("[model_providers.cpa-gui]\nexperimental_bearer_token = \"old-key\"\n"),
             "http://127.0.0.1:8317/v1",
@@ -13958,7 +13969,21 @@ mod tests {
                 .and_then(toml::Value::as_bool),
             Some(true)
         );
-        assert!(!provider.contains_key("experimental_bearer_token"));
+        assert_eq!(
+            provider
+                .get("experimental_bearer_token")
+                .and_then(toml::Value::as_str),
+            Some(DEFAULT_API_KEY)
+        );
+
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, rendered).unwrap();
+        let (configured, model, oauth_configuration) =
+            inspect_codex_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap();
+        assert!(configured);
+        assert_eq!(model.as_deref(), Some("gpt-test"));
+        assert!(oauth_configuration);
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
@@ -14620,7 +14645,7 @@ custom_option = "keep-original"
         provider["custom_option"] = toml_edit::value("keep-updated");
         fs::write(&path, externally_edited.to_string()).unwrap();
 
-        let (configured, current_model) =
+        let (configured, current_model, _) =
             inspect_codex_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap();
         let inspection = inspect_agent_modification(
             AgentClient::Codex,

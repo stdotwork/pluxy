@@ -445,8 +445,6 @@ export const jaOverrides = {
   'agents.sessions.repairTitle': '過去のセッションを復元',
   'agents.sessions.repairDescription': '他の Provider のセッションを現在のセッション Provider に同期します。',
   'agents.sessions.autoRepair': 'Codex 起動前に過去のセッションを自動復元',
-  'agents.sessions.autoRepairEnabled': '起動前の自動復元を有効にしました。',
-  'agents.sessions.autoRepairDisabled': '起動前の自動復元を無効にしました。',
   'agents.sessions.settingLoading': '読み込み中',
   'agents.sessions.settingOn': 'オン',
   'agents.sessions.settingOff': 'オフ',

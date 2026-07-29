@@ -62,6 +62,7 @@ type AgentConfigStatus = {
   configValid: boolean;
   configured: boolean;
   currentModel: string | null;
+  oauthConfiguration: boolean;
   modificationEnabled: boolean;
   modificationState: AgentModificationState;
   backupAvailable: boolean;
@@ -509,7 +510,7 @@ export function AgentsPage() {
   const [closeAppError, setCloseAppError] = useState('');
   const [closeAppNotice, setCloseAppNotice] = useState('');
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
-  const [oauthConfiguration, setOauthConfiguration] = useState(false);
+  const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const autoLoadedModelClientRef = useRef<AgentClientId | null>(null);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
@@ -620,6 +621,9 @@ export function AgentsPage() {
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
     ?? agentDefinitions[0];
   const activeStatus = statuses.find((status) => status.id === selected) ?? null;
+  const oauthConfiguration = oauthConfigurationDraft
+    ?? activeStatus?.oauthConfiguration
+    ?? false;
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
@@ -629,11 +633,14 @@ export function AgentsPage() {
     (target) => target.id === selectedLaunchTargetId,
   ) ?? activeLaunchTargets[0] ?? null;
   const appliedModel = activeStatus?.appliedModel ?? activeStatus?.currentModel ?? '';
-  const draftChanged = Boolean(
+  const modelDraftChanged = Boolean(
     selectedModel.trim()
       && appliedModel.trim()
       && selectedModel.trim() !== appliedModel.trim(),
   );
+  const oauthConfigurationChanged = selected === 'codex'
+    && oauthConfiguration !== Boolean(activeStatus?.oauthConfiguration);
+  const draftChanged = modelDraftChanged || oauthConfigurationChanged;
   const canEnable = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
@@ -730,6 +737,7 @@ export function AgentsPage() {
         oauthConfiguration,
       });
       await reloadStatusesAfterAction();
+      setOauthConfigurationDraft(null);
     } catch (requestError) {
       setConfigurationError(String(requestError));
     } finally {
@@ -751,6 +759,7 @@ export function AgentsPage() {
       });
       setDefaultConfirmOpen(false);
       await reloadStatusesAfterAction();
+      setOauthConfigurationDraft(null);
     } catch (requestError) {
       setDefaultError(String(requestError));
     } finally {
@@ -767,6 +776,7 @@ export function AgentsPage() {
       setClearConfirmOpen(false);
       setClearNotice(t('agents.clear.success'));
       await reloadStatusesAfterAction();
+      setOauthConfigurationDraft(null);
     } catch (requestError) {
       setClearError(String(requestError));
     } finally {
@@ -942,7 +952,7 @@ export function AgentsPage() {
               <section className="agent-core-setting-section agent-model-section">
                 <div className="agent-section-heading">
                   <div><strong>{t('agents.useModel')}</strong></div>
-                  {draftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                  {modelDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
                 </div>
                 <AgentModelPicker
                   models={models}
@@ -983,7 +993,7 @@ export function AgentsPage() {
                           type="checkbox"
                           role="switch"
                           checked={oauthConfiguration}
-                          onChange={(event) => setOauthConfiguration(event.currentTarget.checked)}
+                          onChange={(event) => setOauthConfigurationDraft(event.currentTarget.checked)}
                           disabled={busy}
                           aria-label={t('agents.modify.oauthConfiguration')}
                         />
