@@ -8,7 +8,6 @@ type RepairOnLaunchSetting = {
 };
 
 type StatusMessage = {
-  kind: 'success' | 'error';
   text: string;
 };
 
@@ -32,7 +31,6 @@ export function CodexSessionAutoRestoreCard() {
       .catch((error) => {
         if (!disposed) {
           setStatus({
-            kind: 'error',
             text: t('agents.sessions.settingLoadFailed', { error: errorMessage(error) }),
           });
         }
@@ -53,15 +51,8 @@ export function CodexSessionAutoRestoreCard() {
         request: { enabled: nextEnabled },
       });
       setEnabled(result.enabled);
-      setStatus({
-        kind: 'success',
-        text: result.enabled
-          ? t('agents.sessions.autoRepairEnabled')
-          : t('agents.sessions.autoRepairDisabled'),
-      });
     } catch (error) {
       setStatus({
-        kind: 'error',
         text: t('agents.sessions.settingFailed', { error: errorMessage(error) }),
       });
     } finally {
@@ -102,8 +93,8 @@ export function CodexSessionAutoRestoreCard() {
       </div>
       {status ? (
         <small
-          className={`codex-auto-restore-message ${status.kind}`}
-          role={status.kind === 'error' ? 'alert' : 'status'}
+          className="codex-auto-restore-message error"
+          role="alert"
         >
           {status.text}
         </small>

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Activity, BarChart3, Clock3, Database, List, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
+import { Activity, BarChart3, CircleDollarSign, Clock3, Database, List, Pencil, RefreshCw, ShieldCheck, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react';
 import { getCurrentLocale, useI18n } from '../i18n';
 
-type UsageTab = 'overview' | 'analysis' | 'events';
+type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
 
 type CollectorStatus = {
@@ -35,7 +35,11 @@ type UsageOverview = {
   totalTokens: number;
   rpm: number;
   tpm: number;
+  tps: number;
   averageLatencyMs: number;
+  cacheHitRate: number;
+  estimatedCost: number;
+  pricedRequests: number;
   timeline: TimelinePoint[];
 };
 
@@ -88,6 +92,49 @@ type UsageEventPage = {
   totalPages: number;
 };
 
+type ModelPrice = {
+  model: string;
+  prompt: number;
+  completion: number;
+  cache: number;
+  cacheRead: number;
+  cacheCreation: number;
+  promptConfigured: boolean;
+  completionConfigured: boolean;
+  cacheReadConfigured: boolean;
+  cacheCreationConfigured: boolean;
+  source: string;
+  sourceModelId: string;
+  updatedAtMs: number;
+};
+
+type UsagePriceRow = {
+  model: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  estimatedCost: number;
+  price: ModelPrice | null;
+};
+
+type UsagePricing = {
+  rows: UsagePriceRow[];
+  totalCost: number;
+  totalRequests: number;
+  pricedRequests: number;
+  savedPrices: number;
+};
+
+type ModelPriceSyncResult = {
+  imported: number;
+  skipped: number;
+  unmatched: string[];
+  usedBuiltin: boolean;
+};
+
 type UsageQuery = {
   start?: string;
   end?: string;
@@ -107,7 +154,7 @@ const emptyAnalysis: UsageAnalysis = { models: [], providers: [], sources: [], a
 const loadTab = (): UsageTab => {
   try {
     const saved = localStorage.getItem(TAB_KEY);
-    return saved === 'analysis' || saved === 'events' ? saved : 'overview';
+    return saved === 'analysis' || saved === 'events' || saved === 'pricing' ? saved : 'overview';
   } catch {
     return 'overview';
   }
@@ -148,6 +195,22 @@ const compactNumber = (value: number) => new Intl.NumberFormat(getCurrentLocale(
   maximumFractionDigits: 1,
 }).format(Number.isFinite(value) ? value : 0);
 
+const formatUsd = (value: number) => {
+  const amount = Number.isFinite(value) ? value : 0;
+  const absolute = Math.abs(amount);
+  const maximumFractionDigits = absolute === 0 || absolute >= 1
+    ? 2
+    : absolute >= 0.01
+      ? 4
+      : absolute >= 0.0001
+        ? 6
+        : 8;
+  return `$${new Intl.NumberFormat(getCurrentLocale(), {
+    minimumFractionDigits: 2,
+    maximumFractionDigits,
+  }).format(amount)}`;
+};
+
 const formatTime = (value: string) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(getCurrentLocale(), {
@@ -174,6 +237,7 @@ export function UsageRecordsPage() {
   const [analysis, setAnalysis] = useState<UsageAnalysis>(emptyAnalysis);
   const [optionsAnalysis, setOptionsAnalysis] = useState<UsageAnalysis>(emptyAnalysis);
   const [events, setEvents] = useState<UsageEventPage | null>(null);
+  const [pricing, setPricing] = useState<UsagePricing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const requestIdRef = useRef(0);
@@ -230,7 +294,7 @@ export function UsageRecordsPage() {
         setOptionsAnalysis(nextOptions);
         setOverview(nextOverview);
         setAnalysis(nextAnalysis);
-      } else {
+      } else if (activeTab === 'events') {
         const [nextStatus, nextOptions, nextEvents] = await Promise.all([
           statusRequest,
           optionsRequest,
@@ -242,6 +306,16 @@ export function UsageRecordsPage() {
         setStatus(nextStatus);
         setOptionsAnalysis(nextOptions);
         setEvents(nextEvents);
+      } else {
+        const [nextStatus, nextOptions, nextPricing] = await Promise.all([
+          statusRequest,
+          optionsRequest,
+          invoke<UsagePricing>('get_usage_pricing', { query }),
+        ]);
+        if (requestId !== requestIdRef.current) return;
+        setStatus(nextStatus);
+        setOptionsAnalysis(nextOptions);
+        setPricing(nextPricing);
       }
       setError('');
     } catch (requestError) {
@@ -289,6 +363,7 @@ export function UsageRecordsPage() {
     (activeTab === 'overview' && !overview)
     || (activeTab === 'analysis' && !overview)
     || (activeTab === 'events' && !events)
+    || (activeTab === 'pricing' && !pricing)
   );
 
   return (
@@ -313,6 +388,7 @@ export function UsageRecordsPage() {
         <button type="button" className={activeTab === 'overview' ? 'active' : ''} onClick={() => setActiveTab('overview')}><Activity size={15} />{t('usage.tab.overview')}</button>
         <button type="button" className={activeTab === 'analysis' ? 'active' : ''} onClick={() => setActiveTab('analysis')}><BarChart3 size={15} />{t('usage.tab.analysis')}</button>
         <button type="button" className={activeTab === 'events' ? 'active' : ''} onClick={() => setActiveTab('events')}><List size={15} />{t('usage.tab.events')}</button>
+        <button type="button" className={activeTab === 'pricing' ? 'active' : ''} onClick={() => setActiveTab('pricing')}><CircleDollarSign size={15} />{t('usage.tab.pricing')}</button>
       </div>
 
       <section className="panel usage-filter-panel">
@@ -332,6 +408,7 @@ export function UsageRecordsPage() {
       {activeTab === 'overview' && overview ? <OverviewView overview={overview} /> : null}
       {activeTab === 'analysis' ? <AnalysisView analysis={analysis} overview={overview} /> : null}
       {activeTab === 'events' && events ? <EventsView events={events} onPage={setPage} /> : null}
+      {activeTab === 'pricing' && pricing ? <PricingView pricing={pricing} query={buildQueries().query} onChanged={() => loadData(true)} /> : null}
     </section>
   );
 }
@@ -342,7 +419,9 @@ function OverviewView({ overview }: { overview: UsageOverview }) {
     { icon: Activity, label: t('usage.stat.requests'), value: compactNumber(overview.totalRequests), meta: t('usage.stat.requestMeta', { success: overview.successCount, failed: overview.failureCount }) },
     { icon: Sparkles, label: t('usage.stat.tokens'), value: compactNumber(overview.totalTokens), meta: t('usage.stat.tokenMeta', { input: compactNumber(overview.inputTokens), output: compactNumber(overview.outputTokens) }) },
     { icon: ShieldCheck, label: t('usage.stat.successRate'), value: `${overview.successRate.toFixed(1)}%`, meta: t('usage.stat.reasoningMeta', { tokens: compactNumber(overview.reasoningTokens) }) },
-    { icon: Clock3, label: t('usage.stat.averageLatency'), value: `${Math.round(overview.averageLatencyMs)} ms`, meta: `${overview.rpm.toFixed(2)} RPM · ${compactNumber(overview.tpm)} TPM` },
+    { icon: Clock3, label: t('usage.stat.tps'), value: `${overview.tps.toFixed(1)} TPS`, meta: t('usage.stat.performanceMeta', { rpm: overview.rpm.toFixed(2), latency: Math.round(overview.averageLatencyMs) }) },
+    { icon: Database, label: t('usage.stat.cacheHitRate'), value: `${(overview.cacheHitRate * 100).toFixed(1)}%`, meta: t('usage.stat.cacheHitMeta', { hit: compactNumber(overview.cacheReadTokens), input: compactNumber(overview.inputTokens) }) },
+    { icon: CircleDollarSign, label: t('usage.stat.estimatedCost'), value: formatUsd(overview.estimatedCost), meta: t('usage.stat.costMeta', { priced: compactNumber(overview.pricedRequests), total: compactNumber(overview.totalRequests) }) },
   ];
   return <div className="usage-overview-layout">
     <div className="usage-stat-grid">{cards.map(({ icon: Icon, label, value, meta }) => <article className="panel usage-stat-card" key={label}><span><Icon size={16} />{label}</span><strong>{value}</strong><small>{meta}</small></article>)}</div>
@@ -385,7 +464,140 @@ function CategoryPanel({ title, items, compactLabels = false }: { title: string;
 
 function EventsView({ events, onPage }: { events: UsageEventPage; onPage: (page: number) => void }) {
   const { t } = useI18n();
-  return <section className="panel usage-events-panel"><div className="usage-events-summary"><span>{t('usage.events.total', { count: compactNumber(events.total) })}</span><span>{t('usage.events.page', { page: events.page, total: events.totalPages })}</span></div>{events.items.length ? <div className="usage-table-wrap"><table className="usage-events-table"><thead><tr><th>{t('usage.column.time')}</th><th>{t('usage.column.model')}</th><th>Provider</th><th>{t('usage.column.source')}</th><th>API Key</th><th>{t('usage.column.result')}</th><th>{t('usage.column.latency')}</th><th>TTFT</th><th>{t('usage.column.input')}</th><th>{t('usage.column.output')}</th><th>{t('usage.column.reasoning')}</th><th>{t('usage.column.cache')}</th><th>{t('usage.column.total')}</th></tr></thead><tbody>{events.items.map((record) => <tr key={record.id}><td>{formatTime(record.timestamp)}</td><td className="usage-stacked-cell"><strong title={record.alias || record.model}>{record.alias || record.model}</strong>{record.alias || record.reasoning_effort ? <small title={record.model}>{record.alias ? record.model : ''}{record.alias && record.reasoning_effort ? ' · ' : ''}{record.reasoning_effort}</small> : null}</td><td title={record.provider}>{record.provider || '—'}</td><td title={record.source_display || undefined}>{record.source_display || '—'}</td><td className="usage-stacked-cell"><strong title={record.api_key_remark}>{record.api_key_remark || t('usage.key.noRemark')}</strong><small>{record.api_key_display || '—'}</small></td><td><span className={`usage-result ${record.failed ? 'failed' : 'success'}`}>{record.failed ? t('usage.result.failed') : t('usage.result.success')}</span></td><td>{record.latency_ms} ms</td><td>{record.ttft_ms == null ? '—' : `${record.ttft_ms} ms`}</td><td>{compactNumber(record.tokens.input_tokens)}</td><td>{compactNumber(record.tokens.output_tokens)}</td><td>{compactNumber(record.tokens.reasoning_tokens)}</td><td>{compactNumber(record.tokens.cache_read_tokens)}</td><td><strong>{compactNumber(record.tokens.total_tokens)}</strong></td></tr>)}</tbody></table></div> : <UsageEmpty />}<div className="usage-pagination"><button type="button" className="secondary-button" disabled={events.page <= 1} onClick={() => onPage(events.page - 1)}>{t('usage.previous')}</button><button type="button" className="secondary-button" disabled={events.page >= events.totalPages} onClick={() => onPage(events.page + 1)}>{t('usage.next')}</button></div></section>;
+  return <section className="panel usage-events-panel"><div className="usage-events-summary"><span>{t('usage.events.total', { count: compactNumber(events.total) })}</span><span>{t('usage.events.page', { page: events.page, total: events.totalPages })}</span></div>{events.items.length ? <div className="usage-table-wrap"><table className="usage-events-table"><thead><tr><th>{t('usage.column.time')}</th><th>{t('usage.column.model')}</th><th>Provider</th><th>{t('usage.column.source')}</th><th>API Key</th><th>{t('usage.column.input')}</th><th>{t('usage.column.output')}</th><th>{t('usage.column.reasoning')}</th><th>{t('usage.column.cache')}</th><th>{t('usage.column.total')}</th><th>{t('usage.column.result')}</th><th>{t('usage.column.latency')}</th><th>{t('usage.column.ttft')}</th></tr></thead><tbody>{events.items.map((record) => <tr key={record.id}><td>{formatTime(record.timestamp)}</td><td className="usage-stacked-cell"><strong title={record.alias || record.model}>{record.alias || record.model}</strong>{record.alias || record.reasoning_effort ? <small title={record.model}>{record.alias ? record.model : ''}{record.alias && record.reasoning_effort ? ' · ' : ''}{record.reasoning_effort}</small> : null}</td><td title={record.provider}>{record.provider || '—'}</td><td title={record.source_display || undefined}>{record.source_display || '—'}</td><td className="usage-stacked-cell"><strong title={record.api_key_remark}>{record.api_key_remark || t('usage.key.noRemark')}</strong><small>{record.api_key_display || '—'}</small></td><td>{compactNumber(record.tokens.input_tokens)}</td><td>{compactNumber(record.tokens.output_tokens)}</td><td>{compactNumber(record.tokens.reasoning_tokens)}</td><td>{compactNumber(record.tokens.cache_read_tokens)}</td><td><strong>{compactNumber(record.tokens.total_tokens)}</strong></td><td><span className={`usage-result ${record.failed ? 'failed' : 'success'}`}>{record.failed ? t('usage.result.failed') : t('usage.result.success')}</span></td><td>{record.latency_ms} ms</td><td>{record.ttft_ms == null ? '—' : `${record.ttft_ms} ms`}</td></tr>)}</tbody></table></div> : <UsageEmpty />}<div className="usage-pagination"><button type="button" className="secondary-button" disabled={events.page <= 1} onClick={() => onPage(events.page - 1)}>{t('usage.previous')}</button><button type="button" className="secondary-button" disabled={events.page >= events.totalPages} onClick={() => onPage(events.page + 1)}>{t('usage.next')}</button></div></section>;
+}
+
+type PriceDraft = {
+  model: string;
+  prompt: string;
+  completion: string;
+  cache: string;
+  cacheRead: string;
+  cacheCreation: string;
+};
+
+const emptyPriceDraft = (): PriceDraft => ({ model: '', prompt: '', completion: '', cache: '', cacheRead: '', cacheCreation: '' });
+const priceDraftFor = (model = '', price?: ModelPrice | null): PriceDraft => ({
+  model,
+  prompt: price ? String(price.prompt) : '',
+  completion: price ? String(price.completion) : '',
+  cache: price ? String(price.cache) : '',
+  cacheRead: price && (price.cacheReadConfigured || price.cacheRead > 0) ? String(price.cacheRead) : '',
+  cacheCreation: price && (price.cacheCreationConfigured || price.cacheCreation > 0) ? String(price.cacheCreation) : '',
+});
+
+const parsePrice = (value: string) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+};
+
+const priceUnit = (value: number | undefined) => Number.isFinite(value) ? `$${Number(value).toFixed(4)}` : '—';
+
+function PricingView({ pricing, query, onChanged }: { pricing: UsagePricing; query: UsageQuery; onChanged: () => void | Promise<void> }) {
+  const { t } = useI18n();
+  const [search, setSearch] = useState('');
+  const [draft, setDraft] = useState<PriceDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [message, setMessage] = useState('');
+  const [localError, setLocalError] = useState('');
+  const visibleRows = pricing.rows.filter((row) => {
+    const keyword = search.trim().toLowerCase();
+    return !keyword || row.model.toLowerCase().includes(keyword);
+  });
+
+  const savePrice = async () => {
+    if (!draft?.model.trim()) {
+      setLocalError(t('usage.pricing.modelRequired'));
+      return;
+    }
+    setSaving(true);
+    setLocalError('');
+    try {
+      await invoke('save_usage_model_price', {
+        price: {
+          model: draft.model.trim(),
+          prompt: parsePrice(draft.prompt),
+          completion: parsePrice(draft.completion),
+          cache: draft.cache.trim() ? parsePrice(draft.cache) : parsePrice(draft.prompt),
+          cacheRead: parsePrice(draft.cacheRead),
+          cacheCreation: parsePrice(draft.cacheCreation),
+          promptConfigured: draft.prompt.trim() !== '',
+          completionConfigured: draft.completion.trim() !== '',
+          cacheReadConfigured: draft.cacheRead.trim() !== '',
+          cacheCreationConfigured: draft.cacheCreation.trim() !== '',
+          source: 'manual',
+          sourceModelId: '',
+          updatedAtMs: 0,
+        } satisfies ModelPrice,
+      });
+      setDraft(null);
+      setMessage(t('usage.pricing.saved'));
+      await onChanged();
+    } catch (saveError) {
+      setLocalError(String(saveError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deletePrice = async (model: string) => {
+    if (!window.confirm(t('usage.pricing.deleteConfirm', { model }))) return;
+    setLocalError('');
+    try {
+      await invoke('delete_usage_model_price', { model });
+      setMessage(t('usage.pricing.deleted'));
+      await onChanged();
+    } catch (deleteError) {
+      setLocalError(String(deleteError));
+    }
+  };
+
+  const syncPrices = async () => {
+    setSyncing(true);
+    setLocalError('');
+    setMessage('');
+    try {
+      const result = await invoke<ModelPriceSyncResult>('sync_usage_model_prices', { query });
+      setMessage(result.usedBuiltin
+        ? t('usage.pricing.syncFallback')
+        : t('usage.pricing.syncResult', { imported: result.imported, skipped: result.skipped, unmatched: result.unmatched.length }));
+      await onChanged();
+    } catch (syncError) {
+      setLocalError(String(syncError));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return <section className="panel usage-pricing-panel">
+    <div className="usage-pricing-toolbar">
+      <div className="usage-pricing-summary">
+        <strong>{formatUsd(pricing.totalCost)}</strong>
+        <span>{t('usage.pricing.coverage', { priced: compactNumber(pricing.pricedRequests), total: compactNumber(pricing.totalRequests), saved: compactNumber(pricing.savedPrices) })}</span>
+      </div>
+      <div className="usage-pricing-actions">
+        <input value={search} onChange={(event) => setSearch(event.currentTarget.value)} placeholder={t('usage.pricing.search')} aria-label={t('usage.pricing.search')} />
+        <button type="button" className="secondary-button" onClick={() => setDraft(emptyPriceDraft())}>{t('usage.pricing.add')}</button>
+        <button type="button" className="primary-button" disabled={syncing} onClick={() => void syncPrices()}><RefreshCw size={14} className={syncing ? 'spin' : ''} />{syncing ? t('usage.pricing.syncing') : t('usage.pricing.sync')}</button>
+      </div>
+    </div>
+
+    {localError ? <div className="management-alert error">{localError}</div> : null}
+    {message ? <div className="management-alert success">{message}</div> : null}
+
+    {draft ? <div className="usage-price-editor">
+      <label><span>{t('usage.pricing.model')}</span><input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.currentTarget.value })} placeholder="gpt-5.6-terra" /></label>
+      <label><span>{t('usage.pricing.prompt')}</span><input type="number" min="0" step="0.0001" value={draft.prompt} onChange={(event) => setDraft({ ...draft, prompt: event.currentTarget.value })} /></label>
+      <label><span>{t('usage.pricing.completion')}</span><input type="number" min="0" step="0.0001" value={draft.completion} onChange={(event) => setDraft({ ...draft, completion: event.currentTarget.value })} /></label>
+      <label><span>{t('usage.pricing.cache')}</span><input type="number" min="0" step="0.0001" value={draft.cache} onChange={(event) => setDraft({ ...draft, cache: event.currentTarget.value })} /></label>
+      <label><span>{t('usage.pricing.cacheRead')}</span><input type="number" min="0" step="0.0001" value={draft.cacheRead} onChange={(event) => setDraft({ ...draft, cacheRead: event.currentTarget.value })} placeholder={t('usage.pricing.optional')} /></label>
+      <label><span>{t('usage.pricing.cacheCreation')}</span><input type="number" min="0" step="0.0001" value={draft.cacheCreation} onChange={(event) => setDraft({ ...draft, cacheCreation: event.currentTarget.value })} placeholder={t('usage.pricing.optional')} /></label>
+      <div className="usage-price-editor-actions"><button type="button" className="secondary-button" onClick={() => setDraft(null)}><X size={14} />{t('common.cancel')}</button><button type="button" className="primary-button" disabled={saving} onClick={() => void savePrice()}>{saving ? t('usage.pricing.saving') : t('common.save')}</button></div>
+    </div> : null}
+
+    {visibleRows.length ? <div className="usage-table-wrap usage-pricing-table-wrap"><table className="usage-pricing-table"><thead><tr><th>{t('usage.pricing.model')}</th><th>{t('usage.pricing.calls')}</th><th>Token</th><th>{t('usage.pricing.cost')}</th><th>{t('usage.pricing.prompt')}</th><th>{t('usage.pricing.completion')}</th><th>{t('usage.pricing.cacheRead')}</th><th>{t('usage.pricing.cacheCreation')}</th><th>{t('usage.pricing.actions')}</th></tr></thead><tbody>{visibleRows.map((row) => <tr key={row.model}><td><strong>{row.model}</strong></td><td>{compactNumber(row.requests)}</td><td>{compactNumber(row.totalTokens)}</td><td><strong>{row.price ? formatUsd(row.estimatedCost) : '—'}</strong></td><td>{row.price ? priceUnit(row.price.prompt) : '—'}</td><td>{row.price ? priceUnit(row.price.completion) : '—'}</td><td>{row.price ? priceUnit(row.price.cacheReadConfigured || row.price.cacheRead > 0 ? row.price.cacheRead : row.price.cache) : '—'}</td><td>{row.price ? priceUnit(row.price.cacheCreationConfigured || row.price.cacheCreation > 0 ? row.price.cacheCreation : row.price.prompt) : '—'}</td><td><div className="usage-price-row-actions"><button type="button" className="icon-button" title={t('common.edit')} onClick={() => setDraft(priceDraftFor(row.model, row.price))}><Pencil size={14} /></button>{row.price?.source === 'manual' ? <button type="button" className="icon-button danger" title={t('common.delete')} onClick={() => void deletePrice(row.model)}><Trash2 size={14} /></button> : null}</div></td></tr>)}</tbody></table></div> : <UsageEmpty />}
+  </section>;
 }
 
 function UsageEmpty() {

@@ -49,7 +49,7 @@ type AgentClientId =
   | 'openclaw'
   | 'hermes';
 
-type AgentModificationState = 'unconfigured' | 'applied' | 'external-changed' | 'invalid';
+type AgentModificationState = 'unconfigured' | 'applied' | 'invalid';
 
 type AgentConfigStatus = {
   id: AgentClientId;
@@ -62,6 +62,7 @@ type AgentConfigStatus = {
   configValid: boolean;
   configured: boolean;
   currentModel: string | null;
+  oauthConfiguration: boolean;
   modificationEnabled: boolean;
   modificationState: AgentModificationState;
   backupAvailable: boolean;
@@ -210,17 +211,6 @@ const writeAgentModelSelections = (
   }
 };
 
-const reconcileAgentModelSelections = (
-  current: Partial<Record<AgentClientId, string>>,
-  models: ModelOption[],
-) => {
-  return agentDefinitions.reduce<Partial<Record<AgentClientId, string>>>((result, agent) => {
-    const existing = current[agent.id] ?? '';
-    result[agent.id] = resolveAgentModelSelection(models, existing);
-    return result;
-  }, {});
-};
-
 function AgentMark({ definition, size = 26 }: { definition: AgentDefinition; size?: number }) {
   if (definition.icon) {
     return <img src={definition.icon} alt="" className="provider-logo" />;
@@ -234,7 +224,6 @@ const listStatusText = (status: AgentConfigStatus | undefined) => {
   if (!status) return translate(locale, 'agents.list.detecting');
   if (!status.supportedPlatform) return translate(locale, 'agents.list.unsupported');
   if (!status.installed) return translate(locale, 'agents.list.notInstalled');
-  if (status.modificationState === 'external-changed') return translate(locale, 'agents.status.externalChanged');
   if (status.modificationState === 'invalid') return translate(locale, 'agents.status.invalid');
   if (status.modificationState === 'applied') return translate(locale, 'agents.list.modified', { model: status.appliedModel ?? '—' });
   return status.version
@@ -510,8 +499,8 @@ export function AgentsPage() {
   const [closeAppError, setCloseAppError] = useState('');
   const [closeAppNotice, setCloseAppNotice] = useState('');
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
-  const [oauthConfiguration, setOauthConfiguration] = useState(false);
-  const autoLoadedModelClientRef = useRef<AgentClientId | null>(null);
+  const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
+  const modelRequestRef = useRef(0);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -521,22 +510,29 @@ export function AgentsPage() {
     setStatuses(nextStatuses);
   }, []);
 
-  const loadModels = useCallback(async () => {
+  const loadModels = useCallback(async (client: AgentClientId) => {
+    const requestId = modelRequestRef.current + 1;
+    modelRequestRef.current = requestId;
     setModelLoading(true);
     setModelError('');
+    setModels([]);
     try {
-      const nextModels = await invoke<ModelOption[]>('get_agent_models');
+      const nextModels = await invoke<ModelOption[]>('get_agent_models', { client });
+      if (modelRequestRef.current !== requestId) return;
       setModels(nextModels);
       setModelSelectionError('');
       setModelByClient((current) => {
-        const next = reconcileAgentModelSelections(current, nextModels);
+        const next = {
+          ...current,
+          [client]: resolveAgentModelSelection(nextModels, current[client] ?? ''),
+        };
         writeAgentModelSelections(next);
         return next;
       });
     } catch (requestError) {
-      setModelError(String(requestError));
+      if (modelRequestRef.current === requestId) setModelError(String(requestError));
     } finally {
-      setModelLoading(false);
+      if (modelRequestRef.current === requestId) setModelLoading(false);
     }
   }, []);
 
@@ -561,9 +557,7 @@ export function AgentsPage() {
   }, [loadStatuses]);
 
   useEffect(() => {
-    if (autoLoadedModelClientRef.current === selected) return;
-    autoLoadedModelClientRef.current = selected;
-    void loadModels();
+    void loadModels(selected);
   }, [loadModels, selected]);
 
   useEffect(() => {
@@ -621,6 +615,9 @@ export function AgentsPage() {
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
     ?? agentDefinitions[0];
   const activeStatus = statuses.find((status) => status.id === selected) ?? null;
+  const oauthConfiguration = oauthConfigurationDraft
+    ?? activeStatus?.oauthConfiguration
+    ?? false;
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
@@ -630,11 +627,14 @@ export function AgentsPage() {
     (target) => target.id === selectedLaunchTargetId,
   ) ?? activeLaunchTargets[0] ?? null;
   const appliedModel = activeStatus?.appliedModel ?? activeStatus?.currentModel ?? '';
-  const draftChanged = Boolean(
+  const modelDraftChanged = Boolean(
     selectedModel.trim()
       && appliedModel.trim()
       && selectedModel.trim() !== appliedModel.trim(),
   );
+  const oauthConfigurationChanged = selected === 'codex'
+    && oauthConfiguration !== Boolean(activeStatus?.oauthConfiguration);
+  const draftChanged = modelDraftChanged || oauthConfigurationChanged;
   const canEnable = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
@@ -657,31 +657,27 @@ export function AgentsPage() {
         : activeStatus?.modificationState === 'applied'
           ? t('agents.model.current', { model: appliedModel || '—' })
           : t('agents.model.firstSelection', { count: models.length }));
-  const modificationDescription = activeStatus?.modificationState === 'external-changed'
-    ? t('agents.modify.externalChanged')
-    : activeStatus?.modificationState === 'invalid'
-      ? t('agents.modify.invalid')
-      : activeStatus?.modificationState === 'applied'
-        ? t('agents.modify.applied')
-        : '';
+  const modificationDescription = activeStatus?.modificationState === 'invalid'
+    ? t('agents.modify.invalid')
+    : activeStatus?.modificationState === 'applied'
+      ? t('agents.modify.applied')
+      : '';
   const footerMessage = activeStatus?.modificationState === 'applied'
     ? draftChanged
       ? t('agents.footer.changed')
       : t('agents.footer.applied')
-    : activeStatus?.modificationState === 'external-changed'
-      ? t('agents.footer.externalChanged')
-      : activeStatus?.modificationState === 'invalid'
-        ? t('agents.footer.invalidManaged')
-        : !activeStatus?.supportedPlatform
-          ? t('agents.footer.unsupported')
-          : !activeStatus.installed
-            ? t('agents.footer.installFirst')
-            : activeStatus.launchTargets.length === 0
-              ? t('agents.footer.noCommand')
-              : '';
+    : activeStatus?.modificationState === 'invalid'
+      ? t('agents.footer.invalidManaged')
+      : !activeStatus?.supportedPlatform
+        ? t('agents.footer.unsupported')
+        : !activeStatus.installed
+          ? t('agents.footer.installFirst')
+          : activeStatus.launchTargets.length === 0
+            ? t('agents.footer.noCommand')
+            : '';
 
   const refreshModels = () => {
-    void loadModels();
+    void loadModels(selected);
   };
 
   const reloadStatusesAfterAction = async () => {
@@ -731,10 +727,10 @@ export function AgentsPage() {
       await invoke<AgentConfigActionResult>('apply_agent_config', {
         client: selected,
         model,
-        models,
         oauthConfiguration,
       });
       await reloadStatusesAfterAction();
+      setOauthConfigurationDraft(null);
     } catch (requestError) {
       setConfigurationError(String(requestError));
     } finally {
@@ -751,11 +747,11 @@ export function AgentsPage() {
       await invoke<AgentConfigActionResult>('reset_agent_config_to_default', {
         client: selected,
         model,
-        models,
         oauthConfiguration,
       });
       setDefaultConfirmOpen(false);
       await reloadStatusesAfterAction();
+      setOauthConfigurationDraft(null);
     } catch (requestError) {
       setDefaultError(String(requestError));
     } finally {
@@ -772,6 +768,7 @@ export function AgentsPage() {
       setClearConfirmOpen(false);
       setClearNotice(t('agents.clear.success'));
       await reloadStatusesAfterAction();
+      setOauthConfigurationDraft(null);
     } catch (requestError) {
       setClearError(String(requestError));
     } finally {
@@ -947,7 +944,7 @@ export function AgentsPage() {
               <section className="agent-core-setting-section agent-model-section">
                 <div className="agent-section-heading">
                   <div><strong>{t('agents.useModel')}</strong></div>
-                  {draftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                  {modelDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
                 </div>
                 <AgentModelPicker
                   models={models}
@@ -988,7 +985,7 @@ export function AgentsPage() {
                           type="checkbox"
                           role="switch"
                           checked={oauthConfiguration}
-                          onChange={(event) => setOauthConfiguration(event.currentTarget.checked)}
+                          onChange={(event) => setOauthConfigurationDraft(event.currentTarget.checked)}
                           disabled={busy}
                           aria-label={t('agents.modify.oauthConfiguration')}
                         />

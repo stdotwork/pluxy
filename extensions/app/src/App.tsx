@@ -35,6 +35,7 @@ import { languageOptions, useI18n } from './i18n';
 import { AppUpdateDialog, AppUpdateProvider, useAppUpdate } from './appUpdate';
 import { appUpdateIndicatorState } from './appUpdateModel';
 import { canOpenAppPage, isAlwaysAvailablePage } from './navigation';
+import { detectInitialTheme, saveTheme, type AppTheme } from './theme';
 
 const CONTACT_URL = 'https://qm.qq.com/q/3queDaIG';
 
@@ -132,6 +133,7 @@ function AppContent() {
   const { info: appUpdateInfo, hasUpdate, processing: appUpdateProcessing } = useAppUpdate();
   const [active, setActive] = useState<PageId>('home');
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
+  const [theme, setTheme] = useState<AppTheme>(detectInitialTheme);
   const [windowsClosePrompt, setWindowsClosePrompt] = useState<WindowsClosePrompt | null>(null);
   const closeDialogRef = useRef<HTMLElement>(null);
   const languageMenuRef = useRef<HTMLDivElement>(null);
@@ -142,6 +144,10 @@ function AppContent() {
   const ActivePage = activePage.component;
   const selectedLanguage = languageOptions.find((option) => option.value === locale)
     ?? languageOptions[0];
+
+  useEffect(() => {
+    saveTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     if (!canOpenAppPage(active, coreRunning)) {
@@ -300,6 +306,30 @@ function AppContent() {
           </nav>
 
           <div className="sidebar-bottom">
+            <div
+              className="sidebar-theme-selector"
+              role="group"
+              aria-label={`${t('app.theme.light')} / ${t('app.theme.dark')}`}
+            >
+              <button
+                type="button"
+                className={theme === 'light' ? 'active' : ''}
+                aria-pressed={theme === 'light'}
+                title={t('app.theme.switchToLight')}
+                onClick={() => setTheme('light')}
+              >
+                {t('app.theme.light')}
+              </button>
+              <button
+                type="button"
+                className={theme === 'dark' ? 'active' : ''}
+                aria-pressed={theme === 'dark'}
+                title={t('app.theme.switchToDark')}
+                onClick={() => setTheme('dark')}
+              >
+                {t('app.theme.dark')}
+              </button>
+            </div>
             <div ref={languageMenuRef} className="sidebar-language">
               <button
                 ref={languageButtonRef}
