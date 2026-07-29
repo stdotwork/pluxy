@@ -49,7 +49,7 @@ type AgentClientId =
   | 'openclaw'
   | 'hermes';
 
-type AgentModificationState = 'unconfigured' | 'applied' | 'external-changed' | 'invalid';
+type AgentModificationState = 'unconfigured' | 'applied' | 'invalid';
 
 type AgentConfigStatus = {
   id: AgentClientId;
@@ -234,7 +234,6 @@ const listStatusText = (status: AgentConfigStatus | undefined) => {
   if (!status) return translate(locale, 'agents.list.detecting');
   if (!status.supportedPlatform) return translate(locale, 'agents.list.unsupported');
   if (!status.installed) return translate(locale, 'agents.list.notInstalled');
-  if (status.modificationState === 'external-changed') return translate(locale, 'agents.status.externalChanged');
   if (status.modificationState === 'invalid') return translate(locale, 'agents.status.invalid');
   if (status.modificationState === 'applied') return translate(locale, 'agents.list.modified', { model: status.appliedModel ?? '—' });
   return status.version
@@ -657,28 +656,24 @@ export function AgentsPage() {
         : activeStatus?.modificationState === 'applied'
           ? t('agents.model.current', { model: appliedModel || '—' })
           : t('agents.model.firstSelection', { count: models.length }));
-  const modificationDescription = activeStatus?.modificationState === 'external-changed'
-    ? t('agents.modify.externalChanged')
-    : activeStatus?.modificationState === 'invalid'
-      ? t('agents.modify.invalid')
-      : activeStatus?.modificationState === 'applied'
-        ? t('agents.modify.applied')
-        : '';
+  const modificationDescription = activeStatus?.modificationState === 'invalid'
+    ? t('agents.modify.invalid')
+    : activeStatus?.modificationState === 'applied'
+      ? t('agents.modify.applied')
+      : '';
   const footerMessage = activeStatus?.modificationState === 'applied'
     ? draftChanged
       ? t('agents.footer.changed')
       : t('agents.footer.applied')
-    : activeStatus?.modificationState === 'external-changed'
-      ? t('agents.footer.externalChanged')
-      : activeStatus?.modificationState === 'invalid'
-        ? t('agents.footer.invalidManaged')
-        : !activeStatus?.supportedPlatform
-          ? t('agents.footer.unsupported')
-          : !activeStatus.installed
-            ? t('agents.footer.installFirst')
-            : activeStatus.launchTargets.length === 0
-              ? t('agents.footer.noCommand')
-              : '';
+    : activeStatus?.modificationState === 'invalid'
+      ? t('agents.footer.invalidManaged')
+      : !activeStatus?.supportedPlatform
+        ? t('agents.footer.unsupported')
+        : !activeStatus.installed
+          ? t('agents.footer.installFirst')
+          : activeStatus.launchTargets.length === 0
+            ? t('agents.footer.noCommand')
+            : '';
 
   const refreshModels = () => {
     void loadModels();

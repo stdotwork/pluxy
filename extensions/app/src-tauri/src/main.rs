@@ -708,7 +708,6 @@ struct AgentAppliedState {
     version: u8,
     client: String,
     model: String,
-    managed_fingerprint: String,
     updated_at_unix: u64,
 }
 
@@ -2443,7 +2442,7 @@ fn inspect_agent_config(
     if let Some(message) = error.as_ref() {
         warnings.push(message.clone());
     }
-    let modification = inspect_agent_application(client, home, configured);
+    let modification = inspect_agent_application(client, home);
     warnings.extend(modification.warnings.iter().cloned());
 
     AgentConfigStatus {
@@ -2468,55 +2467,21 @@ fn inspect_agent_config(
     }
 }
 
-fn inspect_agent_application(
-    client: AgentClient,
-    home: &Path,
-    configured: bool,
-) -> AgentModificationInspection {
+fn inspect_agent_application(client: AgentClient, home: &Path) -> AgentModificationInspection {
     match load_agent_applied_state(client, home) {
-        Ok(Some(state)) => match agent_managed_fingerprint(client, home) {
-            Ok(fingerprint) if fingerprint == state.managed_fingerprint && configured => {
-                AgentModificationInspection {
-                    enabled: true,
-                    state: "applied".to_string(),
-                    backup_available: false,
-                    applied_model: Some(state.model),
-                    warnings: Vec::new(),
-                }
-            }
-            Ok(_) => AgentModificationInspection {
-                enabled: false,
-                state: "external-changed".to_string(),
-                backup_available: false,
-                applied_model: Some(state.model),
-                warnings: vec![
-                    "配置已被外部程序修改。软件会保留这些内容；再次点击“应用配置修改”后才会重新写入软件负责的字段。"
-                        .to_string(),
-                ],
-            },
-            Err(error) => AgentModificationInspection {
-                enabled: false,
-                state: "invalid".to_string(),
-                backup_available: false,
-                applied_model: Some(state.model),
-                warnings: vec![error],
-            },
+        Ok(Some(state)) => AgentModificationInspection {
+            enabled: true,
+            state: "applied".to_string(),
+            backup_available: false,
+            applied_model: Some(state.model),
+            warnings: Vec::new(),
         },
-        Ok(None) => match agent_managed_fingerprint(client, home) {
-            Ok(_) => AgentModificationInspection {
-                enabled: false,
-                state: "unconfigured".to_string(),
-                backup_available: false,
-                applied_model: None,
-                warnings: Vec::new(),
-            },
-            Err(error) => AgentModificationInspection {
-                enabled: false,
-                state: "invalid".to_string(),
-                backup_available: false,
-                applied_model: None,
-                warnings: vec![error],
-            },
+        Ok(None) => AgentModificationInspection {
+            enabled: false,
+            state: "unconfigured".to_string(),
+            backup_available: false,
+            applied_model: None,
+            warnings: Vec::new(),
         },
         Err(error) => AgentModificationInspection {
             enabled: false,
@@ -4601,318 +4566,9 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn optional_json_object(content: Option<&str>, label: &str) -> Result<serde_json::Value, String> {
-    let Some(content) = content.map(str::trim).filter(|content| !content.is_empty()) else {
-        return Ok(serde_json::json!({}));
-    };
-    let value = serde_json::from_str::<serde_json::Value>(content)
-        .map_err(|error| format!("{label} 格式无效: {error}"))?;
-    if value.is_object() {
-        Ok(value)
-    } else {
-        Err(format!("{label} 根节点必须是对象"))
-    }
-}
-
-fn json_field(value: &serde_json::Value, key: &str) -> serde_json::Value {
-    value.get(key).cloned().unwrap_or(serde_json::Value::Null)
-}
-
-fn agent_managed_projection(
-    client: AgentClient,
-    contents: &[Option<String>],
-) -> Result<serde_json::Value, String> {
-    match client {
-        AgentClient::ClaudeCode => {
-            let root = optional_json_object(
-                contents.first().and_then(Option::as_deref),
-                "Claude Code 配置",
-            )?;
-            let env = root.get("env").cloned().unwrap_or(serde_json::Value::Null);
-            let managed_env = [
-                "ANTHROPIC_BASE_URL",
-                "ANTHROPIC_API_KEY",
-                "ANTHROPIC_AUTH_TOKEN",
-                "ANTHROPIC_MODEL",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL",
-                "ANTHROPIC_DEFAULT_FABLE_MODEL",
-            ]
-            .into_iter()
-            .map(|key| (key.to_string(), json_field(&env, key)))
-            .collect::<serde_json::Map<_, _>>();
-            Ok(serde_json::json!({
-                "env": managed_env,
-                "model": json_field(&root, "model"),
-            }))
-        }
-        AgentClient::ClaudeDesktop => {
-            if contents.len() < 4 {
-                return Err("Claude Desktop 配置文件数量不完整".to_string());
-            }
-            let normal = optional_json_object(contents[0].as_deref(), "Claude Desktop 主配置")?;
-            let threep = optional_json_object(contents[1].as_deref(), "Claude Desktop 3P 配置")?;
-            let profile = optional_json_object(contents[2].as_deref(), "Claude Desktop 网关配置")?;
-            let meta = optional_json_object(contents[3].as_deref(), "Claude Desktop 配置索引")?;
-            let profile_fields = [
-                "coworkEgressAllowedHosts",
-                "disableDeploymentModeChooser",
-                "inferenceGatewayApiKey",
-                "inferenceGatewayAuthScheme",
-                "inferenceGatewayBaseUrl",
-                "inferenceProvider",
-                "inferenceModels",
-            ]
-            .into_iter()
-            .map(|key| (key.to_string(), json_field(&profile, key)))
-            .collect::<serde_json::Map<_, _>>();
-            let managed_entries = meta
-                .get("entries")
-                .and_then(serde_json::Value::as_array)
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .filter(|entry| {
-                            entry.get("id").and_then(serde_json::Value::as_str)
-                                == Some(CLAUDE_DESKTOP_PROFILE_ID)
-                        })
-                        .map(|entry| {
-                            serde_json::json!({
-                                "id": json_field(entry, "id"),
-                                "name": json_field(entry, "name"),
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .map(serde_json::Value::Array)
-                .unwrap_or_else(|| json_field(&meta, "entries"));
-            Ok(serde_json::json!({
-                "normalDeploymentMode": json_field(&normal, "deploymentMode"),
-                "threepDeploymentMode": json_field(&threep, "deploymentMode"),
-                "profile": profile_fields,
-                "meta": {
-                    "appliedId": json_field(&meta, "appliedId"),
-                    "entries": managed_entries,
-                },
-            }))
-        }
-        AgentClient::Codex => {
-            let content = contents
-                .first()
-                .and_then(Option::as_deref)
-                .unwrap_or_default();
-            let root = if content.trim().is_empty() {
-                toml::Value::Table(toml::map::Map::new())
-            } else {
-                toml::from_str::<toml::Value>(content)
-                    .map_err(|error| format!("Codex config.toml 格式无效: {error}"))?
-            };
-            let provider = root
-                .get("model_providers")
-                .and_then(toml::Value::as_table)
-                .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
-            let provider_projection = [
-                "name",
-                "base_url",
-                "wire_api",
-                "experimental_bearer_token",
-                "requires_openai_auth",
-            ]
-            .into_iter()
-            .map(|key| {
-                let value = provider
-                    .and_then(|provider| provider.get(key))
-                    .and_then(|value| serde_json::to_value(value).ok())
-                    .unwrap_or(serde_json::Value::Null);
-                (key.to_string(), value)
-            })
-            .collect::<serde_json::Map<_, _>>();
-            let root_value = |key: &str| {
-                root.get(key)
-                    .and_then(|value| serde_json::to_value(value).ok())
-                    .unwrap_or(serde_json::Value::Null)
-            };
-            let catalog_sha256 = contents
-                .get(1)
-                .and_then(Option::as_deref)
-                .map(|content| serde_json::Value::String(sha256_bytes(content.as_bytes())))
-                .unwrap_or(serde_json::Value::Null);
-            Ok(serde_json::json!({
-                "model_provider": root_value("model_provider"),
-                "model": root_value("model"),
-                "model_catalog_json": root_value("model_catalog_json"),
-                "provider": provider_projection,
-                "catalog_sha256": catalog_sha256,
-            }))
-        }
-        AgentClient::OpenCode => {
-            let root =
-                optional_json_object(contents.first().and_then(Option::as_deref), "OpenCode 配置")?;
-            let provider = root
-                .get("provider")
-                .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let options = provider
-                .get("options")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            Ok(serde_json::json!({
-                "model": json_field(&root, "model"),
-                "provider": {
-                    "npm": json_field(&provider, "npm"),
-                    "name": json_field(&provider, "name"),
-                    "options": {
-                        "baseURL": json_field(&options, "baseURL"),
-                        "apiKey": json_field(&options, "apiKey"),
-                    },
-                    "models": json_field(&provider, "models"),
-                },
-            }))
-        }
-        AgentClient::OpenClaw => {
-            let content = contents
-                .first()
-                .and_then(Option::as_deref)
-                .unwrap_or_default();
-            let root = if content.trim().is_empty() {
-                serde_json::json!({})
-            } else {
-                let value = json5::from_str::<serde_json::Value>(content)
-                    .map_err(|error| format!("OpenClaw 配置格式无效: {error}"))?;
-                if !value.is_object() {
-                    return Err("OpenClaw 配置根节点必须是对象".to_string());
-                }
-                value
-            };
-            let provider = root
-                .pointer(&format!("/models/providers/{MANAGED_AGENT_PROVIDER_ID}"))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let defaults = root
-                .pointer("/agents/defaults")
-                .cloned()
-                .unwrap_or_default();
-            let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
-            let managed_models = defaults
-                .get("models")
-                .and_then(serde_json::Value::as_object)
-                .map(|models| {
-                    models
-                        .iter()
-                        .filter(|(name, _)| name.starts_with(&prefix))
-                        .map(|(name, value)| (name.clone(), value.clone()))
-                        .collect::<serde_json::Map<_, _>>()
-                })
-                .map(serde_json::Value::Object)
-                .unwrap_or_else(|| {
-                    defaults
-                        .get("models")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null)
-                });
-            Ok(serde_json::json!({
-                "provider": {
-                    "baseUrl": json_field(&provider, "baseUrl"),
-                    "apiKey": json_field(&provider, "apiKey"),
-                    "api": json_field(&provider, "api"),
-                    "models": json_field(&provider, "models"),
-                },
-                "primary": defaults.pointer("/model/primary").cloned().unwrap_or(serde_json::Value::Null),
-                "models": managed_models,
-            }))
-        }
-        AgentClient::Hermes => {
-            let content = contents
-                .first()
-                .and_then(Option::as_deref)
-                .unwrap_or_default();
-            let root = if content.trim().is_empty() {
-                serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
-            } else {
-                serde_yaml::from_str::<serde_yaml::Value>(content)
-                    .map_err(|error| format!("Hermes 配置格式无效: {error}"))?
-            };
-            if !root.is_mapping() {
-                return Err("Hermes 配置根节点必须是映射".to_string());
-            }
-            let providers = if let Some(providers) = root
-                .get("custom_providers")
-                .and_then(serde_yaml::Value::as_sequence)
-            {
-                let providers = providers
-                    .iter()
-                    .filter(|provider| {
-                        provider.get("name").and_then(serde_yaml::Value::as_str)
-                            == Some(MANAGED_AGENT_PROVIDER_ID)
-                    })
-                    .map(|provider| {
-                        let provider = serde_json::to_value(provider).map_err(|error| {
-                            format!("序列化 Hermes 受管 Provider 失败: {error}")
-                        })?;
-                        Ok(serde_json::json!({
-                            "name": json_field(&provider, "name"),
-                            "base_url": json_field(&provider, "base_url"),
-                            "api_key": json_field(&provider, "api_key"),
-                            "api_mode": json_field(&provider, "api_mode"),
-                            "model": json_field(&provider, "model"),
-                            "models": json_field(&provider, "models"),
-                        }))
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                serde_json::Value::Array(providers)
-            } else {
-                serde_json::to_value(
-                    root.get("custom_providers")
-                        .cloned()
-                        .unwrap_or(serde_yaml::Value::Null),
-                )
-                .map_err(|error| format!("序列化 Hermes 受管配置失败: {error}"))?
-            };
-            let model = serde_json::to_value(
-                root.get("model")
-                    .cloned()
-                    .unwrap_or(serde_yaml::Value::Null),
-            )
-            .map_err(|error| format!("序列化 Hermes 模型配置失败: {error}"))?;
-            Ok(serde_json::json!({
-                "providers": providers,
-                "model": {
-                    "default": json_field(&model, "default"),
-                    "provider": json_field(&model, "provider"),
-                },
-            }))
-        }
-    }
-}
-
 fn agent_managed_paths(client: AgentClient, home: &Path) -> Vec<PathBuf> {
     let paths = agent_config_paths(client, home);
     expected_agent_record_paths(client, &paths)
-}
-
-fn read_agent_managed_contents(paths: &[PathBuf]) -> Result<Vec<Option<String>>, String> {
-    paths
-        .iter()
-        .map(|path| {
-            let Some(bytes) = read_agent_bytes(path)? else {
-                return Ok(None);
-            };
-            String::from_utf8(bytes)
-                .map(Some)
-                .map_err(|_| format!("智能体配置不是 UTF-8 文本: {}", path_to_string(path)))
-        })
-        .collect()
-}
-
-fn agent_managed_fingerprint(client: AgentClient, home: &Path) -> Result<String, String> {
-    let paths = agent_managed_paths(client, home);
-    let contents = read_agent_managed_contents(&paths)?;
-    let projection = agent_managed_projection(client, &contents)?;
-    let bytes = serde_json::to_vec(&projection)
-        .map_err(|error| format!("生成智能体受管字段指纹失败: {error}"))?;
-    Ok(sha256_bytes(&bytes))
 }
 
 fn legacy_agent_backup_paths(state_content: &str) -> Vec<PathBuf> {
@@ -4973,7 +4629,6 @@ fn load_agent_applied_state(
         version: AGENT_APPLIED_STATE_VERSION,
         client: client.id().to_string(),
         model: record.model,
-        managed_fingerprint: agent_managed_fingerprint(client, home)?,
         updated_at_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -5865,7 +5520,6 @@ fn commit_agent_configuration(
             version: AGENT_APPLIED_STATE_VERSION,
             client: client.id().to_string(),
             model: model.to_string(),
-            managed_fingerprint: agent_managed_fingerprint(client, home)?,
             updated_at_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -13889,7 +13543,7 @@ mod tests {
             .unwrap()
             .exists());
         assert_eq!(
-            inspect_agent_application(AgentClient::Codex, &home, true).state,
+            inspect_agent_application(AgentClient::Codex, &home).state,
             "applied"
         );
 
@@ -13897,15 +13551,15 @@ mod tests {
         document["user_setting"] = toml_edit::value("changed-externally");
         fs::write(&path, document.to_string()).unwrap();
         assert_eq!(
-            inspect_agent_application(AgentClient::Codex, &home, true).state,
+            inspect_agent_application(AgentClient::Codex, &home).state,
             "applied"
         );
 
         document["model"] = toml_edit::value("external-model");
         fs::write(&path, document.to_string()).unwrap();
         assert_eq!(
-            inspect_agent_application(AgentClient::Codex, &home, false).state,
-            "external-changed"
+            inspect_agent_application(AgentClient::Codex, &home).state,
+            "applied"
         );
 
         apply_agent_configuration(
@@ -13987,7 +13641,7 @@ mod tests {
         assert_eq!(root["model"], "cpa-gui/model-a");
         assert!(!agent_backup_path(&path).unwrap().exists());
         assert_eq!(
-            inspect_agent_application(AgentClient::OpenCode, &home, true).state,
+            inspect_agent_application(AgentClient::OpenCode, &home).state,
             "applied"
         );
         fs::remove_dir_all(home).unwrap();
@@ -14482,44 +14136,6 @@ mod tests {
         assert_eq!(
             value["model"]["provider"].as_str(),
             Some(MANAGED_AGENT_PROVIDER_ID)
-        );
-    }
-
-    #[test]
-    fn agent_managed_projection_ignores_unmanaged_provider_extensions() {
-        let opencode_a = vec![Some(
-            r#"{"model":"cpa-gui/gpt-test","provider":{"cpa-gui":{"npm":"sdk","name":"CPA","options":{"baseURL":"http://localhost","apiKey":"key","timeout":10},"models":{},"custom":"a"}}}"#.to_string(),
-        )];
-        let opencode_b = vec![Some(
-            r#"{"model":"cpa-gui/gpt-test","provider":{"cpa-gui":{"npm":"sdk","name":"CPA","options":{"baseURL":"http://localhost","apiKey":"key","timeout":99},"models":{},"custom":"b"}}}"#.to_string(),
-        )];
-        assert_eq!(
-            agent_managed_projection(AgentClient::OpenCode, &opencode_a).unwrap(),
-            agent_managed_projection(AgentClient::OpenCode, &opencode_b).unwrap()
-        );
-
-        let openclaw_a = vec![Some(
-            r#"{"models":{"providers":{"cpa-gui":{"baseUrl":"http://localhost","apiKey":"key","api":"openai-completions","models":[],"custom":"a"}}},"agents":{"defaults":{"model":{"primary":"cpa-gui/gpt-test"},"models":{}}}}"#.to_string(),
-        )];
-        let openclaw_b = vec![Some(
-            r#"{"models":{"providers":{"cpa-gui":{"baseUrl":"http://localhost","apiKey":"key","api":"openai-completions","models":[],"custom":"b"}}},"agents":{"defaults":{"model":{"primary":"cpa-gui/gpt-test"},"models":{}}}}"#.to_string(),
-        )];
-        assert_eq!(
-            agent_managed_projection(AgentClient::OpenClaw, &openclaw_a).unwrap(),
-            agent_managed_projection(AgentClient::OpenClaw, &openclaw_b).unwrap()
-        );
-
-        let hermes_a = vec![Some(
-            "custom_providers:\n  - name: cpa-gui\n    base_url: http://localhost\n    api_key: key\n    api_mode: chat_completions\n    model: gpt-test\n    models: {}\n    custom: a\nmodel:\n  default: gpt-test\n  provider: cpa-gui\n  extension: a\n"
-                .to_string(),
-        )];
-        let hermes_b = vec![Some(
-            "custom_providers:\n  - name: cpa-gui\n    base_url: http://localhost\n    api_key: key\n    api_mode: chat_completions\n    model: gpt-test\n    models: {}\n    custom: b\nmodel:\n  default: gpt-test\n  provider: cpa-gui\n  extension: b\n"
-                .to_string(),
-        )];
-        assert_eq!(
-            agent_managed_projection(AgentClient::Hermes, &hermes_a).unwrap(),
-            agent_managed_projection(AgentClient::Hermes, &hermes_b).unwrap()
         );
     }
 
@@ -16469,10 +16085,7 @@ custom_option = "keep-original"
         assert!(
             validate_agent_launch_modification(AgentClient::Codex, false, "unconfigured").is_ok()
         );
-        assert!(
-            validate_agent_launch_modification(AgentClient::Codex, true, "external-changed",)
-                .is_ok()
-        );
+        assert!(validate_agent_launch_modification(AgentClient::Codex, true, "invalid",).is_ok());
         assert!(
             validate_agent_launch_modification(AgentClient::OpenCode, false, "unconfigured")
                 .is_err()
