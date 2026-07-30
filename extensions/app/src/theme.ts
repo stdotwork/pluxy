@@ -5,8 +5,8 @@ export type AppTheme = 'light' | 'dark';
 
 const STORAGE_KEY = 'easy-cli-proxy-api.theme';
 const WINDOW_BACKGROUND: Record<AppTheme, string> = {
-  light: '#faf9f5',
-  dark: '#101419',
+  light: '#f4f7fb',
+  dark: '#0b1220',
 };
 
 async function applyNativeTheme(theme: AppTheme): Promise<void> {
