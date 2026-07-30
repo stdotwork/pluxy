@@ -1,4 +1,6 @@
 const phraseReplacements: ReadonlyArray<readonly [string, string]> = [
+  ['兼容格式', '相容格式'],
+  ['历史', '歷史'],
   ['高级设置', '進階設定'],
   ['繁体中文', '繁體中文'],
   ['简体中文', '簡體中文'],

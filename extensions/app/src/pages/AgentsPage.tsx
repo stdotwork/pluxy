@@ -12,6 +12,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
   AlertTriangle,
+  AppWindow,
   BadgeCheck,
   Bot,
   Check,
@@ -22,6 +23,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  Terminal,
   Trash2,
   X,
 } from 'lucide-react';
@@ -481,10 +483,11 @@ export function AgentsPage() {
   const [modelByClient, setModelByClient] = useState<Partial<Record<AgentClientId, string>>>(
     readAgentModelSelections,
   );
-  const [launchTargetByClient, setLaunchTargetByClient] = useState<Partial<Record<AgentClientId, string>>>({});
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
-  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'clear' | 'launch' | 'close-app' | null>(null);
+  const [busyAction, setBusyAction] = useState<
+    'apply' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | null
+  >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
   const [modelError, setModelError] = useState('');
@@ -598,20 +601,6 @@ export function AgentsPage() {
     setCloseAppConfirmOpen(false);
   }, [selected]);
 
-  useEffect(() => {
-    setLaunchTargetByClient((current) => agentDefinitions.reduce<Partial<Record<AgentClientId, string>>>(
-      (next, definition) => {
-        const targets = statuses.find((status) => status.id === definition.id)?.launchTargets ?? [];
-        const previous = current[definition.id] ?? '';
-        next[definition.id] = targets.some((target) => target.id === previous)
-          ? previous
-          : targets[0]?.id ?? '';
-        return next;
-      },
-      {},
-    ));
-  }, [statuses]);
-
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
     ?? agentDefinitions[0];
   const activeStatus = statuses.find((status) => status.id === selected) ?? null;
@@ -622,10 +611,9 @@ export function AgentsPage() {
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
   const activeLaunchTargets = activeStatus?.launchTargets ?? [];
-  const selectedLaunchTargetId = launchTargetByClient[selected] ?? activeLaunchTargets[0]?.id ?? '';
-  const selectedLaunchTarget = activeLaunchTargets.find(
-    (target) => target.id === selectedLaunchTargetId,
-  ) ?? activeLaunchTargets[0] ?? null;
+  const defaultLaunchTarget = activeLaunchTargets[0] ?? null;
+  const cliLaunchTarget = activeLaunchTargets.find((target) => target.id === 'cli') ?? null;
+  const appLaunchTarget = activeLaunchTargets.find((target) => target.id === 'app') ?? null;
   const appliedModel = activeStatus?.appliedModel ?? activeStatus?.currentModel ?? '';
   const modelDraftChanged = Boolean(
     selectedModel.trim()
@@ -641,13 +629,13 @@ export function AgentsPage() {
       && !modelLoading
       && selectedModelOption,
   );
-  const canLaunch = Boolean(
+  const launchEnabled = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
-      && selectedLaunchTarget
       && (selected === 'codex'
         || (activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
   );
+  const canLaunchTarget = (target: AgentLaunchTarget | null) => launchEnabled && Boolean(target);
   const modelHint = modelSelectionError
     || modelError
     || (modelLoading
@@ -662,20 +650,6 @@ export function AgentsPage() {
     : activeStatus?.modificationState === 'applied'
       ? t('agents.modify.applied')
       : '';
-  const footerMessage = activeStatus?.modificationState === 'applied'
-    ? draftChanged
-      ? t('agents.footer.changed')
-      : t('agents.footer.applied')
-    : activeStatus?.modificationState === 'invalid'
-      ? t('agents.footer.invalidManaged')
-      : !activeStatus?.supportedPlatform
-        ? t('agents.footer.unsupported')
-        : !activeStatus.installed
-          ? t('agents.footer.installFirst')
-          : activeStatus.launchTargets.length === 0
-            ? t('agents.footer.noCommand')
-            : '';
-
   const refreshModels = () => {
     void loadModels(selected);
   };
@@ -776,14 +750,18 @@ export function AgentsPage() {
     }
   };
 
-  const launchAgent = async () => {
-    setBusyAction('launch');
+  const launchAgent = async (target: AgentLaunchTarget | null) => {
+    if (!target) return;
+    const launchAction = selected === 'codex'
+      ? target.id === 'cli' ? 'launch-cli' : 'launch-app'
+      : 'launch';
+    setBusyAction(launchAction);
     setLaunchError('');
     try {
       if (selected !== 'codex' && draftChanged) {
         throw new Error(t('agents.error.applyFirst'));
       }
-      await invoke('launch_agent', { client: selected, target: selectedLaunchTarget?.id });
+      await invoke('launch_agent', { client: selected, target: target.id });
     } catch (requestError) {
       setLaunchError(String(requestError));
     } finally {
@@ -975,23 +953,26 @@ export function AgentsPage() {
                 </div>
                 <div className="agent-modification-control">
                   {selected === 'codex' ? (
-                    <label
-                      className="agent-oauth-configuration"
-                      title={t('agents.modify.oauthConfiguration')}
-                    >
-                      <span>{t('agents.modify.oauthConfiguration')}</span>
-                      <span className="switch-control">
-                        <input
-                          type="checkbox"
-                          role="switch"
-                          checked={oauthConfiguration}
-                          onChange={(event) => setOauthConfigurationDraft(event.currentTarget.checked)}
-                          disabled={busy}
-                          aria-label={t('agents.modify.oauthConfiguration')}
-                        />
-                        <span className="switch-track" />
-                      </span>
-                    </label>
+                    <div className="agent-codex-options">
+                      <CodexSessionAutoRestoreCard />
+                      <label
+                        className="agent-oauth-configuration"
+                        title={t('agents.modify.oauthConfiguration')}
+                      >
+                        <span>{t('agents.modify.oauthConfiguration')}</span>
+                        <span className="switch-control">
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            checked={oauthConfiguration}
+                            onChange={(event) => setOauthConfigurationDraft(event.currentTarget.checked)}
+                            disabled={busy}
+                            aria-label={t('agents.modify.oauthConfiguration')}
+                          />
+                          <span className="switch-track" />
+                        </span>
+                      </label>
+                    </div>
                   ) : null}
                   <div className={`agent-modification-buttons ${selected === 'codex' ? 'codex' : ''}`}>
                     <button
@@ -1040,56 +1021,48 @@ export function AgentsPage() {
                 </div>
               </section>
 
-              {selected === 'codex' ? <CodexSessionAutoRestoreCard /> : null}
-
               <div className="agent-config-footer">
-                {footerMessage ? (
-                  <div className="agent-config-summary">
-                    {activeStatus?.modificationState === 'applied' ? <Check size={16} /> : <Sparkles size={16} />}
-                    <span>{footerMessage}</span>
-                  </div>
-                ) : null}
                 <div className="agent-launch-control">
                   <div className="agent-launch-actions">
-                    {activeLaunchTargets.length > 1 ? (
-                      <div className="agent-launch-targets" aria-label={t('agents.launchMethods')}>
-                        {activeLaunchTargets.map((target) => (
-                          <button
-                            type="button"
-                            className={target.id === selectedLaunchTarget?.id ? 'active' : ''}
-                            key={target.id}
-                            onClick={() => setLaunchTargetByClient((current) => ({
-                              ...current,
-                              [selected]: target.id,
-                            }))}
-                            disabled={busy}
-                            title={target.detail}
-                          >
-                            {target.label.replace('Codex ', '')}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={() => void launchAgent()}
-                      disabled={
-                        busy
-                        || !canLaunch
-                        || (selected !== 'codex' && draftChanged)
-                      }
-                      title={selected === 'codex'
-                        ? selectedLaunchTarget?.detail
-                        : draftChanged
+                    {selected === 'codex' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="secondary-button agent-launch-button"
+                          onClick={() => void launchAgent(cliLaunchTarget)}
+                          disabled={busy || !canLaunchTarget(cliLaunchTarget)}
+                          title={cliLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                        >
+                          {busyAction === 'launch-cli' ? <LoaderCircle size={16} className="spin" /> : <Terminal size={16} />}
+                          {busyAction === 'launch-cli' ? t('agents.launch.starting') : t('agents.launch.startCli')}
+                        </button>
+                        <button
+                          type="button"
+                          className="primary-button agent-launch-button"
+                          onClick={() => void launchAgent(appLaunchTarget)}
+                          disabled={busy || !canLaunchTarget(appLaunchTarget)}
+                          title={appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                        >
+                          {busyAction === 'launch-app' ? <LoaderCircle size={16} className="spin" /> : <AppWindow size={16} />}
+                          {busyAction === 'launch-app' ? t('agents.launch.starting') : t('agents.launch.startApp')}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="primary-button agent-launch-button"
+                        onClick={() => void launchAgent(defaultLaunchTarget)}
+                        disabled={busy || !canLaunchTarget(defaultLaunchTarget) || draftChanged}
+                        title={draftChanged
                           ? t('agents.launch.applyFirst')
                           : activeStatus?.modificationState === 'applied'
-                            ? selectedLaunchTarget?.detail
+                            ? defaultLaunchTarget?.detail
                             : t('agents.launch.enableFirst')}
-                    >
-                      {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
-                      {busyAction === 'launch' ? t('agents.launch.starting') : selectedLaunchTarget ? t('agents.launch.start', { target: selectedLaunchTarget.label }) : t('agents.launch.unavailable')}
-                    </button>
+                      >
+                        {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
+                        {busyAction === 'launch' ? t('agents.launch.starting') : defaultLaunchTarget ? t('agents.launch.start', { target: defaultLaunchTarget.label }) : t('agents.launch.unavailable')}
+                      </button>
+                    )}
                     {selected === 'codex' ? (
                       <button
                         type="button"
