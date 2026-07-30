@@ -5220,7 +5220,13 @@ textarea:focus-visible {
 
 .codex-auto-restore-card {
   height: 100%;
-  min-height: 64px;
+  min-height: 54px;
+  gap: 6px;
+  padding: 10px 12px;
+  border-color: var(--theme-d8d2c8);
+  border-radius: 9px;
+  background: var(--theme-faf8f4);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
 }
 
 .agent-codex-options {
@@ -5233,41 +5239,28 @@ textarea:focus-visible {
 
 .agent-codex-options > .agent-oauth-configuration {
   height: 100%;
-  min-height: 64px;
+  min-height: 54px;
+  padding: 10px 12px;
 }
 
 .agent-codex-options .agent-section-heading strong,
 .agent-codex-options > .agent-oauth-configuration {
-  font-size: var(--font-size-label);
+  font-size: var(--font-size-meta);
   font-weight: 600;
+  line-height: var(--line-height-tight);
 }
 
 .codex-auto-restore-toggle {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   cursor: pointer;
   user-select: none;
 }
 
-.codex-auto-restore-switch {
-  width: 54px;
-  height: 30px;
-}
-
-.codex-auto-restore-switch .switch-track::after {
-  width: 22px;
-  height: 22px;
-  margin: 3px;
-}
-
-.codex-auto-restore-switch input:checked + .switch-track::after {
-  transform: translateX(24px);
-}
-
 .codex-auto-restore-switch input:focus-visible + .switch-track {
-  outline: 3px solid rgba(45, 42, 38, 0.18);
+  outline: 3px solid var(--ui-focus-ring);
   outline-offset: 2px;
 }
 
@@ -5277,10 +5270,16 @@ textarea:focus-visible {
 }
 
 .codex-auto-restore-toggle > strong {
-  min-width: 42px;
+  min-width: 34px;
   color: var(--theme-5f5a53);
-  font-size: var(--font-size-label);
+  font-size: var(--font-size-meta);
+  font-weight: 600;
   text-align: right;
+}
+
+.codex-auto-restore-card.enabled {
+  border-color: var(--theme-9db8a5);
+  background: var(--theme-f3f8f4);
 }
 
 .codex-auto-restore-card.enabled .codex-auto-restore-toggle > strong {
@@ -6761,10 +6760,6 @@ textarea:focus-visible {
 @container agent-panel (max-width: 640px) {
   .agent-codex-options {
     grid-template-columns: 1fr;
-  }
-
-  .agent-codex-options > .agent-oauth-configuration {
-    min-height: 42px;
   }
 
   .agent-status-grid {
