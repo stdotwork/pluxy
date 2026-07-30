@@ -8,7 +8,6 @@ import {
   ExternalLink,
   FileKey,
   Gauge,
-  GitFork,
   History,
   House,
   Languages,
@@ -29,7 +28,6 @@ import { KernelPage } from './pages/Kernel';
 import { OAuthLoginPage } from './pages/ManagementPages';
 import { QuotaPage } from './pages/QuotaPage';
 import { AgentsPage } from './pages/AgentsPage';
-import { ThinkingAliasesPage } from './pages/ThinkingAliasesPage';
 import { UsageRecordsPage } from './pages/UsageRecordsPage';
 import { languageOptions, useI18n } from './i18n';
 import { AppUpdateDialog, AppUpdateProvider, useAppUpdate } from './appUpdate';
@@ -57,12 +55,6 @@ const pages = [
     labelKey: 'app.nav.config',
     icon: Settings,
     component: ConfigPanelPage,
-  },
-  {
-    id: 'thinking-aliases',
-    labelKey: 'app.nav.thinkingAliases',
-    icon: GitFork,
-    component: ThinkingAliasesPage,
   },
   {
     id: 'oauth',

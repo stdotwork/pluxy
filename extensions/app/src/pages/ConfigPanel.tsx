@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useCoreRuntime, type CoreStatus } from '../coreRuntime';
 import { useI18n } from '../i18n';
+import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 
 type CoreConfigSettings = {
   apiKeys: CoreApiKey[];
@@ -48,7 +49,7 @@ type ConfigAction =
   | 'network'
   | null;
 type NoticeTone = 'success' | 'error';
-type ConfigSubpage = 'general' | 'network';
+type ConfigSubpage = 'general' | 'network' | 'aliases';
 
 const ROUTING_OPTIONS = [
   { value: 'round-robin', labelKey: 'config.routing.roundRobin' },
@@ -378,6 +379,18 @@ export function ConfigPanelPage() {
         >
           {t('config.tabs.network')}
         </button>
+        <button
+          type="button"
+          id="config-subpage-tab-aliases"
+          role="tab"
+          className={activeSubpage === 'aliases' ? 'active' : ''}
+          aria-selected={activeSubpage === 'aliases'}
+          aria-controls="config-subpage-panel-aliases"
+          tabIndex={activeSubpage === 'aliases' ? 0 : -1}
+          onClick={() => setActiveSubpage('aliases')}
+        >
+          {t('app.nav.thinkingAliases')}
+        </button>
       </div>
 
       {activeSubpage === 'general' ? (
@@ -524,7 +537,7 @@ export function ConfigPanelPage() {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeSubpage === 'network' ? (
         <div
           className="config-subpage-panel config-network-subpage"
           id="config-subpage-panel-network"
@@ -701,6 +714,15 @@ export function ConfigPanelPage() {
           </label>
         </div>
       </section>
+        </div>
+      ) : (
+        <div
+          className="config-subpage-panel"
+          id="config-subpage-panel-aliases"
+          role="tabpanel"
+          aria-labelledby="config-subpage-tab-aliases"
+        >
+          <ThinkingAliasesPage />
         </div>
       )}
 
