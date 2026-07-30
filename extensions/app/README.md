@@ -91,7 +91,7 @@ previous configuration, and launch an available desktop or CLI entry point.
 
 ## Additional Capabilities
 
-- Manage core settings, API keys, remote management credentials, plugins, and routing strategy.
+- Manage core settings, API keys, remote management credentials, and routing strategy.
 - Create client-visible model aliases and map them to provider models and reasoning levels.
 - Upload, download, inspect, and manage authentication files.
 - Review provider quotas and account availability.

@@ -13,7 +13,6 @@ import {
   Network,
   Pencil,
   Plus,
-  Plug,
   RefreshCw,
   Route,
   Sparkles,
@@ -28,7 +27,6 @@ type CoreConfigSettings = {
   apiKeys: CoreApiKey[];
   port: number;
   allowLan: boolean;
-  pluginsEnabled: boolean;
   routingStrategy: string;
   proxyUrl: string;
   routingSessionAffinity: boolean;
@@ -44,7 +42,6 @@ type ConfigAction =
   | 'add-key'
   | 'update-key'
   | 'delete-key'
-  | 'plugins'
   | 'routing'
   | 'network'
   | null;
@@ -79,6 +76,7 @@ export function ConfigPanelPage() {
   const [sessionAffinityDraft, setSessionAffinityDraft] = useState(false);
   const [sessionTtlDraft, setSessionTtlDraft] = useState('');
   const [portError, setPortError] = useState('');
+  const [savedStatusVisible, setSavedStatusVisible] = useState(false);
   const noticeTimerRef = useRef<number | null>(null);
   const copyTimerRef = useRef<number | null>(null);
 
@@ -268,25 +266,18 @@ export function ConfigPanelPage() {
     }
   };
 
-  const togglePlugins = async (enabled: boolean) => {
-    await runMutation(
-      'plugins',
-      'set_core_plugins_enabled',
-      { enabled },
-      enabled ? t('config.notice.pluginsEnabled') : t('config.notice.pluginsDisabled'),
-    );
-  };
-
   const changeRoutingStrategy = async (strategy: string) => {
     if (strategy === settings?.routingStrategy) {
       return;
     }
-    await runMutation(
+    setSavedStatusVisible(false);
+    const saved = await runMutation(
       'routing',
       'set_core_routing_strategy',
       { strategy },
       t('config.notice.routingUpdated'),
     );
+    if (saved) setSavedStatusVisible(true);
   };
 
   const saveNetworkRoutingSettings = async () => {
@@ -302,6 +293,7 @@ export function ConfigPanelPage() {
     const routingSessionAffinityTtl = sessionTtlDraft.trim();
     const networkChanged = port !== settings.port || allowLanDraft !== settings.allowLan;
     setPortError('');
+    setSavedStatusVisible(false);
     setBusyAction('network');
     try {
       const result = await invoke<CoreConfigSettings>('save_network_routing_settings', {
@@ -315,6 +307,7 @@ export function ConfigPanelPage() {
       });
       applySettings(result);
       setLoadError('');
+      setSavedStatusVisible(true);
 
       if (networkChanged && coreStatus?.running) {
         try {
@@ -347,6 +340,22 @@ export function ConfigPanelPage() {
     || sessionAffinityDraft !== settings?.routingSessionAffinity
     || sessionTtlDraft.trim() !== settings?.routingSessionAffinityTtl
   );
+  const networkStatusLabel = loading
+    ? t('common.loading')
+    : settings === null
+      ? t('common.unavailable')
+      : busyAction === 'network' || busyAction === 'routing'
+        ? t('config.network.saving')
+        : networkRoutingDirty
+          ? t('config.network.unsaved')
+          : savedStatusVisible
+            ? t('config.network.saved')
+            : '';
+  const networkStatusIsSaved = !loading
+    && settings !== null
+    && busyAction === null
+    && !networkRoutingDirty
+    && savedStatusVisible;
   const selectedDeleteKey =
     deleteIndex === null ? '' : settings?.apiKeys[deleteIndex]?.apiKey || '';
   const deletingLastKey = deleteIndex !== null && settings?.apiKeys.length === 1;
@@ -400,7 +409,6 @@ export function ConfigPanelPage() {
           role="tabpanel"
           aria-labelledby="config-subpage-tab-general"
         >
-          <div className="config-workspace-grid">
         <section className="panel config-keys-panel">
           <div className="config-panel-heading">
             <div className="config-heading-title">
@@ -502,40 +510,6 @@ export function ConfigPanelPage() {
             )}
           </div>
         </section>
-
-            <div className="config-side-stack single">
-          <section className="panel config-setting-panel">
-            <div className="config-panel-heading">
-              <div className="config-heading-title">
-                <Plug size={18} aria-hidden="true" />
-                <h2>{t('config.plugins.title')}</h2>
-              </div>
-              <span className={`state-pill ${settings?.pluginsEnabled ? 'success' : ''}`}>
-                {loading
-                  ? t('common.loading')
-                  : settings === null
-                    ? t('common.unavailable')
-                    : settings.pluginsEnabled
-                      ? t('common.enabled')
-                      : t('common.disabled')}
-              </span>
-            </div>
-            <div className="config-single-control">
-              <span>{t('config.plugins.enable')}</span>
-              <label className="switch-control" title={t('config.plugins.enable')}>
-                <input
-                  type="checkbox"
-                  aria-label={t('config.plugins.enable')}
-                  checked={Boolean(settings?.pluginsEnabled)}
-                  disabled={controlsDisabled}
-                  onChange={(event) => void togglePlugins(event.currentTarget.checked)}
-                />
-                <span className="switch-track" />
-              </label>
-            </div>
-          </section>
-            </div>
-          </div>
         </div>
       ) : activeSubpage === 'network' ? (
         <div
@@ -544,37 +518,6 @@ export function ConfigPanelPage() {
           role="tabpanel"
           aria-labelledby="config-subpage-tab-network"
         >
-          <section className="panel config-setting-panel">
-            <div className="config-panel-heading">
-              <div className="config-heading-title">
-                <Route size={18} aria-hidden="true" />
-                <h2>{t('config.routing.title')}</h2>
-              </div>
-              <span className="state-pill" title={settings?.routingStrategy || undefined}>
-                {loading
-                  ? t('common.loading')
-                  : settings === null
-                    ? t('common.unavailable')
-                    : routingStrategyLabel(settings.routingStrategy, t)}
-              </span>
-            </div>
-            <div className="routing-segmented" role="group" aria-label={t('config.routing.title')}>
-              {ROUTING_OPTIONS.map((option) => (
-                <button
-                  type="button"
-                  key={option.value}
-                  className={settings?.routingStrategy === option.value ? 'active' : ''}
-                  aria-pressed={settings?.routingStrategy === option.value}
-                  disabled={controlsDisabled}
-                  onClick={() => void changeRoutingStrategy(option.value)}
-                  title={option.value}
-                >
-                  {t(option.labelKey)}
-                </button>
-              ))}
-            </div>
-          </section>
-
       <section className="panel config-network-panel">
         <div className="config-panel-heading">
           <div className="config-heading-title">
@@ -582,17 +525,11 @@ export function ConfigPanelPage() {
             <h2>{t('config.network.title')}</h2>
           </div>
           <div className="config-heading-actions">
-            <span className={`state-pill ${settings !== null && !networkRoutingDirty ? 'success' : ''}`}>
-              {loading
-                ? t('common.loading')
-                : settings === null
-                  ? t('common.unavailable')
-                  : busyAction === 'network'
-                    ? t('config.network.saving')
-                    : networkRoutingDirty
-                      ? t('config.network.unsaved')
-                      : t('config.network.saved')}
-            </span>
+            {networkStatusLabel ? (
+              <span className={`state-pill ${networkStatusIsSaved ? 'success' : ''}`}>
+                {networkStatusLabel}
+              </span>
+            ) : null}
             <button
               type="button"
               className="primary-button compact-button"
@@ -607,8 +544,14 @@ export function ConfigPanelPage() {
           </div>
         </div>
 
-        <div className="config-network-grid">
-          <label className="config-network-field config-network-port-field">
+        <div className="config-network-sections">
+          <section className="config-network-section" aria-labelledby="config-network-section-title">
+            <div className="config-network-section-heading">
+              <Network size={16} aria-hidden="true" />
+              <h3 id="config-network-section-title">{t('config.network.networkSection')}</h3>
+            </div>
+            <div className="config-network-grid">
+              <label className="config-network-field config-network-port-field">
             <span>{t('config.network.port')}</span>
             <input
               className={`config-network-input ${portError ? 'error' : ''}`}
@@ -621,6 +564,7 @@ export function ConfigPanelPage() {
               aria-invalid={Boolean(portError)}
               title={portError || t('config.network.portHint')}
               onChange={(event) => {
+                setSavedStatusVisible(false);
                 setPortDraft(event.currentTarget.value.replace(/\D/g, '').slice(0, 5));
                 setPortError('');
               }}
@@ -633,85 +577,136 @@ export function ConfigPanelPage() {
               }}
             />
             <small>{t('config.network.portHint')}</small>
-          </label>
+              </label>
 
-          <div className="config-network-field config-network-toggle">
-            <div>
-              <span>{t('config.network.allowLan')}</span>
-              <small>{t('config.network.allowLanHint')}</small>
+              <div className="config-network-field config-network-toggle">
+                <div>
+                  <span>{t('config.network.allowLan')}</span>
+                  <small>{t('config.network.allowLanHint')}</small>
+                </div>
+                <label className="switch-control" title={t('config.network.allowLan')}>
+                  <input
+                    type="checkbox"
+                    aria-label={t('config.network.allowLan')}
+                    checked={allowLanDraft}
+                    disabled={controlsDisabled}
+                    onChange={(event) => {
+                      setSavedStatusVisible(false);
+                      setAllowLanDraft(event.currentTarget.checked);
+                    }}
+                  />
+                  <span className="switch-track" />
+                </label>
+              </div>
+
+              <label className="config-network-field">
+                <span className="config-network-label">
+                  <Link2 size={15} aria-hidden="true" />
+                  {t('config.network.proxyUrl')}
+                </span>
+                <input
+                  className="config-network-input"
+                  type="text"
+                  value={proxyUrlDraft}
+                  disabled={controlsDisabled}
+                  placeholder={t('config.network.proxyPlaceholder')}
+                  onChange={(event) => {
+                    setSavedStatusVisible(false);
+                    setProxyUrlDraft(event.currentTarget.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && settings) {
+                      setProxyUrlDraft(settings.proxyUrl);
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <small>{t('config.network.proxyHint')}</small>
+              </label>
             </div>
-            <label className="switch-control" title={t('config.network.allowLan')}>
-              <input
-                type="checkbox"
-                aria-label={t('config.network.allowLan')}
-                checked={allowLanDraft}
-                disabled={controlsDisabled}
-                onChange={(event) => setAllowLanDraft(event.currentTarget.checked)}
-              />
-              <span className="switch-track" />
-            </label>
-          </div>
+          </section>
 
-          <label className="config-network-field">
-            <span className="config-network-label">
-              <Link2 size={15} aria-hidden="true" />
-              {t('config.network.proxyUrl')}
-            </span>
-            <input
-              className="config-network-input"
-              type="text"
-              value={proxyUrlDraft}
-              disabled={controlsDisabled}
-              placeholder={t('config.network.proxyPlaceholder')}
-              onChange={(event) => setProxyUrlDraft(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape' && settings) {
-                  setProxyUrlDraft(settings.proxyUrl);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-            <small>{t('config.network.proxyHint')}</small>
-          </label>
-
-          <div className="config-network-field config-network-toggle">
-            <div>
-              <span>{t('config.network.sessionAffinity')}</span>
-              <small>{t('config.network.sessionAffinityHint')}</small>
+          <section className="config-network-section" aria-labelledby="config-routing-section-title">
+            <div className="config-network-section-heading">
+              <Route size={16} aria-hidden="true" />
+              <h3 id="config-routing-section-title">{t('config.network.routingSection')}</h3>
             </div>
-            <label className="switch-control" title={t('config.network.sessionAffinity')}>
-              <input
-                type="checkbox"
-                aria-label={t('config.network.sessionAffinity')}
-                checked={sessionAffinityDraft}
-                disabled={controlsDisabled}
-                onChange={(event) => setSessionAffinityDraft(event.currentTarget.checked)}
-              />
-              <span className="switch-track" />
-            </label>
-          </div>
+            <div className="config-network-grid">
+              <div className="config-network-field config-network-toggle">
+                <div>
+                  <span>{t('config.network.sessionAffinity')}</span>
+                  <small>{t('config.network.sessionAffinityHint')}</small>
+                </div>
+                <label className="switch-control" title={t('config.network.sessionAffinity')}>
+                  <input
+                    type="checkbox"
+                    aria-label={t('config.network.sessionAffinity')}
+                    checked={sessionAffinityDraft}
+                    disabled={controlsDisabled}
+                    onChange={(event) => {
+                      setSavedStatusVisible(false);
+                      setSessionAffinityDraft(event.currentTarget.checked);
+                    }}
+                  />
+                  <span className="switch-track" />
+                </label>
+              </div>
 
-          <label className="config-network-field">
-            <span className="config-network-label">
-              <Clock3 size={15} aria-hidden="true" />
-              {t('config.network.sessionTtl')}
-            </span>
-            <input
-              className="config-network-input"
-              type="text"
-              value={sessionTtlDraft}
-              disabled={controlsDisabled}
-              placeholder="1h"
-              onChange={(event) => setSessionTtlDraft(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape' && settings) {
-                  setSessionTtlDraft(settings.routingSessionAffinityTtl);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-            <small>{t('config.network.sessionTtlHint')}</small>
-          </label>
+              <label className="config-network-field">
+                <span className="config-network-label">
+                  <Clock3 size={15} aria-hidden="true" />
+                  {t('config.network.sessionTtl')}
+                </span>
+                <input
+                  className="config-network-input"
+                  type="text"
+                  value={sessionTtlDraft}
+                  disabled={controlsDisabled}
+                  placeholder="1h"
+                  onChange={(event) => {
+                    setSavedStatusVisible(false);
+                    setSessionTtlDraft(event.currentTarget.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && settings) {
+                      setSessionTtlDraft(settings.routingSessionAffinityTtl);
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <small>{t('config.network.sessionTtlHint')}</small>
+              </label>
+
+              <div className="config-network-field config-network-routing-field">
+                <span className="config-network-label">
+                  <Route size={15} aria-hidden="true" />
+                  {t('config.routing.title')}
+                </span>
+                <div className="routing-segmented" role="group" aria-label={t('config.routing.title')}>
+                  {ROUTING_OPTIONS.map((option) => (
+                    <button
+                      type="button"
+                      key={option.value}
+                      className={settings?.routingStrategy === option.value ? 'active' : ''}
+                      aria-pressed={settings?.routingStrategy === option.value}
+                      disabled={controlsDisabled}
+                      onClick={() => void changeRoutingStrategy(option.value)}
+                      title={option.value}
+                    >
+                      {t(option.labelKey)}
+                    </button>
+                  ))}
+                </div>
+                <small title={settings?.routingStrategy || undefined}>
+                  {loading
+                    ? t('common.loading')
+                    : settings === null
+                      ? t('common.unavailable')
+                      : routingStrategyLabel(settings.routingStrategy, t)}
+                </small>
+              </div>
+            </div>
+          </section>
         </div>
       </section>
         </div>
