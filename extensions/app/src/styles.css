@@ -861,6 +861,16 @@ input:focus-visible {
   height: 350px;
 }
 
+.config-subpage-panel {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+
+.config-network-subpage > .config-setting-panel {
+  width: min(420px, 100%);
+}
+
 .control-panel {
   grid-column: auto;
 }
@@ -1501,6 +1511,12 @@ input:focus-visible {
   grid-template-rows: repeat(2, 166px);
   gap: 18px;
   height: 350px;
+}
+
+.config-side-stack.single {
+  grid-template-rows: 166px;
+  align-content: start;
+  height: 166px;
 }
 
 .config-setting-panel {
@@ -6723,6 +6739,10 @@ input:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: 166px;
     height: 166px;
+  }
+
+  .config-side-stack.single {
+    grid-template-columns: 1fr;
   }
 
   .control-panel,

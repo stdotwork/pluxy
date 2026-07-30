@@ -48,6 +48,7 @@ type ConfigAction =
   | 'network'
   | null;
 type NoticeTone = 'success' | 'error';
+type ConfigSubpage = 'general' | 'network';
 
 const ROUTING_OPTIONS = [
   { value: 'round-robin', labelKey: 'config.routing.roundRobin' },
@@ -70,6 +71,7 @@ export function ConfigPanelPage() {
   const [formError, setFormError] = useState('');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [notice, setNotice] = useState<{ message: string; tone: NoticeTone } | null>(null);
+  const [activeSubpage, setActiveSubpage] = useState<ConfigSubpage>('general');
   const [portDraft, setPortDraft] = useState('8317');
   const [allowLanDraft, setAllowLanDraft] = useState(false);
   const [proxyUrlDraft, setProxyUrlDraft] = useState('');
@@ -351,7 +353,41 @@ export function ConfigPanelPage() {
 
   return (
     <section className="page config-page">
-      <div className="config-workspace-grid">
+      <div className="agent-subpage-tabs config-subpage-tabs" role="tablist" aria-label={t('config.tabs.label')}>
+        <button
+          type="button"
+          id="config-subpage-tab-general"
+          role="tab"
+          className={activeSubpage === 'general' ? 'active' : ''}
+          aria-selected={activeSubpage === 'general'}
+          aria-controls="config-subpage-panel-general"
+          tabIndex={activeSubpage === 'general' ? 0 : -1}
+          onClick={() => setActiveSubpage('general')}
+        >
+          {t('config.tabs.general')}
+        </button>
+        <button
+          type="button"
+          id="config-subpage-tab-network"
+          role="tab"
+          className={activeSubpage === 'network' ? 'active' : ''}
+          aria-selected={activeSubpage === 'network'}
+          aria-controls="config-subpage-panel-network"
+          tabIndex={activeSubpage === 'network' ? 0 : -1}
+          onClick={() => setActiveSubpage('network')}
+        >
+          {t('config.tabs.network')}
+        </button>
+      </div>
+
+      {activeSubpage === 'general' ? (
+        <div
+          className="config-subpage-panel"
+          id="config-subpage-panel-general"
+          role="tabpanel"
+          aria-labelledby="config-subpage-tab-general"
+        >
+          <div className="config-workspace-grid">
         <section className="panel config-keys-panel">
           <div className="config-panel-heading">
             <div className="config-heading-title">
@@ -454,7 +490,7 @@ export function ConfigPanelPage() {
           </div>
         </section>
 
-        <div className="config-side-stack">
+            <div className="config-side-stack single">
           <section className="panel config-setting-panel">
             <div className="config-panel-heading">
               <div className="config-heading-title">
@@ -485,7 +521,16 @@ export function ConfigPanelPage() {
               </label>
             </div>
           </section>
-
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div
+          className="config-subpage-panel config-network-subpage"
+          id="config-subpage-panel-network"
+          role="tabpanel"
+          aria-labelledby="config-subpage-tab-network"
+        >
           <section className="panel config-setting-panel">
             <div className="config-panel-heading">
               <div className="config-heading-title">
@@ -516,8 +561,6 @@ export function ConfigPanelPage() {
               ))}
             </div>
           </section>
-        </div>
-      </div>
 
       <section className="panel config-network-panel">
         <div className="config-panel-heading">
@@ -658,6 +701,8 @@ export function ConfigPanelPage() {
           </label>
         </div>
       </section>
+        </div>
+      )}
 
       {addDialogOpen ? (
         <div className="config-dialog-backdrop" onMouseDown={(event) => {
