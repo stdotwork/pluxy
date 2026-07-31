@@ -599,6 +599,7 @@ struct AgentConfigStatus {
     modification_state: String,
     backup_available: bool,
     applied_model: Option<String>,
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
     warnings: Vec<String>,
     error: Option<String>,
 }
@@ -632,6 +633,24 @@ struct CodexModelCatalogUpdateResult {
 struct AgentModelOption {
     name: String,
     alias: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeDesktopModelMappings {
+    opus: String,
+    sonnet: String,
+    haiku: String,
+}
+
+impl ClaudeDesktopModelMappings {
+    fn all(model: &str) -> Self {
+        Self {
+            opus: model.to_string(),
+            sonnet: model.to_string(),
+            haiku: model.to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -706,6 +725,7 @@ struct AgentModificationInspection {
     state: String,
     backup_available: bool,
     applied_model: Option<String>,
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
     warnings: Vec<String>,
 }
 
@@ -715,6 +735,8 @@ struct AgentAppliedState {
     version: u8,
     client: String,
     model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
     updated_at_unix: u64,
 }
 
@@ -809,6 +831,7 @@ struct AgentConfigurationOptions<'a> {
     models: &'a [AgentModelOption],
     codex_catalog: Option<&'a str>,
     oauth_configuration: bool,
+    claude_desktop_model_mappings: Option<&'a ClaudeDesktopModelMappings>,
 }
 
 struct PreparedAgentModels {
@@ -1934,6 +1957,25 @@ async fn fetch_prepared_agent_models(
     }
 }
 
+fn resolve_claude_desktop_model_mappings(
+    client: AgentClient,
+    models: &[AgentModelOption],
+    selected_model: &str,
+    requested: Option<ClaudeDesktopModelMappings>,
+) -> Result<Option<ClaudeDesktopModelMappings>, String> {
+    if client != AgentClient::ClaudeDesktop {
+        return Ok(None);
+    }
+    let requested = requested.unwrap_or_else(|| ClaudeDesktopModelMappings::all(selected_model));
+    let resolve =
+        |model: &str| resolve_available_agent_model(models, &validate_agent_model(model)?);
+    Ok(Some(ClaudeDesktopModelMappings {
+        opus: resolve(&requested.opus)?,
+        sonnet: resolve(&requested.sonnet)?,
+        haiku: resolve(&requested.haiku)?,
+    }))
+}
+
 fn prepare_codex_agent_models(
     runtime_models: &[codex_catalog::CodexRuntimeModel],
 ) -> Result<PreparedAgentModels, String> {
@@ -1959,6 +2001,7 @@ async fn apply_agent_config(
     client: String,
     model: String,
     oauth_configuration: bool,
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
     let home = app
@@ -1973,9 +2016,12 @@ async fn apply_agent_config(
     validate_agent_can_enable(client, &home, config.port, api_key)?;
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
-    if client == AgentClient::ClaudeDesktop {
-        ensure_claude_desktop_model_alias(&config, &model).await?;
-    }
+    let claude_desktop_model_mappings = resolve_claude_desktop_model_mappings(
+        client,
+        &prepared.models,
+        &model,
+        claude_desktop_model_mappings,
+    )?;
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -1989,6 +2035,7 @@ async fn apply_agent_config(
             models: &prepared.models,
             codex_catalog: prepared.codex_catalog.as_deref(),
             oauth_configuration,
+            claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
         },
     )
 }
@@ -2000,6 +2047,7 @@ async fn reset_agent_config_to_default(
     client: String,
     model: String,
     oauth_configuration: bool,
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
     let home = app
@@ -2014,9 +2062,12 @@ async fn reset_agent_config_to_default(
     validate_agent_can_enable(client, &home, config.port, api_key)?;
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
-    if client == AgentClient::ClaudeDesktop {
-        ensure_claude_desktop_model_alias(&config, &model).await?;
-    }
+    let claude_desktop_model_mappings = resolve_claude_desktop_model_mappings(
+        client,
+        &prepared.models,
+        &model,
+        claude_desktop_model_mappings,
+    )?;
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -2026,8 +2077,10 @@ async fn reset_agent_config_to_default(
         config.port,
         api_key,
         &model,
+        &prepared.models,
         prepared.codex_catalog.as_deref(),
         oauth_configuration,
+        claude_desktop_model_mappings.as_ref(),
     )
 }
 
@@ -2051,6 +2104,7 @@ async fn set_agent_config_enabled(
     model: String,
     enabled: bool,
     force_restore: bool,
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
     let home = app
@@ -2066,20 +2120,27 @@ async fn set_agent_config_enabled(
         let prepared = fetch_prepared_agent_models(client, &config).await?;
         let model =
             resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
-        if client == AgentClient::ClaudeDesktop {
-            ensure_claude_desktop_model_alias(&config, &model).await?;
-        }
+        let claude_desktop_model_mappings = resolve_claude_desktop_model_mappings(
+            client,
+            &prepared.models,
+            &model,
+            claude_desktop_model_mappings,
+        )?;
         let _guard = AGENT_CONFIG_FILE_LOCK
             .lock()
             .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
-        apply_agent_configuration(
+        apply_agent_configuration_with_oauth(
             client,
             &home,
             port,
             api_key,
             &model,
-            &prepared.models,
-            prepared.codex_catalog.as_deref(),
+            AgentConfigurationOptions {
+                models: &prepared.models,
+                codex_catalog: prepared.codex_catalog.as_deref(),
+                oauth_configuration: false,
+                claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
+            },
         )
     } else {
         let _guard = AGENT_CONFIG_FILE_LOCK
@@ -2096,6 +2157,7 @@ async fn update_agent_config(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
     model: String,
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
     let home = app
@@ -2107,20 +2169,27 @@ async fn update_agent_config(
     let api_key = effective_agent_api_key(&config);
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
-    if client == AgentClient::ClaudeDesktop {
-        ensure_claude_desktop_model_alias(&config, &model).await?;
-    }
+    let claude_desktop_model_mappings = resolve_claude_desktop_model_mappings(
+        client,
+        &prepared.models,
+        &model,
+        claude_desktop_model_mappings,
+    )?;
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
-    apply_agent_configuration(
+    apply_agent_configuration_with_oauth(
         client,
         &home,
         port,
         api_key,
         &model,
-        &prepared.models,
-        prepared.codex_catalog.as_deref(),
+        AgentConfigurationOptions {
+            models: &prepared.models,
+            codex_catalog: prepared.codex_catalog.as_deref(),
+            oauth_configuration: false,
+            claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
+        },
     )
 }
 
@@ -2749,6 +2818,7 @@ fn inspect_agent_config(
         modification_state: modification.state,
         backup_available: modification.backup_available,
         applied_model: modification.applied_model,
+        claude_desktop_model_mappings: modification.claude_desktop_model_mappings,
         warnings,
         error,
     }
@@ -2761,6 +2831,7 @@ fn inspect_agent_application(client: AgentClient, home: &Path) -> AgentModificat
             state: "applied".to_string(),
             backup_available: false,
             applied_model: Some(state.model),
+            claude_desktop_model_mappings: state.claude_desktop_model_mappings,
             warnings: Vec::new(),
         },
         Ok(None) => AgentModificationInspection {
@@ -2768,6 +2839,7 @@ fn inspect_agent_application(client: AgentClient, home: &Path) -> AgentModificat
             state: "unconfigured".to_string(),
             backup_available: false,
             applied_model: None,
+            claude_desktop_model_mappings: None,
             warnings: Vec::new(),
         },
         Err(error) => AgentModificationInspection {
@@ -2775,6 +2847,7 @@ fn inspect_agent_application(client: AgentClient, home: &Path) -> AgentModificat
             state: "invalid".to_string(),
             backup_available: false,
             applied_model: None,
+            claude_desktop_model_mappings: None,
             warnings: vec![error],
         },
     }
@@ -4085,6 +4158,7 @@ fn build_agent_updates(
             models,
             codex_catalog,
             oauth_configuration: false,
+            claude_desktop_model_mappings: None,
         },
     )
 }
@@ -4101,6 +4175,7 @@ fn build_agent_updates_with_oauth(
         models,
         codex_catalog,
         oauth_configuration,
+        claude_desktop_model_mappings: _,
     } = options;
     let paths = agent_config_paths(client, home);
     let root_base = format!("http://127.0.0.1:{port}");
@@ -4366,7 +4441,7 @@ fn build_claude_desktop_profile(
     base_url: &str,
     api_key: &str,
     model: &str,
-    _available_models: &[AgentModelOption],
+    available_models: &[AgentModelOption],
 ) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop 网关配置")?;
     root.insert(
@@ -4393,18 +4468,33 @@ fn build_claude_desktop_profile(
         "inferenceProvider".to_string(),
         serde_json::json!("gateway"),
     );
-    // Claude Desktop should receive only the selected model. For a non-Claude
-    // CPA model, the name sent to the gateway is a stable Claude-style alias;
-    // its human-readable label remains the original selected model.
-    let inference_model = claude_desktop_inference_model_id(model)?;
-    let inference_models = vec![if inference_model.eq_ignore_ascii_case(model) {
-        serde_json::json!(inference_model)
-    } else {
-        serde_json::json!({
-            "name": inference_model,
-            "labelOverride": model,
-        })
-    }];
+    // Keep every CPA model visible in Claude Desktop. Non-Claude model IDs use
+    // stable Claude-style gateway aliases, while the original model ID remains
+    // the visible label.
+    let mut inference_models = Vec::with_capacity(available_models.len().max(1));
+    let mut inference_model_ids = Vec::with_capacity(available_models.len().max(1));
+    for available_model in ordered_agent_models(available_models, model) {
+        inference_models.push(serde_json::json!(available_model.name));
+        continue;
+        let inference_model = claude_desktop_inference_model_id(&available_model.name)?;
+        if inference_model_ids
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&inference_model))
+        {
+            return Err(format!("Claude Desktop 模型别名冲突: {inference_model}"));
+        }
+        inference_model_ids.push(inference_model.clone());
+        inference_models.push(
+            if inference_model.eq_ignore_ascii_case(&available_model.name) {
+                serde_json::json!(inference_model)
+            } else {
+                serde_json::json!({
+                    "name": inference_model,
+                    "labelOverride": available_model.name,
+                })
+            },
+        );
+    }
     root.insert(
         "inferenceModels".to_string(),
         serde_json::Value::Array(inference_models),
@@ -4417,7 +4507,7 @@ fn claude_desktop_inference_model_id(model: &str) -> Result<String, String> {
     let normalized = model.to_ascii_lowercase();
     if normalized.starts_with("claude-")
         || normalized.starts_with("opus-")
-        || matches!(normalized.as_str(), "sonnet" | "opus")
+        || matches!(normalized.as_str(), "sonnet" | "opus" | "haiku")
     {
         return Ok(model);
     }
@@ -5077,6 +5167,7 @@ fn load_agent_applied_state(
         version: AGENT_APPLIED_STATE_VERSION,
         client: client.id().to_string(),
         model: record.model,
+        claude_desktop_model_mappings: None,
         updated_at_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -5303,6 +5394,7 @@ fn inspect_agent_modification(
                 state: "inactive".to_string(),
                 backup_available: false,
                 applied_model: current_model.map(str::to_string),
+                claude_desktop_model_mappings: None,
                 warnings: Vec::new(),
             }
         }
@@ -5343,6 +5435,7 @@ fn inspect_agent_modification(
                     state: state.to_string(),
                     backup_available,
                     applied_model: Some(record.model),
+                    claude_desktop_model_mappings: None,
                     warnings,
                 }
             }
@@ -5351,6 +5444,7 @@ fn inspect_agent_modification(
                 state: "inactive".to_string(),
                 backup_available: false,
                 applied_model: current_model.map(str::to_string),
+                claude_desktop_model_mappings: None,
                 warnings: Vec::new(),
             },
             Err(error) => AgentModificationInspection {
@@ -5361,6 +5455,7 @@ fn inspect_agent_modification(
                     .filter_map(|path| agent_backup_path(path).ok())
                     .any(|path| path.is_file()),
                 applied_model: current_model.map(str::to_string),
+                claude_desktop_model_mappings: None,
                 warnings: vec![error],
             },
         };
@@ -5375,6 +5470,7 @@ fn inspect_agent_modification(
                         state: "active".to_string(),
                         backup_available: true,
                         applied_model: Some(record.model),
+                        claude_desktop_model_mappings: None,
                         warnings: vec![
                             "检测到旧版 CPA 配置和备份，可使用“清除修改”恢复原配置".to_string()
                         ],
@@ -5386,6 +5482,7 @@ fn inspect_agent_modification(
                         state: "inactive".to_string(),
                         backup_available: false,
                         applied_model: current_model.map(str::to_string),
+                        claude_desktop_model_mappings: None,
                         warnings: vec!["检测到 CPA 配置，但缺少可安全恢复的原始备份".to_string()],
                     }
                 }
@@ -5395,6 +5492,7 @@ fn inspect_agent_modification(
                         state: "inactive".to_string(),
                         backup_available: false,
                         applied_model: current_model.map(str::to_string),
+                        claude_desktop_model_mappings: None,
                         warnings: vec![error],
                     }
                 }
@@ -5407,6 +5505,7 @@ fn inspect_agent_modification(
         state: "inactive".to_string(),
         backup_available: false,
         applied_model: current_model.map(str::to_string),
+        claude_desktop_model_mappings: None,
         warnings: Vec::new(),
     }
 }
@@ -5418,7 +5517,11 @@ fn fresh_agent_contents(
     api_key: &str,
     model: &str,
 ) -> Result<Vec<String>, String> {
-    fresh_agent_contents_with_oauth(client, port, api_key, model, false)
+    let models = [AgentModelOption {
+        name: model.to_string(),
+        alias: None,
+    }];
+    fresh_agent_contents_with_oauth(client, port, api_key, model, &models, false)
 }
 
 fn fresh_agent_contents_with_oauth(
@@ -5426,14 +5529,11 @@ fn fresh_agent_contents_with_oauth(
     port: u16,
     api_key: &str,
     model: &str,
+    models: &[AgentModelOption],
     oauth_configuration: bool,
 ) -> Result<Vec<String>, String> {
     let root_base = format!("http://127.0.0.1:{port}");
     let openai_base = format!("{root_base}/v1");
-    let models = [AgentModelOption {
-        name: model.to_string(),
-        alias: None,
-    }];
     match client {
         AgentClient::ClaudeCode => Ok(vec![build_claude_agent_config(
             None, &root_base, api_key, model,
@@ -5441,7 +5541,7 @@ fn fresh_agent_contents_with_oauth(
         AgentClient::ClaudeDesktop => Ok(vec![
             build_claude_desktop_deployment_config(None)?,
             build_claude_desktop_deployment_config(None)?,
-            build_claude_desktop_profile(None, &root_base, api_key, model, &models)?,
+            build_claude_desktop_profile(None, &root_base, api_key, model, models)?,
             build_claude_desktop_meta(None)?,
         ]),
         AgentClient::Codex => Ok(vec![build_codex_agent_config_with_oauth(
@@ -5456,21 +5556,21 @@ fn fresh_agent_contents_with_oauth(
             &openai_base,
             api_key,
             model,
-            &models,
+            models,
         )?]),
         AgentClient::OpenClaw => Ok(vec![build_openclaw_agent_config(
             None,
             &openai_base,
             api_key,
             model,
-            &models,
+            models,
         )?]),
         AgentClient::Hermes => Ok(vec![build_hermes_agent_config(
             None,
             &openai_base,
             api_key,
             model,
-            &models,
+            models,
         )?]),
     }
 }
@@ -5931,6 +6031,7 @@ fn commit_agent_configuration(
     model: &str,
     updates: &[AgentFileUpdate],
     outcome: &str,
+    claude_desktop_model_mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let base_paths = agent_config_paths(client, home);
     let state_path = agent_state_path(&base_paths)?;
@@ -5968,6 +6069,9 @@ fn commit_agent_configuration(
             version: AGENT_APPLIED_STATE_VERSION,
             client: client.id().to_string(),
             model: model.to_string(),
+            claude_desktop_model_mappings: (client == AgentClient::ClaudeDesktop)
+                .then(|| claude_desktop_model_mappings.cloned())
+                .flatten(),
             updated_at_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -5999,6 +6103,7 @@ fn commit_agent_configuration(
     }
 }
 
+#[cfg(test)]
 fn apply_agent_configuration(
     client: AgentClient,
     home: &Path,
@@ -6018,6 +6123,7 @@ fn apply_agent_configuration(
             models,
             codex_catalog,
             oauth_configuration: false,
+            claude_desktop_model_mappings: None,
         },
     )
 }
@@ -6030,8 +6136,16 @@ fn apply_agent_configuration_with_oauth(
     model: &str,
     options: AgentConfigurationOptions<'_>,
 ) -> Result<AgentConfigActionResult, String> {
+    let claude_desktop_model_mappings = options.claude_desktop_model_mappings;
     let updates = build_agent_updates_with_oauth(client, home, port, api_key, model, options)?;
-    commit_agent_configuration(client, home, model, &updates, "applied")
+    commit_agent_configuration(
+        client,
+        home,
+        model,
+        &updates,
+        "applied",
+        claude_desktop_model_mappings,
+    )
 }
 
 #[cfg(test)]
@@ -6049,8 +6163,13 @@ fn reset_agent_configuration_to_default(
         port,
         api_key,
         model,
+        &[AgentModelOption {
+            name: model.to_string(),
+            alias: None,
+        }],
         codex_catalog,
         false,
+        None,
     )
 }
 
@@ -6060,12 +6179,14 @@ fn reset_agent_configuration_to_default_with_oauth(
     port: u16,
     api_key: &str,
     model: &str,
+    models: &[AgentModelOption],
     codex_catalog: Option<&str>,
     oauth_configuration: bool,
+    claude_desktop_model_mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let paths = agent_config_paths(client, home);
     let contents =
-        fresh_agent_contents_with_oauth(client, port, api_key, model, oauth_configuration)?;
+        fresh_agent_contents_with_oauth(client, port, api_key, model, models, oauth_configuration)?;
     if paths.len() != contents.len() {
         return Err("智能体默认配置文件数量不匹配".to_string());
     }
@@ -6082,7 +6203,14 @@ fn reset_agent_configuration_to_default_with_oauth(
             after: catalog.to_string(),
         });
     }
-    commit_agent_configuration(client, home, model, &updates, "default")
+    commit_agent_configuration(
+        client,
+        home,
+        model,
+        &updates,
+        "default",
+        claude_desktop_model_mappings,
+    )
 }
 
 #[cfg(test)]
@@ -9630,26 +9758,23 @@ async fn put_management_config_yaml(config: &GuiConfigFile, content: &str) -> Re
     read_management_value(response).await.map(|_| ())
 }
 
-async fn ensure_claude_desktop_model_alias(
+async fn ensure_claude_desktop_model_aliases(
     config: &GuiConfigFile,
-    model: &str,
+    models: &[AgentModelOption],
+    mappings: &ClaudeDesktopModelMappings,
 ) -> Result<(), String> {
-    let alias = claude_desktop_inference_model_id(model)?;
-    if alias.eq_ignore_ascii_case(model) {
-        return Ok(());
-    }
     let content = fetch_management_config_yaml(config).await?;
-    let updated = ensure_claude_desktop_model_alias_in_yaml(&content, model, &alias)?;
+    let updated = ensure_claude_desktop_model_aliases_in_yaml(&content, models, mappings)?;
     if updated != content {
         put_management_config_yaml(config, &updated).await?;
     }
     Ok(())
 }
 
-fn ensure_claude_desktop_model_alias_in_yaml(
+fn ensure_claude_desktop_model_aliases_in_yaml(
     content: &str,
-    source_model: &str,
-    alias: &str,
+    models: &[AgentModelOption],
+    mappings: &ClaudeDesktopModelMappings,
 ) -> Result<String, String> {
     let mut document = yaml_serde_edit::YamlValue::parse(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
@@ -9658,25 +9783,41 @@ fn ensure_claude_desktop_model_alias_in_yaml(
         .as_mapping_mut()
         .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
 
-    if let Some((existing_source, existing_client_model)) =
-        configured_model_client_identity(root, alias)
-    {
-        if existing_client_model != existing_source
-            && existing_source.eq_ignore_ascii_case(source_model)
-        {
-            return Ok(content.to_string());
+    for model in models {
+        let alias = claude_desktop_inference_model_id(&model.name)?;
+        if !alias.eq_ignore_ascii_case(&model.name) {
+            ensure_claude_desktop_model_alias(root, &model.name, &alias)?;
         }
-        return Err(format!(
-            "Claude Desktop 自动别名 {alias} 已被模型 {existing_source} 使用，请先修改冲突模型的别名"
-        ));
     }
-
-    if !append_claude_desktop_model_alias(root, source_model, alias)? {
-        return Err(format!(
-            "无法确定模型 {source_model} 的 CPA 配置来源，无法创建 Claude Desktop 自动别名"
-        ));
+    for (alias, source_model) in [
+        ("opus", mappings.opus.as_str()),
+        ("sonnet", mappings.sonnet.as_str()),
+        ("haiku", mappings.haiku.as_str()),
+    ] {
+        ensure_claude_desktop_model_alias(root, source_model, alias)?;
     }
     render_updated_core_yaml(&mut document, updated)
+}
+
+fn ensure_claude_desktop_model_alias(
+    root: &mut serde_norway::Mapping,
+    source_model: &str,
+    alias: &str,
+) -> Result<(), String> {
+    if let Some((existing_source, _)) = configured_model_client_identity(root, alias) {
+        if existing_source.eq_ignore_ascii_case(source_model) {
+            return Ok(());
+        }
+        return Err(format!(
+            "Claude Desktop 别名 {alias} 已被模型 {existing_source} 使用，请先修改冲突模型的别名"
+        ));
+    }
+    if append_claude_desktop_model_alias(root, source_model, alias)? {
+        return Ok(());
+    }
+    Err(format!(
+        "无法确定模型 {source_model} 的 CPA 配置来源，无法创建 Claude Desktop 别名 {alias}"
+    ))
 }
 
 fn configured_model_client_identity(
@@ -14674,6 +14815,7 @@ mod tests {
                     models: &models,
                     codex_catalog: Some(&catalog),
                     oauth_configuration,
+                    claude_desktop_model_mappings: None,
                 },
             )
             .unwrap()
@@ -14783,7 +14925,8 @@ mod tests {
         assert_eq!(profile["inferenceGatewayApiKey"], DEFAULT_API_KEY);
         assert_eq!(profile["inferenceGatewayBaseUrl"], "http://127.0.0.1:8317");
         assert_eq!(profile["inferenceModels"][0], "claude-sonnet-test");
-        assert_eq!(profile["inferenceModels"].as_array().unwrap().len(), 1);
+        assert_eq!(profile["inferenceModels"][1], "claude-opus-test");
+        assert_eq!(profile["inferenceModels"].as_array().unwrap().len(), 2);
         assert_eq!(meta["appliedId"], CLAUDE_DESKTOP_PROFILE_ID);
         assert_eq!(meta["entries"].as_array().unwrap().len(), 2);
         let managed_entry = meta["entries"]
@@ -15030,11 +15173,17 @@ mod tests {
     }
 
     #[test]
-    fn claude_desktop_auto_alias_is_added_once_to_its_source_provider() {
+    fn claude_desktop_aliases_expose_all_models_and_role_routes() {
         let input = "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1\n    models:\n      - name: gpt-5.6-sol\n";
-        let alias = claude_desktop_inference_model_id("gpt-5.6-sol").unwrap();
+        let available_models = test_agent_models(&["gpt-5.6-sol"]);
+        let mappings = ClaudeDesktopModelMappings {
+            opus: "gpt-5.6-sol".to_string(),
+            sonnet: "gpt-5.6-sol".to_string(),
+            haiku: "gpt-5.6-sol".to_string(),
+        };
         let rendered =
-            ensure_claude_desktop_model_alias_in_yaml(input, "gpt-5.6-sol", &alias).unwrap();
+            ensure_claude_desktop_model_aliases_in_yaml(input, &available_models, &mappings)
+                .unwrap();
         let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
         let root = value.as_mapping().unwrap();
         let providers = yaml_mapping_value(root, "openai-compatibility")
@@ -15044,7 +15193,7 @@ mod tests {
             .and_then(serde_norway::Value::as_sequence)
             .unwrap();
 
-        assert_eq!(models.len(), 2);
+        assert_eq!(models.len(), 5);
         assert_eq!(
             configured_model_identity(&models[1]),
             Some((
@@ -15053,10 +15202,43 @@ mod tests {
                 None,
             ))
         );
+        assert_eq!(configured_model_identity(&models[2]).unwrap().1, "opus");
+        assert_eq!(configured_model_identity(&models[3]).unwrap().1, "sonnet");
+        assert_eq!(configured_model_identity(&models[4]).unwrap().1, "haiku");
         assert_eq!(
-            ensure_claude_desktop_model_alias_in_yaml(&rendered, "gpt-5.6-sol", &alias).unwrap(),
+            ensure_claude_desktop_model_aliases_in_yaml(&rendered, &available_models, &mappings)
+                .unwrap(),
             rendered
         );
+    }
+
+    #[test]
+    fn claude_desktop_role_mappings_can_use_different_available_models() {
+        let models = test_agent_models(&["gpt-5.6-sol", "deepseek-chat", "gemini-3-pro"]);
+        let mappings = resolve_claude_desktop_model_mappings(
+            AgentClient::ClaudeDesktop,
+            &models,
+            "gpt-5.6-sol",
+            Some(ClaudeDesktopModelMappings {
+                opus: "gpt-5.6-sol".to_string(),
+                sonnet: "deepseek-chat".to_string(),
+                haiku: "gemini-3-pro".to_string(),
+            }),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(mappings.opus, "gpt-5.6-sol");
+        assert_eq!(mappings.sonnet, "deepseek-chat");
+        assert_eq!(mappings.haiku, "gemini-3-pro");
+        assert!(resolve_claude_desktop_model_mappings(
+            AgentClient::ClaudeCode,
+            &models,
+            "gpt-5.6-sol",
+            None,
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]

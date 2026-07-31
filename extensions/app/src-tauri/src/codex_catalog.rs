@@ -325,6 +325,7 @@ fn prepare_catalog_with_sources(
         if let Some(template) = sources.templates.get(&key) {
             let mut value = template.value.clone();
             value.insert("slug".to_string(), Value::String(runtime.slug.clone()));
+            enable_fast_mode(&mut value);
             entries.push(CatalogEntry {
                 value,
                 template_order: Some(template.order),
@@ -333,6 +334,7 @@ fn prepare_catalog_with_sources(
             let mut value = sources.fallback.clone();
             apply_runtime_metadata(&mut value, runtime);
             disable_fallback_capabilities(&mut value);
+            enable_fast_mode(&mut value);
             entries.push(CatalogEntry {
                 value,
                 template_order: None,
@@ -506,15 +508,25 @@ fn disable_fallback_capabilities(model: &mut Map<String, Value>) {
         "web_search_tool_type".to_string(),
         Value::String("text".to_string()),
     );
-    model.insert("service_tiers".to_string(), Value::Array(Vec::new()));
-    model.insert(
-        "additional_speed_tiers".to_string(),
-        Value::Array(Vec::new()),
-    );
     model.insert("default_service_tier".to_string(), Value::Null);
     model.insert("upgrade".to_string(), Value::Null);
     model.insert("availability_nux".to_string(), Value::Null);
     model.remove("minimal_client_version");
+}
+
+fn enable_fast_mode(model: &mut Map<String, Value>) {
+    model.insert(
+        "service_tiers".to_string(),
+        serde_json::json!([{
+            "id": "priority",
+            "name": "Fast",
+            "description": "1.5x speed, increased usage"
+        }]),
+    );
+    model.insert(
+        "additional_speed_tiers".to_string(),
+        serde_json::json!(["fast"]),
+    );
 }
 
 fn parse_modalities(value: &Value) -> Option<Vec<String>> {
@@ -860,6 +872,27 @@ mod tests {
     }
 
     #[test]
+    fn all_runtime_models_advertise_fast_capabilities() {
+        let runtime = runtime(serde_json::json!({"models":[
+            {"id":"B"},
+            {"id":"remote-model-alias"}
+        ]}));
+
+        let catalog = prepare_catalog_with_sources(&runtime, &test_sources()).unwrap();
+        for model in output_models(&catalog) {
+            assert_eq!(
+                model["service_tiers"],
+                serde_json::json!([{
+                    "id": "priority",
+                    "name": "Fast",
+                    "description": "1.5x speed, increased usage"
+                }])
+            );
+            assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
+        }
+    }
+
+    #[test]
     fn known_and_unknown_models_are_composed_from_the_correct_sources() {
         let runtime = runtime(serde_json::json!({"models":[
             {"id":"b","display_name":"Runtime B","context_window":1},
@@ -898,12 +931,23 @@ mod tests {
         let model = &output_models(&catalog)[0];
         let template = &sources.templates["a"].value;
         for (key, expected) in template {
-            if key != "slug" {
+            if !matches!(
+                key.as_str(),
+                "slug" | "service_tiers" | "additional_speed_tiers"
+            ) {
                 assert_eq!(model.get(key), Some(expected), "changed field {key}");
             }
         }
         assert_eq!(model["slug"], "a");
         assert_eq!(model["nested"]["unknown"], true);
+        assert_eq!(
+            model["service_tiers"],
+            serde_json::json!([{
+                "id": "priority",
+                "name": "Fast",
+                "description": "1.5x speed, increased usage"
+            }])
+        );
         assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
     }
 
@@ -936,8 +980,15 @@ mod tests {
             "You are Codex, a model-neutral coding agent."
         );
         assert_eq!(model["supports_search_tool"], false);
-        assert_eq!(model["service_tiers"], serde_json::json!([]));
-        assert_eq!(model["additional_speed_tiers"], serde_json::json!([]));
+        assert_eq!(
+            model["service_tiers"],
+            serde_json::json!([{
+                "id": "priority",
+                "name": "Fast",
+                "description": "1.5x speed, increased usage"
+            }])
+        );
+        assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
     }
 
     #[test]
