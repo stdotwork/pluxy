@@ -653,9 +653,7 @@ export function AgentsPage() {
           : t('agents.model.firstSelection', { count: models.length }));
   const modificationDescription = activeStatus?.modificationState === 'invalid'
     ? t('agents.modify.invalid')
-    : activeStatus?.modificationState === 'applied'
-      ? t('agents.modify.applied')
-      : '';
+    : '';
   const refreshModels = () => {
     void loadModels(selected);
   };

@@ -1376,6 +1376,14 @@ textarea:focus-visible {
   align-content: start;
 }
 
+.software-update-details .panel-detail-row {
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+
+.software-update-details .panel-detail-row dt {
+  white-space: nowrap;
+}
+
 .software-update-actions {
   grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
   grid-auto-flow: row;

@@ -523,7 +523,6 @@ export const jaOverrides = {
   'agents.modify.default': 'デフォルト設定',
   'agents.modify.clear': '設定を消去',
   'agents.modify.invalid': '現在の設定を解析できません。「設定変更を適用」は最小の有効な設定を再構築し、「デフォルト設定」はファイル全体をリセットします。',
-  'agents.modify.applied': 'アプリが管理するフィールドは適用済みで、それ以外のユーザー設定は保持されています。',
   'agents.launch.enableFirst': '先に設定変更を適用してください',
   'agents.launch.applyFirst': '先に選択中のモデルを適用してください',
   'agents.launch.starting': '起動中',

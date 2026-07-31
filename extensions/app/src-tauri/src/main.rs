@@ -85,6 +85,12 @@ const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
 const CODEX_MODEL_CATALOG_FILE: &str = "cpa-gui-model-catalog.json";
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR: &str = "CODEX_OAUTH_LOGIN_REQUIRED";
 const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";
+const MODEL_ALIAS_CONFIG_SECTIONS: &[&str] = &[
+    "codex-api-key",
+    "openai-compatibility",
+    "claude-api-key",
+    "gemini-api-key",
+];
 const LEGACY_AGENT_MODIFICATION_STATE_VERSION: u8 = 1;
 const AGENT_MODIFICATION_STATE_VERSION: u8 = 2;
 const AGENT_APPLIED_STATE_VERSION: u8 = 3;
@@ -725,6 +731,14 @@ enum AgentClient {
 #[derive(Clone, Debug)]
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))] // The desktop-app variants are constructed only on macOS/Windows builds.
 enum CodexAppTarget {
+    Application(PathBuf),
+    #[cfg(target_os = "windows")]
+    WindowsAppId(String),
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+enum ClaudeDesktopTarget {
     Application(PathBuf),
     #[cfg(target_os = "windows")]
     WindowsAppId(String),
@@ -1959,6 +1973,9 @@ async fn apply_agent_config(
     validate_agent_can_enable(client, &home, config.port, api_key)?;
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
+    if client == AgentClient::ClaudeDesktop {
+        ensure_claude_desktop_model_alias(&config, &model).await?;
+    }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -1997,6 +2014,9 @@ async fn reset_agent_config_to_default(
     validate_agent_can_enable(client, &home, config.port, api_key)?;
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
+    if client == AgentClient::ClaudeDesktop {
+        ensure_claude_desktop_model_alias(&config, &model).await?;
+    }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -2046,6 +2066,9 @@ async fn set_agent_config_enabled(
         let prepared = fetch_prepared_agent_models(client, &config).await?;
         let model =
             resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
+        if client == AgentClient::ClaudeDesktop {
+            ensure_claude_desktop_model_alias(&config, &model).await?;
+        }
         let _guard = AGENT_CONFIG_FILE_LOCK
             .lock()
             .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -2084,6 +2107,9 @@ async fn update_agent_config(
     let api_key = effective_agent_api_key(&config);
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
+    if client == AgentClient::ClaudeDesktop {
+        ensure_claude_desktop_model_alias(&config, &model).await?;
+    }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -2164,13 +2190,14 @@ async fn launch_agent(
         return Err(format!("{} 不支持桌面 App 启动方式", client.name()));
     }
 
+    if client == AgentClient::ClaudeDesktop {
+        let target = find_claude_desktop_target(&home)
+            .ok_or_else(|| "未检测到 Claude Desktop 应用，请先安装或重新检测。".to_string())?;
+        return launch_claude_desktop(&target);
+    }
     let executable = find_agent_executable(client, &home)
         .ok_or_else(|| format!("未找到 {} 的可执行文件", client.name()))?;
-    if client == AgentClient::ClaudeDesktop {
-        launch_desktop_agent(&executable, client.name())
-    } else {
-        launch_cli_agent(&executable, client.name(), &home)
-    }
+    launch_cli_agent(&executable, client.name(), &home)
 }
 
 fn validate_agent_launch_modification(
@@ -2273,22 +2300,57 @@ fn parse_agent_model_options(payload: &serde_json::Value) -> Result<Vec<AgentMod
                 .trim()
                 .to_string()
         };
-        if name.is_empty()
-            || models
-                .iter()
-                .any(|model: &AgentModelOption| model.name.eq_ignore_ascii_case(&name))
-        {
-            continue;
-        }
-        let alias = ["alias", "display_name", "displayName"]
+        let display_name = ["display_name", "displayName"]
             .into_iter()
             .find_map(|key| item.get(key).and_then(serde_json::Value::as_str))
             .map(str::trim)
             .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case(&name))
             .map(str::to_string);
-        models.push(AgentModelOption { name, alias });
+        let model_alias = item
+            .get("alias")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case(&name))
+            .map(str::to_string);
+        let keep_original = item
+            .get("fork")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+
+        if let Some(model_alias) = model_alias {
+            if keep_original {
+                append_agent_model_option(&mut models, &name, display_name);
+            }
+            append_agent_model_option(&mut models, &model_alias, Some(name));
+        } else {
+            append_agent_model_option(&mut models, &name, display_name);
+        }
     }
     Ok(models)
+}
+
+fn append_agent_model_option(
+    models: &mut Vec<AgentModelOption>,
+    name: &str,
+    alias: Option<String>,
+) {
+    let name = name.trim();
+    if name.is_empty()
+        || models
+            .iter()
+            .any(|model| model.name.eq_ignore_ascii_case(name))
+    {
+        return;
+    }
+    let alias = alias
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case(name))
+        .map(str::to_string);
+    models.push(AgentModelOption {
+        name: name.to_string(),
+        alias,
+    });
 }
 
 fn parse_codex_model_definitions(
@@ -2531,12 +2593,12 @@ fn claude_desktop_config_paths(_home: &Path) -> Vec<PathBuf> {
         (support.join("Claude"), support.join("Claude-3p"))
     };
     #[cfg(target_os = "windows")]
-    let (normal, threep) = {
+    {
         let local = env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| _home.join("AppData/Local"));
-        (local.join("Claude"), local.join("Claude-3p"))
-    };
+        return claude_desktop_config_paths_from_local_app_data(&local);
+    }
     #[cfg(target_os = "linux")]
     let (normal, threep) = {
         let config_home = env::var_os("XDG_CONFIG_HOME")
@@ -2548,16 +2610,58 @@ fn claude_desktop_config_paths(_home: &Path) -> Vec<PathBuf> {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     return Vec::new();
 
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        let library = threep.join("configLibrary");
-        vec![
-            normal.join("claude_desktop_config.json"),
-            threep.join("claude_desktop_config.json"),
-            library.join(format!("{CLAUDE_DESKTOP_PROFILE_ID}.json")),
-            library.join("_meta.json"),
-        ]
+        claude_desktop_config_paths_from_directories(normal, threep)
     }
+}
+
+fn claude_desktop_config_paths_from_directories(normal: PathBuf, threep: PathBuf) -> Vec<PathBuf> {
+    let library = threep.join("configLibrary");
+    vec![
+        normal.join("claude_desktop_config.json"),
+        threep.join("claude_desktop_config.json"),
+        library.join(format!("{CLAUDE_DESKTOP_PROFILE_ID}.json")),
+        library.join("_meta.json"),
+    ]
+}
+
+#[cfg(target_os = "windows")]
+fn claude_desktop_config_paths_from_local_app_data(local_app_data: &Path) -> Vec<PathBuf> {
+    // Claude Desktop may add a channel or version suffix to these directories.
+    // Match cc-switch's resolver so status detection and configuration writes use
+    // the same files as the installed Desktop client rather than only the legacy
+    // fixed `Claude` / `Claude-3p` locations.
+    let normal = find_windows_claude_data_directory(local_app_data, false)
+        .unwrap_or_else(|| local_app_data.join("Claude"));
+    let threep = find_windows_claude_data_directory(local_app_data, true)
+        .unwrap_or_else(|| local_app_data.join("Claude-3p"));
+    claude_desktop_config_paths_from_directories(normal, threep)
+}
+
+#[cfg(target_os = "windows")]
+fn find_windows_claude_data_directory(local_app_data: &Path, threep: bool) -> Option<PathBuf> {
+    let exact_name = if threep { "Claude-3p" } else { "Claude" };
+    let exact = local_app_data.join(exact_name);
+    if exact.is_dir() {
+        return Some(exact);
+    }
+
+    let mut candidates = fs::read_dir(local_app_data)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter(|path| {
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                return false;
+            };
+            let normalized = name.to_ascii_lowercase();
+            normalized.starts_with("claude") && normalized.contains("-3p") == threep
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().next()
 }
 
 fn hermes_agent_config_path(home: &Path) -> PathBuf {
@@ -2605,11 +2709,16 @@ fn inspect_agent_config(
     };
     let launch_targets = agent_launch_targets(client, home);
     let executable = find_agent_executable(client, home);
-    let installed = !launch_targets.is_empty() || config_exists;
-    let version = executable
-        .as_deref()
-        .filter(|_| client != AgentClient::ClaudeDesktop)
-        .and_then(read_agent_version);
+    let installed = if client == AgentClient::ClaudeDesktop {
+        !launch_targets.is_empty()
+    } else {
+        !launch_targets.is_empty() || config_exists
+    };
+    let version = if client == AgentClient::ClaudeDesktop {
+        read_claude_desktop_version(home)
+    } else {
+        executable.as_deref().and_then(read_agent_version)
+    };
     let mut warnings = Vec::new();
     if !client.supported_platform() {
         warnings.push("当前平台不支持 Claude Desktop 3P 配置".to_string());
@@ -2784,6 +2893,16 @@ fn agent_has_managed_marker(client: AgentClient, paths: &[PathBuf]) -> Result<bo
 
 fn agent_launch_targets(client: AgentClient, home: &Path) -> Vec<AgentLaunchTarget> {
     let mut targets = Vec::new();
+    if client == AgentClient::ClaudeDesktop {
+        if let Some(target) = find_claude_desktop_target(home) {
+            targets.push(AgentLaunchTarget {
+                id: "app".to_string(),
+                label: "Claude Desktop".to_string(),
+                detail: claude_desktop_target_detail(&target),
+            });
+        }
+        return targets;
+    }
     if client == AgentClient::Codex {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(target) = find_codex_app_target(home) {
@@ -2825,6 +2944,14 @@ fn codex_app_target_detail(target: &CodexAppTarget) -> String {
         CodexAppTarget::Application(path) => path_to_string(path),
         #[cfg(target_os = "windows")]
         CodexAppTarget::WindowsAppId(app_id) => format!("Microsoft Store · {app_id}"),
+    }
+}
+
+fn claude_desktop_target_detail(target: &ClaudeDesktopTarget) -> String {
+    match target {
+        ClaudeDesktopTarget::Application(path) => path_to_string(path),
+        #[cfg(target_os = "windows")]
+        ClaudeDesktopTarget::WindowsAppId(app_id) => format!("Microsoft Store · {app_id}"),
     }
 }
 
@@ -2881,6 +3008,26 @@ fn find_codex_app_target(home: &Path) -> Option<CodexAppTarget> {
     }
 }
 
+fn find_claude_desktop_target(home: &Path) -> Option<ClaudeDesktopTarget> {
+    #[cfg(target_os = "windows")]
+    {
+        return find_windows_claude_desktop_target(home);
+    }
+    #[cfg(not(target_os = "windows"))]
+    find_claude_desktop_executable(home).map(ClaudeDesktopTarget::Application)
+}
+
+fn read_claude_desktop_version(home: &Path) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        return read_windows_claude_desktop_store_version().or_else(|| {
+            find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path))
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path))
+}
+
 #[cfg(target_os = "windows")]
 fn windows_system_root() -> PathBuf {
     env::var_os("SystemRoot")
@@ -2932,6 +3079,101 @@ fn find_windows_codex_app_target(home: &Path) -> Option<CodexAppTarget> {
     find_windows_registered_codex_app_target()
         .or_else(|| find_windows_codex_app_id_via_registry().map(CodexAppTarget::WindowsAppId))
         .or_else(|| find_windows_codex_app_executable(home).map(CodexAppTarget::Application))
+}
+
+#[cfg(target_os = "windows")]
+fn find_windows_claude_desktop_target(home: &Path) -> Option<ClaudeDesktopTarget> {
+    find_windows_registered_claude_desktop_target()
+        .or_else(|| find_claude_desktop_executable(home).map(ClaudeDesktopTarget::Application))
+}
+
+#[cfg(target_os = "windows")]
+fn find_windows_registered_claude_desktop_target() -> Option<ClaudeDesktopTarget> {
+    const DISCOVERY_SCRIPT: &str = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+$startApps = @(Get-StartApps)
+$appId = $startApps |
+    Where-Object {
+        $_.AppID -like 'Claude_*!*' -or
+        $_.AppID -like 'Anthropic.Claude_*!*'
+    } |
+    Select-Object -First 1 -ExpandProperty AppID
+if ($appId) {
+    Write-Output "APPID:$appId"
+    exit 0
+}
+
+$packages = @(Get-AppxPackage) |
+    Where-Object {
+        $_.Name -eq 'Claude' -or
+        $_.Name -like 'Anthropic.Claude*' -or
+        $_.PackageFamilyName -match '^(Claude|Anthropic\.Claude)_'
+    }
+foreach ($package in $packages) {
+    $manifest = Get-AppxPackageManifest -Package $package.PackageFullName
+    $application = @($manifest.Package.Applications.Application) |
+        Where-Object { $_.Id } |
+        Select-Object -First 1
+    if ($application -and $package.PackageFamilyName) {
+        Write-Output "APPID:$($package.PackageFamilyName)!$($application.Id)"
+        exit 0
+    }
+}
+"#;
+
+    let encoded_command = windows_powershell_encoded_command(DISCOVERY_SCRIPT);
+    let mut command = Command::new(windows_powershell_executable());
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        &encoded_command,
+    ]);
+    configure_background_command(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_windows_claude_desktop_discovery_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_claude_desktop_store_version() -> Option<String> {
+    const VERSION_SCRIPT: &str = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$package = @(Get-AppxPackage) |
+    Where-Object {
+        $_.Name -eq 'Claude' -or
+        $_.Name -like 'Anthropic.Claude*' -or
+        $_.PackageFamilyName -match '^(Claude|Anthropic\.Claude)_'
+    } |
+    Select-Object -First 1
+if ($package -and $package.Version) {
+    Write-Output "VERSION:$($package.Version)"
+}
+"#;
+
+    let encoded_command = windows_powershell_encoded_command(VERSION_SCRIPT);
+    let mut command = Command::new(windows_powershell_executable());
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        &encoded_command,
+    ]);
+    configure_background_command(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_windows_claude_desktop_version_output(&String::from_utf8_lossy(&output.stdout))
 }
 
 #[cfg(target_os = "windows")]
@@ -3048,6 +3290,25 @@ fn parse_windows_codex_app_discovery_output(output: &str) -> Option<CodexAppTarg
             .map(str::trim)
             .filter(|path| !path.is_empty())
             .map(|path| CodexAppTarget::Application(PathBuf::from(path)))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_claude_desktop_discovery_output(output: &str) -> Option<ClaudeDesktopTarget> {
+    output.lines().find_map(|line| {
+        let app_id = line.trim().strip_prefix("APPID:")?.trim();
+        (!app_id.is_empty()).then(|| ClaudeDesktopTarget::WindowsAppId(app_id.to_string()))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_claude_desktop_version_output(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("VERSION:")
+            .map(str::trim)
+            .filter(|version| !version.is_empty())
+            .map(str::to_string)
     })
 }
 
@@ -3385,6 +3646,28 @@ fn launch_desktop_agent(executable: &Path, label: &str) -> Result<(), String> {
         .map_err(|error| format!("启动 {label} 失败: {error}"))
 }
 
+fn launch_claude_desktop(target: &ClaudeDesktopTarget) -> Result<(), String> {
+    match target {
+        ClaudeDesktopTarget::Application(executable) => {
+            launch_desktop_agent(executable, "Claude Desktop")
+        }
+        #[cfg(target_os = "windows")]
+        ClaudeDesktopTarget::WindowsAppId(app_id) => {
+            let mut command = Command::new(windows_explorer_executable());
+            command.arg(format!("shell:AppsFolder\\{app_id}"));
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            configure_background_command(&mut command);
+            command
+                .spawn()
+                .map(|_| ())
+                .map_err(|error| format!("启动 Claude Desktop 失败: {error}"))
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
@@ -3564,6 +3847,11 @@ fn inspect_claude_desktop_agent_config(
         .and_then(|model| {
             model
                 .as_str()
+                .or_else(|| {
+                    model
+                        .get("labelOverride")
+                        .and_then(serde_json::Value::as_str)
+                })
                 .or_else(|| model.get("name").and_then(serde_json::Value::as_str))
         })
         .map(str::trim)
@@ -4078,7 +4366,7 @@ fn build_claude_desktop_profile(
     base_url: &str,
     api_key: &str,
     model: &str,
-    available_models: &[AgentModelOption],
+    _available_models: &[AgentModelOption],
 ) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop 网关配置")?;
     root.insert(
@@ -4105,21 +4393,49 @@ fn build_claude_desktop_profile(
         "inferenceProvider".to_string(),
         serde_json::json!("gateway"),
     );
-    let inference_models = ordered_agent_models(available_models, model)
-        .into_iter()
-        .map(|model| match model.alias {
-            Some(alias) => serde_json::json!({
-                "name": model.name,
-                "labelOverride": alias,
-            }),
-            None => serde_json::json!(model.name),
+    // Claude Desktop should receive only the selected model. For a non-Claude
+    // CPA model, the name sent to the gateway is a stable Claude-style alias;
+    // its human-readable label remains the original selected model.
+    let inference_model = claude_desktop_inference_model_id(model)?;
+    let inference_models = vec![if inference_model.eq_ignore_ascii_case(model) {
+        serde_json::json!(inference_model)
+    } else {
+        serde_json::json!({
+            "name": inference_model,
+            "labelOverride": model,
         })
-        .collect::<Vec<_>>();
+    }];
     root.insert(
         "inferenceModels".to_string(),
         serde_json::Value::Array(inference_models),
     );
     render_agent_json(root, "Claude Desktop 网关配置")
+}
+
+fn claude_desktop_inference_model_id(model: &str) -> Result<String, String> {
+    let model = validate_agent_model(model)?;
+    let normalized = model.to_ascii_lowercase();
+    if normalized.starts_with("claude-")
+        || normalized.starts_with("opus-")
+        || matches!(normalized.as_str(), "sonnet" | "opus")
+    {
+        return Ok(model);
+    }
+    let reversed = model
+        .chars()
+        .rev()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else if matches!(character, '-' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let alias = format!("opus-{reversed}");
+    validate_thinking_alias_model_id(&alias, "Claude Desktop 自动别名")
 }
 
 fn build_claude_desktop_meta(existing: Option<&str>) -> Result<String, String> {
@@ -9314,6 +9630,142 @@ async fn put_management_config_yaml(config: &GuiConfigFile, content: &str) -> Re
     read_management_value(response).await.map(|_| ())
 }
 
+async fn ensure_claude_desktop_model_alias(
+    config: &GuiConfigFile,
+    model: &str,
+) -> Result<(), String> {
+    let alias = claude_desktop_inference_model_id(model)?;
+    if alias.eq_ignore_ascii_case(model) {
+        return Ok(());
+    }
+    let content = fetch_management_config_yaml(config).await?;
+    let updated = ensure_claude_desktop_model_alias_in_yaml(&content, model, &alias)?;
+    if updated != content {
+        put_management_config_yaml(config, &updated).await?;
+    }
+    Ok(())
+}
+
+fn ensure_claude_desktop_model_alias_in_yaml(
+    content: &str,
+    source_model: &str,
+    alias: &str,
+) -> Result<String, String> {
+    let mut document = yaml_serde_edit::YamlValue::parse(content)
+        .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
+    let mut updated = document.get().clone();
+    let root = updated
+        .as_mapping_mut()
+        .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+
+    if let Some((existing_source, existing_client_model)) =
+        configured_model_client_identity(root, alias)
+    {
+        if existing_client_model != existing_source
+            && existing_source.eq_ignore_ascii_case(source_model)
+        {
+            return Ok(content.to_string());
+        }
+        return Err(format!(
+            "Claude Desktop 自动别名 {alias} 已被模型 {existing_source} 使用，请先修改冲突模型的别名"
+        ));
+    }
+
+    if !append_claude_desktop_model_alias(root, source_model, alias)? {
+        return Err(format!(
+            "无法确定模型 {source_model} 的 CPA 配置来源，无法创建 Claude Desktop 自动别名"
+        ));
+    }
+    render_updated_core_yaml(&mut document, updated)
+}
+
+fn configured_model_client_identity(
+    root: &serde_norway::Mapping,
+    client_model: &str,
+) -> Option<(String, String)> {
+    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+        let Some(providers) =
+            yaml_mapping_value(root, section).and_then(serde_norway::Value::as_sequence)
+        else {
+            continue;
+        };
+        for provider in providers {
+            let Some(provider) = provider.as_mapping() else {
+                continue;
+            };
+            let Some(models) =
+                yaml_mapping_value(provider, "models").and_then(serde_norway::Value::as_sequence)
+            else {
+                continue;
+            };
+            for model in models {
+                let Some((source, configured_client_model, _)) = configured_model_identity(model)
+                else {
+                    continue;
+                };
+                if configured_client_model.eq_ignore_ascii_case(client_model) {
+                    return Some((source, configured_client_model));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn append_claude_desktop_model_alias(
+    root: &mut serde_norway::Mapping,
+    source_model: &str,
+    alias: &str,
+) -> Result<bool, String> {
+    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+        let Some(providers) = yaml_mapping_value_mut(root, section) else {
+            continue;
+        };
+        let providers = providers
+            .as_sequence_mut()
+            .ok_or_else(|| format!("{section} 必须是数组"))?;
+        for provider in providers {
+            let Some(provider) = provider.as_mapping_mut() else {
+                continue;
+            };
+            let Some(models) = yaml_mapping_value_mut(provider, "models") else {
+                continue;
+            };
+            let models = models
+                .as_sequence_mut()
+                .ok_or_else(|| format!("{section}.models 必须是数组"))?;
+            let Some(source) = models.iter().find_map(|model| {
+                let (upstream_model, client_model, _) = configured_model_identity(model)?;
+                client_model
+                    .eq_ignore_ascii_case(source_model)
+                    .then(|| (model.clone(), upstream_model))
+            }) else {
+                continue;
+            };
+            let (source, upstream_model) = source;
+            let mut alias_model = source.as_mapping().cloned().unwrap_or_else(|| {
+                let mut mapping = serde_norway::Mapping::new();
+                mapping.insert(
+                    yaml_key("name"),
+                    serde_norway::Value::String(upstream_model.clone()),
+                );
+                mapping
+            });
+            alias_model.insert(
+                yaml_key("name"),
+                serde_norway::Value::String(upstream_model),
+            );
+            alias_model.insert(
+                yaml_key("alias"),
+                serde_norway::Value::String(alias.to_string()),
+            );
+            models.push(serde_norway::Value::Mapping(alias_model));
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 async fn fetch_codex_model_definitions(
     config: &GuiConfigFile,
 ) -> Result<Vec<CodexModelDefinition>, String> {
@@ -9339,24 +9791,12 @@ fn resolved_thinking_alias_sources(
     let root = document
         .as_mapping()
         .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
-    let mut sources = definitions
-        .iter()
-        .filter(|definition| {
-            !definition.reasoning_levels.is_empty()
-                && thinking_alias_model_is_available(available_models, &definition.id)
-        })
-        .map(|definition| ResolvedThinkingAliasSource {
-            source: ThinkingAliasSource {
-                id: format!("codex-oauth:{}", definition.id),
-                model: definition.id.clone(),
-                display_name: definition.display_name.clone(),
-                provider: "Codex OAuth".to_string(),
-                kind: "codex-oauth".to_string(),
-                protocol: "codex".to_string(),
-            },
-            location: ThinkingAliasSourceLocation::CodexOauth,
-        })
-        .collect::<Vec<_>>();
+    // A configured API-key model must win over a catalog entry with the same
+    // name. `model-definitions/codex` describes the OAuth channel's capabilities;
+    // it is not evidence that a model returned by /v1/models is using OAuth.
+    // Otherwise a Codex API alias would be written to oauth-model-alias, which
+    // CPA deliberately does not apply to codex-api-key credentials.
+    let mut sources = Vec::new();
     collect_config_thinking_alias_sources(
         root,
         "codex-api-key",
@@ -9375,6 +9815,31 @@ fn resolved_thinking_alias_sources(
         available_models,
         &mut sources,
     )?;
+    let configured_codex_api_models = sources
+        .iter()
+        .filter(|source| source.source.kind == "codex-api")
+        .map(|source| source.source.model.to_ascii_lowercase())
+        .collect::<std::collections::HashSet<_>>();
+    sources.extend(
+        definitions
+            .iter()
+            .filter(|definition| {
+                !definition.reasoning_levels.is_empty()
+                    && thinking_alias_model_is_available(available_models, &definition.id)
+                    && !configured_codex_api_models.contains(&definition.id.to_ascii_lowercase())
+            })
+            .map(|definition| ResolvedThinkingAliasSource {
+                source: ThinkingAliasSource {
+                    id: format!("codex-oauth:{}", definition.id),
+                    model: definition.id.clone(),
+                    display_name: definition.display_name.clone(),
+                    provider: "Codex OAuth".to_string(),
+                    kind: "codex-oauth".to_string(),
+                    protocol: "codex".to_string(),
+                },
+                location: ThinkingAliasSourceLocation::CodexOauth,
+            }),
+    );
     Ok(sources)
 }
 
@@ -14318,7 +14783,7 @@ mod tests {
         assert_eq!(profile["inferenceGatewayApiKey"], DEFAULT_API_KEY);
         assert_eq!(profile["inferenceGatewayBaseUrl"], "http://127.0.0.1:8317");
         assert_eq!(profile["inferenceModels"][0], "claude-sonnet-test");
-        assert_eq!(profile["inferenceModels"][1], "claude-opus-test");
+        assert_eq!(profile["inferenceModels"].as_array().unwrap().len(), 1);
         assert_eq!(meta["appliedId"], CLAUDE_DESKTOP_PROFILE_ID);
         assert_eq!(meta["entries"].as_array().unwrap().len(), 2);
         let managed_entry = meta["entries"]
@@ -14328,6 +14793,56 @@ mod tests {
             .find(|entry| entry["id"] == CLAUDE_DESKTOP_PROFILE_ID)
             .unwrap();
         assert_eq!(managed_entry["custom"], true);
+    }
+
+    #[test]
+    fn claude_desktop_profile_aliases_a_non_claude_model() {
+        let profile = build_claude_desktop_profile(
+            None,
+            "http://127.0.0.1:8317",
+            DEFAULT_API_KEY,
+            "gpt-5.6-sol",
+            &test_agent_models(&["gpt-5.6-sol"]),
+        )
+        .unwrap();
+        let profile: serde_json::Value = serde_json::from_str(&profile).unwrap();
+
+        assert_eq!(
+            profile["inferenceModels"],
+            serde_json::json!([{
+                "name": "opus-los-6.5-tpg",
+                "labelOverride": "gpt-5.6-sol",
+            }])
+        );
+        assert_eq!(
+            claude_desktop_inference_model_id("opus-los-6.5-tpg").unwrap(),
+            "opus-los-6.5-tpg"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn claude_desktop_detects_windows_variant_config_directories() {
+        let home = agent_test_home("claude-desktop-windows-variant-paths");
+        let local_app_data = home.join("AppData/Local");
+        let normal = local_app_data.join("Claude-Canary");
+        let threep = local_app_data.join("Claude-3p-Canary");
+        fs::create_dir_all(&normal).unwrap();
+        fs::create_dir_all(&threep).unwrap();
+
+        let paths = claude_desktop_config_paths_from_local_app_data(&local_app_data);
+
+        assert_eq!(paths.len(), 4);
+        assert_eq!(paths[0], normal.join("claude_desktop_config.json"));
+        assert_eq!(paths[1], threep.join("claude_desktop_config.json"));
+        assert_eq!(
+            paths[2],
+            threep
+                .join("configLibrary")
+                .join(format!("{CLAUDE_DESKTOP_PROFILE_ID}.json"))
+        );
+        assert_eq!(paths[3], threep.join("configLibrary/_meta.json"));
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[cfg(target_os = "linux")]
@@ -14473,14 +14988,15 @@ mod tests {
     }
 
     #[test]
-    fn agent_model_list_parser_accepts_core_response_and_deduplicates_ids() {
+    fn agent_model_list_parser_exposes_aliases_as_selectable_model_ids() {
         let models = parse_agent_model_options(&serde_json::json!({
             "object": "list",
             "data": [
                 {"id": "gpt-5", "display_name": "GPT 5"},
-                {"name": "claude-sonnet", "alias": "Sonnet"},
+                {"name": "claude-sonnet", "alias": "claude-sonnet-xhigh", "fork": true},
+                {"name": "hidden-original", "alias": "visible-alias"},
                 "deepseek-chat",
-                {"id": "GPT-5", "alias": "duplicate"},
+                {"id": "GPT-5"},
                 {"id": ""}
             ]
         }))
@@ -14495,13 +15011,51 @@ mod tests {
                 },
                 AgentModelOption {
                     name: "claude-sonnet".to_string(),
-                    alias: Some("Sonnet".to_string()),
+                    alias: None,
+                },
+                AgentModelOption {
+                    name: "claude-sonnet-xhigh".to_string(),
+                    alias: Some("claude-sonnet".to_string()),
+                },
+                AgentModelOption {
+                    name: "visible-alias".to_string(),
+                    alias: Some("hidden-original".to_string()),
                 },
                 AgentModelOption {
                     name: "deepseek-chat".to_string(),
                     alias: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn claude_desktop_auto_alias_is_added_once_to_its_source_provider() {
+        let input = "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1\n    models:\n      - name: gpt-5.6-sol\n";
+        let alias = claude_desktop_inference_model_id("gpt-5.6-sol").unwrap();
+        let rendered =
+            ensure_claude_desktop_model_alias_in_yaml(input, "gpt-5.6-sol", &alias).unwrap();
+        let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
+        let root = value.as_mapping().unwrap();
+        let providers = yaml_mapping_value(root, "openai-compatibility")
+            .and_then(serde_norway::Value::as_sequence)
+            .unwrap();
+        let models = yaml_mapping_value(providers[0].as_mapping().unwrap(), "models")
+            .and_then(serde_norway::Value::as_sequence)
+            .unwrap();
+
+        assert_eq!(models.len(), 2);
+        assert_eq!(
+            configured_model_identity(&models[1]),
+            Some((
+                "gpt-5.6-sol".to_string(),
+                "opus-los-6.5-tpg".to_string(),
+                None,
+            ))
+        );
+        assert_eq!(
+            ensure_claude_desktop_model_alias_in_yaml(&rendered, "gpt-5.6-sol", &alias).unwrap(),
+            rendered
         );
     }
 
@@ -14558,9 +15112,41 @@ mod tests {
             .map(|source| source.source.model.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(source_models, vec!["gpt-runtime", "DeepSeek-Chat"]);
+        assert_eq!(source_models, vec!["DeepSeek-Chat", "gpt-runtime"]);
         assert!(!source_models.contains(&"gpt-built-in-only"));
         assert!(!source_models.contains(&"config-only"));
+    }
+
+    #[test]
+    fn thinking_alias_prefers_codex_api_key_model_over_same_named_oauth_definition() {
+        let input = "codex-api-key:\n  - name: CPA\n    api-key: test\n    models:\n      - name: gpt-5.6-luna\n";
+        let definitions = parse_codex_model_definitions(&serde_json::json!({
+            "models": [{
+                "id": "gpt-5.6-luna",
+                "thinking": { "levels": ["low", "high", "xhigh"] }
+            }]
+        }))
+        .unwrap();
+        let available_models = test_agent_models(&["gpt-5.6-luna"]);
+
+        let sources =
+            resolved_thinking_alias_sources(input, &definitions, &available_models).unwrap();
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].source.model, "gpt-5.6-luna");
+        assert_eq!(sources[0].source.kind, "codex-api");
+        assert!(matches!(
+            sources[0].location,
+            ThinkingAliasSourceLocation::ConfigModel {
+                section: "codex-api-key",
+                ..
+            }
+        ));
+
+        let rendered =
+            add_thinking_alias_to_yaml(input, &sources[0], "gpt-5.6-luna-xhigh", "xhigh").unwrap();
+        assert!(rendered.contains("alias: gpt-5.6-luna-xhigh"), "{rendered}");
+        assert!(!rendered.contains("oauth-model-alias"), "{rendered}");
     }
 
     #[cfg(target_os = "windows")]
@@ -14707,6 +15293,27 @@ mod tests {
             "Microsoft.MicrosoftEdge_1.0.0.0_x64__8wekyb3d8bbwe"
         )
         .is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_claude_desktop_discovery_parser_accepts_store_app() {
+        let target = parse_windows_claude_desktop_discovery_output(
+            "notice\r\nAPPID:Claude_pzs8sxrjxfjjc!Claude\r\n",
+        )
+        .unwrap();
+        match target {
+            ClaudeDesktopTarget::WindowsAppId(app_id) => {
+                assert_eq!(app_id, "Claude_pzs8sxrjxfjjc!Claude");
+            }
+            ClaudeDesktopTarget::Application(_) => panic!("expected Store application ID"),
+        }
+        assert!(parse_windows_claude_desktop_discovery_output("no app found\r\n").is_none());
+        assert_eq!(
+            parse_windows_claude_desktop_version_output("VERSION:1.24012.9.0\r\n").as_deref(),
+            Some("1.24012.9.0")
+        );
+        assert!(parse_windows_claude_desktop_version_output("VERSION:\r\n").is_none());
     }
 
     #[test]

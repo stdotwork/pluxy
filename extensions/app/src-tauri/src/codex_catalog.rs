@@ -99,11 +99,14 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
                 .find(|value| !value.is_empty())
                 .unwrap_or_default()
         };
-        if slug.is_empty() || !seen.insert(normalize_id(slug)) {
+        if slug.is_empty() {
             continue;
         }
 
-        let display_name = optional_string(value, &["display_name", "displayName", "alias"]);
+        let display_name = optional_string(value, &["display_name", "displayName"]);
+        let model_alias =
+            optional_string(value, &["alias"]).filter(|alias| !alias.eq_ignore_ascii_case(slug));
+        let keep_original = value.get("fork").and_then(Value::as_bool).unwrap_or(false);
         let description = optional_string(value, &["description"]);
         let context_window = positive_u64_field(
             value,
@@ -125,17 +128,28 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
         let hidden = optional_string(value, &["visibility"])
             .is_some_and(|value| value.eq_ignore_ascii_case("hide"));
 
-        models.push(CodexRuntimeModel {
+        let make_runtime_model = |slug: &str, display_name: Option<String>| CodexRuntimeModel {
             slug: slug.to_string(),
             display_name,
-            description,
+            description: description.clone(),
             context_window,
             max_context_window,
-            input_modalities,
-            supported_reasoning_levels,
-            default_reasoning_level,
+            input_modalities: input_modalities.clone(),
+            supported_reasoning_levels: supported_reasoning_levels.clone(),
+            default_reasoning_level: default_reasoning_level.clone(),
             hidden,
-        });
+        };
+
+        if let Some(model_alias) = model_alias {
+            if keep_original && seen.insert(normalize_id(slug)) {
+                models.push(make_runtime_model(slug, display_name));
+            }
+            if seen.insert(normalize_id(&model_alias)) {
+                models.push(make_runtime_model(&model_alias, Some(slug.to_string())));
+            }
+        } else if seen.insert(normalize_id(slug)) {
+            models.push(make_runtime_model(slug, display_name));
+        }
     }
     Ok(models)
 }
@@ -806,6 +820,43 @@ mod tests {
         assert_eq!(models[0].slug, "Model-A");
         assert_eq!(models[0].context_window, Some(200_000));
         assert_eq!(models[1].slug, "Model-B");
+    }
+
+    #[test]
+    fn runtime_parser_exposes_model_alias_as_a_runtime_slug() {
+        let models = runtime(serde_json::json!({
+            "models": [
+                {
+                    "id": "gpt-5.5",
+                    "alias": "gpt-5.5-xhigh",
+                    "fork": true,
+                    "context_window": 200000
+                },
+                {"id": "hidden-source", "alias": "visible-alias"}
+            ]
+        }));
+
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.5", "gpt-5.5-xhigh", "visible-alias"]
+        );
+        assert_eq!(models[1].display_name.as_deref(), Some("gpt-5.5"));
+        assert_eq!(models[1].context_window, Some(200_000));
+        assert_eq!(models[2].display_name.as_deref(), Some("hidden-source"));
+
+        let catalog = prepare_catalog_with_sources(&models, &test_sources()).unwrap();
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .map(|model| model.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.5", "gpt-5.5-xhigh", "visible-alias"]
+        );
+        assert_eq!(catalog.models[1].alias.as_deref(), Some("gpt-5.5"));
     }
 
     #[test]

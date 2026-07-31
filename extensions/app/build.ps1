@@ -58,7 +58,7 @@ if (-not (Test-Path -LiteralPath $AppBin -PathType Leaf)) {
     throw "Build finished, but executable not found: $AppBin"
 }
 
-& bun $PreparePortable --binary $AppBin --output $BinDir --download true
+& bun $PreparePortable --binary $AppBin --output $BinDir --download true --preserve-runtime-config true
 if ($LASTEXITCODE -ne 0) {
     throw "Portable preparation failed with exit code $LASTEXITCODE."
 }
@@ -68,15 +68,14 @@ if (-not (Test-Path -LiteralPath $BinOut -PathType Leaf)) {
 }
 
 $CoreOut = Join-Path $BinDir 'cpa-core'
-$CoreEntries = @(Get-ChildItem -LiteralPath $CoreOut -Force)
-if (
-    $CoreEntries.Count -ne 1 -or
-    $CoreEntries[0].PSIsContainer -or
-    $CoreEntries[0].Name -notmatch '^CLIProxyAPI_.+_windows_.+\.zip$'
-) {
+$CoreArchives = @(
+    Get-ChildItem -LiteralPath $CoreOut -File |
+        Where-Object { $_.Name -match '^CLIProxyAPI_.+_windows_.+\.zip$' }
+)
+if ($CoreArchives.Count -ne 1) {
     throw "Portable core output must contain exactly one Windows core archive: $CoreOut"
 }
 
 Write-Host "Built: $AppBin"
 Write-Host "Copied: $BinOut"
-Write-Host "Bundled core archive: $($CoreEntries[0].FullName)"
+Write-Host "Bundled core archive: $($CoreArchives[0].FullName)"
