@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useCoreRuntime, type CoreStatus } from '../coreRuntime';
 import { useI18n } from '../i18n';
+import { SpeedAliasesPage } from './SpeedAliasesPage';
 import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 
 type CoreConfigSettings = {
@@ -46,7 +47,7 @@ type ConfigAction =
   | 'network'
   | null;
 type NoticeTone = 'success' | 'error';
-type ConfigSubpage = 'general' | 'network' | 'aliases';
+type ConfigSubpage = 'general' | 'network' | 'aliases' | 'speedAliases';
 
 const ROUTING_OPTIONS = [
   { value: 'round-robin', labelKey: 'config.routing.roundRobin' },
@@ -400,6 +401,18 @@ export function ConfigPanelPage() {
         >
           {t('app.nav.thinkingAliases')}
         </button>
+        <button
+          type="button"
+          id="config-subpage-tab-speed-aliases"
+          role="tab"
+          className={activeSubpage === 'speedAliases' ? 'active' : ''}
+          aria-selected={activeSubpage === 'speedAliases'}
+          aria-controls="config-subpage-panel-speed-aliases"
+          tabIndex={activeSubpage === 'speedAliases' ? 0 : -1}
+          onClick={() => setActiveSubpage('speedAliases')}
+        >
+          {t('app.nav.speedAliases')}
+        </button>
       </div>
 
       {activeSubpage === 'general' ? (
@@ -710,7 +723,7 @@ export function ConfigPanelPage() {
         </div>
       </section>
         </div>
-      ) : (
+      ) : activeSubpage === 'aliases' ? (
         <div
           className="config-subpage-panel"
           id="config-subpage-panel-aliases"
@@ -718,6 +731,15 @@ export function ConfigPanelPage() {
           aria-labelledby="config-subpage-tab-aliases"
         >
           <ThinkingAliasesPage />
+        </div>
+      ) : (
+        <div
+          className="config-subpage-panel"
+          id="config-subpage-panel-speed-aliases"
+          role="tabpanel"
+          aria-labelledby="config-subpage-tab-speed-aliases"
+        >
+          <SpeedAliasesPage />
         </div>
       )}
 

@@ -675,6 +675,16 @@ struct ThinkingAliasEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SpeedAliasEntry {
+    source_model: String,
+    alias: String,
+    service_tier: String,
+    provider: String,
+    kind: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ThinkingAliasSource {
     id: String,
     model: String,
@@ -1839,6 +1849,96 @@ async fn delete_thinking_alias(
     let updated = remove_thinking_alias_from_yaml(&content, &alias)?;
     put_management_config_yaml(&config, &updated).await?;
     thinking_aliases_from_yaml(&updated)
+}
+
+#[tauri::command]
+async fn get_speed_aliases(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<Vec<SpeedAliasEntry>, String> {
+    let config = gui_config_state.snapshot()?;
+    let content = fetch_management_config_yaml(&config).await?;
+    speed_aliases_from_yaml(&content)
+}
+
+#[tauri::command]
+async fn get_speed_alias_sources(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<Vec<ThinkingAliasSource>, String> {
+    let config = gui_config_state.snapshot()?;
+    let content = fetch_management_config_yaml(&config).await?;
+    let available_models =
+        fetch_agent_models(config.port, effective_agent_api_key(&config)).await?;
+    let definitions = fetch_codex_model_definitions(&config)
+        .await
+        .unwrap_or_default();
+    Ok(
+        resolved_speed_alias_sources(&content, &definitions, &available_models)?
+            .into_iter()
+            .map(|resolved| resolved.source)
+            .collect(),
+    )
+}
+
+#[tauri::command]
+async fn create_speed_alias(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    source_id: String,
+    alias: String,
+) -> Result<Vec<SpeedAliasEntry>, String> {
+    let config = gui_config_state.snapshot()?;
+    let source_id = source_id.trim().to_string();
+    if source_id.is_empty() {
+        return Err("请先选择原模型".to_string());
+    }
+    let alias = validate_thinking_alias_model_id(&alias, "别名模型")?;
+    let content = fetch_management_config_yaml(&config).await?;
+    let available_models =
+        fetch_agent_models(config.port, effective_agent_api_key(&config)).await?;
+    let definitions = fetch_codex_model_definitions(&config)
+        .await
+        .unwrap_or_default();
+    let sources = resolved_speed_alias_sources(&content, &definitions, &available_models)?;
+    let source = sources
+        .iter()
+        .find(|source| source.source.id == source_id)
+        .cloned()
+        .ok_or_else(|| {
+            "原模型已不在内核当前可用模型中，或其配置来源已经变化，请刷新后重试".to_string()
+        })?;
+    if source.source.model.eq_ignore_ascii_case(&alias) {
+        return Err("别名模型不能和原模型相同".to_string());
+    }
+    if available_models
+        .iter()
+        .any(|model| model.name.eq_ignore_ascii_case(&alias))
+    {
+        return Err(format!("{alias} 已经是实际模型 ID，不能再作为别名"));
+    }
+    let document = serde_norway::from_str::<serde_norway::Value>(&content)
+        .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
+    let root = document
+        .as_mapping()
+        .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+    if configured_model_alias_exists(root, &alias) {
+        return Err(format!("别名模型 {alias} 已存在"));
+    }
+
+    let updated = add_speed_alias_to_yaml(&content, &source, &alias)?;
+    put_management_config_yaml(&config, &updated).await?;
+    speed_aliases_from_yaml(&updated)
+}
+
+#[tauri::command]
+async fn delete_speed_alias(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    alias: String,
+) -> Result<Vec<SpeedAliasEntry>, String> {
+    let config = gui_config_state.snapshot()?;
+    let alias = validate_thinking_alias_model_id(&alias, "别名模型")?;
+    let content = fetch_management_config_yaml(&config).await?;
+    let updated = remove_speed_alias_from_yaml(&content, &alias)?;
+    put_management_config_yaml(&config, &updated).await?;
+    speed_aliases_from_yaml(&updated)
 }
 
 async fn fetch_agent_models(port: u16, api_key: &str) -> Result<Vec<AgentModelOption>, String> {
@@ -9927,6 +10027,23 @@ fn resolved_thinking_alias_sources(
     definitions: &[CodexModelDefinition],
     available_models: &[AgentModelOption],
 ) -> Result<Vec<ResolvedThinkingAliasSource>, String> {
+    resolved_alias_sources(content, definitions, available_models, true)
+}
+
+fn resolved_speed_alias_sources(
+    content: &str,
+    definitions: &[CodexModelDefinition],
+    available_models: &[AgentModelOption],
+) -> Result<Vec<ResolvedThinkingAliasSource>, String> {
+    resolved_alias_sources(content, definitions, available_models, false)
+}
+
+fn resolved_alias_sources(
+    content: &str,
+    definitions: &[CodexModelDefinition],
+    available_models: &[AgentModelOption],
+    require_reasoning_levels: bool,
+) -> Result<Vec<ResolvedThinkingAliasSource>, String> {
     let document = serde_norway::from_str::<serde_norway::Value>(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
     let root = document
@@ -9965,7 +10082,7 @@ fn resolved_thinking_alias_sources(
         definitions
             .iter()
             .filter(|definition| {
-                !definition.reasoning_levels.is_empty()
+                (!require_reasoning_levels || !definition.reasoning_levels.is_empty())
                     && thinking_alias_model_is_available(available_models, &definition.id)
                     && !configured_codex_api_models.contains(&definition.id.to_ascii_lowercase())
             })
@@ -10187,6 +10304,93 @@ fn thinking_aliases_from_value(
     Ok(entries)
 }
 
+fn speed_aliases_from_yaml(content: &str) -> Result<Vec<SpeedAliasEntry>, String> {
+    let document = serde_norway::from_str::<serde_norway::Value>(content)
+        .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
+    speed_aliases_from_value(&document)
+}
+
+fn speed_aliases_from_value(
+    document: &serde_norway::Value,
+) -> Result<Vec<SpeedAliasEntry>, String> {
+    let root = document
+        .as_mapping()
+        .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+    let mut entries = Vec::new();
+    if let Some(oauth_aliases) = yaml_mapping_value(root, "oauth-model-alias") {
+        let oauth_aliases = oauth_aliases
+            .as_mapping()
+            .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
+        if let Some(codex_aliases) = yaml_mapping_value(oauth_aliases, "codex") {
+            let codex_aliases = codex_aliases
+                .as_sequence()
+                .ok_or_else(|| "oauth-model-alias.codex 必须是数组".to_string())?;
+            for entry in codex_aliases {
+                let Some(mapping) = entry.as_mapping() else {
+                    continue;
+                };
+                if !matches!(
+                    yaml_mapping_value(mapping, "fork"),
+                    Some(serde_norway::Value::Bool(true))
+                ) {
+                    continue;
+                }
+                let Some(source_model) = yaml_mapping_value(mapping, "name")
+                    .and_then(serde_norway::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                let Some(alias) = yaml_mapping_value(mapping, "alias")
+                    .and_then(serde_norway::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                let Some(service_tier) = find_speed_alias_service_tier(root, alias, "codex") else {
+                    continue;
+                };
+                entries.push(SpeedAliasEntry {
+                    source_model: source_model.to_string(),
+                    alias: alias.to_string(),
+                    service_tier,
+                    provider: "Codex OAuth".to_string(),
+                    kind: "codex-oauth".to_string(),
+                });
+            }
+        }
+    }
+    collect_config_speed_alias_entries(
+        root,
+        "codex-api-key",
+        "Codex API",
+        "codex-api",
+        "codex",
+        &mut entries,
+    )?;
+    collect_config_speed_alias_entries(
+        root,
+        "openai-compatibility",
+        "OpenAI 兼容",
+        "openai-compatible",
+        "openai",
+        &mut entries,
+    )?;
+    entries.sort_by(|left, right| {
+        left.provider
+            .to_ascii_lowercase()
+            .cmp(&right.provider.to_ascii_lowercase())
+            .then_with(|| {
+                left.alias
+                    .to_ascii_lowercase()
+                    .cmp(&right.alias.to_ascii_lowercase())
+            })
+    });
+    Ok(entries)
+}
+
 fn collect_config_thinking_alias_entries(
     root: &serde_norway::Mapping,
     section: &str,
@@ -10227,6 +10431,54 @@ fn collect_config_thinking_alias_entries(
                 source_model,
                 alias,
                 effort: Some(effort),
+                provider: provider_name.clone(),
+                kind: kind.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn collect_config_speed_alias_entries(
+    root: &serde_norway::Mapping,
+    section: &str,
+    fallback_provider: &str,
+    kind: &str,
+    protocol: &str,
+    entries: &mut Vec<SpeedAliasEntry>,
+) -> Result<(), String> {
+    let Some(providers) = yaml_mapping_value(root, section) else {
+        return Ok(());
+    };
+    let providers = providers
+        .as_sequence()
+        .ok_or_else(|| format!("{section} 必须是数组"))?;
+    for (provider_index, provider) in providers.iter().enumerate() {
+        let Some(provider) = provider.as_mapping() else {
+            continue;
+        };
+        let provider_name =
+            thinking_alias_provider_name(provider, fallback_provider, provider_index);
+        let Some(models) = yaml_mapping_value(provider, "models") else {
+            continue;
+        };
+        let models = models
+            .as_sequence()
+            .ok_or_else(|| format!("{section}.models 必须是数组"))?;
+        for model in models {
+            let Some((source_model, alias, _)) = configured_model_identity(model) else {
+                continue;
+            };
+            if source_model == alias {
+                continue;
+            }
+            let Some(service_tier) = find_speed_alias_service_tier(root, &alias, protocol) else {
+                continue;
+            };
+            entries.push(SpeedAliasEntry {
+                source_model,
+                alias,
+                service_tier,
                 provider: provider_name.clone(),
                 kind: kind.to_string(),
             });
@@ -10276,6 +10528,40 @@ fn find_thinking_alias_effort(
     None
 }
 
+fn find_speed_alias_service_tier(
+    root: &serde_norway::Mapping,
+    alias: &str,
+    protocol: &str,
+) -> Option<String> {
+    let rules = nested_yaml_value(root, &["payload", "override"])?.as_sequence()?;
+    for rule in rules {
+        let Some(rule) = rule.as_mapping() else {
+            continue;
+        };
+        let service_tier = yaml_mapping_value(rule, "params")
+            .and_then(serde_norway::Value::as_mapping)
+            .and_then(|params| yaml_mapping_value(params, "service_tier"))
+            .and_then(serde_norway::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(service_tier) = service_tier else {
+            continue;
+        };
+        let Some(models) =
+            yaml_mapping_value(rule, "models").and_then(serde_norway::Value::as_sequence)
+        else {
+            continue;
+        };
+        if models
+            .iter()
+            .any(|model| thinking_payload_model_matches(model, alias, protocol))
+        {
+            return Some(service_tier.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
 fn thinking_payload_model_matches(
     model: &serde_norway::Value,
     alias: &str,
@@ -10312,7 +10598,7 @@ fn add_thinking_alias_to_yaml(
 
     match &source.location {
         ThinkingAliasSourceLocation::CodexOauth => {
-            append_codex_oauth_thinking_alias(root, &source.source.model, alias)?;
+            append_codex_oauth_model_alias(root, &source.source.model, alias)?;
         }
         ThinkingAliasSourceLocation::ConfigModel {
             section,
@@ -10385,7 +10671,81 @@ fn add_thinking_alias_to_yaml(
     render_updated_core_yaml(&mut document, updated)
 }
 
-fn append_codex_oauth_thinking_alias(
+fn add_speed_alias_to_yaml(
+    content: &str,
+    source: &ResolvedThinkingAliasSource,
+    alias: &str,
+) -> Result<String, String> {
+    let mut document = yaml_serde_edit::YamlValue::parse(content)
+        .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
+    let mut updated = document.get().clone();
+    let root = updated
+        .as_mapping_mut()
+        .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+
+    if configured_model_alias_exists(root, alias) {
+        return Err(format!("别名模型 {alias} 已存在"));
+    }
+
+    match &source.location {
+        ThinkingAliasSourceLocation::CodexOauth => {
+            append_codex_oauth_model_alias(root, &source.source.model, alias)?;
+        }
+        ThinkingAliasSourceLocation::ConfigModel {
+            section,
+            provider_index,
+            model_index,
+        } => append_config_speed_alias(
+            root,
+            section,
+            *provider_index,
+            *model_index,
+            &source.source.model,
+            alias,
+        )?,
+    }
+
+    remove_speed_payload_model(root, alias)?;
+    let payload = root
+        .entry(yaml_key("payload"))
+        .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+        .as_mapping_mut()
+        .ok_or_else(|| "payload 必须是 YAML 映射".to_string())?;
+    let override_rules = payload
+        .entry(yaml_key("override"))
+        .or_insert_with(|| serde_norway::Value::Sequence(Vec::new()))
+        .as_sequence_mut()
+        .ok_or_else(|| "payload.override 必须是数组".to_string())?;
+
+    let mut model_mapping = serde_norway::Mapping::new();
+    model_mapping.insert(
+        yaml_key("name"),
+        serde_norway::Value::String(alias.to_string()),
+    );
+    model_mapping.insert(
+        yaml_key("protocol"),
+        serde_norway::Value::String(source.source.protocol.clone()),
+    );
+    let mut params_mapping = serde_norway::Mapping::new();
+    params_mapping.insert(
+        yaml_key("service_tier"),
+        serde_norway::Value::String("priority".to_string()),
+    );
+    let mut rule_mapping = serde_norway::Mapping::new();
+    rule_mapping.insert(
+        yaml_key("models"),
+        serde_norway::Value::Sequence(vec![serde_norway::Value::Mapping(model_mapping)]),
+    );
+    rule_mapping.insert(
+        yaml_key("params"),
+        serde_norway::Value::Mapping(params_mapping),
+    );
+    override_rules.push(serde_norway::Value::Mapping(rule_mapping));
+
+    render_updated_core_yaml(&mut document, updated)
+}
+
+fn append_codex_oauth_model_alias(
     root: &mut serde_norway::Mapping,
     source_model: &str,
     alias: &str,
@@ -10478,6 +10838,60 @@ fn append_config_thinking_alias(
     Ok(())
 }
 
+fn append_config_speed_alias(
+    root: &mut serde_norway::Mapping,
+    section: &str,
+    provider_index: usize,
+    model_index: usize,
+    expected_model: &str,
+    alias: &str,
+) -> Result<(), String> {
+    let providers = yaml_mapping_value_mut(root, section)
+        .and_then(serde_norway::Value::as_sequence_mut)
+        .ok_or_else(|| format!("{section} 必须是数组"))?;
+    let provider = providers
+        .get_mut(provider_index)
+        .and_then(serde_norway::Value::as_mapping_mut)
+        .ok_or_else(|| "模型提供商已经变化，请刷新后重试".to_string())?;
+    let models = yaml_mapping_value_mut(provider, "models")
+        .and_then(serde_norway::Value::as_sequence_mut)
+        .ok_or_else(|| format!("{section}.models 必须是数组"))?;
+    let source = models
+        .get(model_index)
+        .cloned()
+        .ok_or_else(|| "原模型已经变化，请刷新后重试".to_string())?;
+    let (_, current_model, _) =
+        configured_model_identity(&source).ok_or_else(|| "原模型配置格式无效".to_string())?;
+    if !current_model.eq_ignore_ascii_case(expected_model) {
+        return Err("原模型已经变化，请刷新后重试".to_string());
+    }
+    let mut alias_model = source.as_mapping().cloned().unwrap_or_else(|| {
+        let mut mapping = serde_norway::Mapping::new();
+        if let Some(name) = source.as_str() {
+            mapping.insert(
+                yaml_key("name"),
+                serde_norway::Value::String(name.to_string()),
+            );
+        }
+        mapping
+    });
+    alias_model.insert(
+        yaml_key("alias"),
+        serde_norway::Value::String(alias.to_string()),
+    );
+    if let Some(display_name) = yaml_mapping_value(&alias_model, "display-name")
+        .and_then(serde_norway::Value::as_str)
+        .map(str::to_string)
+    {
+        alias_model.insert(
+            yaml_key("display-name"),
+            serde_norway::Value::String(format!("{display_name} (Fast)")),
+        );
+    }
+    models.push(serde_norway::Value::Mapping(alias_model));
+    Ok(())
+}
+
 fn remove_thinking_alias_from_yaml(content: &str, alias: &str) -> Result<String, String> {
     let mut document = yaml_serde_edit::YamlValue::parse(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
@@ -10521,6 +10935,52 @@ fn remove_thinking_alias_from_yaml(content: &str, alias: &str) -> Result<String,
         root.remove(yaml_key("oauth-model-alias"));
     }
     remove_thinking_payload_model(root, alias)?;
+    render_updated_core_yaml(&mut document, updated)
+}
+
+fn remove_speed_alias_from_yaml(content: &str, alias: &str) -> Result<String, String> {
+    let mut document = yaml_serde_edit::YamlValue::parse(content)
+        .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
+    let mut updated = document.get().clone();
+    let root = updated
+        .as_mapping_mut()
+        .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+    let mut removed = false;
+    let mut remove_oauth_section = false;
+    if let Some(oauth_aliases) = yaml_mapping_value_mut(root, "oauth-model-alias") {
+        let oauth_aliases = oauth_aliases
+            .as_mapping_mut()
+            .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
+        if let Some(codex_aliases) = yaml_mapping_value_mut(oauth_aliases, "codex") {
+            let codex_aliases = codex_aliases
+                .as_sequence_mut()
+                .ok_or_else(|| "oauth-model-alias.codex 必须是数组".to_string())?;
+            codex_aliases.retain(|entry| {
+                let matches = entry
+                    .as_mapping()
+                    .and_then(|mapping| yaml_mapping_value(mapping, "alias"))
+                    .and_then(serde_norway::Value::as_str)
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case(alias));
+                if matches {
+                    removed = true;
+                }
+                !matches
+            });
+            if codex_aliases.is_empty() {
+                oauth_aliases.remove(yaml_key("codex"));
+            }
+        }
+        remove_oauth_section = oauth_aliases.is_empty();
+    }
+    removed |= remove_config_speed_alias(root, "codex-api-key", "codex", alias)?;
+    removed |= remove_config_speed_alias(root, "openai-compatibility", "openai", alias)?;
+    if !removed {
+        return Err(format!("别名模型 {alias} 不存在，请刷新后重试"));
+    }
+    if remove_oauth_section {
+        root.remove(yaml_key("oauth-model-alias"));
+    }
+    remove_speed_payload_model(root, alias)?;
     render_updated_core_yaml(&mut document, updated)
 }
 
@@ -10593,6 +11053,45 @@ fn remove_config_thinking_alias(
     Ok(removed)
 }
 
+fn remove_config_speed_alias(
+    root: &mut serde_norway::Mapping,
+    section: &str,
+    protocol: &str,
+    alias: &str,
+) -> Result<bool, String> {
+    if find_speed_alias_service_tier(root, alias, protocol).is_none() {
+        return Ok(false);
+    }
+    let Some(providers) = yaml_mapping_value_mut(root, section) else {
+        return Ok(false);
+    };
+    let providers = providers
+        .as_sequence_mut()
+        .ok_or_else(|| format!("{section} 必须是数组"))?;
+    let mut removed = false;
+    for provider in providers {
+        let Some(provider) = provider.as_mapping_mut() else {
+            continue;
+        };
+        let Some(models) = yaml_mapping_value_mut(provider, "models") else {
+            continue;
+        };
+        let models = models
+            .as_sequence_mut()
+            .ok_or_else(|| format!("{section}.models 必须是数组"))?;
+        models.retain(|model| {
+            let matches = configured_model_identity(model)
+                .map(|(source, model_alias, _)| {
+                    source != model_alias && model_alias.eq_ignore_ascii_case(alias)
+                })
+                .unwrap_or(false);
+            removed |= matches;
+            !matches
+        });
+    }
+    Ok(removed)
+}
+
 fn remove_thinking_payload_model(
     root: &mut serde_norway::Mapping,
     alias: &str,
@@ -10618,6 +11117,56 @@ fn remove_thinking_payload_model(
                                 || yaml_mapping_value(params, "reasoning_effort").is_some()
                         });
                     if has_effort {
+                        if let Some(models) = yaml_mapping_value_mut(rule_mapping, "models") {
+                            let models = models
+                                .as_sequence_mut()
+                                .ok_or_else(|| "payload.override.models 必须是数组".to_string())?;
+                            let before = models.len();
+                            models.retain(|model| {
+                                !thinking_payload_model_matches(model, alias, "codex")
+                                    && !thinking_payload_model_matches(model, alias, "openai")
+                            });
+                            removed_from_rule = models.len() != before;
+                            models_empty = models.is_empty();
+                        }
+                    }
+                }
+                if !(removed_from_rule && models_empty) {
+                    next_rules.push(rule);
+                }
+            }
+            *override_rules = next_rules;
+            if override_rules.is_empty() {
+                payload.remove(yaml_key("override"));
+            }
+        }
+        remove_payload_section = payload.is_empty();
+    }
+    if remove_payload_section {
+        root.remove(yaml_key("payload"));
+    }
+    Ok(())
+}
+
+fn remove_speed_payload_model(root: &mut serde_norway::Mapping, alias: &str) -> Result<(), String> {
+    let mut remove_payload_section = false;
+    if let Some(payload) = yaml_mapping_value_mut(root, "payload") {
+        let payload = payload
+            .as_mapping_mut()
+            .ok_or_else(|| "payload 必须是 YAML 映射".to_string())?;
+        if let Some(override_rules) = yaml_mapping_value_mut(payload, "override") {
+            let override_rules = override_rules
+                .as_sequence_mut()
+                .ok_or_else(|| "payload.override 必须是数组".to_string())?;
+            let mut next_rules = Vec::with_capacity(override_rules.len());
+            for mut rule in std::mem::take(override_rules) {
+                let mut removed_from_rule = false;
+                let mut models_empty = false;
+                if let Some(rule_mapping) = rule.as_mapping_mut() {
+                    let has_speed = yaml_mapping_value(rule_mapping, "params")
+                        .and_then(serde_norway::Value::as_mapping)
+                        .is_some_and(|params| yaml_mapping_value(params, "service_tier").is_some());
+                    if has_speed {
                         if let Some(models) = yaml_mapping_value_mut(rule_mapping, "models") {
                             let models = models
                                 .as_sequence_mut()
@@ -14154,6 +14703,10 @@ fn main() {
             get_thinking_alias_sources,
             create_thinking_alias,
             delete_thinking_alias,
+            get_speed_aliases,
+            get_speed_alias_sources,
+            create_speed_alias,
+            delete_speed_alias,
             apply_agent_config,
             reset_agent_config_to_default,
             clear_codex_config,
@@ -15518,6 +16071,77 @@ mod tests {
                 kind: "codex-oauth".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn speed_alias_adds_fast_service_tier_and_removes_only_its_rule() {
+        let input = "payload:\n  override:\n    - models:\n        - name: existing-thinker\n          protocol: codex\n      params:\n        reasoning.effort: xhigh\n";
+        let source = test_codex_oauth_thinking_source("gpt-5.6-sol");
+        let rendered = add_speed_alias_to_yaml(input, &source, "gpt-5.6-sol-fast").unwrap();
+
+        assert!(rendered.contains("alias: gpt-5.6-sol-fast"), "{rendered}");
+        assert!(rendered.contains("service_tier: priority"), "{rendered}");
+        assert!(!rendered.contains("reasoning.effort: fast"), "{rendered}");
+        assert_eq!(
+            speed_aliases_from_yaml(&rendered).unwrap(),
+            vec![SpeedAliasEntry {
+                source_model: "gpt-5.6-sol".to_string(),
+                alias: "gpt-5.6-sol-fast".to_string(),
+                service_tier: "priority".to_string(),
+                provider: "Codex OAuth".to_string(),
+                kind: "codex-oauth".to_string(),
+            }]
+        );
+
+        let restored = remove_speed_alias_from_yaml(&rendered, "gpt-5.6-sol-fast").unwrap();
+        assert!(!restored.contains("gpt-5.6-sol-fast"), "{restored}");
+        assert!(restored.contains("reasoning.effort: xhigh"), "{restored}");
+    }
+
+    #[test]
+    fn speed_alias_supports_openai_compatible_model_entries() {
+        let input = "openai-compatibility:\n  - name: Relay\n    base-url: https://example.com/v1\n    api-key-entries:\n      - api-key: test\n    models:\n      - name: gpt-5.6-terra\n        display-name: Terra\n";
+        let available_models = test_agent_models(&["gpt-5.6-terra"]);
+        let sources = resolved_thinking_alias_sources(input, &[], &available_models).unwrap();
+        let source = sources
+            .iter()
+            .find(|source| source.source.model == "gpt-5.6-terra")
+            .unwrap();
+        let rendered = add_speed_alias_to_yaml(input, source, "gpt-5.6-terra-fast").unwrap();
+
+        assert!(rendered.contains("alias: gpt-5.6-terra-fast"), "{rendered}");
+        assert!(
+            rendered.contains("display-name: Terra (Fast)"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("protocol: openai"), "{rendered}");
+        assert!(rendered.contains("service_tier: priority"), "{rendered}");
+        assert_eq!(speed_aliases_from_yaml(&rendered).unwrap().len(), 1);
+
+        let restored = remove_speed_alias_from_yaml(&rendered, "gpt-5.6-terra-fast").unwrap();
+        assert!(!restored.contains("gpt-5.6-terra-fast"), "{restored}");
+    }
+
+    #[test]
+    fn speed_alias_sources_include_codex_models_without_reasoning_levels() {
+        let definitions = vec![CodexModelDefinition {
+            id: "gpt-speed-only".to_string(),
+            display_name: None,
+            description: None,
+            context_window: None,
+            reasoning_levels: Vec::new(),
+            supports_tools: None,
+        }];
+        let available_models = test_agent_models(&["gpt-speed-only"]);
+
+        assert!(
+            resolved_thinking_alias_sources("{}", &definitions, &available_models)
+                .unwrap()
+                .is_empty()
+        );
+        let sources = resolved_speed_alias_sources("{}", &definitions, &available_models).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].source.model, "gpt-speed-only");
     }
 
     #[test]
