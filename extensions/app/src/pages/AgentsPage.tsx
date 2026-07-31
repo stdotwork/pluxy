@@ -92,6 +92,8 @@ type ChatGptCloseResult = {
   closedProcesses: number;
 };
 
+type OAuthLoginRequiredAction = 'enable' | 'apply' | 'launch';
+
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR = 'CODEX_OAUTH_LOGIN_REQUIRED';
 
 type AgentDefinition = {
@@ -488,7 +490,7 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | null
+    'apply' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
@@ -504,7 +506,7 @@ export function AgentsPage() {
   const [closeAppError, setCloseAppError] = useState('');
   const [closeAppNotice, setCloseAppNotice] = useState('');
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
-  const [oauthLoginRequiredOpen, setOauthLoginRequiredOpen] = useState(false);
+  const [oauthLoginRequiredAction, setOauthLoginRequiredAction] = useState<OAuthLoginRequiredAction | null>(null);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const modelRequestRef = useRef(0);
 
@@ -602,7 +604,7 @@ export function AgentsPage() {
     setCloseAppError('');
     setCloseAppNotice('');
     setCloseAppConfirmOpen(false);
-    setOauthLoginRequiredOpen(false);
+    setOauthLoginRequiredAction(null);
   }, [selected]);
 
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
@@ -696,6 +698,34 @@ export function AgentsPage() {
     return model.name;
   };
 
+  const handleOAuthLoginError = (requestError: unknown, action: OAuthLoginRequiredAction) => {
+    const message = String(requestError);
+    if (message.includes(CODEX_OAUTH_LOGIN_REQUIRED_ERROR)) {
+      setOauthLoginRequiredAction(action);
+      return true;
+    }
+    return false;
+  };
+
+  const changeOauthConfiguration = async (enabled: boolean) => {
+    if (!enabled) {
+      setOauthConfigurationDraft(false);
+      return;
+    }
+
+    setBusyAction('oauth-check');
+    try {
+      await invoke('check_codex_oauth_login');
+      setOauthConfigurationDraft(true);
+    } catch (requestError) {
+      if (!handleOAuthLoginError(requestError, 'enable')) {
+        setConfigurationError(String(requestError));
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const applyConfigurationChanges = async () => {
     setConfigurationError('');
     const model = requireSelectedModel();
@@ -710,7 +740,9 @@ export function AgentsPage() {
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
     } catch (requestError) {
-      setConfigurationError(String(requestError));
+      if (!handleOAuthLoginError(requestError, 'apply')) {
+        setConfigurationError(String(requestError));
+      }
     } finally {
       setBusyAction(null);
     }
@@ -731,7 +763,9 @@ export function AgentsPage() {
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
     } catch (requestError) {
-      setDefaultError(String(requestError));
+      if (!handleOAuthLoginError(requestError, 'apply')) {
+        setDefaultError(String(requestError));
+      }
     } finally {
       setBusyAction(null);
     }
@@ -762,16 +796,12 @@ export function AgentsPage() {
     setBusyAction(launchAction);
     setLaunchError('');
     try {
-      if (selected !== 'codex' && draftChanged) {
+      if (draftChanged) {
         throw new Error(t('agents.error.applyFirst'));
       }
       await invoke('launch_agent', { client: selected, target: target.id });
     } catch (requestError) {
-      if (String(requestError) === CODEX_OAUTH_LOGIN_REQUIRED_ERROR) {
-        setOauthLoginRequiredOpen(true);
-      } else {
-        setLaunchError(String(requestError));
-      }
+      if (!handleOAuthLoginError(requestError, 'launch')) setLaunchError(String(requestError));
     } finally {
       setBusyAction(null);
     }
@@ -827,6 +857,13 @@ export function AgentsPage() {
   const availableSubpages = agentSubpages.filter(
     (subpage) => !subpage.clients || subpage.clients.includes(selected),
   );
+  const oauthLoginRequiredDescription = oauthLoginRequiredAction === 'enable' ? (
+    <>
+      {t('agents.oauthLoginRequired.enableDescription')}
+      <strong>{t('agents.oauthLoginRequired.enableClearConfiguration')}</strong>
+      {t('agents.oauthLoginRequired.enableDescriptionSuffix')}
+    </>
+  ) : oauthLoginRequiredAction ? t(`agents.oauthLoginRequired.${oauthLoginRequiredAction}Description`) : '';
 
   return (
     <section className="page management-page agents-page">
@@ -973,7 +1010,7 @@ export function AgentsPage() {
                             type="checkbox"
                             role="switch"
                             checked={oauthConfiguration}
-                            onChange={(event) => setOauthConfigurationDraft(event.currentTarget.checked)}
+                            onChange={(event) => void changeOauthConfiguration(event.currentTarget.checked)}
                             disabled={busy}
                             aria-label={t('agents.modify.oauthConfiguration')}
                           />
@@ -1038,8 +1075,10 @@ export function AgentsPage() {
                           type="button"
                           className="secondary-button agent-launch-button"
                           onClick={() => void launchAgent(cliLaunchTarget)}
-                          disabled={busy || !canLaunchTarget(cliLaunchTarget)}
-                          title={cliLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                          disabled={busy || !canLaunchTarget(cliLaunchTarget) || draftChanged}
+                          title={draftChanged
+                            ? t('agents.launch.applyFirst')
+                            : cliLaunchTarget?.detail ?? t('agents.launch.unavailable')}
                         >
                           {busyAction === 'launch-cli' ? <LoaderCircle size={16} className="spin" /> : <Terminal size={16} />}
                           {busyAction === 'launch-cli' ? t('agents.launch.starting') : t('agents.launch.startCli')}
@@ -1048,8 +1087,10 @@ export function AgentsPage() {
                           type="button"
                           className="primary-button agent-launch-button"
                           onClick={() => void launchAgent(appLaunchTarget)}
-                          disabled={busy || !canLaunchTarget(appLaunchTarget)}
-                          title={appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                          disabled={busy || !canLaunchTarget(appLaunchTarget) || draftChanged}
+                          title={draftChanged
+                            ? t('agents.launch.applyFirst')
+                            : appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
                         >
                           {busyAction === 'launch-app' ? <LoaderCircle size={16} className="spin" /> : <AppWindow size={16} />}
                           {busyAction === 'launch-app' ? t('agents.launch.starting') : t('agents.launch.startApp')}
@@ -1182,15 +1223,15 @@ export function AgentsPage() {
         </div>
       ) : null}
 
-      {oauthLoginRequiredOpen ? (
+      {oauthLoginRequiredAction ? (
         <div className="config-dialog-backdrop">
           <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-oauth-login-required-title">
             <div className="config-dialog-heading">
               <div><AlertTriangle size={19} /><h2 id="agent-oauth-login-required-title">{t('agents.oauthLoginRequired.title')}</h2></div>
             </div>
-            <p>{t('agents.oauthLoginRequired.description')}</p>
-            <div className="config-dialog-actions">
-              <button type="button" className="primary-button" onClick={() => setOauthLoginRequiredOpen(false)}>{t('agents.oauthLoginRequired.confirm')}</button>
+            <p>{oauthLoginRequiredDescription}</p>
+            <div className="config-dialog-actions single-action">
+              <button type="button" className="primary-button" onClick={() => setOauthLoginRequiredAction(null)}>{t('agents.oauthLoginRequired.confirm')}</button>
             </div>
           </section>
         </div>

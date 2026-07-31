@@ -2194,6 +2194,11 @@ textarea:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.config-dialog-actions.single-action {
+  grid-template-columns: 118px;
+  justify-content: end;
+}
+
 .config-dialog-actions button {
   gap: 7px;
   height: 40px;

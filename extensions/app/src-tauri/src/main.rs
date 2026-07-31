@@ -1609,6 +1609,15 @@ async fn get_agent_models(
 }
 
 #[tauri::command]
+fn check_codex_oauth_login(app: tauri::AppHandle) -> Result<(), String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("无法获取用户目录: {error}"))?;
+    validate_codex_oauth_login(&home)
+}
+
+#[tauri::command]
 async fn update_codex_model_catalog(
     app: tauri::AppHandle,
 ) -> Result<CodexModelCatalogUpdateResult, String> {
@@ -1902,16 +1911,30 @@ async fn fetch_prepared_agent_models(
     let api_key = effective_agent_api_key(config);
     if client == AgentClient::Codex {
         let runtime_models = fetch_codex_runtime_models(config.port, api_key).await?;
-        let catalog = codex_catalog::prepare_catalog(&runtime_models)?;
-        Ok(PreparedAgentModels {
-            models: catalog.models,
-            codex_catalog: Some(catalog.json),
-        })
+        prepare_codex_agent_models(&runtime_models)
     } else {
         Ok(PreparedAgentModels {
             models: fetch_agent_models(config.port, api_key).await?,
             codex_catalog: None,
         })
+    }
+}
+
+fn prepare_codex_agent_models(
+    runtime_models: &[codex_catalog::CodexRuntimeModel],
+) -> Result<PreparedAgentModels, String> {
+    match codex_catalog::prepare_catalog(runtime_models) {
+        Ok(catalog) => Ok(PreparedAgentModels {
+            models: catalog.models,
+            codex_catalog: Some(catalog.json),
+        }),
+        Err(error) if error.contains("CPA 当前没有可写入 Codex 的模型") => {
+            Ok(PreparedAgentModels {
+                models: Vec::new(),
+                codex_catalog: None,
+            })
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -1930,6 +1953,9 @@ async fn apply_agent_config(
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
     let config = gui_config_state.snapshot()?;
     let api_key = effective_agent_api_key(&config);
+    if client == AgentClient::Codex && oauth_configuration {
+        validate_codex_oauth_login(&home)?;
+    }
     validate_agent_can_enable(client, &home, config.port, api_key)?;
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
@@ -1965,6 +1991,9 @@ async fn reset_agent_config_to_default(
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
     let config = gui_config_state.snapshot()?;
     let api_key = effective_agent_api_key(&config);
+    if client == AgentClient::Codex && oauth_configuration {
+        validate_codex_oauth_login(&home)?;
+    }
     validate_agent_can_enable(client, &home, config.port, api_key)?;
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
@@ -13513,6 +13542,7 @@ fn main() {
             get_agent_config_statuses,
             refresh_agent_config_statuses,
             get_agent_models,
+            check_codex_oauth_login,
             update_codex_model_catalog,
             get_thinking_aliases,
             get_thinking_alias_sources,
@@ -14478,6 +14508,14 @@ mod tests {
     #[test]
     fn agent_model_list_parser_rejects_unexpected_response_shape() {
         assert!(parse_agent_model_options(&serde_json::json!({"data": null})).is_err());
+    }
+
+    #[test]
+    fn codex_model_list_is_empty_when_cpa_has_no_writable_models() {
+        let prepared = prepare_codex_agent_models(&[]).unwrap();
+
+        assert!(prepared.models.is_empty());
+        assert!(prepared.codex_catalog.is_none());
     }
 
     #[test]
