@@ -92,6 +92,8 @@ type ChatGptCloseResult = {
   closedProcesses: number;
 };
 
+const CODEX_OAUTH_LOGIN_REQUIRED_ERROR = 'CODEX_OAUTH_LOGIN_REQUIRED';
+
 type AgentDefinition = {
   id: AgentClientId;
   name: string;
@@ -502,6 +504,7 @@ export function AgentsPage() {
   const [closeAppError, setCloseAppError] = useState('');
   const [closeAppNotice, setCloseAppNotice] = useState('');
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
+  const [oauthLoginRequiredOpen, setOauthLoginRequiredOpen] = useState(false);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const modelRequestRef = useRef(0);
 
@@ -599,6 +602,7 @@ export function AgentsPage() {
     setCloseAppError('');
     setCloseAppNotice('');
     setCloseAppConfirmOpen(false);
+    setOauthLoginRequiredOpen(false);
   }, [selected]);
 
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
@@ -763,7 +767,11 @@ export function AgentsPage() {
       }
       await invoke('launch_agent', { client: selected, target: target.id });
     } catch (requestError) {
-      setLaunchError(String(requestError));
+      if (String(requestError) === CODEX_OAUTH_LOGIN_REQUIRED_ERROR) {
+        setOauthLoginRequiredOpen(true);
+      } else {
+        setLaunchError(String(requestError));
+      }
     } finally {
       setBusyAction(null);
     }
@@ -1169,6 +1177,20 @@ export function AgentsPage() {
                 {busyAction === 'close-app' ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}
                 {t('agents.closeApp.confirm')}
               </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {oauthLoginRequiredOpen ? (
+        <div className="config-dialog-backdrop">
+          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-oauth-login-required-title">
+            <div className="config-dialog-heading">
+              <div><AlertTriangle size={19} /><h2 id="agent-oauth-login-required-title">{t('agents.oauthLoginRequired.title')}</h2></div>
+            </div>
+            <p>{t('agents.oauthLoginRequired.description')}</p>
+            <div className="config-dialog-actions">
+              <button type="button" className="primary-button" onClick={() => setOauthLoginRequiredOpen(false)}>{t('agents.oauthLoginRequired.confirm')}</button>
             </div>
           </section>
         </div>

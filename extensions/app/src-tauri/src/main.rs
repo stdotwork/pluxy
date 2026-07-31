@@ -83,6 +83,7 @@ const DEFAULT_API_KEY_INITIAL_REMARK: &str = "默认密钥";
 const DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
 const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
 const CODEX_MODEL_CATALOG_FILE: &str = "cpa-gui-model-catalog.json";
+const CODEX_OAUTH_LOGIN_REQUIRED_ERROR: &str = "CODEX_OAUTH_LOGIN_REQUIRED";
 const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";
 const LEGACY_AGENT_MODIFICATION_STATE_VERSION: u8 = 1;
 const AGENT_MODIFICATION_STATE_VERSION: u8 = 2;
@@ -2091,6 +2092,9 @@ async fn launch_agent(
         status.modification_enabled,
         &status.modification_state,
     )?;
+    if client == AgentClient::Codex && status.oauth_configuration {
+        validate_codex_oauth_login(&home)?;
+    }
     if client == AgentClient::Codex && config.codex_session_repair_on_launch && status.configured {
         let repair_home = home.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -2404,10 +2408,45 @@ fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBuf> {
             }]
         }
         AgentClient::ClaudeDesktop => claude_desktop_config_paths(home),
-        AgentClient::Codex => vec![home.join(".codex/config.toml")],
+        AgentClient::Codex => vec![codex_configuration_directory(home).join("config.toml")],
         AgentClient::OpenCode => vec![home.join(".config/opencode/opencode.json")],
         AgentClient::OpenClaw => vec![home.join(".openclaw/openclaw.json")],
         AgentClient::Hermes => vec![hermes_agent_config_path(home)],
+    }
+}
+
+fn codex_configuration_directory(home: &Path) -> PathBuf {
+    env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| home.join(".codex"))
+}
+
+fn codex_auth_file_has_oauth_tokens(path: &Path) -> bool {
+    let Ok(content) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    root.get("tokens")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|tokens| {
+            tokens
+                .values()
+                .any(|value| value.as_str().is_some_and(|token| !token.trim().is_empty()))
+        })
+}
+
+fn validate_codex_oauth_login(home: &Path) -> Result<(), String> {
+    validate_codex_oauth_login_at(&codex_configuration_directory(home).join("auth.json"))
+}
+
+fn validate_codex_oauth_login_at(auth_path: &Path) -> Result<(), String> {
+    if codex_auth_file_has_oauth_tokens(auth_path) {
+        Ok(())
+    } else {
+        Err(CODEX_OAUTH_LOGIN_REQUIRED_ERROR.to_string())
     }
 }
 
@@ -2423,7 +2462,7 @@ fn remove_codex_config_file(path: &Path) -> Result<bool, String> {
 }
 
 fn clear_codex_config_files(home: &Path) -> Result<Vec<String>, String> {
-    let codex_dir = home.join(".codex");
+    let codex_dir = codex_configuration_directory(home);
     let config_path = codex_dir.join("config.toml");
     let targets = [codex_dir.join("auth.json"), config_path.clone()];
     let mut deleted = Vec::new();
@@ -2443,7 +2482,7 @@ fn clear_codex_config_files(home: &Path) -> Result<Vec<String>, String> {
 }
 
 fn codex_model_catalog_path(home: &Path) -> PathBuf {
-    home.join(".codex").join(CODEX_MODEL_CATALOG_FILE)
+    codex_configuration_directory(home).join(CODEX_MODEL_CATALOG_FILE)
 }
 
 fn expected_agent_record_paths(client: AgentClient, paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -13588,6 +13627,37 @@ mod tests {
 
         config.api_keys.clear();
         assert_eq!(effective_agent_api_key(&config), DEFAULT_API_KEY);
+    }
+
+    #[test]
+    fn codex_oauth_launch_requires_auth_json_with_tokens() {
+        let home = agent_test_home("codex-oauth-login");
+        let auth_path = home.join("auth.json");
+
+        assert_eq!(
+            validate_codex_oauth_login_at(&auth_path),
+            Err(CODEX_OAUTH_LOGIN_REQUIRED_ERROR.to_string())
+        );
+
+        fs::write(&auth_path, "{ invalid json").unwrap();
+        assert_eq!(
+            validate_codex_oauth_login_at(&auth_path),
+            Err(CODEX_OAUTH_LOGIN_REQUIRED_ERROR.to_string())
+        );
+
+        fs::write(&auth_path, r#"{"OPENAI_API_KEY":"sk-api-key"}"#).unwrap();
+        assert_eq!(
+            validate_codex_oauth_login_at(&auth_path),
+            Err(CODEX_OAUTH_LOGIN_REQUIRED_ERROR.to_string())
+        );
+
+        fs::write(
+            &auth_path,
+            r#"{"tokens":{"access_token":"oauth-access-token"}}"#,
+        )
+        .unwrap();
+        assert!(validate_codex_oauth_login_at(&auth_path).is_ok());
+        fs::remove_dir_all(home).unwrap();
     }
 
     fn agent_test_home(name: &str) -> PathBuf {
