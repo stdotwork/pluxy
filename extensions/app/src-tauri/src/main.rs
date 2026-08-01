@@ -399,6 +399,12 @@ impl Default for AppUpdateTask {
 }
 
 #[cfg(windows)]
+struct PortablePackagePayload {
+    manifest: PortableAppManifest,
+    core_archive_name: Option<String>,
+}
+
+#[cfg(windows)]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PortableUpdateDescriptor {
@@ -409,6 +415,12 @@ struct PortableUpdateDescriptor {
     staged_manifest: PathBuf,
     backup_exe: PathBuf,
     backup_manifest: PathBuf,
+    current_core_version: PathBuf,
+    staged_core_version: PathBuf,
+    backup_core_version: PathBuf,
+    staged_core_archive: PathBuf,
+    target_core_archive: PathBuf,
+    install_core_archive: bool,
     ack_path: PathBuf,
     work_dir: PathBuf,
     target_version: String,
@@ -2210,17 +2222,17 @@ async fn reset_agent_config_to_default(
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
-    reset_agent_configuration_to_default_with_oauth(
+    reset_agent_configuration_to_default_with_oauth(AgentDefaultConfiguration {
         client,
-        &home,
-        config.port,
+        home: &home,
+        port: config.port,
         api_key,
-        &model,
-        &prepared.models,
-        prepared.codex_catalog.as_deref(),
+        model: &model,
+        models: &prepared.models,
+        codex_catalog: prepared.codex_catalog.as_deref(),
         oauth_configuration,
-        claude_desktop_model_mappings.as_ref(),
-    )
+        claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
+    })
 }
 
 #[tauri::command]
@@ -2812,7 +2824,7 @@ fn claude_desktop_config_paths(_home: &Path) -> Vec<PathBuf> {
         let local = env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| _home.join("AppData/Local"));
-        return claude_desktop_config_paths_from_local_app_data(&local);
+        claude_desktop_config_paths_from_local_app_data(&local)
     }
     #[cfg(target_os = "linux")]
     let (normal, threep) = {
@@ -3230,7 +3242,7 @@ fn find_codex_app_target(home: &Path) -> Option<CodexAppTarget> {
 fn find_claude_desktop_target(home: &Path) -> Option<ClaudeDesktopTarget> {
     #[cfg(target_os = "windows")]
     {
-        return find_windows_claude_desktop_target(home);
+        find_windows_claude_desktop_target(home)
     }
     #[cfg(not(target_os = "windows"))]
     find_claude_desktop_executable(home).map(ClaudeDesktopTarget::Application)
@@ -3239,9 +3251,9 @@ fn find_claude_desktop_target(home: &Path) -> Option<ClaudeDesktopTarget> {
 fn read_claude_desktop_version(home: &Path) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        return read_windows_claude_desktop_store_version().or_else(|| {
+        read_windows_claude_desktop_store_version().or_else(|| {
             find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path))
-        });
+        })
     }
     #[cfg(not(target_os = "windows"))]
     find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path))
@@ -6542,33 +6554,48 @@ fn reset_agent_configuration_to_default(
     model: &str,
     codex_catalog: Option<&str>,
 ) -> Result<AgentConfigActionResult, String> {
-    reset_agent_configuration_to_default_with_oauth(
+    reset_agent_configuration_to_default_with_oauth(AgentDefaultConfiguration {
         client,
         home,
         port,
         api_key,
         model,
-        &[AgentModelOption {
+        models: &[AgentModelOption {
             name: model.to_string(),
             alias: None,
         }],
         codex_catalog,
-        false,
-        None,
-    )
+        oauth_configuration: false,
+        claude_desktop_model_mappings: None,
+    })
+}
+
+struct AgentDefaultConfiguration<'a> {
+    client: AgentClient,
+    home: &'a Path,
+    port: u16,
+    api_key: &'a str,
+    model: &'a str,
+    models: &'a [AgentModelOption],
+    codex_catalog: Option<&'a str>,
+    oauth_configuration: bool,
+    claude_desktop_model_mappings: Option<&'a ClaudeDesktopModelMappings>,
 }
 
 fn reset_agent_configuration_to_default_with_oauth(
-    client: AgentClient,
-    home: &Path,
-    port: u16,
-    api_key: &str,
-    model: &str,
-    models: &[AgentModelOption],
-    codex_catalog: Option<&str>,
-    oauth_configuration: bool,
-    claude_desktop_model_mappings: Option<&ClaudeDesktopModelMappings>,
+    request: AgentDefaultConfiguration<'_>,
 ) -> Result<AgentConfigActionResult, String> {
+    let AgentDefaultConfiguration {
+        client,
+        home,
+        port,
+        api_key,
+        model,
+        models,
+        codex_catalog,
+        oauth_configuration,
+        claude_desktop_model_mappings,
+    } = request;
     let paths = agent_config_paths(client, home);
     let contents = fresh_agent_contents_with_oauth(
         client,
@@ -7752,16 +7779,25 @@ fn validate_portable_update_manifest(manifest: &PortableUpdateManifest) -> Resul
             .get(key)
             .ok_or_else(|| format!("软件更新清单缺少 {key}"))?;
         validate_portable_update_asset(asset)?;
-        let expected_name = format!(
+        let full_package_name = format!(
+            "EasyCLIProxyAPI-v{}-Windows-{arch}.zip",
+            manifest.version.trim().trim_start_matches('v')
+        );
+        let full_package_url = format!(
+            "{APP_RELEASE_DOWNLOAD_PREFIX}v{}/{}",
+            manifest.version.trim().trim_start_matches('v'),
+            full_package_name
+        );
+        let legacy_package_name = format!(
             "EasyCLIProxyAPI-update-v{}-Windows-{arch}.zip",
             manifest.version.trim().trim_start_matches('v')
         );
-        let expected_url = format!(
+        let legacy_package_url = format!(
             "{APP_RELEASE_DOWNLOAD_PREFIX}v{}/{}",
             manifest.version.trim().trim_start_matches('v'),
-            expected_name
+            legacy_package_name
         );
-        if asset.url != expected_url {
+        if asset.url != full_package_url && asset.url != legacy_package_url {
             return Err(format!("软件更新资产名称与 {key} 不匹配"));
         }
     }
@@ -7913,10 +7949,10 @@ async fn download_and_stage_portable_app_update(
                 task.message = Some("正在准备应用更新".to_string());
             });
             let staging_dir = work_dir.join("staging");
-            let package_manifest = extract_portable_update_archive(&archive_path, &staging_dir)?;
-            if normalize_version(&package_manifest.version) != normalize_version(&pending.version)
-                || package_manifest.platform != "windows"
-                || package_manifest.arch != pending.arch
+            let package = extract_portable_update_archive(&archive_path, &staging_dir)?;
+            if normalize_version(&package.manifest.version) != normalize_version(&pending.version)
+                || package.manifest.platform != "windows"
+                || package.manifest.arch != pending.arch
             {
                 return Err("应用更新包版本或架构不匹配".to_string());
             }
@@ -7927,6 +7963,10 @@ async fn download_and_stage_portable_app_update(
                 .parent()
                 .ok_or_else(|| "当前程序路径没有父目录".to_string())?;
             preflight_portable_update_directory(app_dir)?;
+            let core_archive_name = match package.core_archive_name {
+                Some(name) => name,
+                None => stage_current_portable_core_payload(app_dir, &staging_dir, &pending.arch)?,
+            };
             let helper_path = work_dir.join("EasyCLIProxyAPI-updater.exe");
             fs::copy(&current_exe, &helper_path)
                 .map_err(|error| format!("准备应用更新助手失败: {error}"))?;
@@ -7939,6 +7979,12 @@ async fn download_and_stage_portable_app_update(
                 staged_manifest: staging_dir.join(PORTABLE_APP_MANIFEST_FILE),
                 backup_exe: app_dir.join(".EasyCLIProxyAPI.exe.update-backup"),
                 backup_manifest: app_dir.join(".portable-app.json.update-backup"),
+                current_core_version: app_dir.join(CORE_VERSION_FILE),
+                staged_core_version: staging_dir.join(CORE_VERSION_FILE),
+                backup_core_version: app_dir.join(".core-version.txt.update-backup"),
+                staged_core_archive: staging_dir.join("cpa-core").join(&core_archive_name),
+                target_core_archive: app_dir.join("cpa-core").join(&core_archive_name),
+                install_core_archive: !app_dir.join("cpa-core").join(&core_archive_name).is_file(),
                 ack_path: work_dir.join("update-started.ack"),
                 work_dir: work_dir.clone(),
                 target_version: pending.version.clone(),
@@ -8071,23 +8117,33 @@ fn format_byte_count(bytes: u64) -> String {
 fn extract_portable_update_archive(
     archive_path: &Path,
     staging_dir: &Path,
-) -> Result<PortableAppManifest, String> {
+) -> Result<PortablePackagePayload, String> {
     fs::create_dir_all(staging_dir)
         .map_err(|error| format!("创建应用更新暂存目录失败: {error}"))?;
     let file = File::open(archive_path).map_err(|error| format!("打开应用更新包失败: {error}"))?;
     let mut archive =
         ZipArchive::new(file).map_err(|error| format!("读取应用更新 ZIP 失败: {error}"))?;
-    if archive.len() != 2 {
-        return Err("应用更新包必须只包含程序和便携版标识".to_string());
-    }
+    let archive_names = archive
+        .file_names()
+        .map(|name| name.replace('\\', "/"))
+        .collect::<Vec<_>>();
+    let legacy_layout = archive_names.len() == 2
+        && archive_names.iter().any(|name| name == PORTABLE_APP_BINARY)
+        && archive_names
+            .iter()
+            .any(|name| name == PORTABLE_APP_MANIFEST_FILE);
+    let mut package_root = None::<String>;
     let mut seen_binary = false;
     let mut seen_manifest = false;
+    let mut seen_core_version = false;
+    let mut core_archive_name = None::<String>;
+    let mut regular_file_count = 0_u32;
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
             .map_err(|error| format!("读取应用更新 ZIP 条目失败: {error}"))?;
         let name = entry.name().replace('\\', "/");
-        if entry.is_dir() || entry.enclosed_name().is_none() {
+        if entry.enclosed_name().is_none() {
             return Err("应用更新包包含不安全路径".to_string());
         }
         if entry
@@ -8096,7 +8152,32 @@ fn extract_portable_update_archive(
         {
             return Err("应用更新包不能包含符号链接".to_string());
         }
-        let destination = match name.as_str() {
+        if entry.is_dir() {
+            continue;
+        }
+        regular_file_count = regular_file_count.saturating_add(1);
+        let relative;
+        let relative_name;
+        if legacy_layout {
+            relative = Vec::new();
+            relative_name = name.clone();
+        } else {
+            let mut components = name.split('/');
+            let root = components
+                .next()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "应用更新包缺少顶层目录".to_string())?;
+            relative = components.collect::<Vec<_>>();
+            if relative.is_empty() || relative.iter().any(|value| value.is_empty()) {
+                return Err("应用更新包目录结构无效".to_string());
+            }
+            if package_root.as_deref().is_some_and(|value| value != root) {
+                return Err("应用更新包必须只包含一个顶层目录".to_string());
+            }
+            package_root.get_or_insert_with(|| root.to_string());
+            relative_name = relative.join("/");
+        }
+        let destination = match relative_name.as_str() {
             PORTABLE_APP_BINARY if !seen_binary => {
                 if entry.size() == 0 || entry.size() > 256 * 1024 * 1024 {
                     return Err("应用更新程序大小异常".to_string());
@@ -8111,6 +8192,32 @@ fn extract_portable_update_archive(
                 seen_manifest = true;
                 staging_dir.join(PORTABLE_APP_MANIFEST_FILE)
             }
+            CORE_VERSION_FILE if !seen_core_version => {
+                if entry.size() == 0 || entry.size() > 1024 {
+                    return Err("应用更新包内核版本文件大小异常".to_string());
+                }
+                seen_core_version = true;
+                staging_dir.join(CORE_VERSION_FILE)
+            }
+            _ if relative.len() == 2
+                && relative[0] == "cpa-core"
+                && core_archive_name.is_none() =>
+            {
+                let filename = relative[1];
+                if !filename.starts_with("CLIProxyAPI_")
+                    || !filename.ends_with(".zip")
+                    || filename.contains("_no-plugin")
+                    || entry.size() == 0
+                    || entry.size() > 512 * 1024 * 1024
+                {
+                    return Err("应用更新包内置内核压缩包无效".to_string());
+                }
+                core_archive_name = Some(filename.to_string());
+                let core_staging_dir = staging_dir.join("cpa-core");
+                fs::create_dir_all(&core_staging_dir)
+                    .map_err(|error| format!("创建内置内核暂存目录失败: {error}"))?;
+                core_staging_dir.join(filename)
+            }
             _ => return Err(format!("应用更新包包含未知文件: {name}")),
         };
         let mut output = File::create(&destination)
@@ -8121,7 +8228,12 @@ fn extract_portable_update_archive(
             .flush()
             .map_err(|error| format!("保存应用更新暂存文件失败: {error}"))?;
     }
-    if !seen_binary || !seen_manifest {
+    let required_files_present = if legacy_layout {
+        regular_file_count == 2 && seen_binary && seen_manifest
+    } else {
+        regular_file_count == 4 && seen_binary && seen_manifest && seen_core_version
+    };
+    if !required_files_present {
         return Err("应用更新包缺少必要文件".to_string());
     }
     let manifest = fs::read_to_string(staging_dir.join(PORTABLE_APP_MANIFEST_FILE))
@@ -8134,11 +8246,79 @@ fn extract_portable_update_archive(
     {
         return Err("应用更新标识无效".to_string());
     }
-    Ok(manifest)
+    if !legacy_layout {
+        let expected_root = format!(
+            "EasyCLIProxyAPI-v{}-Windows-{}",
+            manifest.version.trim().trim_start_matches('v'),
+            manifest.arch
+        );
+        if package_root.as_deref() != Some(expected_root.as_str()) {
+            return Err("应用更新包顶层目录与版本或架构不匹配".to_string());
+        }
+        let core_version = fs::read_to_string(staging_dir.join(CORE_VERSION_FILE))
+            .map_err(|error| format!("读取内置内核版本失败: {error}"))?;
+        let core_version = core_version.trim().trim_start_matches('v');
+        if core_version.is_empty()
+            || !core_version.split('.').all(|segment| {
+                !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        {
+            return Err("应用更新包内置内核版本无效".to_string());
+        }
+        let expected_core_archive =
+            format!("CLIProxyAPI_{core_version}_windows_{}.zip", manifest.arch);
+        if core_archive_name.as_deref() != Some(expected_core_archive.as_str()) {
+            return Err("应用更新包内置内核版本或架构不匹配".to_string());
+        }
+    }
+    Ok(PortablePackagePayload {
+        manifest,
+        core_archive_name,
+    })
+}
+
+#[cfg(windows)]
+fn stage_current_portable_core_payload(
+    app_dir: &Path,
+    staging_dir: &Path,
+    arch: &str,
+) -> Result<String, String> {
+    let current_core_version = app_dir.join(CORE_VERSION_FILE);
+    let core_version = fs::read_to_string(&current_core_version)
+        .map_err(|error| format!("读取当前内置内核版本失败: {error}"))?;
+    let core_version = core_version.trim().trim_start_matches('v');
+    if core_version.is_empty()
+        || !core_version
+            .split('.')
+            .all(|segment| !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err("当前内置内核版本无效，无法兼容旧版更新包".to_string());
+    }
+    let core_archive_name = format!("CLIProxyAPI_{core_version}_windows_{arch}.zip");
+    let current_core_archive = app_dir.join("cpa-core").join(&core_archive_name);
+    if !current_core_archive.is_file() {
+        return Err(format!(
+            "当前便携版缺少内置内核压缩包 {core_archive_name}，无法兼容旧版更新包"
+        ));
+    }
+    let staged_core_dir = staging_dir.join("cpa-core");
+    fs::create_dir_all(&staged_core_dir)
+        .map_err(|error| format!("创建旧版更新兼容暂存目录失败: {error}"))?;
+    fs::copy(&current_core_version, staging_dir.join(CORE_VERSION_FILE))
+        .map_err(|error| format!("暂存当前内核版本文件失败: {error}"))?;
+    fs::copy(
+        current_core_archive,
+        staged_core_dir.join(&core_archive_name),
+    )
+    .map_err(|error| format!("暂存当前内置内核压缩包失败: {error}"))?;
+    Ok(core_archive_name)
 }
 
 #[cfg(windows)]
 fn preflight_portable_update_directory(app_dir: &Path) -> Result<(), String> {
+    if !app_dir.join(CORE_VERSION_FILE).is_file() || !app_dir.join("cpa-core").is_dir() {
+        return Err("当前便携版目录不完整，请下载最新版完整包覆盖升级".to_string());
+    }
     let probe = app_dir.join(format!(
         ".easycliproxy-update-write-test-{}",
         std::process::id()
@@ -8146,6 +8326,14 @@ fn preflight_portable_update_directory(app_dir: &Path) -> Result<(), String> {
     fs::write(&probe, b"update-write-test")
         .map_err(|error| format!("应用目录不可写，无法自动升级: {error}"))?;
     fs::remove_file(&probe).map_err(|error| format!("清理应用更新写入测试失败: {error}"))?;
+    let core_probe = app_dir.join("cpa-core").join(format!(
+        ".easycliproxy-update-write-test-{}",
+        std::process::id()
+    ));
+    fs::write(&core_probe, b"update-write-test")
+        .map_err(|error| format!("内置内核目录不可写，无法自动升级: {error}"))?;
+    fs::remove_file(&core_probe)
+        .map_err(|error| format!("清理内置内核更新写入测试失败: {error}"))?;
     Ok(())
 }
 
@@ -14335,8 +14523,23 @@ fn validate_portable_update_descriptor(
         || descriptor.current_manifest != app_dir.join(PORTABLE_APP_MANIFEST_FILE)
         || descriptor.backup_exe != app_dir.join(".EasyCLIProxyAPI.exe.update-backup")
         || descriptor.backup_manifest != app_dir.join(".portable-app.json.update-backup")
+        || descriptor.current_core_version != app_dir.join(CORE_VERSION_FILE)
+        || descriptor.backup_core_version != app_dir.join(".core-version.txt.update-backup")
     {
         return Err("应用更新目标路径无效".to_string());
+    }
+    let core_archive_name = descriptor
+        .staged_core_archive
+        .file_name()
+        .ok_or_else(|| "应用更新内置内核文件名无效".to_string())?;
+    if descriptor.target_core_archive != app_dir.join("cpa-core").join(core_archive_name)
+        || !core_archive_name
+            .to_string_lossy()
+            .starts_with("CLIProxyAPI_")
+        || !core_archive_name.to_string_lossy().ends_with(".zip")
+        || descriptor.install_core_archive == descriptor.target_core_archive.is_file()
+    {
+        return Err("应用更新内置内核目标路径无效".to_string());
     }
     let canonical_work_dir = fs::canonicalize(&descriptor.work_dir)
         .map_err(|error| format!("读取应用更新临时目录失败: {error}"))?;
@@ -14361,7 +14564,12 @@ fn validate_portable_update_descriptor(
     {
         return Err("应用更新描述路径越界".to_string());
     }
-    for staged in [&descriptor.staged_exe, &descriptor.staged_manifest] {
+    for staged in [
+        &descriptor.staged_exe,
+        &descriptor.staged_manifest,
+        &descriptor.staged_core_version,
+        &descriptor.staged_core_archive,
+    ] {
         let canonical = fs::canonicalize(staged)
             .map_err(|error| format!("读取应用更新暂存文件失败: {error}"))?;
         if !canonical.starts_with(&canonical_work_dir) {
@@ -14378,6 +14586,14 @@ fn validate_portable_update_descriptor(
                 .work_dir
                 .join("staging")
                 .join(PORTABLE_APP_MANIFEST_FILE)
+        || descriptor.staged_core_version
+            != descriptor.work_dir.join("staging").join(CORE_VERSION_FILE)
+        || descriptor.staged_core_archive
+            != descriptor
+                .work_dir
+                .join("staging")
+                .join("cpa-core")
+                .join(core_archive_name)
     {
         return Err("应用更新暂存路径无效".to_string());
     }
@@ -14386,7 +14602,10 @@ fn validate_portable_update_descriptor(
 
 #[cfg(windows)]
 fn restore_portable_update_backup(descriptor: &PortableUpdateDescriptor) -> Result<(), String> {
-    if !descriptor.backup_exe.is_file() || !descriptor.backup_manifest.is_file() {
+    if !descriptor.backup_exe.is_file()
+        || !descriptor.backup_manifest.is_file()
+        || !descriptor.backup_core_version.is_file()
+    {
         return Err("应用更新备份不完整，无法回滚".to_string());
     }
     if descriptor.current_exe.exists() {
@@ -14401,6 +14620,19 @@ fn restore_portable_update_backup(descriptor: &PortableUpdateDescriptor) -> Resu
     }
     fs::rename(&descriptor.backup_manifest, &descriptor.current_manifest)
         .map_err(|error| format!("恢复旧版便携版标识失败: {error}"))?;
+    if descriptor.current_core_version.exists() {
+        fs::remove_file(&descriptor.current_core_version)
+            .map_err(|error| format!("移除新版内核版本文件失败: {error}"))?;
+    }
+    fs::rename(
+        &descriptor.backup_core_version,
+        &descriptor.current_core_version,
+    )
+    .map_err(|error| format!("恢复旧版内核版本文件失败: {error}"))?;
+    if descriptor.install_core_archive && descriptor.target_core_archive.exists() {
+        fs::remove_file(&descriptor.target_core_archive)
+            .map_err(|error| format!("移除新版内置内核压缩包失败: {error}"))?;
+    }
     Ok(())
 }
 
@@ -14412,27 +14644,61 @@ fn replace_portable_update_files(descriptor: &PortableUpdateDescriptor) -> Resul
         .ok_or_else(|| "应用更新目标路径无效".to_string())?;
     let replacement_exe = app_dir.join(".EasyCLIProxyAPI.exe.update-new");
     let replacement_manifest = app_dir.join(".portable-app.json.update-new");
+    let replacement_core_version = app_dir.join(".core-version.txt.update-new");
+    let replacement_core_archive = app_dir.join(".cpa-core-archive.update-new");
     let _ = fs::remove_file(&replacement_exe);
     let _ = fs::remove_file(&replacement_manifest);
+    let _ = fs::remove_file(&replacement_core_version);
+    let _ = fs::remove_file(&replacement_core_archive);
     fs::copy(&descriptor.staged_exe, &replacement_exe)
         .map_err(|error| format!("准备新版应用程序失败: {error}"))?;
     if let Err(error) = fs::copy(&descriptor.staged_manifest, &replacement_manifest) {
         let _ = fs::remove_file(&replacement_exe);
         return Err(format!("准备新版便携版标识失败: {error}"));
     }
+    if let Err(error) = fs::copy(&descriptor.staged_core_version, &replacement_core_version) {
+        let _ = fs::remove_file(&replacement_exe);
+        let _ = fs::remove_file(&replacement_manifest);
+        return Err(format!("准备新版内核版本文件失败: {error}"));
+    }
+    if descriptor.install_core_archive {
+        if let Err(error) = fs::copy(&descriptor.staged_core_archive, &replacement_core_archive) {
+            let _ = fs::remove_file(&replacement_exe);
+            let _ = fs::remove_file(&replacement_manifest);
+            let _ = fs::remove_file(&replacement_core_version);
+            return Err(format!("准备新版内置内核压缩包失败: {error}"));
+        }
+    }
 
     let _ = fs::remove_file(&descriptor.backup_exe);
     let _ = fs::remove_file(&descriptor.backup_manifest);
+    let _ = fs::remove_file(&descriptor.backup_core_version);
     if let Err(error) = fs::rename(&descriptor.current_exe, &descriptor.backup_exe) {
         let _ = fs::remove_file(&replacement_exe);
         let _ = fs::remove_file(&replacement_manifest);
+        let _ = fs::remove_file(&replacement_core_version);
+        let _ = fs::remove_file(&replacement_core_archive);
         return Err(format!("备份旧版应用失败: {error}"));
     }
     if let Err(error) = fs::rename(&descriptor.current_manifest, &descriptor.backup_manifest) {
         let _ = fs::rename(&descriptor.backup_exe, &descriptor.current_exe);
         let _ = fs::remove_file(&replacement_exe);
         let _ = fs::remove_file(&replacement_manifest);
+        let _ = fs::remove_file(&replacement_core_version);
+        let _ = fs::remove_file(&replacement_core_archive);
         return Err(format!("备份便携版标识失败: {error}"));
+    }
+    if let Err(error) = fs::rename(
+        &descriptor.current_core_version,
+        &descriptor.backup_core_version,
+    ) {
+        let _ = fs::rename(&descriptor.backup_manifest, &descriptor.current_manifest);
+        let _ = fs::rename(&descriptor.backup_exe, &descriptor.current_exe);
+        let _ = fs::remove_file(&replacement_exe);
+        let _ = fs::remove_file(&replacement_manifest);
+        let _ = fs::remove_file(&replacement_core_version);
+        let _ = fs::remove_file(&replacement_core_archive);
+        return Err(format!("备份旧版内核版本文件失败: {error}"));
     }
 
     let replace_result = (|| -> Result<(), String> {
@@ -14440,16 +14706,66 @@ fn replace_portable_update_files(descriptor: &PortableUpdateDescriptor) -> Resul
             .map_err(|error| format!("替换应用程序失败: {error}"))?;
         fs::rename(&replacement_manifest, &descriptor.current_manifest)
             .map_err(|error| format!("替换便携版标识失败: {error}"))?;
+        fs::rename(&replacement_core_version, &descriptor.current_core_version)
+            .map_err(|error| format!("替换内核版本文件失败: {error}"))?;
+        if descriptor.install_core_archive {
+            fs::rename(&replacement_core_archive, &descriptor.target_core_archive)
+                .map_err(|error| format!("安装新版内置内核压缩包失败: {error}"))?;
+        }
         Ok(())
     })();
     if let Err(error) = replace_result {
         let _ = fs::remove_file(&replacement_exe);
         let _ = fs::remove_file(&replacement_manifest);
+        let _ = fs::remove_file(&replacement_core_version);
+        let _ = fs::remove_file(&replacement_core_archive);
         restore_portable_update_backup(descriptor)
             .map_err(|rollback| format!("{error}；{rollback}"))?;
         return Err(error);
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn cleanup_superseded_bundled_core_archives(descriptor: &PortableUpdateDescriptor) {
+    let Some(core_dir) = descriptor.target_core_archive.parent() else {
+        return;
+    };
+    let Some(current_name) = descriptor
+        .target_core_archive
+        .file_name()
+        .and_then(|value| value.to_str())
+    else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(core_dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path.is_file()
+            && name != current_name
+            && name.starts_with("CLIProxyAPI_")
+            && name.ends_with(".zip")
+            && !name.contains("_no-plugin")
+        {
+            if let Err(error) = fs::remove_file(&path) {
+                eprintln!(
+                    "清理旧版内置内核压缩包失败 {}: {error}",
+                    path_to_string(&path)
+                );
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn cleanup_portable_update_payload(descriptor_path: &Path, descriptor: &PortableUpdateDescriptor) {
+    let _ = fs::remove_file(descriptor.work_dir.join("update.zip"));
+    let _ = fs::remove_dir_all(descriptor.work_dir.join("staging"));
+    let _ = fs::remove_file(&descriptor.ack_path);
+    let _ = fs::remove_file(descriptor_path);
 }
 
 #[cfg(windows)]
@@ -14465,6 +14781,7 @@ fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), String> {
         let mut rollback = Command::new(&descriptor.current_exe);
         configure_background_command(&mut rollback);
         let _ = rollback.spawn();
+        cleanup_portable_update_payload(descriptor_path, &descriptor);
         return Err(error);
     }
 
@@ -14484,6 +14801,7 @@ fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), String> {
             let mut rollback = Command::new(&descriptor.current_exe);
             configure_background_command(&mut rollback);
             let _ = rollback.spawn();
+            cleanup_portable_update_payload(descriptor_path, &descriptor);
             return Err(format!("启动新版应用失败: {error}"));
         }
     };
@@ -14508,8 +14826,9 @@ fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), String> {
     if confirmed {
         let _ = fs::remove_file(&descriptor.backup_exe);
         let _ = fs::remove_file(&descriptor.backup_manifest);
-        let _ = fs::remove_file(&descriptor.ack_path);
-        let _ = fs::remove_file(descriptor_path);
+        let _ = fs::remove_file(&descriptor.backup_core_version);
+        cleanup_superseded_bundled_core_archives(&descriptor);
+        cleanup_portable_update_payload(descriptor_path, &descriptor);
         return Ok(());
     }
 
@@ -14519,6 +14838,7 @@ fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), String> {
     let mut rollback = Command::new(&descriptor.current_exe);
     configure_background_command(&mut rollback);
     let _ = rollback.spawn();
+    cleanup_portable_update_payload(descriptor_path, &descriptor);
     Err(format!(
         "新版应用 {} 未能在 60 秒内完成启动确认，已回滚",
         descriptor.target_version
@@ -18051,6 +18371,15 @@ custom_option = "keep-original"
     }
 
     fn portable_update_test_asset(version: &str, arch: &str) -> PortableUpdateAsset {
+        let name = format!("EasyCLIProxyAPI-v{version}-Windows-{arch}.zip");
+        PortableUpdateAsset {
+            url: format!("{APP_RELEASE_DOWNLOAD_PREFIX}v{version}/{name}"),
+            sha256: "ab".repeat(32),
+            size_bytes: 1024,
+        }
+    }
+
+    fn portable_update_test_legacy_asset(version: &str, arch: &str) -> PortableUpdateAsset {
         let name = format!("EasyCLIProxyAPI-update-v{version}-Windows-{arch}.zip");
         PortableUpdateAsset {
             url: format!("{APP_RELEASE_DOWNLOAD_PREFIX}v{version}/{name}"),
@@ -18087,6 +18416,17 @@ custom_option = "keep-original"
         let manifest = portable_update_test_manifest("1.2.3");
         assert!(validate_portable_update_manifest(&manifest).is_ok());
 
+        let mut legacy_manifest = portable_update_test_manifest("1.2.3");
+        legacy_manifest.assets.insert(
+            "windows-amd64".to_string(),
+            portable_update_test_legacy_asset("1.2.3", "amd64"),
+        );
+        legacy_manifest.assets.insert(
+            "windows-aarch64".to_string(),
+            portable_update_test_legacy_asset("1.2.3", "aarch64"),
+        );
+        assert!(validate_portable_update_manifest(&legacy_manifest).is_ok());
+
         let mut missing_arch = portable_update_test_manifest("1.2.3");
         missing_arch.assets.remove("windows-aarch64");
         assert!(validate_portable_update_manifest(&missing_arch).is_err());
@@ -18104,9 +18444,8 @@ custom_option = "keep-original"
         assert!(validate_portable_update_manifest(&foreign_host).is_err());
 
         let mut mismatched_tag = portable_update_test_manifest("1.2.3");
-        mismatched_tag.assets.get_mut("windows-amd64").unwrap().url = format!(
-            "{APP_RELEASE_DOWNLOAD_PREFIX}v9.9.9/EasyCLIProxyAPI-update-v1.2.3-Windows-amd64.zip"
-        );
+        mismatched_tag.assets.get_mut("windows-amd64").unwrap().url =
+            format!("{APP_RELEASE_DOWNLOAD_PREFIX}v9.9.9/EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip");
         assert!(validate_portable_update_manifest(&mismatched_tag).is_err());
     }
 
@@ -18175,27 +18514,65 @@ custom_option = "keep-original"
 
     #[cfg(windows)]
     #[test]
-    fn portable_update_zip_accepts_only_the_two_expected_regular_files() {
+    fn portable_update_zip_accepts_the_complete_release_package() {
         let root = agent_test_home("portable-zip");
         let valid_zip = root.join("valid.zip");
         let manifest = br#"{"schemaVersion":1,"application":"EasyCLIProxyAPI","version":"1.2.3","platform":"windows","arch":"amd64","autoUpdate":true}"#;
         write_portable_update_zip(
             &valid_zip,
             &[
-                (PORTABLE_APP_BINARY, b"new executable", None),
-                (PORTABLE_APP_MANIFEST_FILE, manifest, None),
+                (
+                    "EasyCLIProxyAPI-v1.2.3-Windows-amd64/EasyCLIProxyAPI.exe",
+                    b"new executable",
+                    None,
+                ),
+                (
+                    "EasyCLIProxyAPI-v1.2.3-Windows-amd64/portable-app.json",
+                    manifest,
+                    None,
+                ),
+                (
+                    "EasyCLIProxyAPI-v1.2.3-Windows-amd64/core-version.txt",
+                    b"7.2.109\n",
+                    None,
+                ),
+                (
+                    "EasyCLIProxyAPI-v1.2.3-Windows-amd64/cpa-core/CLIProxyAPI_7.2.109_windows_amd64.zip",
+                    b"core archive",
+                    None,
+                ),
             ],
         );
         let extracted = extract_portable_update_archive(&valid_zip, &root.join("valid")).unwrap();
-        assert_eq!(extracted.version, "1.2.3");
-        assert!(extracted.auto_update);
+        assert_eq!(extracted.manifest.version, "1.2.3");
+        assert!(extracted.manifest.auto_update);
+        assert_eq!(
+            extracted.core_archive_name,
+            Some("CLIProxyAPI_7.2.109_windows_amd64.zip".to_string())
+        );
+
+        let legacy_zip = root.join("legacy.zip");
+        write_portable_update_zip(
+            &legacy_zip,
+            &[
+                (PORTABLE_APP_BINARY, b"legacy executable", None),
+                (PORTABLE_APP_MANIFEST_FILE, manifest, None),
+            ],
+        );
+        let legacy = extract_portable_update_archive(&legacy_zip, &root.join("legacy")).unwrap();
+        assert_eq!(legacy.manifest.version, "1.2.3");
+        assert!(legacy.core_archive_name.is_none());
 
         let traversal_zip = root.join("traversal.zip");
         write_portable_update_zip(
             &traversal_zip,
             &[
                 ("../EasyCLIProxyAPI.exe", b"malicious", None),
-                (PORTABLE_APP_MANIFEST_FILE, manifest, None),
+                (
+                    "EasyCLIProxyAPI-v1.2.3-Windows-amd64/portable-app.json",
+                    manifest,
+                    None,
+                ),
             ],
         );
         assert!(extract_portable_update_archive(&traversal_zip, &root.join("traversal")).is_err());
@@ -18208,13 +18585,16 @@ custom_option = "keep-original"
             let mut archive = zip::ZipWriter::new(file);
             archive
                 .add_symlink(
-                    PORTABLE_APP_BINARY,
+                    "EasyCLIProxyAPI-v1.2.3-Windows-amd64/EasyCLIProxyAPI.exe",
                     "target.exe",
                     SimpleFileOptions::default(),
                 )
                 .unwrap();
             archive
-                .start_file(PORTABLE_APP_MANIFEST_FILE, SimpleFileOptions::default())
+                .start_file(
+                    "EasyCLIProxyAPI-v1.2.3-Windows-amd64/portable-app.json",
+                    SimpleFileOptions::default(),
+                )
                 .unwrap();
             archive.write_all(manifest).unwrap();
             archive.finish().unwrap();
@@ -18232,13 +18612,31 @@ custom_option = "keep-original"
         let staging = work_dir.join("staging");
         fs::create_dir_all(&app_dir).unwrap();
         fs::create_dir_all(&staging).unwrap();
+        fs::create_dir_all(app_dir.join("cpa-core")).unwrap();
+        fs::create_dir_all(staging.join("cpa-core")).unwrap();
         fs::write(app_dir.join(PORTABLE_APP_BINARY), b"old exe").unwrap();
         fs::write(app_dir.join(PORTABLE_APP_MANIFEST_FILE), b"old manifest").unwrap();
+        fs::write(app_dir.join(CORE_VERSION_FILE), b"7.2.100").unwrap();
+        fs::write(
+            app_dir
+                .join("cpa-core")
+                .join("CLIProxyAPI_7.2.100_windows_amd64.zip"),
+            b"old core archive",
+        )
+        .unwrap();
         fs::write(app_dir.join(GUI_CONFIG_FILE), b"user config").unwrap();
         fs::create_dir_all(app_dir.join(OAUTH_DIR_NAME)).unwrap();
         fs::write(app_dir.join(OAUTH_DIR_NAME).join("account.json"), b"oauth").unwrap();
         fs::write(staging.join(PORTABLE_APP_BINARY), b"new exe").unwrap();
         fs::write(staging.join(PORTABLE_APP_MANIFEST_FILE), b"new manifest").unwrap();
+        fs::write(staging.join(CORE_VERSION_FILE), b"7.2.109").unwrap();
+        fs::write(
+            staging
+                .join("cpa-core")
+                .join("CLIProxyAPI_7.2.109_windows_amd64.zip"),
+            b"new core archive",
+        )
+        .unwrap();
         let descriptor = PortableUpdateDescriptor {
             parent_pid: 1,
             current_exe: app_dir.join(PORTABLE_APP_BINARY),
@@ -18247,6 +18645,16 @@ custom_option = "keep-original"
             staged_manifest: staging.join(PORTABLE_APP_MANIFEST_FILE),
             backup_exe: app_dir.join(".EasyCLIProxyAPI.exe.update-backup"),
             backup_manifest: app_dir.join(".portable-app.json.update-backup"),
+            current_core_version: app_dir.join(CORE_VERSION_FILE),
+            staged_core_version: staging.join(CORE_VERSION_FILE),
+            backup_core_version: app_dir.join(".core-version.txt.update-backup"),
+            staged_core_archive: staging
+                .join("cpa-core")
+                .join("CLIProxyAPI_7.2.109_windows_amd64.zip"),
+            target_core_archive: app_dir
+                .join("cpa-core")
+                .join("CLIProxyAPI_7.2.109_windows_amd64.zip"),
+            install_core_archive: true,
             ack_path: work_dir.join("update-started.ack"),
             work_dir,
             target_version: "1.2.3".to_string(),
@@ -18257,6 +18665,14 @@ custom_option = "keep-original"
         assert_eq!(
             fs::read(&descriptor.current_manifest).unwrap(),
             b"new manifest"
+        );
+        assert_eq!(
+            fs::read(&descriptor.current_core_version).unwrap(),
+            b"7.2.109"
+        );
+        assert_eq!(
+            fs::read(&descriptor.target_core_archive).unwrap(),
+            b"new core archive"
         );
         assert_eq!(
             fs::read(app_dir.join(GUI_CONFIG_FILE)).unwrap(),
@@ -18273,6 +18689,11 @@ custom_option = "keep-original"
             fs::read(&descriptor.current_manifest).unwrap(),
             b"old manifest"
         );
+        assert_eq!(
+            fs::read(&descriptor.current_core_version).unwrap(),
+            b"7.2.100"
+        );
+        assert!(!descriptor.target_core_archive.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

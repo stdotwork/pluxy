@@ -107,6 +107,12 @@ previous configuration, and launch an available desktop or CLI entry point.
 4. Open the **Core** page and install the bundled or latest CLIProxyAPI core.
 5. Start the core, then copy the required local endpoint or configure an OAuth/API provider.
 
+## Upgrading
+
+v0.2.10 is a one-time bridge release. It publishes both the complete Windows ZIP and the legacy `update` ZIP so v0.2.6–v0.2.9 can upgrade to v0.2.10 in the app. Starting with v0.2.11, only the complete ZIP is published; clients already on v0.2.10 can consume it and jump directly across intermediate releases.
+
+If you are running v0.2.5 or earlier, perform one manual migration: exit EasyCLIProxyAPI, download the latest complete Windows ZIP for your architecture, then copy the contents of its top-level directory over the existing installation directory. Do not delete the existing directory first; user data such as `config.toml`, `oauth`, and `cpa-core/config.yaml` will remain in place. After launching the new version, later releases can use in-app automatic updates.
+
 ## Supported Platforms
 
 GitHub Actions builds the following release packages:
