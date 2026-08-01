@@ -60,6 +60,7 @@ export const jaOverrides = {
   'quota.confirm.expiry': '最も早い有効期限：{time}',
   'quota.confirm.warning': '「確認」を押した場合のみ実行されます。「キャンセル」ではリセット回数を消費しません。',
   'oauth.title': 'OAuth ログイン',
+  'oauth.tabs.label': 'OAuth 管理ページ',
   'oauth.loginSuccess': '{provider} へのログインに成功しました',
   'oauth.priorityApplyFailed': 'OAuth ログインは成功しましたが、新しい認証情報の優先度を 0 に設定できませんでした：{error}',
   'oauth.authFailed': '認証に失敗しました',

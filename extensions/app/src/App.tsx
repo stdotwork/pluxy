@@ -6,8 +6,6 @@ import {
   Check,
   ChevronUp,
   ExternalLink,
-  FileKey,
-  Gauge,
   History,
   House,
   Languages,
@@ -23,10 +21,8 @@ import appLogo from './assets/logo.jpg';
 import { CoreRuntimeProvider, useCoreRuntime } from './coreRuntime';
 import { ConfigPanelPage } from './pages/ConfigPanel';
 import { ApiAccessPage } from './pages/ApiAccessPage';
-import { AuthFileManagementPage } from './pages/AuthFileManagementPage';
 import { KernelPage } from './pages/Kernel';
-import { OAuthLoginPage } from './pages/ManagementPages';
-import { QuotaPage } from './pages/QuotaPage';
+import { OAuthManagementPage } from './pages/ManagementPages';
 import { AgentsPage } from './pages/AgentsPage';
 import { UsageRecordsPage } from './pages/UsageRecordsPage';
 import { languageOptions, useI18n } from './i18n';
@@ -60,25 +56,13 @@ const pages = [
     id: 'oauth',
     labelKey: 'app.nav.oauth',
     icon: LogIn,
-    component: OAuthLoginPage,
+    component: OAuthManagementPage,
   },
   {
     id: 'api',
     labelKey: 'app.nav.api',
     icon: Network,
     component: ApiAccessPage,
-  },
-  {
-    id: 'auth-files',
-    labelKey: 'app.nav.authFiles',
-    icon: FileKey,
-    component: AuthFileManagementPage,
-  },
-  {
-    id: 'quota',
-    labelKey: 'app.nav.quota',
-    icon: Gauge,
-    component: QuotaPage,
   },
   {
     id: 'usage-records',

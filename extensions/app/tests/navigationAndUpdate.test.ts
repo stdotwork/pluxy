@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { appUpdateIndicatorState } from '../src/appUpdateModel';
 import { canOpenAppPage, isAlwaysAvailablePage } from '../src/navigation';
+import { oauthSubpages } from '../src/oauthNavigation';
 
 describe('首页、配置与版本管理导航', () => {
   test('内核停止时首页、配置和版本管理始终可进入', () => {
@@ -16,6 +17,17 @@ describe('首页、配置与版本管理导航', () => {
   test('内核运行后解锁其他功能页', () => {
     expect(canOpenAppPage('config', true)).toBe(true);
     expect(canOpenAppPage('agents', true)).toBe(true);
+  });
+});
+
+describe('OAuth 子页面导航', () => {
+  test('认证文件和额度查询收纳在 OAuth 页面内', () => {
+    expect(oauthSubpages.map((page) => page.id)).toEqual(['login', 'authFiles', 'quota']);
+    expect(oauthSubpages.map((page) => page.labelKey)).toEqual([
+      'oauth.title',
+      'authFiles.title',
+      'quota.title',
+    ]);
   });
 });
 

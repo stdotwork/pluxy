@@ -4498,6 +4498,13 @@ textarea:focus-visible {
   box-shadow: 0 1px 4px rgba(45, 42, 38, 0.14);
 }
 
+.oauth-management-page,
+.oauth-subpage-panel {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+
 .agent-core-config {
   display: grid;
   min-width: 0;
