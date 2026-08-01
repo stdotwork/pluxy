@@ -80,11 +80,14 @@ const OAUTH_DIR_NAME: &str = "oauth";
 const DEFAULT_AUTH_DIR: &str = "../oauth";
 const DEFAULT_API_KEY: &str = "123456";
 const DEFAULT_API_KEY_INITIAL_REMARK: &str = "默认密钥";
-const DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
+const LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
 const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
 const CODEX_MODEL_CATALOG_FILE: &str = "cpa-gui-model-catalog.json";
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR: &str = "CODEX_OAUTH_LOGIN_REQUIRED";
 const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";
+const CLAUDE_DESKTOP_OPUS_MODEL_ID: &str = "claude-opus-5";
+const CLAUDE_DESKTOP_SONNET_MODEL_ID: &str = "claude-sonnet-4-6";
+const CLAUDE_DESKTOP_HAIKU_MODEL_ID: &str = "claude-haiku-4-5";
 const MODEL_ALIAS_CONFIG_SECTIONS: &[&str] = &[
     "codex-api-key",
     "openai-compatibility",
@@ -93,7 +96,7 @@ const MODEL_ALIAS_CONFIG_SECTIONS: &[&str] = &[
 ];
 const LEGACY_AGENT_MODIFICATION_STATE_VERSION: u8 = 1;
 const AGENT_MODIFICATION_STATE_VERSION: u8 = 2;
-const AGENT_APPLIED_STATE_VERSION: u8 = 3;
+const AGENT_APPLIED_STATE_VERSION: u8 = 4;
 const AGENT_PHASE_APPLYING: &str = "applying";
 const AGENT_PHASE_ACTIVE: &str = "active";
 const AGENT_PHASE_RESTORING: &str = "restoring";
@@ -112,6 +115,9 @@ const APP_USER_AGENT: &str = concat!(
 );
 static CORE_CONFIG_FILE_LOCK: Mutex<()> = Mutex::new(());
 static AGENT_CONFIG_FILE_LOCK: Mutex<()> = Mutex::new(());
+static CODEX_APPLIED_STATES: LazyLock<
+    Mutex<std::collections::HashMap<PathBuf, AgentAppliedState>>,
+> = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 static CONFIG_WRITE_HASHES: LazyLock<Mutex<std::collections::HashMap<PathBuf, String>>> =
     LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
@@ -537,9 +543,9 @@ impl Default for GuiConfigFile {
             auth_dir: DEFAULT_AUTH_DIR.to_string(),
             api_keys: vec![default_api_key_entry()],
             api_access_remarks: Vec::new(),
-            // Keep plaintext here for management API auth. Core hashes the
-            // value written into config.yaml on startup.
-            management_secret_key: DEFAULT_MANAGEMENT_SECRET_KEY.to_string(),
+            // Populated with an OS-generated secret while loading the GUI
+            // configuration. Core hashes the value written into config.yaml.
+            management_secret_key: String::new(),
             usage_statistics_enabled: true,
             plugins_enabled: false,
             routing_strategy: "round-robin".to_string(),
@@ -747,7 +753,17 @@ struct AgentAppliedState {
     model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    backup_files: Vec<AgentAppliedBackupFile>,
     updated_at_unix: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentAppliedBackupFile {
+    path: PathBuf,
+    backup_path: PathBuf,
+    existed_before: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2122,6 +2138,9 @@ async fn apply_agent_config(
         &model,
         claude_desktop_model_mappings,
     )?;
+    if let Some(mappings) = claude_desktop_model_mappings.as_ref() {
+        ensure_claude_desktop_model_aliases(&config, mappings).await?;
+    }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -2138,6 +2157,23 @@ async fn apply_agent_config(
             claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
         },
     )
+}
+
+#[tauri::command]
+fn close_agent_config_modification(
+    app: tauri::AppHandle,
+    client: String,
+) -> Result<AgentConfigActionResult, String> {
+    let client = AgentClient::parse(&client)?;
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("无法获取用户目录: {error}"))?;
+    let _guard = AGENT_CONFIG_FILE_LOCK
+        .lock()
+        .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
+    restore_agent_session_configuration(client, &home)?;
+    Ok(action_result("closed", false, None, Vec::new(), Vec::new()))
 }
 
 #[tauri::command]
@@ -2168,6 +2204,9 @@ async fn reset_agent_config_to_default(
         &model,
         claude_desktop_model_mappings,
     )?;
+    if let Some(mappings) = claude_desktop_model_mappings.as_ref() {
+        ensure_claude_desktop_model_aliases(&config, mappings).await?;
+    }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -2226,6 +2265,9 @@ async fn set_agent_config_enabled(
             &model,
             claude_desktop_model_mappings,
         )?;
+        if let Some(mappings) = claude_desktop_model_mappings.as_ref() {
+            ensure_claude_desktop_model_aliases(&config, mappings).await?;
+        }
         let _guard = AGENT_CONFIG_FILE_LOCK
             .lock()
             .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -2275,6 +2317,9 @@ async fn update_agent_config(
         &model,
         claude_desktop_model_mappings,
     )?;
+    if let Some(mappings) = claude_desktop_model_mappings.as_ref() {
+        ensure_claude_desktop_model_aliases(&config, mappings).await?;
+    }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
         .map_err(|_| "智能体配置文件锁已损坏".to_string())?;
@@ -2733,9 +2778,10 @@ fn clear_codex_config_files(home: &Path) -> Result<Vec<String>, String> {
         }
     }
 
-    // The state file belongs to this app. Remove it after the Codex files are
-    // cleared so the UI does not report the deliberate deletion as an external edit.
     let state_path = agent_state_path(std::slice::from_ref(&config_path))?;
+    clear_codex_applied_state(&state_path)?;
+    // Clean up state files left by older releases. New Codex applications keep
+    // this short-lived restore metadata in memory instead.
     remove_codex_config_file(&state_path)?;
 
     Ok(deleted)
@@ -4275,7 +4321,7 @@ fn build_agent_updates_with_oauth(
         models,
         codex_catalog,
         oauth_configuration,
-        claude_desktop_model_mappings: _,
+        claude_desktop_model_mappings,
     } = options;
     let paths = agent_config_paths(client, home);
     let root_base = format!("http://127.0.0.1:{port}");
@@ -4316,10 +4362,16 @@ fn build_agent_updates_with_oauth(
                         &root_base,
                         api_key,
                         model,
-                        models,
+                        claude_desktop_model_mappings,
                     )
                     .or_else(|_| {
-                        build_claude_desktop_profile(None, &root_base, api_key, model, models)
+                        build_claude_desktop_profile(
+                            None,
+                            &root_base,
+                            api_key,
+                            model,
+                            claude_desktop_model_mappings,
+                        )
                     })?,
                 },
                 AgentFileUpdate {
@@ -4541,7 +4593,7 @@ fn build_claude_desktop_profile(
     base_url: &str,
     api_key: &str,
     model: &str,
-    available_models: &[AgentModelOption],
+    mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop 网关配置")?;
     root.insert(
@@ -4568,64 +4620,19 @@ fn build_claude_desktop_profile(
         "inferenceProvider".to_string(),
         serde_json::json!("gateway"),
     );
-    // Keep every CPA model visible in Claude Desktop. Non-Claude model IDs use
-    // stable Claude-style gateway aliases, while the original model ID remains
-    // the visible label.
-    let mut inference_models = Vec::with_capacity(available_models.len().max(1));
-    let mut inference_model_ids = Vec::with_capacity(available_models.len().max(1));
-    for available_model in ordered_agent_models(available_models, model) {
-        inference_models.push(serde_json::json!(available_model.name));
-        continue;
-        let inference_model = claude_desktop_inference_model_id(&available_model.name)?;
-        if inference_model_ids
-            .iter()
-            .any(|existing: &String| existing.eq_ignore_ascii_case(&inference_model))
-        {
-            return Err(format!("Claude Desktop 模型别名冲突: {inference_model}"));
-        }
-        inference_model_ids.push(inference_model.clone());
-        inference_models.push(
-            if inference_model.eq_ignore_ascii_case(&available_model.name) {
-                serde_json::json!(inference_model)
-            } else {
-                serde_json::json!({
-                    "name": inference_model,
-                    "labelOverride": available_model.name,
-                })
-            },
-        );
-    }
+    let _mappings = mappings
+        .cloned()
+        .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
+    let inference_models = vec![
+        serde_json::json!(CLAUDE_DESKTOP_OPUS_MODEL_ID),
+        serde_json::json!(CLAUDE_DESKTOP_SONNET_MODEL_ID),
+        serde_json::json!(CLAUDE_DESKTOP_HAIKU_MODEL_ID),
+    ];
     root.insert(
         "inferenceModels".to_string(),
         serde_json::Value::Array(inference_models),
     );
     render_agent_json(root, "Claude Desktop 网关配置")
-}
-
-fn claude_desktop_inference_model_id(model: &str) -> Result<String, String> {
-    let model = validate_agent_model(model)?;
-    let normalized = model.to_ascii_lowercase();
-    if normalized.starts_with("claude-")
-        || normalized.starts_with("opus-")
-        || matches!(normalized.as_str(), "sonnet" | "opus" | "haiku")
-    {
-        return Ok(model);
-    }
-    let reversed = model
-        .chars()
-        .rev()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else if matches!(character, '-' | '.') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    let alias = format!("opus-{reversed}");
-    validate_thinking_alias_model_id(&alias, "Claude Desktop 自动别名")
 }
 
 fn build_claude_desktop_meta(existing: Option<&str>) -> Result<String, String> {
@@ -5223,10 +5230,130 @@ fn legacy_agent_backup_paths(state_content: &str) -> Vec<PathBuf> {
 }
 
 fn write_agent_applied_state(path: &Path, state: &AgentAppliedState) -> Result<(), String> {
+    if state.client == AgentClient::Codex.id() {
+        CODEX_APPLIED_STATES
+            .lock()
+            .map_err(|_| "Codex 应用状态内存锁已损坏".to_string())?
+            .insert(path.to_path_buf(), state.clone());
+        if path.is_file() {
+            fs::remove_file(path).map_err(|error| {
+                format!(
+                    "清理旧版 Codex 应用状态失败 {}: {error}",
+                    path_to_string(path)
+                )
+            })?;
+        }
+        return Ok(());
+    }
+
     let mut content = serde_json::to_string_pretty(state)
         .map_err(|error| format!("生成智能体应用状态失败: {error}"))?;
     content.push('\n');
     write_bytes_directly(path, content.as_bytes())
+}
+
+fn clear_codex_applied_state(path: &Path) -> Result<(), String> {
+    CODEX_APPLIED_STATES
+        .lock()
+        .map_err(|_| "Codex 应用状态内存锁已损坏".to_string())?
+        .remove(path);
+    Ok(())
+}
+
+fn is_dated_agent_backup_name(file_name: &str, original_name: &str) -> bool {
+    let Some(date) = file_name
+        .strip_prefix(&format!("{original_name}."))
+        .and_then(|value| value.strip_suffix(".bak"))
+    else {
+        return false;
+    };
+    let bytes = date.as_bytes();
+    bytes.len() == 8
+        && bytes[0..2].iter().all(u8::is_ascii_digit)
+        && bytes[2] == b'-'
+        && bytes[3..5].iter().all(u8::is_ascii_digit)
+        && bytes[5] == b'-'
+        && bytes[6..8].iter().all(u8::is_ascii_digit)
+}
+
+fn latest_dated_agent_backup_path(path: &Path) -> Result<Option<PathBuf>, String> {
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    if !directory.is_dir() {
+        return Ok(None);
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("智能体配置文件名无效: {}", path_to_string(path)))?;
+    let mut candidates = fs::read_dir(directory)
+        .map_err(|error| {
+            format!(
+                "读取智能体备份目录失败 {}: {error}",
+                path_to_string(directory)
+            )
+        })?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|candidate| {
+            candidate
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| is_dated_agent_backup_name(value, file_name))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    Ok(candidates.pop())
+}
+
+fn recover_codex_applied_state_from_backups(
+    paths: &[PathBuf],
+) -> Result<Option<AgentAppliedState>, String> {
+    let managed_paths = expected_agent_record_paths(AgentClient::Codex, paths);
+    let mut discovered = Vec::with_capacity(managed_paths.len());
+    let mut found_backup = false;
+    for path in managed_paths {
+        let backup = latest_dated_agent_backup_path(&path)?;
+        found_backup |= backup.is_some();
+        discovered.push((path, backup));
+    }
+    if !found_backup {
+        return Ok(None);
+    }
+
+    let model = paths
+        .first()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|content| toml::from_str::<toml::Value>(&content).ok())
+        .and_then(|root| {
+            root.get("model")
+                .and_then(toml::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let mut backup_files = Vec::with_capacity(discovered.len());
+    for (path, backup) in discovered {
+        let existed_before = backup.is_some();
+        backup_files.push(AgentAppliedBackupFile {
+            backup_path: match backup {
+                Some(path) => path,
+                None => dated_agent_backup_path(&path)?,
+            },
+            path,
+            existed_before,
+        });
+    }
+    let state = AgentAppliedState {
+        version: AGENT_APPLIED_STATE_VERSION,
+        client: AgentClient::Codex.id().to_string(),
+        model,
+        claude_desktop_model_mappings: None,
+        backup_files,
+        updated_at_unix: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    Ok(Some(state))
 }
 
 fn load_agent_applied_state(
@@ -5235,8 +5362,26 @@ fn load_agent_applied_state(
 ) -> Result<Option<AgentAppliedState>, String> {
     let paths = agent_config_paths(client, home);
     let state_path = agent_state_path(&paths)?;
+    if client == AgentClient::Codex {
+        if let Some(state) = CODEX_APPLIED_STATES
+            .lock()
+            .map_err(|_| "Codex 应用状态内存锁已损坏".to_string())?
+            .get(&state_path)
+            .cloned()
+        {
+            return Ok(Some(state));
+        }
+    }
     if !state_path.is_file() {
-        return Ok(None);
+        let recovered = if client == AgentClient::Codex {
+            recover_codex_applied_state_from_backups(&paths)?
+        } else {
+            None
+        };
+        if let Some(state) = recovered.as_ref() {
+            write_agent_applied_state(&state_path, state)?;
+        }
+        return Ok(recovered);
     }
     let content = fs::read_to_string(&state_path)
         .map_err(|error| format!("读取智能体应用状态失败: {error}"))?;
@@ -5246,11 +5391,14 @@ fn load_agent_applied_state(
         .get("version")
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| "智能体应用状态缺少版本号".to_string())? as u8;
-    if version == AGENT_APPLIED_STATE_VERSION {
+    if version == AGENT_APPLIED_STATE_VERSION || version == 3 {
         let state = serde_json::from_value::<AgentAppliedState>(value)
             .map_err(|error| format!("解析智能体应用状态失败: {error}"))?;
         if state.client != client.id() {
             return Err("智能体应用状态与客户端不匹配".to_string());
+        }
+        if client == AgentClient::Codex {
+            write_agent_applied_state(&state_path, &state)?;
         }
         return Ok(Some(state));
     }
@@ -5268,6 +5416,7 @@ fn load_agent_applied_state(
         client: client.id().to_string(),
         model: record.model,
         claude_desktop_model_mappings: None,
+        backup_files: Vec::new(),
         updated_at_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -5621,7 +5770,7 @@ fn fresh_agent_contents(
         name: model.to_string(),
         alias: None,
     }];
-    fresh_agent_contents_with_oauth(client, port, api_key, model, &models, false)
+    fresh_agent_contents_with_oauth(client, port, api_key, model, &models, false, None)
 }
 
 fn fresh_agent_contents_with_oauth(
@@ -5631,6 +5780,7 @@ fn fresh_agent_contents_with_oauth(
     model: &str,
     models: &[AgentModelOption],
     oauth_configuration: bool,
+    claude_desktop_model_mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<Vec<String>, String> {
     let root_base = format!("http://127.0.0.1:{port}");
     let openai_base = format!("{root_base}/v1");
@@ -5641,7 +5791,13 @@ fn fresh_agent_contents_with_oauth(
         AgentClient::ClaudeDesktop => Ok(vec![
             build_claude_desktop_deployment_config(None)?,
             build_claude_desktop_deployment_config(None)?,
-            build_claude_desktop_profile(None, &root_base, api_key, model, models)?,
+            build_claude_desktop_profile(
+                None,
+                &root_base,
+                api_key,
+                model,
+                claude_desktop_model_mappings,
+            )?,
             build_claude_desktop_meta(None)?,
         ]),
         AgentClient::Codex => Ok(vec![build_codex_agent_config_with_oauth(
@@ -6125,6 +6281,113 @@ fn restore_agent_snapshots_direct(snapshots: &[FileSnapshot]) -> Result<(), Stri
     }
 }
 
+fn dated_agent_backup_path(path: &Path) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("智能体配置文件名无效: {}", path_to_string(path)))?;
+    let date = chrono::Local::now().format("%y-%m-%d");
+    Ok(path.with_file_name(format!("{file_name}.{date}.bak")))
+}
+
+fn prepare_agent_session_backups(
+    updates: &[AgentFileUpdate],
+) -> Result<Vec<AgentAppliedBackupFile>, String> {
+    let mut backups = Vec::with_capacity(updates.len());
+    let mut renamed = Vec::new();
+    for update in updates {
+        let existed_before = update.path.is_file();
+        let backup_path = dated_agent_backup_path(&update.path)?;
+        if existed_before {
+            if backup_path.exists() {
+                for (path, backup) in renamed.iter().rev() {
+                    let _ = fs::rename(backup, path);
+                }
+                return Err(format!(
+                    "智能体备份文件已存在，无法覆盖: {}",
+                    path_to_string(&backup_path)
+                ));
+            }
+            fs::rename(&update.path, &backup_path).map_err(|error| {
+                format!(
+                    "重命名原智能体配置为备份失败 {}: {error}",
+                    path_to_string(&update.path)
+                )
+            })?;
+            renamed.push((update.path.clone(), backup_path.clone()));
+        }
+        backups.push(AgentAppliedBackupFile {
+            path: update.path.clone(),
+            backup_path,
+            existed_before,
+        });
+    }
+    Ok(backups)
+}
+
+fn restore_agent_session_configuration(client: AgentClient, home: &Path) -> Result<(), String> {
+    let Some(state) = load_agent_applied_state(client, home)? else {
+        return Ok(());
+    };
+    if state.backup_files.is_empty() {
+        return Ok(());
+    }
+
+    for file in state.backup_files.iter().rev() {
+        if file.existed_before {
+            let original = fs::read(&file.backup_path).map_err(|error| {
+                format!(
+                    "读取智能体备份失败 {}: {error}",
+                    path_to_string(&file.backup_path)
+                )
+            })?;
+            write_bytes_directly(&file.path, &original)?;
+            fs::remove_file(&file.backup_path).map_err(|error| {
+                format!(
+                    "清理智能体备份失败 {}: {error}",
+                    path_to_string(&file.backup_path)
+                )
+            })?;
+        } else if file.path.exists() {
+            fs::remove_file(&file.path).map_err(|error| {
+                format!(
+                    "删除临时智能体配置失败 {}: {error}",
+                    path_to_string(&file.path)
+                )
+            })?;
+        }
+    }
+
+    let state_path = agent_state_path(&agent_config_paths(client, home))?;
+    if client == AgentClient::Codex {
+        clear_codex_applied_state(&state_path)?;
+    }
+    if state_path.is_file() {
+        fs::remove_file(&state_path).map_err(|error| {
+            format!(
+                "清理智能体应用状态失败 {}: {error}",
+                path_to_string(&state_path)
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn restore_all_agent_session_configurations(home: &Path) {
+    for client in [
+        AgentClient::ClaudeCode,
+        AgentClient::ClaudeDesktop,
+        AgentClient::Codex,
+        AgentClient::OpenCode,
+        AgentClient::OpenClaw,
+        AgentClient::Hermes,
+    ] {
+        if let Err(error) = restore_agent_session_configuration(client, home) {
+            eprintln!("关闭时恢复 {} 配置失败: {error}", client.name());
+        }
+    }
+}
+
 fn commit_agent_configuration(
     client: AgentClient,
     home: &Path,
@@ -6135,6 +6398,7 @@ fn commit_agent_configuration(
 ) -> Result<AgentConfigActionResult, String> {
     let base_paths = agent_config_paths(client, home);
     let state_path = agent_state_path(&base_paths)?;
+    let existing_state = load_agent_applied_state(client, home)?;
     let previous_state = read_agent_bytes(&state_path)?;
     let mut legacy_backups = previous_state
         .as_deref()
@@ -6155,6 +6419,16 @@ fn commit_agent_configuration(
         .collect::<Result<Vec<_>, String>>()?;
     snapshots.push((state_path.clone(), previous_state));
 
+    let created_session_backups = existing_state
+        .as_ref()
+        .is_none_or(|state| state.backup_files.is_empty());
+    let backup_files =
+        if let Some(state) = existing_state.filter(|state| !state.backup_files.is_empty()) {
+            state.backup_files
+        } else {
+            prepare_agent_session_backups(updates)?
+        };
+
     let transaction = (|| -> Result<Vec<String>, String> {
         let mut changed = Vec::new();
         for update in updates {
@@ -6172,6 +6446,7 @@ fn commit_agent_configuration(
             claude_desktop_model_mappings: (client == AgentClient::ClaudeDesktop)
                 .then(|| claude_desktop_model_mappings.cloned())
                 .flatten(),
+            backup_files: backup_files.clone(),
             updated_at_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -6196,10 +6471,20 @@ fn commit_agent_configuration(
                 Vec::new(),
             ))
         }
-        Err(error) => match restore_agent_snapshots_direct(&snapshots) {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(format!("{error}；回滚配置失败: {rollback_error}")),
-        },
+        Err(error) => {
+            let rollback = restore_agent_snapshots_direct(&snapshots);
+            if created_session_backups {
+                for backup in &backup_files {
+                    if backup.existed_before && backup.backup_path.is_file() {
+                        let _ = fs::remove_file(&backup.backup_path);
+                    }
+                }
+            }
+            match rollback {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(format!("{error}；回滚配置失败: {rollback_error}")),
+            }
+        }
     }
 }
 
@@ -6285,8 +6570,15 @@ fn reset_agent_configuration_to_default_with_oauth(
     claude_desktop_model_mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let paths = agent_config_paths(client, home);
-    let contents =
-        fresh_agent_contents_with_oauth(client, port, api_key, model, models, oauth_configuration)?;
+    let contents = fresh_agent_contents_with_oauth(
+        client,
+        port,
+        api_key,
+        model,
+        models,
+        oauth_configuration,
+        claude_desktop_model_mappings,
+    )?;
     if paths.len() != contents.len() {
         return Err("智能体默认配置文件数量不匹配".to_string());
     }
@@ -6939,13 +7231,17 @@ fn set_core_management_secret_key(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     secret_key: String,
 ) -> Result<CoreConfigView, String> {
-    let secret_key = secret_key.trim().to_string();
-    if secret_key.chars().any(char::is_control) {
-        return Err("管理密钥不能包含控制字符".to_string());
-    }
-    validate_management_secret_key(&secret_key)?;
-    let config = gui_config_state.set_management_secret_key(secret_key)?;
-    patch_core_management_secret_key(&config.management_secret_key)?;
+    let secret_key = normalize_management_secret_key(secret_key)?;
+    let previous = gui_config_state.snapshot()?;
+    patch_core_management_secret_key(&secret_key)?;
+    let config = match gui_config_state.set_management_secret_key(secret_key) {
+        Ok(config) => config,
+        Err(error) => {
+            let rollback_error =
+                patch_core_management_secret_key(&previous.management_secret_key).err();
+            return Err(config_update_error_with_rollback(error, rollback_error));
+        }
+    };
     Ok(CoreConfigView::from(&config))
 }
 
@@ -6953,8 +7249,16 @@ fn set_core_management_secret_key(
 fn clear_core_management_secret_key(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<CoreConfigView, String> {
-    let config = gui_config_state.set_management_secret_key(String::new())?;
-    patch_core_management_secret_key(&config.management_secret_key)?;
+    let previous = gui_config_state.snapshot()?;
+    patch_core_management_secret_key("")?;
+    let config = match gui_config_state.set_management_secret_key(String::new()) {
+        Ok(config) => config,
+        Err(error) => {
+            let rollback_error =
+                patch_core_management_secret_key(&previous.management_secret_key).err();
+            return Err(config_update_error_with_rollback(error, rollback_error));
+        }
+    };
     Ok(CoreConfigView::from(&config))
 }
 
@@ -9860,11 +10164,10 @@ async fn put_management_config_yaml(config: &GuiConfigFile, content: &str) -> Re
 
 async fn ensure_claude_desktop_model_aliases(
     config: &GuiConfigFile,
-    models: &[AgentModelOption],
     mappings: &ClaudeDesktopModelMappings,
 ) -> Result<(), String> {
     let content = fetch_management_config_yaml(config).await?;
-    let updated = ensure_claude_desktop_model_aliases_in_yaml(&content, models, mappings)?;
+    let updated = ensure_claude_desktop_model_aliases_in_yaml(&content, mappings)?;
     if updated != content {
         put_management_config_yaml(config, &updated).await?;
     }
@@ -9873,7 +10176,6 @@ async fn ensure_claude_desktop_model_aliases(
 
 fn ensure_claude_desktop_model_aliases_in_yaml(
     content: &str,
-    models: &[AgentModelOption],
     mappings: &ClaudeDesktopModelMappings,
 ) -> Result<String, String> {
     let mut document = yaml_serde_edit::YamlValue::parse(content)
@@ -9883,16 +10185,10 @@ fn ensure_claude_desktop_model_aliases_in_yaml(
         .as_mapping_mut()
         .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
 
-    for model in models {
-        let alias = claude_desktop_inference_model_id(&model.name)?;
-        if !alias.eq_ignore_ascii_case(&model.name) {
-            ensure_claude_desktop_model_alias(root, &model.name, &alias)?;
-        }
-    }
     for (alias, source_model) in [
-        ("opus", mappings.opus.as_str()),
-        ("sonnet", mappings.sonnet.as_str()),
-        ("haiku", mappings.haiku.as_str()),
+        (CLAUDE_DESKTOP_OPUS_MODEL_ID, mappings.opus.as_str()),
+        (CLAUDE_DESKTOP_SONNET_MODEL_ID, mappings.sonnet.as_str()),
+        (CLAUDE_DESKTOP_HAIKU_MODEL_ID, mappings.haiku.as_str()),
     ] {
         ensure_claude_desktop_model_alias(root, source_model, alias)?;
     }
@@ -11435,6 +11731,49 @@ fn validate_management_secret_key(secret_key: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_strong_management_secret_key(secret_key: &str) -> Result<(), String> {
+    validate_management_secret_key(secret_key)?;
+    if secret_key.trim().is_empty() {
+        return Err("WebUI 密钥不能为空".to_string());
+    }
+    if secret_key.trim() == LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY {
+        return Err("不能继续使用旧版默认 WebUI 密钥 123456".to_string());
+    }
+    if is_hashed_management_secret_key(secret_key) {
+        return Err("GUI 配置必须保存可用于管理接口认证的明文 WebUI 密钥".to_string());
+    }
+    Ok(())
+}
+
+fn generate_management_secret_key() -> Result<String, String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+    let mut random = [0_u8; 32];
+    getrandom::fill(&mut random).map_err(|error| format!("生成 WebUI 安全密钥失败: {error}"))?;
+    Ok(format!("wui-Aa9_{}", URL_SAFE_NO_PAD.encode(random)))
+}
+
+fn management_secret_requires_rotation(secret_key: &str) -> bool {
+    let secret_key = secret_key.trim();
+    secret_key.is_empty()
+        || secret_key == LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY
+        || is_hashed_management_secret_key(secret_key)
+}
+
+fn ensure_strong_management_secret(config: &mut GuiConfigFile) -> Result<bool, String> {
+    if !management_secret_requires_rotation(&config.management_secret_key) {
+        return Ok(false);
+    }
+    config.management_secret_key = generate_management_secret_key()?;
+    Ok(true)
+}
+
+fn normalize_management_secret_key(secret_key: String) -> Result<String, String> {
+    let secret_key = secret_key.trim().to_string();
+    validate_strong_management_secret_key(&secret_key)?;
+    Ok(secret_key)
+}
+
 fn is_example_core_api_key(api_key: &str) -> bool {
     let value = api_key.trim();
     value == "your-api-key" || value.starts_with("your-api-key-")
@@ -12047,10 +12386,17 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     if presence.codex_session_repair_on_launch.is_none() {
         changed = true;
     }
+    let management_secret_rotated = ensure_strong_management_secret(&mut config)?;
+    changed |= management_secret_rotated;
     changed |= sanitize_gui_config(&mut config)?;
     validate_gui_config(&config)?;
     if changed {
         write_gui_config(&config)?;
+    }
+    if management_secret_rotated {
+        if let Err(error) = patch_core_management_secret_key(&config.management_secret_key) {
+            eprintln!("更新旧版 CPA WebUI 密钥失败，将在下次启动内核时重试: {error}");
+        }
     }
     if !config.auth_dir.trim().is_empty() {
         let install_dir = core_install_dir()?;
@@ -12458,7 +12804,7 @@ fn validate_gui_config(config: &GuiConfigFile) -> Result<(), String> {
         }
         validate_api_key_remark(&entry.remark)?;
     }
-    validate_management_secret_key(&config.management_secret_key)?;
+    validate_strong_management_secret_key(&config.management_secret_key)?;
     validate_routing_strategy(config.routing_strategy.trim())?;
     if config.proxy_url.chars().any(char::is_control) {
         return Err("代理 URL 不能包含控制字符".to_string());
@@ -14526,6 +14872,10 @@ fn main() {
         Err(error) => {
             eprintln!("{error}");
             let mut config = GuiConfigFile::default();
+            if let Err(secret_error) = ensure_strong_management_secret(&mut config) {
+                eprintln!("初始化 WebUI 安全密钥失败: {secret_error}");
+                return;
+            }
             if let Err(sanitize_error) = sanitize_gui_config(&mut config) {
                 eprintln!("初始化固定凭证目录失败: {sanitize_error}");
             }
@@ -14708,6 +15058,7 @@ fn main() {
             create_speed_alias,
             delete_speed_alias,
             apply_agent_config,
+            close_agent_config_modification,
             reset_agent_config_to_default,
             clear_codex_config,
             set_agent_config_enabled,
@@ -14775,6 +15126,10 @@ fn main() {
         }
         tauri::RunEvent::Exit => {
             usage::stop_usage_collector(app_handle);
+            if let Ok(home) = app_handle.path().home_dir() {
+                let _guard = AGENT_CONFIG_FILE_LOCK.lock();
+                restore_all_agent_session_configurations(&home);
+            }
             let process_state = app_handle.state::<CoreProcessState>();
             let gui_config_state = app_handle.state::<GuiConfigState>();
             shutdown_managed_core(process_state.inner(), gui_config_state.inner());
@@ -14878,6 +15233,108 @@ mod tests {
         });
         let runtime = codex_catalog::parse_runtime_models(&payload).unwrap();
         codex_catalog::prepare_catalog(&runtime).unwrap().json
+    }
+
+    #[test]
+    fn agent_configuration_is_restored_from_the_dated_session_backup_on_exit() {
+        let home = agent_test_home("session-backup");
+        let path = home.join(".config/opencode/opencode.json");
+        let original = b"{\"provider\":\"original\"}";
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, original).unwrap();
+
+        commit_agent_configuration(
+            AgentClient::OpenCode,
+            &home,
+            "gpt-test",
+            &[AgentFileUpdate {
+                path: path.clone(),
+                after: "{\"provider\":\"managed\"}".to_string(),
+            }],
+            "applied",
+            None,
+        )
+        .unwrap();
+
+        let backup = dated_agent_backup_path(&path).unwrap();
+        assert!(backup.is_file());
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert!(fs::read_to_string(&path).unwrap().contains("managed"));
+
+        restore_agent_session_configuration(AgentClient::OpenCode, &home).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(!backup.exists());
+        assert!(!agent_state_path(std::slice::from_ref(&path))
+            .unwrap()
+            .exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn codex_session_restore_does_not_create_a_state_json_file() {
+        let home = agent_test_home("codex-session-without-state-file");
+        let config_path = home.join(".codex/config.toml");
+        let catalog_path = codex_model_catalog_path(&home);
+        let state_path = agent_state_path(std::slice::from_ref(&config_path)).unwrap();
+        let original = b"approval_policy = \"never\"\n";
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(&config_path, original).unwrap();
+
+        commit_agent_configuration(
+            AgentClient::Codex,
+            &home,
+            "gpt-test",
+            &[
+                AgentFileUpdate {
+                    path: config_path.clone(),
+                    after: "model = \"gpt-test\"\n".to_string(),
+                },
+                AgentFileUpdate {
+                    path: catalog_path.clone(),
+                    after: "{\"models\":[]}".to_string(),
+                },
+            ],
+            "applied",
+            None,
+        )
+        .unwrap();
+
+        let backup = dated_agent_backup_path(&config_path).unwrap();
+        assert!(backup.is_file());
+        assert!(!state_path.exists());
+        assert_eq!(
+            inspect_agent_application(AgentClient::Codex, &home).state,
+            "applied"
+        );
+
+        restore_agent_session_configuration(AgentClient::Codex, &home).unwrap();
+        assert_eq!(fs::read(&config_path).unwrap(), original);
+        assert!(!catalog_path.exists());
+        assert!(!backup.exists());
+        assert!(!state_path.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn codex_session_restore_recovers_from_a_dated_backup_without_state_json() {
+        let home = agent_test_home("codex-session-backup-recovery");
+        let config_path = home.join(".codex/config.toml");
+        let catalog_path = codex_model_catalog_path(&home);
+        let state_path = agent_state_path(std::slice::from_ref(&config_path)).unwrap();
+        let backup = dated_agent_backup_path(&config_path).unwrap();
+        let original = b"approval_policy = \"on-request\"\n";
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(&backup, original).unwrap();
+        fs::write(&config_path, "model = \"gpt-test\"\n").unwrap();
+        fs::write(&catalog_path, "{\"models\":[]}").unwrap();
+
+        restore_agent_session_configuration(AgentClient::Codex, &home).unwrap();
+
+        assert_eq!(fs::read(&config_path).unwrap(), original);
+        assert!(!catalog_path.exists());
+        assert!(!backup.exists());
+        assert!(!state_path.exists());
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
@@ -15200,7 +15657,7 @@ mod tests {
         assert!(content.contains("[[api-keys]]"));
         assert!(content.contains("key = \"123456\""));
         assert!(content.contains("remark = \"默认密钥\""));
-        assert!(content.contains("management-secret-key = \"123456\""));
+        assert!(content.contains("management-secret-key = \"\""));
         assert!(content.contains("plugins-enabled = false"));
         assert!(content.contains("routing-strategy = \"round-robin\""));
         assert!(content.contains("codex-session-repair-on-launch = false"));
@@ -15456,13 +15913,12 @@ mod tests {
 
     #[test]
     fn claude_desktop_config_builds_gateway_profile_and_index() {
-        let models = test_agent_models(&["claude-sonnet-test", "claude-opus-test"]);
         let profile = build_claude_desktop_profile(
             Some(r#"{"keep":true}"#),
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "claude-sonnet-test",
-            &models,
+            None,
         )
         .unwrap();
         let meta = build_claude_desktop_meta(Some(
@@ -15477,9 +15933,14 @@ mod tests {
         assert_eq!(profile["keep"], true);
         assert_eq!(profile["inferenceGatewayApiKey"], DEFAULT_API_KEY);
         assert_eq!(profile["inferenceGatewayBaseUrl"], "http://127.0.0.1:8317");
-        assert_eq!(profile["inferenceModels"][0], "claude-sonnet-test");
-        assert_eq!(profile["inferenceModels"][1], "claude-opus-test");
-        assert_eq!(profile["inferenceModels"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            profile["inferenceModels"],
+            serde_json::json!([
+                CLAUDE_DESKTOP_OPUS_MODEL_ID,
+                CLAUDE_DESKTOP_SONNET_MODEL_ID,
+                CLAUDE_DESKTOP_HAIKU_MODEL_ID
+            ])
+        );
         assert_eq!(meta["appliedId"], CLAUDE_DESKTOP_PROFILE_ID);
         assert_eq!(meta["entries"].as_array().unwrap().len(), 2);
         let managed_entry = meta["entries"]
@@ -15492,28 +15953,31 @@ mod tests {
     }
 
     #[test]
-    fn claude_desktop_profile_aliases_a_non_claude_model() {
+    fn claude_desktop_profile_keeps_non_claude_models_internal() {
+        let mappings = ClaudeDesktopModelMappings {
+            opus: "gpt-5.6-sol".to_string(),
+            sonnet: "gpt-5.6".to_string(),
+            haiku: "gpt-5.6-mini".to_string(),
+        };
         let profile = build_claude_desktop_profile(
             None,
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "gpt-5.6-sol",
-            &test_agent_models(&["gpt-5.6-sol"]),
+            Some(&mappings),
         )
         .unwrap();
         let profile: serde_json::Value = serde_json::from_str(&profile).unwrap();
 
         assert_eq!(
             profile["inferenceModels"],
-            serde_json::json!([{
-                "name": "opus-los-6.5-tpg",
-                "labelOverride": "gpt-5.6-sol",
-            }])
+            serde_json::json!([
+                CLAUDE_DESKTOP_OPUS_MODEL_ID,
+                CLAUDE_DESKTOP_SONNET_MODEL_ID,
+                CLAUDE_DESKTOP_HAIKU_MODEL_ID
+            ])
         );
-        assert_eq!(
-            claude_desktop_inference_model_id("opus-los-6.5-tpg").unwrap(),
-            "opus-los-6.5-tpg"
-        );
+        assert!(!profile.to_string().contains("gpt-"));
     }
 
     #[cfg(target_os = "windows")]
@@ -15726,17 +16190,14 @@ mod tests {
     }
 
     #[test]
-    fn claude_desktop_aliases_expose_all_models_and_role_routes() {
+    fn claude_desktop_aliases_expose_role_routes_only() {
         let input = "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1\n    models:\n      - name: gpt-5.6-sol\n";
-        let available_models = test_agent_models(&["gpt-5.6-sol"]);
         let mappings = ClaudeDesktopModelMappings {
             opus: "gpt-5.6-sol".to_string(),
             sonnet: "gpt-5.6-sol".to_string(),
             haiku: "gpt-5.6-sol".to_string(),
         };
-        let rendered =
-            ensure_claude_desktop_model_aliases_in_yaml(input, &available_models, &mappings)
-                .unwrap();
+        let rendered = ensure_claude_desktop_model_aliases_in_yaml(input, &mappings).unwrap();
         let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
         let root = value.as_mapping().unwrap();
         let providers = yaml_mapping_value(root, "openai-compatibility")
@@ -15746,21 +16207,21 @@ mod tests {
             .and_then(serde_norway::Value::as_sequence)
             .unwrap();
 
-        assert_eq!(models.len(), 5);
+        assert_eq!(models.len(), 4);
         assert_eq!(
-            configured_model_identity(&models[1]),
-            Some((
-                "gpt-5.6-sol".to_string(),
-                "opus-los-6.5-tpg".to_string(),
-                None,
-            ))
+            configured_model_identity(&models[1]).unwrap().1,
+            CLAUDE_DESKTOP_OPUS_MODEL_ID
         );
-        assert_eq!(configured_model_identity(&models[2]).unwrap().1, "opus");
-        assert_eq!(configured_model_identity(&models[3]).unwrap().1, "sonnet");
-        assert_eq!(configured_model_identity(&models[4]).unwrap().1, "haiku");
         assert_eq!(
-            ensure_claude_desktop_model_aliases_in_yaml(&rendered, &available_models, &mappings)
-                .unwrap(),
+            configured_model_identity(&models[2]).unwrap().1,
+            CLAUDE_DESKTOP_SONNET_MODEL_ID
+        );
+        assert_eq!(
+            configured_model_identity(&models[3]).unwrap().1,
+            CLAUDE_DESKTOP_HAIKU_MODEL_ID
+        );
+        assert_eq!(
+            ensure_claude_desktop_model_aliases_in_yaml(&rendered, &mappings).unwrap(),
             rendered
         );
     }
@@ -16826,11 +17287,68 @@ custom_option = "keep-original"
 
     #[test]
     fn core_config_view_exposes_api_key_metadata_for_the_webview() {
-        let view = serde_json::to_value(CoreConfigView::from(&GuiConfigFile::default())).unwrap();
+        let mut config = GuiConfigFile::default();
+        ensure_strong_management_secret(&mut config).unwrap();
+        let view = serde_json::to_value(CoreConfigView::from(&config)).unwrap();
 
         assert_eq!(view["apiKeys"][0]["apiKey"], DEFAULT_API_KEY);
         assert_eq!(view["apiKeys"][0]["remark"], DEFAULT_API_KEY_INITIAL_REMARK);
         assert!(view["apiKeys"][0].get("builtIn").is_none());
+        assert_eq!(view["managementSecretConfigured"], true);
+        assert!(view.get("managementSecretKey").is_none());
+    }
+
+    #[test]
+    fn webui_management_secret_requires_a_non_empty_plaintext_value() {
+        assert_eq!(
+            normalize_management_secret_key("  new-webui-secret  ".to_string()).unwrap(),
+            "new-webui-secret"
+        );
+        assert!(normalize_management_secret_key("   ".to_string()).is_err());
+        assert!(normalize_management_secret_key(
+            "$2a$10$abcdefghijklmnopqrstuuuuuuuuuuuuuuuuuuuuuuuuuuuuu".to_string()
+        )
+        .is_err());
+        assert!(normalize_management_secret_key("bad\nsecret".to_string()).is_err());
+        assert!(normalize_management_secret_key("123456".to_string()).is_err());
+    }
+
+    #[test]
+    fn management_secret_rotation_replaces_legacy_values_and_preserves_custom_values() {
+        let mut fresh = GuiConfigFile::default();
+        assert!(ensure_strong_management_secret(&mut fresh).unwrap());
+        assert!(fresh.management_secret_key.starts_with("wui-Aa9_"));
+        assert!(fresh.management_secret_key.len() >= 50);
+        assert!(!management_secret_requires_rotation(
+            &fresh.management_secret_key
+        ));
+
+        let first_generated = fresh.management_secret_key.clone();
+        let mut legacy = GuiConfigFile {
+            management_secret_key: LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY.to_string(),
+            ..GuiConfigFile::default()
+        };
+        assert!(ensure_strong_management_secret(&mut legacy).unwrap());
+        assert_ne!(
+            legacy.management_secret_key,
+            LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY
+        );
+        assert_ne!(legacy.management_secret_key, first_generated);
+
+        let mut hashed = GuiConfigFile {
+            management_secret_key: "$2a$10$abcdefghijklmnopqrstuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"
+                .to_string(),
+            ..GuiConfigFile::default()
+        };
+        assert!(ensure_strong_management_secret(&mut hashed).unwrap());
+        assert!(hashed.management_secret_key.starts_with("wui-Aa9_"));
+
+        let mut custom = GuiConfigFile {
+            management_secret_key: "user-selected-secret".to_string(),
+            ..GuiConfigFile::default()
+        };
+        assert!(!ensure_strong_management_secret(&mut custom).unwrap());
+        assert_eq!(custom.management_secret_key, "user-selected-secret");
     }
 
     #[test]
@@ -16858,6 +17376,7 @@ custom_option = "keep-original"
             auth_dir: "/tmp/user-selected-auth".to_string(),
             ..GuiConfigFile::default()
         };
+        ensure_strong_management_secret(&mut config).unwrap();
 
         assert!(validate_gui_config(&config).is_ok());
         assert!(!sanitize_gui_config(&mut config).unwrap());
@@ -17466,7 +17985,9 @@ custom_option = "keep-original"
     #[test]
     fn startup_merge_without_current_config_uses_gui_defaults() {
         let template = "# Template\nhost: \"\"\nport: 9000\napi-keys:\n  - template-key\nplugins:\n  enabled: true\nrouting:\n  strategy: fill-first\ndebug: false\n";
-        let merged = merge_core_config_yaml(template, None, &GuiConfigFile::default()).unwrap();
+        let mut config = GuiConfigFile::default();
+        ensure_strong_management_secret(&mut config).unwrap();
+        let merged = merge_core_config_yaml(template, None, &config).unwrap();
         let document = serde_norway::from_str::<serde_norway::Value>(&merged).unwrap();
 
         assert!(merged.contains("# Template"));
@@ -17480,6 +18001,10 @@ custom_option = "keep-original"
         assert_eq!(document["plugins"]["enabled"], false);
         assert_eq!(document["routing"]["strategy"], "round-robin");
         assert_eq!(document["usage-statistics-enabled"], true);
+        assert_eq!(
+            document["remote-management"]["secret-key"],
+            config.management_secret_key
+        );
     }
 
     #[test]
@@ -17487,14 +18012,19 @@ custom_option = "keep-original"
         let template = "host: \"\"\nport: 8317\nremote-management:\n  secret-key: \"\"\nauth-dir: ~/.cli-proxy-api\napi-keys:\n  - template-one\n  - template-two\n  - template-three\ndebug: false\nplugins:\n  enabled: false\nrouting:\n  strategy: round-robin\n";
         let current = "host: 127.0.0.1\nport: 8317\nremote-management:\n  secret-key: hashed\nauth-dir: C:/oauth\napi-keys:\n  - '123456'\ndebug: false\nplugins:\n  enabled: false\nrouting:\n  strategy: round-robin\n";
 
-        let merged =
-            merge_core_config_yaml(template, Some(current), &GuiConfigFile::default()).unwrap();
+        let mut config = GuiConfigFile::default();
+        ensure_strong_management_secret(&mut config).unwrap();
+        let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
         let document = serde_norway::from_str::<serde_norway::Value>(&merged)
             .unwrap_or_else(|error| panic!("invalid YAML: {error}\n{merged}"));
 
         assert_eq!(document["api-keys"][0], DEFAULT_API_KEY);
         assert_eq!(document["api-keys"].as_sequence().unwrap().len(), 1);
         assert_eq!(document["debug"], false);
+        assert_eq!(
+            document["remote-management"]["secret-key"],
+            config.management_secret_key
+        );
     }
 
     #[test]

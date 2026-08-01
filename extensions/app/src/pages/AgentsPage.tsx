@@ -69,6 +69,7 @@ type AgentConfigStatus = {
   modificationState: AgentModificationState;
   backupAvailable: boolean;
   appliedModel: string | null;
+  claudeDesktopModelMappings: ClaudeDesktopModelMappings | null;
   warnings: string[];
   error: string | null;
 };
@@ -94,7 +95,30 @@ type ChatGptCloseResult = {
 
 type OAuthLoginRequiredAction = 'enable' | 'apply' | 'launch';
 
+type ClaudeDesktopModelMappings = {
+  opus: string;
+  sonnet: string;
+  haiku: string;
+};
+
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR = 'CODEX_OAUTH_LOGIN_REQUIRED';
+
+const createClaudeDesktopModelMappings = (model: string): ClaudeDesktopModelMappings => ({
+  opus: model,
+  sonnet: model,
+  haiku: model,
+});
+
+const sameClaudeDesktopModelMappings = (
+  left: ClaudeDesktopModelMappings,
+  right: ClaudeDesktopModelMappings,
+) => left.opus === right.opus && left.sonnet === right.sonnet && left.haiku === right.haiku;
+
+const claudeDesktopMappingRoles = [
+  { key: 'opus', labelKey: 'agents.claudeDesktopMapping.opus' },
+  { key: 'sonnet', labelKey: 'agents.claudeDesktopMapping.sonnet' },
+  { key: 'haiku', labelKey: 'agents.claudeDesktopMapping.haiku' },
+] as const;
 
 type AgentDefinition = {
   id: AgentClientId;
@@ -487,10 +511,13 @@ export function AgentsPage() {
   const [modelByClient, setModelByClient] = useState<Partial<Record<AgentClientId, string>>>(
     readAgentModelSelections,
   );
+  const [claudeDesktopModelMappingsDraft, setClaudeDesktopModelMappingsDraft] = useState<ClaudeDesktopModelMappings>(
+    createClaudeDesktopModelMappings(''),
+  );
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | null
+    'apply' | 'close-config' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
@@ -509,6 +536,7 @@ export function AgentsPage() {
   const [oauthLoginRequiredAction, setOauthLoginRequiredAction] = useState<OAuthLoginRequiredAction | null>(null);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const modelRequestRef = useRef(0);
+  const claudeDesktopModelMappingsDirtyRef = useRef(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -616,24 +644,55 @@ export function AgentsPage() {
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
+
+  useEffect(() => {
+    if (selected !== 'claude-desktop' || !selectedModel) return;
+    const appliedMappings = activeStatus?.claudeDesktopModelMappings;
+    setClaudeDesktopModelMappingsDraft((current) => {
+      const source = claudeDesktopModelMappingsDirtyRef.current
+        ? current
+        : appliedMappings ?? current;
+      const next: ClaudeDesktopModelMappings = {
+        opus: findAgentModel(models, source.opus)?.name ?? selectedModel,
+        sonnet: findAgentModel(models, source.sonnet)?.name ?? selectedModel,
+        haiku: findAgentModel(models, source.haiku)?.name ?? selectedModel,
+      };
+      return sameClaudeDesktopModelMappings(current, next) ? current : next;
+    });
+  }, [activeStatus?.claudeDesktopModelMappings, models, selected, selectedModel]);
+
   const activeLaunchTargets = activeStatus?.launchTargets ?? [];
   const defaultLaunchTarget = activeLaunchTargets[0] ?? null;
   const cliLaunchTarget = activeLaunchTargets.find((target) => target.id === 'cli') ?? null;
   const appLaunchTarget = activeLaunchTargets.find((target) => target.id === 'app') ?? null;
   const appliedModel = activeStatus?.appliedModel ?? activeStatus?.currentModel ?? '';
-  const modelDraftChanged = Boolean(
+  const modelDraftChanged = selected !== 'claude-desktop' && Boolean(
     selectedModel.trim()
       && appliedModel.trim()
       && selectedModel.trim() !== appliedModel.trim(),
   );
+  const appliedClaudeDesktopModelMappings = activeStatus?.claudeDesktopModelMappings
+    ?? createClaudeDesktopModelMappings(appliedModel);
+  const claudeDesktopMappingsReady = selected !== 'claude-desktop'
+    || claudeDesktopMappingRoles.every((role) =>
+      Boolean(findAgentModel(models, claudeDesktopModelMappingsDraft[role.key])),
+    );
+  const claudeDesktopMappingDraftChanged = selected === 'claude-desktop'
+    && activeStatus?.modificationState === 'applied'
+    && !sameClaudeDesktopModelMappings(
+      claudeDesktopModelMappingsDraft,
+      appliedClaudeDesktopModelMappings,
+    );
   const oauthConfigurationChanged = selected === 'codex'
     && oauthConfiguration !== Boolean(activeStatus?.oauthConfiguration);
-  const draftChanged = modelDraftChanged || oauthConfigurationChanged;
+  const draftChanged = modelDraftChanged || claudeDesktopMappingDraftChanged || oauthConfigurationChanged;
   const canEnable = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
       && !modelLoading
-      && selectedModelOption,
+      && (selected === 'claude-desktop'
+        ? claudeDesktopMappingsReady
+        : selectedModelOption),
   );
   const launchEnabled = Boolean(
     activeStatus?.supportedPlatform
@@ -678,6 +737,17 @@ export function AgentsPage() {
     });
   };
 
+  const selectClaudeDesktopModelMapping = (
+    role: keyof ClaudeDesktopModelMappings,
+    value: string,
+  ) => {
+    const model = findAgentModel(models, value);
+    if (!model) return;
+    claudeDesktopModelMappingsDirtyRef.current = true;
+    setModelSelectionError('');
+    setClaudeDesktopModelMappingsDraft((current) => ({ ...current, [role]: model.name }));
+  };
+
   const requireSelectedModel = () => {
     if (modelLoading) {
       setModelSelectionError(t('agents.error.modelsLoading'));
@@ -694,6 +764,20 @@ export function AgentsPage() {
     }
     setModelSelectionError('');
     return model.name;
+  };
+
+  const requireClaudeDesktopModelMappings = (): ClaudeDesktopModelMappings | null => {
+    if (selected !== 'claude-desktop') return null;
+    const resolved = {} as ClaudeDesktopModelMappings;
+    for (const role of claudeDesktopMappingRoles) {
+      const model = findAgentModel(models, claudeDesktopModelMappingsDraft[role.key]);
+      if (!model) {
+        setModelSelectionError(t('agents.error.mappingSelectionGone'));
+        return null;
+      }
+      resolved[role.key] = model.name;
+    }
+    return resolved;
   };
 
   const handleOAuthLoginError = (requestError: unknown, action: OAuthLoginRequiredAction) => {
@@ -726,7 +810,11 @@ export function AgentsPage() {
 
   const applyConfigurationChanges = async () => {
     setConfigurationError('');
-    const model = requireSelectedModel();
+    const claudeDesktopModelMappings = requireClaudeDesktopModelMappings();
+    if (selected === 'claude-desktop' && !claudeDesktopModelMappings) return;
+    const model = selected === 'claude-desktop'
+      ? claudeDesktopModelMappings?.sonnet ?? null
+      : requireSelectedModel();
     if (!model) return;
     setBusyAction('apply');
     try {
@@ -734,9 +822,11 @@ export function AgentsPage() {
         client: selected,
         model,
         oauthConfiguration,
+        claudeDesktopModelMappings,
       });
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
+      claudeDesktopModelMappingsDirtyRef.current = false;
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'apply')) {
         setConfigurationError(String(requestError));
@@ -746,8 +836,26 @@ export function AgentsPage() {
     }
   };
 
+  const closeConfigurationChanges = async () => {
+    setConfigurationError('');
+    setBusyAction('close-config');
+    try {
+      await invoke<AgentConfigActionResult>('close_agent_config_modification', { client: selected });
+      await reloadStatusesAfterAction();
+      setOauthConfigurationDraft(null);
+    } catch (requestError) {
+      setConfigurationError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const resetConfigurationToDefault = async () => {
-    const model = requireSelectedModel();
+    const claudeDesktopModelMappings = requireClaudeDesktopModelMappings();
+    if (selected === 'claude-desktop' && !claudeDesktopModelMappings) return;
+    const model = selected === 'claude-desktop'
+      ? claudeDesktopModelMappings?.sonnet ?? null
+      : requireSelectedModel();
     if (!model) return;
     setBusyAction('default');
     setDefaultError('');
@@ -756,10 +864,12 @@ export function AgentsPage() {
         client: selected,
         model,
         oauthConfiguration,
+        claudeDesktopModelMappings,
       });
       setDefaultConfirmOpen(false);
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
+      claudeDesktopModelMappingsDirtyRef.current = false;
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'apply')) {
         setDefaultError(String(requestError));
@@ -962,30 +1072,60 @@ export function AgentsPage() {
                 </div>
               ) : null}
 
-              <section className="agent-core-setting-section agent-model-section">
-                <div className="agent-section-heading">
-                  <div><strong>{t('agents.useModel')}</strong></div>
-                  {modelDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
-                </div>
-                <AgentModelPicker
-                  models={models}
-                  value={selectedModel}
-                  loading={modelLoading}
-                  error={modelError}
-                  disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
-                  onChange={selectModel}
-                  onRefresh={refreshModels}
-                />
-                {modelHint ? (
-                  <span
-                    className={`agent-model-hint ${modelSelectionError || modelError ? 'error' : ''}`}
-                    role={modelSelectionError || modelError ? 'alert' : undefined}
-                    aria-live="polite"
-                  >
-                    {modelHint}
-                  </span>
-                ) : null}
-              </section>
+              {selected !== 'claude-desktop' ? (
+                <section className="agent-core-setting-section agent-model-section">
+                  <div className="agent-section-heading">
+                    <div><strong>{t('agents.useModel')}</strong></div>
+                    {modelDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                  </div>
+                  <AgentModelPicker
+                    models={models}
+                    value={selectedModel}
+                    loading={modelLoading}
+                    error={modelError}
+                    disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
+                    onChange={selectModel}
+                    onRefresh={refreshModels}
+                  />
+                  {modelHint ? (
+                    <span
+                      className={`agent-model-hint ${modelSelectionError || modelError ? 'error' : ''}`}
+                      role={modelSelectionError || modelError ? 'alert' : undefined}
+                      aria-live="polite"
+                    >
+                      {modelHint}
+                    </span>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {selected === 'claude-desktop' ? (
+                <section className="agent-core-setting-section agent-claude-desktop-mapping">
+                  <div className="agent-section-heading">
+                    <div>
+                      <strong>{t('agents.claudeDesktopMapping.title')}</strong>
+                      <span>{t('agents.claudeDesktopMapping.description')}</span>
+                    </div>
+                    {claudeDesktopMappingDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                  </div>
+                  <div className="agent-claude-desktop-mapping-grid">
+                    {claudeDesktopMappingRoles.map((role) => (
+                      <div className="agent-claude-desktop-mapping-row" key={role.key}>
+                        <strong>{t(role.labelKey)}</strong>
+                        <AgentModelPicker
+                          models={models}
+                          value={claudeDesktopModelMappingsDraft[role.key]}
+                          loading={modelLoading}
+                          error={modelError}
+                          disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
+                          onChange={(value) => selectClaudeDesktopModelMapping(role.key, value)}
+                          onRefresh={refreshModels}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
 
               <section className={`agent-core-setting-section agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
                 <div className="agent-section-heading">
@@ -1021,14 +1161,20 @@ export function AgentsPage() {
                     <button
                       type="button"
                       className="primary-button"
-                      onClick={() => void applyConfigurationChanges()}
+                      onClick={() => void (activeStatus?.modificationState === 'applied'
+                        ? closeConfigurationChanges()
+                        : applyConfigurationChanges())}
                       disabled={
                         busy
-                        || !canEnable
+                        || (activeStatus?.modificationState === 'applied' ? false : !canEnable)
                       }
                     >
-                      {busyAction === 'apply' ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
-                      {t('agents.modify.apply')}
+                      {busyAction === 'apply' || busyAction === 'close-config'
+                        ? <LoaderCircle size={16} className="spin" />
+                        : <Sparkles size={16} />}
+                      {activeStatus?.modificationState === 'applied'
+                        ? t('agents.modify.close')
+                        : t('agents.modify.apply')}
                     </button>
                     <button
                       type="button"

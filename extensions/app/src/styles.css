@@ -1661,6 +1661,105 @@ textarea:focus-visible {
   height: 350px;
 }
 
+.config-management-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.config-management-content {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.72fr) minmax(420px, 1.28fr);
+  align-items: stretch;
+  gap: 18px;
+}
+
+.config-management-description,
+.config-management-form {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--theme-e3e1db);
+  border-radius: 8px;
+  background: var(--theme-faf8f2);
+}
+
+.config-management-description {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+}
+
+.config-management-description strong {
+  color: var(--theme-2d2a26);
+  font-size: var(--font-size-section);
+}
+
+.config-management-description p,
+.config-management-description small {
+  margin: 0;
+  color: var(--theme-6d6760);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+.config-management-description small {
+  color: var(--theme-7a746c);
+  font-size: var(--font-size-meta);
+}
+
+.config-management-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+.config-management-field {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 8px;
+  color: var(--theme-5f5a53);
+  font-size: var(--font-size-body);
+  font-weight: 700;
+}
+
+.config-management-field .config-secret-input input,
+.config-management-field > .config-dialog-text-input {
+  background: var(--theme-fffdf8);
+}
+
+.config-management-field > .config-dialog-text-input[aria-invalid='true'] {
+  border-color: var(--theme-a83f32);
+}
+
+.config-management-form-footer {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.config-management-error {
+  min-width: 0;
+  overflow: hidden;
+  color: transparent;
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-management-error.visible {
+  color: var(--theme-9f2d20);
+}
+
+.config-management-actions {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 10px;
+}
+
 .config-network-panel {
   display: grid;
   gap: 18px;
@@ -4988,6 +5087,27 @@ textarea:focus-visible {
   min-height: 0;
 }
 
+.agent-claude-desktop-mapping {
+  grid-column: 1 / -1;
+}
+
+.agent-claude-desktop-mapping-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-claude-desktop-mapping-row {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.agent-claude-desktop-mapping-row > strong {
+  color: var(--theme-5f5a53);
+  font-size: var(--font-size-label);
+}
+
 .agent-section-heading {
   display: flex;
   align-items: center;
@@ -6771,6 +6891,10 @@ textarea:focus-visible {
 }
 
 @container agent-panel (max-width: 640px) {
+  .agent-claude-desktop-mapping-grid {
+    grid-template-columns: 1fr;
+  }
+
   .agent-codex-options {
     grid-template-columns: 1fr;
   }
@@ -6882,6 +7006,10 @@ textarea:focus-visible {
     grid-column: auto;
   }
 
+  .config-management-content {
+    grid-template-columns: 1fr;
+  }
+
 }
 
 @media (max-width: 760px) {
@@ -6935,6 +7063,14 @@ textarea:focus-visible {
   .config-network-grid {
     grid-template-columns: 1fr;
     grid-auto-rows: auto;
+  }
+
+  .config-management-form {
+    grid-template-columns: 1fr;
+  }
+
+  .config-management-form-footer {
+    grid-column: auto;
   }
 
   .client-api-grid {
@@ -7150,6 +7286,16 @@ textarea:focus-visible {
   .primary-button,
   .secondary-button,
   .danger-button {
+    width: 100%;
+  }
+
+  .config-management-form-footer {
+    grid-template-columns: 1fr;
+  }
+
+  .config-management-actions {
+    display: grid;
+    grid-template-columns: 1fr;
     width: 100%;
   }
 

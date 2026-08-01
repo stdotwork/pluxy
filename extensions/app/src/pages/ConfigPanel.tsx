@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   Route,
+  ShieldCheck,
   Sparkles,
   Trash2,
   X,
@@ -26,6 +27,7 @@ import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 
 type CoreConfigSettings = {
   apiKeys: CoreApiKey[];
+  managementSecretConfigured: boolean;
   port: number;
   allowLan: boolean;
   routingStrategy: string;
@@ -43,6 +45,7 @@ type ConfigAction =
   | 'add-key'
   | 'update-key'
   | 'delete-key'
+  | 'management-secret'
   | 'routing'
   | 'network'
   | null;
@@ -68,6 +71,10 @@ export function ConfigPanelPage() {
   const [newApiKeyRemark, setNewApiKeyRemark] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [formError, setFormError] = useState('');
+  const [managementSecretDraft, setManagementSecretDraft] = useState('');
+  const [managementSecretConfirm, setManagementSecretConfirm] = useState('');
+  const [showManagementSecret, setShowManagementSecret] = useState(false);
+  const [managementSecretError, setManagementSecretError] = useState('');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [notice, setNotice] = useState<{ message: string; tone: NoticeTone } | null>(null);
   const [activeSubpage, setActiveSubpage] = useState<ConfigSubpage>('general');
@@ -197,6 +204,55 @@ export function ConfigPanelPage() {
     setNewApiKey(`sk-${value}`);
     setShowApiKey(true);
     setFormError('');
+  };
+
+  const generateManagementSecret = () => {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const secret = `webui-${value}`;
+    setManagementSecretDraft(secret);
+    setManagementSecretConfirm(secret);
+    setShowManagementSecret(true);
+    setManagementSecretError('');
+  };
+
+  const saveManagementSecret = async (event: FormEvent) => {
+    event.preventDefault();
+    const secretKey = managementSecretDraft.trim();
+    if (!secretKey) {
+      setManagementSecretError(t('config.webuiKey.error.empty'));
+      return;
+    }
+    if (secretKey === '123456') {
+      setManagementSecretError(t('config.webuiKey.error.legacyDefault'));
+      return;
+    }
+    if (secretKey.length > 512) {
+      setManagementSecretError(t('config.webuiKey.error.tooLong'));
+      return;
+    }
+    if (/[\u0000-\u001f\u007f-\u009f]/.test(secretKey)) {
+      setManagementSecretError(t('config.webuiKey.error.invalid'));
+      return;
+    }
+    if (secretKey !== managementSecretConfirm.trim()) {
+      setManagementSecretError(t('config.webuiKey.error.mismatch'));
+      return;
+    }
+
+    const saved = await runMutation(
+      'management-secret',
+      'set_core_management_secret_key',
+      { secretKey },
+      t('config.webuiKey.notice.updated'),
+    );
+    if (saved) {
+      setManagementSecretDraft('');
+      setManagementSecretConfirm('');
+      setShowManagementSecret(false);
+      setManagementSecretError('');
+    }
   };
 
   const submitApiKey = async (event: FormEvent) => {
@@ -361,6 +417,7 @@ export function ConfigPanelPage() {
     deleteIndex === null ? '' : settings?.apiKeys[deleteIndex]?.apiKey || '';
   const deletingLastKey = deleteIndex !== null && settings?.apiKeys.length === 1;
   const keyMutationBusy = busyAction === 'add-key' || busyAction === 'update-key';
+  const managementSecretBusy = busyAction === 'management-secret';
 
   return (
     <section className="page config-page">
@@ -521,6 +578,115 @@ export function ConfigPanelPage() {
                 <strong>{t('config.keys.empty')}</strong>
               </div>
             )}
+          </div>
+        </section>
+        <section className="panel config-management-panel">
+          <div className="config-panel-heading">
+            <div className="config-heading-title">
+              <ShieldCheck size={18} aria-hidden="true" />
+              <h2>{t('config.webuiKey.title')}</h2>
+            </div>
+            {!loading && settings ? (
+              <span
+                className={`state-pill ${settings.managementSecretConfigured ? 'success' : ''}`}
+              >
+                {settings.managementSecretConfigured
+                  ? t('config.webuiKey.configured')
+                  : t('config.webuiKey.unconfigured')}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="config-management-content">
+            <div className="config-management-description">
+              <strong>{t('config.webuiKey.heading')}</strong>
+              <p>{t('config.webuiKey.description')}</p>
+              <small>{t('config.webuiKey.securityHint')}</small>
+            </div>
+
+            <form
+              className="config-management-form"
+              onSubmit={(event) => void saveManagementSecret(event)}
+            >
+              <label className="config-management-field">
+                <span>{t('config.webuiKey.newKey')}</span>
+                <div className="config-secret-input">
+                  <input
+                    type={showManagementSecret ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    maxLength={512}
+                    value={managementSecretDraft}
+                    disabled={controlsDisabled}
+                    aria-invalid={Boolean(managementSecretError)}
+                    placeholder={t('config.webuiKey.placeholder')}
+                    onChange={(event) => {
+                      setManagementSecretDraft(event.currentTarget.value);
+                      setManagementSecretError('');
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="icon-button quiet"
+                    disabled={controlsDisabled}
+                    onClick={() => setShowManagementSecret((value) => !value)}
+                    title={showManagementSecret ? t('config.keys.hide') : t('config.keys.show')}
+                    aria-label={showManagementSecret ? t('config.keys.hide') : t('config.keys.show')}
+                  >
+                    {showManagementSecret ? (
+                      <EyeOff size={16} aria-hidden="true" />
+                    ) : (
+                      <Eye size={16} aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
+              </label>
+
+              <label className="config-management-field">
+                <span>{t('config.webuiKey.confirmKey')}</span>
+                <input
+                  className="config-dialog-text-input"
+                  type={showManagementSecret ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  maxLength={512}
+                  value={managementSecretConfirm}
+                  disabled={controlsDisabled}
+                  aria-invalid={Boolean(managementSecretError)}
+                  placeholder={t('config.webuiKey.confirmPlaceholder')}
+                  onChange={(event) => {
+                    setManagementSecretConfirm(event.currentTarget.value);
+                    setManagementSecretError('');
+                  }}
+                />
+              </label>
+
+              <div className="config-management-form-footer">
+                <span
+                  className={`config-management-error ${managementSecretError ? 'visible' : ''}`}
+                  role="alert"
+                >
+                  {managementSecretError || ' '}
+                </span>
+                <div className="config-management-actions">
+                  <button
+                    type="button"
+                    className="secondary-button compact-button"
+                    disabled={controlsDisabled}
+                    onClick={generateManagementSecret}
+                  >
+                    <Sparkles size={16} aria-hidden="true" />
+                    {t('config.webuiKey.generate')}
+                  </button>
+                  <button
+                    type="submit"
+                    className="primary-button compact-button"
+                    disabled={controlsDisabled || !managementSecretDraft.trim()}
+                  >
+                    <Check size={16} aria-hidden="true" />
+                    {managementSecretBusy ? t('common.saving') : t('config.webuiKey.save')}
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
         </section>
         </div>
