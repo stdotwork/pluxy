@@ -32,6 +32,7 @@ import codexIcon from '../assets/icons/codex.svg';
 import hermesIcon from '../assets/icons/hermes.png';
 import openclawIcon from '../assets/icons/openclaw.svg';
 import opencodeIcon from '../assets/icons/opencode.svg';
+import piIcon from '../assets/icons/pi-logo-on-light.svg';
 import {
   agentModelAlias,
   filterAgentModels,
@@ -192,7 +193,7 @@ const agentDefinitions: AgentDefinition[] = [
   {
     id: 'pi',
     name: 'Pi',
-    Icon: Bot,
+    icon: piIcon,
     descriptionKey: 'agents.description.pi',
   },
 ];
