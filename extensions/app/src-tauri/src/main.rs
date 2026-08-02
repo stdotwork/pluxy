@@ -12227,15 +12227,6 @@ fn thinking_payload_model_matches(
     name_matches && protocol_matches
 }
 
-fn add_thinking_alias_to_yaml(
-    content: &str,
-    source: &ResolvedThinkingAliasSource,
-    alias: &str,
-    effort: &str,
-) -> Result<String, String> {
-    add_model_alias_to_yaml(content, source, alias, effort, false)
-}
-
 fn add_model_alias_to_yaml(
     content: &str,
     source: &ResolvedThinkingAliasSource,
@@ -18642,7 +18633,8 @@ model:
         ));
 
         let rendered =
-            add_thinking_alias_to_yaml(input, &sources[0], "gpt-5.6-luna-xhigh", "xhigh").unwrap();
+            add_model_alias_to_yaml(input, &sources[0], "gpt-5.6-luna-xhigh", "xhigh", false)
+                .unwrap();
         assert!(rendered.contains("alias: gpt-5.6-luna-xhigh"), "{rendered}");
         assert!(!rendered.contains("oauth-model-alias"), "{rendered}");
     }
@@ -18820,7 +18812,7 @@ model:
         let input = "# Keep this comment\ndebug: true\npayload:\n  override:\n    - models:\n        - name: existing-fast\n          protocol: codex\n      params:\n        service_tier: priority\n";
         let source = test_codex_oauth_thinking_source("gpt-5.5");
         let rendered =
-            add_thinking_alias_to_yaml(input, &source, "gpt-5.5-xhigh", "xhigh").unwrap();
+            add_model_alias_to_yaml(input, &source, "gpt-5.5-xhigh", "xhigh", false).unwrap();
         let aliases = thinking_aliases_from_yaml(&rendered).unwrap();
 
         assert!(rendered.contains("# Keep this comment"), "{rendered}");
@@ -18962,7 +18954,7 @@ model:
         let input = "oauth-model-alias:\n  codex:\n    - name: gpt-5.5\n      alias: gpt-5.5-high\n      fork: true\n";
         let source = test_codex_oauth_thinking_source("gpt-5.4");
         assert!(
-            add_thinking_alias_to_yaml(input, &source, "GPT-5.5-HIGH", "high")
+            add_model_alias_to_yaml(input, &source, "GPT-5.5-HIGH", "high", false)
                 .unwrap_err()
                 .contains("已存在")
         );
@@ -18978,7 +18970,7 @@ model:
             .find(|source| source.source.model == "deepseek-chat")
             .unwrap();
         let rendered =
-            add_thinking_alias_to_yaml(input, source, "deepseek-chat-high", "high").unwrap();
+            add_model_alias_to_yaml(input, source, "deepseek-chat-high", "high", false).unwrap();
         let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
         let root = value.as_mapping().unwrap();
         let providers = yaml_mapping_value(root, "openai-compatibility")
@@ -19023,7 +19015,7 @@ model:
             .find(|source| source.source.kind == "codex-api")
             .unwrap();
         let rendered =
-            add_thinking_alias_to_yaml(input, source, "gpt-custom-xhigh", "xhigh").unwrap();
+            add_model_alias_to_yaml(input, source, "gpt-custom-xhigh", "xhigh", false).unwrap();
 
         assert!(rendered.contains("alias: gpt-custom-xhigh"), "{rendered}");
         assert!(rendered.contains("protocol: codex"), "{rendered}");
