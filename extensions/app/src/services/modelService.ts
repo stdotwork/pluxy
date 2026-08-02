@@ -6,6 +6,8 @@ const modelText = (key: Parameters<typeof translate>[1]) => translate(getCurrent
 export type ModelOption = {
   name: string;
   alias?: string;
+  isAlias?: boolean;
+  contextWindow?: number;
   thinking?: Record<string, unknown>;
 };
 export type ModelProvider = 'gemini' | 'codex' | 'claude' | 'openai';
@@ -90,6 +92,7 @@ export async function fetchModels(
   apiKey: string,
   authIndex?: string,
   customHeaders: Record<string, string> = {},
+  timeoutMs?: number,
 ): Promise<ModelOption[]> {
   const normalized = baseUrl.trim() ? normalizeBaseUrl(baseUrl) : '';
   const candidates = endpointCandidates(provider, normalized);
@@ -130,7 +133,7 @@ export async function fetchModels(
           method: 'GET',
           url: pageUrl.toString(),
           header: Object.keys(headers).length ? headers : undefined,
-        });
+        }, { timeoutMs });
         const status = Number(response.status_code ?? response.statusCode ?? 0);
         if (status < 200 || status >= 300) {
           lastError = apiCallErrorMessage(response);
@@ -165,7 +168,7 @@ export async function fetchModels(
         const response = await managementApi.post<Record<string, unknown>>('/api-call', {
           method: 'GET',
           url,
-        });
+        }, { timeoutMs });
         const status = Number(response.status_code ?? response.statusCode ?? 0);
         if (status >= 200 && status < 300) {
           const models = normalizeModelList(response.body ?? response.bodyText);
@@ -179,7 +182,7 @@ export async function fetchModels(
           const response = await managementApi.post<Record<string, unknown>>('/api-call', {
             method: 'GET',
             url,
-          });
+          }, { timeoutMs });
           const status = Number(response.status_code ?? response.statusCode ?? 0);
           if (status >= 200 && status < 300) {
             const models = normalizeModelList(response.body ?? response.bodyText);

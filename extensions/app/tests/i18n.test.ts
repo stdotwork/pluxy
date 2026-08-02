@@ -25,6 +25,27 @@ describe('i18n', () => {
       .toBe('1.2.3 をインストールしています');
   });
 
+  it('translates client API compatibility formats consistently', () => {
+    expect(translate('zh-CN', 'kernel.access.openaiDescription')).toBe('OpenAI兼容格式');
+    expect(translate('zh-TW', 'kernel.access.claudeDescription')).toBe('Anthropic相容格式');
+    expect(translate('ja', 'kernel.access.geminiDescription')).toBe('Gemini互換形式');
+    expect(translate('en', 'kernel.access.openaiDescription')).toBe('OpenAI-compatible format');
+  });
+
+  it('translates direct Codex launch actions', () => {
+    expect(translate('zh-CN', 'agents.launch.startCli')).toBe('启动 CLI');
+    expect(translate('zh-TW', 'agents.launch.startApp')).toBe('啟動 App');
+    expect(translate('ja', 'agents.launch.startCli')).toBe('CLI を起動');
+    expect(translate('en', 'agents.launch.startApp')).toBe('Start App');
+  });
+
+  it('uses the concise automatic session restoration label', () => {
+    expect(translate('zh-CN', 'agents.sessions.autoRepair')).toBe('自动恢复历史会话');
+    expect(translate('zh-TW', 'agents.sessions.autoRepair')).toBe('自動恢復歷史工作階段');
+    expect(translate('ja', 'agents.sessions.autoRepair')).toBe('過去のセッションを自動復元');
+    expect(translate('en', 'agents.sessions.autoRepair')).toBe('Automatically restore historical sessions');
+  });
+
   it('uses each language native name independently of the active locale', () => {
     expect(languageOptions).toEqual([
       { value: 'zh-CN', nativeLabel: '简体中文' },

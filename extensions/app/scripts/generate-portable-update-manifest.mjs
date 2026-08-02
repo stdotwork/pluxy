@@ -3,6 +3,8 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+export const LEGACY_UPDATE_BRIDGE_VERSION = '0.2.10';
+
 export async function generatePortableUpdateManifest({
   directory,
   output,
@@ -29,12 +31,15 @@ export async function generatePortableUpdateManifest({
   }
 
   const assets = {};
+  const useLegacyBridgeAssets = version === LEGACY_UPDATE_BRIDGE_VERSION;
   for (const arch of ['amd64', 'aarch64']) {
-    const filename = `EasyCLIProxyAPI-update-${tag}-Windows-${arch}.zip`;
+    const filename = useLegacyBridgeAssets
+      ? `EasyCLIProxyAPI-update-${tag}-Windows-${arch}.zip`
+      : `EasyCLIProxyAPI-${tag}-Windows-${arch}.zip`;
     const path = join(resolvedDirectory, filename);
     const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
     if (!metadata.isFile() || metadata.size === 0) {
-      throw new Error(`Portable updater asset is empty or not a file: ${filename}`);
+      throw new Error(`Portable release asset is empty or not a file: ${filename}`);
     }
     assets[`windows-${arch}`] = {
       url: `https://github.com/${resolvedRepository}/releases/download/${tag}/${filename}`,

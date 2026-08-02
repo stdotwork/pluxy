@@ -28,6 +28,33 @@ export function filterAgentModels(models: ModelOption[], search: string): ModelO
     .map((item) => item.model);
 }
 
+export function filterAgentModelsByAlias(
+  models: ModelOption[],
+  aliasesOnly: boolean,
+): ModelOption[] {
+  return models.filter((model) => Boolean(model.isAlias) === aliasesOnly);
+}
+
+export function resolveAgentModelForAliasMode(
+  models: ModelOption[],
+  current: string,
+  aliasesOnly: boolean,
+): string {
+  const candidates = filterAgentModelsByAlias(models, aliasesOnly);
+  const selected = findAgentModel(models, current);
+  if (selected && Boolean(selected.isAlias) === aliasesOnly) return selected.name;
+
+  if (selected && aliasesOnly) {
+    const alias = candidates.find((candidate) => normalized(candidate.alias ?? '') === normalized(selected.name));
+    if (alias) return alias.name;
+  }
+  if (selected?.isAlias && !aliasesOnly) {
+    const original = candidates.find((candidate) => normalized(candidate.name) === normalized(selected.alias ?? ''));
+    if (original) return original.name;
+  }
+  return candidates[0]?.name ?? '';
+}
+
 export function hasExactAgentModel(models: ModelOption[], value: string): boolean {
   const query = normalized(value);
   if (!query) return false;

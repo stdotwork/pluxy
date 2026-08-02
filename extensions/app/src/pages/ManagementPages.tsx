@@ -13,12 +13,15 @@ import codexIcon from '../assets/icons/codex.svg';
 import grokIcon from '../assets/icons/grok.svg';
 import kimiIcon from '../assets/icons/kimi-light.svg';
 import { useI18n } from '../i18n';
+import { oauthSubpages, type OAuthSubpage } from '../oauthNavigation';
 import {
   changedOAuthAuthFileNames,
   snapshotAuthFiles,
   type AuthFileSnapshot,
 } from '../services/authFiles';
 import { managementApi, responseList } from '../services/managementApi';
+import { AuthFileManagementPage } from './AuthFileManagementPage';
+import { QuotaPage } from './QuotaPage';
 
 type OAuthProviderId = 'codex' | 'claude' | 'antigravity' | 'kimi' | 'xai';
 type OAuthFlowStatus = 'idle' | 'waiting' | 'success' | 'error';
@@ -64,6 +67,51 @@ const OAUTH_CALLBACK_SUPPORTED = new Set<OAuthProviderId>([
 const XAI_CALLBACK_URL = 'http://127.0.0.1:56121/callback';
 const OAUTH_SUCCESS_RESET_MS = 5000;
 const OAUTH_POLL_INTERVAL_MS = 3000;
+
+export function OAuthManagementPage() {
+  const { t } = useI18n();
+  const [activeSubpage, setActiveSubpage] = useState<OAuthSubpage>('login');
+
+  return (
+    <section className="page oauth-management-page">
+      <div
+        className="agent-subpage-tabs oauth-subpage-tabs"
+        role="tablist"
+        aria-label={t('oauth.tabs.label')}
+      >
+        {oauthSubpages.map((subpage) => {
+          const active = activeSubpage === subpage.id;
+          return (
+            <button
+              type="button"
+              id={`oauth-subpage-tab-${subpage.id}`}
+              key={subpage.id}
+              role="tab"
+              className={active ? 'active' : ''}
+              aria-selected={active}
+              aria-controls={`oauth-subpage-panel-${subpage.id}`}
+              tabIndex={active ? 0 : -1}
+              onClick={() => setActiveSubpage(subpage.id)}
+            >
+              {t(subpage.labelKey)}
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        className="oauth-subpage-panel"
+        id={`oauth-subpage-panel-${activeSubpage}`}
+        role="tabpanel"
+        aria-labelledby={`oauth-subpage-tab-${activeSubpage}`}
+      >
+        {activeSubpage === 'login' ? <OAuthLoginPage /> : null}
+        {activeSubpage === 'authFiles' ? <AuthFileManagementPage /> : null}
+        {activeSubpage === 'quota' ? <QuotaPage /> : null}
+      </div>
+    </section>
+  );
+}
 
 export function OAuthLoginPage() {
   const { t } = useI18n();

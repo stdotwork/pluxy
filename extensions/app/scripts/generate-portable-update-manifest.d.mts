@@ -4,6 +4,8 @@ export type PortableUpdateManifestAsset = {
   sizeBytes: number;
 };
 
+export const LEGACY_UPDATE_BRIDGE_VERSION: string;
+
 export type PortableUpdateManifest = {
   schemaVersion: number;
   version: string;

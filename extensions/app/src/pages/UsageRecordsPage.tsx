@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Activity, BarChart3, CircleDollarSign, Clock3, Database, List, Pencil, RefreshCw, ShieldCheck, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react';
 import { getCurrentLocale, useI18n } from '../i18n';
+import { formatUsageNumber } from '../services/usageNumber';
 
 type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
@@ -190,10 +191,7 @@ const rangeQuery = (range: UsageRange, customStart: string, customEnd: string): 
   return { start: new Date(now.getTime() - hours * 3_600_000).toISOString(), end: now.toISOString() };
 };
 
-const compactNumber = (value: number) => new Intl.NumberFormat(getCurrentLocale(), {
-  notation: value >= 10_000 ? 'compact' : 'standard',
-  maximumFractionDigits: 1,
-}).format(Number.isFinite(value) ? value : 0);
+const compactNumber = (value: number) => formatUsageNumber(value, getCurrentLocale());
 
 const formatUsd = (value: number) => {
   const amount = Number.isFinite(value) ? value : 0;
@@ -416,7 +414,7 @@ export function UsageRecordsPage() {
 function OverviewView({ overview }: { overview: UsageOverview }) {
   const { t } = useI18n();
   const cards = [
-    { icon: Activity, label: t('usage.stat.requests'), value: compactNumber(overview.totalRequests), meta: t('usage.stat.requestMeta', { success: overview.successCount, failed: overview.failureCount }) },
+    { icon: Activity, label: t('usage.stat.requests'), value: compactNumber(overview.totalRequests), meta: t('usage.stat.requestMeta', { success: compactNumber(overview.successCount), failed: compactNumber(overview.failureCount) }) },
     { icon: Sparkles, label: t('usage.stat.tokens'), value: compactNumber(overview.totalTokens), meta: t('usage.stat.tokenMeta', { input: compactNumber(overview.inputTokens), output: compactNumber(overview.outputTokens) }) },
     { icon: ShieldCheck, label: t('usage.stat.successRate'), value: `${overview.successRate.toFixed(1)}%`, meta: t('usage.stat.reasoningMeta', { tokens: compactNumber(overview.reasoningTokens) }) },
     { icon: Clock3, label: t('usage.stat.tps'), value: `${overview.tps.toFixed(1)} TPS`, meta: t('usage.stat.performanceMeta', { rpm: overview.rpm.toFixed(2), latency: Math.round(overview.averageLatencyMs) }) },
@@ -424,7 +422,7 @@ function OverviewView({ overview }: { overview: UsageOverview }) {
     { icon: CircleDollarSign, label: t('usage.stat.estimatedCost'), value: formatUsd(overview.estimatedCost), meta: t('usage.stat.costMeta', { priced: compactNumber(overview.pricedRequests), total: compactNumber(overview.totalRequests) }) },
   ];
   return <div className="usage-overview-layout">
-    <div className="usage-stat-grid">{cards.map(({ icon: Icon, label, value, meta }) => <article className="panel usage-stat-card" key={label}><span><Icon size={16} />{label}</span><strong>{value}</strong><small>{meta}</small></article>)}</div>
+    <div className="usage-stat-grid">{cards.map(({ icon: Icon, label, value, meta }) => <article className="panel usage-stat-card" key={label}><span><Icon size={16} />{label}</span><strong>{value}</strong><small title={meta}>{meta}</small></article>)}</div>
     <section className="panel usage-trend-panel"><div className="usage-section-heading"><div><strong>{t('usage.trend.title')}</strong><span>{t('usage.trend.description')}</span></div></div>{overview.timeline.length ? <UsageTrend points={overview.timeline} /> : <UsageEmpty />}</section>
     <section className="panel usage-health-panel"><div className="usage-section-heading"><div><strong>{t('usage.token.title')}</strong><span>{t('usage.token.description')}</span></div></div><div className="usage-token-breakdown"><TokenMetric label={t('usage.token.input')} value={overview.inputTokens} total={overview.totalTokens} /><TokenMetric label={t('usage.token.output')} value={overview.outputTokens} total={overview.totalTokens} /><TokenMetric label={t('usage.token.reasoning')} value={overview.reasoningTokens} total={overview.totalTokens} /><TokenMetric label={t('usage.token.cacheRead')} value={overview.cacheReadTokens} total={overview.totalTokens} /><TokenMetric label={t('usage.token.cacheCreation')} value={overview.cacheCreationTokens} total={overview.totalTokens} /></div></section>
   </div>;

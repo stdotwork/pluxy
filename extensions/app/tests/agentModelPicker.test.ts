@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import {
   agentModelAlias,
   filterAgentModels,
+  filterAgentModelsByAlias,
   findAgentModel,
   hasExactAgentModel,
+  resolveAgentModelForAliasMode,
   resolveAgentModelSelection,
 } from '../src/services/agentModelPicker';
 
@@ -48,5 +50,22 @@ describe('智能体模型选择器', () => {
   test('配置前只能解析模型列表中真实存在的模型', () => {
     expect(findAgentModel(models, 'codex')?.name).toBeUndefined();
     expect(findAgentModel(models, 'gpt-5.2-codex')?.name).toBe('gpt-5.2-codex');
+  });
+
+  test('Claude Desktop 自定义映射只显示对应类型的模型', () => {
+    const mixedModels = [
+      { name: 'gpt-original', alias: 'GPT Original', isAlias: false },
+      { name: 'gpt-high', alias: 'gpt-original', isAlias: true },
+      { name: 'claude-original' },
+    ];
+
+    expect(filterAgentModelsByAlias(mixedModels, false).map((model) => model.name))
+      .toEqual(['gpt-original', 'claude-original']);
+    expect(filterAgentModelsByAlias(mixedModels, true).map((model) => model.name))
+      .toEqual(['gpt-high']);
+    expect(resolveAgentModelForAliasMode(mixedModels, 'gpt-original', true)).toBe('gpt-high');
+    expect(resolveAgentModelForAliasMode(mixedModels, 'gpt-high', false)).toBe('gpt-original');
+    expect(resolveAgentModelForAliasMode(mixedModels, 'claude-original', true)).toBe('gpt-high');
+    expect(resolveAgentModelForAliasMode([], 'gpt-original', true)).toBe('');
   });
 });

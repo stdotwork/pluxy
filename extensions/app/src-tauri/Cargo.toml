@@ -1,6 +1,6 @@
 [package]
 name = "cpa-gui"
-version = "0.2.9"
+version = "0.2.10"
 description = "CPA desktop management shell"
 authors = ["lzt404"]
 edition = "2021"
@@ -13,6 +13,7 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 flate2 = "1"
 futures-util = "0.3"
+getrandom = "0.3"
 json5 = "0.4"
 notify = "7"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
@@ -25,6 +26,7 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 tar = "0.4"
 tauri = { version = "~2.11", features = ["tray-icon"] }
+tauri-plugin-dialog = "2.7.1"
 tauri-plugin-opener = "2"
 tokio = { version = "1", features = ["macros", "sync", "time"] }
 tokio-util = "0.7"

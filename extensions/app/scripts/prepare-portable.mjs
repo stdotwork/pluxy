@@ -14,6 +14,7 @@ const binary = resolve(args.get('--binary') ?? join(root, 'src-tauri', 'target',
 const targetOS = args.get('--os') ?? ({ linux: 'linux', darwin: 'darwin', win32: 'windows' })[process.platform];
 const targetArch = args.get('--arch') ?? ({ x64: 'amd64', arm64: 'aarch64' })[process.arch];
 const shouldDownload = args.get('--download') === 'true';
+const preserveRuntimeConfig = args.get('--preserve-runtime-config') === 'true';
 
 if (!targetOS || !targetArch) throw new Error(`Unsupported target: ${process.platform}/${process.arch}`);
 if (!existsSync(binary)) throw new Error(`GUI binary not found: ${binary}`);
@@ -75,17 +76,25 @@ await writeFile(join(output, 'portable-app.json'), `${JSON.stringify({
 }, null, 2)}\n`);
 
 const coreOutput = join(output, 'cpa-core');
-await rm(coreOutput, { recursive: true, force: true });
+if (preserveRuntimeConfig) {
+  await mkdir(coreOutput, { recursive: true });
+  const entries = await readdir(coreOutput, { withFileTypes: true });
+  await Promise.all(entries
+    .filter((entry) => entry.name !== 'config.yaml')
+    .map((entry) => rm(join(coreOutput, entry.name), { recursive: true, force: true })));
+} else {
+  await rm(coreOutput, { recursive: true, force: true });
+}
 await mkdir(coreOutput, { recursive: true });
 await copyFile(sourceArchive, join(coreOutput, assetName));
 const coreEntries = await readdir(coreOutput, { withFileTypes: true });
-if (
-  coreEntries.length !== 1
-  || !coreEntries[0].isFile()
-  || coreEntries[0].name !== assetName
-) {
+const bundledArchive = coreEntries.find((entry) => entry.isFile() && entry.name === assetName);
+if (!bundledArchive) {
+  throw new Error(`Core output must contain ${assetName}`);
+}
+if (!preserveRuntimeConfig && coreEntries.length !== 1) {
   throw new Error(`Core output must contain only ${assetName}`);
 }
 
 console.log(`Prepared portable directory: ${output}`);
-console.log(`Bundled core: ${basename(sourceArchive)} (archive only)`);
+console.log(`Bundled core: ${basename(sourceArchive)}${preserveRuntimeConfig ? ' (preserved cpa-core/config.yaml)' : ' (archive only)'}`);

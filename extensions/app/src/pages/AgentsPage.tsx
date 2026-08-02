@@ -10,8 +10,10 @@ import {
 } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   AlertTriangle,
+  AppWindow,
   BadgeCheck,
   Bot,
   Check,
@@ -21,7 +23,7 @@ import {
   Power,
   RefreshCw,
   Search,
-  Sparkles,
+  Terminal,
   Trash2,
   X,
 } from 'lucide-react';
@@ -33,7 +35,9 @@ import opencodeIcon from '../assets/icons/opencode.svg';
 import {
   agentModelAlias,
   filterAgentModels,
+  filterAgentModelsByAlias,
   findAgentModel,
+  resolveAgentModelForAliasMode,
   resolveAgentModelSelection,
 } from '../services/agentModelPicker';
 import type { ModelOption } from '../services/modelService';
@@ -67,6 +71,10 @@ type AgentConfigStatus = {
   modificationState: AgentModificationState;
   backupAvailable: boolean;
   appliedModel: string | null;
+  claudeCodeModelMappings: ClaudeModelMappings | null;
+  claudeDesktopModelMappings: ClaudeModelMappings | null;
+  claudeCodeWorkingDirectory: string | null;
+  claudeCodeWorkingDirectoryPromptDisabled: boolean;
   warnings: string[];
   error: string | null;
 };
@@ -89,6 +97,42 @@ type ChatGptCloseResult = {
   wasRunning: boolean;
   closedProcesses: number;
 };
+
+type OAuthLoginRequiredAction = 'enable' | 'apply' | 'launch';
+
+type ClaudeModelMappings = {
+  opus: string;
+  sonnet: string;
+  haiku: string;
+};
+
+const CODEX_OAUTH_LOGIN_REQUIRED_ERROR = 'CODEX_OAUTH_LOGIN_REQUIRED';
+
+const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
+  opus: model,
+  sonnet: model,
+  haiku: model,
+});
+
+const sameClaudeModelMappings = (
+  left: ClaudeModelMappings,
+  right: ClaudeModelMappings,
+) => left.opus === right.opus && left.sonnet === right.sonnet && left.haiku === right.haiku;
+
+const claudeMappingRoles = [
+  {
+    key: 'opus',
+    labelKey: 'agents.claudeDesktopMapping.opus',
+  },
+  {
+    key: 'sonnet',
+    labelKey: 'agents.claudeDesktopMapping.sonnet',
+  },
+  {
+    key: 'haiku',
+    labelKey: 'agents.claudeDesktopMapping.haiku',
+  },
+] as const;
 
 type AgentDefinition = {
   id: AgentClientId;
@@ -269,7 +313,9 @@ function AgentModelPicker({
     () => visibleModels.map((model) => ({ name: model.name, alias: model.alias ?? '' })),
     [visibleModels],
   );
-  const selectedAlias = agentModelAlias(models, value);
+  const selectedModel = findAgentModel(models, value);
+  const selectedName = selectedModel?.name ?? '';
+  const selectedAlias = selectedName ? agentModelAlias(models, selectedName) : '';
 
   const updateDropdownLayout = useCallback(() => {
     const root = rootRef.current;
@@ -382,8 +428,8 @@ function AgentModelPicker({
         }}
       >
         <span>
-          <strong title={value || undefined}>
-            {value || (loading ? t('agents.model.loading') : error ? t('agents.model.loadFailed') : models.length ? t('agents.model.select') : t('agents.model.none'))}
+          <strong title={selectedName || undefined}>
+            {selectedName || (loading ? t('agents.model.loading') : error ? t('agents.model.loadFailed') : models.length ? t('agents.model.select') : t('agents.model.none'))}
           </strong>
           {selectedAlias ? <small title={selectedAlias}>{selectedAlias}</small> : null}
         </span>
@@ -481,10 +527,19 @@ export function AgentsPage() {
   const [modelByClient, setModelByClient] = useState<Partial<Record<AgentClientId, string>>>(
     readAgentModelSelections,
   );
-  const [launchTargetByClient, setLaunchTargetByClient] = useState<Partial<Record<AgentClientId, string>>>({});
+  const [claudeModelMappingsDraft, setClaudeModelMappingsDraft] = useState<ClaudeModelMappings>(
+    createClaudeModelMappings(''),
+  );
+  const [claudeCustomMapping, setClaudeCustomMapping] = useState(false);
+  const [claudeCodeLaunchDialogOpen, setClaudeCodeLaunchDialogOpen] = useState(false);
+  const [claudeCodeLaunchDirectory, setClaudeCodeLaunchDirectory] = useState('');
+  const [claudeCodeSuppressDirectoryPrompt, setClaudeCodeSuppressDirectoryPrompt] = useState(false);
+  const [claudeCodeDirectoryError, setClaudeCodeDirectoryError] = useState('');
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
-  const [busyAction, setBusyAction] = useState<'apply' | 'default' | 'clear' | 'launch' | 'close-app' | null>(null);
+  const [busyAction, setBusyAction] = useState<
+    'apply' | 'close-config' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
+  >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
   const [modelError, setModelError] = useState('');
@@ -499,8 +554,10 @@ export function AgentsPage() {
   const [closeAppError, setCloseAppError] = useState('');
   const [closeAppNotice, setCloseAppNotice] = useState('');
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
+  const [oauthLoginRequiredAction, setOauthLoginRequiredAction] = useState<OAuthLoginRequiredAction | null>(null);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const modelRequestRef = useRef(0);
+  const claudeModelMappingsDirtyRef = useRef(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -596,21 +653,11 @@ export function AgentsPage() {
     setCloseAppError('');
     setCloseAppNotice('');
     setCloseAppConfirmOpen(false);
+    setOauthLoginRequiredAction(null);
+    setClaudeCodeLaunchDialogOpen(false);
+    setClaudeCodeDirectoryError('');
+    claudeModelMappingsDirtyRef.current = false;
   }, [selected]);
-
-  useEffect(() => {
-    setLaunchTargetByClient((current) => agentDefinitions.reduce<Partial<Record<AgentClientId, string>>>(
-      (next, definition) => {
-        const targets = statuses.find((status) => status.id === definition.id)?.launchTargets ?? [];
-        const previous = current[definition.id] ?? '';
-        next[definition.id] = targets.some((target) => target.id === previous)
-          ? previous
-          : targets[0]?.id ?? '';
-        return next;
-      },
-      {},
-    ));
-  }, [statuses]);
 
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
     ?? agentDefinitions[0];
@@ -621,33 +668,87 @@ export function AgentsPage() {
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
+  const isClaudeModelMappingClient = selected === 'claude-code' || selected === 'claude-desktop';
+  const claudeMappingModels = useMemo(
+    () => filterAgentModelsByAlias(models, claudeCustomMapping),
+    [claudeCustomMapping, models],
+  );
+
+  useEffect(() => {
+    if (!isClaudeModelMappingClient || !selectedModel) return;
+    const appliedMappings = selected === 'claude-code'
+      ? activeStatus?.claudeCodeModelMappings
+      : activeStatus?.claudeDesktopModelMappings;
+    if (!claudeModelMappingsDirtyRef.current && appliedMappings) {
+      const appliedModels = claudeMappingRoles
+        .map((role) => findAgentModel(models, appliedMappings[role.key]))
+        .filter((model): model is ModelOption => model !== null);
+      if (appliedModels.length === claudeMappingRoles.length) {
+        setClaudeCustomMapping(appliedModels.every((model) => Boolean(model.isAlias)));
+      }
+    }
+    setClaudeModelMappingsDraft((current) => {
+      const source = claudeModelMappingsDirtyRef.current
+        ? current
+        : appliedMappings ?? current;
+      const next: ClaudeModelMappings = {
+        opus: findAgentModel(models, source.opus)?.name ?? selectedModel,
+        sonnet: findAgentModel(models, source.sonnet)?.name ?? selectedModel,
+        haiku: findAgentModel(models, source.haiku)?.name ?? selectedModel,
+      };
+      return sameClaudeModelMappings(current, next) ? current : next;
+    });
+  }, [
+    activeStatus?.claudeCodeModelMappings,
+    activeStatus?.claudeDesktopModelMappings,
+    isClaudeModelMappingClient,
+    models,
+    selected,
+    selectedModel,
+  ]);
+
   const activeLaunchTargets = activeStatus?.launchTargets ?? [];
-  const selectedLaunchTargetId = launchTargetByClient[selected] ?? activeLaunchTargets[0]?.id ?? '';
-  const selectedLaunchTarget = activeLaunchTargets.find(
-    (target) => target.id === selectedLaunchTargetId,
-  ) ?? activeLaunchTargets[0] ?? null;
+  const defaultLaunchTarget = activeLaunchTargets[0] ?? null;
+  const cliLaunchTarget = activeLaunchTargets.find((target) => target.id === 'cli') ?? null;
+  const appLaunchTarget = activeLaunchTargets.find((target) => target.id === 'app') ?? null;
   const appliedModel = activeStatus?.appliedModel ?? activeStatus?.currentModel ?? '';
-  const modelDraftChanged = Boolean(
+  const modelDraftChanged = !isClaudeModelMappingClient && Boolean(
     selectedModel.trim()
       && appliedModel.trim()
       && selectedModel.trim() !== appliedModel.trim(),
   );
+  const appliedClaudeModelMappings = (selected === 'claude-code'
+    ? activeStatus?.claudeCodeModelMappings
+    : activeStatus?.claudeDesktopModelMappings)
+    ?? createClaudeModelMappings(appliedModel);
+  const claudeMappingsReady = !isClaudeModelMappingClient
+    || claudeMappingRoles.every((role) =>
+      Boolean(findAgentModel(models, claudeModelMappingsDraft[role.key])),
+    );
+  const claudeMappingDraftChanged = isClaudeModelMappingClient
+    && activeStatus?.modificationState === 'applied'
+    && !sameClaudeModelMappings(
+      claudeModelMappingsDraft,
+      appliedClaudeModelMappings,
+    );
   const oauthConfigurationChanged = selected === 'codex'
     && oauthConfiguration !== Boolean(activeStatus?.oauthConfiguration);
-  const draftChanged = modelDraftChanged || oauthConfigurationChanged;
+  const draftChanged = modelDraftChanged || claudeMappingDraftChanged || oauthConfigurationChanged;
   const canEnable = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
       && !modelLoading
-      && selectedModelOption,
+      && (isClaudeModelMappingClient
+        ? claudeMappingsReady
+        : selectedModelOption),
   );
-  const canLaunch = Boolean(
+  const launchEnabled = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
-      && selectedLaunchTarget
       && (selected === 'codex'
         || (activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
   );
+  const canLaunchTarget = (target: AgentLaunchTarget | null) => launchEnabled && Boolean(target);
   const modelHint = modelSelectionError
     || modelError
     || (modelLoading
@@ -659,23 +760,7 @@ export function AgentsPage() {
           : t('agents.model.firstSelection', { count: models.length }));
   const modificationDescription = activeStatus?.modificationState === 'invalid'
     ? t('agents.modify.invalid')
-    : activeStatus?.modificationState === 'applied'
-      ? t('agents.modify.applied')
-      : '';
-  const footerMessage = activeStatus?.modificationState === 'applied'
-    ? draftChanged
-      ? t('agents.footer.changed')
-      : t('agents.footer.applied')
-    : activeStatus?.modificationState === 'invalid'
-      ? t('agents.footer.invalidManaged')
-      : !activeStatus?.supportedPlatform
-        ? t('agents.footer.unsupported')
-        : !activeStatus.installed
-          ? t('agents.footer.installFirst')
-          : activeStatus.launchTargets.length === 0
-            ? t('agents.footer.noCommand')
-            : '';
-
+    : '';
   const refreshModels = () => {
     void loadModels(selected);
   };
@@ -700,6 +785,33 @@ export function AgentsPage() {
     });
   };
 
+  const selectClaudeModelMapping = (
+    role: keyof ClaudeModelMappings,
+    value: string,
+  ) => {
+    const model = findAgentModel(models, value);
+    if (!model) return;
+    claudeModelMappingsDirtyRef.current = true;
+    setModelSelectionError('');
+    setClaudeModelMappingsDraft((current) => ({ ...current, [role]: model.name }));
+  };
+
+  const changeClaudeCustomMapping = (enabled: boolean) => {
+    setClaudeCustomMapping(enabled);
+    setModelSelectionError('');
+    setClaudeModelMappingsDraft((current) => {
+      const next: ClaudeModelMappings = {
+        opus: resolveAgentModelForAliasMode(models, current.opus, enabled),
+        sonnet: resolveAgentModelForAliasMode(models, current.sonnet, enabled),
+        haiku: resolveAgentModelForAliasMode(models, current.haiku, enabled),
+      };
+      if (!sameClaudeModelMappings(current, next)) {
+        claudeModelMappingsDirtyRef.current = true;
+      }
+      return next;
+    });
+  };
+
   const requireSelectedModel = () => {
     if (modelLoading) {
       setModelSelectionError(t('agents.error.modelsLoading'));
@@ -718,9 +830,55 @@ export function AgentsPage() {
     return model.name;
   };
 
+  const requireClaudeModelMappings = (): ClaudeModelMappings | null => {
+    if (!isClaudeModelMappingClient) return null;
+    const resolved = {} as ClaudeModelMappings;
+    for (const role of claudeMappingRoles) {
+      const model = findAgentModel(models, claudeModelMappingsDraft[role.key]);
+      if (!model) {
+        setModelSelectionError(t('agents.error.mappingSelectionGone'));
+        return null;
+      }
+      resolved[role.key] = model.name;
+    }
+    return resolved;
+  };
+
+  const handleOAuthLoginError = (requestError: unknown, action: OAuthLoginRequiredAction) => {
+    const message = String(requestError);
+    if (message.includes(CODEX_OAUTH_LOGIN_REQUIRED_ERROR)) {
+      setOauthLoginRequiredAction(action);
+      return true;
+    }
+    return false;
+  };
+
+  const changeOauthConfiguration = async (enabled: boolean) => {
+    if (!enabled) {
+      setOauthConfigurationDraft(false);
+      return;
+    }
+
+    setBusyAction('oauth-check');
+    try {
+      await invoke('check_codex_oauth_login');
+      setOauthConfigurationDraft(true);
+    } catch (requestError) {
+      if (!handleOAuthLoginError(requestError, 'enable')) {
+        setConfigurationError(String(requestError));
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const applyConfigurationChanges = async () => {
     setConfigurationError('');
-    const model = requireSelectedModel();
+    const claudeModelMappings = requireClaudeModelMappings();
+    if (isClaudeModelMappingClient && !claudeModelMappings) return;
+    const model = isClaudeModelMappingClient
+      ? claudeModelMappings?.sonnet ?? null
+      : requireSelectedModel();
     if (!model) return;
     setBusyAction('apply');
     try {
@@ -728,7 +886,26 @@ export function AgentsPage() {
         client: selected,
         model,
         oauthConfiguration,
+        claudeCodeModelMappings: selected === 'claude-code' ? claudeModelMappings : null,
+        claudeDesktopModelMappings: selected === 'claude-desktop' ? claudeModelMappings : null,
       });
+      await reloadStatusesAfterAction();
+      setOauthConfigurationDraft(null);
+      claudeModelMappingsDirtyRef.current = false;
+    } catch (requestError) {
+      if (!handleOAuthLoginError(requestError, 'apply')) {
+        setConfigurationError(String(requestError));
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const closeConfigurationChanges = async () => {
+    setConfigurationError('');
+    setBusyAction('close-config');
+    try {
+      await invoke<AgentConfigActionResult>('close_agent_config_modification', { client: selected });
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
     } catch (requestError) {
@@ -739,7 +916,11 @@ export function AgentsPage() {
   };
 
   const resetConfigurationToDefault = async () => {
-    const model = requireSelectedModel();
+    const claudeModelMappings = requireClaudeModelMappings();
+    if (isClaudeModelMappingClient && !claudeModelMappings) return;
+    const model = isClaudeModelMappingClient
+      ? claudeModelMappings?.sonnet ?? null
+      : requireSelectedModel();
     if (!model) return;
     setBusyAction('default');
     setDefaultError('');
@@ -748,12 +929,17 @@ export function AgentsPage() {
         client: selected,
         model,
         oauthConfiguration,
+        claudeCodeModelMappings: selected === 'claude-code' ? claudeModelMappings : null,
+        claudeDesktopModelMappings: selected === 'claude-desktop' ? claudeModelMappings : null,
       });
       setDefaultConfirmOpen(false);
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
+      claudeModelMappingsDirtyRef.current = false;
     } catch (requestError) {
-      setDefaultError(String(requestError));
+      if (!handleOAuthLoginError(requestError, 'apply')) {
+        setDefaultError(String(requestError));
+      }
     } finally {
       setBusyAction(null);
     }
@@ -776,19 +962,102 @@ export function AgentsPage() {
     }
   };
 
-  const launchAgent = async () => {
-    setBusyAction('launch');
-    setLaunchError('');
+  const openClaudeCodeLaunchDialog = () => {
+    setClaudeCodeLaunchDirectory(activeStatus?.claudeCodeWorkingDirectory ?? '');
+    setClaudeCodeSuppressDirectoryPrompt(false);
+    setClaudeCodeDirectoryError('');
+    setClaudeCodeLaunchDialogOpen(true);
+  };
+
+  const chooseClaudeCodeWorkingDirectory = async () => {
+    setBusyAction('directory');
+    setClaudeCodeDirectoryError('');
     try {
-      if (selected !== 'codex' && draftChanged) {
-        throw new Error(t('agents.error.applyFirst'));
+      const selectedDirectory = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: claudeCodeLaunchDirectory || activeStatus?.claudeCodeWorkingDirectory || undefined,
+        title: t('agents.claudeCodeLaunch.dialogTitle'),
+      });
+      if (typeof selectedDirectory === 'string') {
+        setClaudeCodeLaunchDirectory(selectedDirectory);
       }
-      await invoke('launch_agent', { client: selected, target: selectedLaunchTarget?.id });
     } catch (requestError) {
-      setLaunchError(String(requestError));
+      setClaudeCodeDirectoryError(String(requestError));
     } finally {
       setBusyAction(null);
     }
+  };
+
+  const invokeAgentLaunch = async (
+    target: AgentLaunchTarget,
+    workingDirectory: string | null = null,
+    suppressWorkingDirectoryPrompt: boolean | null = null,
+  ) => {
+    if (!target) return;
+    const launchAction = selected === 'codex'
+      ? target.id === 'cli' ? 'launch-cli' : 'launch-app'
+      : 'launch';
+    setBusyAction(launchAction);
+    setLaunchError('');
+    try {
+      if (draftChanged) {
+        throw new Error(t('agents.error.applyFirst'));
+      }
+      await invoke('launch_agent', {
+        client: selected,
+        target: target.id,
+        workingDirectory,
+        suppressWorkingDirectoryPrompt,
+      });
+      if (selected === 'claude-code' && workingDirectory) {
+        setClaudeCodeLaunchDialogOpen(false);
+        await reloadStatusesAfterAction();
+      }
+    } catch (requestError) {
+      const message = String(requestError);
+      if (
+        selected === 'claude-code'
+        && (message.includes('CLAUDE_CODE_WORKING_DIRECTORY_REQUIRED')
+          || message.includes('CLAUDE_CODE_WORKING_DIRECTORY_INVALID'))
+      ) {
+        openClaudeCodeLaunchDialog();
+        setClaudeCodeDirectoryError(
+          message.includes('CLAUDE_CODE_WORKING_DIRECTORY_INVALID') ? message : '',
+        );
+      } else if (selected === 'claude-code' && workingDirectory) {
+        setClaudeCodeDirectoryError(message);
+      } else if (!handleOAuthLoginError(requestError, 'launch')) {
+        setLaunchError(message);
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const launchAgent = async (target: AgentLaunchTarget | null) => {
+    if (!target) return;
+    if (selected === 'claude-code' && !activeStatus?.claudeCodeWorkingDirectoryPromptDisabled) {
+      openClaudeCodeLaunchDialog();
+      return;
+    }
+    await invokeAgentLaunch(target);
+  };
+
+  const launchClaudeCodeFromDialog = async () => {
+    const target = defaultLaunchTarget;
+    if (!target) return;
+    const workingDirectory = claudeCodeLaunchDirectory.trim();
+    if (!workingDirectory) {
+      setClaudeCodeDirectoryError(t('agents.claudeCodeLaunch.directoryRequired'));
+      return;
+    }
+    setClaudeCodeDirectoryError('');
+    await invokeAgentLaunch(
+      target,
+      workingDirectory,
+      claudeCodeSuppressDirectoryPrompt,
+    );
   };
 
   const closeChatGptApp = async () => {
@@ -841,6 +1110,13 @@ export function AgentsPage() {
   const availableSubpages = agentSubpages.filter(
     (subpage) => !subpage.clients || subpage.clients.includes(selected),
   );
+  const oauthLoginRequiredDescription = oauthLoginRequiredAction === 'enable' ? (
+    <>
+      {t('agents.oauthLoginRequired.enableDescription')}
+      <strong>{t('agents.oauthLoginRequired.enableClearConfiguration')}</strong>
+      {t('agents.oauthLoginRequired.enableDescriptionSuffix')}
+    </>
+  ) : oauthLoginRequiredAction ? t(`agents.oauthLoginRequired.${oauthLoginRequiredAction}Description`) : '';
 
   return (
     <section className="page management-page agents-page">
@@ -941,30 +1217,81 @@ export function AgentsPage() {
                 </div>
               ) : null}
 
-              <section className="agent-core-setting-section agent-model-section">
-                <div className="agent-section-heading">
-                  <div><strong>{t('agents.useModel')}</strong></div>
-                  {modelDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
-                </div>
-                <AgentModelPicker
-                  models={models}
-                  value={selectedModel}
-                  loading={modelLoading}
-                  error={modelError}
-                  disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
-                  onChange={selectModel}
-                  onRefresh={refreshModels}
-                />
-                {modelHint ? (
-                  <span
-                    className={`agent-model-hint ${modelSelectionError || modelError ? 'error' : ''}`}
-                    role={modelSelectionError || modelError ? 'alert' : undefined}
-                    aria-live="polite"
-                  >
-                    {modelHint}
-                  </span>
-                ) : null}
-              </section>
+              {!isClaudeModelMappingClient ? (
+                <section className="agent-core-setting-section agent-model-section">
+                  <div className="agent-section-heading">
+                    <div><strong>{t('agents.useModel')}</strong></div>
+                    {modelDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                  </div>
+                  <AgentModelPicker
+                    models={models}
+                    value={selectedModel}
+                    loading={modelLoading}
+                    error={modelError}
+                    disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
+                    onChange={selectModel}
+                    onRefresh={refreshModels}
+                  />
+                  {modelHint ? (
+                    <span
+                      className={`agent-model-hint ${modelSelectionError || modelError ? 'error' : ''}`}
+                      role={modelSelectionError || modelError ? 'alert' : undefined}
+                      aria-live="polite"
+                    >
+                      {modelHint}
+                    </span>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {isClaudeModelMappingClient ? (
+                <section className="agent-core-setting-section agent-claude-desktop-mapping">
+                  <div className="agent-section-heading">
+                    <div>
+                      <strong>{t(selected === 'claude-code'
+                        ? 'agents.claudeCodeMapping.title'
+                        : 'agents.claudeDesktopMapping.title')}</strong>
+                      <span>{t(selected === 'claude-code'
+                        ? 'agents.claudeCodeMapping.description'
+                        : 'agents.claudeDesktopMapping.description')}</span>
+                    </div>
+                    <div className="agent-section-heading-actions">
+                      <label
+                        className="agent-claude-desktop-mapping-filter"
+                        title={t('agents.claudeDesktopMapping.customMappingHint')}
+                      >
+                        <span>{t('agents.claudeDesktopMapping.customMapping')}</span>
+                        <span className="switch-control">
+                          <input
+                            type="checkbox"
+                            checked={claudeCustomMapping}
+                            onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)}
+                            disabled={busy || modelLoading}
+                          />
+                          <span className="switch-track" />
+                        </span>
+                      </label>
+                      {claudeMappingDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                    </div>
+                  </div>
+                  <div className="agent-claude-desktop-mapping-grid">
+                    {claudeMappingRoles.map((role) => (
+                      <div className="agent-claude-desktop-mapping-row" key={role.key}>
+                        <strong>{t(role.labelKey)}</strong>
+                        <AgentModelPicker
+                          models={claudeMappingModels}
+                          value={claudeModelMappingsDraft[role.key]}
+                          loading={modelLoading}
+                          error={modelError}
+                          disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
+                          onChange={(value) => selectClaudeModelMapping(role.key, value)}
+                          onRefresh={refreshModels}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
 
               <section className={`agent-core-setting-section agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
                 <div className="agent-section-heading">
@@ -975,36 +1302,45 @@ export function AgentsPage() {
                 </div>
                 <div className="agent-modification-control">
                   {selected === 'codex' ? (
-                    <label
-                      className="agent-oauth-configuration"
-                      title={t('agents.modify.oauthConfiguration')}
-                    >
-                      <span>{t('agents.modify.oauthConfiguration')}</span>
-                      <span className="switch-control">
-                        <input
-                          type="checkbox"
-                          role="switch"
-                          checked={oauthConfiguration}
-                          onChange={(event) => setOauthConfigurationDraft(event.currentTarget.checked)}
-                          disabled={busy}
-                          aria-label={t('agents.modify.oauthConfiguration')}
-                        />
-                        <span className="switch-track" />
-                      </span>
-                    </label>
+                    <div className="agent-codex-options">
+                      <CodexSessionAutoRestoreCard />
+                      <label
+                        className="agent-oauth-configuration"
+                        title={t('agents.modify.oauthConfiguration')}
+                      >
+                        <span>{t('agents.modify.oauthConfiguration')}</span>
+                        <span className="switch-control">
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            checked={oauthConfiguration}
+                            onChange={(event) => void changeOauthConfiguration(event.currentTarget.checked)}
+                            disabled={busy}
+                            aria-label={t('agents.modify.oauthConfiguration')}
+                          />
+                          <span className="switch-track" />
+                        </span>
+                      </label>
+                    </div>
                   ) : null}
                   <div className={`agent-modification-buttons ${selected === 'codex' ? 'codex' : ''}`}>
                     <button
                       type="button"
                       className="primary-button"
-                      onClick={() => void applyConfigurationChanges()}
+                      onClick={() => void (activeStatus?.modificationState === 'applied'
+                        ? closeConfigurationChanges()
+                        : applyConfigurationChanges())}
                       disabled={
                         busy
-                        || !canEnable
+                        || (activeStatus?.modificationState === 'applied' ? false : !canEnable)
                       }
                     >
-                      {busyAction === 'apply' ? <LoaderCircle size={16} className="spin" /> : <Sparkles size={16} />}
-                      {t('agents.modify.apply')}
+                      {busyAction === 'apply' || busyAction === 'close-config'
+                        ? <LoaderCircle size={16} className="spin" />
+                        : null}
+                      {activeStatus?.modificationState === 'applied'
+                        ? t('agents.modify.close')
+                        : t('agents.modify.apply')}
                     </button>
                     <button
                       type="button"
@@ -1012,7 +1348,9 @@ export function AgentsPage() {
                       onClick={openDefaultConfirmation}
                       disabled={busy || !canEnable}
                     >
-                      {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
+                      {busyAction === 'default'
+                        ? <LoaderCircle size={16} className="spin" />
+                        : <RefreshCw size={16} />}
                       {t('agents.modify.default')}
                     </button>
                     {selected === 'codex' ? (
@@ -1040,56 +1378,54 @@ export function AgentsPage() {
                 </div>
               </section>
 
-              {selected === 'codex' ? <CodexSessionAutoRestoreCard /> : null}
-
               <div className="agent-config-footer">
-                {footerMessage ? (
-                  <div className="agent-config-summary">
-                    {activeStatus?.modificationState === 'applied' ? <Check size={16} /> : <Sparkles size={16} />}
-                    <span>{footerMessage}</span>
-                  </div>
-                ) : null}
                 <div className="agent-launch-control">
                   <div className="agent-launch-actions">
-                    {activeLaunchTargets.length > 1 ? (
-                      <div className="agent-launch-targets" aria-label={t('agents.launchMethods')}>
-                        {activeLaunchTargets.map((target) => (
-                          <button
-                            type="button"
-                            className={target.id === selectedLaunchTarget?.id ? 'active' : ''}
-                            key={target.id}
-                            onClick={() => setLaunchTargetByClient((current) => ({
-                              ...current,
-                              [selected]: target.id,
-                            }))}
-                            disabled={busy}
-                            title={target.detail}
-                          >
-                            {target.label.replace('Codex ', '')}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={() => void launchAgent()}
-                      disabled={
-                        busy
-                        || !canLaunch
-                        || (selected !== 'codex' && draftChanged)
-                      }
-                      title={selected === 'codex'
-                        ? selectedLaunchTarget?.detail
-                        : draftChanged
+                    {selected === 'codex' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="secondary-button agent-launch-button"
+                          onClick={() => void launchAgent(cliLaunchTarget)}
+                          disabled={busy || !canLaunchTarget(cliLaunchTarget) || draftChanged}
+                          title={draftChanged
+                            ? t('agents.launch.applyFirst')
+                            : cliLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                        >
+                          {busyAction === 'launch-cli' ? <LoaderCircle size={16} className="spin" /> : <Terminal size={16} />}
+                          {busyAction === 'launch-cli' ? t('agents.launch.starting') : t('agents.launch.startCli')}
+                        </button>
+                        <button
+                          type="button"
+                          className="primary-button agent-launch-button"
+                          onClick={() => void launchAgent(appLaunchTarget)}
+                          disabled={busy || !canLaunchTarget(appLaunchTarget) || draftChanged}
+                          title={draftChanged
+                            ? t('agents.launch.applyFirst')
+                            : appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                        >
+                          {busyAction === 'launch-app' ? <LoaderCircle size={16} className="spin" /> : <AppWindow size={16} />}
+                          {busyAction === 'launch-app' ? t('agents.launch.starting') : t('agents.launch.startApp')}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="primary-button agent-launch-button"
+                        onClick={() => void launchAgent(defaultLaunchTarget)}
+                        disabled={busy || !canLaunchTarget(defaultLaunchTarget) || draftChanged}
+                        title={draftChanged
                           ? t('agents.launch.applyFirst')
                           : activeStatus?.modificationState === 'applied'
-                            ? selectedLaunchTarget?.detail
+                            ? defaultLaunchTarget?.detail
                             : t('agents.launch.enableFirst')}
-                    >
-                      {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
-                      {busyAction === 'launch' ? t('agents.launch.starting') : selectedLaunchTarget ? t('agents.launch.start', { target: selectedLaunchTarget.label }) : t('agents.launch.unavailable')}
-                    </button>
+                      >
+                        {busyAction === 'launch'
+                          ? <LoaderCircle size={16} className="spin" />
+                          : <Play size={16} />}
+                        {busyAction === 'launch' ? t('agents.launch.starting') : defaultLaunchTarget ? t('agents.launch.start', { target: defaultLaunchTarget.label }) : t('agents.launch.unavailable')}
+                      </button>
+                    )}
                     {selected === 'codex' ? (
                       <button
                         type="button"
@@ -1129,6 +1465,85 @@ export function AgentsPage() {
           ) : null}
         </section>
       </div>
+
+      {claudeCodeLaunchDialogOpen ? (
+        <div className="config-dialog-backdrop" onMouseDown={(event) => {
+          if (event.currentTarget === event.target && !busy) {
+            setClaudeCodeLaunchDialogOpen(false);
+          }
+        }}>
+          <section
+            className="config-dialog agent-claude-code-launch-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-claude-code-launch-title"
+          >
+            <div className="config-dialog-heading">
+              <div>
+                <h2 id="agent-claude-code-launch-title">
+                  {t('agents.claudeCodeLaunch.dialogTitle')}
+                </h2>
+              </div>
+            </div>
+            <p>{t('agents.claudeCodeLaunch.dialogDescription')}</p>
+            <div className="config-dialog-field">
+              <span>{t('agents.claudeCodeLaunch.workingDirectory')}</span>
+              <button
+                type="button"
+                className="agent-claude-code-directory-picker"
+                onClick={() => void chooseClaudeCodeWorkingDirectory()}
+                disabled={busy}
+                autoFocus
+              >
+                <span>
+                  <small>{claudeCodeLaunchDirectory
+                    ? t('agents.claudeCodeLaunch.selectedDirectory')
+                    : t('agents.claudeCodeLaunch.noDirectory')}</small>
+                  <strong title={claudeCodeLaunchDirectory || undefined}>
+                    {claudeCodeLaunchDirectory || t('agents.claudeCodeLaunch.chooseDirectory')}
+                  </strong>
+                </span>
+                <b>{busyAction === 'directory'
+                  ? t('agents.claudeCodeLaunch.choosing')
+                  : t('agents.claudeCodeLaunch.browse')}</b>
+              </button>
+            </div>
+            <label className="agent-claude-code-suppress-prompt">
+              <input
+                type="checkbox"
+                checked={claudeCodeSuppressDirectoryPrompt}
+                onChange={(event) => setClaudeCodeSuppressDirectoryPrompt(event.currentTarget.checked)}
+                disabled={busy}
+              />
+              <span>{t('agents.claudeCodeLaunch.neverAskAgain')}</span>
+            </label>
+            {claudeCodeDirectoryError ? (
+              <span className="agent-inline-message error" role="alert" aria-live="polite">
+                {claudeCodeDirectoryError}
+              </span>
+            ) : null}
+            <div className="config-dialog-actions two-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setClaudeCodeLaunchDialogOpen(false)}
+                disabled={busy}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void launchClaudeCodeFromDialog()}
+                disabled={busy || !claudeCodeLaunchDirectory.trim()}
+              >
+                {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : null}
+                {t('agents.claudeCodeLaunch.launch')}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {defaultConfirmOpen ? (
         <div className="config-dialog-backdrop">
@@ -1196,6 +1611,20 @@ export function AgentsPage() {
                 {busyAction === 'close-app' ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}
                 {t('agents.closeApp.confirm')}
               </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {oauthLoginRequiredAction ? (
+        <div className="config-dialog-backdrop">
+          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-oauth-login-required-title">
+            <div className="config-dialog-heading">
+              <div><AlertTriangle size={19} /><h2 id="agent-oauth-login-required-title">{t('agents.oauthLoginRequired.title')}</h2></div>
+            </div>
+            <p>{oauthLoginRequiredDescription}</p>
+            <div className="config-dialog-actions single-action">
+              <button type="button" className="primary-button" onClick={() => setOauthLoginRequiredAction(null)}>{t('agents.oauthLoginRequired.confirm')}</button>
             </div>
           </section>
         </div>

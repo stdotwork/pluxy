@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { clientApiProfiles } from '../src/services/clientAccess';
+import { clientApiProfiles, webUiManagementUrl } from '../src/services/clientAccess';
 
 describe('客户端 API 接入信息', () => {
   it('生成 OpenAI、Claude 和 Gemini 三种正确格式', () => {
@@ -19,5 +19,14 @@ describe('客户端 API 接入信息', () => {
 
     expect(openai.baseUrl).toBe('http://127.0.0.1:8317/v1');
     expect(openai.lanUrl).toBeNull();
+  });
+
+  it('使用当前内核端口生成 WebUI 登录地址', () => {
+    expect(webUiManagementUrl(9527)).toBe(
+      'http://127.0.0.1:9527/management.html#/login',
+    );
+    expect(webUiManagementUrl(0)).toBe(
+      'http://127.0.0.1:8317/management.html#/login',
+    );
   });
 });

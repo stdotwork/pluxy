@@ -99,11 +99,14 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
                 .find(|value| !value.is_empty())
                 .unwrap_or_default()
         };
-        if slug.is_empty() || !seen.insert(normalize_id(slug)) {
+        if slug.is_empty() {
             continue;
         }
 
-        let display_name = optional_string(value, &["display_name", "displayName", "alias"]);
+        let display_name = optional_string(value, &["display_name", "displayName"]);
+        let model_alias =
+            optional_string(value, &["alias"]).filter(|alias| !alias.eq_ignore_ascii_case(slug));
+        let keep_original = value.get("fork").and_then(Value::as_bool).unwrap_or(false);
         let description = optional_string(value, &["description"]);
         let context_window = positive_u64_field(
             value,
@@ -125,17 +128,28 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
         let hidden = optional_string(value, &["visibility"])
             .is_some_and(|value| value.eq_ignore_ascii_case("hide"));
 
-        models.push(CodexRuntimeModel {
+        let make_runtime_model = |slug: &str, display_name: Option<String>| CodexRuntimeModel {
             slug: slug.to_string(),
             display_name,
-            description,
+            description: description.clone(),
             context_window,
             max_context_window,
-            input_modalities,
-            supported_reasoning_levels,
-            default_reasoning_level,
+            input_modalities: input_modalities.clone(),
+            supported_reasoning_levels: supported_reasoning_levels.clone(),
+            default_reasoning_level: default_reasoning_level.clone(),
             hidden,
-        });
+        };
+
+        if let Some(model_alias) = model_alias {
+            if keep_original && seen.insert(normalize_id(slug)) {
+                models.push(make_runtime_model(slug, display_name));
+            }
+            if seen.insert(normalize_id(&model_alias)) {
+                models.push(make_runtime_model(&model_alias, Some(slug.to_string())));
+            }
+        } else if seen.insert(normalize_id(slug)) {
+            models.push(make_runtime_model(slug, display_name));
+        }
     }
     Ok(models)
 }
@@ -311,6 +325,7 @@ fn prepare_catalog_with_sources(
         if let Some(template) = sources.templates.get(&key) {
             let mut value = template.value.clone();
             value.insert("slug".to_string(), Value::String(runtime.slug.clone()));
+            enable_fast_mode(&mut value);
             entries.push(CatalogEntry {
                 value,
                 template_order: Some(template.order),
@@ -319,6 +334,7 @@ fn prepare_catalog_with_sources(
             let mut value = sources.fallback.clone();
             apply_runtime_metadata(&mut value, runtime);
             disable_fallback_capabilities(&mut value);
+            enable_fast_mode(&mut value);
             entries.push(CatalogEntry {
                 value,
                 template_order: None,
@@ -372,6 +388,8 @@ fn prepare_catalog_with_sources(
             alias: optional_map_string(&entry.value, "display_name").filter(|display| {
                 !display.eq_ignore_ascii_case(&string_value(&entry.value, "slug"))
             }),
+            is_alias: false,
+            context_window: positive_u64_value(entry.value.get("context_window")),
         })
         .collect::<Vec<_>>();
     let values = entries
@@ -492,15 +510,25 @@ fn disable_fallback_capabilities(model: &mut Map<String, Value>) {
         "web_search_tool_type".to_string(),
         Value::String("text".to_string()),
     );
-    model.insert("service_tiers".to_string(), Value::Array(Vec::new()));
-    model.insert(
-        "additional_speed_tiers".to_string(),
-        Value::Array(Vec::new()),
-    );
     model.insert("default_service_tier".to_string(), Value::Null);
     model.insert("upgrade".to_string(), Value::Null);
     model.insert("availability_nux".to_string(), Value::Null);
     model.remove("minimal_client_version");
+}
+
+fn enable_fast_mode(model: &mut Map<String, Value>) {
+    model.insert(
+        "service_tiers".to_string(),
+        serde_json::json!([{
+            "id": "priority",
+            "name": "Fast",
+            "description": "1.5x speed, increased usage"
+        }]),
+    );
+    model.insert(
+        "additional_speed_tiers".to_string(),
+        serde_json::json!(["fast"]),
+    );
 }
 
 fn parse_modalities(value: &Value) -> Option<Vec<String>> {
@@ -809,6 +837,64 @@ mod tests {
     }
 
     #[test]
+    fn runtime_parser_exposes_model_alias_as_a_runtime_slug() {
+        let models = runtime(serde_json::json!({
+            "models": [
+                {
+                    "id": "gpt-5.5",
+                    "alias": "gpt-5.5-xhigh",
+                    "fork": true,
+                    "context_window": 200000
+                },
+                {"id": "hidden-source", "alias": "visible-alias"}
+            ]
+        }));
+
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.5", "gpt-5.5-xhigh", "visible-alias"]
+        );
+        assert_eq!(models[1].display_name.as_deref(), Some("gpt-5.5"));
+        assert_eq!(models[1].context_window, Some(200_000));
+        assert_eq!(models[2].display_name.as_deref(), Some("hidden-source"));
+
+        let catalog = prepare_catalog_with_sources(&models, &test_sources()).unwrap();
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .map(|model| model.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.5", "gpt-5.5-xhigh", "visible-alias"]
+        );
+        assert_eq!(catalog.models[1].alias.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn all_runtime_models_advertise_fast_capabilities() {
+        let runtime = runtime(serde_json::json!({"models":[
+            {"id":"B"},
+            {"id":"remote-model-alias"}
+        ]}));
+
+        let catalog = prepare_catalog_with_sources(&runtime, &test_sources()).unwrap();
+        for model in output_models(&catalog) {
+            assert_eq!(
+                model["service_tiers"],
+                serde_json::json!([{
+                    "id": "priority",
+                    "name": "Fast",
+                    "description": "1.5x speed, increased usage"
+                }])
+            );
+            assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
+        }
+    }
+
+    #[test]
     fn known_and_unknown_models_are_composed_from_the_correct_sources() {
         let runtime = runtime(serde_json::json!({"models":[
             {"id":"b","display_name":"Runtime B","context_window":1},
@@ -847,12 +933,23 @@ mod tests {
         let model = &output_models(&catalog)[0];
         let template = &sources.templates["a"].value;
         for (key, expected) in template {
-            if key != "slug" {
+            if !matches!(
+                key.as_str(),
+                "slug" | "service_tiers" | "additional_speed_tiers"
+            ) {
                 assert_eq!(model.get(key), Some(expected), "changed field {key}");
             }
         }
         assert_eq!(model["slug"], "a");
         assert_eq!(model["nested"]["unknown"], true);
+        assert_eq!(
+            model["service_tiers"],
+            serde_json::json!([{
+                "id": "priority",
+                "name": "Fast",
+                "description": "1.5x speed, increased usage"
+            }])
+        );
         assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
     }
 
@@ -885,8 +982,15 @@ mod tests {
             "You are Codex, a model-neutral coding agent."
         );
         assert_eq!(model["supports_search_tool"], false);
-        assert_eq!(model["service_tiers"], serde_json::json!([]));
-        assert_eq!(model["additional_speed_tiers"], serde_json::json!([]));
+        assert_eq!(
+            model["service_tiers"],
+            serde_json::json!([{
+                "id": "priority",
+                "name": "Fast",
+                "description": "1.5x speed, increased usage"
+            }])
+        );
+        assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
     }
 
     #[test]
