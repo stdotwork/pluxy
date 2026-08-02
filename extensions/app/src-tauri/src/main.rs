@@ -2360,6 +2360,7 @@ fn clear_codex_config(app: tauri::AppHandle) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn set_agent_config_enabled(
     app: tauri::AppHandle,
     gui_config_state: tauri::State<'_, GuiConfigState>,
@@ -7428,7 +7429,19 @@ fn fresh_agent_contents(
         is_alias: false,
         context_window: Some(200_000),
     }];
-    fresh_agent_contents_with_oauth(client, port, api_key, model, &models, false, None, None)
+    fresh_agent_contents_with_oauth(
+        client,
+        port,
+        api_key,
+        model,
+        AgentConfigurationOptions {
+            models: &models,
+            codex_catalog: None,
+            oauth_configuration: false,
+            claude_code_model_mappings: None,
+            claude_desktop_model_mappings: None,
+        },
+    )
 }
 
 fn fresh_agent_contents_with_oauth(
@@ -7436,11 +7449,15 @@ fn fresh_agent_contents_with_oauth(
     port: u16,
     api_key: &str,
     model: &str,
-    models: &[AgentModelOption],
-    oauth_configuration: bool,
-    claude_code_model_mappings: Option<&ClaudeDesktopModelMappings>,
-    claude_desktop_model_mappings: Option<&ClaudeDesktopModelMappings>,
+    options: AgentConfigurationOptions<'_>,
 ) -> Result<Vec<String>, String> {
+    let AgentConfigurationOptions {
+        models,
+        oauth_configuration,
+        claude_code_model_mappings,
+        claude_desktop_model_mappings,
+        ..
+    } = options;
     let root_base = format!("http://127.0.0.1:{port}");
     let openai_base = format!("{root_base}/v1");
     match client {
@@ -8318,10 +8335,13 @@ fn reset_agent_configuration_to_default_with_oauth(
         port,
         api_key,
         model,
-        models,
-        oauth_configuration,
-        claude_code_model_mappings,
-        claude_desktop_model_mappings,
+        AgentConfigurationOptions {
+            models,
+            codex_catalog,
+            oauth_configuration,
+            claude_code_model_mappings,
+            claude_desktop_model_mappings,
+        },
     )?;
     if paths.len() != contents.len() {
         return Err("智能体默认配置文件数量不匹配".to_string());
