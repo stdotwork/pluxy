@@ -2984,14 +2984,53 @@ fn inspect_agent_config(
 
 fn inspect_agent_application(client: AgentClient, home: &Path) -> AgentModificationInspection {
     match load_agent_applied_state(client, home) {
-        Ok(Some(state)) => AgentModificationInspection {
-            enabled: true,
-            state: "applied".to_string(),
-            backup_available: false,
-            applied_model: Some(state.model),
-            claude_desktop_model_mappings: state.claude_desktop_model_mappings,
-            warnings: Vec::new(),
-        },
+        Ok(Some(state)) => {
+            let paths = agent_config_paths(client, home);
+            let backup_available = !state.backup_files.is_empty()
+                && state
+                    .backup_files
+                    .iter()
+                    .all(|file| !file.existed_before || file.backup_path.is_file());
+            if state.backup_files.is_empty() {
+                match agent_has_managed_marker(client, &paths) {
+                    Ok(false) => {
+                        return AgentModificationInspection {
+                            enabled: false,
+                            state: "unconfigured".to_string(),
+                            backup_available: false,
+                            applied_model: None,
+                            claude_desktop_model_mappings: None,
+                            warnings: Vec::new(),
+                        };
+                    }
+                    Err(error) => {
+                        return AgentModificationInspection {
+                            enabled: false,
+                            state: "invalid".to_string(),
+                            backup_available: false,
+                            applied_model: None,
+                            claude_desktop_model_mappings: None,
+                            warnings: vec![error],
+                        };
+                    }
+                    Ok(true) => {}
+                }
+            }
+            let mut warnings = Vec::new();
+            if state.backup_files.is_empty() {
+                warnings.push("检测到旧版应用状态；关闭时将只移除 CPA 管理的配置字段".to_string());
+            } else if !backup_available {
+                warnings.push("原配置会话备份不完整，暂时无法安全恢复".to_string());
+            }
+            AgentModificationInspection {
+                enabled: true,
+                state: "applied".to_string(),
+                backup_available,
+                applied_model: Some(state.model),
+                claude_desktop_model_mappings: state.claude_desktop_model_mappings,
+                warnings,
+            }
+        }
         Ok(None) => AgentModificationInspection {
             enabled: false,
             state: "unconfigured".to_string(),
@@ -3035,7 +3074,6 @@ fn inspect_agent_managed_config(
     }
 }
 
-#[cfg(test)]
 fn agent_has_managed_marker(client: AgentClient, paths: &[PathBuf]) -> Result<bool, String> {
     match client {
         AgentClient::ClaudeCode => {
@@ -3047,21 +3085,29 @@ fn agent_has_managed_marker(client: AgentClient, paths: &[PathBuf]) -> Result<bo
             Ok(env
                 .and_then(|value| value.get("ANTHROPIC_BASE_URL"))
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| {
-                    value.starts_with("http://127.0.0.1:") || value.starts_with("http://localhost:")
-                })
-                && env
-                    .and_then(|value| value.get("ANTHROPIC_AUTH_TOKEN"))
-                    .and_then(serde_json::Value::as_str)
-                    == Some(DEFAULT_API_KEY))
+                .is_some_and(is_managed_agent_base_url))
         }
         AgentClient::ClaudeDesktop => {
-            if paths.len() != 4 || !paths[3].is_file() {
+            if paths.len() != 4 {
                 return Ok(false);
             }
             let meta = read_agent_json_or_empty(&paths[3], "Claude Desktop 配置索引")?;
+            let profile = read_agent_json_or_empty(&paths[2], "Claude Desktop 网关配置")?;
             Ok(meta.get("appliedId").and_then(serde_json::Value::as_str)
-                == Some(CLAUDE_DESKTOP_PROFILE_ID))
+                == Some(CLAUDE_DESKTOP_PROFILE_ID)
+                || meta
+                    .get("entries")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|entries| {
+                        entries.iter().any(|entry| {
+                            entry.get("id").and_then(serde_json::Value::as_str)
+                                == Some(CLAUDE_DESKTOP_PROFILE_ID)
+                        })
+                    })
+                || profile
+                    .get("inferenceGatewayBaseUrl")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(is_managed_agent_base_url))
         }
         AgentClient::Codex => {
             if !paths[0].is_file() {
@@ -3080,10 +3126,16 @@ fn agent_has_managed_marker(client: AgentClient, paths: &[PathBuf]) -> Result<bo
                 return Ok(false);
             }
             let root = read_agent_json_or_empty(&paths[0], "OpenCode 配置")?;
-            Ok(root
+            let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+            let provider_exists = root
                 .get("provider")
                 .and_then(|value| value.get(MANAGED_AGENT_PROVIDER_ID))
-                .is_some())
+                .is_some();
+            let model_selected = root
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|model| model.starts_with(&prefix));
+            Ok(provider_exists && model_selected)
         }
         AgentClient::OpenClaw => {
             if !paths[0].is_file() {
@@ -3094,11 +3146,20 @@ fn agent_has_managed_marker(client: AgentClient, paths: &[PathBuf]) -> Result<bo
                     .map_err(|error| format!("读取 OpenClaw 配置失败: {error}"))?,
             )
             .map_err(|error| format!("解析 OpenClaw 配置失败: {error}"))?;
-            Ok(root
+            let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+            let provider_exists = root
                 .get("models")
                 .and_then(|value| value.get("providers"))
                 .and_then(|value| value.get(MANAGED_AGENT_PROVIDER_ID))
-                .is_some())
+                .is_some();
+            let model_selected = root
+                .get("agents")
+                .and_then(|value| value.get("defaults"))
+                .and_then(|value| value.get("model"))
+                .and_then(|value| value.get("primary"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|model| model.starts_with(&prefix));
+            Ok(provider_exists && model_selected)
         }
         AgentClient::Hermes => {
             if !paths[0].is_file() {
@@ -3109,7 +3170,7 @@ fn agent_has_managed_marker(client: AgentClient, paths: &[PathBuf]) -> Result<bo
                     .map_err(|error| format!("读取 Hermes 配置失败: {error}"))?,
             )
             .map_err(|error| format!("解析 Hermes 配置失败: {error}"))?;
-            Ok(root
+            let provider_exists = root
                 .get("custom_providers")
                 .and_then(serde_yaml::Value::as_sequence)
                 .is_some_and(|providers| {
@@ -3117,9 +3178,20 @@ fn agent_has_managed_marker(client: AgentClient, paths: &[PathBuf]) -> Result<bo
                         provider.get("name").and_then(serde_yaml::Value::as_str)
                             == Some(MANAGED_AGENT_PROVIDER_ID)
                     })
-                }))
+                });
+            let model_selected = root
+                .get("model")
+                .and_then(|value| value.get("provider"))
+                .and_then(serde_yaml::Value::as_str)
+                == Some(MANAGED_AGENT_PROVIDER_ID);
+            Ok(provider_exists && model_selected)
         }
     }
+}
+
+fn is_managed_agent_base_url(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.starts_with("http://127.0.0.1:") || value.starts_with("http://localhost:")
 }
 
 fn agent_launch_targets(client: AgentClient, home: &Path) -> Vec<AgentLaunchTarget> {
@@ -4678,6 +4750,978 @@ fn build_claude_desktop_meta(existing: Option<&str>) -> Result<String, String> {
     render_agent_json(root, "Claude Desktop 配置索引")
 }
 
+fn update_agent_json_file<F>(path: &Path, label: &str, update: F) -> Result<bool, String>
+where
+    F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> bool,
+{
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 {label} 失败 {}: {error}", path_to_string(path)))?;
+    let mut root = parse_agent_json_object(Some(&content), label)?;
+    if !update(&mut root) {
+        return Ok(false);
+    }
+    if root.is_empty() {
+        fs::remove_file(path)
+            .map_err(|error| format!("删除空的 {label} 失败 {}: {error}", path_to_string(path)))?;
+    } else {
+        let rendered = render_agent_json(root, label)?;
+        write_bytes_directly(path, rendered.as_bytes())?;
+    }
+    Ok(true)
+}
+
+fn remove_claude_desktop_managed_configuration(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    if paths.len() != 4 {
+        return Err("Claude Desktop 当前平台配置路径不可用".to_string());
+    }
+    let mut changed = Vec::new();
+    for (path, label) in [
+        (&paths[0], "Claude Desktop 主配置"),
+        (&paths[1], "Claude Desktop 3P 配置"),
+    ] {
+        if update_agent_json_file(path, label, |root| {
+            if root
+                .get("deploymentMode")
+                .and_then(serde_json::Value::as_str)
+                == Some("3p")
+            {
+                root.remove("deploymentMode");
+                true
+            } else {
+                false
+            }
+        })? {
+            changed.push(path_to_string(path));
+        }
+    }
+
+    if update_agent_json_file(&paths[2], "Claude Desktop 网关配置", |root| {
+        let mut updated = false;
+        for key in [
+            "coworkEgressAllowedHosts",
+            "disableDeploymentModeChooser",
+            "inferenceGatewayApiKey",
+            "inferenceGatewayAuthScheme",
+            "inferenceGatewayBaseUrl",
+            "inferenceProvider",
+            "inferenceModels",
+        ] {
+            updated |= root.remove(key).is_some();
+        }
+        updated
+    })? {
+        changed.push(path_to_string(&paths[2]));
+    }
+
+    if update_agent_json_file(&paths[3], "Claude Desktop 配置索引", |root| {
+        let mut updated = false;
+        if root.get("appliedId").and_then(serde_json::Value::as_str)
+            == Some(CLAUDE_DESKTOP_PROFILE_ID)
+        {
+            root.remove("appliedId");
+            updated = true;
+        }
+        let entries_empty = if let Some(entries) = root
+            .get_mut("entries")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            let previous_len = entries.len();
+            entries.retain(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str)
+                    != Some(CLAUDE_DESKTOP_PROFILE_ID)
+            });
+            updated |= entries.len() != previous_len;
+            entries.is_empty()
+        } else {
+            false
+        };
+        if entries_empty {
+            root.remove("entries");
+        }
+        updated
+    })? {
+        changed.push(path_to_string(&paths[3]));
+    }
+    Ok(changed)
+}
+
+fn remove_claude_code_managed_configuration(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    let Some(path) = paths.first() else {
+        return Err("Claude Code 当前平台配置路径不可用".to_string());
+    };
+    let updated = update_agent_json_file(path, "Claude Code 配置", |root| {
+        let managed_model = root
+            .get("env")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|env| env.get("ANTHROPIC_MODEL"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let managed = root
+            .get("env")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(is_managed_agent_base_url);
+        if !managed {
+            return false;
+        }
+        if root.get("model").and_then(serde_json::Value::as_str) == managed_model.as_deref() {
+            root.remove("model");
+        }
+        let env_empty = if let Some(env) = root
+            .get_mut("env")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for key in [
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            ] {
+                env.remove(key);
+            }
+            env.is_empty()
+        } else {
+            false
+        };
+        if env_empty {
+            root.remove("env");
+        }
+        true
+    })?;
+    Ok(updated.then(|| path_to_string(path)).into_iter().collect())
+}
+
+fn remove_codex_managed_configuration(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    use toml_edit::{Document, Item};
+
+    let Some(path) = paths.first() else {
+        return Err("Codex 当前平台配置路径不可用".to_string());
+    };
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 Codex 配置失败 {}: {error}", path_to_string(path)))?;
+    let mut document = content
+        .parse::<Document>()
+        .map_err(|error| format!("解析 Codex 配置失败: {error}"))?;
+    let managed_selected =
+        document.get("model_provider").and_then(Item::as_str) == Some(MANAGED_AGENT_PROVIDER_ID);
+    let managed_catalog =
+        document.get("model_catalog_json").and_then(Item::as_str) == Some(CODEX_MODEL_CATALOG_FILE);
+    let managed_provider = document
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .is_some_and(|providers| providers.contains_key(MANAGED_AGENT_PROVIDER_ID));
+    if !managed_selected && !managed_catalog && !managed_provider {
+        return Ok(Vec::new());
+    }
+    if managed_selected {
+        document.remove("model_provider");
+        document.remove("model");
+    }
+    if managed_catalog {
+        document.remove("model_catalog_json");
+    }
+    if let Some(providers) = document
+        .get_mut("model_providers")
+        .and_then(Item::as_table_mut)
+    {
+        providers.remove(MANAGED_AGENT_PROVIDER_ID);
+    }
+    if document
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .is_some_and(toml_edit::Table::is_empty)
+    {
+        document.remove("model_providers");
+    }
+    let rendered = document.to_string();
+    toml::from_str::<toml::Value>(&rendered)
+        .map_err(|error| format!("验证恢复后的 Codex 配置失败: {error}"))?;
+    if rendered.trim().is_empty() {
+        fs::remove_file(path).map_err(|error| {
+            format!("删除空的 Codex 配置失败 {}: {error}", path_to_string(path))
+        })?;
+    } else {
+        write_bytes_directly(path, rendered.as_bytes())?;
+    }
+    let mut changed = vec![path_to_string(path)];
+    if managed_catalog {
+        let catalog_path = path.with_file_name(CODEX_MODEL_CATALOG_FILE);
+        if catalog_path.is_file() {
+            fs::remove_file(&catalog_path).map_err(|error| {
+                format!(
+                    "删除 Codex CPA 模型目录失败 {}: {error}",
+                    path_to_string(&catalog_path)
+                )
+            })?;
+            changed.push(path_to_string(&catalog_path));
+        }
+    }
+    Ok(changed)
+}
+
+fn remove_opencode_managed_configuration(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    let Some(path) = paths.first() else {
+        return Err("OpenCode 当前平台配置路径不可用".to_string());
+    };
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let updated = update_agent_json_file(path, "OpenCode 配置", |root| {
+        let mut changed = false;
+        if root
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|model| model.starts_with(&prefix))
+        {
+            root.remove("model");
+            changed = true;
+        }
+        let providers_empty = if let Some(providers) = root
+            .get_mut("provider")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            changed |= providers.remove(MANAGED_AGENT_PROVIDER_ID).is_some();
+            providers.is_empty()
+        } else {
+            false
+        };
+        if providers_empty {
+            root.remove("provider");
+        }
+        changed
+    })?;
+    Ok(updated.then(|| path_to_string(path)).into_iter().collect())
+}
+
+fn update_agent_json5_file<F>(path: &Path, label: &str, update: F) -> Result<bool, String>
+where
+    F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> bool,
+{
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 {label} 失败 {}: {error}", path_to_string(path)))?;
+    let value = json5::from_str::<serde_json::Value>(&content)
+        .map_err(|error| format!("解析 {label} 失败: {error}"))?;
+    let mut root = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| format!("{label} 根节点必须是对象"))?;
+    if !update(&mut root) {
+        return Ok(false);
+    }
+    if root.is_empty() {
+        fs::remove_file(path)
+            .map_err(|error| format!("删除空的 {label} 失败 {}: {error}", path_to_string(path)))?;
+    } else {
+        let rendered = render_agent_json(root, label)?;
+        let comments = extract_json5_comments(&content);
+        let rendered = if comments.is_empty() {
+            rendered
+        } else {
+            format!("{}\n{rendered}", comments.join("\n"))
+        };
+        write_bytes_directly(path, rendered.as_bytes())?;
+    }
+    Ok(true)
+}
+
+fn remove_openclaw_managed_configuration(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    let Some(path) = paths.first() else {
+        return Err("OpenClaw 当前平台配置路径不可用".to_string());
+    };
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let updated = update_agent_json5_file(path, "OpenClaw 配置", |root| {
+        let mut changed = false;
+        if let Some(models) = root
+            .get_mut("models")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            let providers_empty = if let Some(providers) = models
+                .get_mut("providers")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                changed |= providers.remove(MANAGED_AGENT_PROVIDER_ID).is_some();
+                providers.is_empty()
+            } else {
+                false
+            };
+            if providers_empty {
+                models.remove("providers");
+            }
+        }
+        if let Some(defaults) = root
+            .get_mut("agents")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|agents| agents.get_mut("defaults"))
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            let model_empty = if let Some(model) = defaults
+                .get_mut("model")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                if model
+                    .get("primary")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|model| model.starts_with(&prefix))
+                {
+                    model.remove("primary");
+                    changed = true;
+                }
+                model.is_empty()
+            } else {
+                false
+            };
+            if model_empty {
+                defaults.remove("model");
+            }
+            let catalog_empty = if let Some(catalog) = defaults
+                .get_mut("models")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                let previous_len = catalog.len();
+                catalog.retain(|name, _| !name.starts_with(&prefix));
+                changed |= catalog.len() != previous_len;
+                catalog.is_empty()
+            } else {
+                false
+            };
+            if catalog_empty {
+                defaults.remove("models");
+            }
+        }
+        changed
+    })?;
+    Ok(updated.then(|| path_to_string(path)).into_iter().collect())
+}
+
+fn remove_hermes_managed_configuration(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    let Some(path) = paths.first() else {
+        return Err("Hermes 当前平台配置路径不可用".to_string());
+    };
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 Hermes 配置失败 {}: {error}", path_to_string(path)))?;
+    let mut document = yaml_serde_edit::YamlValue::parse(&content)
+        .map_err(|error| format!("解析 Hermes 配置失败: {error}"))?;
+    let mut updated = document.get().clone();
+    let root = updated
+        .as_mapping_mut()
+        .ok_or_else(|| "Hermes 配置根节点必须是映射".to_string())?;
+    let mut changed = false;
+    let providers_empty = if let Some(providers) = root
+        .get_mut(yaml_key("custom_providers"))
+        .and_then(serde_norway::Value::as_sequence_mut)
+    {
+        let previous_len = providers.len();
+        providers.retain(|provider| {
+            provider.get("name").and_then(serde_norway::Value::as_str)
+                != Some(MANAGED_AGENT_PROVIDER_ID)
+        });
+        changed |= providers.len() != previous_len;
+        providers.is_empty()
+    } else {
+        false
+    };
+    if providers_empty {
+        root.remove(yaml_key("custom_providers"));
+    }
+    let model_empty = if let Some(model) = root
+        .get_mut(yaml_key("model"))
+        .and_then(serde_norway::Value::as_mapping_mut)
+    {
+        if model
+            .get(yaml_key("provider"))
+            .and_then(serde_norway::Value::as_str)
+            == Some(MANAGED_AGENT_PROVIDER_ID)
+        {
+            model.remove(yaml_key("provider"));
+            model.remove(yaml_key("default"));
+            changed = true;
+        }
+        model.is_empty()
+    } else {
+        false
+    };
+    if model_empty {
+        root.remove(yaml_key("model"));
+    }
+    if !changed {
+        return Ok(Vec::new());
+    }
+    if root.is_empty() {
+        fs::remove_file(path).map_err(|error| {
+            format!("删除空的 Hermes 配置失败 {}: {error}", path_to_string(path))
+        })?;
+    } else {
+        let rendered = render_updated_core_yaml(&mut document, updated)?;
+        write_bytes_directly(path, rendered.as_bytes())?;
+    }
+    Ok(vec![path_to_string(path)])
+}
+
+fn remove_agent_managed_configuration(
+    client: AgentClient,
+    paths: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    match client {
+        AgentClient::ClaudeCode => remove_claude_code_managed_configuration(paths),
+        AgentClient::ClaudeDesktop => remove_claude_desktop_managed_configuration(paths),
+        AgentClient::Codex => remove_codex_managed_configuration(paths),
+        AgentClient::OpenCode => remove_opencode_managed_configuration(paths),
+        AgentClient::OpenClaw => remove_openclaw_managed_configuration(paths),
+        AgentClient::Hermes => remove_hermes_managed_configuration(paths),
+    }
+}
+
+fn restore_json_key(
+    current: &mut serde_json::Map<String, serde_json::Value>,
+    original: Option<&serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+) {
+    if let Some(value) = original.and_then(|root| root.get(key)).cloned() {
+        current.insert(key.to_string(), value);
+    } else {
+        current.remove(key);
+    }
+}
+
+fn parse_restored_json_object(
+    content: Option<&str>,
+    label: &str,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    content
+        .map(|content| parse_agent_json_object(Some(content), label))
+        .transpose()
+}
+
+fn render_restored_json(
+    root: serde_json::Map<String, serde_json::Value>,
+    original_existed: bool,
+    label: &str,
+) -> Result<Option<String>, String> {
+    if root.is_empty() && !original_existed {
+        Ok(None)
+    } else {
+        render_agent_json(root, label).map(Some)
+    }
+}
+
+fn build_restored_claude_code_config(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut root = parse_agent_json_object(Some(current), "当前 Claude Code 配置")?;
+    let original_root = parse_restored_json_object(original, "原始 Claude Code 配置")?;
+    restore_json_key(&mut root, original_root.as_ref(), "model");
+    let original_env = original_root
+        .as_ref()
+        .and_then(|root| root.get("env"))
+        .and_then(serde_json::Value::as_object);
+    if root.get("env").is_some_and(serde_json::Value::is_object) {
+        let env = root
+            .get_mut("env")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("Claude Code env was checked as an object");
+        for key in [
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        ] {
+            restore_json_key(env, original_env, key);
+        }
+        if env.is_empty() && original_env.is_none() {
+            root.remove("env");
+        }
+    } else {
+        restore_json_key(&mut root, original_root.as_ref(), "env");
+    }
+    render_restored_json(root, original.is_some(), "恢复后的 Claude Code 配置")
+}
+
+fn build_restored_claude_desktop_config(
+    index: usize,
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut root = parse_agent_json_object(Some(current), "当前 Claude Desktop 配置")?;
+    let original_root = parse_restored_json_object(original, "原始 Claude Desktop 配置")?;
+    match index {
+        0 | 1 => restore_json_key(&mut root, original_root.as_ref(), "deploymentMode"),
+        2 => {
+            for key in [
+                "coworkEgressAllowedHosts",
+                "disableDeploymentModeChooser",
+                "inferenceGatewayApiKey",
+                "inferenceGatewayAuthScheme",
+                "inferenceGatewayBaseUrl",
+                "inferenceProvider",
+                "inferenceModels",
+            ] {
+                restore_json_key(&mut root, original_root.as_ref(), key);
+            }
+        }
+        3 => {
+            restore_json_key(&mut root, original_root.as_ref(), "appliedId");
+            let mut entries = root
+                .remove("entries")
+                .and_then(|value| value.as_array().cloned())
+                .unwrap_or_default();
+            entries.retain(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str)
+                    != Some(CLAUDE_DESKTOP_PROFILE_ID)
+            });
+            let original_managed_entries = original_root
+                .as_ref()
+                .and_then(|root| root.get("entries"))
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|entry| {
+                    entry.get("id").and_then(serde_json::Value::as_str)
+                        == Some(CLAUDE_DESKTOP_PROFILE_ID)
+                })
+                .cloned();
+            entries.extend(original_managed_entries);
+            if !entries.is_empty()
+                || original_root
+                    .as_ref()
+                    .and_then(|root| root.get("entries"))
+                    .is_some()
+            {
+                root.insert("entries".to_string(), serde_json::Value::Array(entries));
+            }
+        }
+        _ => return Err("Claude Desktop 配置文件索引无效".to_string()),
+    }
+    render_restored_json(root, original.is_some(), "恢复后的 Claude Desktop 配置")
+}
+
+fn build_restored_opencode_config(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut root = parse_agent_json_object(Some(current), "当前 OpenCode 配置")?;
+    let original_root = parse_restored_json_object(original, "原始 OpenCode 配置")?;
+    for key in ["$schema", "model"] {
+        restore_json_key(&mut root, original_root.as_ref(), key);
+    }
+    let original_provider = original_root
+        .as_ref()
+        .and_then(|root| root.get("provider"))
+        .and_then(serde_json::Value::as_object);
+    let original_managed = original_provider
+        .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+        .and_then(serde_json::Value::as_object);
+    if root
+        .get("provider")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        let providers = root
+            .get_mut("provider")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("OpenCode provider was checked as an object");
+        if providers
+            .get(MANAGED_AGENT_PROVIDER_ID)
+            .is_some_and(serde_json::Value::is_object)
+        {
+            let managed = providers
+                .get_mut(MANAGED_AGENT_PROVIDER_ID)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("OpenCode managed provider was checked as an object");
+            for key in ["npm", "name", "models"] {
+                restore_json_key(managed, original_managed, key);
+            }
+            let original_options = original_managed
+                .and_then(|managed| managed.get("options"))
+                .and_then(serde_json::Value::as_object);
+            if managed
+                .get("options")
+                .is_some_and(serde_json::Value::is_object)
+            {
+                let options = managed
+                    .get_mut("options")
+                    .and_then(serde_json::Value::as_object_mut)
+                    .expect("OpenCode options were checked as an object");
+                for key in ["baseURL", "apiKey"] {
+                    restore_json_key(options, original_options, key);
+                }
+                if options.is_empty() && original_options.is_none() {
+                    managed.remove("options");
+                }
+            } else {
+                restore_json_key(managed, original_managed, "options");
+            }
+            if managed.is_empty() && original_managed.is_none() {
+                providers.remove(MANAGED_AGENT_PROVIDER_ID);
+            }
+        } else if let Some(original_managed) = original_provider
+            .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+            .cloned()
+        {
+            providers.insert(MANAGED_AGENT_PROVIDER_ID.to_string(), original_managed);
+        }
+        if providers.is_empty() && original_provider.is_none() {
+            root.remove("provider");
+        }
+    } else {
+        restore_json_key(&mut root, original_root.as_ref(), "provider");
+    }
+    render_restored_json(root, original.is_some(), "恢复后的 OpenCode 配置")
+}
+
+fn build_restored_openclaw_config(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    let current_value = json5::from_str::<serde_json::Value>(current)
+        .map_err(|error| format!("当前 OpenClaw 配置格式无效: {error}"))?;
+    let mut root = current_value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "当前 OpenClaw 配置根节点必须是对象".to_string())?;
+    let original_root = original
+        .map(|content| {
+            json5::from_str::<serde_json::Value>(content)
+                .map_err(|error| format!("原始 OpenClaw 配置格式无效: {error}"))?
+                .as_object()
+                .cloned()
+                .ok_or_else(|| "原始 OpenClaw 配置根节点必须是对象".to_string())
+        })
+        .transpose()?;
+    let original_models = original_root
+        .as_ref()
+        .and_then(|root| root.get("models"))
+        .and_then(serde_json::Value::as_object);
+    if root.get("models").is_some_and(serde_json::Value::is_object) {
+        let models = root
+            .get_mut("models")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("OpenClaw models were checked as an object");
+        restore_json_key(models, original_models, "mode");
+        let original_providers = original_models
+            .and_then(|models| models.get("providers"))
+            .and_then(serde_json::Value::as_object);
+        if models
+            .get("providers")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            let providers = models
+                .get_mut("providers")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("OpenClaw providers were checked as an object");
+            let original_managed = original_providers
+                .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+                .and_then(serde_json::Value::as_object);
+            if providers
+                .get(MANAGED_AGENT_PROVIDER_ID)
+                .is_some_and(serde_json::Value::is_object)
+            {
+                let managed = providers
+                    .get_mut(MANAGED_AGENT_PROVIDER_ID)
+                    .and_then(serde_json::Value::as_object_mut)
+                    .expect("OpenClaw managed provider was checked as an object");
+                for key in ["baseUrl", "apiKey", "api", "models"] {
+                    restore_json_key(managed, original_managed, key);
+                }
+                if managed.is_empty() && original_managed.is_none() {
+                    providers.remove(MANAGED_AGENT_PROVIDER_ID);
+                }
+            } else if let Some(original_managed) = original_providers
+                .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+                .cloned()
+            {
+                providers.insert(MANAGED_AGENT_PROVIDER_ID.to_string(), original_managed);
+            }
+            if providers.is_empty() && original_providers.is_none() {
+                models.remove("providers");
+            }
+        } else {
+            restore_json_key(models, original_models, "providers");
+        }
+        if models.is_empty() && original_models.is_none() {
+            root.remove("models");
+        }
+    } else {
+        restore_json_key(&mut root, original_root.as_ref(), "models");
+    }
+
+    let original_defaults = original_root
+        .as_ref()
+        .and_then(|root| root.get("agents"))
+        .and_then(|agents| agents.get("defaults"))
+        .and_then(serde_json::Value::as_object);
+    if let Some(defaults) = root
+        .get_mut("agents")
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|agents| agents.get_mut("defaults"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        let original_model = original_defaults
+            .and_then(|defaults| defaults.get("model"))
+            .and_then(serde_json::Value::as_object);
+        if defaults
+            .get("model")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            let model = defaults
+                .get_mut("model")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("OpenClaw default model was checked as an object");
+            restore_json_key(model, original_model, "primary");
+            if model.is_empty() && original_model.is_none() {
+                defaults.remove("model");
+            }
+        } else {
+            restore_json_key(defaults, original_defaults, "model");
+        }
+
+        let original_catalog = original_defaults
+            .and_then(|defaults| defaults.get("models"))
+            .and_then(serde_json::Value::as_object);
+        if defaults
+            .get("models")
+            .is_some_and(serde_json::Value::is_object)
+        {
+            let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+            let catalog = defaults
+                .get_mut("models")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("OpenClaw model catalog was checked as an object");
+            catalog.retain(|name, _| !name.starts_with(&prefix));
+            if let Some(original_catalog) = original_catalog {
+                catalog.extend(
+                    original_catalog
+                        .iter()
+                        .filter(|(name, _)| name.starts_with(&prefix))
+                        .map(|(name, value)| (name.clone(), value.clone())),
+                );
+            }
+            if catalog.is_empty() && original_catalog.is_none() {
+                defaults.remove("models");
+            }
+        } else {
+            restore_json_key(defaults, original_defaults, "models");
+        }
+    }
+    let original_agents = original_root
+        .as_ref()
+        .and_then(|root| root.get("agents"))
+        .and_then(serde_json::Value::as_object);
+    if let Some(agents) = root
+        .get_mut("agents")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        let remove_defaults = agents
+            .get("defaults")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(serde_json::Map::is_empty)
+            && original_defaults.is_none();
+        if remove_defaults {
+            agents.remove("defaults");
+        }
+        if agents.is_empty() && original_agents.is_none() {
+            root.remove("agents");
+        }
+    }
+    if root.is_empty() && original.is_none() {
+        return Ok(None);
+    }
+    let rendered = render_agent_json(root, "恢复后的 OpenClaw 配置")?;
+    let comments = extract_json5_comments(current);
+    Ok(Some(if comments.is_empty() {
+        rendered
+    } else {
+        format!("{}\n{rendered}", comments.join("\n"))
+    }))
+}
+
+fn restore_yaml_key(
+    current: &mut serde_norway::Mapping,
+    original: Option<&serde_norway::Mapping>,
+    key: &str,
+) {
+    if let Some(value) = original.and_then(|root| root.get(yaml_key(key))).cloned() {
+        current.insert(yaml_key(key), value);
+    } else {
+        current.remove(yaml_key(key));
+    }
+}
+
+fn build_restored_hermes_config(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut document = yaml_serde_edit::YamlValue::parse(current)
+        .map_err(|error| format!("当前 Hermes 配置格式无效: {error}"))?;
+    let mut updated = document.get().clone();
+    let root = updated
+        .as_mapping_mut()
+        .ok_or_else(|| "当前 Hermes 配置根节点必须是映射".to_string())?;
+    let original_value = original
+        .map(|content| {
+            serde_norway::from_str::<serde_norway::Value>(content)
+                .map_err(|error| format!("原始 Hermes 配置格式无效: {error}"))
+        })
+        .transpose()?;
+    let original_root = original_value
+        .as_ref()
+        .and_then(serde_norway::Value::as_mapping);
+    let original_managed = original_root
+        .and_then(|root| root.get(yaml_key("custom_providers")))
+        .and_then(serde_norway::Value::as_sequence)
+        .and_then(|providers| {
+            providers.iter().find(|provider| {
+                provider.get("name").and_then(serde_norway::Value::as_str)
+                    == Some(MANAGED_AGENT_PROVIDER_ID)
+            })
+        });
+    if let Some(providers) = root
+        .get_mut(yaml_key("custom_providers"))
+        .and_then(serde_norway::Value::as_sequence_mut)
+    {
+        let current_managed = providers
+            .iter()
+            .find(|provider| {
+                provider.get("name").and_then(serde_norway::Value::as_str)
+                    == Some(MANAGED_AGENT_PROVIDER_ID)
+            })
+            .and_then(serde_norway::Value::as_mapping)
+            .cloned();
+        providers.retain(|provider| {
+            provider.get("name").and_then(serde_norway::Value::as_str)
+                != Some(MANAGED_AGENT_PROVIDER_ID)
+        });
+        let mut managed = current_managed.unwrap_or_default();
+        let original_managed = original_managed.and_then(serde_norway::Value::as_mapping);
+        for key in ["name", "base_url", "api_key", "api_mode", "model", "models"] {
+            restore_yaml_key(&mut managed, original_managed, key);
+        }
+        if original_managed.is_some() {
+            providers.push(serde_norway::Value::Mapping(managed));
+        } else if !managed.is_empty() {
+            managed.insert(
+                yaml_key("name"),
+                serde_norway::Value::String(MANAGED_AGENT_PROVIDER_ID.to_string()),
+            );
+            providers.push(serde_norway::Value::Mapping(managed));
+        }
+        if providers.is_empty()
+            && original_root
+                .and_then(|root| root.get(yaml_key("custom_providers")))
+                .is_none()
+        {
+            root.remove(yaml_key("custom_providers"));
+        }
+    } else {
+        restore_yaml_key(root, original_root, "custom_providers");
+    }
+    let original_model = original_root
+        .and_then(|root| root.get(yaml_key("model")))
+        .and_then(serde_norway::Value::as_mapping);
+    if let Some(model) = root
+        .get_mut(yaml_key("model"))
+        .and_then(serde_norway::Value::as_mapping_mut)
+    {
+        for key in ["default", "provider"] {
+            restore_yaml_key(model, original_model, key);
+        }
+        if model.is_empty() && original_model.is_none() {
+            root.remove(yaml_key("model"));
+        }
+    } else {
+        restore_yaml_key(root, original_root, "model");
+    }
+    if root.is_empty() && original.is_none() {
+        return Ok(None);
+    }
+    render_updated_core_yaml(&mut document, updated).map(Some)
+}
+
+fn agent_config_semantically_equal(client: AgentClient, actual: &str, expected: &str) -> bool {
+    match client {
+        AgentClient::Codex => {
+            toml::from_str::<toml::Value>(actual).ok()
+                == toml::from_str::<toml::Value>(expected).ok()
+        }
+        AgentClient::OpenClaw => {
+            json5::from_str::<serde_json::Value>(actual).ok()
+                == json5::from_str::<serde_json::Value>(expected).ok()
+        }
+        AgentClient::Hermes => {
+            serde_norway::from_str::<serde_norway::Value>(actual).ok()
+                == serde_norway::from_str::<serde_norway::Value>(expected).ok()
+        }
+        _ => {
+            serde_json::from_str::<serde_json::Value>(actual).ok()
+                == serde_json::from_str::<serde_json::Value>(expected).ok()
+        }
+    }
+}
+
+fn build_agent_session_restored_bytes(
+    client: AgentClient,
+    paths: &[PathBuf],
+    path: &Path,
+    current: Option<&[u8]>,
+    original: Option<&[u8]>,
+) -> Result<Option<Vec<u8>>, String> {
+    let Some(current) = current else {
+        return Ok(original.map(ToOwned::to_owned));
+    };
+    if client == AgentClient::Codex && paths.first().is_none_or(|config| config != path) {
+        return Ok(original.map(ToOwned::to_owned));
+    }
+    let current = std::str::from_utf8(current)
+        .map_err(|_| format!("当前智能体配置不是 UTF-8 文本: {}", path_to_string(path)))?;
+    let original_bytes = original;
+    let original = original_bytes
+        .map(|bytes| {
+            std::str::from_utf8(bytes)
+                .map_err(|_| format!("原智能体配置不是 UTF-8 文本: {}", path_to_string(path)))
+        })
+        .transpose()?;
+    let restored = match client {
+        AgentClient::ClaudeCode => build_restored_claude_code_config(current, original)?,
+        AgentClient::ClaudeDesktop => {
+            let index = paths
+                .iter()
+                .position(|candidate| candidate == path)
+                .ok_or_else(|| "Claude Desktop 恢复路径不匹配".to_string())?;
+            build_restored_claude_desktop_config(index, current, original)?
+        }
+        AgentClient::Codex => build_restored_codex_agent_config(Some(current), original)?,
+        AgentClient::OpenCode => build_restored_opencode_config(current, original)?,
+        AgentClient::OpenClaw => build_restored_openclaw_config(current, original)?,
+        AgentClient::Hermes => build_restored_hermes_config(current, original)?,
+    };
+    if let (Some(restored), Some(original), Some(original_bytes)) =
+        (restored.as_deref(), original, original_bytes)
+    {
+        if agent_config_semantically_equal(client, restored, original) {
+            return Ok(Some(original_bytes.to_vec()));
+        }
+    }
+    Ok(restored.map(String::into_bytes))
+}
+
 #[cfg(test)]
 fn build_codex_agent_config(
     existing: Option<&str>,
@@ -4750,9 +5794,7 @@ fn build_codex_agent_config_with_oauth(
     Ok(rendered)
 }
 
-#[cfg(test)]
 const CODEX_MANAGED_ROOT_KEYS: [&str; 3] = ["model_provider", "model", "model_catalog_json"];
-#[cfg(test)]
 const CODEX_MANAGED_PROVIDER_KEYS: [&str; 5] = [
     "name",
     "base_url",
@@ -4771,7 +5813,6 @@ fn set_codex_table_item(table: &mut toml_edit::Table, key: &str, mut item: toml_
     *table.entry(key).or_insert(toml_edit::Item::None) = item;
 }
 
-#[cfg(test)]
 fn restore_codex_table_item(
     current: &mut toml_edit::Table,
     original: Option<&toml_edit::Table>,
@@ -4794,7 +5835,6 @@ fn restore_codex_table_item(
     }
 }
 
-#[cfg(test)]
 fn parse_codex_document(content: Option<&str>, label: &str) -> Result<toml_edit::Document, String> {
     use toml_edit::Document;
 
@@ -4806,7 +5846,6 @@ fn parse_codex_document(content: Option<&str>, label: &str) -> Result<toml_edit:
     }
 }
 
-#[cfg(test)]
 fn codex_provider_table(document: &toml_edit::Document) -> Option<&toml_edit::Table> {
     document
         .as_table()
@@ -4816,7 +5855,6 @@ fn codex_provider_table(document: &toml_edit::Document) -> Option<&toml_edit::Ta
         .and_then(toml_edit::Item::as_table)
 }
 
-#[cfg(test)]
 fn ensure_codex_provider_table(
     document: &mut toml_edit::Document,
 ) -> Result<&mut toml_edit::Table, String> {
@@ -4839,7 +5877,21 @@ fn ensure_codex_provider_table(
         .ok_or_else(|| "Codex cpa-gui provider 必须是 TOML 表".to_string())
 }
 
-#[cfg(test)]
+fn merge_missing_codex_table_items(current: &mut toml_edit::Table, original: &toml_edit::Table) {
+    for (key, original_item) in original.iter() {
+        if !current.contains_key(key) {
+            current.insert(key, original_item.clone());
+            continue;
+        }
+        if let (Some(current_table), Some(original_table)) = (
+            current.get_mut(key).and_then(toml_edit::Item::as_table_mut),
+            original_item.as_table(),
+        ) {
+            merge_missing_codex_table_items(current_table, original_table);
+        }
+    }
+}
+
 fn build_restored_codex_agent_config(
     current: Option<&str>,
     original: Option<&str>,
@@ -4850,6 +5902,12 @@ fn build_restored_codex_agent_config(
     let original_document = original
         .map(|content| parse_codex_document(Some(content), "原始 Codex config.toml"))
         .transpose()?;
+    if let Some(original_document) = original_document.as_ref() {
+        merge_missing_codex_table_items(
+            current_document.as_table_mut(),
+            original_document.as_table(),
+        );
+    }
 
     for key in CODEX_MANAGED_ROOT_KEYS {
         restore_codex_table_item(
@@ -5368,6 +6426,48 @@ fn recover_codex_applied_state_from_backups(
     Ok(Some(state))
 }
 
+fn validate_agent_applied_state(
+    client: AgentClient,
+    paths: &[PathBuf],
+    state: &AgentAppliedState,
+) -> Result<(), String> {
+    if state.client != client.id() {
+        return Err("智能体应用状态与客户端不匹配".to_string());
+    }
+    if state.backup_files.is_empty() {
+        return Ok(());
+    }
+    let expected_paths = expected_agent_record_paths(client, paths);
+    let state_paths = state
+        .backup_files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    let valid_paths = state_paths == expected_paths
+        || (client == AgentClient::Codex && state_paths.as_slice() == paths);
+    if !valid_paths {
+        return Err("智能体应用状态文件数量或路径不匹配".to_string());
+    }
+    for file in &state.backup_files {
+        let legacy_backup = agent_backup_path(&file.path)?;
+        let original_name = file
+            .path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| format!("智能体配置文件名无效: {}", path_to_string(&file.path)))?;
+        let dated_backup = file.backup_path.parent() == file.path.parent()
+            && file
+                .backup_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| is_dated_agent_backup_name(name, original_name));
+        if file.backup_path != legacy_backup && !dated_backup {
+            return Err("智能体应用状态包含非预期备份路径".to_string());
+        }
+    }
+    Ok(())
+}
+
 fn load_agent_applied_state(
     client: AgentClient,
     home: &Path,
@@ -5402,13 +6502,12 @@ fn load_agent_applied_state(
     let version = value
         .get("version")
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| "智能体应用状态缺少版本号".to_string())? as u8;
+        .ok_or_else(|| "智能体应用状态缺少版本号".to_string())?;
+    let version = u8::try_from(version).map_err(|_| "不支持的智能体应用状态版本".to_string())?;
     if version == AGENT_APPLIED_STATE_VERSION || version == 3 {
         let state = serde_json::from_value::<AgentAppliedState>(value)
             .map_err(|error| format!("解析智能体应用状态失败: {error}"))?;
-        if state.client != client.id() {
-            return Err("智能体应用状态与客户端不匹配".to_string());
-        }
+        validate_agent_applied_state(client, &paths, &state)?;
         if client == AgentClient::Codex {
             write_agent_applied_state(&state_path, &state)?;
         }
@@ -5423,23 +6522,27 @@ fn load_agent_applied_state(
     let record = serde_json::from_value::<AgentModificationRecord>(value)
         .map_err(|error| format!("解析旧版智能体状态失败: {error}"))?;
     validate_agent_record(client, &paths, &record)?;
+    let backup_files = record
+        .files
+        .iter()
+        .map(|file| AgentAppliedBackupFile {
+            path: file.path.clone(),
+            backup_path: file.backup_path.clone(),
+            existed_before: file.existed_before,
+        })
+        .collect();
     let state = AgentAppliedState {
         version: AGENT_APPLIED_STATE_VERSION,
         client: client.id().to_string(),
         model: record.model,
         claude_desktop_model_mappings: None,
-        backup_files: Vec::new(),
+        backup_files,
         updated_at_unix: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
     };
     write_agent_applied_state(&state_path, &state)?;
-    for backup_path in record.files.into_iter().map(|file| file.backup_path) {
-        if backup_path.is_file() {
-            let _ = fs::remove_file(backup_path);
-        }
-    }
     Ok(Some(state))
 }
 
@@ -6338,47 +7441,102 @@ fn prepare_agent_session_backups(
 }
 
 fn restore_agent_session_configuration(client: AgentClient, home: &Path) -> Result<(), String> {
+    let paths = agent_config_paths(client, home);
+    let state_path = agent_state_path(&paths)?;
     let Some(state) = load_agent_applied_state(client, home)? else {
         return Ok(());
     };
-    if state.backup_files.is_empty() {
-        return Ok(());
-    }
+    restore_agent_applied_state_configuration(client, &paths, &state_path, &state)
+}
 
-    for file in state.backup_files.iter().rev() {
-        if file.existed_before {
-            let original = fs::read(&file.backup_path).map_err(|error| {
-                format!(
-                    "读取智能体备份失败 {}: {error}",
-                    path_to_string(&file.backup_path)
+fn restore_agent_applied_state_configuration(
+    client: AgentClient,
+    paths: &[PathBuf],
+    state_path: &Path,
+    state: &AgentAppliedState,
+) -> Result<(), String> {
+    validate_agent_applied_state(client, paths, state)?;
+    if state.backup_files.is_empty() {
+        if agent_has_managed_marker(client, paths)? {
+            remove_agent_managed_configuration(client, paths)?;
+        }
+    } else {
+        let originals = state
+            .backup_files
+            .iter()
+            .map(|file| {
+                if file.existed_before {
+                    fs::read(&file.backup_path).map(Some).map_err(|error| {
+                        format!(
+                            "读取智能体备份失败 {}: {error}",
+                            path_to_string(&file.backup_path)
+                        )
+                    })
+                } else {
+                    Ok(None)
+                }
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let snapshots = state
+            .backup_files
+            .iter()
+            .map(|file| Ok((file.path.clone(), read_agent_bytes(&file.path)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        let replacements = state
+            .backup_files
+            .iter()
+            .zip(&originals)
+            .zip(&snapshots)
+            .map(|((file, original), (_, current))| {
+                build_agent_session_restored_bytes(
+                    client,
+                    paths,
+                    &file.path,
+                    current.as_deref(),
+                    original.as_deref(),
                 )
-            })?;
-            write_bytes_directly(&file.path, &original)?;
-            fs::remove_file(&file.backup_path).map_err(|error| {
-                format!(
-                    "清理智能体备份失败 {}: {error}",
-                    path_to_string(&file.backup_path)
-                )
-            })?;
-        } else if file.path.exists() {
-            fs::remove_file(&file.path).map_err(|error| {
-                format!(
-                    "删除临时智能体配置失败 {}: {error}",
-                    path_to_string(&file.path)
-                )
-            })?;
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let restore_result = (|| -> Result<(), String> {
+            for (file, replacement) in state.backup_files.iter().zip(&replacements).rev() {
+                if let Some(replacement) = replacement {
+                    write_bytes_directly(&file.path, replacement)?;
+                } else if file.path.exists() {
+                    fs::remove_file(&file.path).map_err(|error| {
+                        format!(
+                            "删除临时智能体配置失败 {}: {error}",
+                            path_to_string(&file.path)
+                        )
+                    })?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = restore_result {
+            return match restore_agent_snapshots_direct(&snapshots) {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(format!("{error}；回滚恢复操作失败: {rollback_error}")),
+            };
+        }
+        for file in &state.backup_files {
+            if file.existed_before && file.backup_path.is_file() {
+                fs::remove_file(&file.backup_path).map_err(|error| {
+                    format!(
+                        "清理智能体备份失败 {}: {error}",
+                        path_to_string(&file.backup_path)
+                    )
+                })?;
+            }
         }
     }
-
-    let state_path = agent_state_path(&agent_config_paths(client, home))?;
     if client == AgentClient::Codex {
-        clear_codex_applied_state(&state_path)?;
+        clear_codex_applied_state(state_path)?;
     }
     if state_path.is_file() {
-        fs::remove_file(&state_path).map_err(|error| {
+        fs::remove_file(state_path).map_err(|error| {
             format!(
                 "清理智能体应用状态失败 {}: {error}",
-                path_to_string(&state_path)
+                path_to_string(state_path)
             )
         })?;
     }
@@ -15580,6 +16738,9 @@ mod tests {
         assert!(backup.is_file());
         assert_eq!(fs::read(&backup).unwrap(), original);
         assert!(fs::read_to_string(&path).unwrap().contains("managed"));
+        let inspection = inspect_agent_application(AgentClient::OpenCode, &home);
+        assert_eq!(inspection.state, "applied");
+        assert!(inspection.backup_available);
 
         restore_agent_session_configuration(AgentClient::OpenCode, &home).unwrap();
         assert_eq!(fs::read(&path).unwrap(), original);
@@ -15587,6 +16748,788 @@ mod tests {
         assert!(!agent_state_path(std::slice::from_ref(&path))
             .unwrap()
             .exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn opencode_runtime_edits_survive_close_and_next_apply_owns_conflicts() {
+        let home = agent_test_home("opencode-runtime-edit-merge");
+        let path = home.join(".config/opencode/opencode.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"provider":{"other":{"keep":"original"}},"keep":"root"}"#,
+        )
+        .unwrap();
+        let models = test_agent_models(&["gpt-one", "gpt-two"]);
+        apply_agent_configuration(
+            AgentClient::OpenCode,
+            &home,
+            8317,
+            DEFAULT_API_KEY,
+            "gpt-one",
+            &models,
+            None,
+        )
+        .unwrap();
+
+        let mut runtime: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        runtime["agentAdded"] = serde_json::json!({"enabled": true});
+        runtime["provider"]["other"]["runtimeAdded"] = serde_json::json!(42);
+        runtime["provider"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"] =
+            serde_json::json!("keep-me");
+        runtime["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["baseURL"] =
+            serde_json::json!("https://agent-overwrite.invalid/v1");
+        runtime["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["apiKey"] =
+            serde_json::json!("agent-overwrite");
+        runtime["model"] = serde_json::json!("cpa-gui/agent-overwrite");
+        fs::write(&path, serde_json::to_string_pretty(&runtime).unwrap()).unwrap();
+
+        restore_agent_session_configuration(AgentClient::OpenCode, &home).unwrap();
+        let closed: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(closed["keep"], "root");
+        assert_eq!(closed["agentAdded"]["enabled"], true);
+        assert_eq!(closed["provider"]["other"]["keep"], "original");
+        assert_eq!(closed["provider"]["other"]["runtimeAdded"], 42);
+        assert_eq!(
+            closed["provider"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"],
+            "keep-me"
+        );
+        assert!(closed.get("model").is_none());
+        assert!(closed.get("$schema").is_none());
+        assert!(closed["provider"][MANAGED_AGENT_PROVIDER_ID]
+            .get("options")
+            .is_none());
+
+        apply_agent_configuration(
+            AgentClient::OpenCode,
+            &home,
+            8317,
+            DEFAULT_API_KEY,
+            "gpt-two",
+            &models,
+            None,
+        )
+        .unwrap();
+        let reapplied: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reapplied["model"], "cpa-gui/gpt-two");
+        assert_eq!(
+            reapplied["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["baseURL"],
+            "http://127.0.0.1:8317/v1"
+        );
+        assert_eq!(
+            reapplied["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["apiKey"],
+            DEFAULT_API_KEY
+        );
+        assert_eq!(
+            reapplied["provider"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"],
+            "keep-me"
+        );
+        assert_eq!(reapplied["agentAdded"]["enabled"], true);
+        assert_eq!(reapplied["provider"]["other"]["runtimeAdded"], 42);
+
+        restore_agent_session_configuration(AgentClient::OpenCode, &home).unwrap();
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn session_merge_preserves_runtime_fields_for_other_agent_formats() {
+        let claude_original = r#"{"env":{"KEEP_ENV":"original"},"keep":"claude"}"#;
+        let claude_managed = build_claude_agent_config(
+            Some(claude_original),
+            "http://127.0.0.1:8317",
+            DEFAULT_API_KEY,
+            "gpt-test",
+        )
+        .unwrap();
+        let mut claude_current: serde_json::Value = serde_json::from_str(&claude_managed).unwrap();
+        claude_current["runtimeAdded"] = serde_json::json!(true);
+        claude_current["env"]["RUNTIME_ENV"] = serde_json::json!("keep");
+        claude_current["env"]["ANTHROPIC_BASE_URL"] =
+            serde_json::json!("https://agent-overwrite.invalid");
+        let claude_restored = build_restored_claude_code_config(
+            &serde_json::to_string(&claude_current).unwrap(),
+            Some(claude_original),
+        )
+        .unwrap()
+        .unwrap();
+        let claude: serde_json::Value = serde_json::from_str(&claude_restored).unwrap();
+        assert_eq!(claude["runtimeAdded"], true);
+        assert_eq!(claude["env"]["RUNTIME_ENV"], "keep");
+        assert_eq!(claude["env"]["KEEP_ENV"], "original");
+        assert!(claude["env"].get("ANTHROPIC_BASE_URL").is_none());
+        assert!(claude.get("model").is_none());
+
+        let desktop_original = r#"{"keep":"desktop-profile"}"#;
+        let desktop_managed = build_claude_desktop_profile(
+            Some(desktop_original),
+            "http://127.0.0.1:8317",
+            DEFAULT_API_KEY,
+            "gpt-test",
+            None,
+        )
+        .unwrap();
+        let mut desktop_current: serde_json::Value =
+            serde_json::from_str(&desktop_managed).unwrap();
+        desktop_current["runtimeAdded"] = serde_json::json!({"keep": true});
+        desktop_current["inferenceGatewayBaseUrl"] =
+            serde_json::json!("https://agent-overwrite.invalid");
+        let desktop_restored = build_restored_claude_desktop_config(
+            2,
+            &serde_json::to_string(&desktop_current).unwrap(),
+            Some(desktop_original),
+        )
+        .unwrap()
+        .unwrap();
+        let desktop: serde_json::Value = serde_json::from_str(&desktop_restored).unwrap();
+        assert_eq!(desktop["keep"], "desktop-profile");
+        assert_eq!(desktop["runtimeAdded"]["keep"], true);
+        assert!(desktop.get("inferenceGatewayBaseUrl").is_none());
+        assert!(desktop.get("inferenceGatewayApiKey").is_none());
+
+        let models = test_agent_models(&["gpt-test"]);
+        let openclaw_original = r#"{
+  "models": {"providers": {"other": {"keep": true}}},
+  "agents": {"defaults": {
+    "model": {"primary": "other/original", "fallback": "other/fallback"},
+    "models": {"other/original": {}}
+  }},
+  "keep": "openclaw"
+}"#;
+        let openclaw_managed = build_openclaw_agent_config(
+            Some(openclaw_original),
+            "http://127.0.0.1:8317/v1",
+            DEFAULT_API_KEY,
+            "gpt-test",
+            &models,
+        )
+        .unwrap();
+        let mut openclaw_current: serde_json::Value = json5::from_str(&openclaw_managed).unwrap();
+        openclaw_current["runtimeAdded"] = serde_json::json!(true);
+        openclaw_current["models"]["providers"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"] =
+            serde_json::json!("keep");
+        openclaw_current["models"]["providers"][MANAGED_AGENT_PROVIDER_ID]["baseUrl"] =
+            serde_json::json!("https://agent-overwrite.invalid");
+        openclaw_current["agents"]["defaults"]["models"]["other/runtime"] =
+            serde_json::json!({"keep": true});
+        let openclaw_restored = build_restored_openclaw_config(
+            &serde_json::to_string(&openclaw_current).unwrap(),
+            Some(openclaw_original),
+        )
+        .unwrap()
+        .unwrap();
+        let openclaw: serde_json::Value = json5::from_str(&openclaw_restored).unwrap();
+        assert_eq!(openclaw["runtimeAdded"], true);
+        assert_eq!(
+            openclaw["models"]["providers"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"],
+            "keep"
+        );
+        assert!(openclaw["models"]["providers"][MANAGED_AGENT_PROVIDER_ID]
+            .get("baseUrl")
+            .is_none());
+        assert_eq!(
+            openclaw["agents"]["defaults"]["model"]["primary"],
+            "other/original"
+        );
+        assert!(openclaw["agents"]["defaults"]["models"]
+            .get("cpa-gui/gpt-test")
+            .is_none());
+        assert_eq!(
+            openclaw["agents"]["defaults"]["models"]["other/runtime"]["keep"],
+            true
+        );
+        let generated_openclaw = build_openclaw_agent_config(
+            None,
+            "http://127.0.0.1:8317/v1",
+            DEFAULT_API_KEY,
+            "gpt-test",
+            &models,
+        )
+        .unwrap();
+        assert!(build_restored_openclaw_config(&generated_openclaw, None)
+            .unwrap()
+            .is_none());
+
+        let hermes_original = r#"keep: hermes
+custom_providers:
+  - name: other
+    keep: true
+model:
+  default: original-model
+  provider: other
+  keep: model
+"#;
+        let hermes_managed = build_hermes_agent_config(
+            Some(hermes_original),
+            "http://127.0.0.1:8317/v1",
+            DEFAULT_API_KEY,
+            "gpt-test",
+            &models,
+        )
+        .unwrap();
+        let mut hermes_current: serde_norway::Value =
+            serde_norway::from_str(&hermes_managed).unwrap();
+        let hermes_root = hermes_current.as_mapping_mut().unwrap();
+        hermes_root.insert(yaml_key("runtimeAdded"), serde_norway::Value::Bool(true));
+        let managed_provider = hermes_root
+            .get_mut(yaml_key("custom_providers"))
+            .and_then(serde_norway::Value::as_sequence_mut)
+            .unwrap()
+            .iter_mut()
+            .find(|provider| {
+                provider.get("name").and_then(serde_norway::Value::as_str)
+                    == Some(MANAGED_AGENT_PROVIDER_ID)
+            })
+            .and_then(serde_norway::Value::as_mapping_mut)
+            .unwrap();
+        managed_provider.insert(
+            yaml_key("custom_after_apply"),
+            serde_norway::Value::String("keep".to_string()),
+        );
+        managed_provider.insert(
+            yaml_key("base_url"),
+            serde_norway::Value::String("https://agent-overwrite.invalid".to_string()),
+        );
+        let hermes_restored = build_restored_hermes_config(
+            &serde_norway::to_string(&hermes_current).unwrap(),
+            Some(hermes_original),
+        )
+        .unwrap()
+        .unwrap();
+        let hermes: serde_norway::Value = serde_norway::from_str(&hermes_restored).unwrap();
+        assert_eq!(hermes["runtimeAdded"], serde_norway::Value::Bool(true));
+        assert_eq!(hermes["model"]["default"].as_str(), Some("original-model"));
+        assert_eq!(hermes["model"]["provider"].as_str(), Some("other"));
+        let hermes_managed_provider = hermes["custom_providers"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|provider| {
+                provider.get("name").and_then(serde_norway::Value::as_str)
+                    == Some(MANAGED_AGENT_PROVIDER_ID)
+            })
+            .unwrap();
+        assert_eq!(
+            hermes_managed_provider["custom_after_apply"].as_str(),
+            Some("keep")
+        );
+        assert!(hermes_managed_provider.get("base_url").is_none());
+    }
+
+    #[test]
+    fn legacy_agent_state_migration_preserves_backup_for_restore() {
+        let home = agent_test_home("legacy-state-backup-migration");
+        let path = home.join(".config/opencode/opencode.json");
+        let state_path = agent_state_path(std::slice::from_ref(&path)).unwrap();
+        let backup_path = agent_backup_path(&path).unwrap();
+        let original = b"{\"provider\":\"original\"}";
+        let managed = b"{\"provider\":\"managed\"}";
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, managed).unwrap();
+        fs::write(&backup_path, original).unwrap();
+        write_agent_state(
+            &state_path,
+            &AgentModificationRecord {
+                version: AGENT_MODIFICATION_STATE_VERSION,
+                client: AgentClient::OpenCode.id().to_string(),
+                phase: AGENT_PHASE_ACTIVE.to_string(),
+                model: "gpt-test".to_string(),
+                files: vec![AgentModificationFile {
+                    path: path.clone(),
+                    backup_path: backup_path.clone(),
+                    existed_before: true,
+                    original_sha256: Some(sha256_bytes(original)),
+                    managed_sha256: sha256_bytes(managed),
+                }],
+            },
+        )
+        .unwrap();
+
+        let migrated = load_agent_applied_state(AgentClient::OpenCode, &home)
+            .unwrap()
+            .unwrap();
+        assert_eq!(migrated.version, AGENT_APPLIED_STATE_VERSION);
+        assert_eq!(migrated.backup_files.len(), 1);
+        assert_eq!(migrated.backup_files[0].path, path);
+        assert_eq!(migrated.backup_files[0].backup_path, backup_path);
+        assert!(migrated.backup_files[0].existed_before);
+        assert!(backup_path.is_file());
+
+        restore_agent_session_configuration(AgentClient::OpenCode, &home).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(!backup_path.exists());
+        assert!(!state_path.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn legacy_codex_single_file_state_remains_restorable() {
+        let home = agent_test_home("legacy-codex-single-file-state");
+        let path = home.join(".codex/config.toml");
+        let paths = vec![path.clone()];
+        let state_path = agent_state_path(&paths).unwrap();
+        let backup_path = agent_backup_path(&path).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "model_provider = \"cpa-gui\"\n").unwrap();
+        fs::write(&backup_path, "approval_policy = \"never\"\n").unwrap();
+        fs::write(&state_path, "state").unwrap();
+        let state = AgentAppliedState {
+            version: AGENT_APPLIED_STATE_VERSION,
+            client: AgentClient::Codex.id().to_string(),
+            model: "gpt-test".to_string(),
+            claude_desktop_model_mappings: None,
+            backup_files: vec![AgentAppliedBackupFile {
+                path: path.clone(),
+                backup_path: backup_path.clone(),
+                existed_before: true,
+            }],
+            updated_at_unix: 1,
+        };
+
+        restore_agent_applied_state_configuration(AgentClient::Codex, &paths, &state_path, &state)
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "approval_policy = \"never\"\n"
+        );
+        assert!(!backup_path.exists());
+        assert!(!state_path.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn claude_desktop_version_three_state_can_be_closed_safely() {
+        let home = agent_test_home("claude-desktop-version-three-restore");
+        let normal = home.join("Claude");
+        let threep = home.join("Claude-3p");
+        let paths = claude_desktop_config_paths_from_directories(normal, threep);
+        let state_path = agent_state_path(&paths).unwrap();
+        for path in &paths {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        fs::write(&paths[0], r#"{"deploymentMode":"3p","keep":"normal"}"#).unwrap();
+        fs::write(&paths[1], r#"{"deploymentMode":"3p","keep":"threep"}"#).unwrap();
+        fs::write(
+            &paths[2],
+            r#"{
+  "coworkEgressAllowedHosts": ["127.0.0.1"],
+  "disableDeploymentModeChooser": true,
+  "inferenceGatewayApiKey": "managed-key",
+  "inferenceGatewayAuthScheme": "bearer",
+  "inferenceGatewayBaseUrl": "http://127.0.0.1:8317",
+  "inferenceProvider": "generic-chat-completion-api",
+  "inferenceModels": ["claude-sonnet-4-5"],
+  "keep": "profile"
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            &paths[3],
+            format!(
+                r#"{{
+  "appliedId": "{CLAUDE_DESKTOP_PROFILE_ID}",
+  "entries": [
+    {{"id": "{CLAUDE_DESKTOP_PROFILE_ID}", "name": "CPA"}},
+    {{"id": "other", "name": "Other"}}
+  ],
+  "keep": "meta"
+}}"#
+            ),
+        )
+        .unwrap();
+        let state = AgentAppliedState {
+            version: 3,
+            client: AgentClient::ClaudeDesktop.id().to_string(),
+            model: "gpt-test".to_string(),
+            claude_desktop_model_mappings: None,
+            backup_files: Vec::new(),
+            updated_at_unix: 1,
+        };
+        write_agent_applied_state(&state_path, &state).unwrap();
+
+        restore_agent_applied_state_configuration(
+            AgentClient::ClaudeDesktop,
+            &paths,
+            &state_path,
+            &state,
+        )
+        .unwrap();
+
+        assert!(!state_path.exists());
+        let normal: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&paths[0]).unwrap()).unwrap();
+        let threep: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&paths[1]).unwrap()).unwrap();
+        let profile: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&paths[2]).unwrap()).unwrap();
+        let meta: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&paths[3]).unwrap()).unwrap();
+        assert!(normal.get("deploymentMode").is_none());
+        assert_eq!(normal["keep"], "normal");
+        assert!(threep.get("deploymentMode").is_none());
+        assert_eq!(threep["keep"], "threep");
+        for key in [
+            "coworkEgressAllowedHosts",
+            "disableDeploymentModeChooser",
+            "inferenceGatewayApiKey",
+            "inferenceGatewayAuthScheme",
+            "inferenceGatewayBaseUrl",
+            "inferenceProvider",
+            "inferenceModels",
+        ] {
+            assert!(profile.get(key).is_none(), "managed key remains: {key}");
+        }
+        assert_eq!(profile["keep"], "profile");
+        assert!(meta.get("appliedId").is_none());
+        assert_eq!(meta["keep"], "meta");
+        assert_eq!(meta["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(meta["entries"][0]["id"], "other");
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn opencode_version_three_state_uses_managed_marker_and_closes_safely() {
+        let home = agent_test_home("opencode-version-three-restore");
+        let path = home.join(".config/opencode/opencode.json");
+        let state_path = agent_state_path(std::slice::from_ref(&path)).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "cpa-gui/gpt-test",
+  "provider": {
+    "cpa-gui": {
+      "options": {"baseURL": "http://127.0.0.1:8317/v1", "apiKey": "secret"}
+    },
+    "other": {"keep": true}
+  },
+  "keep": "root"
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            &state_path,
+            r#"{"version":3,"client":"opencode","model":"gpt-test","updatedAtUnix":1}"#,
+        )
+        .unwrap();
+
+        let before = inspect_agent_application(AgentClient::OpenCode, &home);
+        assert_eq!(before.state, "applied");
+        assert!(!before.backup_available);
+        restore_agent_session_configuration(AgentClient::OpenCode, &home).unwrap();
+
+        let restored: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(restored.get("model").is_none());
+        assert!(restored["provider"]
+            .get(MANAGED_AGENT_PROVIDER_ID)
+            .is_none());
+        assert_eq!(restored["provider"]["other"]["keep"], true);
+        assert_eq!(restored["keep"], "root");
+        assert!(!state_path.exists());
+        assert_eq!(
+            inspect_agent_application(AgentClient::OpenCode, &home).state,
+            "unconfigured"
+        );
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn stale_version_three_state_without_managed_configuration_is_not_applied() {
+        let home = agent_test_home("stale-version-three-state");
+        let path = home.join(".config/opencode/opencode.json");
+        let state_path = agent_state_path(std::slice::from_ref(&path)).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = r#"{"provider":{"other":{"keep":true}}}"#;
+        fs::write(&path, original).unwrap();
+        fs::write(
+            &state_path,
+            r#"{"version":3,"client":"opencode","model":"gpt-test","updatedAtUnix":1}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            inspect_agent_application(AgentClient::OpenCode, &home).state,
+            "unconfigured"
+        );
+        restore_agent_session_configuration(AgentClient::OpenCode, &home).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        assert!(!state_path.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn applied_state_rejects_backup_paths_outside_the_managed_config_set() {
+        let home = agent_test_home("invalid-applied-backup-path");
+        let path = home.join(".config/opencode/opencode.json");
+        let state_path = agent_state_path(std::slice::from_ref(&path)).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{}").unwrap();
+        write_agent_applied_state(
+            &state_path,
+            &AgentAppliedState {
+                version: AGENT_APPLIED_STATE_VERSION,
+                client: AgentClient::OpenCode.id().to_string(),
+                model: "gpt-test".to_string(),
+                claude_desktop_model_mappings: None,
+                backup_files: vec![AgentAppliedBackupFile {
+                    path: path.clone(),
+                    backup_path: home.join("unexpected-location.bak"),
+                    existed_before: true,
+                }],
+                updated_at_unix: 1,
+            },
+        )
+        .unwrap();
+
+        let error = load_agent_applied_state(AgentClient::OpenCode, &home)
+            .err()
+            .unwrap();
+        assert!(error.contains("非预期备份路径"));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn missing_session_backup_is_detected_before_any_file_is_restored() {
+        let home = agent_test_home("missing-session-backup-preflight");
+        let config_path = home.join(".codex/config.toml");
+        let catalog_path = config_path.with_file_name(CODEX_MODEL_CATALOG_FILE);
+        let paths = vec![config_path.clone()];
+        let state_path = agent_state_path(&paths).unwrap();
+        let config_backup = dated_agent_backup_path(&config_path).unwrap();
+        let catalog_backup = dated_agent_backup_path(&catalog_path).unwrap();
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(&config_path, "managed-config").unwrap();
+        fs::write(&catalog_path, "managed-catalog").unwrap();
+        fs::write(&config_backup, "original-config").unwrap();
+        fs::write(&state_path, "state").unwrap();
+        let state = AgentAppliedState {
+            version: AGENT_APPLIED_STATE_VERSION,
+            client: AgentClient::Codex.id().to_string(),
+            model: "gpt-test".to_string(),
+            claude_desktop_model_mappings: None,
+            backup_files: vec![
+                AgentAppliedBackupFile {
+                    path: config_path.clone(),
+                    backup_path: config_backup,
+                    existed_before: true,
+                },
+                AgentAppliedBackupFile {
+                    path: catalog_path.clone(),
+                    backup_path: catalog_backup,
+                    existed_before: true,
+                },
+            ],
+            updated_at_unix: 1,
+        };
+
+        let error = restore_agent_applied_state_configuration(
+            AgentClient::Codex,
+            &paths,
+            &state_path,
+            &state,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("读取智能体备份失败"));
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), "managed-config");
+        assert_eq!(
+            fs::read_to_string(&catalog_path).unwrap(),
+            "managed-catalog"
+        );
+        assert!(state_path.exists());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn version_three_cleanup_covers_every_non_desktop_agent_format() {
+        let home = agent_test_home("all-agent-version-three-cleanup");
+        let state = |client: AgentClient| AgentAppliedState {
+            version: 3,
+            client: client.id().to_string(),
+            model: "gpt-test".to_string(),
+            claude_desktop_model_mappings: None,
+            backup_files: Vec::new(),
+            updated_at_unix: 1,
+        };
+
+        let claude_path = home.join("claude/settings.json");
+        fs::create_dir_all(claude_path.parent().unwrap()).unwrap();
+        fs::write(
+            &claude_path,
+            r#"{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+    "ANTHROPIC_API_KEY": "secret",
+    "ANTHROPIC_AUTH_TOKEN": "secret",
+    "ANTHROPIC_MODEL": "gpt-test",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-test",
+    "KEEP_ENV": "yes"
+  },
+  "model": "gpt-test",
+  "keep": "claude"
+}"#,
+        )
+        .unwrap();
+        let claude_state_path = agent_state_path(std::slice::from_ref(&claude_path)).unwrap();
+        fs::write(&claude_state_path, "state").unwrap();
+        restore_agent_applied_state_configuration(
+            AgentClient::ClaudeCode,
+            std::slice::from_ref(&claude_path),
+            &claude_state_path,
+            &state(AgentClient::ClaudeCode),
+        )
+        .unwrap();
+        let claude: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&claude_path).unwrap()).unwrap();
+        assert!(claude.get("model").is_none());
+        assert!(claude["env"].get("ANTHROPIC_BASE_URL").is_none());
+        assert_eq!(claude["env"]["KEEP_ENV"], "yes");
+        assert_eq!(claude["keep"], "claude");
+
+        let codex_path = home.join("codex/config.toml");
+        let codex_catalog = codex_path.with_file_name(CODEX_MODEL_CATALOG_FILE);
+        fs::create_dir_all(codex_path.parent().unwrap()).unwrap();
+        fs::write(
+            &codex_path,
+            r#"approval_policy = "never"
+model_provider = "cpa-gui"
+model = "gpt-test"
+model_catalog_json = "cpa-gui-model-catalog.json"
+
+[model_providers.cpa-gui]
+name = "EasyCLIProxyAPI"
+base_url = "http://127.0.0.1:8317/v1"
+
+[model_providers.other]
+name = "Other"
+"#,
+        )
+        .unwrap();
+        fs::write(&codex_catalog, "{}").unwrap();
+        let codex_state_path = agent_state_path(std::slice::from_ref(&codex_path)).unwrap();
+        fs::write(&codex_state_path, "state").unwrap();
+        restore_agent_applied_state_configuration(
+            AgentClient::Codex,
+            std::slice::from_ref(&codex_path),
+            &codex_state_path,
+            &state(AgentClient::Codex),
+        )
+        .unwrap();
+        let codex: toml::Value = toml::from_str(&fs::read_to_string(&codex_path).unwrap()).unwrap();
+        assert_eq!(codex["approval_policy"].as_str(), Some("never"));
+        assert!(codex.get("model_provider").is_none());
+        assert!(codex.get("model").is_none());
+        assert!(codex["model_providers"]
+            .get(MANAGED_AGENT_PROVIDER_ID)
+            .is_none());
+        assert_eq!(
+            codex["model_providers"]["other"]["name"].as_str(),
+            Some("Other")
+        );
+        assert!(!codex_catalog.exists());
+
+        let openclaw_path = home.join("openclaw/openclaw.json");
+        fs::create_dir_all(openclaw_path.parent().unwrap()).unwrap();
+        fs::write(
+            &openclaw_path,
+            r#"// keep-comment
+{
+  models: {
+    mode: "merge",
+    providers: {
+      "cpa-gui": {baseUrl: "http://127.0.0.1:8317/v1"},
+      other: {keep: true}
+    }
+  },
+  agents: {defaults: {
+    model: {primary: "cpa-gui/gpt-test", fallback: "other/model"},
+    models: {"cpa-gui/gpt-test": {}, "other/model": {}}
+  }},
+  keep: "openclaw"
+}"#,
+        )
+        .unwrap();
+        let openclaw_state_path = agent_state_path(std::slice::from_ref(&openclaw_path)).unwrap();
+        fs::write(&openclaw_state_path, "state").unwrap();
+        restore_agent_applied_state_configuration(
+            AgentClient::OpenClaw,
+            std::slice::from_ref(&openclaw_path),
+            &openclaw_state_path,
+            &state(AgentClient::OpenClaw),
+        )
+        .unwrap();
+        let openclaw_content = fs::read_to_string(&openclaw_path).unwrap();
+        assert!(openclaw_content.contains("// keep-comment"));
+        let openclaw: serde_json::Value = json5::from_str(&openclaw_content).unwrap();
+        assert!(openclaw["models"]["providers"]
+            .get(MANAGED_AGENT_PROVIDER_ID)
+            .is_none());
+        assert_eq!(openclaw["models"]["providers"]["other"]["keep"], true);
+        assert!(openclaw["agents"]["defaults"]["model"]
+            .get("primary")
+            .is_none());
+        assert_eq!(
+            openclaw["agents"]["defaults"]["model"]["fallback"],
+            "other/model"
+        );
+        assert!(openclaw["agents"]["defaults"]["models"]
+            .get("cpa-gui/gpt-test")
+            .is_none());
+        assert!(openclaw["agents"]["defaults"]["models"]
+            .get("other/model")
+            .is_some());
+
+        let hermes_path = home.join("hermes/config.yaml");
+        fs::create_dir_all(hermes_path.parent().unwrap()).unwrap();
+        fs::write(
+            &hermes_path,
+            r#"keep: hermes
+custom_providers:
+  - name: other
+    keep: true
+  - name: cpa-gui
+    base_url: http://127.0.0.1:8317/v1
+model:
+  default: gpt-test
+  provider: cpa-gui
+  keep: model
+"#,
+        )
+        .unwrap();
+        let hermes_state_path = agent_state_path(std::slice::from_ref(&hermes_path)).unwrap();
+        fs::write(&hermes_state_path, "state").unwrap();
+        restore_agent_applied_state_configuration(
+            AgentClient::Hermes,
+            std::slice::from_ref(&hermes_path),
+            &hermes_state_path,
+            &state(AgentClient::Hermes),
+        )
+        .unwrap();
+        let hermes: serde_norway::Value =
+            serde_norway::from_str(&fs::read_to_string(&hermes_path).unwrap()).unwrap();
+        assert_eq!(hermes["keep"].as_str(), Some("hermes"));
+        assert_eq!(hermes["custom_providers"].as_sequence().unwrap().len(), 1);
+        assert_eq!(
+            hermes["custom_providers"][0]["name"].as_str(),
+            Some("other")
+        );
+        assert!(hermes["model"].get("provider").is_none());
+        assert!(hermes["model"].get("default").is_none());
+        assert_eq!(hermes["model"]["keep"].as_str(), Some("model"));
+
+        for state_path in [
+            claude_state_path,
+            codex_state_path,
+            openclaw_state_path,
+            hermes_state_path,
+        ] {
+            assert!(!state_path.exists());
+        }
         fs::remove_dir_all(home).unwrap();
     }
 

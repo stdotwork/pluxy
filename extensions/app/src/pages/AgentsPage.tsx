@@ -22,7 +22,6 @@ import {
   Power,
   RefreshCw,
   Search,
-  Sparkles,
   Terminal,
   Trash2,
   X,
@@ -1171,7 +1170,7 @@ export function AgentsPage() {
                     >
                       {busyAction === 'apply' || busyAction === 'close-config'
                         ? <LoaderCircle size={16} className="spin" />
-                        : <Sparkles size={16} />}
+                        : null}
                       {activeStatus?.modificationState === 'applied'
                         ? t('agents.modify.close')
                         : t('agents.modify.apply')}
