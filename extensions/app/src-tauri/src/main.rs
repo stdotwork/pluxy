@@ -479,6 +479,8 @@ struct GuiConfigFile {
     routing_session_affinity: bool,
     routing_session_affinity_ttl: String,
     codex_session_repair_on_launch: bool,
+    claude_code_working_directory: String,
+    claude_code_working_directory_prompt_disabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -566,6 +568,8 @@ impl Default for GuiConfigFile {
             routing_session_affinity: false,
             routing_session_affinity_ttl: String::new(),
             codex_session_repair_on_launch: false,
+            claude_code_working_directory: String::new(),
+            claude_code_working_directory_prompt_disabled: false,
         }
     }
 }
@@ -588,6 +592,8 @@ struct GuiConfigPresence {
     proxy_url: Option<String>,
     routing_session_affinity: Option<bool>,
     routing_session_affinity_ttl: Option<String>,
+    claude_code_working_directory: Option<String>,
+    claude_code_working_directory_prompt_disabled: Option<bool>,
 }
 
 #[derive(Clone, Serialize)]
@@ -618,7 +624,10 @@ struct AgentConfigStatus {
     modification_state: String,
     backup_available: bool,
     applied_model: Option<String>,
+    claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
+    claude_code_working_directory: Option<String>,
+    claude_code_working_directory_prompt_disabled: bool,
     warnings: Vec<String>,
     error: Option<String>,
 }
@@ -874,6 +883,7 @@ struct AgentConfigurationOptions<'a> {
     models: &'a [AgentModelOption],
     codex_catalog: Option<&'a str>,
     oauth_configuration: bool,
+    claude_code_model_mappings: Option<&'a ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<&'a ClaudeDesktopModelMappings>,
 }
 
@@ -1330,6 +1340,20 @@ impl GuiConfigState {
         })
     }
 
+    fn set_claude_code_launch_preferences(
+        &self,
+        working_directory: Option<&Path>,
+        prompt_disabled: bool,
+    ) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            if let Some(working_directory) = working_directory {
+                config.claude_code_working_directory = path_to_string(working_directory);
+            }
+            config.claude_code_working_directory_prompt_disabled = prompt_disabled;
+            Ok(())
+        })
+    }
+
     fn set_locale(&self, locale: String) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.locale = normalize_app_locale(&locale).to_string();
@@ -1612,14 +1636,14 @@ fn resolve_windows_close_request(
 
 fn inspect_agent_config_statuses(
     app: &tauri::AppHandle,
-    port: u16,
-    api_key: &str,
+    config: &GuiConfigFile,
 ) -> Result<Vec<AgentConfigStatus>, String> {
     let home = app
         .path()
         .home_dir()
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
-    Ok([
+    let api_key = effective_agent_api_key(config);
+    let mut statuses = [
         AgentClient::ClaudeCode,
         AgentClient::ClaudeDesktop,
         AgentClient::Codex,
@@ -1628,8 +1652,19 @@ fn inspect_agent_config_statuses(
         AgentClient::Hermes,
     ]
     .into_iter()
-    .map(|client| inspect_agent_config(client, &home, port, api_key))
-    .collect())
+    .map(|client| inspect_agent_config(client, &home, config.port, api_key))
+    .collect::<Vec<_>>();
+    if let Some(status) = statuses
+        .iter_mut()
+        .find(|status| status.id == AgentClient::ClaudeCode.id())
+    {
+        status.claude_code_working_directory =
+            (!config.claude_code_working_directory.trim().is_empty())
+                .then(|| config.claude_code_working_directory.clone());
+        status.claude_code_working_directory_prompt_disabled =
+            config.claude_code_working_directory_prompt_disabled;
+    }
+    Ok(statuses)
 }
 
 fn refresh_agent_config_status_cache(
@@ -1644,7 +1679,7 @@ fn refresh_agent_config_status_cache(
     let config = gui_config_state.snapshot()?;
     let port = config.port;
     let api_key = effective_agent_api_key(&config);
-    let statuses = inspect_agent_config_statuses(app, port, api_key)?;
+    let statuses = inspect_agent_config_statuses(app, &config)?;
     cache.replace(port, api_key, statuses.clone())?;
     Ok(statuses)
 }
@@ -1686,6 +1721,29 @@ async fn get_agent_models(
     let client = AgentClient::parse(&client)?;
     let config = gui_config_state.snapshot()?;
     Ok(fetch_prepared_agent_models(client, &config).await?.models)
+}
+
+fn validate_claude_code_working_directory(value: &str) -> Result<PathBuf, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(
+            "CLAUDE_CODE_WORKING_DIRECTORY_REQUIRED: Please select a working directory".to_string(),
+        );
+    }
+    if value.chars().any(char::is_control) {
+        return Err("The Claude Code working directory contains invalid characters".to_string());
+    }
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err("The Claude Code working directory must be an absolute path".to_string());
+    }
+    if !path.is_dir() {
+        return Err(format!(
+            "CLAUDE_CODE_WORKING_DIRECTORY_INVALID: The working directory does not exist: {}",
+            path_to_string(&path)
+        ));
+    }
+    Ok(path)
 }
 
 #[tauri::command]
@@ -2111,6 +2169,25 @@ fn resolve_claude_desktop_model_mappings(
     }))
 }
 
+fn resolve_claude_code_model_mappings(
+    client: AgentClient,
+    models: &[AgentModelOption],
+    selected_model: &str,
+    requested: Option<ClaudeDesktopModelMappings>,
+) -> Result<Option<ClaudeDesktopModelMappings>, String> {
+    if client != AgentClient::ClaudeCode {
+        return Ok(None);
+    }
+    let requested = requested.unwrap_or_else(|| ClaudeDesktopModelMappings::all(selected_model));
+    let resolve =
+        |model: &str| resolve_available_agent_model(models, &validate_agent_model(model)?);
+    Ok(Some(ClaudeDesktopModelMappings {
+        opus: resolve(&requested.opus)?,
+        sonnet: resolve(&requested.sonnet)?,
+        haiku: resolve(&requested.haiku)?,
+    }))
+}
+
 fn prepare_codex_agent_models(
     runtime_models: &[codex_catalog::CodexRuntimeModel],
 ) -> Result<PreparedAgentModels, String> {
@@ -2136,6 +2213,7 @@ async fn apply_agent_config(
     client: String,
     model: String,
     oauth_configuration: bool,
+    claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
@@ -2151,6 +2229,12 @@ async fn apply_agent_config(
     validate_agent_can_enable(client, &home, config.port, api_key)?;
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
+    let claude_code_model_mappings = resolve_claude_code_model_mappings(
+        client,
+        &prepared.models,
+        &model,
+        claude_code_model_mappings,
+    )?;
     let claude_desktop_model_mappings = resolve_claude_desktop_model_mappings(
         client,
         &prepared.models,
@@ -2173,6 +2257,7 @@ async fn apply_agent_config(
             models: &prepared.models,
             codex_catalog: prepared.codex_catalog.as_deref(),
             oauth_configuration,
+            claude_code_model_mappings: claude_code_model_mappings.as_ref(),
             claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
         },
     )
@@ -2202,6 +2287,7 @@ async fn reset_agent_config_to_default(
     client: String,
     model: String,
     oauth_configuration: bool,
+    claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
@@ -2217,6 +2303,12 @@ async fn reset_agent_config_to_default(
     validate_agent_can_enable(client, &home, config.port, api_key)?;
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
+    let claude_code_model_mappings = resolve_claude_code_model_mappings(
+        client,
+        &prepared.models,
+        &model,
+        claude_code_model_mappings,
+    )?;
     let claude_desktop_model_mappings = resolve_claude_desktop_model_mappings(
         client,
         &prepared.models,
@@ -2238,6 +2330,7 @@ async fn reset_agent_config_to_default(
         models: &prepared.models,
         codex_catalog: prepared.codex_catalog.as_deref(),
         oauth_configuration,
+        claude_code_model_mappings: claude_code_model_mappings.as_ref(),
         claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
     })
 }
@@ -2262,6 +2355,7 @@ async fn set_agent_config_enabled(
     model: String,
     enabled: bool,
     force_restore: bool,
+    claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
@@ -2278,6 +2372,12 @@ async fn set_agent_config_enabled(
         let prepared = fetch_prepared_agent_models(client, &config).await?;
         let model =
             resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
+        let claude_code_model_mappings = resolve_claude_code_model_mappings(
+            client,
+            &prepared.models,
+            &model,
+            claude_code_model_mappings,
+        )?;
         let claude_desktop_model_mappings = resolve_claude_desktop_model_mappings(
             client,
             &prepared.models,
@@ -2300,6 +2400,7 @@ async fn set_agent_config_enabled(
                 models: &prepared.models,
                 codex_catalog: prepared.codex_catalog.as_deref(),
                 oauth_configuration: false,
+                claude_code_model_mappings: claude_code_model_mappings.as_ref(),
                 claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
             },
         )
@@ -2318,6 +2419,7 @@ async fn update_agent_config(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
     model: String,
+    claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
 ) -> Result<AgentConfigActionResult, String> {
     let client = AgentClient::parse(&client)?;
@@ -2330,6 +2432,12 @@ async fn update_agent_config(
     let api_key = effective_agent_api_key(&config);
     let prepared = fetch_prepared_agent_models(client, &config).await?;
     let model = resolve_available_agent_model(&prepared.models, &validate_agent_model(&model)?)?;
+    let claude_code_model_mappings = resolve_claude_code_model_mappings(
+        client,
+        &prepared.models,
+        &model,
+        claude_code_model_mappings,
+    )?;
     let claude_desktop_model_mappings = resolve_claude_desktop_model_mappings(
         client,
         &prepared.models,
@@ -2352,6 +2460,7 @@ async fn update_agent_config(
             models: &prepared.models,
             codex_catalog: prepared.codex_catalog.as_deref(),
             oauth_configuration: false,
+            claude_code_model_mappings: claude_code_model_mappings.as_ref(),
             claude_desktop_model_mappings: claude_desktop_model_mappings.as_ref(),
         },
     )
@@ -2361,8 +2470,11 @@ async fn update_agent_config(
 async fn launch_agent(
     app: tauri::AppHandle,
     gui_config_state: tauri::State<'_, GuiConfigState>,
+    cache: tauri::State<'_, AgentConfigStatusCache>,
     client: String,
     target: Option<String>,
+    working_directory: Option<String>,
+    suppress_working_directory_prompt: Option<bool>,
 ) -> Result<(), String> {
     let client = AgentClient::parse(&client)?;
     if !client.supported_platform() {
@@ -2430,7 +2542,59 @@ async fn launch_agent(
     }
     let executable = find_agent_executable(client, &home)
         .ok_or_else(|| format!("未找到 {} 的可执行文件", client.name()))?;
-    launch_cli_agent(&executable, client.name(), &home)
+    if client == AgentClient::ClaudeCode {
+        let explicit_working_directory = working_directory
+            .as_deref()
+            .map(validate_claude_code_working_directory)
+            .transpose()?;
+        let selected_working_directory = match explicit_working_directory {
+            Some(path) => path,
+            None if config.claude_code_working_directory_prompt_disabled => {
+                validate_claude_code_working_directory(&config.claude_code_working_directory)?
+            }
+            None => {
+                return Err(
+                    "CLAUDE_CODE_WORKING_DIRECTORY_REQUIRED: Please select a working directory"
+                        .to_string(),
+                )
+            }
+        };
+        if working_directory.is_some() {
+            gui_config_state.set_claude_code_launch_preferences(
+                Some(&selected_working_directory),
+                suppress_working_directory_prompt.unwrap_or(false),
+            )?;
+            cache.clear()?;
+        }
+        let claude_config_path = agent_config_paths(client, &home)[0].clone();
+        {
+            let _guard = AGENT_CONFIG_FILE_LOCK
+                .lock()
+                .map_err(|_| "Claude Code configuration lock is poisoned".to_string())?;
+            remove_claude_code_conflicting_api_key(&claude_config_path)?;
+        }
+        let mappings = inspect_claude_code_model_mappings(&claude_config_path)?
+            .or_else(|| {
+                status
+                    .current_model
+                    .as_deref()
+                    .map(ClaudeDesktopModelMappings::all)
+            })
+            .ok_or_else(|| "Claude Code model environment is not configured".to_string())?;
+        let environment = claude_code_launch_environment(
+            &format!("http://127.0.0.1:{port}"),
+            effective_agent_api_key(&config),
+            &mappings,
+        );
+        return launch_cli_agent(
+            &executable,
+            client.name(),
+            &selected_working_directory,
+            &environment,
+            &["ANTHROPIC_API_KEY"],
+        );
+    }
+    launch_cli_agent(&executable, client.name(), &home, &[], &[])
 }
 
 fn validate_agent_launch_modification(
@@ -2994,7 +3158,12 @@ fn inspect_agent_config(
         modification_state: modification.state,
         backup_available: modification.backup_available,
         applied_model: modification.applied_model,
+        claude_code_model_mappings: (client == AgentClient::ClaudeCode)
+            .then(|| inspect_claude_code_model_mappings(&paths[0]).ok().flatten())
+            .flatten(),
         claude_desktop_model_mappings: modification.claude_desktop_model_mappings,
+        claude_code_working_directory: None,
+        claude_code_working_directory_prompt_disabled: false,
         warnings,
         error,
     }
@@ -4005,10 +4174,24 @@ fn launch_cli_agent(
     executable: &Path,
     label: &str,
     working_directory: &Path,
+    environment: &[(String, String)],
+    environment_to_remove: &[&str],
 ) -> Result<(), String> {
+    let environment_removals = environment_to_remove
+        .iter()
+        .map(|key| format!("-u {}", shell_single_quote(key)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let environment = environment
+        .iter()
+        .map(|(key, value)| format!("{key}={}", shell_single_quote(value)))
+        .collect::<Vec<_>>()
+        .join(" ");
     let command_line = format!(
-        "cd {} && exec {}",
+        "cd {} && exec env {} {} {}",
         shell_single_quote(&path_to_string(working_directory)),
+        environment_removals,
+        environment,
         shell_single_quote(&path_to_string(executable))
     );
     let apple_script_command = command_line.replace('\\', "\\\\").replace('"', "\\\"");
@@ -4039,6 +4222,8 @@ fn launch_cli_agent(
     executable: &Path,
     label: &str,
     working_directory: &Path,
+    environment: &[(String, String)],
+    environment_to_remove: &[&str],
 ) -> Result<(), String> {
     let terminals: &[(&str, &[&str])] = &[
         ("x-terminal-emulator", &["-e"]),
@@ -4058,15 +4243,19 @@ fn launch_cli_agent(
         if !available {
             continue;
         }
-        match Command::new(terminal)
+        let mut command = Command::new(terminal);
+        command
             .args(*arguments)
             .arg(executable)
+            .envs(environment.iter().map(|(key, value)| (key, value)))
             .current_dir(working_directory)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+            .stderr(Stdio::null());
+        for key in environment_to_remove {
+            command.env_remove(key);
+        }
+        match command.spawn() {
             Ok(_) => return Ok(()),
             Err(error) => last_error = Some(error.to_string()),
         }
@@ -4082,13 +4271,21 @@ fn launch_cli_agent(
     executable: &Path,
     label: &str,
     working_directory: &Path,
+    environment: &[(String, String)],
+    environment_to_remove: &[&str],
 ) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-    windows_command_for_executable(executable, true)
+    let mut command = windows_command_for_executable(executable, true);
+    command
+        .envs(environment.iter().map(|(key, value)| (key, value)))
         .current_dir(working_directory)
-        .creation_flags(CREATE_NEW_CONSOLE)
+        .creation_flags(CREATE_NEW_CONSOLE);
+    for key in environment_to_remove {
+        command.env_remove(key);
+    }
+    command
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("启动 {label} 失败: {error}"))
@@ -4099,6 +4296,8 @@ fn launch_cli_agent(
     _executable: &Path,
     label: &str,
     _working_directory: &Path,
+    _environment: &[(String, String)],
+    _environment_to_remove: &[&str],
 ) -> Result<(), String> {
     Err(format!("当前平台不支持启动 {label}"))
 }
@@ -4134,6 +4333,68 @@ fn inspect_claude_agent_config(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     Ok((configured, model))
+}
+
+fn inspect_claude_code_model_mappings(
+    path: &Path,
+) -> Result<Option<ClaudeDesktopModelMappings>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let root: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(path)
+            .map_err(|error| format!("Failed to read Claude Code configuration: {error}"))?,
+    )
+    .map_err(|error| format!("Failed to parse Claude Code configuration: {error}"))?;
+    let Some(env) = root.get("env").and_then(serde_json::Value::as_object) else {
+        return Ok(None);
+    };
+    let fallback = env
+        .get("ANTHROPIC_MODEL")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let read_model = |key: &str| {
+        env.get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or(fallback)
+            .map(str::to_string)
+    };
+    let Some(opus) = read_model("ANTHROPIC_DEFAULT_OPUS_MODEL") else {
+        return Ok(None);
+    };
+    let Some(sonnet) = read_model("ANTHROPIC_DEFAULT_SONNET_MODEL") else {
+        return Ok(None);
+    };
+    let Some(haiku) = read_model("ANTHROPIC_DEFAULT_HAIKU_MODEL") else {
+        return Ok(None);
+    };
+    Ok(Some(ClaudeDesktopModelMappings {
+        opus,
+        sonnet,
+        haiku,
+    }))
+}
+
+fn claude_code_launch_environment(
+    base_url: &str,
+    api_key: &str,
+    mappings: &ClaudeDesktopModelMappings,
+) -> Vec<(String, String)> {
+    [
+        ("ANTHROPIC_BASE_URL", base_url),
+        ("ANTHROPIC_AUTH_TOKEN", api_key),
+        ("ANTHROPIC_MODEL", mappings.sonnet.as_str()),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", mappings.haiku.as_str()),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", mappings.sonnet.as_str()),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", mappings.opus.as_str()),
+        ("ANTHROPIC_DEFAULT_FABLE_MODEL", mappings.sonnet.as_str()),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect()
 }
 
 fn inspect_claude_desktop_agent_config(
@@ -4412,6 +4673,7 @@ fn build_agent_updates(
             models,
             codex_catalog,
             oauth_configuration: false,
+            claude_code_model_mappings: None,
             claude_desktop_model_mappings: None,
         },
     )
@@ -4429,6 +4691,7 @@ fn build_agent_updates_with_oauth(
         models,
         codex_catalog,
         oauth_configuration,
+        claude_code_model_mappings,
         claude_desktop_model_mappings,
     } = options;
     let paths = agent_config_paths(client, home);
@@ -4437,8 +4700,22 @@ fn build_agent_updates_with_oauth(
     match client {
         AgentClient::ClaudeCode => {
             let before = read_optional_text(&paths[0])?;
-            let after = build_claude_agent_config(before.as_deref(), &root_base, api_key, model)
-                .or_else(|_| build_claude_agent_config(None, &root_base, api_key, model))?;
+            let after = build_claude_agent_config(
+                before.as_deref(),
+                &root_base,
+                api_key,
+                model,
+                claude_code_model_mappings,
+            )
+            .or_else(|_| {
+                build_claude_agent_config(
+                    None,
+                    &root_base,
+                    api_key,
+                    model,
+                    claude_code_model_mappings,
+                )
+            })?;
             Ok(vec![AgentFileUpdate {
                 path: paths[0].clone(),
                 after,
@@ -4580,6 +4857,7 @@ fn build_claude_agent_config(
     base_url: &str,
     api_key: &str,
     model: &str,
+    mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<String, String> {
     let mut root = match existing.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => serde_json::from_str::<serde_json::Value>(value)
@@ -4589,16 +4867,19 @@ fn build_claude_agent_config(
     let root = root
         .as_object_mut()
         .ok_or_else(|| "Claude Code settings.json 根节点必须是对象".to_string())?;
+    let mappings = mappings
+        .cloned()
+        .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
     let env = ensure_json_object_entry(root, "env");
+    env.remove("ANTHROPIC_API_KEY");
     for (key, value) in [
         ("ANTHROPIC_BASE_URL", base_url),
-        ("ANTHROPIC_API_KEY", api_key),
         ("ANTHROPIC_AUTH_TOKEN", api_key),
-        ("ANTHROPIC_MODEL", model),
-        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", model),
-        ("ANTHROPIC_DEFAULT_SONNET_MODEL", model),
-        ("ANTHROPIC_DEFAULT_OPUS_MODEL", model),
-        ("ANTHROPIC_DEFAULT_FABLE_MODEL", model),
+        ("ANTHROPIC_MODEL", mappings.sonnet.as_str()),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", mappings.haiku.as_str()),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", mappings.sonnet.as_str()),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", mappings.opus.as_str()),
+        ("ANTHROPIC_DEFAULT_FABLE_MODEL", mappings.sonnet.as_str()),
     ] {
         env.insert(
             key.to_string(),
@@ -4607,12 +4888,29 @@ fn build_claude_agent_config(
     }
     root.insert(
         "model".to_string(),
-        serde_json::Value::String(model.to_string()),
+        serde_json::Value::String(mappings.sonnet),
     );
     let mut rendered = serde_json::to_string_pretty(&serde_json::Value::Object(root.clone()))
         .map_err(|error| format!("生成 Claude Code 配置失败: {error}"))?;
     rendered.push('\n');
     Ok(rendered)
+}
+
+fn remove_claude_code_conflicting_api_key(path: &Path) -> Result<bool, String> {
+    update_agent_json_file(path, "Claude Code configuration", |root| {
+        let managed = root
+            .get("env")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(is_managed_agent_base_url);
+        if !managed {
+            return false;
+        }
+        root.get_mut("env")
+            .and_then(serde_json::Value::as_object_mut)
+            .is_some_and(|env| env.remove("ANTHROPIC_API_KEY").is_some())
+    })
 }
 
 fn parse_agent_json_object(
@@ -6963,7 +7261,7 @@ fn fresh_agent_contents(
         is_alias: false,
         context_window: None,
     }];
-    fresh_agent_contents_with_oauth(client, port, api_key, model, &models, false, None)
+    fresh_agent_contents_with_oauth(client, port, api_key, model, &models, false, None, None)
 }
 
 fn fresh_agent_contents_with_oauth(
@@ -6973,13 +7271,18 @@ fn fresh_agent_contents_with_oauth(
     model: &str,
     models: &[AgentModelOption],
     oauth_configuration: bool,
+    claude_code_model_mappings: Option<&ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<Vec<String>, String> {
     let root_base = format!("http://127.0.0.1:{port}");
     let openai_base = format!("{root_base}/v1");
     match client {
         AgentClient::ClaudeCode => Ok(vec![build_claude_agent_config(
-            None, &root_base, api_key, model,
+            None,
+            &root_base,
+            api_key,
+            model,
+            claude_code_model_mappings,
         )?]),
         AgentClient::ClaudeDesktop => Ok(vec![
             build_claude_desktop_deployment_config(None)?,
@@ -7757,6 +8060,7 @@ fn apply_agent_configuration(
             models,
             codex_catalog,
             oauth_configuration: false,
+            claude_code_model_mappings: None,
             claude_desktop_model_mappings: None,
         },
     )
@@ -7805,6 +8109,7 @@ fn reset_agent_configuration_to_default(
         }],
         codex_catalog,
         oauth_configuration: false,
+        claude_code_model_mappings: None,
         claude_desktop_model_mappings: None,
     })
 }
@@ -7818,6 +8123,7 @@ struct AgentDefaultConfiguration<'a> {
     models: &'a [AgentModelOption],
     codex_catalog: Option<&'a str>,
     oauth_configuration: bool,
+    claude_code_model_mappings: Option<&'a ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<&'a ClaudeDesktopModelMappings>,
 }
 
@@ -7833,6 +8139,7 @@ fn reset_agent_configuration_to_default_with_oauth(
         models,
         codex_catalog,
         oauth_configuration,
+        claude_code_model_mappings,
         claude_desktop_model_mappings,
     } = request;
     let paths = agent_config_paths(client, home);
@@ -7843,6 +8150,7 @@ fn reset_agent_configuration_to_default_with_oauth(
         model,
         models,
         oauth_configuration,
+        claude_code_model_mappings,
         claude_desktop_model_mappings,
     )?;
     if paths.len() != contents.len() {
@@ -14075,6 +14383,13 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     if presence.codex_session_repair_on_launch.is_none() {
         changed = true;
     }
+    if presence.claude_code_working_directory.is_none()
+        || presence
+            .claude_code_working_directory_prompt_disabled
+            .is_none()
+    {
+        changed = true;
+    }
     let management_secret_rotated = ensure_strong_management_secret(&mut config)?;
     changed |= management_secret_rotated;
     changed |= sanitize_gui_config(&mut config)?;
@@ -14355,6 +14670,11 @@ fn sanitize_gui_config(config: &mut GuiConfigFile) -> Result<bool, String> {
         config.routing_session_affinity_ttl = routing_session_affinity_ttl;
         changed = true;
     }
+    let claude_code_working_directory = config.claude_code_working_directory.trim().to_string();
+    if config.claude_code_working_directory != claude_code_working_directory {
+        config.claude_code_working_directory = claude_code_working_directory;
+        changed = true;
+    }
     let window_size = configured_window_size(config);
     let normalized_width = window_size.map(|size| size.width);
     let normalized_height = window_size.map(|size| size.height);
@@ -14419,6 +14739,14 @@ fn write_gui_config_to_path(config: &GuiConfigFile, config_path: &Path) -> Resul
         (
             "codex-session-repair-on-launch",
             value(config.codex_session_repair_on_launch),
+        ),
+        (
+            "claude-code-working-directory",
+            value(config.claude_code_working_directory.as_str()),
+        ),
+        (
+            "claude-code-working-directory-prompt-disabled",
+            value(config.claude_code_working_directory_prompt_disabled),
         ),
     ] {
         set_codex_table_item(root, key, item);
@@ -14504,6 +14832,13 @@ fn validate_gui_config(config: &GuiConfigFile) -> Result<(), String> {
         .any(char::is_control)
     {
         return Err("会话粘性 TTL 不能包含控制字符".to_string());
+    }
+    if config
+        .claude_code_working_directory
+        .chars()
+        .any(char::is_control)
+    {
+        return Err("Claude Code working directory cannot contain control characters".to_string());
     }
     Ok(())
 }
@@ -16706,6 +17041,7 @@ fn main() {
     let initial_window_size = configured_window_size(&gui_config);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -17254,6 +17590,7 @@ data: {"delta":{"type":"text_delta","text":"H"}}
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "gpt-test",
+            None,
         )
         .unwrap();
         let mut claude_current: serde_json::Value = serde_json::from_str(&claude_managed).unwrap();
@@ -18159,6 +18496,7 @@ model:
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "model-a",
+            None,
         )
         .unwrap();
         let claude = serde_json::from_str::<serde_json::Value>(&claude).unwrap();
@@ -18255,6 +18593,8 @@ model:
             management_secret_key: "custom-secret".to_string(),
             usage_statistics_enabled: false,
             codex_session_repair_on_launch: true,
+            claude_code_working_directory: path_to_string(&home),
+            claude_code_working_directory_prompt_disabled: true,
             ..GuiConfigFile::default()
         };
 
@@ -18268,6 +18608,8 @@ model:
         assert!(content.contains("management-secret-key = \"custom-secret\""));
         assert!(content.contains("usage-statistics-enabled = false"));
         assert!(content.contains("codex-session-repair-on-launch = true"));
+        assert!(content.contains("claude-code-working-directory = "));
+        assert!(content.contains("claude-code-working-directory-prompt-disabled = true"));
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -18395,20 +18737,92 @@ model:
     #[test]
     fn claude_agent_config_preserves_existing_fields() {
         let rendered = build_claude_agent_config(
-            Some(r#"{"theme":"dark","env":{"KEEP":"yes"}}"#),
+            Some(r#"{"theme":"dark","env":{"KEEP":"yes","ANTHROPIC_API_KEY":"legacy-key"}}"#),
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "claude-test",
+            None,
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
 
         assert_eq!(value["theme"], "dark");
         assert_eq!(value["env"]["KEEP"], "yes");
+        assert!(value["env"].get("ANTHROPIC_API_KEY").is_none());
         assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317");
         assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], DEFAULT_API_KEY);
         assert_eq!(value["env"]["ANTHROPIC_MODEL"], "claude-test");
         assert_eq!(value["model"], "claude-test");
+    }
+
+    #[test]
+    fn claude_code_role_mappings_drive_settings_and_launch_environment() {
+        let mappings = ClaudeDesktopModelMappings {
+            opus: "gpt-opus".to_string(),
+            sonnet: "gpt-sonnet".to_string(),
+            haiku: "gpt-haiku".to_string(),
+        };
+        let rendered = build_claude_agent_config(
+            None,
+            "http://127.0.0.1:8317",
+            "test-key",
+            "gpt-sonnet",
+            Some(&mappings),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(value["env"]["ANTHROPIC_MODEL"], "gpt-sonnet");
+        assert_eq!(value["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"], "gpt-opus");
+        assert_eq!(value["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"], "gpt-sonnet");
+        assert_eq!(value["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "gpt-haiku");
+
+        let environment =
+            claude_code_launch_environment("http://127.0.0.1:8317", "test-key", &mappings);
+        let read = |key: &str| {
+            environment
+                .iter()
+                .find(|(candidate, _)| candidate == key)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(read("ANTHROPIC_BASE_URL"), Some("http://127.0.0.1:8317"));
+        assert_eq!(read("ANTHROPIC_AUTH_TOKEN"), Some("test-key"));
+        assert_eq!(read("ANTHROPIC_API_KEY"), None);
+        assert_eq!(read("ANTHROPIC_DEFAULT_OPUS_MODEL"), Some("gpt-opus"));
+        assert_eq!(read("ANTHROPIC_DEFAULT_SONNET_MODEL"), Some("gpt-sonnet"));
+        assert_eq!(read("ANTHROPIC_DEFAULT_HAIKU_MODEL"), Some("gpt-haiku"));
+    }
+
+    #[test]
+    fn claude_code_launch_migrates_legacy_dual_auth_configuration() {
+        let directory = agent_test_home("claude-code-dual-auth-migration");
+        let path = directory.join("settings.json");
+        fs::write(
+            &path,
+            r#"{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317","ANTHROPIC_API_KEY":"legacy","ANTHROPIC_AUTH_TOKEN":"token"}}"#,
+        )
+        .unwrap();
+
+        assert!(remove_claude_code_conflicting_api_key(&path).unwrap());
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value["env"].get("ANTHROPIC_API_KEY").is_none());
+        assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "token");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn claude_code_working_directory_must_be_absolute_and_exist() {
+        let directory = agent_test_home("claude-code-working-directory");
+        assert_eq!(
+            validate_claude_code_working_directory(&path_to_string(&directory)).unwrap(),
+            directory
+        );
+        assert!(validate_claude_code_working_directory("relative/path").is_err());
+        assert!(validate_claude_code_working_directory(&path_to_string(
+            &directory.join("missing")
+        ))
+        .is_err());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -18500,6 +18914,7 @@ model:
                     models: &models,
                     codex_catalog: Some(&catalog),
                     oauth_configuration,
+                    claude_code_model_mappings: None,
                     claude_desktop_model_mappings: None,
                 },
             )
@@ -20759,6 +21174,8 @@ custom_option = "keep-original"
             routing_session_affinity: true,
             routing_session_affinity_ttl: "1h".to_string(),
             codex_session_repair_on_launch: false,
+            claude_code_working_directory: String::new(),
+            claude_code_working_directory_prompt_disabled: false,
         };
         let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
 

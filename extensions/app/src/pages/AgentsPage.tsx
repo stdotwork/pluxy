@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   AlertTriangle,
   AppWindow,
@@ -70,7 +71,10 @@ type AgentConfigStatus = {
   modificationState: AgentModificationState;
   backupAvailable: boolean;
   appliedModel: string | null;
-  claudeDesktopModelMappings: ClaudeDesktopModelMappings | null;
+  claudeCodeModelMappings: ClaudeModelMappings | null;
+  claudeDesktopModelMappings: ClaudeModelMappings | null;
+  claudeCodeWorkingDirectory: string | null;
+  claudeCodeWorkingDirectoryPromptDisabled: boolean;
   warnings: string[];
   error: string | null;
 };
@@ -96,7 +100,7 @@ type ChatGptCloseResult = {
 
 type OAuthLoginRequiredAction = 'enable' | 'apply' | 'launch';
 
-type ClaudeDesktopModelMappings = {
+type ClaudeModelMappings = {
   opus: string;
   sonnet: string;
   haiku: string;
@@ -104,21 +108,36 @@ type ClaudeDesktopModelMappings = {
 
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR = 'CODEX_OAUTH_LOGIN_REQUIRED';
 
-const createClaudeDesktopModelMappings = (model: string): ClaudeDesktopModelMappings => ({
+const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
   opus: model,
   sonnet: model,
   haiku: model,
 });
 
-const sameClaudeDesktopModelMappings = (
-  left: ClaudeDesktopModelMappings,
-  right: ClaudeDesktopModelMappings,
+const sameClaudeModelMappings = (
+  left: ClaudeModelMappings,
+  right: ClaudeModelMappings,
 ) => left.opus === right.opus && left.sonnet === right.sonnet && left.haiku === right.haiku;
 
-const claudeDesktopMappingRoles = [
-  { key: 'opus', labelKey: 'agents.claudeDesktopMapping.opus' },
-  { key: 'sonnet', labelKey: 'agents.claudeDesktopMapping.sonnet' },
-  { key: 'haiku', labelKey: 'agents.claudeDesktopMapping.haiku' },
+const claudeMappingRoles = [
+  {
+    key: 'opus',
+    labelKey: 'agents.claudeDesktopMapping.opus',
+    codeLabelKey: 'agents.claudeCodeMapping.opus',
+    codeHintKey: 'agents.claudeCodeMapping.opusHint',
+  },
+  {
+    key: 'sonnet',
+    labelKey: 'agents.claudeDesktopMapping.sonnet',
+    codeLabelKey: 'agents.claudeCodeMapping.sonnet',
+    codeHintKey: 'agents.claudeCodeMapping.sonnetHint',
+  },
+  {
+    key: 'haiku',
+    labelKey: 'agents.claudeDesktopMapping.haiku',
+    codeLabelKey: 'agents.claudeCodeMapping.haiku',
+    codeHintKey: 'agents.claudeCodeMapping.haikuHint',
+  },
 ] as const;
 
 type AgentDefinition = {
@@ -514,14 +533,18 @@ export function AgentsPage() {
   const [modelByClient, setModelByClient] = useState<Partial<Record<AgentClientId, string>>>(
     readAgentModelSelections,
   );
-  const [claudeDesktopModelMappingsDraft, setClaudeDesktopModelMappingsDraft] = useState<ClaudeDesktopModelMappings>(
-    createClaudeDesktopModelMappings(''),
+  const [claudeModelMappingsDraft, setClaudeModelMappingsDraft] = useState<ClaudeModelMappings>(
+    createClaudeModelMappings(''),
   );
-  const [claudeDesktopCustomMapping, setClaudeDesktopCustomMapping] = useState(false);
+  const [claudeCustomMapping, setClaudeCustomMapping] = useState(false);
+  const [claudeCodeLaunchDialogOpen, setClaudeCodeLaunchDialogOpen] = useState(false);
+  const [claudeCodeLaunchDirectory, setClaudeCodeLaunchDirectory] = useState('');
+  const [claudeCodeSuppressDirectoryPrompt, setClaudeCodeSuppressDirectoryPrompt] = useState(false);
+  const [claudeCodeDirectoryError, setClaudeCodeDirectoryError] = useState('');
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'close-config' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | null
+    'apply' | 'close-config' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
@@ -540,7 +563,7 @@ export function AgentsPage() {
   const [oauthLoginRequiredAction, setOauthLoginRequiredAction] = useState<OAuthLoginRequiredAction | null>(null);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const modelRequestRef = useRef(0);
-  const claudeDesktopModelMappingsDirtyRef = useRef(false);
+  const claudeModelMappingsDirtyRef = useRef(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -637,6 +660,9 @@ export function AgentsPage() {
     setCloseAppNotice('');
     setCloseAppConfirmOpen(false);
     setOauthLoginRequiredAction(null);
+    setClaudeCodeLaunchDialogOpen(false);
+    setClaudeCodeDirectoryError('');
+    claudeModelMappingsDirtyRef.current = false;
   }, [selected]);
 
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
@@ -648,66 +674,78 @@ export function AgentsPage() {
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
-  const claudeDesktopModels = useMemo(
-    () => filterAgentModelsByAlias(models, claudeDesktopCustomMapping),
-    [claudeDesktopCustomMapping, models],
+  const isClaudeModelMappingClient = selected === 'claude-code' || selected === 'claude-desktop';
+  const claudeMappingModels = useMemo(
+    () => filterAgentModelsByAlias(models, claudeCustomMapping),
+    [claudeCustomMapping, models],
   );
 
   useEffect(() => {
-    if (selected !== 'claude-desktop' || !selectedModel) return;
-    const appliedMappings = activeStatus?.claudeDesktopModelMappings;
-    if (!claudeDesktopModelMappingsDirtyRef.current && appliedMappings) {
-      const appliedModels = claudeDesktopMappingRoles
+    if (!isClaudeModelMappingClient || !selectedModel) return;
+    const appliedMappings = selected === 'claude-code'
+      ? activeStatus?.claudeCodeModelMappings
+      : activeStatus?.claudeDesktopModelMappings;
+    if (!claudeModelMappingsDirtyRef.current && appliedMappings) {
+      const appliedModels = claudeMappingRoles
         .map((role) => findAgentModel(models, appliedMappings[role.key]))
         .filter((model): model is ModelOption => model !== null);
-      if (appliedModels.length === claudeDesktopMappingRoles.length) {
-        setClaudeDesktopCustomMapping(appliedModels.every((model) => Boolean(model.isAlias)));
+      if (appliedModels.length === claudeMappingRoles.length) {
+        setClaudeCustomMapping(appliedModels.every((model) => Boolean(model.isAlias)));
       }
     }
-    setClaudeDesktopModelMappingsDraft((current) => {
-      const source = claudeDesktopModelMappingsDirtyRef.current
+    setClaudeModelMappingsDraft((current) => {
+      const source = claudeModelMappingsDirtyRef.current
         ? current
         : appliedMappings ?? current;
-      const next: ClaudeDesktopModelMappings = {
+      const next: ClaudeModelMappings = {
         opus: findAgentModel(models, source.opus)?.name ?? selectedModel,
         sonnet: findAgentModel(models, source.sonnet)?.name ?? selectedModel,
         haiku: findAgentModel(models, source.haiku)?.name ?? selectedModel,
       };
-      return sameClaudeDesktopModelMappings(current, next) ? current : next;
+      return sameClaudeModelMappings(current, next) ? current : next;
     });
-  }, [activeStatus?.claudeDesktopModelMappings, models, selected, selectedModel]);
+  }, [
+    activeStatus?.claudeCodeModelMappings,
+    activeStatus?.claudeDesktopModelMappings,
+    isClaudeModelMappingClient,
+    models,
+    selected,
+    selectedModel,
+  ]);
 
   const activeLaunchTargets = activeStatus?.launchTargets ?? [];
   const defaultLaunchTarget = activeLaunchTargets[0] ?? null;
   const cliLaunchTarget = activeLaunchTargets.find((target) => target.id === 'cli') ?? null;
   const appLaunchTarget = activeLaunchTargets.find((target) => target.id === 'app') ?? null;
   const appliedModel = activeStatus?.appliedModel ?? activeStatus?.currentModel ?? '';
-  const modelDraftChanged = selected !== 'claude-desktop' && Boolean(
+  const modelDraftChanged = !isClaudeModelMappingClient && Boolean(
     selectedModel.trim()
       && appliedModel.trim()
       && selectedModel.trim() !== appliedModel.trim(),
   );
-  const appliedClaudeDesktopModelMappings = activeStatus?.claudeDesktopModelMappings
-    ?? createClaudeDesktopModelMappings(appliedModel);
-  const claudeDesktopMappingsReady = selected !== 'claude-desktop'
-    || claudeDesktopMappingRoles.every((role) =>
-      Boolean(findAgentModel(models, claudeDesktopModelMappingsDraft[role.key])),
+  const appliedClaudeModelMappings = (selected === 'claude-code'
+    ? activeStatus?.claudeCodeModelMappings
+    : activeStatus?.claudeDesktopModelMappings)
+    ?? createClaudeModelMappings(appliedModel);
+  const claudeMappingsReady = !isClaudeModelMappingClient
+    || claudeMappingRoles.every((role) =>
+      Boolean(findAgentModel(models, claudeModelMappingsDraft[role.key])),
     );
-  const claudeDesktopMappingDraftChanged = selected === 'claude-desktop'
+  const claudeMappingDraftChanged = isClaudeModelMappingClient
     && activeStatus?.modificationState === 'applied'
-    && !sameClaudeDesktopModelMappings(
-      claudeDesktopModelMappingsDraft,
-      appliedClaudeDesktopModelMappings,
+    && !sameClaudeModelMappings(
+      claudeModelMappingsDraft,
+      appliedClaudeModelMappings,
     );
   const oauthConfigurationChanged = selected === 'codex'
     && oauthConfiguration !== Boolean(activeStatus?.oauthConfiguration);
-  const draftChanged = modelDraftChanged || claudeDesktopMappingDraftChanged || oauthConfigurationChanged;
+  const draftChanged = modelDraftChanged || claudeMappingDraftChanged || oauthConfigurationChanged;
   const canEnable = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
       && !modelLoading
-      && (selected === 'claude-desktop'
-        ? claudeDesktopMappingsReady
+      && (isClaudeModelMappingClient
+        ? claudeMappingsReady
         : selectedModelOption),
   );
   const launchEnabled = Boolean(
@@ -753,28 +791,28 @@ export function AgentsPage() {
     });
   };
 
-  const selectClaudeDesktopModelMapping = (
-    role: keyof ClaudeDesktopModelMappings,
+  const selectClaudeModelMapping = (
+    role: keyof ClaudeModelMappings,
     value: string,
   ) => {
     const model = findAgentModel(models, value);
     if (!model) return;
-    claudeDesktopModelMappingsDirtyRef.current = true;
+    claudeModelMappingsDirtyRef.current = true;
     setModelSelectionError('');
-    setClaudeDesktopModelMappingsDraft((current) => ({ ...current, [role]: model.name }));
+    setClaudeModelMappingsDraft((current) => ({ ...current, [role]: model.name }));
   };
 
-  const changeClaudeDesktopCustomMapping = (enabled: boolean) => {
-    setClaudeDesktopCustomMapping(enabled);
+  const changeClaudeCustomMapping = (enabled: boolean) => {
+    setClaudeCustomMapping(enabled);
     setModelSelectionError('');
-    setClaudeDesktopModelMappingsDraft((current) => {
-      const next: ClaudeDesktopModelMappings = {
+    setClaudeModelMappingsDraft((current) => {
+      const next: ClaudeModelMappings = {
         opus: resolveAgentModelForAliasMode(models, current.opus, enabled),
         sonnet: resolveAgentModelForAliasMode(models, current.sonnet, enabled),
         haiku: resolveAgentModelForAliasMode(models, current.haiku, enabled),
       };
-      if (!sameClaudeDesktopModelMappings(current, next)) {
-        claudeDesktopModelMappingsDirtyRef.current = true;
+      if (!sameClaudeModelMappings(current, next)) {
+        claudeModelMappingsDirtyRef.current = true;
       }
       return next;
     });
@@ -798,11 +836,11 @@ export function AgentsPage() {
     return model.name;
   };
 
-  const requireClaudeDesktopModelMappings = (): ClaudeDesktopModelMappings | null => {
-    if (selected !== 'claude-desktop') return null;
-    const resolved = {} as ClaudeDesktopModelMappings;
-    for (const role of claudeDesktopMappingRoles) {
-      const model = findAgentModel(models, claudeDesktopModelMappingsDraft[role.key]);
+  const requireClaudeModelMappings = (): ClaudeModelMappings | null => {
+    if (!isClaudeModelMappingClient) return null;
+    const resolved = {} as ClaudeModelMappings;
+    for (const role of claudeMappingRoles) {
+      const model = findAgentModel(models, claudeModelMappingsDraft[role.key]);
       if (!model) {
         setModelSelectionError(t('agents.error.mappingSelectionGone'));
         return null;
@@ -842,10 +880,10 @@ export function AgentsPage() {
 
   const applyConfigurationChanges = async () => {
     setConfigurationError('');
-    const claudeDesktopModelMappings = requireClaudeDesktopModelMappings();
-    if (selected === 'claude-desktop' && !claudeDesktopModelMappings) return;
-    const model = selected === 'claude-desktop'
-      ? claudeDesktopModelMappings?.sonnet ?? null
+    const claudeModelMappings = requireClaudeModelMappings();
+    if (isClaudeModelMappingClient && !claudeModelMappings) return;
+    const model = isClaudeModelMappingClient
+      ? claudeModelMappings?.sonnet ?? null
       : requireSelectedModel();
     if (!model) return;
     setBusyAction('apply');
@@ -854,11 +892,12 @@ export function AgentsPage() {
         client: selected,
         model,
         oauthConfiguration,
-        claudeDesktopModelMappings,
+        claudeCodeModelMappings: selected === 'claude-code' ? claudeModelMappings : null,
+        claudeDesktopModelMappings: selected === 'claude-desktop' ? claudeModelMappings : null,
       });
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
-      claudeDesktopModelMappingsDirtyRef.current = false;
+      claudeModelMappingsDirtyRef.current = false;
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'apply')) {
         setConfigurationError(String(requestError));
@@ -883,10 +922,10 @@ export function AgentsPage() {
   };
 
   const resetConfigurationToDefault = async () => {
-    const claudeDesktopModelMappings = requireClaudeDesktopModelMappings();
-    if (selected === 'claude-desktop' && !claudeDesktopModelMappings) return;
-    const model = selected === 'claude-desktop'
-      ? claudeDesktopModelMappings?.sonnet ?? null
+    const claudeModelMappings = requireClaudeModelMappings();
+    if (isClaudeModelMappingClient && !claudeModelMappings) return;
+    const model = isClaudeModelMappingClient
+      ? claudeModelMappings?.sonnet ?? null
       : requireSelectedModel();
     if (!model) return;
     setBusyAction('default');
@@ -896,12 +935,13 @@ export function AgentsPage() {
         client: selected,
         model,
         oauthConfiguration,
-        claudeDesktopModelMappings,
+        claudeCodeModelMappings: selected === 'claude-code' ? claudeModelMappings : null,
+        claudeDesktopModelMappings: selected === 'claude-desktop' ? claudeModelMappings : null,
       });
       setDefaultConfirmOpen(false);
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
-      claudeDesktopModelMappingsDirtyRef.current = false;
+      claudeModelMappingsDirtyRef.current = false;
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'apply')) {
         setDefaultError(String(requestError));
@@ -928,7 +968,38 @@ export function AgentsPage() {
     }
   };
 
-  const launchAgent = async (target: AgentLaunchTarget | null) => {
+  const openClaudeCodeLaunchDialog = () => {
+    setClaudeCodeLaunchDirectory(activeStatus?.claudeCodeWorkingDirectory ?? '');
+    setClaudeCodeSuppressDirectoryPrompt(false);
+    setClaudeCodeDirectoryError('');
+    setClaudeCodeLaunchDialogOpen(true);
+  };
+
+  const chooseClaudeCodeWorkingDirectory = async () => {
+    setBusyAction('directory');
+    setClaudeCodeDirectoryError('');
+    try {
+      const selectedDirectory = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: claudeCodeLaunchDirectory || activeStatus?.claudeCodeWorkingDirectory || undefined,
+        title: t('agents.claudeCodeLaunch.dialogTitle'),
+      });
+      if (typeof selectedDirectory === 'string') {
+        setClaudeCodeLaunchDirectory(selectedDirectory);
+      }
+    } catch (requestError) {
+      setClaudeCodeDirectoryError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const invokeAgentLaunch = async (
+    target: AgentLaunchTarget,
+    workingDirectory: string | null = null,
+    suppressWorkingDirectoryPrompt: boolean | null = null,
+  ) => {
     if (!target) return;
     const launchAction = selected === 'codex'
       ? target.id === 'cli' ? 'launch-cli' : 'launch-app'
@@ -939,12 +1010,60 @@ export function AgentsPage() {
       if (draftChanged) {
         throw new Error(t('agents.error.applyFirst'));
       }
-      await invoke('launch_agent', { client: selected, target: target.id });
+      await invoke('launch_agent', {
+        client: selected,
+        target: target.id,
+        workingDirectory,
+        suppressWorkingDirectoryPrompt,
+      });
+      if (selected === 'claude-code' && workingDirectory) {
+        setClaudeCodeLaunchDialogOpen(false);
+        await reloadStatusesAfterAction();
+      }
     } catch (requestError) {
-      if (!handleOAuthLoginError(requestError, 'launch')) setLaunchError(String(requestError));
+      const message = String(requestError);
+      if (
+        selected === 'claude-code'
+        && (message.includes('CLAUDE_CODE_WORKING_DIRECTORY_REQUIRED')
+          || message.includes('CLAUDE_CODE_WORKING_DIRECTORY_INVALID'))
+      ) {
+        openClaudeCodeLaunchDialog();
+        setClaudeCodeDirectoryError(
+          message.includes('CLAUDE_CODE_WORKING_DIRECTORY_INVALID') ? message : '',
+        );
+      } else if (selected === 'claude-code' && workingDirectory) {
+        setClaudeCodeDirectoryError(message);
+      } else if (!handleOAuthLoginError(requestError, 'launch')) {
+        setLaunchError(message);
+      }
     } finally {
       setBusyAction(null);
     }
+  };
+
+  const launchAgent = async (target: AgentLaunchTarget | null) => {
+    if (!target) return;
+    if (selected === 'claude-code' && !activeStatus?.claudeCodeWorkingDirectoryPromptDisabled) {
+      openClaudeCodeLaunchDialog();
+      return;
+    }
+    await invokeAgentLaunch(target);
+  };
+
+  const launchClaudeCodeFromDialog = async () => {
+    const target = defaultLaunchTarget;
+    if (!target) return;
+    const workingDirectory = claudeCodeLaunchDirectory.trim();
+    if (!workingDirectory) {
+      setClaudeCodeDirectoryError(t('agents.claudeCodeLaunch.directoryRequired'));
+      return;
+    }
+    setClaudeCodeDirectoryError('');
+    await invokeAgentLaunch(
+      target,
+      workingDirectory,
+      claudeCodeSuppressDirectoryPrompt,
+    );
   };
 
   const closeChatGptApp = async () => {
@@ -1058,30 +1177,33 @@ export function AgentsPage() {
         </aside>
 
         <section className="panel agent-config-panel">
-          <div className="agent-subpage-tabs" role="tablist" aria-label={t('agents.tabs.label')}>
-            {availableSubpages.map((subpage) => (
-              <button
-                type="button"
-                id={`agent-subpage-tab-${subpage.id}`}
-                role="tab"
-                className={activeSubpage === subpage.id ? 'active' : ''}
-                aria-selected={activeSubpage === subpage.id}
-                aria-controls={`agent-subpage-panel-${subpage.id}`}
-                tabIndex={activeSubpage === subpage.id ? 0 : -1}
-                key={subpage.id}
-                onClick={() => setActiveSubpage(subpage.id)}
-              >
-                {t(subpage.labelKey)}
-              </button>
-            ))}
-          </div>
+          {selected !== 'claude-code' ? (
+            <div className="agent-subpage-tabs" role="tablist" aria-label={t('agents.tabs.label')}>
+              {availableSubpages.map((subpage) => (
+                <button
+                  type="button"
+                  id={`agent-subpage-tab-${subpage.id}`}
+                  role="tab"
+                  className={activeSubpage === subpage.id ? 'active' : ''}
+                  aria-selected={activeSubpage === subpage.id}
+                  aria-controls={`agent-subpage-panel-${subpage.id}`}
+                  tabIndex={activeSubpage === subpage.id ? 0 : -1}
+                  key={subpage.id}
+                  onClick={() => setActiveSubpage(subpage.id)}
+                >
+                  {t(subpage.labelKey)}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           {activeSubpage === 'core' ? (
             <div
-              className="agent-core-config"
+              className={`agent-core-config ${selected === 'claude-code' ? 'agent-claude-code-config' : ''}`}
               id="agent-subpage-panel-core"
               role="tabpanel"
-              aria-labelledby="agent-subpage-tab-core"
+              aria-labelledby={selected === 'claude-code' ? undefined : 'agent-subpage-tab-core'}
+              aria-label={selected === 'claude-code' ? t('agents.claudeCodeMapping.title') : undefined}
             >
               <div className="agent-status-grid">
                 <div>
@@ -1104,7 +1226,7 @@ export function AgentsPage() {
                 </div>
               ) : null}
 
-              {selected !== 'claude-desktop' ? (
+              {!isClaudeModelMappingClient ? (
                 <section className="agent-core-setting-section agent-model-section">
                   <div className="agent-section-heading">
                     <div><strong>{t('agents.useModel')}</strong></div>
@@ -1131,43 +1253,52 @@ export function AgentsPage() {
                 </section>
               ) : null}
 
-              {selected === 'claude-desktop' ? (
-                <section className="agent-core-setting-section agent-claude-desktop-mapping">
+              {isClaudeModelMappingClient ? (
+                <section className={`agent-core-setting-section agent-claude-desktop-mapping ${selected === 'claude-code' ? 'agent-claude-code-mapping' : ''}`}>
                   <div className="agent-section-heading">
                     <div>
-                      <strong>{t('agents.claudeDesktopMapping.title')}</strong>
-                      <span>{t('agents.claudeDesktopMapping.description')}</span>
+                      <strong>{t(selected === 'claude-code'
+                        ? 'agents.claudeCodeMapping.title'
+                        : 'agents.claudeDesktopMapping.title')}</strong>
+                      <span>{t(selected === 'claude-code'
+                        ? 'agents.claudeCodeMapping.description'
+                        : 'agents.claudeDesktopMapping.description')}</span>
                     </div>
                     <div className="agent-section-heading-actions">
                       <label
                         className="agent-claude-desktop-mapping-filter"
                         title={t('agents.claudeDesktopMapping.customMappingHint')}
                       >
-                        <span>{t('agents.claudeDesktopMapping.customMapping')}</span>
+                        <span>{t(selected === 'claude-code'
+                          ? 'agents.claudeCodeMapping.aliasOnly'
+                          : 'agents.claudeDesktopMapping.customMapping')}</span>
                         <span className="switch-control">
                           <input
                             type="checkbox"
-                            checked={claudeDesktopCustomMapping}
-                            onChange={(event) => changeClaudeDesktopCustomMapping(event.currentTarget.checked)}
+                            checked={claudeCustomMapping}
+                            onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)}
                             disabled={busy || modelLoading}
                           />
                           <span className="switch-track" />
                         </span>
                       </label>
-                      {claudeDesktopMappingDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                      {claudeMappingDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
                     </div>
                   </div>
                   <div className="agent-claude-desktop-mapping-grid">
-                    {claudeDesktopMappingRoles.map((role) => (
-                      <div className="agent-claude-desktop-mapping-row" key={role.key}>
-                        <strong>{t(role.labelKey)}</strong>
+                    {claudeMappingRoles.map((role) => (
+                      <div className={`agent-claude-desktop-mapping-row ${role.key}`} key={role.key}>
+                        <div className="agent-claude-mapping-role">
+                          <strong>{t(selected === 'claude-code' ? role.codeLabelKey : role.labelKey)}</strong>
+                          {selected === 'claude-code' ? <span>{t(role.codeHintKey)}</span> : null}
+                        </div>
                         <AgentModelPicker
-                          models={claudeDesktopModels}
-                          value={claudeDesktopModelMappingsDraft[role.key]}
+                          models={claudeMappingModels}
+                          value={claudeModelMappingsDraft[role.key]}
                           loading={modelLoading}
                           error={modelError}
                           disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
-                          onChange={(value) => selectClaudeDesktopModelMapping(role.key, value)}
+                          onChange={(value) => selectClaudeModelMapping(role.key, value)}
                           onRefresh={refreshModels}
                         />
                       </div>
@@ -1231,7 +1362,9 @@ export function AgentsPage() {
                       onClick={openDefaultConfirmation}
                       disabled={busy || !canEnable}
                     >
-                      {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
+                      {busyAction === 'default'
+                        ? <LoaderCircle size={16} className="spin" />
+                        : selected === 'claude-code' ? null : <RefreshCw size={16} />}
                       {t('agents.modify.default')}
                     </button>
                     {selected === 'codex' ? (
@@ -1301,7 +1434,9 @@ export function AgentsPage() {
                             ? defaultLaunchTarget?.detail
                             : t('agents.launch.enableFirst')}
                       >
-                        {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : <Play size={16} />}
+                        {busyAction === 'launch'
+                          ? <LoaderCircle size={16} className="spin" />
+                          : selected === 'claude-code' ? null : <Play size={16} />}
                         {busyAction === 'launch' ? t('agents.launch.starting') : defaultLaunchTarget ? t('agents.launch.start', { target: defaultLaunchTarget.label }) : t('agents.launch.unavailable')}
                       </button>
                     )}
@@ -1344,6 +1479,85 @@ export function AgentsPage() {
           ) : null}
         </section>
       </div>
+
+      {claudeCodeLaunchDialogOpen ? (
+        <div className="config-dialog-backdrop" onMouseDown={(event) => {
+          if (event.currentTarget === event.target && !busy) {
+            setClaudeCodeLaunchDialogOpen(false);
+          }
+        }}>
+          <section
+            className="config-dialog agent-claude-code-launch-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-claude-code-launch-title"
+          >
+            <div className="config-dialog-heading">
+              <div>
+                <h2 id="agent-claude-code-launch-title">
+                  {t('agents.claudeCodeLaunch.dialogTitle')}
+                </h2>
+              </div>
+            </div>
+            <p>{t('agents.claudeCodeLaunch.dialogDescription')}</p>
+            <div className="config-dialog-field">
+              <span>{t('agents.claudeCodeLaunch.workingDirectory')}</span>
+              <button
+                type="button"
+                className="agent-claude-code-directory-picker"
+                onClick={() => void chooseClaudeCodeWorkingDirectory()}
+                disabled={busy}
+                autoFocus
+              >
+                <span>
+                  <small>{claudeCodeLaunchDirectory
+                    ? t('agents.claudeCodeLaunch.selectedDirectory')
+                    : t('agents.claudeCodeLaunch.noDirectory')}</small>
+                  <strong title={claudeCodeLaunchDirectory || undefined}>
+                    {claudeCodeLaunchDirectory || t('agents.claudeCodeLaunch.chooseDirectory')}
+                  </strong>
+                </span>
+                <b>{busyAction === 'directory'
+                  ? t('agents.claudeCodeLaunch.choosing')
+                  : t('agents.claudeCodeLaunch.browse')}</b>
+              </button>
+            </div>
+            <label className="agent-claude-code-suppress-prompt">
+              <input
+                type="checkbox"
+                checked={claudeCodeSuppressDirectoryPrompt}
+                onChange={(event) => setClaudeCodeSuppressDirectoryPrompt(event.currentTarget.checked)}
+                disabled={busy}
+              />
+              <span>{t('agents.claudeCodeLaunch.neverAskAgain')}</span>
+            </label>
+            {claudeCodeDirectoryError ? (
+              <span className="agent-inline-message error" role="alert" aria-live="polite">
+                {claudeCodeDirectoryError}
+              </span>
+            ) : null}
+            <div className="config-dialog-actions two-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setClaudeCodeLaunchDialogOpen(false)}
+                disabled={busy}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void launchClaudeCodeFromDialog()}
+                disabled={busy || !claudeCodeLaunchDirectory.trim()}
+              >
+                {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : null}
+                {t('agents.claudeCodeLaunch.launch')}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {defaultConfirmOpen ? (
         <div className="config-dialog-backdrop">
