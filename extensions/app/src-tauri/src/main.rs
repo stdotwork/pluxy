@@ -8623,6 +8623,8 @@ struct ManagementRequest {
     path: String,
     query: Option<std::collections::HashMap<String, String>>,
     body: Option<serde_json::Value>,
+    #[serde(rename = "timeoutMs")]
+    timeout_ms: Option<u64>,
 }
 
 #[tauri::command]
@@ -8648,6 +8650,9 @@ async fn management_request(
     let mut builder = client
         .request(method, management_endpoint(&config, path)?)
         .header("Authorization", management_authorization(&config)?);
+    if let Some(timeout_ms) = request.timeout_ms {
+        builder = builder.timeout(Duration::from_millis(timeout_ms.clamp(1_000, 120_000)));
+    }
     if let Some(query) = request.query {
         builder = builder.query(&query);
     }

@@ -3407,6 +3407,18 @@ textarea:focus-visible {
   flex: none;
 }
 
+.provider-health-pill {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: var(--font-size-meta);
+}
+
+.provider-health-pill.checking {
+  border-color: var(--theme-d5d2cb);
+  background: var(--theme-f4f1ea);
+  color: var(--theme-5f5a53);
+}
+
 .provider-row-meta {
   align-items: flex-end;
   flex-direction: column;
@@ -3419,6 +3431,13 @@ textarea:focus-visible {
 .auth-file-actions {
   justify-content: flex-end;
   gap: 7px;
+}
+
+.provider-row-actions .provider-health-button {
+  width: auto;
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: var(--font-size-label);
 }
 
 .provider-enabled-control {
@@ -7514,6 +7533,15 @@ textarea:focus-visible {
 
   .provider-category-panel {
     grid-template-columns: 1fr;
+  }
+
+  .real-provider-row {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-row-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .thinking-effort-options {

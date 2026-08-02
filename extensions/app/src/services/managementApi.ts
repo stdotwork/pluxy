@@ -6,6 +6,7 @@ export type ManagementJson = Record<string, unknown> | unknown[] | string | numb
 type ManagementRequestOptions = {
   query?: Record<string, string | number | boolean | undefined>;
   body?: ManagementJson;
+  timeoutMs?: number;
 };
 
 const normalizeQuery = (
@@ -34,6 +35,7 @@ async function request<T = ManagementJson>(
       path,
       query: normalizeQuery(options.query),
       body: options.body,
+      timeoutMs: options.timeoutMs,
     },
   });
 }
@@ -41,8 +43,11 @@ async function request<T = ManagementJson>(
 export const managementApi = {
   get: <T = ManagementJson>(path: string, query?: ManagementRequestOptions['query']) =>
     request<T>('GET', path, { query }),
-  post: <T = ManagementJson>(path: string, body?: ManagementJson) =>
-    request<T>('POST', path, { body }),
+  post: <T = ManagementJson>(
+    path: string,
+    body?: ManagementJson,
+    options: Pick<ManagementRequestOptions, 'timeoutMs'> = {},
+  ) => request<T>('POST', path, { ...options, body }),
   put: <T = ManagementJson>(path: string, body?: ManagementJson) =>
     request<T>('PUT', path, { body }),
   patch: <T = ManagementJson>(path: string, body?: ManagementJson) =>

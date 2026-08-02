@@ -32,6 +32,11 @@ import {
   type ModelOption,
   type ModelProvider,
 } from '../services/modelService';
+import {
+  checkProviderHealth,
+  ProviderHealthCheckError,
+  type ProviderHealthResult,
+} from '../services/providerHealthCheck';
 import { modelMatchesRule } from '../services/oauthModels';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 
@@ -70,6 +75,8 @@ type ProviderRow = {
   authIndex: string;
   remark: string;
 };
+
+type ProviderHealthState = { status: 'checking' } | ProviderHealthResult;
 
 export type ProviderDraft = {
   name: string;
@@ -191,6 +198,29 @@ const rowFromRecord = (
 
 const providerRemarkIdentity = (section: ProviderSection, apiKeys: string[]) =>
   `${section}\u0000${apiKeys.join('\u0000')}`;
+
+const providerHealthIdentity = (row: ProviderRow) => [
+  row.section,
+  row.index,
+  row.name,
+  row.baseUrl,
+  row.authIndex,
+  readString(row.record, 'test-model', 'testModel'),
+  row.apiKeys.join('\u0000'),
+  row.models.map((model) => model.name).join('\u0000'),
+].join('\u0001');
+
+const providerModelType = (section: ProviderSection): ModelProvider => {
+  if (section === 'gemini-api-key') return 'gemini';
+  if (section === 'claude-api-key') return 'claude';
+  if (section === 'codex-api-key') return 'codex';
+  return 'openai';
+};
+
+const providerHeadersFromRecord = (record: Record<string, unknown>) =>
+  isRecord(record.headers)
+    ? Object.fromEntries(Object.entries(record.headers).map(([key, value]) => [key, String(value)]))
+    : {};
 
 export const stripResponseFields = (record: Record<string, unknown>) => {
   const next = { ...record };
@@ -622,6 +652,7 @@ export function ApiAccessPage() {
   const [editingRow, setEditingRow] = useState<ProviderRow | null>(null);
   const [dialogDraft, setDialogDraft] = useState<ProviderDraft>(emptyProviderDraft);
   const [apiAccessRemarks, setApiAccessRemarks] = useState<Record<string, string>>({});
+  const [providerHealth, setProviderHealth] = useState<Record<string, ProviderHealthState>>({});
   const activeDefinition = definitionFor(activeCategory);
   const activeSection = activeDefinition.section;
 
@@ -907,6 +938,58 @@ export function ApiAccessPage() {
     }
   };
 
+  const checkRowHealth = async (row: ProviderRow) => {
+    if (!window.confirm(t('apiAccess.health.confirm'))) return;
+    const identity = providerHealthIdentity(row);
+    setProviderHealth((current) => ({ ...current, [identity]: { status: 'checking' } }));
+    try {
+      const result = await checkProviderHealth({
+        provider: providerModelType(row.section),
+        baseUrl: row.baseUrl,
+        apiKeys: row.apiKeys,
+        authIndex: row.authIndex,
+        models: row.models,
+        testModel: readString(row.record, 'test-model', 'testModel'),
+        customHeaders: providerHeadersFromRecord(row.record),
+      });
+      setProviderHealth((current) => ({ ...current, [identity]: result }));
+    } catch (requestError) {
+      const message = requestError instanceof ProviderHealthCheckError
+        ? t('apiAccess.health.noModel')
+        : String(requestError).replace(/^Error:\s*/i, '');
+      const timedOut = /timed?\s*out|timeout|deadline has elapsed|超时/i.test(message);
+      setProviderHealth((current) => ({
+        ...current,
+        [identity]: {
+          status: 'failed',
+          model: readString(row.record, 'test-model', 'testModel') || row.models[0]?.name || '',
+          successCount: 0,
+          totalCount: Math.max(1, new Set(row.apiKeys.filter(Boolean)).size),
+          errors: [message],
+          timedOut,
+        },
+      }));
+    }
+  };
+
+  const healthStatusLabel = (status: ProviderHealthResult['status']) => {
+    if (status === 'healthy') return t('apiAccess.health.healthy');
+    if (status === 'partial') return t('apiAccess.health.partial');
+    return t('apiAccess.health.failed');
+  };
+
+  const healthResultTitle = (result: ProviderHealthResult) => [
+    result.model ? t('apiAccess.health.modelResult', { model: result.model }) : '',
+    t('apiAccess.health.keysResult', { success: result.successCount, total: result.totalCount }),
+    result.latencyMs === undefined
+      ? ''
+      : t('apiAccess.health.latencyResult', { latency: result.latencyMs }),
+    result.timedOut ? t('apiAccess.health.timeout') : '',
+    result.errors.length > 0
+      ? t('apiAccess.health.errorsResult', { errors: result.errors.join('; ') })
+      : '',
+  ].filter(Boolean).join('\n');
+
   const totalCount = Object.values(records).reduce((sum, items) => sum + items.length, 0);
 
   const countForDefinition = (definition: ProviderDefinition) =>
@@ -976,11 +1059,26 @@ export function ApiAccessPage() {
             </div>
           ) : (
             <div className="real-provider-list">
-              {rows.map((row) => (
+              {rows.map((row) => {
+                const health = providerHealth[providerHealthIdentity(row)];
+                return (
                 <article className="real-provider-row" key={`${row.section}-${row.index}-${row.authIndex}`}>
                   <div className="provider-row-main">
                     <div className="provider-row-title">
                       <strong title={row.remark || row.name}>{row.remark || row.name}</strong>
+                      {health?.status === 'checking' ? (
+                        <span className="state-pill provider-health-pill checking">
+                          {t('apiAccess.health.checking')}
+                        </span>
+                      ) : health ? (
+                        <span
+                          className={`state-pill provider-health-pill ${health.status === 'healthy' ? 'success' : health.status === 'partial' ? 'update' : 'error'}`}
+                          title={healthResultTitle(health)}
+                        >
+                          {healthStatusLabel(health.status)} · {health.successCount}/{health.totalCount}
+                          {health.latencyMs === undefined ? '' : ` · ${health.latencyMs} ms`}
+                        </span>
+                      ) : null}
                     </div>
                     <code title={definitionFor(row.section).openAi ? t('apiAccess.keys.count', { count: row.apiKeys.length }) : undefined}>
                       {definitionFor(row.section).openAi && row.apiKeys.length > 1
@@ -995,6 +1093,16 @@ export function ApiAccessPage() {
                     {row.authIndex ? <span title={row.authIndex}>{t('apiAccess.runtimeCredential', { index: row.authIndex.slice(0, 8) })}</span> : null}
                   </div>
                   <div className="provider-row-actions">
+                    <button
+                      type="button"
+                      className="secondary-button provider-health-button"
+                      onClick={() => void checkRowHealth(row)}
+                      disabled={busy || health?.status === 'checking'}
+                    >
+                      {health?.status === 'checking'
+                        ? t('apiAccess.health.checking')
+                        : t('apiAccess.health.action')}
+                    </button>
                     <label className="provider-enabled-control" title={row.disabled ? t('apiAccess.enable') : t('apiAccess.disable')}>
                       <span>{row.disabled ? t('apiAccess.status.disabled') : t('apiAccess.status.enabled')}</span>
                       <span className="switch-control">
@@ -1016,7 +1124,8 @@ export function ApiAccessPage() {
                     </button>
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
