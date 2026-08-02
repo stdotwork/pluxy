@@ -286,7 +286,7 @@ export const jaOverrides = {
   'config.webuiKey.unconfigured': '未設定',
   'config.webuiKey.heading': '管理 API のアクセス認証情報',
   'config.webuiKey.description': 'CPA WebUI へのログインと管理 API の呼び出しに使用します。上の API 認証キーとは用途が異なります。',
-  'config.webuiKey.securityHint': '現在のキーは表示されません。保存後、他の WebUI では新しいキーで再ログインしてください。',
+  'config.webuiKey.securityHint': '既存のキーは表示されません。忘れた場合は、そのままキーを再設定してください。',
   'config.webuiKey.newKey': '新しい WebUI キー',
   'config.webuiKey.confirmKey': '新しいキーを確認',
   'config.webuiKey.placeholder': '新しい平文キーを入力',
