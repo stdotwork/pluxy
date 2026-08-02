@@ -82,6 +82,11 @@ const DEFAULT_API_KEY: &str = "123456";
 const DEFAULT_API_KEY_INITIAL_REMARK: &str = "默认密钥";
 const LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
 const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
+const PI_AGENT_ID: &str = "pi";
+const PI_AGENT_NAME: &str = "Pi";
+const PI_CLIPROXYAPI_PACKAGE: &str = "npm:@router-for-me/pi-cliproxyapi-provider";
+const PI_AGENT_CONFIG_FILE: &str = "cliproxyapi.json";
+const PI_AGENT_SETTINGS_FILE: &str = "settings.json";
 const CODEX_MODEL_CATALOG_FILE: &str = "cpa-gui-model-catalog.json";
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR: &str = "CODEX_OAUTH_LOGIN_REQUIRED";
 const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";
@@ -618,6 +623,7 @@ struct AgentConfigStatus {
     name: String,
     supported_platform: bool,
     installed: bool,
+    plugin_installed: bool,
     executable_path: Option<String>,
     launch_targets: Vec<AgentLaunchTarget>,
     version: Option<String>,
@@ -1661,6 +1667,7 @@ fn inspect_agent_config_statuses(
     .into_iter()
     .map(|client| inspect_agent_config(client, &home, config.port, api_key))
     .collect::<Vec<_>>();
+    statuses.push(inspect_pi_provider_status(&home, config.port, api_key));
     if let Some(status) = statuses
         .iter_mut()
         .find(|status| status.id == AgentClient::ClaudeCode.id())
@@ -1725,9 +1732,37 @@ async fn get_agent_models(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     client: String,
 ) -> Result<Vec<AgentModelOption>, String> {
+    if client.trim().eq_ignore_ascii_case(PI_AGENT_ID) {
+        let config = gui_config_state.snapshot()?;
+        return fetch_agent_models(config.port, effective_agent_api_key(&config)).await;
+    }
     let client = AgentClient::parse(&client)?;
     let config = gui_config_state.snapshot()?;
     Ok(fetch_prepared_agent_models(client, &config).await?.models)
+}
+
+#[tauri::command]
+async fn install_pi_provider(
+    app: tauri::AppHandle,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    cache: tauri::State<'_, AgentConfigStatusCache>,
+) -> Result<AgentConfigActionResult, String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("无法获取用户目录: {error}"))?;
+    let config = gui_config_state.snapshot()?;
+    let executable = find_pi_executable(&home)
+        .ok_or_else(|| "未检测到 Pi CLI，请先安装 Pi 并确保 pi 命令在 PATH 中".to_string())?;
+    let port = config.port;
+    let api_key = effective_agent_api_key(&config).to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        install_pi_provider_inner(&home, &executable, port, &api_key)
+    })
+    .await
+    .map_err(|error| format!("安装 Pi CLIProxyAPI provider 任务失败: {error}"))??;
+    cache.clear()?;
+    Ok(result)
 }
 
 fn validate_claude_code_working_directory(value: &str) -> Result<PathBuf, String> {
@@ -2489,6 +2524,31 @@ async fn launch_agent(
     working_directory: Option<String>,
     suppress_working_directory_prompt: Option<bool>,
 ) -> Result<(), String> {
+    if client.trim().eq_ignore_ascii_case(PI_AGENT_ID) {
+        let home = app
+            .path()
+            .home_dir()
+            .map_err(|error| format!("无法获取用户目录: {error}"))?;
+        let config = gui_config_state.snapshot()?;
+        let status =
+            inspect_pi_provider_status(&home, config.port, effective_agent_api_key(&config));
+        if !status.installed {
+            return Err("未检测到 Pi CLI，请先安装 Pi 并确保 pi 命令在 PATH 中".to_string());
+        }
+        if !status.configured {
+            return Err("请先安装并配置 Pi CLIProxyAPI provider 插件".to_string());
+        }
+        let requested_target = target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if requested_target.is_some_and(|value| value != "cli") {
+            return Err("Pi 只支持 CLI 启动方式".to_string());
+        }
+        let executable =
+            find_pi_executable(&home).ok_or_else(|| "未找到 Pi CLI 可执行文件".to_string())?;
+        return launch_cli_agent(&executable, PI_AGENT_NAME, &home, &[], &[]);
+    }
     let client = AgentClient::parse(&client)?;
     if !client.supported_platform() {
         return Err(format!("当前平台不支持启动 {}", client.name()));
@@ -3009,6 +3069,252 @@ fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBuf> {
     }
 }
 
+fn pi_agent_directory(home: &Path) -> PathBuf {
+    env::var_os("PI_CODING_AGENT_DIR")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| home.join(".pi/agent"))
+}
+
+fn pi_provider_config_path(home: &Path) -> PathBuf {
+    pi_agent_directory(home).join(PI_AGENT_CONFIG_FILE)
+}
+
+fn pi_provider_settings_path(home: &Path) -> PathBuf {
+    pi_agent_directory(home).join(PI_AGENT_SETTINGS_FILE)
+}
+
+fn pi_package_source_matches(value: &str) -> bool {
+    let value = value.trim();
+    value == PI_CLIPROXYAPI_PACKAGE || value.starts_with(&format!("{PI_CLIPROXYAPI_PACKAGE}@"))
+}
+
+fn pi_settings_contains_provider(settings: &serde_json::Value) -> bool {
+    settings
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|packages| {
+            packages.iter().any(|package| {
+                package.as_str().is_some_and(pi_package_source_matches)
+                    || package
+                        .get("source")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(pi_package_source_matches)
+            })
+        })
+}
+
+fn pi_provider_package_installed(home: &Path) -> Result<bool, String> {
+    let path = pi_provider_settings_path(home);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "读取 Pi settings.json 失败 {}: {error}",
+            path_to_string(&path)
+        )
+    })?;
+    let settings = serde_json::from_str::<serde_json::Value>(&content).map_err(|error| {
+        format!(
+            "解析 Pi settings.json 失败 {}: {error}",
+            path_to_string(&path)
+        )
+    })?;
+    Ok(pi_settings_contains_provider(&settings))
+}
+
+fn build_pi_provider_config(
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+) -> Result<String, String> {
+    let mut root = match existing.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => serde_json::from_str::<serde_json::Value>(value)
+            .map_err(|error| format!("解析 Pi CLIProxyAPI 配置失败: {error}"))?,
+        None => serde_json::json!({}),
+    };
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| "Pi CLIProxyAPI 配置根节点必须是 JSON 对象".to_string())?;
+    object.insert("baseUrl".to_string(), serde_json::json!(base_url));
+    object.insert("apiKey".to_string(), serde_json::json!(api_key));
+    let mut rendered = serde_json::to_string_pretty(&root)
+        .map_err(|error| format!("生成 Pi CLIProxyAPI 配置失败: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+fn inspect_pi_provider_status(home: &Path, port: u16, api_key: &str) -> AgentConfigStatus {
+    let config_path = pi_provider_config_path(home);
+    let settings_path = pi_provider_settings_path(home);
+    let executable = find_pi_executable(home);
+    let launch_targets = executable
+        .as_ref()
+        .map(|path| {
+            vec![AgentLaunchTarget {
+                id: "cli".to_string(),
+                label: PI_AGENT_NAME.to_string(),
+                detail: path_to_string(path),
+            }]
+        })
+        .unwrap_or_default();
+    let plugin_installed = match pi_provider_package_installed(home) {
+        Ok(installed) => installed,
+        Err(_) => false,
+    };
+    let mut errors = Vec::new();
+    let mut credentials_match = false;
+    if config_path.is_file() {
+        match fs::read_to_string(&config_path)
+            .map_err(|error| format!("读取 Pi CLIProxyAPI 配置失败: {error}"))
+            .and_then(|content| {
+                let root = serde_json::from_str::<serde_json::Value>(&content)
+                    .map_err(|error| format!("解析 Pi CLIProxyAPI 配置失败: {error}"))?;
+                let object = root
+                    .as_object()
+                    .ok_or_else(|| "Pi CLIProxyAPI 配置根节点必须是 JSON 对象".to_string())?;
+                let expected_base_url = format!("http://127.0.0.1:{port}");
+                credentials_match = object
+                    .get("baseUrl")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| value.trim() == expected_base_url)
+                    && object.get("apiKey").and_then(serde_json::Value::as_str) == Some(api_key);
+                Ok(())
+            }) {
+            Ok(()) => {}
+            Err(error) => errors.push(error),
+        }
+    }
+    if settings_path.is_file() {
+        if let Err(error) = pi_provider_package_installed(home) {
+            errors.push(error);
+        }
+    }
+    let config_exists = config_path.is_file() || settings_path.is_file();
+    let config_valid = errors.is_empty();
+    let configured = plugin_installed && credentials_match && config_valid;
+    let mut warnings = Vec::new();
+    if executable.is_some() && !plugin_installed && config_valid {
+        warnings.push("Pi CLIProxyAPI provider 插件尚未安装".to_string());
+    } else if plugin_installed && !credentials_match && config_valid && config_exists {
+        warnings
+            .push("Pi 插件已安装，但尚未同步当前 EasyCLIProxyAPI 的 baseUrl/API key".to_string());
+    }
+    if executable.is_none() && plugin_installed {
+        warnings.push("已找到 Pi 插件配置，但未检测到 Pi CLI 命令".to_string());
+    }
+    let modification_state = if configured {
+        "applied"
+    } else {
+        "unconfigured"
+    };
+    let error = errors.into_iter().next();
+    AgentConfigStatus {
+        id: PI_AGENT_ID.to_string(),
+        name: PI_AGENT_NAME.to_string(),
+        supported_platform: true,
+        installed: executable.is_some(),
+        plugin_installed,
+        executable_path: launch_targets.first().map(|target| target.detail.clone()),
+        launch_targets,
+        version: executable.as_deref().and_then(read_agent_version),
+        config_paths: vec![path_to_string(&config_path), path_to_string(&settings_path)],
+        config_exists,
+        config_valid,
+        configured,
+        current_model: None,
+        oauth_configuration: false,
+        modification_enabled: configured,
+        modification_state: modification_state.to_string(),
+        backup_available: false,
+        applied_model: None,
+        claude_code_model_mappings: None,
+        claude_desktop_model_mappings: None,
+        claude_code_working_directory: None,
+        claude_code_working_directory_prompt_disabled: false,
+        warnings,
+        error,
+    }
+}
+
+fn install_pi_provider_inner(
+    home: &Path,
+    executable: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<AgentConfigActionResult, String> {
+    if port == 0 {
+        return Err("内核端口无效".to_string());
+    }
+    if api_key.trim().is_empty() {
+        return Err("EasyCLIProxyAPI 没有可用的 API key".to_string());
+    }
+    let settings_path = pi_provider_settings_path(home);
+    let mut changed_files = Vec::new();
+    if !pi_provider_package_installed(home)? {
+        install_pi_package(executable, home)?;
+        changed_files.push(path_to_string(&settings_path));
+    }
+
+    let config_path = pi_provider_config_path(home);
+    let existing = if config_path.is_file() {
+        Some(fs::read_to_string(&config_path).map_err(|error| {
+            format!(
+                "读取 Pi CLIProxyAPI 配置失败 {}: {error}",
+                path_to_string(&config_path)
+            )
+        })?)
+    } else {
+        None
+    };
+    let base_url = format!("http://127.0.0.1:{port}");
+    let rendered = build_pi_provider_config(existing.as_deref(), &base_url, api_key)?;
+    if existing.as_deref() != Some(rendered.as_str()) {
+        write_bytes_atomically(&config_path, rendered.as_bytes())?;
+        changed_files.push(path_to_string(&config_path));
+    }
+
+    Ok(action_result(
+        "applied",
+        true,
+        None,
+        changed_files,
+        Vec::new(),
+    ))
+}
+
+fn install_pi_package(executable: &Path, home: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = windows_command_for_executable(executable, false);
+    #[cfg(not(target_os = "windows"))]
+    let mut command = Command::new(executable);
+
+    command
+        .arg("install")
+        .arg(PI_CLIPROXYAPI_PACKAGE)
+        .current_dir(home)
+        .stdin(Stdio::null());
+    configure_background_command(&mut command);
+    let output = command
+        .output()
+        .map_err(|error| format!("执行 Pi 插件安装失败: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    Err(format!(
+        "Pi CLIProxyAPI provider 插件安装失败{}",
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {detail}")
+        }
+    ))
+}
+
 fn codex_configuration_directory(home: &Path) -> PathBuf {
     env::var_os("CODEX_HOME")
         .map(PathBuf::from)
@@ -3238,6 +3544,7 @@ fn inspect_agent_config(
         name: client.name().to_string(),
         supported_platform: client.supported_platform(),
         installed,
+        plugin_installed: true,
         executable_path: launch_targets.first().map(|target| target.detail.clone()),
         launch_targets,
         version,
@@ -4018,8 +4325,16 @@ fn find_agent_executable(client: AgentClient, home: &Path) -> Option<PathBuf> {
     if client == AgentClient::ClaudeDesktop {
         return find_claude_desktop_executable(home);
     }
+    find_named_agent_executable(home, client.executable_names())
+}
+
+fn find_pi_executable(home: &Path) -> Option<PathBuf> {
+    find_named_agent_executable(home, &["pi"])
+}
+
+fn find_named_agent_executable(home: &Path, names: &[&str]) -> Option<PathBuf> {
     for directory in agent_executable_directories(home) {
-        for name in client.executable_names() {
+        for name in names {
             #[cfg(target_os = "windows")]
             let candidates = [
                 directory.join(format!("{name}.exe")),
@@ -17613,6 +17928,7 @@ fn main() {
             get_agent_config_statuses,
             refresh_agent_config_statuses,
             get_agent_models,
+            install_pi_provider,
             check_codex_oauth_login,
             update_codex_model_catalog,
             get_thinking_aliases,
@@ -17720,6 +18036,37 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pi_provider_config_preserves_existing_fields_and_syncs_cpa_credentials() {
+        let rendered = build_pi_provider_config(
+            Some(r#"{"fast":true,"providerId":"custom","nested":{"keep":1}}"#),
+            "http://127.0.0.1:9527",
+            "agent-key",
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert_eq!(value["baseUrl"], "http://127.0.0.1:9527");
+        assert_eq!(value["apiKey"], "agent-key");
+        assert_eq!(value["fast"], true);
+        assert_eq!(value["providerId"], "custom");
+        assert_eq!(value["nested"]["keep"], 1);
+    }
+
+    #[test]
+    fn pi_package_source_match_accepts_unpinned_and_pinned_sources() {
+        assert!(pi_package_source_matches(PI_CLIPROXYAPI_PACKAGE));
+        assert!(pi_package_source_matches(
+            "npm:@router-for-me/pi-cliproxyapi-provider@1.4.10"
+        ));
+        assert!(!pi_package_source_matches(
+            "npm:@router-for-me/other-provider"
+        ));
+        assert!(pi_settings_contains_provider(&serde_json::json!({
+            "packages": [{"source": PI_CLIPROXYAPI_PACKAGE}]
+        })));
+    }
 
     #[test]
     fn provider_health_stream_detects_only_real_model_text() {
