@@ -388,6 +388,8 @@ fn prepare_catalog_with_sources(
             alias: optional_map_string(&entry.value, "display_name").filter(|display| {
                 !display.eq_ignore_ascii_case(&string_value(&entry.value, "slug"))
             }),
+            is_alias: false,
+            context_window: positive_u64_value(entry.value.get("context_window")),
         })
         .collect::<Vec<_>>();
     let values = entries

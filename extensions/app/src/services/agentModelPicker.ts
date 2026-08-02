@@ -28,6 +28,13 @@ export function filterAgentModels(models: ModelOption[], search: string): ModelO
     .map((item) => item.model);
 }
 
+export function filterAgentModelsByAlias(
+  models: ModelOption[],
+  aliasesOnly: boolean,
+): ModelOption[] {
+  return models.filter((model) => Boolean(model.isAlias) === aliasesOnly);
+}
+
 export function hasExactAgentModel(models: ModelOption[], value: string): boolean {
   const query = normalized(value);
   if (!query) return false;

@@ -5166,6 +5166,39 @@ textarea:focus-visible {
   font-size: var(--font-size-label);
 }
 
+.agent-section-heading-actions {
+  display: flex !important;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px !important;
+}
+
+.agent-claude-desktop-mapping-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--theme-e3e1db);
+  border-radius: 7px;
+  background: var(--theme-fff);
+  color: var(--theme-5f5a53);
+  cursor: pointer;
+  font-size: var(--font-size-label);
+  font-weight: 700;
+}
+
+.agent-claude-desktop-mapping-filter:has(input:checked) {
+  border-color: var(--theme-8069ad);
+  background: var(--theme-f1ecfb);
+  color: var(--theme-554075);
+}
+
+.agent-claude-desktop-mapping-filter:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .agent-section-heading {
   display: flex;
   align-items: center;
@@ -6950,6 +6983,15 @@ textarea:focus-visible {
 }
 
 @container agent-panel (max-width: 640px) {
+  .agent-claude-desktop-mapping > .agent-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-claude-desktop-mapping .agent-section-heading-actions {
+    justify-content: space-between;
+  }
+
   .agent-claude-desktop-mapping-grid {
     grid-template-columns: 1fr;
   }

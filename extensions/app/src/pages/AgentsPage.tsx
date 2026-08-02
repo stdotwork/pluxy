@@ -34,6 +34,7 @@ import opencodeIcon from '../assets/icons/opencode.svg';
 import {
   agentModelAlias,
   filterAgentModels,
+  filterAgentModelsByAlias,
   findAgentModel,
   resolveAgentModelSelection,
 } from '../services/agentModelPicker';
@@ -298,7 +299,9 @@ function AgentModelPicker({
     () => visibleModels.map((model) => ({ name: model.name, alias: model.alias ?? '' })),
     [visibleModels],
   );
-  const selectedAlias = agentModelAlias(models, value);
+  const selectedModel = findAgentModel(models, value);
+  const selectedName = selectedModel?.name ?? '';
+  const selectedAlias = selectedName ? agentModelAlias(models, selectedName) : '';
 
   const updateDropdownLayout = useCallback(() => {
     const root = rootRef.current;
@@ -411,8 +414,8 @@ function AgentModelPicker({
         }}
       >
         <span>
-          <strong title={value || undefined}>
-            {value || (loading ? t('agents.model.loading') : error ? t('agents.model.loadFailed') : models.length ? t('agents.model.select') : t('agents.model.none'))}
+          <strong title={selectedName || undefined}>
+            {selectedName || (loading ? t('agents.model.loading') : error ? t('agents.model.loadFailed') : models.length ? t('agents.model.select') : t('agents.model.none'))}
           </strong>
           {selectedAlias ? <small title={selectedAlias}>{selectedAlias}</small> : null}
         </span>
@@ -513,6 +516,7 @@ export function AgentsPage() {
   const [claudeDesktopModelMappingsDraft, setClaudeDesktopModelMappingsDraft] = useState<ClaudeDesktopModelMappings>(
     createClaudeDesktopModelMappings(''),
   );
+  const [claudeDesktopCustomMapping, setClaudeDesktopCustomMapping] = useState(false);
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
@@ -643,6 +647,10 @@ export function AgentsPage() {
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
+  const claudeDesktopModels = useMemo(
+    () => filterAgentModelsByAlias(models, claudeDesktopCustomMapping),
+    [claudeDesktopCustomMapping, models],
+  );
 
   useEffect(() => {
     if (selected !== 'claude-desktop' || !selectedModel) return;
@@ -1105,14 +1113,31 @@ export function AgentsPage() {
                       <strong>{t('agents.claudeDesktopMapping.title')}</strong>
                       <span>{t('agents.claudeDesktopMapping.description')}</span>
                     </div>
-                    {claudeDesktopMappingDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                    <div className="agent-section-heading-actions">
+                      <label
+                        className="agent-claude-desktop-mapping-filter"
+                        title={t('agents.claudeDesktopMapping.customMappingHint')}
+                      >
+                        <span>{t('agents.claudeDesktopMapping.customMapping')}</span>
+                        <span className="switch-control">
+                          <input
+                            type="checkbox"
+                            checked={claudeDesktopCustomMapping}
+                            onChange={(event) => setClaudeDesktopCustomMapping(event.currentTarget.checked)}
+                            disabled={busy || modelLoading}
+                          />
+                          <span className="switch-track" />
+                        </span>
+                      </label>
+                      {claudeDesktopMappingDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
+                    </div>
                   </div>
                   <div className="agent-claude-desktop-mapping-grid">
                     {claudeDesktopMappingRoles.map((role) => (
                       <div className="agent-claude-desktop-mapping-row" key={role.key}>
                         <strong>{t(role.labelKey)}</strong>
                         <AgentModelPicker
-                          models={models}
+                          models={claudeDesktopModels}
                           value={claudeDesktopModelMappingsDraft[role.key]}
                           loading={modelLoading}
                           error={modelError}

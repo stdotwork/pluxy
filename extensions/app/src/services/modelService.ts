@@ -6,6 +6,8 @@ const modelText = (key: Parameters<typeof translate>[1]) => translate(getCurrent
 export type ModelOption = {
   name: string;
   alias?: string;
+  isAlias?: boolean;
+  contextWindow?: number;
   thinking?: Record<string, unknown>;
 };
 export type ModelProvider = 'gemini' | 'codex' | 'claude' | 'openai';

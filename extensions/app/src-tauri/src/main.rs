@@ -88,6 +88,7 @@ const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";
 const CLAUDE_DESKTOP_OPUS_MODEL_ID: &str = "claude-opus-5";
 const CLAUDE_DESKTOP_SONNET_MODEL_ID: &str = "claude-sonnet-4-6";
 const CLAUDE_DESKTOP_HAIKU_MODEL_ID: &str = "claude-haiku-4-5";
+const CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW: u64 = 1_000_000;
 const MODEL_ALIAS_CONFIG_SECTIONS: &[&str] = &[
     "codex-api-key",
     "openai-compatibility",
@@ -651,6 +652,10 @@ struct CodexModelCatalogUpdateResult {
 struct AgentModelOption {
     name: String,
     alias: Option<String>,
+    #[serde(default)]
+    is_alias: bool,
+    #[serde(default)]
+    context_window: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -2544,14 +2549,23 @@ fn parse_agent_model_options(payload: &serde_json::Value) -> Result<Vec<AgentMod
             .get("fork")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+        let context_window = [
+            "context_length",
+            "contextLength",
+            "ContextLength",
+            "context_window",
+            "contextWindow",
+        ]
+        .into_iter()
+        .find_map(|key| item.get(key).and_then(json_positive_u64));
 
         if let Some(model_alias) = model_alias {
             if keep_original {
-                append_agent_model_option(&mut models, &name, display_name);
+                append_agent_model_option(&mut models, &name, display_name, false, context_window);
             }
-            append_agent_model_option(&mut models, &model_alias, Some(name));
+            append_agent_model_option(&mut models, &model_alias, Some(name), true, context_window);
         } else {
-            append_agent_model_option(&mut models, &name, display_name);
+            append_agent_model_option(&mut models, &name, display_name, false, context_window);
         }
     }
     Ok(models)
@@ -2561,6 +2575,8 @@ fn append_agent_model_option(
     models: &mut Vec<AgentModelOption>,
     name: &str,
     alias: Option<String>,
+    is_alias: bool,
+    context_window: Option<u64>,
 ) {
     let name = name.trim();
     if name.is_empty()
@@ -2578,6 +2594,8 @@ fn append_agent_model_option(
     models.push(AgentModelOption {
         name: name.to_string(),
         alias,
+        is_alias,
+        context_window,
     });
 }
 
@@ -4452,6 +4470,7 @@ fn build_agent_updates_with_oauth(
                         &root_base,
                         api_key,
                         model,
+                        models,
                         claude_desktop_model_mappings,
                     )
                     .or_else(|_| {
@@ -4460,6 +4479,7 @@ fn build_agent_updates_with_oauth(
                             &root_base,
                             api_key,
                             model,
+                            models,
                             claude_desktop_model_mappings,
                         )
                     })?,
@@ -4658,6 +4678,8 @@ fn ordered_agent_models(
         ordered.push(AgentModelOption {
             name: selected_model.to_string(),
             alias: None,
+            is_alias: false,
+            context_window: None,
         });
     }
     for model in models {
@@ -4683,6 +4705,7 @@ fn build_claude_desktop_profile(
     base_url: &str,
     api_key: &str,
     model: &str,
+    models: &[AgentModelOption],
     mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop 网关配置")?;
@@ -4710,19 +4733,37 @@ fn build_claude_desktop_profile(
         "inferenceProvider".to_string(),
         serde_json::json!("gateway"),
     );
-    let _mappings = mappings
+    let mappings = mappings
         .cloned()
         .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
     let inference_models = vec![
-        serde_json::json!(CLAUDE_DESKTOP_OPUS_MODEL_ID),
-        serde_json::json!(CLAUDE_DESKTOP_SONNET_MODEL_ID),
-        serde_json::json!(CLAUDE_DESKTOP_HAIKU_MODEL_ID),
+        claude_desktop_inference_model(CLAUDE_DESKTOP_OPUS_MODEL_ID, &mappings.opus, models),
+        claude_desktop_inference_model(CLAUDE_DESKTOP_SONNET_MODEL_ID, &mappings.sonnet, models),
+        claude_desktop_inference_model(CLAUDE_DESKTOP_HAIKU_MODEL_ID, &mappings.haiku, models),
     ];
     root.insert(
         "inferenceModels".to_string(),
         serde_json::Value::Array(inference_models),
     );
     render_agent_json(root, "Claude Desktop 网关配置")
+}
+
+fn claude_desktop_inference_model(
+    route_model: &str,
+    source_model: &str,
+    models: &[AgentModelOption],
+) -> serde_json::Value {
+    let context_window = models
+        .iter()
+        .find(|model| model.name.eq_ignore_ascii_case(source_model))
+        .and_then(|model| model.context_window);
+    let mut entry = serde_json::Map::new();
+    entry.insert("name".to_string(), serde_json::json!(route_model));
+    if context_window.is_some_and(|window| window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW) {
+        entry.insert("supports1m".to_string(), serde_json::json!(true));
+        entry.insert("prefer1m".to_string(), serde_json::json!(true));
+    }
+    serde_json::Value::Object(entry)
 }
 
 fn build_claude_desktop_meta(existing: Option<&str>) -> Result<String, String> {
@@ -6890,6 +6931,8 @@ fn fresh_agent_contents(
     let models = [AgentModelOption {
         name: model.to_string(),
         alias: None,
+        is_alias: false,
+        context_window: None,
     }];
     fresh_agent_contents_with_oauth(client, port, api_key, model, &models, false, None)
 }
@@ -6917,6 +6960,7 @@ fn fresh_agent_contents_with_oauth(
                 &root_base,
                 api_key,
                 model,
+                models,
                 claude_desktop_model_mappings,
             )?,
             build_claude_desktop_meta(None)?,
@@ -7727,6 +7771,8 @@ fn reset_agent_configuration_to_default(
         models: &[AgentModelOption {
             name: model.to_string(),
             alias: None,
+            is_alias: false,
+            context_window: None,
         }],
         codex_catalog,
         oauth_configuration: false,
@@ -16715,6 +16761,8 @@ mod tests {
             .map(|name| AgentModelOption {
                 name: (*name).to_string(),
                 alias: None,
+                is_alias: false,
+                context_window: None,
             })
             .collect()
     }
@@ -16883,6 +16931,7 @@ mod tests {
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "gpt-test",
+            &[],
             None,
         )
         .unwrap();
@@ -18195,6 +18244,7 @@ model:
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "claude-sonnet-test",
+            &[],
             None,
         )
         .unwrap();
@@ -18213,9 +18263,9 @@ model:
         assert_eq!(
             profile["inferenceModels"],
             serde_json::json!([
-                CLAUDE_DESKTOP_OPUS_MODEL_ID,
-                CLAUDE_DESKTOP_SONNET_MODEL_ID,
-                CLAUDE_DESKTOP_HAIKU_MODEL_ID
+                { "name": CLAUDE_DESKTOP_OPUS_MODEL_ID },
+                { "name": CLAUDE_DESKTOP_SONNET_MODEL_ID },
+                { "name": CLAUDE_DESKTOP_HAIKU_MODEL_ID }
             ])
         );
         assert_eq!(meta["appliedId"], CLAUDE_DESKTOP_PROFILE_ID);
@@ -18236,11 +18286,32 @@ model:
             sonnet: "gpt-5.6".to_string(),
             haiku: "gpt-5.6-mini".to_string(),
         };
+        let models = vec![
+            AgentModelOption {
+                name: mappings.opus.clone(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+            AgentModelOption {
+                name: mappings.sonnet.clone(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(272_000),
+            },
+            AgentModelOption {
+                name: mappings.haiku.clone(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+        ];
         let profile = build_claude_desktop_profile(
             None,
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "gpt-5.6-sol",
+            &models,
             Some(&mappings),
         )
         .unwrap();
@@ -18249,9 +18320,17 @@ model:
         assert_eq!(
             profile["inferenceModels"],
             serde_json::json!([
-                CLAUDE_DESKTOP_OPUS_MODEL_ID,
-                CLAUDE_DESKTOP_SONNET_MODEL_ID,
-                CLAUDE_DESKTOP_HAIKU_MODEL_ID
+                {
+                    "name": CLAUDE_DESKTOP_OPUS_MODEL_ID,
+                    "supports1m": true,
+                    "prefer1m": true
+                },
+                { "name": CLAUDE_DESKTOP_SONNET_MODEL_ID },
+                {
+                    "name": CLAUDE_DESKTOP_HAIKU_MODEL_ID,
+                    "supports1m": true,
+                    "prefer1m": true
+                }
             ])
         );
         assert!(!profile.to_string().contains("gpt-"));
@@ -18429,9 +18508,9 @@ model:
         let models = parse_agent_model_options(&serde_json::json!({
             "object": "list",
             "data": [
-                {"id": "gpt-5", "display_name": "GPT 5"},
-                {"name": "claude-sonnet", "alias": "claude-sonnet-xhigh", "fork": true},
-                {"name": "hidden-original", "alias": "visible-alias"},
+                {"id": "gpt-5", "display_name": "GPT 5", "context_length": 272000},
+                {"name": "claude-sonnet", "alias": "claude-sonnet-xhigh", "fork": true, "contextLength": "1000000"},
+                {"name": "hidden-original", "alias": "visible-alias", "context_window": 128000},
                 "deepseek-chat",
                 {"id": "GPT-5"},
                 {"id": ""}
@@ -18445,22 +18524,32 @@ model:
                 AgentModelOption {
                     name: "gpt-5".to_string(),
                     alias: Some("GPT 5".to_string()),
+                    is_alias: false,
+                    context_window: Some(272_000),
                 },
                 AgentModelOption {
                     name: "claude-sonnet".to_string(),
                     alias: None,
+                    is_alias: false,
+                    context_window: Some(1_000_000),
                 },
                 AgentModelOption {
                     name: "claude-sonnet-xhigh".to_string(),
                     alias: Some("claude-sonnet".to_string()),
+                    is_alias: true,
+                    context_window: Some(1_000_000),
                 },
                 AgentModelOption {
                     name: "visible-alias".to_string(),
                     alias: Some("hidden-original".to_string()),
+                    is_alias: true,
+                    context_window: Some(128_000),
                 },
                 AgentModelOption {
                     name: "deepseek-chat".to_string(),
                     alias: None,
+                    is_alias: false,
+                    context_window: None,
                 },
             ]
         );
@@ -18566,6 +18655,8 @@ model:
         let models = vec![AgentModelOption {
             name: "gpt-5.4".to_string(),
             alias: Some("GPT 5.4".to_string()),
+            is_alias: false,
+            context_window: None,
         }];
 
         assert_eq!(

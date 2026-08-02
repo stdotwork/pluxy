@@ -550,6 +550,8 @@ export const jaOverrides = {
   'agents.modify.oauthConfiguration': 'OAuth 設定方式',
   'agents.claudeDesktopMapping.title': 'Claude Desktop モデル → 上流モデル',
   'agents.claudeDesktopMapping.description': '各 Claude Desktop モデルが実際に呼び出す上流モデルを選択します。',
+  'agents.claudeDesktopMapping.customMapping': 'カスタムマッピング',
+  'agents.claudeDesktopMapping.customMappingHint': '有効にするとエイリアスモデルのみ、無効にするとエイリアス未設定の元モデルのみ表示します。',
   'agents.claudeDesktopMapping.opus': 'Claude Opus 5 のマッピング先',
   'agents.claudeDesktopMapping.sonnet': 'Claude Sonnet 4.6 のマッピング先',
   'agents.claudeDesktopMapping.haiku': 'Claude Haiku 4.5 のマッピング先',
