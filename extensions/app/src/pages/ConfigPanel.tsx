@@ -670,10 +670,9 @@ export function ConfigPanelPage() {
                   <button
                     type="button"
                     className="secondary-button compact-button"
-                    disabled={controlsDisabled}
-                    onClick={generateManagementSecret}
-                  >
-                    <Sparkles size={16} aria-hidden="true" />
+                  disabled={controlsDisabled}
+                  onClick={generateManagementSecret}
+                >
                     {t('config.webuiKey.generate')}
                   </button>
                   <button

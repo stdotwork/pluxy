@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Activity, BarChart3, CircleDollarSign, Clock3, Database, List, Pencil, RefreshCw, ShieldCheck, Sparkles, Trash2, TriangleAlert, X } from 'lucide-react';
 import { getCurrentLocale, useI18n } from '../i18n';
+import { formatUsageNumber } from '../services/usageNumber';
 
 type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
@@ -190,10 +191,7 @@ const rangeQuery = (range: UsageRange, customStart: string, customEnd: string): 
   return { start: new Date(now.getTime() - hours * 3_600_000).toISOString(), end: now.toISOString() };
 };
 
-const compactNumber = (value: number) => new Intl.NumberFormat(getCurrentLocale(), {
-  notation: value >= 10_000 ? 'compact' : 'standard',
-  maximumFractionDigits: 1,
-}).format(Number.isFinite(value) ? value : 0);
+const compactNumber = (value: number) => formatUsageNumber(value, getCurrentLocale());
 
 const formatUsd = (value: number) => {
   const amount = Number.isFinite(value) ? value : 0;
