@@ -5,6 +5,7 @@ import {
   filterAgentModelsByAlias,
   findAgentModel,
   hasExactAgentModel,
+  resolveAgentModelForAliasMode,
   resolveAgentModelSelection,
 } from '../src/services/agentModelPicker';
 
@@ -62,5 +63,9 @@ describe('智能体模型选择器', () => {
       .toEqual(['gpt-original', 'claude-original']);
     expect(filterAgentModelsByAlias(mixedModels, true).map((model) => model.name))
       .toEqual(['gpt-high']);
+    expect(resolveAgentModelForAliasMode(mixedModels, 'gpt-original', true)).toBe('gpt-high');
+    expect(resolveAgentModelForAliasMode(mixedModels, 'gpt-high', false)).toBe('gpt-original');
+    expect(resolveAgentModelForAliasMode(mixedModels, 'claude-original', true)).toBe('gpt-high');
+    expect(resolveAgentModelForAliasMode([], 'gpt-original', true)).toBe('');
   });
 });

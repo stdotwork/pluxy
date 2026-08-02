@@ -2158,7 +2158,7 @@ async fn apply_agent_config(
         claude_desktop_model_mappings,
     )?;
     if let Some(mappings) = claude_desktop_model_mappings.as_ref() {
-        ensure_claude_desktop_model_aliases(&config, mappings).await?;
+        ensure_claude_desktop_model_aliases(&config, mappings, &prepared.models).await?;
     }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
@@ -2224,7 +2224,7 @@ async fn reset_agent_config_to_default(
         claude_desktop_model_mappings,
     )?;
     if let Some(mappings) = claude_desktop_model_mappings.as_ref() {
-        ensure_claude_desktop_model_aliases(&config, mappings).await?;
+        ensure_claude_desktop_model_aliases(&config, mappings, &prepared.models).await?;
     }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
@@ -2285,7 +2285,7 @@ async fn set_agent_config_enabled(
             claude_desktop_model_mappings,
         )?;
         if let Some(mappings) = claude_desktop_model_mappings.as_ref() {
-            ensure_claude_desktop_model_aliases(&config, mappings).await?;
+            ensure_claude_desktop_model_aliases(&config, mappings, &prepared.models).await?;
         }
         let _guard = AGENT_CONFIG_FILE_LOCK
             .lock()
@@ -2337,7 +2337,7 @@ async fn update_agent_config(
         claude_desktop_model_mappings,
     )?;
     if let Some(mappings) = claude_desktop_model_mappings.as_ref() {
-        ensure_claude_desktop_model_aliases(&config, mappings).await?;
+        ensure_claude_desktop_model_aliases(&config, mappings, &prepared.models).await?;
     }
     let _guard = AGENT_CONFIG_FILE_LOCK
         .lock()
@@ -4736,11 +4736,18 @@ fn build_claude_desktop_profile(
     let mappings = mappings
         .cloned()
         .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
-    let inference_models = vec![
+    let mut inference_models = vec![
         claude_desktop_inference_model(CLAUDE_DESKTOP_OPUS_MODEL_ID, &mappings.opus, models),
         claude_desktop_inference_model(CLAUDE_DESKTOP_SONNET_MODEL_ID, &mappings.sonnet, models),
         claude_desktop_inference_model(CLAUDE_DESKTOP_HAIKU_MODEL_ID, &mappings.haiku, models),
     ];
+    let mut seen_models = HashSet::new();
+    inference_models.retain(|entry| {
+        entry
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| seen_models.insert(name.to_ascii_lowercase()))
+    });
     root.insert(
         "inferenceModels".to_string(),
         serde_json::Value::Array(inference_models),
@@ -4753,12 +4760,34 @@ fn claude_desktop_inference_model(
     source_model: &str,
     models: &[AgentModelOption],
 ) -> serde_json::Value {
-    let context_window = models
+    let selected = models
         .iter()
-        .find(|model| model.name.eq_ignore_ascii_case(source_model))
-        .and_then(|model| model.context_window);
+        .find(|model| model.name.eq_ignore_ascii_case(source_model));
+    let direct_alias = selected.is_some_and(|model| model.is_alias);
+    let context_model = selected.and_then(|model| {
+        if !model.is_alias {
+            return Some(model);
+        }
+        model
+            .alias
+            .as_deref()
+            .and_then(|source| {
+                models
+                    .iter()
+                    .find(|candidate| candidate.name.eq_ignore_ascii_case(source))
+            })
+            .or(Some(model))
+    });
+    let context_window = context_model.and_then(|model| model.context_window);
     let mut entry = serde_json::Map::new();
-    entry.insert("name".to_string(), serde_json::json!(route_model));
+    entry.insert(
+        "name".to_string(),
+        serde_json::json!(if direct_alias {
+            source_model
+        } else {
+            route_model
+        }),
+    );
     if context_window.is_some_and(|window| window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW) {
         entry.insert("supports1m".to_string(), serde_json::json!(true));
         entry.insert("prefer1m".to_string(), serde_json::json!(true));
@@ -11776,9 +11805,10 @@ async fn put_management_config_yaml(config: &GuiConfigFile, content: &str) -> Re
 async fn ensure_claude_desktop_model_aliases(
     config: &GuiConfigFile,
     mappings: &ClaudeDesktopModelMappings,
+    models: &[AgentModelOption],
 ) -> Result<(), String> {
     let content = fetch_management_config_yaml(config).await?;
-    let updated = ensure_claude_desktop_model_aliases_in_yaml(&content, mappings)?;
+    let updated = ensure_claude_desktop_model_aliases_in_yaml(&content, mappings, models)?;
     if updated != content {
         put_management_config_yaml(config, &updated).await?;
     }
@@ -11788,6 +11818,7 @@ async fn ensure_claude_desktop_model_aliases(
 fn ensure_claude_desktop_model_aliases_in_yaml(
     content: &str,
     mappings: &ClaudeDesktopModelMappings,
+    models: &[AgentModelOption],
 ) -> Result<String, String> {
     let mut document = yaml_serde_edit::YamlValue::parse(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
@@ -11801,9 +11832,48 @@ fn ensure_claude_desktop_model_aliases_in_yaml(
         (CLAUDE_DESKTOP_SONNET_MODEL_ID, mappings.sonnet.as_str()),
         (CLAUDE_DESKTOP_HAIKU_MODEL_ID, mappings.haiku.as_str()),
     ] {
-        ensure_claude_desktop_model_alias(root, source_model, alias)?;
+        let direct_alias = models
+            .iter()
+            .any(|model| model.name.eq_ignore_ascii_case(source_model) && model.is_alias);
+        if direct_alias {
+            if !source_model.eq_ignore_ascii_case(alias) {
+                remove_claude_desktop_model_alias(root, alias)?;
+            }
+        } else {
+            ensure_claude_desktop_model_alias(root, source_model, alias)?;
+        }
     }
     render_updated_core_yaml(&mut document, updated)
+}
+
+fn remove_claude_desktop_model_alias(
+    root: &mut serde_norway::Mapping,
+    alias: &str,
+) -> Result<(), String> {
+    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+        let Some(providers) = yaml_mapping_value_mut(root, section) else {
+            continue;
+        };
+        let providers = providers
+            .as_sequence_mut()
+            .ok_or_else(|| format!("{section} 必须是数组"))?;
+        for provider in providers {
+            let Some(provider) = provider.as_mapping_mut() else {
+                continue;
+            };
+            let Some(models) = yaml_mapping_value_mut(provider, "models") else {
+                continue;
+            };
+            let models = models
+                .as_sequence_mut()
+                .ok_or_else(|| format!("{section}.models 必须是数组"))?;
+            models.retain(|model| {
+                configured_model_identity(model)
+                    .is_none_or(|(_, client_model, _)| !client_model.eq_ignore_ascii_case(alias))
+            });
+        }
+    }
+    Ok(())
 }
 
 fn ensure_claude_desktop_model_alias(
@@ -18842,7 +18912,10 @@ model:
             sonnet: "gpt-5.6-sol".to_string(),
             haiku: "gpt-5.6-sol".to_string(),
         };
-        let rendered = ensure_claude_desktop_model_aliases_in_yaml(input, &mappings).unwrap();
+        let available_models = test_agent_models(&["gpt-5.6-sol"]);
+        let rendered =
+            ensure_claude_desktop_model_aliases_in_yaml(input, &mappings, &available_models)
+                .unwrap();
         let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
         let root = value.as_mapping().unwrap();
         let providers = yaml_mapping_value(root, "openai-compatibility")
@@ -18866,8 +18939,69 @@ model:
             CLAUDE_DESKTOP_HAIKU_MODEL_ID
         );
         assert_eq!(
-            ensure_claude_desktop_model_aliases_in_yaml(&rendered, &mappings).unwrap(),
+            ensure_claude_desktop_model_aliases_in_yaml(&rendered, &mappings, &available_models,)
+                .unwrap(),
             rendered
+        );
+    }
+
+    #[test]
+    fn claude_desktop_uses_selected_alias_directly_with_original_context() {
+        let input = "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1\n    models:\n      - name: gpt-original\n      - name: gpt-original\n        alias: gpt-high\n      - name: gpt-original\n        alias: claude-opus-5\n";
+        let mappings = ClaudeDesktopModelMappings {
+            opus: "gpt-high".to_string(),
+            sonnet: "gpt-high".to_string(),
+            haiku: "gpt-high".to_string(),
+        };
+        let models = vec![
+            AgentModelOption {
+                name: "gpt-original".to_string(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+            AgentModelOption {
+                name: "gpt-high".to_string(),
+                alias: Some("gpt-original".to_string()),
+                is_alias: true,
+                context_window: Some(128_000),
+            },
+        ];
+
+        let rendered =
+            ensure_claude_desktop_model_aliases_in_yaml(input, &mappings, &models).unwrap();
+        let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
+        let root = value.as_mapping().unwrap();
+        let providers = yaml_mapping_value(root, "openai-compatibility")
+            .and_then(serde_norway::Value::as_sequence)
+            .unwrap();
+        let configured_models = yaml_mapping_value(providers[0].as_mapping().unwrap(), "models")
+            .and_then(serde_norway::Value::as_sequence)
+            .unwrap();
+        let client_models = configured_models
+            .iter()
+            .filter_map(configured_model_identity)
+            .map(|(_, client_model, _)| client_model)
+            .collect::<Vec<_>>();
+        assert_eq!(client_models, vec!["gpt-original", "gpt-high"]);
+
+        let profile = build_claude_desktop_profile(
+            None,
+            "http://127.0.0.1:8317",
+            DEFAULT_API_KEY,
+            "gpt-high",
+            &models,
+            Some(&mappings),
+        )
+        .unwrap();
+        let profile: serde_json::Value = serde_json::from_str(&profile).unwrap();
+        assert_eq!(
+            profile["inferenceModels"],
+            serde_json::json!([{
+                "name": "gpt-high",
+                "supports1m": true,
+                "prefer1m": true
+            }])
         );
     }
 

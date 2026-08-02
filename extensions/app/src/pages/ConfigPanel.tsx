@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useCoreRuntime, type CoreStatus } from '../coreRuntime';
 import { useI18n } from '../i18n';
+import { webUiManagementUrl } from '../services/clientAccess';
 import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 
 type CoreConfigSettings = {
@@ -322,6 +323,16 @@ export function ConfigPanelPage() {
     }
   };
 
+  const openWebUi = async () => {
+    try {
+      await invoke('open_external_url', {
+        url: webUiManagementUrl(settings?.port ?? 8317),
+      });
+    } catch (error) {
+      showNotice(t('config.webuiKey.error.openFailed', { error: String(error) }), 'error');
+    }
+  };
+
   const changeRoutingStrategy = async (strategy: string) => {
     if (strategy === settings?.routingStrategy) {
       return;
@@ -573,15 +584,26 @@ export function ConfigPanelPage() {
               <ShieldCheck size={18} aria-hidden="true" />
               <h2>{t('config.webuiKey.title')}</h2>
             </div>
-            {!loading && settings ? (
-              <span
-                className={`state-pill ${settings.managementSecretConfigured ? 'success' : ''}`}
+            <div className="config-heading-actions">
+              {!loading && settings ? (
+                <span
+                  className={`state-pill ${settings.managementSecretConfigured ? 'success' : ''}`}
+                >
+                  {settings.managementSecretConfigured
+                    ? t('config.webuiKey.configured')
+                    : t('config.webuiKey.unconfigured')}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                disabled={loading || settings === null}
+                onClick={() => void openWebUi()}
+                title={settings ? webUiManagementUrl(settings.port) : undefined}
               >
-                {settings.managementSecretConfigured
-                  ? t('config.webuiKey.configured')
-                  : t('config.webuiKey.unconfigured')}
-              </span>
-            ) : null}
+                {t('config.webuiKey.open')}
+              </button>
+            </div>
           </div>
 
           <div className="config-management-content">

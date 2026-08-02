@@ -36,6 +36,7 @@ import {
   filterAgentModels,
   filterAgentModelsByAlias,
   findAgentModel,
+  resolveAgentModelForAliasMode,
   resolveAgentModelSelection,
 } from '../services/agentModelPicker';
 import type { ModelOption } from '../services/modelService';
@@ -655,6 +656,14 @@ export function AgentsPage() {
   useEffect(() => {
     if (selected !== 'claude-desktop' || !selectedModel) return;
     const appliedMappings = activeStatus?.claudeDesktopModelMappings;
+    if (!claudeDesktopModelMappingsDirtyRef.current && appliedMappings) {
+      const appliedModels = claudeDesktopMappingRoles
+        .map((role) => findAgentModel(models, appliedMappings[role.key]))
+        .filter((model): model is ModelOption => model !== null);
+      if (appliedModels.length === claudeDesktopMappingRoles.length) {
+        setClaudeDesktopCustomMapping(appliedModels.every((model) => Boolean(model.isAlias)));
+      }
+    }
     setClaudeDesktopModelMappingsDraft((current) => {
       const source = claudeDesktopModelMappingsDirtyRef.current
         ? current
@@ -753,6 +762,22 @@ export function AgentsPage() {
     claudeDesktopModelMappingsDirtyRef.current = true;
     setModelSelectionError('');
     setClaudeDesktopModelMappingsDraft((current) => ({ ...current, [role]: model.name }));
+  };
+
+  const changeClaudeDesktopCustomMapping = (enabled: boolean) => {
+    setClaudeDesktopCustomMapping(enabled);
+    setModelSelectionError('');
+    setClaudeDesktopModelMappingsDraft((current) => {
+      const next: ClaudeDesktopModelMappings = {
+        opus: resolveAgentModelForAliasMode(models, current.opus, enabled),
+        sonnet: resolveAgentModelForAliasMode(models, current.sonnet, enabled),
+        haiku: resolveAgentModelForAliasMode(models, current.haiku, enabled),
+      };
+      if (!sameClaudeDesktopModelMappings(current, next)) {
+        claudeDesktopModelMappingsDirtyRef.current = true;
+      }
+      return next;
+    });
   };
 
   const requireSelectedModel = () => {
@@ -1123,7 +1148,7 @@ export function AgentsPage() {
                           <input
                             type="checkbox"
                             checked={claudeDesktopCustomMapping}
-                            onChange={(event) => setClaudeDesktopCustomMapping(event.currentTarget.checked)}
+                            onChange={(event) => changeClaudeDesktopCustomMapping(event.currentTarget.checked)}
                             disabled={busy || modelLoading}
                           />
                           <span className="switch-track" />

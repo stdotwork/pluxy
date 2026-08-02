@@ -1022,10 +1022,11 @@ export function ApiAccessPage() {
                     <span className="provider-row-url" title={row.baseUrl || undefined}>{row.baseUrl || t('apiAccess.defaultUrl')}</span>
                     {row.models.length > 0 ? <span className="provider-row-models" title={row.models.map((model) => model.name).join(', ')}>{t('apiAccess.models.summary', { count: row.models.length, models: row.models.slice(0, 3).map((model) => model.name).join(', ') })}</span> : null}
                   </div>
-                  <div className="provider-row-meta">
-                    {row.priority === null ? null : <span>{t('apiAccess.priorityValue', { priority: row.priority })}</span>}
-                    {row.authIndex ? <span title={row.authIndex}>{t('apiAccess.runtimeCredential', { index: row.authIndex.slice(0, 8) })}</span> : null}
-                  </div>
+                  {row.priority === null ? null : (
+                    <div className="provider-row-meta">
+                      <span>{t('apiAccess.priorityValue', { priority: row.priority })}</span>
+                    </div>
+                  )}
                   <div className="provider-row-actions">
                     <button
                       type="button"

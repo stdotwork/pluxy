@@ -1929,6 +1929,11 @@ textarea:focus-visible {
   flex: none;
 }
 
+.config-heading-actions .compact-button {
+  width: auto;
+  margin-top: 0;
+}
+
 .config-panel-heading .state-pill {
   max-width: 108px;
   flex: none;
