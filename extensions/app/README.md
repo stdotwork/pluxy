@@ -27,22 +27,23 @@ archive, making first-time setup and offline installation easier.
 
 ## Feature Tour
 
-### Core dashboard and version management
+### Home dashboard and local API endpoints
 
-![Core dashboard and version management](docs/images/1.png)
+![Home dashboard and local API endpoints](docs/screenshots/en/1.png)
 
-The core dashboard provides a complete view of the local proxy runtime:
+The Home page provides a quick overview of the local proxy runtime and ready-to-use API endpoints:
 
 - Start, stop, restart, and refresh the CLIProxyAPI core.
-- View installation state, runtime state, process ID, listening port, and LAN access settings.
-- Compare the installed, latest, and bundled core versions.
-- Install the latest core, reinstall it, or use an offline package when GitHub is unavailable.
+- View installation state, runtime state, process ID, and listening port.
 - Copy ready-to-use OpenAI, Claude, and Gemini-compatible API endpoints.
-- Check the EasyCLIProxyAPI application version and local connectivity from one page.
+- Check local connectivity and the application/core version at a glance.
+
+Core installation, version comparison, and offline installation are available from the
+**Version Management** page.
 
 ### OAuth account authorization
 
-![OAuth account authorization](docs/images/2.png)
+![OAuth account authorization](docs/screenshots/en/2.png)
 
 The OAuth page centralizes browser-based authorization for supported providers:
 
@@ -57,7 +58,7 @@ flow when an automatic redirect is unavailable.
 
 ### API provider aggregation
 
-![API provider aggregation](docs/images/3.png)
+![API provider aggregation](docs/screenshots/en/3.png)
 
 The provider workspace manages upstream API credentials and endpoints by protocol or provider:
 
@@ -71,12 +72,23 @@ You can add multiple connections, search existing entries, refresh provider stat
 through the unified local CLIProxyAPI endpoint. Requests and responses can be converted between
 supported OpenAI, Claude, Gemini, and compatible formats.
 
+### Usage history and token analytics
+
+![Usage history and token analytics](docs/screenshots/en/4.png)
+
+The Usage page helps you understand local request activity and token consumption:
+
+- Review request totals, token counts, success rate, throughput, cache hit rate, and estimated cost.
+- Filter usage by time, model, provider, source, key, and result.
+- Inspect request/token trends and input, output, reasoning, and cache usage.
+- Browse request details, analysis views, and price statistics.
+
 ### Agent client configuration
 
-![Agent client configuration](docs/images/4.png)
+![Agent client configuration](docs/screenshots/en/5.png)
 
-The agent client page detects installed desktop and CLI clients and helps connect them to the
-local proxy. Supported clients include:
+The Agents page detects installed desktop and CLI clients and helps connect them to the local
+proxy. Supported clients include:
 
 - Claude Code
 - Claude Desktop
@@ -95,7 +107,6 @@ previous configuration, and launch an available desktop or CLI entry point.
 - Create client-visible model aliases and map them to provider models and reasoning levels.
 - Upload, download, inspect, and manage authentication files.
 - Review provider quotas and account availability.
-- Browse local usage records and token statistics.
 - Keep the application available from the macOS menu bar or Windows system tray.
 
 ## Quick Start
@@ -104,8 +115,8 @@ previous configuration, and launch an available desktop or CLI entry point.
    [GitHub Releases](https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest).
 2. Extract the Windows or Linux archive, or open the macOS DMG.
 3. Launch EasyCLIProxyAPI.
-4. Open the **Core** page and install the bundled or latest CLIProxyAPI core.
-5. Start the core, then copy the required local endpoint or configure an OAuth/API provider.
+4. Open **Version Management** and install the bundled or latest CLIProxyAPI core.
+5. Return to **Home**, start the core, then copy the required local endpoint or configure an OAuth/API provider.
 
 ## Upgrading
 
