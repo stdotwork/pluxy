@@ -2936,21 +2936,19 @@ fn inspect_agent_config(
     };
     let launch_targets = agent_launch_targets(client, home);
     let executable = find_agent_executable(client, home);
-    let installed = if client == AgentClient::ClaudeDesktop {
-        !launch_targets.is_empty()
-    } else {
-        !launch_targets.is_empty() || config_exists
-    };
     let version = if client == AgentClient::ClaudeDesktop {
         read_claude_desktop_version(home)
     } else {
         executable.as_deref().and_then(read_agent_version)
     };
+    let installed = version.is_some();
     let mut warnings = Vec::new();
     if !client.supported_platform() {
         warnings.push("当前平台不支持 Claude Desktop 3P 配置".to_string());
     } else if launch_targets.is_empty() && config_exists {
         warnings.push("只检测到配置文件，未在 PATH 中找到客户端命令".to_string());
+    } else if !launch_targets.is_empty() && version.is_none() {
+        warnings.push("检测到客户端入口，但无法读取有效版本，未标记为已安装".to_string());
     }
     if let Some(message) = error.as_ref() {
         warnings.push(message.clone());
@@ -3609,9 +3607,7 @@ fn parse_windows_claude_desktop_version_output(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         line.trim()
             .strip_prefix("VERSION:")
-            .map(str::trim)
-            .filter(|version| !version.is_empty())
-            .map(str::to_string)
+            .and_then(normalize_detected_agent_version)
     })
 }
 
@@ -3900,16 +3896,24 @@ fn read_agent_version(path: &Path) -> Option<String> {
     command.arg("--version");
     configure_background_command(&mut command);
     let output = command.output().ok()?;
-    let text = if output.stdout.is_empty() {
-        String::from_utf8_lossy(&output.stderr)
-    } else {
-        String::from_utf8_lossy(&output.stdout)
-    };
-    text.lines()
-        .next()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout
+        .lines()
+        .chain(stderr.lines())
+        .find_map(normalize_detected_agent_version)
+}
+
+fn normalize_detected_agent_version(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= 256
+        && value.chars().any(|character| character.is_ascii_digit())
+        && !value.chars().any(char::is_control))
+    .then(|| value.to_string())
 }
 
 fn launch_desktop_agent(executable: &Path, label: &str) -> Result<(), String> {
@@ -18524,6 +18528,22 @@ model:
     }
 
     #[test]
+    fn detected_agent_version_requires_a_real_version_value() {
+        assert_eq!(
+            normalize_detected_agent_version("  opencode 1.2.3  ").as_deref(),
+            Some("opencode 1.2.3")
+        );
+        assert_eq!(
+            normalize_detected_agent_version("Claude Code v4").as_deref(),
+            Some("Claude Code v4")
+        );
+        assert!(normalize_detected_agent_version("").is_none());
+        assert!(normalize_detected_agent_version("version unknown").is_none());
+        assert!(normalize_detected_agent_version("1.2.3\0invalid").is_none());
+        assert!(normalize_detected_agent_version(&"1".repeat(257)).is_none());
+    }
+
+    #[test]
     fn codex_model_list_is_empty_when_cpa_has_no_writable_models() {
         let prepared = prepare_codex_agent_models(&[]).unwrap();
 
@@ -18773,6 +18793,7 @@ model:
             Some("1.24012.9.0")
         );
         assert!(parse_windows_claude_desktop_version_output("VERSION:\r\n").is_none());
+        assert!(parse_windows_claude_desktop_version_output("VERSION:unknown\r\n").is_none());
     }
 
     #[test]
