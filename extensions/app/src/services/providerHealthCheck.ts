@@ -1,36 +1,27 @@
-import { apiCallErrorMessage, managementApi } from './managementApi';
-import {
-  fetchModels,
-  normalizeBaseUrl,
-  type ModelOption,
-  type ModelProvider,
-} from './modelService';
+import { invoke } from '@tauri-apps/api/core';
+import { normalizeBaseUrl, type ModelOption, type ModelProvider } from './modelService';
 
 export const PROVIDER_HEALTH_TIMEOUT_MS = 15_000;
-
-export type ProviderHealthStatus = 'healthy' | 'partial' | 'failed';
+export const PROVIDER_HEALTH_CONCURRENCY = 4;
 
 export type ProviderHealthProbe = {
   url: string;
   header: Record<string, string>;
   data: string;
+  protocol: 'openai-chat' | 'openai-responses' | 'claude' | 'gemini';
 };
 
 export type ProviderHealthProbeResult = {
   success: boolean;
-  latencyMs?: number;
+  firstTokenLatencyMs?: number;
   error?: string;
   timedOut?: boolean;
+  errorCode?: 'missing-direct-key';
 };
 
-export type ProviderHealthResult = {
-  status: ProviderHealthStatus;
+export type ProviderModelHealthResult = ProviderHealthProbeResult & {
   model: string;
-  successCount: number;
-  totalCount: number;
-  latencyMs?: number;
-  errors: string[];
-  timedOut: boolean;
+  status: 'healthy' | 'failed';
 };
 
 export type ProviderHealthCheckOptions = {
@@ -38,21 +29,9 @@ export type ProviderHealthCheckOptions = {
   baseUrl: string;
   apiKeys: string[];
   authIndex?: string;
-  models: ModelOption[];
-  testModel?: string;
   customHeaders?: Record<string, string>;
   timeoutMs?: number;
 };
-
-export class ProviderHealthCheckError extends Error {
-  readonly code: 'no-model';
-
-  constructor(code: 'no-model') {
-    super(code);
-    this.name = 'ProviderHealthCheckError';
-    this.code = code;
-  }
-}
 
 const defaultBaseUrl = (provider: ModelProvider) => {
   if (provider === 'claude') return 'https://api.anthropic.com';
@@ -79,11 +58,29 @@ const setHeaderIfMissing = (
   if (!hasHeader(headers, name)) headers[name] = value;
 };
 
-export function selectProviderHealthModel(
-  testModel: string | undefined,
-  models: ModelOption[],
-): string {
-  return testModel?.trim() || models.find((model) => model.name.trim())?.name.trim() || '';
+export function primaryProviderHealthCredential(apiKeys: string[]): string {
+  return apiKeys.map((key) => key.trim()).find(Boolean) ?? '';
+}
+
+export function mergeProviderHealthModels(
+  discoveredModels: ModelOption[],
+  configuredModels: ModelOption[],
+  testModel = '',
+): ModelOption[] {
+  const models = new Map<string, ModelOption>();
+  [...discoveredModels, ...configuredModels].forEach((model) => {
+    const name = model.name.trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    models.set(key, { ...models.get(key), ...model, name });
+  });
+  const normalizedTestModel = testModel.trim();
+  if (normalizedTestModel && !models.has(normalizedTestModel.toLowerCase())) {
+    models.set(normalizedTestModel.toLowerCase(), { name: normalizedTestModel });
+  }
+  return Array.from(models.values()).sort((left, right) =>
+    left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }),
+  );
 }
 
 export function buildProviderHealthProbe(
@@ -104,11 +101,12 @@ export function buildProviderHealthProbe(
     else if (authIndex) setHeaderIfMissing(headers, 'x-goog-api-key', '$TOKEN$');
     const normalizedModel = model.trim().replace(/^models\//i, '');
     return {
-      url: `${root}/v1beta/models/${encodeURIComponent(normalizedModel)}:generateContent`,
+      url: `${root}/v1beta/models/${encodeURIComponent(normalizedModel)}:generateContent?alt=sse`,
       header: headers,
+      protocol: 'gemini',
       data: JSON.stringify({
         contents: [{ parts: [{ text: 'hi' }] }],
-        generationConfig: { maxOutputTokens: 1 },
+        generationConfig: { maxOutputTokens: 16 },
       }),
     };
   }
@@ -122,9 +120,11 @@ export function buildProviderHealthProbe(
     return {
       url: `${root}/v1/messages`,
       header: headers,
+      protocol: 'claude',
       data: JSON.stringify({
         model: model.trim(),
-        max_tokens: 1,
+        max_tokens: 16,
+        stream: true,
         messages: [{ role: 'user', content: 'hi' }],
       }),
     };
@@ -137,10 +137,11 @@ export function buildProviderHealthProbe(
     return {
       url: `${root}/v1/responses`,
       header: headers,
+      protocol: 'openai-responses',
       data: JSON.stringify({
         model: model.trim(),
         input: 'hi',
-        max_output_tokens: 1,
+        stream: true,
       }),
     };
   }
@@ -148,11 +149,11 @@ export function buildProviderHealthProbe(
   return {
     url: `${root}/v1/chat/completions`,
     header: headers,
+    protocol: 'openai-chat',
     data: JSON.stringify({
       model: model.trim(),
       messages: [{ role: 'user', content: 'hi' }],
-      max_tokens: 1,
-      stream: false,
+      stream: true,
     }),
   };
 }
@@ -174,33 +175,33 @@ export async function checkProviderHealthProbe(
   customHeaders: Record<string, string> = {},
   timeoutMs = PROVIDER_HEALTH_TIMEOUT_MS,
 ): Promise<ProviderHealthProbeResult> {
-  const probe = buildProviderHealthProbe(
-    provider,
-    baseUrl,
-    model,
-    apiKey,
-    authIndex,
-    customHeaders,
-  );
-  const startedAt = performance.now();
   try {
-    const response = await managementApi.post<Record<string, unknown>>('/api-call', {
-      authIndex: authIndex.trim() || undefined,
-      method: 'POST',
-      url: probe.url,
-      header: probe.header,
-      data: probe.data,
-    }, { timeoutMs });
-    const status = Number(response.status_code ?? response.statusCode ?? 0);
-    if (status < 200 || status >= 300) {
+    const probe = buildProviderHealthProbe(
+      provider,
+      baseUrl,
+      model,
+      apiKey,
+      authIndex,
+      customHeaders,
+    );
+    if (Object.values(probe.header).some((value) => value.includes('$TOKEN$'))) {
       return {
         success: false,
-        error: apiCallErrorMessage(response),
+        errorCode: 'missing-direct-key',
       };
     }
+    const response = await invoke<{ firstTokenLatencyMs: number }>('provider_health_probe', {
+      request: {
+        protocol: probe.protocol,
+        timeoutMs,
+        data: probe.data,
+        header: probe.header,
+        url: probe.url,
+      },
+    });
     return {
       success: true,
-      latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
+      firstTokenLatencyMs: Math.max(1, Math.round(response.firstTokenLatencyMs)),
     };
   } catch (error) {
     const message = errorMessage(error);
@@ -212,78 +213,62 @@ export async function checkProviderHealthProbe(
   }
 }
 
-export function aggregateProviderHealthResults(
-  model: string,
-  results: ProviderHealthProbeResult[],
-): ProviderHealthResult {
-  const successful = results.filter((result) => result.success);
-  const status: ProviderHealthStatus = successful.length === results.length
-    ? 'healthy'
-    : successful.length > 0
-      ? 'partial'
-      : 'failed';
-  const latencies = successful
-    .map((result) => result.latencyMs)
-    .filter((latency): latency is number => latency !== undefined);
-  const errors = results
-    .map((result) => result.error?.trim() ?? '')
-    .filter((message, index, messages) => message && messages.indexOf(message) === index);
-  return {
-    status,
-    model,
-    successCount: successful.length,
-    totalCount: results.length,
-    ...(latencies.length > 0 ? { latencyMs: Math.min(...latencies) } : {}),
-    errors,
-    timedOut: results.some((result) => result.timedOut),
-  };
-}
-
-const healthCredentials = (apiKeys: string[]) => {
-  const keys = apiKeys
-    .map((key) => key.trim())
-    .filter((key, index, values) => key && values.indexOf(key) === index);
-  return keys.length > 0 ? keys : [''];
-};
-
-export async function checkProviderHealth(
+export async function checkProviderModelHealth(
   options: ProviderHealthCheckOptions,
-): Promise<ProviderHealthResult> {
-  const timeoutMs = options.timeoutMs ?? PROVIDER_HEALTH_TIMEOUT_MS;
-  const credentials = healthCredentials(options.apiKeys);
-  const customHeaders = options.customHeaders ?? {};
-  let model = selectProviderHealthModel(options.testModel, options.models);
-
-  if (!model) {
-    let discoveryError: unknown;
-    for (const apiKey of credentials) {
-      try {
-        const discovered = await fetchModels(
-          options.provider,
-          options.baseUrl,
-          apiKey,
-          options.authIndex,
-          customHeaders,
-          timeoutMs,
-        );
-        model = selectProviderHealthModel(undefined, discovered);
-        if (model) break;
-      } catch (error) {
-        discoveryError = error;
-      }
-    }
-    if (!model && discoveryError) throw discoveryError;
-    if (!model) throw new ProviderHealthCheckError('no-model');
-  }
-
-  const results = await Promise.all(credentials.map((apiKey) => checkProviderHealthProbe(
+  model: string,
+): Promise<ProviderModelHealthResult> {
+  const result = await checkProviderHealthProbe(
     options.provider,
     options.baseUrl,
     model,
-    apiKey,
+    primaryProviderHealthCredential(options.apiKeys),
     options.authIndex,
-    customHeaders,
-    timeoutMs,
-  )));
-  return aggregateProviderHealthResults(model, results);
+    options.customHeaders,
+    options.timeoutMs,
+  );
+  return {
+    ...result,
+    model,
+    status: result.success ? 'healthy' : 'failed',
+  };
+}
+
+export async function runProviderModelHealthChecks(
+  models: ModelOption[],
+  checkModel: (model: ModelOption, index: number) => Promise<ProviderModelHealthResult>,
+  onModelChecked?: (result: ProviderModelHealthResult, index: number) => void,
+  concurrency = PROVIDER_HEALTH_CONCURRENCY,
+): Promise<ProviderModelHealthResult[]> {
+  const results: ProviderModelHealthResult[] = new Array(models.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(models.length, Math.max(1, Math.floor(concurrency)));
+
+  const runWorker = async () => {
+    while (nextIndex < models.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const model = models[index];
+      if (!model) continue;
+      const result = await checkModel(model, index);
+      results[index] = result;
+      onModelChecked?.(result, index);
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, runWorker));
+  return results;
+}
+
+export async function checkProviderModelsHealth(
+  options: ProviderHealthCheckOptions,
+  models: ModelOption[],
+  onModelChecked?: (result: ProviderModelHealthResult, index: number) => void,
+  concurrency = PROVIDER_HEALTH_CONCURRENCY,
+): Promise<ProviderModelHealthResult[]> {
+  return runProviderModelHealthChecks(
+    models,
+    (model) => checkProviderModelHealth(options, model.name),
+    onModelChecked,
+    concurrency,
+  );
 }

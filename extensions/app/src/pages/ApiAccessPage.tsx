@@ -33,9 +33,12 @@ import {
   type ModelProvider,
 } from '../services/modelService';
 import {
-  checkProviderHealth,
-  ProviderHealthCheckError,
-  type ProviderHealthResult,
+  checkProviderModelHealth,
+  checkProviderModelsHealth,
+  mergeProviderHealthModels,
+  PROVIDER_HEALTH_TIMEOUT_MS,
+  type ProviderHealthCheckOptions,
+  type ProviderModelHealthResult,
 } from '../services/providerHealthCheck';
 import { modelMatchesRule } from '../services/oauthModels';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
@@ -75,8 +78,6 @@ type ProviderRow = {
   authIndex: string;
   remark: string;
 };
-
-type ProviderHealthState = { status: 'checking' } | ProviderHealthResult;
 
 export type ProviderDraft = {
   name: string;
@@ -652,7 +653,7 @@ export function ApiAccessPage() {
   const [editingRow, setEditingRow] = useState<ProviderRow | null>(null);
   const [dialogDraft, setDialogDraft] = useState<ProviderDraft>(emptyProviderDraft);
   const [apiAccessRemarks, setApiAccessRemarks] = useState<Record<string, string>>({});
-  const [providerHealth, setProviderHealth] = useState<Record<string, ProviderHealthState>>({});
+  const [healthDialogRow, setHealthDialogRow] = useState<ProviderRow | null>(null);
   const activeDefinition = definitionFor(activeCategory);
   const activeSection = activeDefinition.section;
 
@@ -938,58 +939,6 @@ export function ApiAccessPage() {
     }
   };
 
-  const checkRowHealth = async (row: ProviderRow) => {
-    if (!window.confirm(t('apiAccess.health.confirm'))) return;
-    const identity = providerHealthIdentity(row);
-    setProviderHealth((current) => ({ ...current, [identity]: { status: 'checking' } }));
-    try {
-      const result = await checkProviderHealth({
-        provider: providerModelType(row.section),
-        baseUrl: row.baseUrl,
-        apiKeys: row.apiKeys,
-        authIndex: row.authIndex,
-        models: row.models,
-        testModel: readString(row.record, 'test-model', 'testModel'),
-        customHeaders: providerHeadersFromRecord(row.record),
-      });
-      setProviderHealth((current) => ({ ...current, [identity]: result }));
-    } catch (requestError) {
-      const message = requestError instanceof ProviderHealthCheckError
-        ? t('apiAccess.health.noModel')
-        : String(requestError).replace(/^Error:\s*/i, '');
-      const timedOut = /timed?\s*out|timeout|deadline has elapsed|超时/i.test(message);
-      setProviderHealth((current) => ({
-        ...current,
-        [identity]: {
-          status: 'failed',
-          model: readString(row.record, 'test-model', 'testModel') || row.models[0]?.name || '',
-          successCount: 0,
-          totalCount: Math.max(1, new Set(row.apiKeys.filter(Boolean)).size),
-          errors: [message],
-          timedOut,
-        },
-      }));
-    }
-  };
-
-  const healthStatusLabel = (status: ProviderHealthResult['status']) => {
-    if (status === 'healthy') return t('apiAccess.health.healthy');
-    if (status === 'partial') return t('apiAccess.health.partial');
-    return t('apiAccess.health.failed');
-  };
-
-  const healthResultTitle = (result: ProviderHealthResult) => [
-    result.model ? t('apiAccess.health.modelResult', { model: result.model }) : '',
-    t('apiAccess.health.keysResult', { success: result.successCount, total: result.totalCount }),
-    result.latencyMs === undefined
-      ? ''
-      : t('apiAccess.health.latencyResult', { latency: result.latencyMs }),
-    result.timedOut ? t('apiAccess.health.timeout') : '',
-    result.errors.length > 0
-      ? t('apiAccess.health.errorsResult', { errors: result.errors.join('; ') })
-      : '',
-  ].filter(Boolean).join('\n');
-
   const totalCount = Object.values(records).reduce((sum, items) => sum + items.length, 0);
 
   const countForDefinition = (definition: ProviderDefinition) =>
@@ -1059,26 +1008,11 @@ export function ApiAccessPage() {
             </div>
           ) : (
             <div className="real-provider-list">
-              {rows.map((row) => {
-                const health = providerHealth[providerHealthIdentity(row)];
-                return (
+              {rows.map((row) => (
                 <article className="real-provider-row" key={`${row.section}-${row.index}-${row.authIndex}`}>
                   <div className="provider-row-main">
                     <div className="provider-row-title">
                       <strong title={row.remark || row.name}>{row.remark || row.name}</strong>
-                      {health?.status === 'checking' ? (
-                        <span className="state-pill provider-health-pill checking">
-                          {t('apiAccess.health.checking')}
-                        </span>
-                      ) : health ? (
-                        <span
-                          className={`state-pill provider-health-pill ${health.status === 'healthy' ? 'success' : health.status === 'partial' ? 'update' : 'error'}`}
-                          title={healthResultTitle(health)}
-                        >
-                          {healthStatusLabel(health.status)} · {health.successCount}/{health.totalCount}
-                          {health.latencyMs === undefined ? '' : ` · ${health.latencyMs} ms`}
-                        </span>
-                      ) : null}
                     </div>
                     <code title={definitionFor(row.section).openAi ? t('apiAccess.keys.count', { count: row.apiKeys.length }) : undefined}>
                       {definitionFor(row.section).openAi && row.apiKeys.length > 1
@@ -1096,12 +1030,10 @@ export function ApiAccessPage() {
                     <button
                       type="button"
                       className="secondary-button provider-health-button"
-                      onClick={() => void checkRowHealth(row)}
-                      disabled={busy || health?.status === 'checking'}
+                      onClick={() => setHealthDialogRow(row)}
+                      disabled={busy}
                     >
-                      {health?.status === 'checking'
-                        ? t('apiAccess.health.checking')
-                        : t('apiAccess.health.action')}
+                      {t('apiAccess.health.action')}
                     </button>
                     <label className="provider-enabled-control" title={row.disabled ? t('apiAccess.enable') : t('apiAccess.disable')}>
                       <span>{row.disabled ? t('apiAccess.status.disabled') : t('apiAccess.status.enabled')}</span>
@@ -1124,8 +1056,7 @@ export function ApiAccessPage() {
                     </button>
                   </div>
                 </article>
-                );
-              })}
+              ))}
             </div>
           )}
         </section>
@@ -1141,7 +1072,214 @@ export function ApiAccessPage() {
           onSave={saveProvider}
         />
       ) : null}
+      {healthDialogRow ? (
+        <ProviderHealthDialog
+          key={providerHealthIdentity(healthDialogRow)}
+          row={healthDialogRow}
+          onClose={() => setHealthDialogRow(null)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+type ProviderHealthDialogProps = {
+  row: ProviderRow;
+  onClose: () => void;
+};
+
+type ProviderModelHealthState = { status: 'checking' } | ProviderModelHealthResult;
+
+function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
+  const { t } = useI18n();
+  const testModel = readString(row.record, 'test-model', 'testModel');
+  const configuredModels = useMemo(
+    () => mergeProviderHealthModels([], row.models, testModel),
+    [row.models, testModel],
+  );
+  const [models, setModels] = useState<ModelOption[]>(configuredModels);
+  const [modelLoading, setModelLoading] = useState(true);
+  const [modelError, setModelError] = useState('');
+  const [search, setSearch] = useState('');
+  const [results, setResults] = useState<Record<string, ProviderModelHealthState>>({});
+  const [checkingAll, setCheckingAll] = useState(false);
+
+  const healthOptions = useMemo<ProviderHealthCheckOptions>(() => ({
+    provider: providerModelType(row.section),
+    baseUrl: row.baseUrl,
+    apiKeys: row.apiKeys,
+    authIndex: row.authIndex,
+    customHeaders: providerHeadersFromRecord(row.record),
+    timeoutMs: PROVIDER_HEALTH_TIMEOUT_MS,
+  }), [row]);
+
+  useEffect(() => {
+    let disposed = false;
+    setModelLoading(true);
+    setModelError('');
+    void fetchModels(
+      healthOptions.provider,
+      healthOptions.baseUrl,
+      row.apiKeys.find((key) => key.trim()) ?? '',
+      healthOptions.authIndex,
+      healthOptions.customHeaders,
+      healthOptions.timeoutMs,
+    ).then((discovered) => {
+      if (!disposed) setModels(mergeProviderHealthModels(discovered, row.models, testModel));
+    }).catch((requestError) => {
+      if (!disposed) setModelError(String(requestError).replace(/^Error:\s*/i, ''));
+    }).finally(() => {
+      if (!disposed) setModelLoading(false);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [healthOptions, row.apiKeys, row.models, testModel]);
+
+  const visibleModels = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return models;
+    return models.filter((model) =>
+      `${model.name} ${model.alias ?? ''}`.toLowerCase().includes(query),
+    );
+  }, [models, search]);
+
+  const resultValues = Object.values(results);
+  const checkedCount = resultValues.filter((result) => result.status !== 'checking').length;
+  const healthyCount = resultValues.filter((result) => result.status === 'healthy').length;
+  const failedCount = resultValues.filter((result) => result.status === 'failed').length;
+  const hasCheckingModel = resultValues.some((result) => result.status === 'checking');
+
+  const saveResult = (result: ProviderModelHealthResult) => {
+    setResults((current) => ({
+      ...current,
+      [result.model.toLowerCase()]: result,
+    }));
+  };
+
+  const checkOneModel = async (model: ModelOption) => {
+    const key = model.name.toLowerCase();
+    setResults((current) => ({ ...current, [key]: { status: 'checking' } }));
+    saveResult(await checkProviderModelHealth(healthOptions, model.name));
+  };
+
+  const checkAllModels = async () => {
+    if (models.length === 0) return;
+    setCheckingAll(true);
+    setResults(Object.fromEntries(models.map((model) => [
+      model.name.toLowerCase(),
+      { status: 'checking' } satisfies ProviderModelHealthState,
+    ])));
+    try {
+      await checkProviderModelsHealth(healthOptions, models, saveResult);
+    } finally {
+      setCheckingAll(false);
+    }
+  };
+
+  const statusLabel = (state: ProviderModelHealthState | undefined) => {
+    if (!state) return t('apiAccess.health.notChecked');
+    if (state.status === 'checking') return t('apiAccess.health.checking');
+    return state.status === 'healthy'
+      ? t('apiAccess.health.healthy')
+      : t('apiAccess.health.failed');
+  };
+
+  return (
+    <div className="model-discovery-backdrop" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
+      <section className="model-discovery-dialog provider-health-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-health-title">
+        <div className="model-discovery-header">
+          <div>
+            <h2 id="provider-health-title">{t('apiAccess.health.title')}</h2>
+            <span>{t('apiAccess.health.description', { provider: row.remark || row.name })}</span>
+          </div>
+          <button type="button" className="icon-button quiet" onClick={onClose} title={t('common.close')}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="model-discovery-search">
+          <Search size={16} aria-hidden="true" />
+          <input value={search} onChange={(event) => setSearch(event.currentTarget.value)} placeholder={t('apiAccess.health.search')} />
+        </div>
+
+        <div className="provider-health-overview">
+          <p>{t('apiAccess.health.warning')}</p>
+          <span>{t('apiAccess.health.summary', {
+            checked: checkedCount,
+            total: models.length,
+            healthy: healthyCount,
+            failed: failedCount,
+          })}</span>
+          {modelError ? (
+            <small className="error" title={modelError}>{t('apiAccess.health.modelLoadFailed', { error: modelError })}</small>
+          ) : modelLoading ? (
+            <small>{t('apiAccess.health.loadingModels')}</small>
+          ) : null}
+        </div>
+
+        <div className="model-discovery-list provider-health-model-list">
+          {modelLoading && models.length === 0 ? (
+            <div className="model-discovery-message"><LoaderCircle size={20} className="spin" /><strong>{t('apiAccess.health.loadingModels')}</strong></div>
+          ) : visibleModels.length === 0 ? (
+            <div className="model-discovery-message"><strong>{models.length ? t('apiAccess.health.noMatch') : t('apiAccess.health.noModel')}</strong></div>
+          ) : visibleModels.map((model) => {
+            const state = results[model.name.toLowerCase()];
+            const checked = state && state.status !== 'checking' ? state : null;
+            const error = checked?.status === 'failed'
+              ? checked.errorCode === 'missing-direct-key'
+                ? t('apiAccess.health.missingDirectKey')
+                : checked.timedOut
+                  ? t('apiAccess.health.timeout')
+                  : checked.error || t('apiAccess.health.failed')
+              : '';
+            return (
+              <div className={`provider-health-model-row ${checked?.status === 'failed' ? 'failed' : ''}`} key={model.name}>
+                <div className="provider-health-model-name">
+                  <strong title={model.name}>{model.name}</strong>
+                  {error
+                    ? <small className="error" title={error}>{error}</small>
+                    : model.alias
+                      ? <small title={model.alias}>{model.alias}</small>
+                      : null}
+                </div>
+                <span
+                  className={`state-pill provider-health-pill ${state?.status === 'checking' ? 'checking' : checked?.status === 'healthy' ? 'success' : checked?.status === 'failed' ? 'error' : ''}`}
+                  title={checked?.firstTokenLatencyMs === undefined ? error || undefined : t('apiAccess.health.firstTokenLatencyResult', { latency: checked.firstTokenLatencyMs })}
+                >
+                  {statusLabel(state)}
+                  {checked?.firstTokenLatencyMs === undefined
+                    ? ''
+                    : ` · ${t('apiAccess.health.firstTokenInline', { latency: checked.firstTokenLatencyMs })}`}
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button compact-button provider-health-single-button"
+                  onClick={() => void checkOneModel(model)}
+                  disabled={modelLoading || checkingAll || state?.status === 'checking'}
+                >
+                  {checked ? t('apiAccess.health.retryOne') : t('apiAccess.health.checkOne')}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="model-discovery-actions provider-health-actions">
+          <button type="button" className="secondary-button compact-button" onClick={onClose}>{t('common.close')}</button>
+          <button
+            type="button"
+            className="primary-button compact-button"
+            onClick={() => void checkAllModels()}
+            disabled={modelLoading || models.length === 0 || hasCheckingModel}
+          >
+            {checkingAll
+              ? t('apiAccess.health.checkingProgress', { checked: checkedCount, total: models.length })
+              : t('apiAccess.health.checkAll')}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 

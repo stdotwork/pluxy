@@ -3009,6 +3009,126 @@ textarea:focus-visible {
   min-width: 112px;
 }
 
+.provider-health-dialog {
+  width: min(780px, 100%);
+  height: min(660px, calc(100vh - 32px));
+}
+
+.provider-health-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 14px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--theme-dfbf91);
+  border-radius: 7px;
+  background: var(--theme-fff7e9);
+}
+
+.provider-health-overview p,
+.provider-health-overview span,
+.provider-health-overview small {
+  margin: 0;
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-body);
+}
+
+.provider-health-overview p {
+  min-width: 0;
+  color: var(--theme-8b5b21);
+}
+
+.provider-health-overview span {
+  color: var(--theme-5f5a53);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.provider-health-overview small {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--theme-7a746c);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-health-overview small.error {
+  color: var(--theme-9f2d20);
+}
+
+.provider-health-model-list {
+  min-height: 0;
+  border: 1px solid var(--theme-e2ddd3);
+  border-radius: 7px;
+  background: var(--theme-ffffff);
+}
+
+.provider-health-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 88px;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--theme-eeece6);
+}
+
+.provider-health-model-row:last-child {
+  border-bottom: 0;
+}
+
+.provider-health-model-row.failed {
+  background: var(--theme-fff1ee);
+}
+
+.provider-health-model-name {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.provider-health-model-name strong,
+.provider-health-model-name small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-health-model-name strong {
+  color: var(--theme-2d2a26);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: var(--font-size-label);
+}
+
+.provider-health-model-name small {
+  color: var(--theme-8a847c);
+  font-size: var(--font-size-meta);
+}
+
+.provider-health-model-name small.error {
+  color: var(--theme-9f2d20);
+}
+
+.provider-health-model-row .provider-health-pill {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-health-single-button {
+  width: 88px;
+  min-width: 88px;
+  margin-top: 0;
+}
+
+.provider-health-actions .primary-button {
+  min-width: 150px;
+}
+
 .management-card-actions button,
 .management-heading-actions button {
   gap: 7px;
@@ -7714,6 +7834,25 @@ textarea:focus-visible {
   .model-discovery-actions button {
     flex: 1;
     min-width: 0;
+  }
+
+  .provider-health-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-health-overview span,
+  .provider-health-overview small {
+    grid-column: auto;
+    white-space: normal;
+  }
+
+  .provider-health-model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .provider-health-single-button {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 }
 

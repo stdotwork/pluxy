@@ -1,17 +1,30 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  aggregateProviderHealthResults,
   buildProviderHealthProbe,
-  selectProviderHealthModel,
+  mergeProviderHealthModels,
+  primaryProviderHealthCredential,
+  runProviderModelHealthChecks,
 } from '../src/services/providerHealthCheck';
 
 describe('API 接入健康检测', () => {
-  it('优先使用 test-model，其次使用第一个已配置模型', () => {
-    const models = [{ name: 'configured-first' }, { name: 'configured-second' }];
+  it('合并发现模型、已配置模型和 test-model，并按名称去重', () => {
+    const models = mergeProviderHealthModels(
+      [{ name: 'model-b' }, { name: 'model-a' }],
+      [{ name: 'MODEL-A', alias: 'model-a-alias' }, { name: 'model-c' }],
+      'health-model',
+    );
 
-    expect(selectProviderHealthModel('health-model', models)).toBe('health-model');
-    expect(selectProviderHealthModel('', models)).toBe('configured-first');
-    expect(selectProviderHealthModel('', [])).toBe('');
+    expect(models).toEqual([
+      { name: 'health-model' },
+      { name: 'MODEL-A', alias: 'model-a-alias' },
+      { name: 'model-b' },
+      { name: 'model-c' },
+    ]);
+  });
+
+  it('逐模型检测只使用当前接入的首个有效密钥', () => {
+    expect(primaryProviderHealthCredential(['', ' first-key ', 'second-key'])).toBe('first-key');
+    expect(primaryProviderHealthCredential([])).toBe('');
   });
 
   it('为 OpenAI 兼容接入构造最小 chat completions 请求并保留自定义头', () => {
@@ -33,9 +46,9 @@ describe('API 接入健康检测', () => {
     expect(JSON.parse(probe.data)).toEqual({
       model: 'gpt-test',
       messages: [{ role: 'user', content: 'hi' }],
-      max_tokens: 1,
-      stream: false,
+      stream: true,
     });
+    expect(probe.protocol).toBe('openai-chat');
   });
 
   it('不会覆盖供应商已有的自定义认证头', () => {
@@ -69,8 +82,9 @@ describe('API 接入健康检测', () => {
     expect(JSON.parse(probe.data)).toEqual({
       model: 'gpt-5-codex',
       input: 'hi',
-      max_output_tokens: 1,
+      stream: true,
     });
+    expect(probe.protocol).toBe('openai-responses');
   });
 
   it('为 Gemini 使用默认地址并移除 models/ 前缀', () => {
@@ -82,27 +96,30 @@ describe('API 接入健康检测', () => {
     );
 
     expect(probe.url).toBe(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?alt=sse',
     );
     expect(probe.header['x-goog-api-key']).toBe('gemini-key');
+    expect(probe.protocol).toBe('gemini');
   });
 
-  it('多密钥检测部分成功时汇总最低延迟、去重错误和超时状态', () => {
-    const result = aggregateProviderHealthResults('test-model', [
-      { success: true, latencyMs: 240 },
-      { success: false, error: 'invalid key' },
-      { success: true, latencyMs: 180 },
-      { success: false, error: 'invalid key', timedOut: true },
-    ]);
+  it('检测全部时每个模型只请求一次并保持结果顺序', async () => {
+    const requested: string[] = [];
+    const results = await runProviderModelHealthChecks([
+      { name: 'model-a' },
+      { name: 'model-b' },
+      { name: 'model-c' },
+    ], async (model) => {
+      requested.push(model.name);
+      return {
+        model: model.name,
+        status: 'healthy',
+        success: true,
+        firstTokenLatencyMs: 120,
+      };
+    }, undefined, 2);
 
-    expect(result).toEqual({
-      status: 'partial',
-      model: 'test-model',
-      successCount: 2,
-      totalCount: 4,
-      latencyMs: 180,
-      errors: ['invalid key'],
-      timedOut: true,
-    });
+    expect(requested.sort()).toEqual(['model-a', 'model-b', 'model-c']);
+    expect(results.map((result) => result.model)).toEqual(['model-a', 'model-b', 'model-c']);
   });
+
 });
