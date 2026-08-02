@@ -38,11 +38,9 @@ type SpeedAliasEntry = {
   kind: string;
 };
 
-type AliasListEntry =
-  | (ThinkingAliasEntry & { mode: 'reasoning' })
-  | (SpeedAliasEntry & { mode: 'fast' });
-
-type AliasMode = 'reasoning' | 'fast';
+type AliasListEntry = ThinkingAliasEntry & {
+  serviceTier: string | null;
+};
 
 type ThinkingAliasSource = {
   id: string;
@@ -51,6 +49,10 @@ type ThinkingAliasSource = {
   provider: string;
   kind: string;
   protocol: string;
+};
+
+type ModelAliasSource = ThinkingAliasSource & {
+  supportsReasoning: boolean;
 };
 
 const effortOptions = [
@@ -64,13 +66,45 @@ const effortOptions = [
 export const combineModelAliasEntries = (
   thinkingEntries: ThinkingAliasEntry[],
   speedEntries: SpeedAliasEntry[],
-): AliasListEntry[] => [
-  ...thinkingEntries.map((entry) => ({ ...entry, mode: 'reasoning' as const })),
-  ...speedEntries.map((entry) => ({ ...entry, mode: 'fast' as const })),
-].sort((left, right) => (
-  left.provider.localeCompare(right.provider)
-    || left.alias.localeCompare(right.alias)
-));
+): AliasListEntry[] => {
+  const entries = new Map<string, AliasListEntry>();
+  const entryKey = (entry: Pick<ThinkingAliasEntry, 'kind' | 'provider' | 'sourceModel' | 'alias'>) => (
+    [entry.kind, entry.provider, entry.sourceModel, entry.alias]
+      .map((value) => value.toLocaleLowerCase())
+      .join('\u0000')
+  );
+
+  thinkingEntries.forEach((entry) => {
+    entries.set(entryKey(entry), { ...entry, serviceTier: null });
+  });
+  speedEntries.forEach((entry) => {
+    const key = entryKey(entry);
+    const current = entries.get(key);
+    entries.set(key, current
+      ? { ...current, serviceTier: entry.serviceTier }
+      : { ...entry, effort: null, serviceTier: entry.serviceTier });
+  });
+
+  return [...entries.values()].sort((left, right) => (
+    left.provider.localeCompare(right.provider)
+      || left.alias.localeCompare(right.alias)
+  ));
+};
+
+export const combineModelAliasSources = (
+  thinkingSources: ThinkingAliasSource[],
+  speedSources: ThinkingAliasSource[],
+): ModelAliasSource[] => {
+  const reasoningSourceIds = new Set(thinkingSources.map((source) => source.id));
+  const sources = new Map<string, ModelAliasSource>();
+  [...speedSources, ...thinkingSources].forEach((source) => {
+    sources.set(source.id, {
+      ...source,
+      supportsReasoning: reasoningSourceIds.has(source.id),
+    });
+  });
+  return [...sources.values()];
+};
 
 export const thinkingAliasSourceKindLabel = (kind: string) => {
   if (kind === 'codex-oauth') return 'Codex OAuth';
@@ -96,8 +130,8 @@ export function ThinkingAliasesPage() {
   const [thinkingSources, setThinkingSources] = useState<ThinkingAliasSource[]>([]);
   const [speedSources, setSpeedSources] = useState<ThinkingAliasSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState('');
-  const [aliasMode, setAliasMode] = useState<AliasMode>('reasoning');
   const [effort, setEffort] = useState('xhigh');
+  const [fastEnabled, setFastEnabled] = useState(false);
   const [customEffortOpen, setCustomEffortOpen] = useState(false);
   const [alias, setAlias] = useState('');
   const [search, setSearch] = useState('');
@@ -152,7 +186,10 @@ export function ThinkingAliasesPage() {
     return () => document.removeEventListener('pointerdown', closeOnOutsideClick);
   }, [modelPickerOpen]);
 
-  const sources = aliasMode === 'fast' ? speedSources : thinkingSources;
+  const sources = useMemo(
+    () => combineModelAliasSources(thinkingSources, speedSources),
+    [speedSources, thinkingSources],
+  );
   const entries = useMemo(
     () => combineModelAliasEntries(thinkingEntries, speedEntries),
     [speedEntries, thinkingEntries],
@@ -195,8 +232,13 @@ export function ThinkingAliasesPage() {
     setActiveSourceIndex(0);
   }, [search, sources]);
 
-  const chooseSource = (source: ThinkingAliasSource) => {
+  const chooseSource = (source: ModelAliasSource) => {
     setSelectedSourceId(source.id);
+    if (!source.supportsReasoning) {
+      setEffort('');
+      setFastEnabled(true);
+      setCustomEffortOpen(false);
+    }
     setModelPickerOpen(false);
     setSearch('');
   };
@@ -233,8 +275,7 @@ export function ThinkingAliasesPage() {
 
   const normalizedEffort = effort.trim().toLowerCase();
   const customEffortSelected = Boolean(
-    aliasMode === 'reasoning'
-      && normalizedEffort
+    normalizedEffort
       && !effortOptions.some((option) => option.value === normalizedEffort),
   );
 
@@ -248,8 +289,12 @@ export function ThinkingAliasesPage() {
       setError(t('aliases.error.emptyAlias'));
       return;
     }
-    if (aliasMode === 'reasoning' && !normalizedEffort) {
-      setError(t('aliases.error.emptyEffort'));
+    if (!normalizedEffort && !fastEnabled) {
+      setError(t('aliases.error.emptyOptions'));
+      return;
+    }
+    if (normalizedEffort && !selectedSource.supportsReasoning) {
+      setError(t('aliases.error.unsupportedEffort'));
       return;
     }
     setBusyAlias(normalizedAlias);
@@ -257,23 +302,26 @@ export function ThinkingAliasesPage() {
     setError('');
     setNotice('');
     try {
-      if (aliasMode === 'fast') {
-        const nextEntries = await invoke<SpeedAliasEntry[]>('create_speed_alias', {
-          sourceId: selectedSource.id,
-          alias: normalizedAlias,
-        });
-        setSpeedEntries(nextEntries);
-        setNotice(t('speedAliases.created', { alias: normalizedAlias }));
-      } else {
-        const nextEntries = await invoke<ThinkingAliasEntry[]>('create_thinking_alias', {
+      if (normalizedEffort) {
+        await invoke<ThinkingAliasEntry[]>('create_thinking_alias', {
           sourceId: selectedSource.id,
           alias: normalizedAlias,
           effort: normalizedEffort,
+          fast: fastEnabled,
         });
-        setThinkingEntries(nextEntries);
-        setNotice(t('aliases.created', { alias: normalizedAlias, effort: normalizedEffort }));
+        setNotice(t(fastEnabled ? 'aliases.createdCombined' : 'aliases.created', {
+          alias: normalizedAlias,
+          effort: normalizedEffort,
+        }));
+      } else {
+        await invoke<SpeedAliasEntry[]>('create_speed_alias', {
+          sourceId: selectedSource.id,
+          alias: normalizedAlias,
+        });
+        setNotice(t('speedAliases.created', { alias: normalizedAlias }));
       }
       setAlias('');
+      await load();
     } catch (requestError) {
       setError(String(requestError));
     } finally {
@@ -284,28 +332,24 @@ export function ThinkingAliasesPage() {
 
   const deleteAlias = async (entry: AliasListEntry) => {
     if (!window.confirm(
-      t(entry.mode === 'fast' ? 'speedAliases.deleteConfirm' : 'aliases.deleteConfirm', {
-        alias: entry.alias,
-      }),
+      t('aliases.deleteConfirm', { alias: entry.alias }),
     )) return;
     setBusyAlias(entry.alias);
     setBusyAction('delete');
     setError('');
     setNotice('');
     try {
-      if (entry.mode === 'fast') {
-        const nextEntries = await invoke<SpeedAliasEntry[]>('delete_speed_alias', {
+      if (entry.effort) {
+        await invoke<ThinkingAliasEntry[]>('delete_thinking_alias', {
           alias: entry.alias,
         });
-        setSpeedEntries(nextEntries);
-        setNotice(t('speedAliases.deleted', { alias: entry.alias }));
       } else {
-        const nextEntries = await invoke<ThinkingAliasEntry[]>('delete_thinking_alias', {
+        await invoke<SpeedAliasEntry[]>('delete_speed_alias', {
           alias: entry.alias,
         });
-        setThinkingEntries(nextEntries);
-        setNotice(t('aliases.deleted', { alias: entry.alias }));
       }
+      setNotice(t('aliases.deleted', { alias: entry.alias }));
+      await load();
     } catch (requestError) {
       setError(String(requestError));
     } finally {
@@ -431,17 +475,28 @@ export function ThinkingAliasesPage() {
               <span>{t('aliases.effort.description')}</span>
             </div>
             <div className="thinking-effort-options">
+              <button
+                type="button"
+                className={!normalizedEffort ? 'active none' : 'none'}
+                onClick={() => {
+                  chooseEffort('');
+                  setCustomEffortOpen(false);
+                }}
+                disabled={Boolean(busyAlias)}
+                title={t('aliases.effort.noneHint')}
+              >
+                {t('aliases.effort.none')}
+              </button>
               {effortOptions.map((option) => (
                 <button
                   type="button"
-                  className={aliasMode === 'reasoning' && effort.trim().toLowerCase() === option.value ? 'active' : ''}
+                  className={effort.trim().toLowerCase() === option.value ? 'active' : ''}
                   key={option.value}
                   onClick={() => {
-                    setAliasMode('reasoning');
                     chooseEffort(option.value);
                     setCustomEffortOpen(false);
                   }}
-                  disabled={Boolean(busyAlias)}
+                  disabled={Boolean(busyAlias) || Boolean(selectedSource && !selectedSource.supportsReasoning)}
                   title={t(option.hintKey)}
                 >
                   {option.label}
@@ -449,25 +504,12 @@ export function ThinkingAliasesPage() {
               ))}
               <button
                 type="button"
-                className={aliasMode === 'fast' ? 'active fast' : 'fast'}
-                onClick={() => {
-                  setAliasMode('fast');
-                  setCustomEffortOpen(false);
-                }}
-                disabled={Boolean(busyAlias)}
-                title={t('aliases.fast.description')}
-              >
-                <Zap size={13} /> Fast
-              </button>
-              <button
-                type="button"
                 className={customEffortSelected ? 'active custom' : 'custom'}
                 onClick={() => {
-                  setAliasMode('reasoning');
                   if (!customEffortSelected) chooseEffort('');
                   setCustomEffortOpen(true);
                 }}
-                disabled={Boolean(busyAlias)}
+                disabled={Boolean(busyAlias) || Boolean(selectedSource && !selectedSource.supportsReasoning)}
                 title={customEffortSelected
                   ? t('aliases.customLevel', { effort: normalizedEffort })
                   : t('aliases.customLevelHint')}
@@ -479,10 +521,7 @@ export function ThinkingAliasesPage() {
               <input
                 id="thinking-effort-custom"
                 value={customEffortSelected ? effort : ''}
-                onChange={(event) => {
-                  setAliasMode('reasoning');
-                  chooseEffort(event.currentTarget.value);
-                }}
+                onChange={(event) => chooseEffort(event.currentTarget.value)}
                 placeholder={t('aliases.customPlaceholder')}
                 maxLength={64}
                 spellCheck={false}
@@ -500,6 +539,26 @@ export function ThinkingAliasesPage() {
               </button>
               <small>{t('aliases.customHelp')}</small>
             </div> : null}
+            {selectedSource && !selectedSource.supportsReasoning ? (
+              <small className="thinking-model-hint">{t('aliases.effort.unsupported')}</small>
+            ) : null}
+            </div>
+
+            <div className="thinking-alias-field">
+              <div className="thinking-field-heading">
+                <strong>{t('aliases.fast.title')}</strong>
+                <span>{t('aliases.fast.description')}</span>
+              </div>
+              <button
+                type="button"
+                className={`thinking-speed-toggle${fastEnabled ? ' active' : ''}`}
+                aria-pressed={fastEnabled}
+                onClick={() => setFastEnabled((current) => !current)}
+                disabled={Boolean(busyAlias)}
+              >
+                <span>Fast</span>
+                <small>{fastEnabled ? t('aliases.fast.enabled') : t('aliases.fast.disabled')}</small>
+              </button>
             </div>
             <div className="thinking-alias-section-divider" aria-hidden="true" />
 
@@ -514,21 +573,24 @@ export function ThinkingAliasesPage() {
                 value={alias}
                 onChange={(event) => setAlias(event.currentTarget.value)}
                 placeholder={selectedSource
-                  ? aliasMode === 'fast'
-                    ? t('speedAliases.aliasName.example', { model: selectedSource.model })
-                    : t('aliases.aliasName.example', { model: selectedSource.model, effort: normalizedEffort || 'high' })
+                  ? normalizedEffort
+                    ? t('aliases.aliasName.example', { model: selectedSource.model, effort: normalizedEffort })
+                    : t('speedAliases.aliasName.example', { model: selectedSource.model })
                   : t('aliases.aliasName.selectFirst')}
                 disabled={Boolean(busyAlias)}
               />
             </div>
 
             <div className="thinking-alias-preview">
-              {aliasMode === 'fast' ? <Zap size={18} /> : <BrainCircuit size={18} />}
+              {normalizedEffort ? <BrainCircuit size={18} /> : <Zap size={18} />}
               <div>
                 <span>{selectedSource?.model || t('aliases.notSelected')} <ArrowRight size={13} /> {alias || t('aliases.enterAlias')}</span>
-                <code>{aliasMode === 'fast'
-                  ? 'service_tier = priority'
-                  : `${selectedSource?.protocol === 'openai' ? 'reasoning_effort' : 'reasoning.effort'} = ${normalizedEffort || t('aliases.notSet')}`}</code>
+                <code>{[
+                  normalizedEffort
+                    ? `${selectedSource?.protocol === 'openai' ? 'reasoning_effort' : 'reasoning.effort'} = ${normalizedEffort}`
+                    : '',
+                  fastEnabled ? 'service_tier = priority' : '',
+                ].filter(Boolean).join(' · ') || t('aliases.notSet')}</code>
               </div>
             </div>
 
@@ -536,11 +598,11 @@ export function ThinkingAliasesPage() {
               type="button"
               className="primary-button thinking-alias-create"
               onClick={() => void createAlias()}
-              disabled={loading || Boolean(busyAlias) || !selectedSource || (aliasMode === 'reasoning' && !effort.trim()) || !alias.trim()}
+              disabled={loading || Boolean(busyAlias) || !selectedSource || (!normalizedEffort && !fastEnabled) || !alias.trim()}
             >
               {busyAction === 'create'
                 ? <LoaderCircle size={16} className="spin" />
-                : aliasMode === 'fast' ? <Zap size={16} /> : <GitFork size={16} />}
+                : <GitFork size={16} />}
               {busyAction === 'create' ? t('aliases.creating') : t('aliases.create')}
             </button>
         </section>
@@ -578,19 +640,20 @@ export function ThinkingAliasesPage() {
                   <ArrowRight size={14} />
                   <strong title={entry.alias}>{entry.alias}</strong>
                 </div>
-                <span className={`thinking-effort-badge ${entry.mode === 'fast' ? 'fast' : entry.effort ? '' : 'missing'}`}>
-                  {entry.mode === 'fast'
-                    ? t('speedAliases.fast.title')
-                    : entry.effort ?? t('aliases.unboundEffort')}
-                </span>
+                <div className="thinking-alias-badges">
+                  {entry.effort ? (
+                    <span className="thinking-effort-badge">{entry.effort}</span>
+                  ) : null}
+                  {entry.serviceTier ? (
+                    <span className="thinking-effort-badge fast">{t('speedAliases.fast.title')}</span>
+                  ) : null}
+                </div>
                 <button
                   type="button"
                   className="icon-button danger"
                   onClick={() => void deleteAlias(entry)}
                   disabled={Boolean(busyAlias)}
-                  title={t(entry.mode === 'fast' ? 'speedAliases.delete' : 'aliases.delete', {
-                    alias: entry.alias,
-                  })}
+                  title={t('aliases.delete', { alias: entry.alias })}
                 >
                   {busyAction === 'delete' && busyAlias === entry.alias
                     ? <LoaderCircle size={15} className="spin" />

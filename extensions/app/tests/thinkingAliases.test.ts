@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   combineModelAliasEntries,
+  combineModelAliasSources,
   thinkingAliasSourceKindLabel,
 } from '../src/pages/ThinkingAliasesPage';
 
@@ -32,9 +33,46 @@ describe('统一模型别名列表', () => {
       }],
     );
 
-    expect(entries.map((entry) => [entry.alias, entry.mode])).toEqual([
-      ['gpt-fast', 'fast'],
-      ['gpt-high', 'reasoning'],
+    expect(entries.map((entry) => [entry.alias, entry.effort, entry.serviceTier])).toEqual([
+      ['gpt-fast', null, 'priority'],
+      ['gpt-high', 'high', null],
     ]);
+  });
+
+  test('同一个别名可同时设置思考强度和 Fast', () => {
+    const identity = {
+      sourceModel: 'gpt-5.6-sol',
+      alias: 'gpt-5.6-sol-xhigh-fast',
+      provider: 'Codex OAuth',
+      kind: 'codex-oauth',
+    };
+    const entries = combineModelAliasEntries(
+      [{ ...identity, effort: 'xhigh' }],
+      [{ ...identity, serviceTier: 'priority' }],
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ effort: 'xhigh', serviceTier: 'priority' });
+  });
+
+  test('速度模型与思考模型合并后保留思考能力标记', () => {
+    const baseSource = {
+      model: 'gpt-5.6-sol',
+      displayName: 'GPT-5.6 Sol',
+      provider: 'Codex OAuth',
+      kind: 'codex-oauth',
+      protocol: 'codex',
+    };
+    const sources = combineModelAliasSources(
+      [{ ...baseSource, id: 'reasoning-and-fast' }],
+      [
+        { ...baseSource, id: 'reasoning-and-fast' },
+        { ...baseSource, id: 'fast-only', model: 'gpt-speed-only' },
+      ],
+    );
+
+    expect(sources).toHaveLength(2);
+    expect(sources.find((source) => source.id === 'reasoning-and-fast')?.supportsReasoning).toBe(true);
+    expect(sources.find((source) => source.id === 'fast-only')?.supportsReasoning).toBe(false);
   });
 });

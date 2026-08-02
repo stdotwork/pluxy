@@ -1820,6 +1820,7 @@ async fn create_thinking_alias(
     source_id: String,
     alias: String,
     effort: String,
+    fast: Option<bool>,
 ) -> Result<Vec<ThinkingAliasEntry>, String> {
     let config = gui_config_state.snapshot()?;
     let source_id = source_id.trim().to_string();
@@ -1861,7 +1862,8 @@ async fn create_thinking_alias(
         return Err(format!("别名模型 {alias} 已存在"));
     }
 
-    let updated = add_thinking_alias_to_yaml(&content, &source, &alias, &effort)?;
+    let updated =
+        add_model_alias_to_yaml(&content, &source, &alias, &effort, fast.unwrap_or(false))?;
     put_management_config_yaml(&config, &updated).await?;
     thinking_aliases_from_yaml(&updated)
 }
@@ -12231,6 +12233,16 @@ fn add_thinking_alias_to_yaml(
     alias: &str,
     effort: &str,
 ) -> Result<String, String> {
+    add_model_alias_to_yaml(content, source, alias, effort, false)
+}
+
+fn add_model_alias_to_yaml(
+    content: &str,
+    source: &ResolvedThinkingAliasSource,
+    alias: &str,
+    effort: &str,
+    fast: bool,
+) -> Result<String, String> {
     let mut document = yaml_serde_edit::YamlValue::parse(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
     let mut updated = document.get().clone();
@@ -12291,6 +12303,12 @@ fn add_thinking_alias_to_yaml(
         }),
         serde_norway::Value::String(effort.to_string()),
     );
+    if fast {
+        params_mapping.insert(
+            yaml_key("service_tier"),
+            serde_norway::Value::String("priority".to_string()),
+        );
+    }
     if source.source.protocol == "openai"
         && source
             .source
@@ -12581,6 +12599,7 @@ fn remove_thinking_alias_from_yaml(content: &str, alias: &str) -> Result<String,
         root.remove(yaml_key("oauth-model-alias"));
     }
     remove_thinking_payload_model(root, alias)?;
+    remove_speed_payload_model(root, alias)?;
     render_updated_core_yaml(&mut document, updated)
 }
 
@@ -18816,6 +18835,29 @@ model:
                 kind: "codex-oauth".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn model_alias_can_apply_reasoning_and_fast_together() {
+        let source = test_codex_oauth_thinking_source("gpt-5.6-sol");
+        let rendered =
+            add_model_alias_to_yaml("{}\n", &source, "gpt-5.6-sol-xhigh-fast", "xhigh", true)
+                .unwrap();
+
+        assert!(rendered.contains("reasoning.effort: xhigh"), "{rendered}");
+        assert!(rendered.contains("service_tier: priority"), "{rendered}");
+        assert_eq!(thinking_aliases_from_yaml(&rendered).unwrap().len(), 1);
+        assert_eq!(speed_aliases_from_yaml(&rendered).unwrap().len(), 1);
+
+        let restored =
+            remove_thinking_alias_from_yaml(&rendered, "gpt-5.6-sol-xhigh-fast").unwrap();
+        assert!(!restored.contains("gpt-5.6-sol-xhigh-fast"), "{restored}");
+        assert!(!restored.contains("service_tier: priority"), "{restored}");
+
+        let legacy = "oauth-model-alias:\n  codex:\n    - name: gpt-5.6-sol\n      alias: legacy-combined\n      fork: true\npayload:\n  override:\n    - models:\n        - name: legacy-combined\n          protocol: codex\n      params:\n        reasoning.effort: high\n    - models:\n        - name: legacy-combined\n          protocol: codex\n      params:\n        service_tier: priority\n";
+        let restored = remove_thinking_alias_from_yaml(legacy, "legacy-combined").unwrap();
+        assert!(!restored.contains("legacy-combined"), "{restored}");
+        assert!(!restored.contains("service_tier: priority"), "{restored}");
     }
 
     #[test]

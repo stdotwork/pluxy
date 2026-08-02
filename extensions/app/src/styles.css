@@ -4051,16 +4051,41 @@ textarea:focus-visible {
   border-style: solid;
 }
 
-.thinking-effort-options button.fast {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
+.thinking-effort-options button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
-.thinking-effort-options button.fast.active {
+.thinking-speed-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 42px;
+  padding: 7px 10px;
+  border: 1px solid var(--theme-d5d2cb);
+  border-radius: 7px;
+  background: var(--theme-fff);
+  color: var(--theme-7a746c);
+}
+
+.thinking-speed-toggle span {
+  font-size: var(--font-size-section);
+  font-weight: 800;
+}
+
+.thinking-speed-toggle small {
+  color: var(--theme-9a938a);
+  font-size: var(--font-size-label);
+}
+
+.thinking-speed-toggle.active {
   border-color: var(--theme-d7a447);
   background: var(--theme-fff8eb);
+  color: var(--theme-805a24);
+}
+
+.thinking-speed-toggle.active small {
   color: var(--theme-805a24);
 }
 
@@ -4283,6 +4308,13 @@ textarea:focus-visible {
   text-transform: uppercase;
 }
 
+.thinking-alias-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
 .thinking-effort-badge.missing {
   border-color: var(--theme-e4d0af);
   background: var(--theme-fff8eb);
@@ -4306,7 +4338,7 @@ textarea:focus-visible {
     grid-column: 1 / -1;
   }
 
-  .thinking-alias-list-panel .thinking-effort-badge {
+  .thinking-alias-list-panel .thinking-alias-badges {
     grid-column: 2;
   }
 
