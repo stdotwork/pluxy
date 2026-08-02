@@ -123,20 +123,14 @@ const claudeMappingRoles = [
   {
     key: 'opus',
     labelKey: 'agents.claudeDesktopMapping.opus',
-    codeLabelKey: 'agents.claudeCodeMapping.opus',
-    codeHintKey: 'agents.claudeCodeMapping.opusHint',
   },
   {
     key: 'sonnet',
     labelKey: 'agents.claudeDesktopMapping.sonnet',
-    codeLabelKey: 'agents.claudeCodeMapping.sonnet',
-    codeHintKey: 'agents.claudeCodeMapping.sonnetHint',
   },
   {
     key: 'haiku',
     labelKey: 'agents.claudeDesktopMapping.haiku',
-    codeLabelKey: 'agents.claudeCodeMapping.haiku',
-    codeHintKey: 'agents.claudeCodeMapping.haikuHint',
   },
 ] as const;
 
@@ -1177,33 +1171,30 @@ export function AgentsPage() {
         </aside>
 
         <section className="panel agent-config-panel">
-          {selected !== 'claude-code' ? (
-            <div className="agent-subpage-tabs" role="tablist" aria-label={t('agents.tabs.label')}>
-              {availableSubpages.map((subpage) => (
-                <button
-                  type="button"
-                  id={`agent-subpage-tab-${subpage.id}`}
-                  role="tab"
-                  className={activeSubpage === subpage.id ? 'active' : ''}
-                  aria-selected={activeSubpage === subpage.id}
-                  aria-controls={`agent-subpage-panel-${subpage.id}`}
-                  tabIndex={activeSubpage === subpage.id ? 0 : -1}
-                  key={subpage.id}
-                  onClick={() => setActiveSubpage(subpage.id)}
-                >
-                  {t(subpage.labelKey)}
-                </button>
-              ))}
-            </div>
-          ) : null}
+          <div className="agent-subpage-tabs" role="tablist" aria-label={t('agents.tabs.label')}>
+            {availableSubpages.map((subpage) => (
+              <button
+                type="button"
+                id={`agent-subpage-tab-${subpage.id}`}
+                role="tab"
+                className={activeSubpage === subpage.id ? 'active' : ''}
+                aria-selected={activeSubpage === subpage.id}
+                aria-controls={`agent-subpage-panel-${subpage.id}`}
+                tabIndex={activeSubpage === subpage.id ? 0 : -1}
+                key={subpage.id}
+                onClick={() => setActiveSubpage(subpage.id)}
+              >
+                {t(subpage.labelKey)}
+              </button>
+            ))}
+          </div>
 
           {activeSubpage === 'core' ? (
             <div
-              className={`agent-core-config ${selected === 'claude-code' ? 'agent-claude-code-config' : ''}`}
+              className="agent-core-config"
               id="agent-subpage-panel-core"
               role="tabpanel"
-              aria-labelledby={selected === 'claude-code' ? undefined : 'agent-subpage-tab-core'}
-              aria-label={selected === 'claude-code' ? t('agents.claudeCodeMapping.title') : undefined}
+              aria-labelledby="agent-subpage-tab-core"
             >
               <div className="agent-status-grid">
                 <div>
@@ -1254,7 +1245,7 @@ export function AgentsPage() {
               ) : null}
 
               {isClaudeModelMappingClient ? (
-                <section className={`agent-core-setting-section agent-claude-desktop-mapping ${selected === 'claude-code' ? 'agent-claude-code-mapping' : ''}`}>
+                <section className="agent-core-setting-section agent-claude-desktop-mapping">
                   <div className="agent-section-heading">
                     <div>
                       <strong>{t(selected === 'claude-code'
@@ -1269,9 +1260,7 @@ export function AgentsPage() {
                         className="agent-claude-desktop-mapping-filter"
                         title={t('agents.claudeDesktopMapping.customMappingHint')}
                       >
-                        <span>{t(selected === 'claude-code'
-                          ? 'agents.claudeCodeMapping.aliasOnly'
-                          : 'agents.claudeDesktopMapping.customMapping')}</span>
+                        <span>{t('agents.claudeDesktopMapping.customMapping')}</span>
                         <span className="switch-control">
                           <input
                             type="checkbox"
@@ -1287,11 +1276,8 @@ export function AgentsPage() {
                   </div>
                   <div className="agent-claude-desktop-mapping-grid">
                     {claudeMappingRoles.map((role) => (
-                      <div className={`agent-claude-desktop-mapping-row ${role.key}`} key={role.key}>
-                        <div className="agent-claude-mapping-role">
-                          <strong>{t(selected === 'claude-code' ? role.codeLabelKey : role.labelKey)}</strong>
-                          {selected === 'claude-code' ? <span>{t(role.codeHintKey)}</span> : null}
-                        </div>
+                      <div className="agent-claude-desktop-mapping-row" key={role.key}>
+                        <strong>{t(role.labelKey)}</strong>
                         <AgentModelPicker
                           models={claudeMappingModels}
                           value={claudeModelMappingsDraft[role.key]}
@@ -1364,7 +1350,7 @@ export function AgentsPage() {
                     >
                       {busyAction === 'default'
                         ? <LoaderCircle size={16} className="spin" />
-                        : selected === 'claude-code' ? null : <RefreshCw size={16} />}
+                        : <RefreshCw size={16} />}
                       {t('agents.modify.default')}
                     </button>
                     {selected === 'codex' ? (
@@ -1436,7 +1422,7 @@ export function AgentsPage() {
                       >
                         {busyAction === 'launch'
                           ? <LoaderCircle size={16} className="spin" />
-                          : selected === 'claude-code' ? null : <Play size={16} />}
+                          : <Play size={16} />}
                         {busyAction === 'launch' ? t('agents.launch.starting') : defaultLaunchTarget ? t('agents.launch.start', { target: defaultLaunchTarget.label }) : t('agents.launch.unavailable')}
                       </button>
                     )}

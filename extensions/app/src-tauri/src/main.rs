@@ -88,7 +88,14 @@ const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";
 const CLAUDE_DESKTOP_OPUS_MODEL_ID: &str = "claude-opus-5";
 const CLAUDE_DESKTOP_SONNET_MODEL_ID: &str = "claude-sonnet-4-6";
 const CLAUDE_DESKTOP_HAIKU_MODEL_ID: &str = "claude-haiku-4-5";
+const MANAGED_CLAUDE_OPUS_ALIAS_DISPLAY_NAME: &str = "EasyCLIProxyAPI managed Claude Opus mapping";
+const MANAGED_CLAUDE_SONNET_ALIAS_DISPLAY_NAME: &str =
+    "EasyCLIProxyAPI managed Claude Sonnet mapping";
+const MANAGED_CLAUDE_HAIKU_ALIAS_DISPLAY_NAME: &str =
+    "EasyCLIProxyAPI managed Claude Haiku mapping";
+const DEFAULT_CLAUDE_CONTEXT_WINDOW: u64 = 200_000;
 const CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW: u64 = 1_000_000;
+const CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV: &str = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
 const MODEL_ALIAS_CONFIG_SECTIONS: &[&str] = &[
     "codex-api-key",
     "openai-compatibility",
@@ -2143,8 +2150,13 @@ async fn fetch_prepared_agent_models(
         let runtime_models = fetch_codex_runtime_models(config.port, api_key).await?;
         prepare_codex_agent_models(&runtime_models)
     } else {
+        let mut models = fetch_agent_models(config.port, api_key).await?;
+        if matches!(client, AgentClient::ClaudeCode | AgentClient::ClaudeDesktop) {
+            let content = fetch_management_config_yaml(config).await?;
+            mark_configured_agent_model_aliases(&mut models, &content)?;
+        }
         Ok(PreparedAgentModels {
-            models: fetch_agent_models(config.port, api_key).await?,
+            models,
             codex_catalog: None,
         })
     }
@@ -2581,10 +2593,19 @@ async fn launch_agent(
                     .map(ClaudeDesktopModelMappings::all)
             })
             .ok_or_else(|| "Claude Code model environment is not configured".to_string())?;
+        let prepared = fetch_prepared_agent_models(client, &config).await?;
+        let max_context_tokens = claude_code_max_context_tokens(&mappings, &prepared.models)?;
+        {
+            let _guard = AGENT_CONFIG_FILE_LOCK
+                .lock()
+                .map_err(|_| "Claude Code configuration lock is poisoned".to_string())?;
+            update_claude_code_context_window(&claude_config_path, max_context_tokens)?;
+        }
         let environment = claude_code_launch_environment(
             &format!("http://127.0.0.1:{port}"),
             effective_agent_api_key(&config),
             &mappings,
+            max_context_tokens,
         );
         return launch_cli_agent(
             &executable,
@@ -2719,6 +2740,10 @@ fn parse_agent_model_options(payload: &serde_json::Value) -> Result<Vec<AgentMod
             "ContextLength",
             "context_window",
             "contextWindow",
+            "max_input_tokens",
+            "maxInputTokens",
+            "input_token_limit",
+            "inputTokenLimit",
         ]
         .into_iter()
         .find_map(|key| item.get(key).and_then(json_positive_u64));
@@ -2761,6 +2786,73 @@ fn append_agent_model_option(
         is_alias,
         context_window,
     });
+}
+
+fn mark_configured_agent_model_aliases(
+    models: &mut [AgentModelOption],
+    content: &str,
+) -> Result<(), String> {
+    let document = serde_norway::from_str::<serde_norway::Value>(content)
+        .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
+    let root = document
+        .as_mapping()
+        .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+
+    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+        let Some(providers) = yaml_mapping_value(root, section) else {
+            continue;
+        };
+        let providers = providers
+            .as_sequence()
+            .ok_or_else(|| format!("{section} 必须是数组"))?;
+        for provider in providers {
+            let Some(provider) = provider.as_mapping() else {
+                continue;
+            };
+            let Some(configured_models) = yaml_mapping_value(provider, "models") else {
+                continue;
+            };
+            let configured_models = configured_models
+                .as_sequence()
+                .ok_or_else(|| format!("{section}.models 必须是数组"))?;
+            mark_agent_model_aliases_from_sequence(models, configured_models);
+        }
+    }
+
+    if let Some(oauth_aliases) = yaml_mapping_value(root, "oauth-model-alias") {
+        let oauth_aliases = oauth_aliases
+            .as_mapping()
+            .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
+        for entries in oauth_aliases.values() {
+            let Some(entries) = entries.as_sequence() else {
+                continue;
+            };
+            mark_agent_model_aliases_from_sequence(models, entries);
+        }
+    }
+    Ok(())
+}
+
+fn mark_agent_model_aliases_from_sequence(
+    models: &mut [AgentModelOption],
+    configured_models: &[serde_norway::Value],
+) {
+    for configured in configured_models {
+        let Some((source_model, client_model, _)) = configured_model_identity(configured) else {
+            continue;
+        };
+        if source_model.eq_ignore_ascii_case(&client_model) {
+            continue;
+        }
+        let Some(model) = models
+            .iter_mut()
+            .find(|model| model.name.eq_ignore_ascii_case(&client_model))
+        else {
+            continue;
+        };
+        model.is_alias = true;
+        model.alias = Some(source_model);
+    }
 }
 
 fn parse_codex_model_definitions(
@@ -4378,12 +4470,58 @@ fn inspect_claude_code_model_mappings(
     }))
 }
 
+fn agent_model_context_window(models: &[AgentModelOption], model_name: &str) -> Option<u64> {
+    let selected = models
+        .iter()
+        .find(|model| model.name.eq_ignore_ascii_case(model_name))?;
+    if !selected.is_alias {
+        return Some(
+            selected
+                .context_window
+                .unwrap_or(DEFAULT_CLAUDE_CONTEXT_WINDOW),
+        );
+    }
+    selected
+        .alias
+        .as_deref()
+        .and_then(|source| {
+            models
+                .iter()
+                .find(|model| model.name.eq_ignore_ascii_case(source))
+        })
+        .and_then(|model| model.context_window)
+        .or(selected.context_window)
+        .or(Some(DEFAULT_CLAUDE_CONTEXT_WINDOW))
+}
+
+fn claude_code_max_context_tokens(
+    mappings: &ClaudeDesktopModelMappings,
+    models: &[AgentModelOption],
+) -> Result<u64, String> {
+    [
+        ("Opus", mappings.opus.as_str()),
+        ("Sonnet", mappings.sonnet.as_str()),
+        ("Haiku", mappings.haiku.as_str()),
+    ]
+    .into_iter()
+    .map(|(role, model)| {
+        agent_model_context_window(models, model).ok_or_else(|| {
+            format!("CPA 模型 API 未返回 Claude Code {role} 映射模型 {model} 的上下文窗口")
+        })
+    })
+    .collect::<Result<Vec<_>, _>>()?
+    .into_iter()
+    .min()
+    .ok_or_else(|| "CPA 模型 API 未返回 Claude Code 上下文窗口".to_string())
+}
+
 fn claude_code_launch_environment(
     base_url: &str,
     api_key: &str,
     mappings: &ClaudeDesktopModelMappings,
+    max_context_tokens: u64,
 ) -> Vec<(String, String)> {
-    [
+    let mut environment = [
         ("ANTHROPIC_BASE_URL", base_url),
         ("ANTHROPIC_AUTH_TOKEN", api_key),
         ("ANTHROPIC_MODEL", mappings.sonnet.as_str()),
@@ -4394,7 +4532,12 @@ fn claude_code_launch_environment(
     ]
     .into_iter()
     .map(|(key, value)| (key.to_string(), value.to_string()))
-    .collect()
+    .collect::<Vec<_>>();
+    environment.push((
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
+        max_context_tokens.to_string(),
+    ));
+    environment
 }
 
 fn inspect_claude_desktop_agent_config(
@@ -4705,6 +4848,7 @@ fn build_agent_updates_with_oauth(
                 &root_base,
                 api_key,
                 model,
+                models,
                 claude_code_model_mappings,
             )
             .or_else(|_| {
@@ -4713,6 +4857,7 @@ fn build_agent_updates_with_oauth(
                     &root_base,
                     api_key,
                     model,
+                    models,
                     claude_code_model_mappings,
                 )
             })?;
@@ -4857,6 +5002,7 @@ fn build_claude_agent_config(
     base_url: &str,
     api_key: &str,
     model: &str,
+    models: &[AgentModelOption],
     mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<String, String> {
     let mut root = match existing.map(str::trim).filter(|value| !value.is_empty()) {
@@ -4870,6 +5016,7 @@ fn build_claude_agent_config(
     let mappings = mappings
         .cloned()
         .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
+    let max_context_tokens = claude_code_max_context_tokens(&mappings, models)?;
     let env = ensure_json_object_entry(root, "env");
     env.remove("ANTHROPIC_API_KEY");
     for (key, value) in [
@@ -4886,6 +5033,10 @@ fn build_claude_agent_config(
             serde_json::Value::String(value.to_string()),
         );
     }
+    env.insert(
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
+        serde_json::Value::String(max_context_tokens.to_string()),
+    );
     root.insert(
         "model".to_string(),
         serde_json::Value::String(mappings.sonnet),
@@ -4910,6 +5061,34 @@ fn remove_claude_code_conflicting_api_key(path: &Path) -> Result<bool, String> {
         root.get_mut("env")
             .and_then(serde_json::Value::as_object_mut)
             .is_some_and(|env| env.remove("ANTHROPIC_API_KEY").is_some())
+    })
+}
+
+fn update_claude_code_context_window(path: &Path, max_context_tokens: u64) -> Result<bool, String> {
+    update_agent_json_file(path, "Claude Code configuration", |root| {
+        let managed = root
+            .get("env")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(is_managed_agent_base_url);
+        if !managed {
+            return false;
+        }
+        let expected = max_context_tokens.to_string();
+        let env = ensure_json_object_entry(root, "env");
+        if env
+            .get(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV)
+            .and_then(serde_json::Value::as_str)
+            == Some(expected.as_str())
+        {
+            return false;
+        }
+        env.insert(
+            CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
+            serde_json::Value::String(expected),
+        );
+        true
     })
 }
 
@@ -5062,21 +5241,7 @@ fn claude_desktop_inference_model(
         .iter()
         .find(|model| model.name.eq_ignore_ascii_case(source_model));
     let direct_alias = selected.is_some_and(|model| model.is_alias);
-    let context_model = selected.and_then(|model| {
-        if !model.is_alias {
-            return Some(model);
-        }
-        model
-            .alias
-            .as_deref()
-            .and_then(|source| {
-                models
-                    .iter()
-                    .find(|candidate| candidate.name.eq_ignore_ascii_case(source))
-            })
-            .or(Some(model))
-    });
-    let context_window = context_model.and_then(|model| model.context_window);
+    let context_window = agent_model_context_window(models, source_model);
     let mut entry = serde_json::Map::new();
     entry.insert(
         "name".to_string(),
@@ -5258,6 +5423,7 @@ fn remove_claude_code_managed_configuration(paths: &[PathBuf]) -> Result<Vec<Str
                 "ANTHROPIC_DEFAULT_SONNET_MODEL",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL",
                 "ANTHROPIC_DEFAULT_FABLE_MODEL",
+                CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV,
             ] {
                 env.remove(key);
             }
@@ -5618,6 +5784,7 @@ fn build_restored_claude_code_config(
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
             "ANTHROPIC_DEFAULT_OPUS_MODEL",
             "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV,
         ] {
             restore_json_key(env, original_env, key);
         }
@@ -7259,7 +7426,7 @@ fn fresh_agent_contents(
         name: model.to_string(),
         alias: None,
         is_alias: false,
-        context_window: None,
+        context_window: Some(200_000),
     }];
     fresh_agent_contents_with_oauth(client, port, api_key, model, &models, false, None, None)
 }
@@ -7282,6 +7449,7 @@ fn fresh_agent_contents_with_oauth(
             &root_base,
             api_key,
             model,
+            models,
             claude_code_model_mappings,
         )?]),
         AgentClient::ClaudeDesktop => Ok(vec![
@@ -7925,15 +8093,17 @@ fn restore_agent_applied_state_configuration(
     Ok(())
 }
 
-fn restore_all_agent_session_configurations(home: &Path) {
-    for client in [
-        AgentClient::ClaudeCode,
-        AgentClient::ClaudeDesktop,
+fn agent_clients_restored_on_exit() -> [AgentClient; 4] {
+    [
         AgentClient::Codex,
         AgentClient::OpenCode,
         AgentClient::OpenClaw,
         AgentClient::Hermes,
-    ] {
+    ]
+}
+
+fn restore_all_agent_session_configurations(home: &Path) {
+    for client in agent_clients_restored_on_exit() {
         if let Err(error) = restore_agent_session_configuration(client, home) {
             eprintln!("关闭时恢复 {} 配置失败: {error}", client.name());
         }
@@ -8105,7 +8275,7 @@ fn reset_agent_configuration_to_default(
             name: model.to_string(),
             alias: None,
             is_alias: false,
-            context_window: None,
+            context_window: Some(200_000),
         }],
         codex_catalog,
         oauth_configuration: false,
@@ -12123,6 +12293,15 @@ async fn ensure_claude_desktop_model_aliases(
     Ok(())
 }
 
+async fn remove_managed_claude_model_aliases(config: &GuiConfigFile) -> Result<(), String> {
+    let content = fetch_management_config_yaml(config).await?;
+    let updated = remove_managed_claude_model_aliases_in_yaml(&content)?;
+    if updated != content {
+        put_management_config_yaml(config, &updated).await?;
+    }
+    Ok(())
+}
+
 fn ensure_claude_desktop_model_aliases_in_yaml(
     content: &str,
     mappings: &ClaudeDesktopModelMappings,
@@ -12145,7 +12324,7 @@ fn ensure_claude_desktop_model_aliases_in_yaml(
             .any(|model| model.name.eq_ignore_ascii_case(source_model) && model.is_alias);
         if direct_alias {
             if !source_model.eq_ignore_ascii_case(alias) {
-                remove_claude_desktop_model_alias(root, alias)?;
+                remove_managed_claude_model_alias(root, alias)?;
             }
         } else {
             ensure_claude_desktop_model_alias(root, source_model, alias)?;
@@ -12154,10 +12333,32 @@ fn ensure_claude_desktop_model_aliases_in_yaml(
     render_updated_core_yaml(&mut document, updated)
 }
 
-fn remove_claude_desktop_model_alias(
+fn remove_managed_claude_model_aliases_in_yaml(content: &str) -> Result<String, String> {
+    let mut document = yaml_serde_edit::YamlValue::parse(content)
+        .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
+    let mut updated = document.get().clone();
+    let root = updated
+        .as_mapping_mut()
+        .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+    let mut changed = false;
+    for alias in [
+        CLAUDE_DESKTOP_OPUS_MODEL_ID,
+        CLAUDE_DESKTOP_SONNET_MODEL_ID,
+        CLAUDE_DESKTOP_HAIKU_MODEL_ID,
+    ] {
+        changed |= remove_managed_claude_model_alias(root, alias)?;
+    }
+    if !changed {
+        return Ok(content.to_string());
+    }
+    render_updated_core_yaml(&mut document, updated)
+}
+
+fn remove_managed_claude_model_alias(
     root: &mut serde_norway::Mapping,
     alias: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    let mut changed = false;
     for section in MODEL_ALIAS_CONFIG_SECTIONS {
         let Some(providers) = yaml_mapping_value_mut(root, section) else {
             continue;
@@ -12175,13 +12376,84 @@ fn remove_claude_desktop_model_alias(
             let models = models
                 .as_sequence_mut()
                 .ok_or_else(|| format!("{section}.models 必须是数组"))?;
+            let before = models.len();
+            models.retain(|model| !is_managed_claude_model_alias(model, alias));
+            changed |= models.len() != before;
+        }
+    }
+    Ok(changed)
+}
+
+fn remove_existing_claude_model_alias(
+    root: &mut serde_norway::Mapping,
+    alias: &str,
+) -> Result<bool, String> {
+    let mut changed = false;
+    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+        let Some(providers) = yaml_mapping_value_mut(root, section) else {
+            continue;
+        };
+        let providers = providers
+            .as_sequence_mut()
+            .ok_or_else(|| format!("{section} 必须是数组"))?;
+        for provider in providers {
+            let Some(provider) = provider.as_mapping_mut() else {
+                continue;
+            };
+            let Some(models) = yaml_mapping_value_mut(provider, "models") else {
+                continue;
+            };
+            let models = models
+                .as_sequence_mut()
+                .ok_or_else(|| format!("{section}.models 必须是数组"))?;
+            let before = models.len();
             models.retain(|model| {
                 configured_model_identity(model)
                     .is_none_or(|(_, client_model, _)| !client_model.eq_ignore_ascii_case(alias))
             });
+            changed |= models.len() != before;
         }
     }
-    Ok(())
+    Ok(changed)
+}
+
+fn managed_claude_alias_display_name(alias: &str) -> Option<&'static str> {
+    if alias.eq_ignore_ascii_case(CLAUDE_DESKTOP_OPUS_MODEL_ID) {
+        Some(MANAGED_CLAUDE_OPUS_ALIAS_DISPLAY_NAME)
+    } else if alias.eq_ignore_ascii_case(CLAUDE_DESKTOP_SONNET_MODEL_ID) {
+        Some(MANAGED_CLAUDE_SONNET_ALIAS_DISPLAY_NAME)
+    } else if alias.eq_ignore_ascii_case(CLAUDE_DESKTOP_HAIKU_MODEL_ID) {
+        Some(MANAGED_CLAUDE_HAIKU_ALIAS_DISPLAY_NAME)
+    } else {
+        None
+    }
+}
+
+fn is_managed_claude_model_alias(model: &serde_norway::Value, alias: &str) -> bool {
+    let Some(expected_display_name) = managed_claude_alias_display_name(alias) else {
+        return false;
+    };
+    let Some((_, client_model, display_name)) = configured_model_identity(model) else {
+        return false;
+    };
+    client_model.eq_ignore_ascii_case(alias)
+        && display_name
+            .as_deref()
+            .is_some_and(|value| value == expected_display_name)
+}
+
+fn configured_managed_claude_alias_exists(root: &serde_norway::Mapping, alias: &str) -> bool {
+    MODEL_ALIAS_CONFIG_SECTIONS.iter().any(|section| {
+        yaml_mapping_value(root, section)
+            .and_then(serde_norway::Value::as_sequence)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_norway::Value::as_mapping)
+            .filter_map(|provider| yaml_mapping_value(provider, "models"))
+            .filter_map(serde_norway::Value::as_sequence)
+            .flatten()
+            .any(|model| is_managed_claude_model_alias(model, alias))
+    })
 }
 
 fn ensure_claude_desktop_model_alias(
@@ -12190,12 +12462,12 @@ fn ensure_claude_desktop_model_alias(
     alias: &str,
 ) -> Result<(), String> {
     if let Some((existing_source, _)) = configured_model_client_identity(root, alias) {
-        if existing_source.eq_ignore_ascii_case(source_model) {
+        if existing_source.eq_ignore_ascii_case(source_model)
+            && configured_managed_claude_alias_exists(root, alias)
+        {
             return Ok(());
         }
-        return Err(format!(
-            "Claude Desktop 别名 {alias} 已被模型 {existing_source} 使用，请先修改冲突模型的别名"
-        ));
+        remove_existing_claude_model_alias(root, alias)?;
     }
     if append_claude_desktop_model_alias(root, source_model, alias)? {
         return Ok(());
@@ -12284,6 +12556,12 @@ fn append_claude_desktop_model_alias(
             alias_model.insert(
                 yaml_key("alias"),
                 serde_norway::Value::String(alias.to_string()),
+            );
+            let display_name = managed_claude_alias_display_name(alias)
+                .ok_or_else(|| format!("不支持的 Claude 托管别名: {alias}"))?;
+            alias_model.insert(
+                yaml_key("display-name"),
+                serde_norway::Value::String(display_name.to_string()),
             );
             models.push(serde_norway::Value::Mapping(alias_model));
             return Ok(true);
@@ -13496,10 +13774,121 @@ fn render_updated_core_yaml(
     updated: serde_norway::Value,
 ) -> Result<String, String> {
     document.set(updated);
-    let rendered = document.get_string();
+    let rendered = expand_top_level_flow_style_collections(&document.get_string(), document.get())?;
+    let rendered = indent_indentationless_yaml_sequences(&rendered);
     serde_norway::from_str::<serde_norway::Value>(&rendered)
         .map_err(|error| format!("验证更新后的内核配置失败: {error}"))?;
     Ok(rendered)
+}
+
+fn expand_top_level_flow_style_collections(
+    content: &str,
+    document: &serde_norway::Value,
+) -> Result<String, String> {
+    let root = document
+        .as_mapping()
+        .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+    let mut rendered = content.to_string();
+    for (key, value) in root {
+        let Some(key) = key.as_str() else {
+            continue;
+        };
+        let is_non_empty_collection = match value {
+            serde_norway::Value::Mapping(mapping) => !mapping.is_empty(),
+            serde_norway::Value::Sequence(sequence) => !sequence.is_empty(),
+            _ => false,
+        };
+        if !is_non_empty_collection || !top_level_yaml_entry_uses_flow_style(&rendered, key) {
+            continue;
+        }
+        let mut wrapper = serde_norway::Mapping::new();
+        wrapper.insert(yaml_key(key), value.clone());
+        let block = serde_norway::to_string(&serde_norway::Value::Mapping(wrapper))
+            .map_err(|error| format!("格式化内核 YAML 配置失败: {error}"))?;
+        rendered = replace_top_level_yaml_block(&rendered, key, &block);
+    }
+    Ok(rendered)
+}
+
+fn top_level_yaml_entry_uses_flow_style(content: &str, key: &str) -> bool {
+    let prefix = format!("{key}:");
+    yaml_line_ranges(content).into_iter().any(|range| {
+        let line = yaml_line_content(content, range);
+        if line.chars().next().is_some_and(char::is_whitespace) {
+            return false;
+        }
+        line.strip_prefix(&prefix)
+            .map(str::trim_start)
+            .is_some_and(|value| value.starts_with('[') || value.starts_with('{'))
+    })
+}
+
+fn indent_indentationless_yaml_sequences(content: &str) -> String {
+    let mut lines = content
+        .split_inclusive('\n')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !content.is_empty() && !content.ends_with('\n') && lines.is_empty() {
+        lines.push(content.to_string());
+    }
+
+    loop {
+        let mut range_to_indent = None;
+        for key_index in 0..lines.len() {
+            let key_line = lines[key_index].trim_end_matches(['\r', '\n']);
+            let key_trimmed = key_line.trim_start_matches(' ');
+            if key_trimmed.is_empty()
+                || key_trimmed.starts_with('#')
+                || key_trimmed.starts_with('-')
+                || !key_trimmed.ends_with(':')
+            {
+                continue;
+            }
+            let parent_indent = key_line.len() - key_trimmed.len();
+            let Some(first_item) = ((key_index + 1)..lines.len()).find(|index| {
+                let line = lines[*index].trim_end_matches(['\r', '\n']).trim();
+                !line.is_empty() && !line.starts_with('#')
+            }) else {
+                continue;
+            };
+            let first_line = lines[first_item].trim_end_matches(['\r', '\n']);
+            let first_trimmed = first_line.trim_start_matches(' ');
+            let first_indent = first_line.len() - first_trimmed.len();
+            if first_indent != parent_indent
+                || !is_indentationless_yaml_sequence_item(first_trimmed)
+            {
+                continue;
+            }
+
+            let mut end = first_item;
+            while end < lines.len() {
+                let line = lines[end].trim_end_matches(['\r', '\n']);
+                let trimmed = line.trim_start_matches(' ');
+                if !trimmed.is_empty() {
+                    let indent = line.len() - trimmed.len();
+                    if indent < parent_indent
+                        || (indent == parent_indent
+                            && !is_indentationless_yaml_sequence_item(trimmed))
+                    {
+                        break;
+                    }
+                }
+                end += 1;
+            }
+            range_to_indent = Some((first_item, end));
+            break;
+        }
+
+        let Some((start, end)) = range_to_indent else {
+            break;
+        };
+        for line in &mut lines[start..end] {
+            if !line.trim().is_empty() {
+                line.insert_str(0, "  ");
+            }
+        }
+    }
+    lines.concat()
 }
 
 fn management_http_client() -> Result<reqwest::Client, String> {
@@ -17284,12 +17673,24 @@ fn main() {
         }
         tauri::RunEvent::Exit => {
             usage::stop_usage_collector(app_handle);
+            let gui_config_state = app_handle.state::<GuiConfigState>();
+            match gui_config_state.snapshot() {
+                Ok(config) => {
+                    if let Err(error) =
+                        tauri::async_runtime::block_on(remove_managed_claude_model_aliases(&config))
+                    {
+                        eprintln!("退出时清理 EasyCLIProxyAPI 托管的 Claude 模型别名失败: {error}");
+                    }
+                }
+                Err(error) => {
+                    eprintln!("退出时读取 GUI 配置失败，无法清理 Claude 模型别名: {error}");
+                }
+            }
             if let Ok(home) = app_handle.path().home_dir() {
                 let _guard = AGENT_CONFIG_FILE_LOCK.lock();
                 restore_all_agent_session_configurations(&home);
             }
             let process_state = app_handle.state::<CoreProcessState>();
-            let gui_config_state = app_handle.state::<GuiConfigState>();
             shutdown_managed_core(process_state.inner(), gui_config_state.inner());
         }
         _ => {}
@@ -17447,7 +17848,7 @@ data: {"delta":{"type":"text_delta","text":"H"}}
                 name: (*name).to_string(),
                 alias: None,
                 is_alias: false,
-                context_window: None,
+                context_window: Some(200_000),
             })
             .collect()
     }
@@ -17590,6 +17991,7 @@ data: {"delta":{"type":"text_delta","text":"H"}}
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "gpt-test",
+            &test_agent_models(&["gpt-test"]),
             None,
         )
         .unwrap();
@@ -18496,6 +18898,7 @@ model:
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "model-a",
+            &test_agent_models(&["model-a"]),
             None,
         )
         .unwrap();
@@ -18741,6 +19144,7 @@ model:
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "claude-test",
+            &test_agent_models(&["claude-test"]),
             None,
         )
         .unwrap();
@@ -18762,11 +19166,38 @@ model:
             sonnet: "gpt-sonnet".to_string(),
             haiku: "gpt-haiku".to_string(),
         };
+        let models = vec![
+            AgentModelOption {
+                name: "gpt-opus-base".to_string(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+            AgentModelOption {
+                name: mappings.opus.clone(),
+                alias: Some("gpt-opus-base".to_string()),
+                is_alias: true,
+                context_window: Some(128_000),
+            },
+            AgentModelOption {
+                name: mappings.sonnet.clone(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(272_000),
+            },
+            AgentModelOption {
+                name: mappings.haiku.clone(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(512_000),
+            },
+        ];
         let rendered = build_claude_agent_config(
             None,
             "http://127.0.0.1:8317",
             "test-key",
             "gpt-sonnet",
+            &models,
             Some(&mappings),
         )
         .unwrap();
@@ -18775,9 +19206,14 @@ model:
         assert_eq!(value["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"], "gpt-opus");
         assert_eq!(value["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"], "gpt-sonnet");
         assert_eq!(value["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "gpt-haiku");
+        assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "272000");
 
-        let environment =
-            claude_code_launch_environment("http://127.0.0.1:8317", "test-key", &mappings);
+        let environment = claude_code_launch_environment(
+            "http://127.0.0.1:8317",
+            "test-key",
+            &mappings,
+            claude_code_max_context_tokens(&mappings, &models).unwrap(),
+        );
         let read = |key: &str| {
             environment
                 .iter()
@@ -18790,6 +19226,23 @@ model:
         assert_eq!(read("ANTHROPIC_DEFAULT_OPUS_MODEL"), Some("gpt-opus"));
         assert_eq!(read("ANTHROPIC_DEFAULT_SONNET_MODEL"), Some("gpt-sonnet"));
         assert_eq!(read("ANTHROPIC_DEFAULT_HAIKU_MODEL"), Some("gpt-haiku"));
+        assert_eq!(read(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV), Some("272000"));
+    }
+
+    #[test]
+    fn claude_code_uses_200k_when_cpa_context_metadata_is_missing() {
+        let mappings = ClaudeDesktopModelMappings::all("custom-model");
+        let models = vec![AgentModelOption {
+            name: "custom-model".to_string(),
+            alias: None,
+            is_alias: false,
+            context_window: None,
+        }];
+
+        assert_eq!(
+            claude_code_max_context_tokens(&mappings, &models).unwrap(),
+            DEFAULT_CLAUDE_CONTEXT_WINDOW
+        );
     }
 
     #[test]
@@ -18803,10 +19256,13 @@ model:
         .unwrap();
 
         assert!(remove_claude_code_conflicting_api_key(&path).unwrap());
+        assert!(update_claude_code_context_window(&path, 272_000).unwrap());
+        assert!(!update_claude_code_context_window(&path, 272_000).unwrap());
         let value: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert!(value["env"].get("ANTHROPIC_API_KEY").is_none());
         assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "token");
+        assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "272000");
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -19274,7 +19730,7 @@ model:
             "data": [
                 {"id": "gpt-5", "display_name": "GPT 5", "context_length": 272000},
                 {"name": "claude-sonnet", "alias": "claude-sonnet-xhigh", "fork": true, "contextLength": "1000000"},
-                {"name": "hidden-original", "alias": "visible-alias", "context_window": 128000},
+                {"name": "hidden-original", "alias": "visible-alias", "ContextLength": 128000},
                 "deepseek-chat",
                 {"id": "GPT-5"},
                 {"id": ""}
@@ -19320,6 +19776,52 @@ model:
     }
 
     #[test]
+    fn claude_model_lists_mark_yaml_aliases_when_api_returns_only_model_ids() {
+        let mut models = test_agent_models(&[
+            "gpt-original",
+            "gpt-high",
+            "claude-opus-5",
+            "oauth-original",
+            "oauth-fast",
+        ]);
+        let yaml = r#"
+codex-api-key:
+  - api-key: test
+    models:
+      - name: gpt-original
+      - name: gpt-original
+        alias: gpt-high
+      - name: gpt-original
+        alias: claude-opus-5
+oauth-model-alias:
+  codex:
+    - name: oauth-original
+      alias: oauth-fast
+      fork: true
+"#;
+
+        mark_configured_agent_model_aliases(&mut models, yaml).unwrap();
+
+        let find = |name: &str| models.iter().find(|model| model.name == name).unwrap();
+        assert!(!find("gpt-original").is_alias);
+        assert_eq!(find("gpt-high").alias.as_deref(), Some("gpt-original"));
+        assert!(find("gpt-high").is_alias);
+        assert_eq!(find("claude-opus-5").alias.as_deref(), Some("gpt-original"));
+        assert!(find("claude-opus-5").is_alias);
+        assert_eq!(find("oauth-fast").alias.as_deref(), Some("oauth-original"));
+        assert!(find("oauth-fast").is_alias);
+    }
+
+    #[test]
+    fn exit_preserves_claude_client_configurations() {
+        let restored = agent_clients_restored_on_exit();
+        assert!(!restored.contains(&AgentClient::ClaudeCode));
+        assert!(!restored.contains(&AgentClient::ClaudeDesktop));
+        assert!(restored.contains(&AgentClient::Codex));
+        assert!(restored.contains(&AgentClient::OpenCode));
+    }
+
+    #[test]
     fn claude_desktop_aliases_expose_role_routes_only() {
         let input = "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1\n    models:\n      - name: gpt-5.6-sol\n";
         let mappings = ClaudeDesktopModelMappings {
@@ -19354,6 +19856,23 @@ model:
             CLAUDE_DESKTOP_HAIKU_MODEL_ID
         );
         assert_eq!(
+            configured_model_identity(&models[1]).unwrap().2.as_deref(),
+            Some(MANAGED_CLAUDE_OPUS_ALIAS_DISPLAY_NAME)
+        );
+        assert_eq!(
+            configured_model_identity(&models[2]).unwrap().2.as_deref(),
+            Some(MANAGED_CLAUDE_SONNET_ALIAS_DISPLAY_NAME)
+        );
+        assert_eq!(
+            configured_model_identity(&models[3]).unwrap().2.as_deref(),
+            Some(MANAGED_CLAUDE_HAIKU_ALIAS_DISPLAY_NAME)
+        );
+        assert!(!rendered.contains("models: [{"));
+        assert!(rendered.contains("\n      - name: gpt-5.6-sol\n"));
+        assert!(rendered.contains("\n        alias: claude-opus-5\n"));
+        assert!(rendered
+            .contains("\n        display-name: EasyCLIProxyAPI managed Claude Opus mapping\n"));
+        assert_eq!(
             ensure_claude_desktop_model_aliases_in_yaml(&rendered, &mappings, &available_models,)
                 .unwrap(),
             rendered
@@ -19361,8 +19880,82 @@ model:
     }
 
     #[test]
+    fn claude_managed_aliases_expand_flow_yaml_and_are_removed_selectively() {
+        let compact = "# keep this comment\ncodex-api-key: [{api-key: test, models: [{name: gpt-5.6-sol, alias: ''}]}]\ncredential-concurrency: {max-limit: 1000000, cleanup-interval: 5s}\n";
+        let mappings = ClaudeDesktopModelMappings::all("gpt-5.6-sol");
+        let available_models = test_agent_models(&["gpt-5.6-sol"]);
+        let rendered =
+            ensure_claude_desktop_model_aliases_in_yaml(compact, &mappings, &available_models)
+                .unwrap();
+
+        assert!(rendered.starts_with("# keep this comment\n"));
+        assert!(!rendered.contains("codex-api-key: ["));
+        assert!(!rendered.contains("credential-concurrency: {"));
+        assert!(rendered.contains("codex-api-key:\n  - api-key: test\n"));
+        assert!(rendered.contains("    models:\n      - name: gpt-5.6-sol\n"));
+
+        let cleaned = remove_managed_claude_model_aliases_in_yaml(&rendered).unwrap();
+        let value: serde_norway::Value = serde_norway::from_str(&cleaned).unwrap();
+        let root = value.as_mapping().unwrap();
+        let providers = yaml_mapping_value(root, "codex-api-key")
+            .and_then(serde_norway::Value::as_sequence)
+            .unwrap();
+        let models = yaml_mapping_value(providers[0].as_mapping().unwrap(), "models")
+            .and_then(serde_norway::Value::as_sequence)
+            .unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(
+            configured_model_identity(&models[0]).unwrap().0,
+            "gpt-5.6-sol"
+        );
+    }
+
+    #[test]
+    fn claude_alias_cleanup_does_not_delete_user_owned_routes() {
+        let input = format!(
+            "codex-api-key:\n  - api-key: test\n    models:\n      - name: user-opus\n        alias: {opus}\n        display-name: User managed route\n      - name: app-sonnet\n        alias: {sonnet}\n        display-name: {managed_sonnet}\n",
+            opus = CLAUDE_DESKTOP_OPUS_MODEL_ID,
+            sonnet = CLAUDE_DESKTOP_SONNET_MODEL_ID,
+            managed_sonnet = MANAGED_CLAUDE_SONNET_ALIAS_DISPLAY_NAME,
+        );
+
+        let cleaned = remove_managed_claude_model_aliases_in_yaml(&input).unwrap();
+        let value: serde_norway::Value = serde_norway::from_str(&cleaned).unwrap();
+        let root = value.as_mapping().unwrap();
+        assert_eq!(
+            configured_model_client_identity(root, CLAUDE_DESKTOP_OPUS_MODEL_ID)
+                .unwrap()
+                .0,
+            "user-opus"
+        );
+        assert!(configured_model_client_identity(root, CLAUDE_DESKTOP_SONNET_MODEL_ID).is_none());
+    }
+
+    #[test]
+    fn claude_legacy_aliases_are_adopted_and_moved_to_the_selected_model() {
+        let input = format!(
+            "codex-api-key:\n  - api-key: test\n    models:\n      - name: old-model\n      - name: new-model\n      - name: old-model\n        alias: {opus}\n",
+            opus = CLAUDE_DESKTOP_OPUS_MODEL_ID,
+        );
+        let mappings = ClaudeDesktopModelMappings::all("new-model");
+        let models = test_agent_models(&["old-model", "new-model"]);
+
+        let rendered =
+            ensure_claude_desktop_model_aliases_in_yaml(&input, &mappings, &models).unwrap();
+        let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
+        let root = value.as_mapping().unwrap();
+        assert_eq!(
+            configured_model_client_identity(root, CLAUDE_DESKTOP_OPUS_MODEL_ID)
+                .unwrap()
+                .0,
+            "new-model"
+        );
+        assert!(rendered.contains(MANAGED_CLAUDE_OPUS_ALIAS_DISPLAY_NAME));
+    }
+
+    #[test]
     fn claude_desktop_uses_selected_alias_directly_with_original_context() {
-        let input = "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1\n    models:\n      - name: gpt-original\n      - name: gpt-original\n        alias: gpt-high\n      - name: gpt-original\n        alias: claude-opus-5\n";
+        let input = "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1\n    models:\n      - name: gpt-original\n      - name: gpt-original\n        alias: gpt-high\n      - name: gpt-original\n        alias: claude-opus-5\n        display-name: EasyCLIProxyAPI managed Claude Opus mapping\n";
         let mappings = ClaudeDesktopModelMappings {
             opus: "gpt-high".to_string(),
             sonnet: "gpt-high".to_string(),
