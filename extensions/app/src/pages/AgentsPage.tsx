@@ -32,6 +32,7 @@ import codexIcon from '../assets/icons/codex.svg';
 import hermesIcon from '../assets/icons/hermes.png';
 import openclawIcon from '../assets/icons/openclaw.svg';
 import opencodeIcon from '../assets/icons/opencode.svg';
+import piIcon from '../assets/icons/pi-logo-on-light.svg';
 import {
   agentModelAlias,
   filterAgentModels,
@@ -51,7 +52,8 @@ type AgentClientId =
   | 'codex'
   | 'opencode'
   | 'openclaw'
-  | 'hermes';
+  | 'hermes'
+  | 'pi';
 
 type AgentModificationState = 'unconfigured' | 'applied' | 'invalid';
 
@@ -60,6 +62,7 @@ type AgentConfigStatus = {
   name: string;
   supportedPlatform: boolean;
   installed: boolean;
+  pluginInstalled: boolean;
   executablePath: string | null;
   launchTargets: AgentLaunchTarget[];
   version: string | null;
@@ -139,7 +142,7 @@ type AgentDefinition = {
   name: string;
   icon?: string;
   Icon?: ComponentType<{ size?: number; 'aria-hidden'?: boolean }>;
-  descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes';
+  descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes' | 'agents.description.pi';
 };
 
 type AgentSubpageId = 'core' | 'sessions';
@@ -186,6 +189,12 @@ const agentDefinitions: AgentDefinition[] = [
     name: 'Hermes Agent',
     icon: hermesIcon,
     descriptionKey: 'agents.description.hermes',
+  },
+  {
+    id: 'pi',
+    name: 'Pi',
+    icon: piIcon,
+    descriptionKey: 'agents.description.pi',
   },
 ];
 
@@ -268,6 +277,12 @@ const listStatusText = (status: AgentConfigStatus | undefined) => {
   if (!status) return translate(locale, 'agents.list.detecting');
   if (!status.supportedPlatform) return translate(locale, 'agents.list.unsupported');
   if (!status.installed) return translate(locale, 'agents.list.notInstalled');
+  if (status.id === 'pi' && !status.pluginInstalled) {
+    return translate(locale, 'agents.list.pluginNotInstalled');
+  }
+  if (status.id === 'pi' && status.configured) {
+    return translate(locale, 'agents.list.configured');
+  }
   if (status.modificationState === 'invalid') return translate(locale, 'agents.status.invalid');
   if (status.modificationState === 'applied') return translate(locale, 'agents.list.modified', { model: status.appliedModel ?? '—' });
   return status.version
@@ -538,7 +553,7 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'close-config' | 'default' | 'clear' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
+    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
@@ -614,6 +629,12 @@ export function AgentsPage() {
   }, [loadStatuses]);
 
   useEffect(() => {
+    if (selected === 'pi') {
+      setModels([]);
+      setModelLoading(false);
+      setModelError('');
+      return;
+    }
     void loadModels(selected);
   }, [loadModels, selected]);
 
@@ -668,6 +689,7 @@ export function AgentsPage() {
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
+  const isPiClient = selected === 'pi';
   const isClaudeModelMappingClient = selected === 'claude-code' || selected === 'claude-desktop';
   const claudeMappingModels = useMemo(
     () => filterAgentModelsByAlias(models, claudeCustomMapping),
@@ -738,9 +760,10 @@ export function AgentsPage() {
     activeStatus?.supportedPlatform
       && activeStatus.installed
       && !modelLoading
-      && (isClaudeModelMappingClient
+      && (isPiClient
+        || (isClaudeModelMappingClient
         ? claudeMappingsReady
-        : selectedModelOption),
+        : selectedModelOption)),
   );
   const launchEnabled = Boolean(
     activeStatus?.supportedPlatform
@@ -896,6 +919,19 @@ export function AgentsPage() {
       if (!handleOAuthLoginError(requestError, 'apply')) {
         setConfigurationError(String(requestError));
       }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const installPiProvider = async () => {
+    setBusyAction('install-pi');
+    setConfigurationError('');
+    try {
+      await invoke<AgentConfigActionResult>('install_pi_provider');
+      await reloadStatusesAfterAction();
+    } catch (requestError) {
+      setConfigurationError(String(requestError));
     } finally {
       setBusyAction(null);
     }
@@ -1217,7 +1253,7 @@ export function AgentsPage() {
                 </div>
               ) : null}
 
-              {!isClaudeModelMappingClient ? (
+              {!isClaudeModelMappingClient && !isPiClient ? (
                 <section className="agent-core-setting-section agent-model-section">
                   <div className="agent-section-heading">
                     <div><strong>{t('agents.useModel')}</strong></div>
@@ -1293,6 +1329,38 @@ export function AgentsPage() {
                 </section>
               ) : null}
 
+              {isPiClient ? (
+                <section className={`agent-core-setting-section agent-modification-actions ${activeStatus?.configured ? 'enabled' : ''}`}>
+                  <div className="agent-section-heading">
+                    <div>
+                      <strong>{t('agents.pi.installTitle')}</strong>
+                      <span>{t('agents.pi.installDescription')}</span>
+                    </div>
+                  </div>
+                  <div className="agent-modification-control">
+                    <div className="agent-modification-buttons">
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => void installPiProvider()}
+                        disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
+                      >
+                        {busyAction === 'install-pi' ? <LoaderCircle size={16} className="spin" /> : null}
+                        {busyAction === 'install-pi'
+                          ? t('agents.pi.installing')
+                          : activeStatus?.configured
+                            ? t('agents.pi.update')
+                            : t('agents.pi.install')}
+                      </button>
+                    </div>
+                    {configurationError ? (
+                      <span className="agent-inline-message error" role="alert" aria-live="polite">
+                        {configurationError}
+                      </span>
+                    ) : null}
+                  </div>
+                </section>
+              ) : (
               <section className={`agent-core-setting-section agent-modification-actions ${activeStatus?.modificationState === 'applied' ? 'enabled' : ''}`}>
                 <div className="agent-section-heading">
                   <div>
@@ -1377,6 +1445,7 @@ export function AgentsPage() {
                   ) : null}
                 </div>
               </section>
+              )}
 
               <div className="agent-config-footer">
                 <div className="agent-launch-control">

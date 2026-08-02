@@ -96,6 +96,7 @@ proxy. Supported clients include:
 - OpenCode
 - OpenClaw
 - Hermes Agent
+- Pi (with the CLIProxyAPI provider extension)
 
 For supported clients, the application can synchronize the available model catalog, select a
 default model, back up the original configuration before applying managed settings, restore the
