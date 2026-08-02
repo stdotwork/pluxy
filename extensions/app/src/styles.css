@@ -4019,7 +4019,7 @@ textarea:focus-visible {
 
 .thinking-effort-options {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -4049,6 +4049,19 @@ textarea:focus-visible {
 
 .thinking-effort-options button.custom.active {
   border-style: solid;
+}
+
+.thinking-effort-options button.fast {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.thinking-effort-options button.fast.active {
+  border-color: var(--theme-d7a447);
+  background: var(--theme-fff8eb);
+  color: var(--theme-805a24);
 }
 
 .thinking-effort-custom {
@@ -4275,6 +4288,12 @@ textarea:focus-visible {
   background: var(--theme-fff8eb);
   color: var(--theme-805a24);
   text-transform: none;
+}
+
+.thinking-effort-badge.fast {
+  border-color: var(--theme-d7a447);
+  background: var(--theme-fff8eb);
+  color: var(--theme-805a24);
 }
 
 @media (min-width: 1081px) {
