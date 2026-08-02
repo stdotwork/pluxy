@@ -5,6 +5,8 @@ src-tauri/target/
 bin-work/
 cpa-core/
 
+agent_docs
+
 *.log
 *.tmp
 misc/

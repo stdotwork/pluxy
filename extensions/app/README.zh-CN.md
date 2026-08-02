@@ -26,22 +26,22 @@ EasyCLIProxyAPI 是基于 [CLIProxyAPI](https://github.com/router-for-me/CLIProx
 
 ## 功能导览
 
-### 内核控制台与版本管理
+### 首页与本地 API 地址
 
-![内核控制台与版本管理](docs/images/1.png)
+![首页与本地 API 地址](docs/screenshots/zh-CN/1.png)
 
-内核页面集中展示本地代理服务的运行情况，并提供完整的控制能力：
+首页集中展示本地代理服务的运行情况，并提供常用的本地 API 地址：
 
 - 启动、关闭、重启和刷新 CLIProxyAPI 内核状态。
-- 查看安装状态、运行状态、进程 PID、监听端口和局域网访问设置。
-- 对比当前版本、最新版本和软件内置的内核版本。
-- 安装最新版、重新安装，或在无法连接 GitHub 时使用离线安装包。
+- 查看安装状态、运行状态、进程 PID、内核版本和软件版本。
 - 复制可直接使用的 OpenAI、Claude 和 Gemini 兼容 API 地址。
-- 在同一页面查看 EasyCLIProxyAPI 软件版本和本地连接状态。
+- 查看本地连接状态。
+
+内核安装、版本对比和离线安装功能位于 **版本管理** 页面。
 
 ### OAuth 账号授权
 
-![OAuth 账号授权](docs/images/2.png)
+![OAuth 账号授权](docs/screenshots/zh-CN/2.png)
 
 OAuth 页面集中管理支持的浏览器授权登录：
 
@@ -53,9 +53,9 @@ OAuth 页面集中管理支持的浏览器授权登录：
 
 EasyCLIProxyAPI 会自动打开浏览器授权页面；当浏览器无法自动跳转回来时，也支持手动完成回调流程。
 
-### API Provider 聚合管理
+### API 接入与 Provider 聚合
 
-![API Provider 聚合管理](docs/images/3.png)
+![API 接入与 Provider 聚合](docs/screenshots/zh-CN/3.png)
 
 API 接入页面按照协议或 Provider 管理上游 API 凭证和服务地址：
 
@@ -65,12 +65,24 @@ API 接入页面按照协议或 Provider 管理上游 API 凭证和服务地址�
 - Claude
 - Gemini
 
-你可以添加多个接入配置、搜索已有配置、刷新 Provider 状态，并通过统一的本地 CLIProxyAPI
-地址调用它们。请求和响应可以在 OpenAI、Claude、Gemini 及其他兼容协议之间转换。
+你可以添加多个接入配置、搜索已有配置、刷新 Provider 状态并执行健康检测，
+然后通过统一的本地 CLIProxyAPI 地址调用它们。请求和响应可以在 OpenAI、Claude、Gemini
+及其他兼容协议之间转换。
+
+### 使用记录与 Token 统计
+
+![使用记录与 Token 统计](docs/screenshots/zh-CN/4.png)
+
+使用记录页面帮助你了解本地请求活动和 Token 消耗情况：
+
+- 查看请求总数、Token 总量、成功率、TPS、缓存命中率和预估成本。
+- 按时间、模型、Provider、来源、密钥和结果筛选数据。
+- 查看请求与 Token 趋势，以及输入、输出、思考和缓存用量构成。
+- 浏览请求明细、分析视图和价格统计。
 
 ### 智能体客户端配置
 
-![智能体客户端配置](docs/images/4.png)
+![智能体客户端配置](docs/screenshots/zh-CN/5.png)
 
 智能体页面会检测本机已安装的桌面端和命令行客户端，并帮助它们连接本地代理。支持的客户端包括：
 
@@ -90,7 +102,6 @@ API 接入页面按照协议或 Provider 管理上游 API 凭证和服务地址�
 - 创建客户端可见的模型别名，并映射到 Provider 模型和推理等级。
 - 上传、下载、检查和管理认证文件。
 - 查看 Provider 配额和账号可用状态。
-- 浏览本地使用记录和 Token 统计数据。
 - 通过 macOS 菜单栏或 Windows 系统托盘保持软件在后台运行。
 
 ## 快速开始
@@ -99,8 +110,8 @@ API 接入页面按照协议或 Provider 管理上游 API 凭证和服务地址�
    下载对应操作系统的发行包。
 2. 解压 Windows 或 Linux 压缩包，macOS 用户打开 DMG。
 3. 启动 EasyCLIProxyAPI。
-4. 打开 **内核** 页面，安装内置版本或最新版本的 CLIProxyAPI 内核。
-5. 启动内核，然后复制所需的本地 API 地址，或配置 OAuth/API Provider。
+4. 打开 **版本管理** 页面，安装内置版本或最新版本的 CLIProxyAPI 内核。
+5. 返回 **首页** 启动内核，然后复制所需的本地 API 地址，或配置 OAuth/API Provider。
 
 ## 升级
 
