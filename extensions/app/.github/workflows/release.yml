@@ -190,8 +190,8 @@ jobs:
             throw new Error(`cpa-core must contain exactly one archive; found: ${entries.map((entry) => entry.name).join(', ')}`);
           }
           NODE
-      - name: Prepare v0.2.10 legacy updater bridge
-        if: matrix.os == 'windows' && steps.package.outputs.version == '0.2.10'
+      - name: Prepare Windows legacy updater payload
+        if: matrix.os == 'windows'
         shell: pwsh
         run: |
           $updateDir = "release/update-${{ matrix.arch }}"
@@ -201,11 +201,11 @@ jobs:
           $marker = Get-Content -Raw -LiteralPath "$updateDir/portable-app.json" | ConvertFrom-Json
           if ($marker.schemaVersion -ne 1 -or
               $marker.application -ne "EasyCLIProxyAPI" -or
-              $marker.version -ne "0.2.10" -or
+              $marker.version -ne "${{ steps.package.outputs.version }}" -or
               $marker.platform -ne "windows" -or
               $marker.arch -ne "${{ matrix.arch }}" -or
               $marker.autoUpdate -ne $true) {
-            throw "v0.2.10 legacy updater bridge does not match the Windows target"
+            throw "Legacy updater payload does not match the Windows target"
           }
       - name: Build signed macOS DMG
         if: matrix.os == 'darwin'
@@ -341,8 +341,6 @@ jobs:
       - name: Archive Windows release
         if: matrix.os == 'windows'
         shell: pwsh
-        env:
-          LEGACY_UPDATE_BRIDGE: ${{ steps.package.outputs.version == '0.2.10' }}
         run: |
           Compress-Archive -Path "release/${{ steps.package.outputs.stem }}" -DestinationPath "${{ steps.package.outputs.stem }}.zip"
           Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -360,20 +358,18 @@ jobs:
           } finally {
             $zip.Dispose()
           }
-          if ($env:LEGACY_UPDATE_BRIDGE -eq "true") {
-            $updateArchive = "EasyCLIProxyAPI-update-v0.2.10-Windows-${{ matrix.arch }}.zip"
-            Compress-Archive -Path "release/update-${{ matrix.arch }}/*" -DestinationPath $updateArchive
-            $updateZip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $updateArchive))
-            try {
-              $updateEntries = @($updateZip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-              if ($updateEntries.Count -ne 2 -or
-                  $updateEntries -notcontains "EasyCLIProxyAPI.exe" -or
-                  $updateEntries -notcontains "portable-app.json") {
-                throw "v0.2.10 legacy updater bridge contains unexpected entries: $($updateEntries -join ', ')"
-              }
-            } finally {
-              $updateZip.Dispose()
+          $updateArchive = "EasyCLIProxyAPI-update-v${{ steps.package.outputs.version }}-Windows-${{ matrix.arch }}.zip"
+          Compress-Archive -Path "release/update-${{ matrix.arch }}/*" -DestinationPath $updateArchive
+          $updateZip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $updateArchive))
+          try {
+            $updateEntries = @($updateZip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+            if ($updateEntries.Count -ne 2 -or
+                $updateEntries -notcontains "EasyCLIProxyAPI.exe" -or
+                $updateEntries -notcontains "portable-app.json") {
+              throw "Legacy updater ZIP contains unexpected entries: $($updateEntries -join ', ')"
             }
+          } finally {
+            $updateZip.Dispose()
           }
       - uses: actions/upload-artifact@v7
         with:
@@ -382,10 +378,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v7
-        if: matrix.os == 'windows' && steps.package.outputs.version == '0.2.10'
+        if: matrix.os == 'windows'
         with:
-          name: legacy-updater-bridge-windows-${{ matrix.arch }}
-          path: EasyCLIProxyAPI-update-v0.2.10-Windows-${{ matrix.arch }}.zip
+          name: portable-updater-windows-${{ matrix.arch }}
+          path: EasyCLIProxyAPI-update-v${{ steps.package.outputs.version }}-Windows-${{ matrix.arch }}.zip
           if-no-files-found: error
           retention-days: 14
   publish:

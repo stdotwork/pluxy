@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
   generatePortableUpdateManifest,
-  LEGACY_UPDATE_BRIDGE_VERSION,
 } from '../scripts/generate-portable-update-manifest.mjs';
 
 describe('Windows 便携更新清单', () => {
@@ -17,6 +16,10 @@ describe('Windows 便携更新清单', () => {
         aarch64: Buffer.from('aarch64 full portable package'),
       };
       for (const [arch, contents] of Object.entries(payloads)) {
+        await writeFile(
+          join(root, `EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip`),
+          Buffer.from(`${arch} legacy update package`),
+        );
         await writeFile(
           join(root, `EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip`),
           contents,
@@ -37,10 +40,14 @@ describe('Windows 便携更新清单', () => {
       for (const arch of ['amd64', 'aarch64'] as const) {
         const asset = manifest.assets[`windows-${arch}`];
         expect(asset.url).toBe(
+          `https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/v1.2.3/EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip`,
+        );
+        const fullAsset = manifest.fullAssets[`windows-${arch}`];
+        expect(fullAsset.url).toBe(
           `https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/v1.2.3/EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip`,
         );
-        expect(asset.sizeBytes).toBe(payloads[arch].byteLength);
-        expect(asset.sha256).toBe(createHash('sha256').update(payloads[arch]).digest('hex'));
+        expect(fullAsset.sizeBytes).toBe(payloads[arch].byteLength);
+        expect(fullAsset.sha256).toBe(createHash('sha256').update(payloads[arch]).digest('hex'));
       }
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -51,7 +58,7 @@ describe('Windows 便携更新清单', () => {
     const root = await mkdtemp(join(tmpdir(), 'easycli-manifest-missing-'));
     try {
       await writeFile(
-        join(root, 'EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip'),
+        join(root, 'EasyCLIProxyAPI-update-v1.2.3-Windows-amd64.zip'),
         'amd64',
       );
       await expect(generatePortableUpdateManifest({
@@ -65,28 +72,38 @@ describe('Windows 便携更新清单', () => {
     }
   });
 
-  test('v0.2.10 使用一次性旧版桥接资产，后续版本恢复完整包', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'easycli-manifest-bridge-'));
+  test('所有版本同时保留旧版更新包和完整包', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'easycli-manifest-dual-'));
     try {
       for (const arch of ['amd64', 'aarch64']) {
         await writeFile(
-          join(root, `EasyCLIProxyAPI-update-v${LEGACY_UPDATE_BRIDGE_VERSION}-Windows-${arch}.zip`),
-          `legacy bridge ${arch}`,
+          join(root, `EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip`),
+          `legacy update ${arch}`,
+        );
+        await writeFile(
+          join(root, `EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip`),
+          `full package ${arch}`,
         );
       }
       const manifest = await generatePortableUpdateManifest({
         directory: root,
         output: join(root, 'portable-update-windows.json'),
         repository: 'router-for-me/EasyCLIProxyAPI',
-        tag: `v${LEGACY_UPDATE_BRIDGE_VERSION}`,
+        tag: 'v1.2.3',
         publishedAt: '2026-08-02T00:00:00.000Z',
       });
 
       expect(manifest.assets['windows-amd64'].url).toEndWith(
-        '/EasyCLIProxyAPI-update-v0.2.10-Windows-amd64.zip',
+        '/EasyCLIProxyAPI-update-v1.2.3-Windows-amd64.zip',
       );
       expect(manifest.assets['windows-aarch64'].url).toEndWith(
-        '/EasyCLIProxyAPI-update-v0.2.10-Windows-aarch64.zip',
+        '/EasyCLIProxyAPI-update-v1.2.3-Windows-aarch64.zip',
+      );
+      expect(manifest.fullAssets['windows-amd64'].url).toEndWith(
+        '/EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip',
+      );
+      expect(manifest.fullAssets['windows-aarch64'].url).toEndWith(
+        '/EasyCLIProxyAPI-v1.2.3-Windows-aarch64.zip',
       );
     } finally {
       await rm(root, { recursive: true, force: true });

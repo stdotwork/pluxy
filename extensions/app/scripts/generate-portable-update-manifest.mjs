@@ -3,8 +3,6 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const LEGACY_UPDATE_BRIDGE_VERSION = '0.2.10';
-
 export async function generatePortableUpdateManifest({
   directory,
   output,
@@ -31,21 +29,23 @@ export async function generatePortableUpdateManifest({
   }
 
   const assets = {};
-  const useLegacyBridgeAssets = version === LEGACY_UPDATE_BRIDGE_VERSION;
+  const fullAssets = {};
   for (const arch of ['amd64', 'aarch64']) {
-    const filename = useLegacyBridgeAssets
-      ? `EasyCLIProxyAPI-update-${tag}-Windows-${arch}.zip`
-      : `EasyCLIProxyAPI-${tag}-Windows-${arch}.zip`;
-    const path = join(resolvedDirectory, filename);
-    const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
-    if (!metadata.isFile() || metadata.size === 0) {
-      throw new Error(`Portable release asset is empty or not a file: ${filename}`);
+    for (const [collection, filename] of [
+      [assets, `EasyCLIProxyAPI-update-${tag}-Windows-${arch}.zip`],
+      [fullAssets, `EasyCLIProxyAPI-${tag}-Windows-${arch}.zip`],
+    ]) {
+      const path = join(resolvedDirectory, filename);
+      const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
+      if (!metadata.isFile() || metadata.size === 0) {
+        throw new Error(`Portable release asset is empty or not a file: ${filename}`);
+      }
+      collection[`windows-${arch}`] = {
+        url: `https://github.com/${resolvedRepository}/releases/download/${tag}/${filename}`,
+        sha256: createHash('sha256').update(contents).digest('hex'),
+        sizeBytes: metadata.size,
+      };
     }
-    assets[`windows-${arch}`] = {
-      url: `https://github.com/${resolvedRepository}/releases/download/${tag}/${filename}`,
-      sha256: createHash('sha256').update(contents).digest('hex'),
-      sizeBytes: metadata.size,
-    };
   }
 
   const manifest = {
@@ -54,6 +54,7 @@ export async function generatePortableUpdateManifest({
     publishedAt,
     releaseUrl: `https://github.com/${resolvedRepository}/releases/tag/${tag}`,
     assets,
+    fullAssets,
   };
 
   await writeFile(resolvedOutput, `${JSON.stringify(manifest, null, 2)}\n`);
