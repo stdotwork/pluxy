@@ -57,10 +57,12 @@ describe('API 接入配置合并', () => {
       apiKey: 'deepseek-key',
       models: discovered,
     });
-    const result = buildProviderRecord('openai-compatibility', prepared);
+    const identified = applyProviderRemarkIdentity('deepseek', prepared);
+    const result = buildProviderRecord('openai-compatibility', identified);
 
     expect(draft.name).toBe('DeepSeek');
-    expect(draft.remark).toBe('DeepSeek');
+    expect(draft.remark).toBe('');
+    expect(identified.name).toBe('DeepSeek');
     expect(draft.baseUrl).toBe(DEEPSEEK_BASE_URL);
     expect(draft.models).toEqual([]);
     expect(result).toMatchObject({

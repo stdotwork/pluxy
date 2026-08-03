@@ -101,12 +101,12 @@ export type ProviderDraft = {
 };
 
 const providerDefinitions: ProviderDefinition[] = [
-  { id: 'codex-api-key', section: 'codex-api-key', responseKey: 'codex-api-key', label: 'Codex', icon: codexIcon, openAi: false },
+  { id: 'codex-api-key', section: 'codex-api-key', responseKey: 'codex-api-key', label: 'Codex API', icon: codexIcon, openAi: false },
   {
     id: 'openai-compatibility',
     section: 'openai-compatibility',
     responseKey: 'openai-compatibility',
-    label: 'OpenAI Compatible',
+    label: 'OpenAI 兼容',
     icon: openaiIcon,
     openAi: true,
   },
@@ -356,41 +356,45 @@ const thinkingLevelsFromModels = (models: ModelOption[]): string[] => {
   return levels;
 };
 
-const draftFromRow = (row: ProviderRow): ProviderDraft => ({
-  name: row.name,
-  apiKey: definitionFor(row.section).openAi ? row.apiKeys.join('\n') : row.apiKey,
-  remark: row.remark || (definitionFor(row.section).openAi ? row.name : ''),
-  baseUrl: row.baseUrl,
-  priority: row.priority === null ? '' : String(row.priority),
-  models: row.models,
-  prefix: readString(row.record, 'prefix'),
-  headersText: isRecord(row.record.headers)
-    ? Object.entries(row.record.headers)
-      .map(([key, value]) => `${key}: ${String(value)}`)
-      .join('\n')
-    : '',
-  excludedModelsText: Array.isArray(row.record['excluded-models'])
-    ? row.record['excluded-models'].map(String).filter((model) => model.trim() !== '*').join('\n')
-    : '',
-  disableCooling: readBoolean(row.record, 'disable-cooling', 'disableCooling'),
-  websockets: readBoolean(row.record, 'websockets'),
-  testModel: readString(row.record, 'test-model', 'testModel'),
-  thinkingLevels: definitionFor(row.section).openAi
-    ? thinkingLevelsFromModels(row.models)
-    : undefined,
-  disabled: row.disabled,
-  cloakMode: isRecord(row.record.cloak) ? readString(row.record.cloak, 'mode') : '',
-  cloakStrictMode: isRecord(row.record.cloak)
-    ? readBoolean(row.record.cloak, 'strict-mode', 'strictMode')
-    : false,
-  cloakSensitiveWordsText:
-    isRecord(row.record.cloak) && Array.isArray(row.record.cloak['sensitive-words'])
-      ? row.record.cloak['sensitive-words'].map(String).join('\n')
+const draftFromRow = (row: ProviderRow): ProviderDraft => {
+  const definition = definitionFor(row.section);
+  const isDeepSeek = row.section === 'openai-compatibility' && isDeepSeekRecord(row.record);
+  return {
+    name: row.name,
+    apiKey: definition.openAi ? row.apiKeys.join('\n') : row.apiKey,
+    remark: row.remark || (definition.openAi && !isDeepSeek ? row.name : ''),
+    baseUrl: row.baseUrl,
+    priority: row.priority === null ? '' : String(row.priority),
+    models: row.models,
+    prefix: readString(row.record, 'prefix'),
+    headersText: isRecord(row.record.headers)
+      ? Object.entries(row.record.headers)
+        .map(([key, value]) => `${key}: ${String(value)}`)
+        .join('\n')
       : '',
-  cloakCacheUserId: isRecord(row.record.cloak)
-    ? readBoolean(row.record.cloak, 'cache-user-id', 'cacheUserId')
-    : false,
-});
+    excludedModelsText: Array.isArray(row.record['excluded-models'])
+      ? row.record['excluded-models'].map(String).filter((model) => model.trim() !== '*').join('\n')
+      : '',
+    disableCooling: readBoolean(row.record, 'disable-cooling', 'disableCooling'),
+    websockets: readBoolean(row.record, 'websockets'),
+    testModel: readString(row.record, 'test-model', 'testModel'),
+    thinkingLevels: definition.openAi
+      ? thinkingLevelsFromModels(row.models)
+      : undefined,
+    disabled: row.disabled,
+    cloakMode: isRecord(row.record.cloak) ? readString(row.record.cloak, 'mode') : '',
+    cloakStrictMode: isRecord(row.record.cloak)
+      ? readBoolean(row.record.cloak, 'strict-mode', 'strictMode')
+      : false,
+    cloakSensitiveWordsText:
+      isRecord(row.record.cloak) && Array.isArray(row.record.cloak['sensitive-words'])
+        ? row.record.cloak['sensitive-words'].map(String).join('\n')
+        : '',
+    cloakCacheUserId: isRecord(row.record.cloak)
+      ? readBoolean(row.record.cloak, 'cache-user-id', 'cacheUserId')
+      : false,
+  };
+};
 
 const emptyProviderDraft = (): ProviderDraft => ({
   name: '',
@@ -419,7 +423,7 @@ export const createProviderDraft = (category: ProviderCategory): ProviderDraft =
   return {
     ...draft,
     name: 'DeepSeek',
-    remark: 'DeepSeek',
+    remark: '',
     baseUrl: DEEPSEEK_BASE_URL,
     thinkingLevels: [...DEEPSEEK_THINKING_LEVELS],
   };
@@ -428,9 +432,11 @@ export const createProviderDraft = (category: ProviderCategory): ProviderDraft =
 export const applyProviderRemarkIdentity = (
   category: ProviderCategory,
   draft: ProviderDraft,
-): ProviderDraft => definitionFor(category).openAi
-  ? { ...draft, name: draft.remark.trim() }
-  : draft;
+): ProviderDraft => category === 'deepseek'
+  ? { ...draft, name: draft.name.trim() || 'DeepSeek' }
+  : definitionFor(category).openAi
+    ? { ...draft, name: draft.remark.trim() }
+    : draft;
 
 export const applyProviderPreset = (
   category: ProviderCategory,
@@ -775,13 +781,14 @@ export function ApiAccessPage() {
       models: preparedDraft.models.filter((model) => model.name.trim()),
     };
     const baseUrlRequired = definition.openAi || definition.section === 'codex-api-key';
+    const remarkRequired = definition.openAi && activeCategory !== 'deepseek';
     const parsedApiKeys = preparedDraft.apiKey
       .split(/\r?\n/)
       .map((value) => value.trim())
       .filter(Boolean);
     if (
       parsedApiKeys.length === 0
-      || (definition.openAi && !preparedDraft.remark.trim())
+      || (remarkRequired && !preparedDraft.remark.trim())
       || (baseUrlRequired && !preparedDraft.baseUrl.trim())
     ) {
       setError(
