@@ -5305,6 +5305,10 @@ textarea:focus-visible {
   min-height: 76px;
 }
 
+.agent-status-grid.codex-status-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .agent-status-grid > div {
   display: grid;
   min-width: 0;
@@ -7280,6 +7284,10 @@ textarea:focus-visible {
   .agent-status-grid {
     grid-template-columns: 1fr;
     min-height: 0;
+  }
+
+  .agent-status-grid.codex-status-grid {
+    grid-template-columns: 1fr;
   }
 
   .codex-session-metrics {

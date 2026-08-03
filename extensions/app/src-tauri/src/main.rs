@@ -657,6 +657,8 @@ struct AgentConfigStatus {
     executable_path: Option<String>,
     launch_targets: Vec<AgentLaunchTarget>,
     version: Option<String>,
+    cli_version: Option<String>,
+    app_version: Option<String>,
     config_paths: Vec<String>,
     config_exists: bool,
     config_valid: bool,
@@ -3308,6 +3310,7 @@ fn inspect_pi_provider_status(home: &Path, port: u16, api_key: &str) -> AgentCon
         "unconfigured"
     };
     let error = errors.into_iter().next();
+    let cli_version = executable.as_deref().and_then(read_agent_version);
     AgentConfigStatus {
         id: PI_AGENT_ID.to_string(),
         name: PI_AGENT_NAME.to_string(),
@@ -3316,7 +3319,9 @@ fn inspect_pi_provider_status(home: &Path, port: u16, api_key: &str) -> AgentCon
         plugin_installed,
         executable_path: launch_targets.first().map(|target| target.detail.clone()),
         launch_targets,
-        version: executable.as_deref().and_then(read_agent_version),
+        version: cli_version.clone(),
+        cli_version,
+        app_version: None,
         config_paths: vec![path_to_string(&config_path), path_to_string(&settings_path)],
         config_exists,
         config_valid,
@@ -3692,18 +3697,20 @@ fn inspect_agent_config(
     };
     let launch_targets = agent_launch_targets(client, home);
     let executable = find_agent_executable(client, home);
-    let version = if client == AgentClient::ClaudeDesktop {
-        read_claude_desktop_version(home)
-    } else {
-        executable.as_deref().and_then(read_agent_version)
+    let cli_version = executable.as_deref().and_then(read_agent_version);
+    let app_version = match client {
+        AgentClient::ClaudeDesktop => read_claude_desktop_version(home),
+        AgentClient::Codex => read_codex_app_version(home),
+        _ => None,
     };
-    let installed = version.is_some();
+    let version = cli_version.clone().or_else(|| app_version.clone());
+    let installed = agent_client_is_installed(client, &launch_targets, version.as_deref());
     let mut warnings = Vec::new();
     if !client.supported_platform() {
         warnings.push("当前平台不支持 Claude Desktop 3P 配置".to_string());
     } else if launch_targets.is_empty() && config_exists {
         warnings.push("只检测到配置文件，未在 PATH 中找到客户端命令".to_string());
-    } else if !launch_targets.is_empty() && version.is_none() {
+    } else if !installed && !launch_targets.is_empty() && version.is_none() {
         warnings.push("检测到客户端入口，但无法读取有效版本，未标记为已安装".to_string());
     }
     if let Some(message) = error.as_ref() {
@@ -3721,6 +3728,8 @@ fn inspect_agent_config(
         executable_path: launch_targets.first().map(|target| target.detail.clone()),
         launch_targets,
         version,
+        cli_version,
+        app_version,
         config_paths: paths.iter().map(|path| path_to_string(path)).collect(),
         config_exists,
         config_valid,
@@ -3954,6 +3963,22 @@ fn is_managed_agent_base_url(value: &str) -> bool {
     value.starts_with("http://127.0.0.1:") || value.starts_with("http://localhost:")
 }
 
+fn agent_client_is_installed(
+    client: AgentClient,
+    launch_targets: &[AgentLaunchTarget],
+    version: Option<&str>,
+) -> bool {
+    if client == AgentClient::Codex {
+        // Codex can be installed as either a CLI or a desktop app. Discovery
+        // of either real entry is enough; version lookup is independent.
+        launch_targets
+            .iter()
+            .any(|target| target.id == "cli" || target.id == "app")
+    } else {
+        version.is_some()
+    }
+}
+
 fn agent_launch_targets(client: AgentClient, home: &Path) -> Vec<AgentLaunchTarget> {
     let mut targets = Vec::new();
     if client == AgentClient::ClaudeDesktop {
@@ -3973,12 +3998,6 @@ fn agent_launch_targets(client: AgentClient, home: &Path) -> Vec<AgentLaunchTarg
                 id: "app".to_string(),
                 label: "ChatGPT App".to_string(),
                 detail: codex_app_target_detail(&target),
-            });
-        } else if let Some(executable) = find_agent_executable(AgentClient::Codex, home) {
-            targets.push(AgentLaunchTarget {
-                id: "app".to_string(),
-                label: "ChatGPT App".to_string(),
-                detail: format!("{} app", path_to_string(&executable)),
             });
         }
     }
@@ -4089,6 +4108,49 @@ fn read_claude_desktop_version(home: &Path) -> Option<String> {
     }
     #[cfg(not(target_os = "windows"))]
     find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path))
+}
+
+fn read_codex_app_version(home: &Path) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        match find_codex_app_target(home)? {
+            CodexAppTarget::WindowsAppId(_) => read_windows_codex_store_version(),
+            CodexAppTarget::Application(path) => {
+                read_windows_executable_version(&path).or_else(|| read_agent_version(&path))
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let CodexAppTarget::Application(path) = find_codex_app_target(home)?;
+        read_macos_app_version(&path)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = home;
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_app_version(application: &Path) -> Option<String> {
+    let info_plist = application.join("Contents/Info.plist");
+    for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
+        let output = Command::new("/usr/bin/plutil")
+            .args(["-extract", key, "raw", "-o", "-"])
+            .arg(&info_plist)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            continue;
+        }
+        if let Some(version) =
+            normalize_detected_agent_version(&String::from_utf8_lossy(&output.stdout))
+        {
+            return Some(version);
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "windows")]
@@ -4240,6 +4302,42 @@ if ($package -and $package.Version) {
 }
 
 #[cfg(target_os = "windows")]
+fn read_windows_codex_store_version() -> Option<String> {
+    const VERSION_SCRIPT: &str = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+$package = @(Get-AppxPackage) |
+    Where-Object {
+        $_.Name -in @('OpenAI.Codex', 'OpenAI.CodexBeta', 'OpenAI.ChatGPT') -or
+        $_.PackageFamilyName -match '^OpenAI\.(Codex|CodexBeta|ChatGPT)_'
+    } |
+    Sort-Object { [version]$_.Version } -Descending |
+    Select-Object -First 1
+if ($package -and $package.Version) {
+    Write-Output "VERSION:$($package.Version)"
+}
+"#;
+
+    let encoded_command = windows_powershell_encoded_command(VERSION_SCRIPT);
+    let mut command = Command::new(windows_powershell_executable());
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        &encoded_command,
+    ]);
+    configure_background_command(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_windows_codex_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(target_os = "windows")]
 fn find_windows_registered_codex_app_target() -> Option<CodexAppTarget> {
     const DISCOVERY_SCRIPT: &str = r#"
 $ErrorActionPreference = 'SilentlyContinue'
@@ -4343,6 +4441,43 @@ fn windows_powershell_encoded_command(script: &str) -> String {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_powershell_single_quoted_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_executable_version(path: &Path) -> Option<String> {
+    let path = windows_powershell_single_quoted_literal(&path_to_string(path));
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$item = Get-Item -LiteralPath {path}
+$version = $item.VersionInfo.ProductVersion
+if ($version) {{
+    Write-Output "VERSION:$version"
+}}
+"#
+    );
+    let encoded_command = windows_powershell_encoded_command(&script);
+    let mut command = Command::new(windows_powershell_executable());
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        &encoded_command,
+    ]);
+    configure_background_command(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_windows_codex_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(target_os = "windows")]
 fn parse_windows_codex_app_discovery_output(output: &str) -> Option<CodexAppTarget> {
     output.lines().find_map(|line| {
         let line = line.trim();
@@ -4366,6 +4501,15 @@ fn parse_windows_claude_desktop_discovery_output(output: &str) -> Option<ClaudeD
 
 #[cfg(target_os = "windows")]
 fn parse_windows_claude_desktop_version_output(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("VERSION:")
+            .and_then(normalize_detected_agent_version)
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_codex_version_output(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         line.trim()
             .strip_prefix("VERSION:")
@@ -20826,6 +20970,32 @@ oauth-model-alias:
         assert_eq!(GuiConfigFile::default().locale, "zh-CN");
     }
 
+    #[test]
+    fn codex_installation_is_detected_from_either_cli_or_app_entry() {
+        let cli_target = vec![AgentLaunchTarget {
+            id: "cli".to_string(),
+            label: "Codex CLI".to_string(),
+            detail: "codex".to_string(),
+        }];
+        let app_target = vec![AgentLaunchTarget {
+            id: "app".to_string(),
+            label: "ChatGPT App".to_string(),
+            detail: "Microsoft Store · OpenAI.Codex_2p2nqsd0c76g0!App".to_string(),
+        }];
+
+        assert!(agent_client_is_installed(
+            AgentClient::Codex,
+            &cli_target,
+            None
+        ));
+        assert!(agent_client_is_installed(
+            AgentClient::Codex,
+            &app_target,
+            None
+        ));
+        assert!(!agent_client_is_installed(AgentClient::Codex, &[], None));
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_chatgpt_discovery_parser_accepts_registered_app_and_executable() {
@@ -20893,6 +21063,12 @@ oauth-model-alias:
         );
         assert!(parse_windows_claude_desktop_version_output("VERSION:\r\n").is_none());
         assert!(parse_windows_claude_desktop_version_output("VERSION:unknown\r\n").is_none());
+        assert_eq!(
+            parse_windows_codex_version_output("VERSION:26.727.6591.0\r\n").as_deref(),
+            Some("26.727.6591.0")
+        );
+        assert!(parse_windows_codex_version_output("VERSION:\r\n").is_none());
+        assert!(parse_windows_codex_version_output("VERSION:unknown\r\n").is_none());
     }
 
     #[test]

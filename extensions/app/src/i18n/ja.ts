@@ -556,6 +556,8 @@ export const jaOverrides = {
   'agents.clientDetected': 'クライアントを検出しました',
   'agents.clientNotDetected': 'クライアントを検出できません',
   'agents.clientVersion': 'クライアントバージョン',
+  'agents.cliVersion': 'CLI バージョン',
+  'agents.appVersion': 'App バージョン',
   'agents.notFetched': '未取得',
   'agents.useModel': '使用モデル',
   'agents.pending': '未適用',

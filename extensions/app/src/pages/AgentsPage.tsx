@@ -66,6 +66,8 @@ type AgentConfigStatus = {
   executablePath: string | null;
   launchTargets: AgentLaunchTarget[];
   version: string | null;
+  cliVersion: string | null;
+  appVersion: string | null;
   configValid: boolean;
   configured: boolean;
   currentModel: string | null;
@@ -1259,15 +1261,28 @@ export function AgentsPage() {
               role="tabpanel"
               aria-labelledby="agent-subpage-tab-core"
             >
-              <div className="agent-status-grid">
+              <div className={`agent-status-grid ${selected === 'codex' ? 'codex-status-grid' : ''}`}>
                 <div>
                   <span><BadgeCheck size={14} />{t('agents.installStatus')}</span>
                   <strong>{activeStatus?.installed ? t('agents.clientDetected') : t('agents.clientNotDetected')}</strong>
                 </div>
-                <div>
-                  <span>{t('agents.clientVersion')}</span>
-                  <strong title={activeStatus?.version ?? undefined}>{activeStatus?.version ?? t('agents.notFetched')}</strong>
-                </div>
+                {selected === 'codex' ? (
+                  <>
+                    <div>
+                      <span>{t('agents.cliVersion')}</span>
+                      <strong title={activeStatus?.cliVersion ?? undefined}>{activeStatus?.cliVersion ?? t('agents.notFetched')}</strong>
+                    </div>
+                    <div>
+                      <span>{t('agents.appVersion')}</span>
+                      <strong title={activeStatus?.appVersion ?? undefined}>{activeStatus?.appVersion ?? t('agents.notFetched')}</strong>
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <span>{t('agents.clientVersion')}</span>
+                    <strong title={activeStatus?.version ?? undefined}>{activeStatus?.version ?? t('agents.notFetched')}</strong>
+                  </div>
+                )}
               </div>
 
               {activeStatus?.error || (!isPiClient && activeStatus?.warnings.length) ? (
