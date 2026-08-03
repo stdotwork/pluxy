@@ -144,7 +144,7 @@ export function ThinkingAliasesPage() {
   const [thinkingSources, setThinkingSources] = useState<ThinkingAliasSource[]>([]);
   const [speedSources, setSpeedSources] = useState<ThinkingAliasSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState('');
-  const [effort, setEffort] = useState('xhigh');
+  const [effort, setEffort] = useState('');
   const [fastEnabled, setFastEnabled] = useState(false);
   const [customEffortOpen, setCustomEffortOpen] = useState(false);
   const [alias, setAlias] = useState('');
@@ -253,7 +253,7 @@ export function ThinkingAliasesPage() {
       setEffort('');
       setFastEnabled(source.supportsFast);
     } else {
-      setEffort('xhigh');
+      setEffort('');
       setFastEnabled(false);
     }
     setCustomEffortOpen(false);
@@ -439,7 +439,7 @@ export function ThinkingAliasesPage() {
                       && nextSearch.trim().toLowerCase() !== selectedSource.model.trim().toLowerCase()
                     ) {
                       setSelectedSourceId('');
-                      setEffort('xhigh');
+                      setEffort('');
                       setFastEnabled(false);
                       setCustomEffortOpen(false);
                       setAlias('');
