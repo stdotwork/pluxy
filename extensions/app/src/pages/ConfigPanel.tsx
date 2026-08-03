@@ -83,6 +83,7 @@ export function ConfigPanelPage() {
   const [softwareSettings, setSoftwareSettings] = useState<GuiSettings | null>(null);
   const [softwareSettingsLoading, setSoftwareSettingsLoading] = useState(true);
   const [softwareCloseBehaviorDraft, setSoftwareCloseBehaviorDraft] = useState<CloseBehavior>('ask');
+  const [softwareSavedStatusVisible, setSoftwareSavedStatusVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [busyAction, setBusyAction] = useState<ConfigAction>(null);
@@ -193,6 +194,7 @@ export function ConfigPanelPage() {
 
   async function loadSoftwareSettings() {
     setSoftwareSettingsLoading(true);
+    setSoftwareSavedStatusVisible(false);
     try {
       const result = await invoke<GuiSettings>('get_gui_settings');
       setSoftwareSettings(result);
@@ -470,9 +472,11 @@ export function ConfigPanelPage() {
       });
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
+      setSoftwareSavedStatusVisible(true);
       showNotice(t('config.notice.softwareCloseBehaviorUpdated'), 'success');
     } catch (error) {
       setSoftwareCloseBehaviorDraft(softwareSettings.closeBehavior);
+      setSoftwareSavedStatusVisible(false);
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
     } finally {
       setBusyAction(null);
@@ -500,6 +504,19 @@ export function ConfigPanelPage() {
             : '';
   const softwareCloseBehaviorDirty = softwareSettings !== null
     && softwareCloseBehaviorDraft !== softwareSettings.closeBehavior;
+  const softwareStatusLabel = softwareSettingsLoading
+    ? t('common.loading')
+    : softwareSettings === null
+      ? t('common.unavailable')
+      : softwareCloseBehaviorDirty
+        ? t('config.network.unsaved')
+        : softwareSavedStatusVisible
+          ? t('config.network.saved')
+          : '';
+  const softwareStatusIsSaved = !softwareSettingsLoading
+    && softwareSettings !== null
+    && !softwareCloseBehaviorDirty
+    && softwareSavedStatusVisible;
   const networkStatusIsSaved = !loading
     && settings !== null
     && busyAction === null
@@ -540,18 +557,6 @@ export function ConfigPanelPage() {
         </button>
         <button
           type="button"
-          id="config-subpage-tab-software"
-          role="tab"
-          className={activeSubpage === 'software' ? 'active' : ''}
-          aria-selected={activeSubpage === 'software'}
-          aria-controls="config-subpage-panel-software"
-          tabIndex={activeSubpage === 'software' ? 0 : -1}
-          onClick={() => setActiveSubpage('software')}
-        >
-          {t('config.tabs.software')}
-        </button>
-        <button
-          type="button"
           id="config-subpage-tab-aliases"
           role="tab"
           className={activeSubpage === 'aliases' ? 'active' : ''}
@@ -561,6 +566,18 @@ export function ConfigPanelPage() {
           onClick={() => setActiveSubpage('aliases')}
         >
           {t('app.nav.thinkingAliases')}
+        </button>
+        <button
+          type="button"
+          id="config-subpage-tab-software"
+          role="tab"
+          className={activeSubpage === 'software' ? 'active' : ''}
+          aria-selected={activeSubpage === 'software'}
+          aria-controls="config-subpage-panel-software"
+          tabIndex={activeSubpage === 'software' ? 0 : -1}
+          onClick={() => setActiveSubpage('software')}
+        >
+          {t('config.tabs.software')}
         </button>
       </div>
 
@@ -1008,15 +1025,11 @@ export function ConfigPanelPage() {
                 <h2>{t('config.software.title')}</h2>
               </div>
               <div className="config-heading-actions">
-                <span className={`state-pill ${softwareSettings && !softwareCloseBehaviorDirty ? 'success' : ''}`}>
-                  {softwareSettingsLoading
-                    ? t('common.loading')
-                    : softwareSettings === null
-                      ? t('common.unavailable')
-                      : softwareCloseBehaviorDirty
-                        ? t('config.network.unsaved')
-                        : t('config.network.saved')}
-                </span>
+                {softwareStatusLabel ? (
+                  <span className={`state-pill ${softwareStatusIsSaved ? 'success' : ''}`}>
+                    {softwareStatusLabel}
+                  </span>
+                ) : null}
                 <button
                   type="button"
                   className="primary-button compact-button"
@@ -1029,10 +1042,8 @@ export function ConfigPanelPage() {
               </div>
             </div>
             <div className="config-software-content">
-              <div className="config-management-description">
-                <strong>{t('config.software.closeBehavior')}</strong>
+              <div className="config-software-description">
                 <p>{t('config.software.description')}</p>
-                <small>{t('config.software.closeBehaviorHint')}</small>
               </div>
               <label className="config-software-field">
                 <span>{t('config.software.closeBehavior')}</span>
@@ -1040,7 +1051,10 @@ export function ConfigPanelPage() {
                   className="config-network-input"
                   value={softwareCloseBehaviorDraft}
                   disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
-                  onChange={(event) => setSoftwareCloseBehaviorDraft(event.currentTarget.value as CloseBehavior)}
+                  onChange={(event) => {
+                    setSoftwareSavedStatusVisible(false);
+                    setSoftwareCloseBehaviorDraft(event.currentTarget.value as CloseBehavior);
+                  }}
                 >
                   <option value="ask">{t('config.software.behavior.ask')}</option>
                   <option value="minimize-to-tray">{t('config.software.behavior.minimize')}</option>
