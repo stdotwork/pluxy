@@ -353,6 +353,8 @@ struct PortableUpdateManifest {
     published_at: String,
     release_url: String,
     assets: std::collections::HashMap<String, PortableUpdateAsset>,
+    #[serde(default)]
+    full_assets: Option<std::collections::HashMap<String, PortableUpdateAsset>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -10045,9 +10047,8 @@ async fn check_app_update(
     let current_version = normalize_version(env!("CARGO_PKG_VERSION"));
     let update_available = is_app_update_available(&current_version, &latest_version)?;
     let target = portable_update_target();
-    let asset = target
-        .and_then(|(key, _)| manifest.assets.get(key))
-        .cloned();
+    let asset_catalog = manifest.full_assets.as_ref().unwrap_or(&manifest.assets);
+    let asset = target.and_then(|(key, _)| asset_catalog.get(key)).cloned();
     let portable_support = target
         .map(|(_, arch)| validate_local_portable_app_manifest(arch))
         .transpose()?;
@@ -10177,6 +10178,31 @@ fn validate_portable_update_manifest(manifest: &PortableUpdateManifest) -> Resul
         );
         if asset.url != full_package_url && asset.url != legacy_package_url {
             return Err(format!("软件更新资产名称与 {key} 不匹配"));
+        }
+    }
+    if let Some(full_assets) = &manifest.full_assets {
+        if full_assets.len() != 2 {
+            return Err(
+                "Full update asset catalog must contain both Windows architectures".to_string(),
+            );
+        }
+        for (key, arch) in [("windows-amd64", "amd64"), ("windows-aarch64", "aarch64")] {
+            let asset = full_assets
+                .get(key)
+                .ok_or_else(|| format!("Full update asset catalog is missing {key}"))?;
+            validate_portable_update_asset(asset)?;
+            let package_name = format!(
+                "EasyCLIProxyAPI-v{}-Windows-{arch}.zip",
+                manifest.version.trim().trim_start_matches('v')
+            );
+            let expected_url = format!(
+                "{APP_RELEASE_DOWNLOAD_PREFIX}v{}/{}",
+                manifest.version.trim().trim_start_matches('v'),
+                package_name
+            );
+            if asset.url != expected_url {
+                return Err(format!("Full update asset name does not match {key}"));
+            }
         }
     }
     Ok(())
@@ -22406,6 +22432,7 @@ custom_option = "keep-original"
             ]
             .into_iter()
             .collect(),
+            full_assets: None,
         }
     }
 
@@ -22424,6 +22451,35 @@ custom_option = "keep-original"
             portable_update_test_legacy_asset("1.2.3", "aarch64"),
         );
         assert!(validate_portable_update_manifest(&legacy_manifest).is_ok());
+
+        let mut dual_manifest = portable_update_test_manifest("1.2.3");
+        dual_manifest.assets = [
+            (
+                "windows-amd64".to_string(),
+                portable_update_test_legacy_asset("1.2.3", "amd64"),
+            ),
+            (
+                "windows-aarch64".to_string(),
+                portable_update_test_legacy_asset("1.2.3", "aarch64"),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        dual_manifest.full_assets = Some(
+            [
+                (
+                    "windows-amd64".to_string(),
+                    portable_update_test_asset("1.2.3", "amd64"),
+                ),
+                (
+                    "windows-aarch64".to_string(),
+                    portable_update_test_asset("1.2.3", "aarch64"),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert!(validate_portable_update_manifest(&dual_manifest).is_ok());
 
         let mut missing_arch = portable_update_test_manifest("1.2.3");
         missing_arch.assets.remove("windows-aarch64");
