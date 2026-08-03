@@ -2401,6 +2401,23 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.close-dialog-remember {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  color: var(--theme-5f5a53);
+  font-size: var(--font-size-label);
+  cursor: pointer;
+}
+
+.close-dialog-remember input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--theme-4f825c);
+}
+
 .close-dialog-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2423,6 +2440,35 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
+.config-software-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.config-software-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  align-items: start;
+  gap: 24px;
+  padding: 16px;
+  border: 1px solid var(--theme-d5d2cb);
+  border-radius: 8px;
+  background: var(--theme-fffdf8);
+}
+
+.config-software-field {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  color: var(--theme-39352f);
+  font-size: var(--font-size-body);
+  font-weight: 700;
+}
+
+.config-software-field .config-network-input {
+  height: 42px;
+}
+
 @media (max-width: 520px) {
   .close-dialog-backdrop {
     padding: 16px;
@@ -2434,6 +2480,12 @@ textarea:focus-visible {
 
   .close-dialog-actions {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .config-software-content {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -5253,6 +5305,10 @@ textarea:focus-visible {
   min-height: 76px;
 }
 
+.agent-status-grid.codex-status-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .agent-status-grid > div {
   display: grid;
   min-width: 0;
@@ -7228,6 +7284,10 @@ textarea:focus-visible {
   .agent-status-grid {
     grid-template-columns: 1fr;
     min-height: 0;
+  }
+
+  .agent-status-grid.codex-status-grid {
+    grid-template-columns: 1fr;
   }
 
   .codex-session-metrics {
