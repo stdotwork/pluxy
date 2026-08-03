@@ -505,18 +505,13 @@ enum WindowsCloseAction {
     MinimizeToTray,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum WindowsCloseBehavior {
+    #[default]
     Ask,
     Exit,
     MinimizeToTray,
-}
-
-impl Default for WindowsCloseBehavior {
-    fn default() -> Self {
-        Self::Ask
-    }
 }
 
 impl WindowsCloseBehavior {
