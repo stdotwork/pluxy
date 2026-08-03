@@ -355,8 +355,10 @@ export function ConfigPanelPage() {
 
   const openWebUi = async () => {
     try {
+      const latestSettings = await invoke<CoreConfigSettings>('get_core_config_settings');
+      applySettings(latestSettings, 'preserve');
       await invoke('open_external_url', {
-        url: webUiManagementUrl(settings?.port ?? 8317),
+        url: webUiManagementUrl(latestSettings.port),
       });
     } catch (error) {
       showNotice(t('config.webuiKey.error.openFailed', { error: String(error) }), 'error');
