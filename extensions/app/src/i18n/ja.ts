@@ -343,7 +343,6 @@ export const jaOverrides = {
   'config.software.title': 'ソフトウェア設定',
   'config.software.description': 'ウィンドウの閉じるボタンをクリックしたときのデフォルト動作を設定します。「毎回確認」を選ぶと確認ダイアログに戻ります。',
   'config.software.closeBehavior': '終了動作',
-  'config.software.closeBehaviorHint': '選択を記憶すると、ウィンドウを閉じたときに選択した動作をすぐに実行します。',
   'config.software.behavior.ask': '毎回確認',
   'config.software.behavior.minimize': 'トレイに最小化',
   'config.software.behavior.exit': 'アプリを終了',
