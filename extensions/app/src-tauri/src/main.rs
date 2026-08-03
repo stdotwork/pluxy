@@ -479,6 +479,7 @@ struct GuiConfigFile {
     allow_lan: bool,
     host: String,
     run_on_startup: bool,
+    close_behavior: WindowsCloseBehavior,
     window_width: Option<u32>,
     window_height: Option<u32>,
     auth_dir: String,
@@ -502,6 +503,30 @@ struct GuiConfigFile {
 enum WindowsCloseAction {
     Exit,
     MinimizeToTray,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum WindowsCloseBehavior {
+    Ask,
+    Exit,
+    MinimizeToTray,
+}
+
+impl Default for WindowsCloseBehavior {
+    fn default() -> Self {
+        Self::Ask
+    }
+}
+
+impl WindowsCloseBehavior {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Exit => "exit",
+            Self::MinimizeToTray => "minimize-to-tray",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -567,6 +592,7 @@ impl Default for GuiConfigFile {
             allow_lan: false,
             host: "127.0.0.1".to_string(),
             run_on_startup: false,
+            close_behavior: WindowsCloseBehavior::Ask,
             window_width: Some(DEFAULT_MAIN_WINDOW_WIDTH),
             window_height: Some(DEFAULT_MAIN_WINDOW_HEIGHT),
             auth_dir: DEFAULT_AUTH_DIR.to_string(),
@@ -599,6 +625,7 @@ struct GuiConfigPresence {
     api_keys: Option<Vec<GuiApiKeyInput>>,
     api_access_remarks: Option<Vec<GuiApiAccessRemark>>,
     management_secret_key: Option<String>,
+    close_behavior: Option<WindowsCloseBehavior>,
     codex_session_repair_on_launch: Option<bool>,
     usage_statistics_enabled: Option<bool>,
     plugins_enabled: Option<bool>,
@@ -616,6 +643,7 @@ struct GuiSettings {
     port: u16,
     allow_lan: bool,
     run_on_startup: bool,
+    close_behavior: WindowsCloseBehavior,
 }
 
 #[derive(Clone, Serialize)]
@@ -1348,6 +1376,16 @@ impl GuiConfigState {
         })
     }
 
+    fn set_close_behavior(
+        &self,
+        close_behavior: WindowsCloseBehavior,
+    ) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.close_behavior = close_behavior;
+            Ok(())
+        })
+    }
+
     fn set_codex_session_repair_on_launch(&self, enabled: bool) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.codex_session_repair_on_launch = enabled;
@@ -1450,6 +1488,7 @@ impl From<&GuiConfigFile> for GuiSettings {
             port: config.port,
             allow_lan: config.allow_lan,
             run_on_startup: config.run_on_startup,
+            close_behavior: config.close_behavior,
         }
     }
 }
@@ -1632,8 +1671,18 @@ fn set_app_locale(
 #[tauri::command]
 fn resolve_windows_close_request(
     app: tauri::AppHandle,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
     action: WindowsCloseAction,
+    remember: Option<bool>,
 ) -> Result<(), String> {
+    if remember.unwrap_or(false) {
+        let close_behavior = match action {
+            WindowsCloseAction::Exit => WindowsCloseBehavior::Exit,
+            WindowsCloseAction::MinimizeToTray => WindowsCloseBehavior::MinimizeToTray,
+        };
+        gui_config_state.set_close_behavior(close_behavior)?;
+    }
+
     match action {
         WindowsCloseAction::Exit => app.exit(0),
         WindowsCloseAction::MinimizeToTray => {
@@ -1647,6 +1696,15 @@ fn resolve_windows_close_request(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+fn save_app_close_behavior(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    behavior: WindowsCloseBehavior,
+) -> Result<GuiSettings, String> {
+    let config = gui_config_state.set_close_behavior(behavior)?;
+    Ok(GuiSettings::from(&config))
 }
 
 fn inspect_agent_config_statuses(
@@ -15243,6 +15301,9 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     if presence.locale.is_none() {
         changed = true;
     }
+    if presence.close_behavior.is_none() {
+        changed = true;
+    }
     if presence.codex_session_repair_on_launch.is_none() {
         changed = true;
     }
@@ -15579,6 +15640,7 @@ fn write_gui_config_to_path(config: &GuiConfigFile, config_path: &Path) -> Resul
         ("allow-lan", value(config.allow_lan)),
         ("host", value(config.host.as_str())),
         ("run-on-startup", value(config.run_on_startup)),
+        ("close-behavior", value(config.close_behavior.as_str())),
         ("auth-dir", value(config.auth_dir.as_str())),
         (
             "management-secret-key",
@@ -18068,6 +18130,7 @@ fn main() {
             save_api_access_remark,
             set_app_locale,
             resolve_windows_close_request,
+            save_app_close_behavior,
             get_agent_config_statuses,
             refresh_agent_config_statuses,
             get_agent_models,
@@ -19583,6 +19646,7 @@ model:
         assert!(content.contains("port = 8317"));
         assert!(content.contains("allow-lan = false"));
         assert!(content.contains("run-on-startup = false"));
+        assert!(content.contains("close-behavior = \"ask\""));
         assert!(content.contains("window-width = 1531"));
         assert!(content.contains("window-height = 891"));
         assert!(content.contains("auth-dir = \"../oauth\""));
@@ -22260,6 +22324,7 @@ custom_option = "keep-original"
             allow_lan: true,
             host: "0.0.0.0".to_string(),
             run_on_startup: false,
+            close_behavior: WindowsCloseBehavior::Ask,
             window_width: None,
             window_height: None,
             auth_dir: path_to_string(&fixed_oauth_dir().unwrap()),

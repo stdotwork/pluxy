@@ -80,10 +80,16 @@ const pages = [
 
 type PageId = (typeof pages)[number]['id'];
 type WindowsCloseAction = 'exit' | 'minimize-to-tray';
+type WindowsCloseBehavior = 'ask' | WindowsCloseAction;
 
 type WindowsClosePrompt = {
   resolvingAction: WindowsCloseAction | null;
+  rememberChoice: boolean;
   error: string | null;
+};
+
+type GuiSettings = {
+  closeBehavior: WindowsCloseBehavior;
 };
 
 function HomePage() {
@@ -155,13 +161,28 @@ function AppContent() {
     let disposed = false;
     let stopListening: (() => void) | undefined;
 
-    void listen('windows-close-requested', () => {
+    const handleWindowsCloseRequest = async () => {
+      try {
+        const settings = await invoke<GuiSettings>('get_gui_settings');
+        if (settings.closeBehavior !== 'ask') {
+          await resolveWindowsCloseRequest(settings.closeBehavior, false);
+          return;
+        }
+      } catch (error) {
+        console.error('读取关闭行为设置失败', error);
+      }
+
       setWindowsClosePrompt((current) =>
         current ?? {
           resolvingAction: null,
+          rememberChoice: false,
           error: null,
         },
       );
+    };
+
+    void listen('windows-close-requested', () => {
+      void handleWindowsCloseRequest();
     })
       .then((stop) => {
         if (disposed) {
@@ -206,7 +227,10 @@ function AppContent() {
     }
   };
 
-  const resolveWindowsCloseRequest = async (action: WindowsCloseAction) => {
+  const resolveWindowsCloseRequest = async (
+    action: WindowsCloseAction,
+    remember = windowsClosePrompt?.rememberChoice ?? false,
+  ) => {
     setWindowsClosePrompt((current) =>
       current
         ? {
@@ -218,7 +242,7 @@ function AppContent() {
     );
 
     try {
-      await invoke('resolve_windows_close_request', { action });
+      await invoke('resolve_windows_close_request', { action, remember });
       setWindowsClosePrompt(null);
     } catch (error) {
       setWindowsClosePrompt((current) =>
@@ -228,7 +252,11 @@ function AppContent() {
               resolvingAction: null,
               error: error instanceof Error ? error.message : String(error),
             }
-          : current,
+          : {
+              resolvingAction: null,
+              rememberChoice: false,
+              error: error instanceof Error ? error.message : String(error),
+            },
       );
     }
   };
@@ -415,6 +443,20 @@ function AppContent() {
                 {windowsClosePrompt.error}
               </div>
             ) : null}
+            <label className="close-dialog-remember">
+              <input
+                type="checkbox"
+                checked={windowsClosePrompt.rememberChoice}
+                disabled={windowsClosePrompt.resolvingAction !== null}
+                onChange={(event) => {
+                  const rememberChoice = event.currentTarget.checked;
+                  setWindowsClosePrompt((current) =>
+                    current ? { ...current, rememberChoice } : current,
+                  );
+                }}
+              />
+              <span>{t('app.close.remember')}</span>
+            </label>
             <div className="close-dialog-actions">
               <button
                 type="button"

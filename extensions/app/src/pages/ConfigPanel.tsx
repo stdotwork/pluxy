@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   Route,
+  Settings2,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -48,13 +49,19 @@ type ConfigAction =
   | 'management-secret'
   | 'routing'
   | 'network'
+  | 'software'
   | null;
 type NoticeTone = 'success' | 'error';
-type ConfigSubpage = 'general' | 'network' | 'aliases';
+type ConfigSubpage = 'general' | 'network' | 'software' | 'aliases';
+type CloseBehavior = 'ask' | 'exit' | 'minimize-to-tray';
 type NetworkDraftField = 'port' | 'allowLan' | 'proxyUrl' | 'sessionAffinity' | 'sessionTtl';
 type DraftRefreshMode = 'replace' | 'preserve';
 
 type NetworkDraftDirty = Record<NetworkDraftField, boolean>;
+
+type GuiSettings = {
+  closeBehavior: CloseBehavior;
+};
 
 const cleanNetworkDraft = (): NetworkDraftDirty => ({
   port: false,
@@ -73,6 +80,9 @@ export function ConfigPanelPage() {
   const { t } = useI18n();
   const { status: coreStatus, publishStatus, refreshStatus } = useCoreRuntime();
   const [settings, setSettings] = useState<CoreConfigSettings | null>(null);
+  const [softwareSettings, setSoftwareSettings] = useState<GuiSettings | null>(null);
+  const [softwareSettingsLoading, setSoftwareSettingsLoading] = useState(true);
+  const [softwareCloseBehaviorDraft, setSoftwareCloseBehaviorDraft] = useState<CloseBehavior>('ask');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [busyAction, setBusyAction] = useState<ConfigAction>(null);
@@ -105,8 +115,12 @@ export function ConfigPanelPage() {
     let disposed = false;
     let stop: (() => void) | null = null;
     void loadSettings();
+    void loadSoftwareSettings();
     void listen('config-files-changed', () => {
-      if (!disposed) void loadSettings('preserve');
+      if (!disposed) {
+        void loadSettings('preserve');
+        void loadSoftwareSettings();
+      }
     }).then((unlisten) => {
       if (disposed) unlisten();
       else stop = unlisten;
@@ -174,6 +188,20 @@ export function ConfigPanelPage() {
       setLoadError(String(error));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadSoftwareSettings() {
+    setSoftwareSettingsLoading(true);
+    try {
+      const result = await invoke<GuiSettings>('get_gui_settings');
+      setSoftwareSettings(result);
+      setSoftwareCloseBehaviorDraft(result.closeBehavior);
+    } catch (error) {
+      setSoftwareSettings(null);
+      showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
+    } finally {
+      setSoftwareSettingsLoading(false);
     }
   }
 
@@ -431,6 +459,26 @@ export function ConfigPanelPage() {
     }
   };
 
+  const saveSoftwareCloseBehavior = async () => {
+    if (!softwareSettings || busyAction !== null) return;
+    if (softwareCloseBehaviorDraft === softwareSettings.closeBehavior) return;
+
+    setBusyAction('software');
+    try {
+      const result = await invoke<GuiSettings>('save_app_close_behavior', {
+        behavior: softwareCloseBehaviorDraft,
+      });
+      setSoftwareSettings(result);
+      setSoftwareCloseBehaviorDraft(result.closeBehavior);
+      showNotice(t('config.notice.softwareCloseBehaviorUpdated'), 'success');
+    } catch (error) {
+      setSoftwareCloseBehaviorDraft(softwareSettings.closeBehavior);
+      showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const controlsDisabled = loading || settings === null || busyAction !== null;
   const networkRoutingDirty = Boolean(settings) && (
     portDraft !== String(settings?.port)
@@ -450,6 +498,8 @@ export function ConfigPanelPage() {
           : savedStatusVisible
             ? t('config.network.saved')
             : '';
+  const softwareCloseBehaviorDirty = softwareSettings !== null
+    && softwareCloseBehaviorDraft !== softwareSettings.closeBehavior;
   const networkStatusIsSaved = !loading
     && settings !== null
     && busyAction === null
@@ -487,6 +537,18 @@ export function ConfigPanelPage() {
           onClick={() => setActiveSubpage('network')}
         >
           {t('config.tabs.network')}
+        </button>
+        <button
+          type="button"
+          id="config-subpage-tab-software"
+          role="tab"
+          className={activeSubpage === 'software' ? 'active' : ''}
+          aria-selected={activeSubpage === 'software'}
+          aria-controls="config-subpage-panel-software"
+          tabIndex={activeSubpage === 'software' ? 0 : -1}
+          onClick={() => setActiveSubpage('software')}
+        >
+          {t('config.tabs.software')}
         </button>
         <button
           type="button"
@@ -931,6 +993,62 @@ export function ConfigPanelPage() {
           </section>
         </div>
       </section>
+        </div>
+      ) : activeSubpage === 'software' ? (
+        <div
+          className="config-subpage-panel"
+          id="config-subpage-panel-software"
+          role="tabpanel"
+          aria-labelledby="config-subpage-tab-software"
+        >
+          <section className="panel config-software-panel">
+            <div className="config-panel-heading">
+              <div className="config-heading-title">
+                <Settings2 size={18} aria-hidden="true" />
+                <h2>{t('config.software.title')}</h2>
+              </div>
+              <div className="config-heading-actions">
+                <span className={`state-pill ${softwareSettings && !softwareCloseBehaviorDirty ? 'success' : ''}`}>
+                  {softwareSettingsLoading
+                    ? t('common.loading')
+                    : softwareSettings === null
+                      ? t('common.unavailable')
+                      : softwareCloseBehaviorDirty
+                        ? t('config.network.unsaved')
+                        : t('config.network.saved')}
+                </span>
+                <button
+                  type="button"
+                  className="primary-button compact-button"
+                  disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null || !softwareCloseBehaviorDirty}
+                  onClick={() => void saveSoftwareCloseBehavior()}
+                >
+                  <Check size={16} aria-hidden="true" />
+                  {busyAction === 'software' ? t('common.saving') : t('config.network.confirmSave')}
+                </button>
+              </div>
+            </div>
+            <div className="config-software-content">
+              <div className="config-management-description">
+                <strong>{t('config.software.closeBehavior')}</strong>
+                <p>{t('config.software.description')}</p>
+                <small>{t('config.software.closeBehaviorHint')}</small>
+              </div>
+              <label className="config-software-field">
+                <span>{t('config.software.closeBehavior')}</span>
+                <select
+                  className="config-network-input"
+                  value={softwareCloseBehaviorDraft}
+                  disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
+                  onChange={(event) => setSoftwareCloseBehaviorDraft(event.currentTarget.value as CloseBehavior)}
+                >
+                  <option value="ask">{t('config.software.behavior.ask')}</option>
+                  <option value="minimize-to-tray">{t('config.software.behavior.minimize')}</option>
+                  <option value="exit">{t('config.software.behavior.exit')}</option>
+                </select>
+              </label>
+            </div>
+          </section>
         </div>
       ) : (
         <div
