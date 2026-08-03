@@ -120,6 +120,28 @@ export const defaultModelAlias = (
   return `${normalizedModel}${normalizedEffort ? `-${normalizedEffort}` : ''}${fast ? '-fast' : ''}`;
 };
 
+export const uniqueModelAlias = (
+  alias: string,
+  existingModelNames: string[],
+) => {
+  const normalizedAlias = alias.trim();
+  if (!normalizedAlias) return '';
+  const existingNames = new Set(
+    existingModelNames
+      .map((name) => name.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  if (!existingNames.has(normalizedAlias.toLowerCase())) return normalizedAlias;
+
+  let suffix = 2;
+  let candidate = `${normalizedAlias}-${suffix}`;
+  while (existingNames.has(candidate.toLowerCase())) {
+    suffix += 1;
+    candidate = `${normalizedAlias}-${suffix}`;
+  }
+  return candidate;
+};
+
 export const thinkingAliasSourceKindLabel = (kind: string) => {
   if (kind === 'codex-oauth') return 'Codex OAuth';
   if (kind === 'codex-api') return 'Codex API';
@@ -295,6 +317,7 @@ export function ThinkingAliasesPage() {
 
   const normalizedEffort = effort.trim().toLowerCase();
   const defaultAlias = defaultModelAlias(selectedSource?.model, normalizedEffort, fastEnabled);
+  const uniqueDefaultAlias = uniqueModelAlias(defaultAlias, sources.map((source) => source.model));
   const customEffortSelected = Boolean(
     normalizedEffort
       && !effortOptions.some((option) => option.value === normalizedEffort),
@@ -305,10 +328,10 @@ export function ThinkingAliasesPage() {
       const currentValue = current.trim();
       const canReplace = !currentValue || currentValue === generatedAliasRef.current;
       if (!canReplace) return current;
-      generatedAliasRef.current = defaultAlias;
-      return defaultAlias;
+      generatedAliasRef.current = uniqueDefaultAlias;
+      return uniqueDefaultAlias;
     });
-  }, [defaultAlias]);
+  }, [uniqueDefaultAlias]);
 
   const createAlias = async () => {
     if (!selectedSource) {

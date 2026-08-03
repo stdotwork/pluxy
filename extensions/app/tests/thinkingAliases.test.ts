@@ -4,6 +4,7 @@ import {
   combineModelAliasSources,
   defaultModelAlias,
   thinkingAliasSourceKindLabel,
+  uniqueModelAlias,
 } from '../src/pages/ThinkingAliasesPage';
 
 describe('模型别名默认名称', () => {
@@ -12,6 +13,16 @@ describe('模型别名默认名称', () => {
     expect(defaultModelAlias('gpt-5.6-sol', '', true)).toBe('gpt-5.6-sol-fast');
     expect(defaultModelAlias('gpt-5.6-sol', 'xhigh', true)).toBe('gpt-5.6-sol-xhigh-fast');
     expect(defaultModelAlias('gpt-5.6-sol', '', false)).toBe('');
+  });
+
+  test('默认别名与现有模型重名时递增数字后缀', () => {
+    expect(uniqueModelAlias('gpt-5.6-sol-fast', ['gpt-5.6-sol-fast'])).toBe('gpt-5.6-sol-fast-2');
+    expect(uniqueModelAlias('gpt-5.6-sol-fast', [
+      'gpt-5.6-sol-fast',
+      'gpt-5.6-sol-fast-2',
+    ])).toBe('gpt-5.6-sol-fast-3');
+    expect(uniqueModelAlias('gpt-5.6-sol-fast', ['GPT-5.6-SOL-FAST'])).toBe('gpt-5.6-sol-fast-2');
+    expect(uniqueModelAlias('gpt-5.6-sol-fast', ['gpt-5.6-sol'])).toBe('gpt-5.6-sol-fast');
   });
 });
 
