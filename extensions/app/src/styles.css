@@ -2895,6 +2895,32 @@ textarea:focus-visible {
   font-size: var(--font-size-meta);
 }
 
+.model-config-entries {
+  display: grid;
+  gap: 6px;
+}
+
+.model-config-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-config-entry input {
+  width: 100%;
+  min-width: 0;
+}
+
+.model-config-entry .icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.model-config-add {
+  justify-self: start;
+}
+
 .model-picker-error {
   color: var(--theme-9f2d20);
   font-size: var(--font-size-meta);
@@ -4280,37 +4306,68 @@ textarea:focus-visible {
   opacity: 0.45;
 }
 
-.thinking-speed-toggle {
+.thinking-fast-option {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   width: 100%;
-  min-height: 42px;
-  padding: 7px 10px;
+  min-height: 48px;
+  padding: 8px 10px;
   border: 1px solid var(--theme-d5d2cb);
   border-radius: 7px;
   background: var(--theme-fff);
   color: var(--theme-7a746c);
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
 }
 
-.thinking-speed-toggle span {
-  font-size: var(--font-size-section);
-  font-weight: 800;
+.thinking-fast-option:hover {
+  border-color: var(--theme-d7a447);
 }
 
-.thinking-speed-toggle small {
-  color: var(--theme-9a938a);
-  font-size: var(--font-size-label);
-}
-
-.thinking-speed-toggle.active {
+.thinking-fast-option.active {
   border-color: var(--theme-d7a447);
   background: var(--theme-fff8eb);
   color: var(--theme-805a24);
 }
 
-.thinking-speed-toggle.active small {
+.thinking-fast-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.thinking-fast-option-copy > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--font-size-section);
+  font-weight: 800;
+}
+
+.thinking-fast-option-copy small {
+  color: var(--theme-9a938a);
+  font-size: var(--font-size-label);
+}
+
+.thinking-fast-option.active .thinking-fast-option-copy small {
   color: var(--theme-805a24);
+}
+
+.thinking-fast-option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.thinking-fast-switch {
+  width: 42px;
+  height: 23px;
+}
+
+.thinking-fast-switch input:checked + .switch-track {
+  border-color: var(--theme-d7a447);
+  background: var(--theme-d7a447);
 }
 
 .thinking-effort-custom {

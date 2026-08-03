@@ -4,6 +4,10 @@ import { jaOverrides } from './ja';
 export type MessageVariables = Record<string, string | number>;
 
 export const zhCN = {
+  'apiAccess.models.add': '添加自定义模型',
+  'apiAccess.models.namePlaceholder': '模型名称，例如 gpt-4o',
+  'apiAccess.models.aliasPlaceholder': '模型别名（可选）',
+  'apiAccess.models.remove': '删除模型',
   'app.language': '语言',
   'app.theme.light': '日间模式',
   'app.theme.dark': '夜间模式',
@@ -209,6 +213,7 @@ export const zhCN = {
   'aliases.error.emptyEffort': '思考强度不能为空',
   'aliases.error.emptyOptions': '请至少设置思考强度或启用 Fast',
   'aliases.error.unsupportedEffort': '该模型不支持设置思考强度，只能使用 Fast 选项',
+  'aliases.error.unsupportedFast': '该模型当前不支持 Fast 选项',
   'aliases.created': '已创建 {alias}，思考强度固定为 {effort}',
   'aliases.createdCombined': '已创建 {alias}，思考强度为 {effort}，同时启用 Fast',
   'aliases.deleteConfirm': '确定删除别名模型“{alias}”吗？\n将同时移除对应的思考强度和 Fast 覆盖规则。',
@@ -240,6 +245,7 @@ export const zhCN = {
   'aliases.customHelp': '仅填写目标模型实际支持的等级名称',
   'aliases.aliasName.title': '别名模型名称',
   'aliases.aliasName.description': '由你填写，仅新增入口，不会改名原模型',
+  'aliases.aliasName.autoDescription': '根据原模型和已选选项自动生成，可按需修改；不会改名原模型',
   'aliases.aliasName.example': '例如 {model}-{effort}',
   'aliases.aliasName.selectFirst': '先选择原模型，再填写客户端使用的别名',
   'aliases.notSelected': '未选择模型',
@@ -956,6 +962,10 @@ export const zhCN = {
 export type MessageKey = keyof typeof zhCN;
 
 export const en: Record<MessageKey, string> = {
+  'apiAccess.models.add': 'Add Custom Model',
+  'apiAccess.models.namePlaceholder': 'Model name, for example gpt-4o',
+  'apiAccess.models.aliasPlaceholder': 'Model alias (optional)',
+  'apiAccess.models.remove': 'Remove model',
   'app.language': 'Language',
   'app.theme.light': 'Light mode',
   'app.theme.dark': 'Dark mode',
@@ -1161,6 +1171,7 @@ export const en: Record<MessageKey, string> = {
   'aliases.error.emptyEffort': 'The reasoning effort cannot be empty',
   'aliases.error.emptyOptions': 'Set a reasoning effort or enable Fast',
   'aliases.error.unsupportedEffort': 'This model does not support a reasoning-effort override; only Fast can be used',
+  'aliases.error.unsupportedFast': 'Fast is not available for this model',
   'aliases.created': 'Created {alias} with reasoning effort fixed to {effort}',
   'aliases.createdCombined': 'Created {alias} with reasoning effort {effort} and Fast enabled',
   'aliases.deleteConfirm': 'Delete the model alias “{alias}”?\nIts reasoning-effort and Fast overrides will also be removed.',
@@ -1192,6 +1203,7 @@ export const en: Record<MessageKey, string> = {
   'aliases.customHelp': 'Enter only a level name supported by the target model',
   'aliases.aliasName.title': 'Model Alias',
   'aliases.aliasName.description': 'Adds another entry point without renaming the original model',
+  'aliases.aliasName.autoDescription': 'Generated from the model and selected options; edit it as needed without renaming the original',
   'aliases.aliasName.example': 'For example: {model}-{effort}',
   'aliases.aliasName.selectFirst': 'Select the original model, then enter the alias clients will use',
   'aliases.notSelected': 'No model selected',

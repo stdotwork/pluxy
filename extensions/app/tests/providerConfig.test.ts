@@ -18,6 +18,22 @@ import {
   stripResponseFields,
 } from '../src/pages/ApiAccessPage';
 
+it('saves non-empty custom model names and removes duplicate or blank entries', () => {
+  const result = buildProviderRecord('openai-compatibility', {
+    name: 'custom-provider',
+    apiKey: 'provider-key',
+    baseUrl: 'https://api.example.com',
+    priority: '',
+    models: [
+      { name: ' custom-model ', alias: ' Custom Alias ' },
+      { name: ' ' },
+      { name: 'CUSTOM-MODEL', alias: 'duplicate' },
+    ],
+  });
+
+  expect(result.models).toEqual([{ name: 'custom-model', alias: 'Custom Alias' }]);
+});
+
 describe('API 接入配置合并', () => {
   it('固定使用 Codex、OpenAI、DeepSeek、Claude、Gemini 顺序且不包含 Vertex', () => {
     expect(providerSectionOrder).toEqual([

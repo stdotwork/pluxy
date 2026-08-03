@@ -1,6 +1,10 @@
 import type { MessageKey } from './resources';
 
 export const jaOverrides = {
+  'apiAccess.models.add': 'カスタムモデルを追加',
+  'apiAccess.models.namePlaceholder': 'モデル名（例: gpt-4o）',
+  'apiAccess.models.aliasPlaceholder': 'モデル別名（任意）',
+  'apiAccess.models.remove': 'モデルを削除',
   'app.language': '言語',
   'app.theme.light': 'ライトモード',
   'app.theme.dark': 'ダークモード',
@@ -206,6 +210,7 @@ export const jaOverrides = {
   'aliases.error.emptyEffort': '推論レベルを入力してください',
   'aliases.error.emptyOptions': '推論レベルを設定するか、Fast を有効にしてください',
   'aliases.error.unsupportedEffort': 'このモデルでは推論レベルを設定できないため、Fast オプションのみ使用できます',
+  'aliases.error.unsupportedFast': 'このモデルでは Fast を利用できません',
   'aliases.created': '{alias} を作成し、推論レベルを {effort} に固定しました',
   'aliases.createdCombined': '{alias} を作成し、推論レベル {effort} と Fast を有効にしました',
   'aliases.deleteConfirm': 'エイリアスモデル「{alias}」を削除しますか？\n対応する推論レベルと Fast の上書きルールも削除されます。',
@@ -237,6 +242,7 @@ export const jaOverrides = {
   'aliases.customHelp': '対象モデルが実際に対応するレベル名のみ入力してください',
   'aliases.aliasName.title': 'エイリアスモデル名',
   'aliases.aliasName.description': '新しい入口のみを追加し、元のモデル名は変更しません',
+  'aliases.aliasName.autoDescription': 'モデルと選択したオプションから自動生成します。元のモデル名は変更せず編集できます',
   'aliases.aliasName.example': '例：{model}-{effort}',
   'aliases.aliasName.selectFirst': '先に元のモデルを選択し、クライアントで使用するエイリアスを入力してください',
   'aliases.notSelected': 'モデル未選択',

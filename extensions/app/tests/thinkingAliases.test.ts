@@ -2,8 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import {
   combineModelAliasEntries,
   combineModelAliasSources,
+  defaultModelAlias,
   thinkingAliasSourceKindLabel,
 } from '../src/pages/ThinkingAliasesPage';
+
+describe('模型别名默认名称', () => {
+  test('按思考强度和 Fast 选项生成可编辑的默认名称', () => {
+    expect(defaultModelAlias('gpt-5.6-sol', 'XHigh', false)).toBe('gpt-5.6-sol-xhigh');
+    expect(defaultModelAlias('gpt-5.6-sol', '', true)).toBe('gpt-5.6-sol-fast');
+    expect(defaultModelAlias('gpt-5.6-sol', 'xhigh', true)).toBe('gpt-5.6-sol-xhigh-fast');
+    expect(defaultModelAlias('gpt-5.6-sol', '', false)).toBe('');
+  });
+});
 
 describe('思考别名', () => {
   test('区分同名模型的接入来源', () => {
@@ -73,6 +83,8 @@ describe('统一模型别名列表', () => {
 
     expect(sources).toHaveLength(2);
     expect(sources.find((source) => source.id === 'reasoning-and-fast')?.supportsReasoning).toBe(true);
+    expect(sources.find((source) => source.id === 'reasoning-and-fast')?.supportsFast).toBe(true);
     expect(sources.find((source) => source.id === 'fast-only')?.supportsReasoning).toBe(false);
+    expect(sources.find((source) => source.id === 'fast-only')?.supportsFast).toBe(true);
   });
 });
