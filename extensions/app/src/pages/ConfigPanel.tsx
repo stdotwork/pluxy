@@ -51,6 +51,18 @@ type ConfigAction =
   | null;
 type NoticeTone = 'success' | 'error';
 type ConfigSubpage = 'general' | 'network' | 'aliases';
+type NetworkDraftField = 'port' | 'allowLan' | 'proxyUrl' | 'sessionAffinity' | 'sessionTtl';
+type DraftRefreshMode = 'replace' | 'preserve';
+
+type NetworkDraftDirty = Record<NetworkDraftField, boolean>;
+
+const cleanNetworkDraft = (): NetworkDraftDirty => ({
+  port: false,
+  allowLan: false,
+  proxyUrl: false,
+  sessionAffinity: false,
+  sessionTtl: false,
+});
 
 const ROUTING_OPTIONS = [
   { value: 'round-robin', labelKey: 'config.routing.roundRobin' },
@@ -85,6 +97,7 @@ export function ConfigPanelPage() {
   const [sessionTtlDraft, setSessionTtlDraft] = useState('');
   const [portError, setPortError] = useState('');
   const [savedStatusVisible, setSavedStatusVisible] = useState(false);
+  const networkDraftDirtyRef = useRef<NetworkDraftDirty>(cleanNetworkDraft());
   const noticeTimerRef = useRef<number | null>(null);
   const copyTimerRef = useRef<number | null>(null);
 
@@ -93,7 +106,7 @@ export function ConfigPanelPage() {
     let stop: (() => void) | null = null;
     void loadSettings();
     void listen('config-files-changed', () => {
-      if (!disposed) void loadSettings();
+      if (!disposed) void loadSettings('preserve');
     }).then((unlisten) => {
       if (disposed) unlisten();
       else stop = unlisten;
@@ -121,24 +134,41 @@ export function ConfigPanelPage() {
     }, 3200);
   };
 
-  const applySettings = (result: CoreConfigSettings, syncNetworkDrafts = true) => {
+  const applySettings = (result: CoreConfigSettings, mode: DraftRefreshMode = 'replace') => {
     setSettings(result);
-    if (syncNetworkDrafts) {
-      setPortDraft(String(result.port));
-      setAllowLanDraft(result.allowLan);
-      setProxyUrlDraft(result.proxyUrl);
-      setSessionAffinityDraft(result.routingSessionAffinity);
-      setSessionTtlDraft(result.routingSessionAffinityTtl);
-      setPortError('');
+    if (mode === 'preserve') {
+      const dirty = networkDraftDirtyRef.current;
+      if (!dirty.port) setPortDraft(String(result.port));
+      if (!dirty.allowLan) setAllowLanDraft(result.allowLan);
+      if (!dirty.proxyUrl) setProxyUrlDraft(result.proxyUrl);
+      if (!dirty.sessionAffinity) setSessionAffinityDraft(result.routingSessionAffinity);
+      if (!dirty.sessionTtl) setSessionTtlDraft(result.routingSessionAffinityTtl);
+      return;
     }
+    networkDraftDirtyRef.current = cleanNetworkDraft();
+    setPortDraft(String(result.port));
+    setAllowLanDraft(result.allowLan);
+    setProxyUrlDraft(result.proxyUrl);
+    setSessionAffinityDraft(result.routingSessionAffinity);
+    setSessionTtlDraft(result.routingSessionAffinityTtl);
+    setPortError('');
   };
 
-  async function loadSettings(syncNetworkDrafts = true) {
+  const markDraftDirty = (field: NetworkDraftField) => {
+    networkDraftDirtyRef.current[field] = true;
+    setSavedStatusVisible(false);
+  };
+
+  const clearDraftDirty = (field: NetworkDraftField) => {
+    networkDraftDirtyRef.current[field] = false;
+  };
+
+  async function loadSettings(mode: DraftRefreshMode = 'replace') {
     setLoading(true);
     setLoadError('');
     try {
       const result = await invoke<CoreConfigSettings>('get_core_config_settings');
-      applySettings(result, syncNetworkDrafts);
+      applySettings(result, mode);
     } catch (error) {
       setSettings(null);
       setLoadError(String(error));
@@ -156,14 +186,14 @@ export function ConfigPanelPage() {
     setBusyAction(action);
     try {
       const result = await invoke<CoreConfigSettings>(command, args);
-      applySettings(result, false);
+      setSettings(result);
       setLoadError('');
       showNotice(successMessage, 'success');
       return true;
     } catch (error) {
-      if (settings) applySettings(settings, false);
+      if (settings) setSettings(settings);
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
-      void loadSettings(false);
+      void loadSettings('preserve');
       return false;
     } finally {
       setBusyAction(null);
@@ -325,8 +355,10 @@ export function ConfigPanelPage() {
 
   const openWebUi = async () => {
     try {
+      const latestSettings = await invoke<CoreConfigSettings>('get_core_config_settings');
+      applySettings(latestSettings, 'preserve');
       await invoke('open_external_url', {
-        url: webUiManagementUrl(settings?.port ?? 8317),
+        url: webUiManagementUrl(latestSettings.port),
       });
     } catch (error) {
       showNotice(t('config.webuiKey.error.openFailed', { error: String(error) }), 'error');
@@ -751,12 +783,13 @@ export function ConfigPanelPage() {
               aria-invalid={Boolean(portError)}
               title={portError || t('config.network.portHint')}
               onChange={(event) => {
-                setSavedStatusVisible(false);
+                markDraftDirty('port');
                 setPortDraft(event.currentTarget.value.replace(/\D/g, '').slice(0, 5));
                 setPortError('');
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Escape' && settings) {
+                  clearDraftDirty('port');
                   setPortDraft(String(settings.port));
                   setPortError('');
                   event.currentTarget.blur();
@@ -778,7 +811,7 @@ export function ConfigPanelPage() {
                     checked={allowLanDraft}
                     disabled={controlsDisabled}
                     onChange={(event) => {
-                      setSavedStatusVisible(false);
+                      markDraftDirty('allowLan');
                       setAllowLanDraft(event.currentTarget.checked);
                     }}
                   />
@@ -798,11 +831,12 @@ export function ConfigPanelPage() {
                   disabled={controlsDisabled}
                   placeholder={t('config.network.proxyPlaceholder')}
                   onChange={(event) => {
-                    setSavedStatusVisible(false);
+                    markDraftDirty('proxyUrl');
                     setProxyUrlDraft(event.currentTarget.value);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 'Escape' && settings) {
+                      clearDraftDirty('proxyUrl');
                       setProxyUrlDraft(settings.proxyUrl);
                       event.currentTarget.blur();
                     }
@@ -831,7 +865,7 @@ export function ConfigPanelPage() {
                     checked={sessionAffinityDraft}
                     disabled={controlsDisabled}
                     onChange={(event) => {
-                      setSavedStatusVisible(false);
+                      markDraftDirty('sessionAffinity');
                       setSessionAffinityDraft(event.currentTarget.checked);
                     }}
                   />
@@ -851,11 +885,12 @@ export function ConfigPanelPage() {
                   disabled={controlsDisabled}
                   placeholder="1h"
                   onChange={(event) => {
-                    setSavedStatusVisible(false);
+                    markDraftDirty('sessionTtl');
                     setSessionTtlDraft(event.currentTarget.value);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 'Escape' && settings) {
+                      clearDraftDirty('sessionTtl');
                       setSessionTtlDraft(settings.routingSessionAffinityTtl);
                       event.currentTarget.blur();
                     }

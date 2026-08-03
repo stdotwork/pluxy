@@ -1765,6 +1765,47 @@ async fn install_pi_provider(
     Ok(result)
 }
 
+#[tauri::command]
+async fn sync_pi_provider(
+    app: tauri::AppHandle,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    cache: tauri::State<'_, AgentConfigStatusCache>,
+) -> Result<AgentConfigActionResult, String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("鏃犳硶鑾峰彇鐢ㄦ埛鐩綍: {error}"))?;
+    let config = gui_config_state.snapshot()?;
+    let port = config.port;
+    let api_key = effective_agent_api_key(&config).to_string();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || sync_pi_provider_inner(&home, port, &api_key))
+            .await
+            .map_err(|error| format!("鍚屾 Pi 閰嶇疆浠诲姟澶辫触: {error}"))??;
+    cache.clear()?;
+    Ok(result)
+}
+
+#[tauri::command]
+async fn uninstall_pi_provider(
+    app: tauri::AppHandle,
+    cache: tauri::State<'_, AgentConfigStatusCache>,
+) -> Result<AgentConfigActionResult, String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("鏃犳硶鑾峰彇鐢ㄦ埛鐩綍: {error}"))?;
+    let executable =
+        find_pi_executable(&home).ok_or_else(|| "鏈娴嬪埌 Pi CLI锛岃鍏堝畨瑁?Pi".to_string())?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        uninstall_pi_provider_inner(&home, &executable)
+    })
+    .await
+    .map_err(|error| format!("鍗歌浇 Pi 鎻掍欢浠诲姟澶辫触: {error}"))??;
+    cache.clear()?;
+    Ok(result)
+}
+
 fn validate_claude_code_working_directory(value: &str) -> Result<PathBuf, String> {
     let value = value.trim();
     if value.is_empty() {
@@ -3257,7 +3298,28 @@ fn install_pi_provider_inner(
         changed_files.push(path_to_string(&settings_path));
     }
 
+    let mut result = sync_pi_provider_inner(home, port, api_key)?;
+    changed_files.extend(result.changed_files);
+    result.changed_files = changed_files;
+    Ok(result)
+}
+
+fn sync_pi_provider_inner(
+    home: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<AgentConfigActionResult, String> {
+    if port == 0 {
+        return Err("Core port is invalid".to_string());
+    }
+    if api_key.trim().is_empty() {
+        return Err("EasyCLIProxyAPI has no usable API key".to_string());
+    }
     let config_path = pi_provider_config_path(home);
+    let mut changed_files = Vec::new();
+    if !pi_provider_package_installed(home)? {
+        return Err("Pi CLIProxyAPI provider is not installed".to_string());
+    }
     let existing = if config_path.is_file() {
         Some(fs::read_to_string(&config_path).map_err(|error| {
             format!(
@@ -3280,6 +3342,29 @@ fn install_pi_provider_inner(
         true,
         None,
         changed_files,
+        Vec::new(),
+    ))
+}
+
+fn uninstall_pi_provider_inner(
+    home: &Path,
+    executable: &Path,
+) -> Result<AgentConfigActionResult, String> {
+    if !pi_provider_package_installed(home)? {
+        return Ok(action_result(
+            "not-installed",
+            false,
+            None,
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+    remove_pi_package(executable, home)?;
+    Ok(action_result(
+        "removed",
+        false,
+        None,
+        vec![path_to_string(&pi_provider_settings_path(home))],
         Vec::new(),
     ))
 }
@@ -3307,6 +3392,37 @@ fn install_pi_package(executable: &Path, home: &Path) -> Result<(), String> {
     let detail = if !stderr.is_empty() { stderr } else { stdout };
     Err(format!(
         "Pi CLIProxyAPI provider 插件安装失败{}",
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {detail}")
+        }
+    ))
+}
+
+fn remove_pi_package(executable: &Path, home: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = windows_command_for_executable(executable, false);
+    #[cfg(not(target_os = "windows"))]
+    let mut command = Command::new(executable);
+
+    command
+        .arg("remove")
+        .arg(PI_CLIPROXYAPI_PACKAGE)
+        .current_dir(home)
+        .stdin(Stdio::null());
+    configure_background_command(&mut command);
+    let output = command
+        .output()
+        .map_err(|error| format!("鎵ц Pi 鎻掍欢鍗歌浇澶辫触: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    Err(format!(
+        "Pi CLIProxyAPI provider 鎻掍欢鍗歌浇澶辫触{}",
         if detail.is_empty() {
             String::new()
         } else {
@@ -17670,11 +17786,15 @@ fn ensure_configuration_watch_directories(
 fn start_configuration_file_watcher(app: tauri::AppHandle) -> Result<(), String> {
     let tracked_paths = tracked_configuration_paths(&app)?;
     let (sender, receiver) = std::sync::mpsc::channel();
-    let mut watcher: RecommendedWatcher =
-        notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
-            let _ = sender.send(event);
-        })
-        .map_err(|error| format!("创建配置文件监控器失败: {error}"))?;
+    let mut watcher: RecommendedWatcher = notify::recommended_watcher(
+        move |event: Result<notify::Event, notify::Error>| match event {
+            Ok(event) if event.kind.is_access() => {}
+            event => {
+                let _ = sender.send(event);
+            }
+        },
+    )
+    .map_err(|error| format!("创建配置文件监控器失败: {error}"))?;
     let mut watched_directories = Vec::new();
     ensure_configuration_watch_directories(&mut watcher, &tracked_paths, &mut watched_directories)?;
 
@@ -17929,6 +18049,8 @@ fn main() {
             refresh_agent_config_statuses,
             get_agent_models,
             install_pi_provider,
+            sync_pi_provider,
+            uninstall_pi_provider,
             check_codex_oauth_login,
             update_codex_model_catalog,
             get_thinking_aliases,

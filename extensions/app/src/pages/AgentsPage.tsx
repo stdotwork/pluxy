@@ -277,11 +277,10 @@ const listStatusText = (status: AgentConfigStatus | undefined) => {
   if (!status) return translate(locale, 'agents.list.detecting');
   if (!status.supportedPlatform) return translate(locale, 'agents.list.unsupported');
   if (!status.installed) return translate(locale, 'agents.list.notInstalled');
-  if (status.id === 'pi' && !status.pluginInstalled) {
-    return translate(locale, 'agents.list.pluginNotInstalled');
-  }
-  if (status.id === 'pi' && status.configured) {
-    return translate(locale, 'agents.list.configured');
+  if (status.id === 'pi') {
+    return status.pluginInstalled
+      ? translate(locale, 'agents.list.piInstalled')
+      : translate(locale, 'agents.list.pluginNotInstalled');
   }
   if (status.modificationState === 'invalid') return translate(locale, 'agents.status.invalid');
   if (status.modificationState === 'applied') return translate(locale, 'agents.list.modified', { model: status.appliedModel ?? '—' });
@@ -553,7 +552,7 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
+    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'sync-pi' | 'uninstall-pi' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
@@ -937,6 +936,32 @@ export function AgentsPage() {
     }
   };
 
+  const syncPiProvider = async () => {
+    setBusyAction('sync-pi');
+    setConfigurationError('');
+    try {
+      await invoke<AgentConfigActionResult>('sync_pi_provider');
+      await reloadStatusesAfterAction();
+    } catch (requestError) {
+      setConfigurationError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const uninstallPiProvider = async () => {
+    setBusyAction('uninstall-pi');
+    setConfigurationError('');
+    try {
+      await invoke<AgentConfigActionResult>('uninstall_pi_provider');
+      await reloadStatusesAfterAction();
+    } catch (requestError) {
+      setConfigurationError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const closeConfigurationChanges = async () => {
     setConfigurationError('');
     setBusyAction('close-config');
@@ -1197,7 +1222,9 @@ export function AgentsPage() {
                   <span className="agent-client-icon"><AgentMark definition={agent} /></span>
                   <span><strong>{agent.name}</strong><small>{listStatusText(status)}</small></span>
                   <i
-                    className={status?.modificationEnabled ? 'configured' : status?.installed ? 'installed' : ''}
+                    className={status?.id === 'pi'
+                      ? status?.installed ? 'installed' : ''
+                      : status?.modificationEnabled ? 'configured' : status?.installed ? 'installed' : ''}
                     aria-hidden="true"
                   />
                 </button>
@@ -1243,7 +1270,7 @@ export function AgentsPage() {
                 </div>
               </div>
 
-              {activeStatus?.error || activeStatus?.warnings.length ? (
+              {activeStatus?.error || (!isPiClient && activeStatus?.warnings.length) ? (
                 <div className="agent-status-messages" aria-live="polite">
                   {activeStatus.error ? (
                     <span className="agent-inline-message error" role="alert">{activeStatus.error}</span>
@@ -1330,7 +1357,7 @@ export function AgentsPage() {
               ) : null}
 
               {isPiClient ? (
-                <section className={`agent-core-setting-section agent-modification-actions ${activeStatus?.configured ? 'enabled' : ''}`}>
+                <section className="agent-core-setting-section agent-modification-actions">
                   <div className="agent-section-heading">
                     <div>
                       <strong>{t('agents.pi.installTitle')}</strong>
@@ -1341,16 +1368,25 @@ export function AgentsPage() {
                     <div className="agent-modification-buttons">
                       <button
                         type="button"
-                        className="primary-button"
-                        onClick={() => void installPiProvider()}
+                        className={activeStatus?.pluginInstalled ? 'danger-button' : 'primary-button'}
+                        onClick={() => void (activeStatus?.pluginInstalled ? uninstallPiProvider() : installPiProvider())}
                         disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
                       >
-                        {busyAction === 'install-pi' ? <LoaderCircle size={16} className="spin" /> : null}
-                        {busyAction === 'install-pi'
-                          ? t('agents.pi.installing')
-                          : activeStatus?.configured
-                            ? t('agents.pi.update')
-                            : t('agents.pi.install')}
+                        {busyAction === 'install-pi' || busyAction === 'uninstall-pi'
+                          ? <LoaderCircle size={16} className="spin" />
+                          : null}
+                        {activeStatus?.pluginInstalled
+                          ? busyAction === 'uninstall-pi' ? t('agents.pi.uninstalling') : t('agents.pi.uninstall')
+                          : busyAction === 'install-pi' ? t('agents.pi.installing') : t('agents.pi.install')}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void syncPiProvider()}
+                        disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform || !activeStatus.pluginInstalled}
+                      >
+                        {busyAction === 'sync-pi' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
+                        {busyAction === 'sync-pi' ? t('agents.pi.syncing') : t('agents.pi.sync')}
                       </button>
                     </div>
                     {configurationError ? (
