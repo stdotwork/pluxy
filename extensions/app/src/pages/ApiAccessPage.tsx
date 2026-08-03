@@ -321,12 +321,14 @@ export const modelSelectionForDiscovery = (
 export const allModelSelectionForDiscovery = (models: ModelOption[]) =>
   new Set(models.map((model) => model.name.trim().toLowerCase()).filter(Boolean));
 
+export const parseProviderApiKeys = (value: string) => value
+  .split(/\r?\n/)
+  .map((item) => item.trim())
+  .filter((item, index, values) => item && values.indexOf(item) === index);
+
 const mergeOpenAiApiKeyEntries = (current: unknown, apiKey: string) => {
   const entries = Array.isArray(current) ? current.filter(isRecord) : [];
-  const keys = apiKey
-    .split(/\r?\n/)
-    .map((value) => value.trim())
-    .filter((value, index, values) => value && values.indexOf(value) === index);
+  const keys = parseProviderApiKeys(apiKey);
   const usedIndexes = new Set<number>();
   return keys.map((key, index) => {
     let matchedIndex = entries.findIndex(
@@ -782,10 +784,7 @@ export function ApiAccessPage() {
     };
     const baseUrlRequired = definition.openAi || definition.section === 'codex-api-key';
     const remarkRequired = definition.openAi && activeCategory !== 'deepseek';
-    const parsedApiKeys = preparedDraft.apiKey
-      .split(/\r?\n/)
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const parsedApiKeys = parseProviderApiKeys(preparedDraft.apiKey);
     if (
       parsedApiKeys.length === 0
       || (remarkRequired && !preparedDraft.remark.trim())
@@ -837,33 +836,41 @@ export function ApiAccessPage() {
       const latestConfig = await managementApi.get('/config');
       const current = sectionRecordsFromConfig(latestConfig, activeSection);
       let nextList: Record<string, unknown>[];
+      let targetIndex = -1;
+      let currentRecord: Record<string, unknown> | undefined;
 
       if (editingRow) {
-        const targetIndex = resolveProviderRecordIndex(current, editingRow);
+        targetIndex = resolveProviderRecordIndex(current, editingRow);
         if (targetIndex < 0) {
           throw new Error(t('apiAccess.error.stale'));
         }
-        const nextRecord = buildProviderRecord(
-          activeSection,
-          draftToSave,
-          current[targetIndex],
-        );
-        nextList = current.map((record, index) =>
-          index === targetIndex ? nextRecord : record,
-        );
-      } else {
-        const duplicate = current.some((record) =>
-          definition.openAi
-            ? readString(record, 'name') === preparedDraft.name.trim()
-            : readString(record, 'api-key', 'apiKey') === preparedDraft.apiKey.trim()
-              && readString(record, 'base-url', 'baseUrl') === baseUrl,
-        );
-        if (duplicate) throw new Error(t('apiAccess.error.duplicate'));
-        nextList = [
-          ...current,
-          buildProviderRecord(activeSection, draftToSave),
-        ];
+        currentRecord = current[targetIndex];
       }
+
+      const duplicate = current.some((record, index) => {
+        if (index === targetIndex) return false;
+        if (definition.openAi) return readString(record, 'name') === preparedDraft.name.trim();
+        return parsedApiKeys.some((apiKey) => (
+          readString(record, 'api-key', 'apiKey').trim() === apiKey
+          && readString(record, 'base-url', 'baseUrl').trim() === baseUrl
+        ));
+      });
+      if (duplicate) throw new Error(t('apiAccess.error.duplicate'));
+
+      const recordsToSave = definition.openAi
+        ? [buildProviderRecord(activeSection, draftToSave, currentRecord)]
+        : parsedApiKeys.map((apiKey) => buildProviderRecord(
+          activeSection,
+          { ...draftToSave, apiKey },
+          currentRecord,
+        ));
+      nextList = editingRow
+        ? [
+          ...current.slice(0, targetIndex),
+          ...recordsToSave,
+          ...current.slice(targetIndex + 1),
+        ]
+        : [...current, ...recordsToSave];
 
       await managementApi.put(`/${activeSection}`, nextList.map(stripResponseFields));
       await invoke('save_api_access_remark', {
@@ -1547,13 +1554,15 @@ function ApiProviderDialog({
           </button>
         </div>
         <label><span>{t('apiAccess.field.remark')}</span><input autoFocus={definition.openAi} value={draft.remark} maxLength={80} onChange={(event) => updateTextField('remark', event.currentTarget.value)} placeholder={t('apiAccess.remarkPlaceholder')} /></label>
-        <label className={definition.openAi ? 'multiline-field' : undefined}>
-          <span>{definition.openAi ? t('apiAccess.field.keysMany') : t('apiAccess.field.key')}</span>
-          {definition.openAi ? (
-            <textarea value={draft.apiKey} onChange={(event) => updateTextField('apiKey', event.currentTarget.value)} placeholder={'sk-...\nsk-...'} rows={3} />
-          ) : (
-            <input autoFocus={!definition.openAi} type="password" value={draft.apiKey} onChange={(event) => updateTextField('apiKey', event.currentTarget.value)} placeholder="sk-..." />
-          )}
+        <label className="multiline-field">
+          <span>{t('apiAccess.field.keysMany')}</span>
+          <textarea
+            autoFocus={!definition.openAi}
+            value={draft.apiKey}
+            onChange={(event) => updateTextField('apiKey', event.currentTarget.value)}
+            placeholder={'sk-...\nsk-...'}
+            rows={3}
+          />
         </label>
         <label><span>Base URL</span><input value={draft.baseUrl} onChange={(event) => updateTextField('baseUrl', event.currentTarget.value)} placeholder={activeSection === 'codex-api-key' || activeSection === 'openai-compatibility' ? t('apiAccess.baseRequiredPlaceholder') : t('apiAccess.baseOptionalPlaceholder')} /></label>
         {activeCategory === 'deepseek' ? (

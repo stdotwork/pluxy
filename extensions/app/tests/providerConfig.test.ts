@@ -10,6 +10,7 @@ import {
   exclusionsForModelSelection,
   modelSelectionForDiscovery,
   parseProviderHeaders,
+  parseProviderApiKeys,
   providerCategoryMatchesRecord,
   providerRecordWithDisabledState,
   providerSectionOrder,
@@ -32,6 +33,10 @@ it('saves non-empty custom model names and removes duplicate or blank entries', 
   });
 
   expect(result.models).toEqual([{ name: 'custom-model', alias: 'Custom Alias' }]);
+});
+
+it('parses multiline API keys into unique trimmed entries', () => {
+  expect(parseProviderApiKeys(' key-a\n\nkey-b\r\nkey-a ')).toEqual(['key-a', 'key-b']);
 });
 
 describe('API 接入配置合并', () => {
