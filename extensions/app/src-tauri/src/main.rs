@@ -3200,10 +3200,7 @@ fn inspect_pi_provider_status(home: &Path, port: u16, api_key: &str) -> AgentCon
             }]
         })
         .unwrap_or_default();
-    let plugin_installed = match pi_provider_package_installed(home) {
-        Ok(installed) => installed,
-        Err(_) => false,
-    };
+    let plugin_installed = pi_provider_package_installed(home).unwrap_or_default();
     let mut errors = Vec::new();
     let mut credentials_match = false;
     if config_path.is_file() {
