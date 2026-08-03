@@ -253,7 +253,7 @@ export function ThinkingAliasesPage() {
       setEffort('');
       setFastEnabled(source.supportsFast);
     } else {
-      setEffort((current) => current || 'xhigh');
+      setEffort('xhigh');
       setFastEnabled(false);
     }
     setCustomEffortOpen(false);
@@ -431,8 +431,20 @@ export function ThinkingAliasesPage() {
                     event.currentTarget.select();
                   }}
                   onChange={(event) => {
-                    setSearch(event.currentTarget.value);
+                    const nextSearch = event.currentTarget.value;
+                    setSearch(nextSearch);
                     setModelPickerOpen(true);
+                    if (
+                      selectedSource
+                      && nextSearch.trim().toLowerCase() !== selectedSource.model.trim().toLowerCase()
+                    ) {
+                      setSelectedSourceId('');
+                      setEffort('xhigh');
+                      setFastEnabled(false);
+                      setCustomEffortOpen(false);
+                      setAlias('');
+                      generatedAliasRef.current = '';
+                    }
                   }}
                   onKeyDown={handleModelSearchKeyDown}
                   placeholder={loading ? t('aliases.loadingModels') : t('aliases.searchModel')}

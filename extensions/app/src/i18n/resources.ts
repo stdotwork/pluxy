@@ -235,7 +235,7 @@ export const zhCN = {
   'aliases.effort.unsupported': '这个模型没有可用的思考强度，已切换为仅启用 Fast。',
   'aliases.fast.title': '速度选项',
   'aliases.fast.description': '固定使用 Fast 请求层级（service_tier=priority）',
-  'aliases.fast.enabled': '已启用，可与思考强度同时生效',
+  'aliases.fast.enabled': '已启用',
   'aliases.fast.disabled': '未启用',
   'aliases.customLevel': '自定义等级：{effort}',
   'aliases.customLevelHint': '输入模型提供商支持的其他思考等级',
