@@ -599,6 +599,7 @@ export const jaOverrides = {
   'agents.oauthLoginRequired.launchDescription': 'OAuth 設定方式が有効ですが、有効な Codex のログイン認証情報が見つかりません。起動する前に Codex で ChatGPT アカウントにログインしてください。',
   'agents.oauthLoginRequired.confirm': '了解しました',
   'agents.modify.apply': '設定変更を適用',
+  'agents.modify.update': '設定を更新',
   'agents.modify.close': '設定変更を終了',
   'agents.modify.default': 'デフォルト設定',
   'agents.modify.clear': '設定を消去',

@@ -1116,10 +1116,9 @@ type ProviderModelHealthState = { status: 'checking' } | ProviderModelHealthResu
 
 function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
   const { t } = useI18n();
-  const testModel = readString(row.record, 'test-model', 'testModel');
   const configuredModels = useMemo(
-    () => mergeProviderHealthModels([], row.models, testModel),
-    [row.models, testModel],
+    () => mergeProviderHealthModels([], row.models),
+    [row.models],
   );
   const [models, setModels] = useState<ModelOption[]>(configuredModels);
   const [modelLoading, setModelLoading] = useState(true);
@@ -1149,7 +1148,7 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
       healthOptions.customHeaders,
       healthOptions.timeoutMs,
     ).then((discovered) => {
-      if (!disposed) setModels(mergeProviderHealthModels(discovered, row.models, testModel));
+      if (!disposed) setModels(mergeProviderHealthModels(discovered, row.models));
     }).catch((requestError) => {
       if (!disposed) setModelError(String(requestError).replace(/^Error:\s*/i, ''));
     }).finally(() => {
@@ -1158,7 +1157,7 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
     return () => {
       disposed = true;
     };
-  }, [healthOptions, row.apiKeys, row.models, testModel]);
+  }, [healthOptions, row.apiKeys, row.models]);
 
   const visibleModels = useMemo(() => {
     const query = search.trim().toLowerCase();

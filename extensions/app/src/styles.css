@@ -5589,17 +5589,6 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.agent-pending-badge {
-  flex: none;
-  padding: 4px 8px;
-  border: 1px solid var(--theme-e4d0af);
-  border-radius: 999px;
-  background: var(--theme-fff8eb);
-  color: var(--theme-805a24);
-  font-size: var(--font-size-meta);
-  font-weight: 700;
-}
-
 .agent-model-picker {
   position: relative;
   min-width: 0;

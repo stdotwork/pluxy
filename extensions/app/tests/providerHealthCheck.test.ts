@@ -7,19 +7,27 @@ import {
 } from '../src/services/providerHealthCheck';
 
 describe('API 接入健康检测', () => {
-  it('合并发现模型、已配置模型和 test-model，并按名称去重', () => {
+  it('健康检测只保留已勾选模型，并使用发现结果补充模型信息', () => {
     const models = mergeProviderHealthModels(
-      [{ name: 'model-b' }, { name: 'model-a' }],
+      [
+        { name: 'model-b' },
+        { name: 'model-a', contextWindow: 200_000 },
+        { name: 'model-c' },
+      ],
       [{ name: 'MODEL-A', alias: 'model-a-alias' }, { name: 'model-c' }],
-      'health-model',
     );
 
     expect(models).toEqual([
-      { name: 'health-model' },
-      { name: 'MODEL-A', alias: 'model-a-alias' },
-      { name: 'model-b' },
+      { name: 'MODEL-A', alias: 'model-a-alias', contextWindow: 200_000 },
       { name: 'model-c' },
     ]);
+  });
+
+  it('没有勾选模型时不允许发现列表自动加入健康检测', () => {
+    expect(mergeProviderHealthModels(
+      [{ name: 'model-a' }, { name: 'model-b' }],
+      [],
+    )).toEqual([]);
   });
 
   it('逐模型检测只使用当前接入的首个有效密钥', () => {
