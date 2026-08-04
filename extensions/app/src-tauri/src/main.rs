@@ -5248,9 +5248,9 @@ fn claude_code_model_settings(
 }
 
 fn format_context_window(context_window: u64) -> String {
-    if context_window % 1_000_000 == 0 {
+    if context_window.is_multiple_of(1_000_000) {
         format!("{}M", context_window / 1_000_000)
-    } else if context_window % 1_000 == 0 {
+    } else if context_window.is_multiple_of(1_000) {
         format!("{}K", context_window / 1_000)
     } else {
         context_window.to_string()
