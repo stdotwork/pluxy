@@ -805,7 +805,7 @@ export const zhCN = {
   'kernel.update.statusChecking': '正在检查',
   'kernel.update.notYetChecked': '尚未检查',
   'kernel.update.latest': '已是最新版本',
-  'kernel.update.available': '可安装新版本',
+  'kernel.update.available': '请在首页中关闭运行后安装新版本',
   'appUpdate.eyebrow': '软件升级',
   'appUpdate.title': '软件版本管理',
   'appUpdate.current': '当前版本',

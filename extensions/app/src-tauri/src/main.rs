@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod claude_catalog;
 mod codex_catalog;
 mod codex_sessions;
 mod usage;
@@ -2287,6 +2288,17 @@ async fn fetch_prepared_agent_models(
         if matches!(client, AgentClient::ClaudeCode | AgentClient::ClaudeDesktop) {
             let content = fetch_management_config_yaml(config).await?;
             mark_configured_agent_model_aliases(&mut models, &content)?;
+            for model in &mut models {
+                model.context_window = Some(claude_catalog::context_window_for(
+                    &model.name,
+                    model.context_window,
+                )?);
+                if !model.is_alias {
+                    if let Some(display_name) = claude_catalog::display_name_for(&model.name)? {
+                        model.alias = Some(display_name);
+                    }
+                }
+            }
         }
         Ok(PreparedAgentModels {
             models,
@@ -2754,24 +2766,38 @@ async fn launch_agent(
             .ok_or_else(|| "Claude Code model environment is not configured".to_string())?;
         let prepared = fetch_prepared_agent_models(client, &config).await?;
         let max_context_tokens = claude_code_max_context_tokens(&mappings, &prepared.models)?;
+        let max_context_override =
+            (!claude_code_model_supports_1m(&prepared.models, &mappings.sonnet)?)
+                .then_some(max_context_tokens);
         {
             let _guard = AGENT_CONFIG_FILE_LOCK
                 .lock()
                 .map_err(|_| "Claude Code configuration lock is poisoned".to_string())?;
-            update_claude_code_context_window(&claude_config_path, max_context_tokens)?;
+            update_claude_code_context_window(&claude_config_path, max_context_override)?;
         }
         let environment = claude_code_launch_environment(
             &format!("http://127.0.0.1:{port}"),
             effective_agent_api_key(&config),
             &mappings,
+            &prepared.models,
             max_context_tokens,
-        );
+        )?;
+        let mut environment_to_remove = vec!["ANTHROPIC_API_KEY"];
+        if !environment
+            .iter()
+            .any(|(key, _)| key == "CLAUDE_CODE_EFFORT_LEVEL")
+        {
+            environment_to_remove.push("CLAUDE_CODE_EFFORT_LEVEL");
+        }
+        if max_context_override.is_none() {
+            environment_to_remove.push(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV);
+        }
         return launch_cli_agent(
             &executable,
             client.name(),
             &selected_working_directory,
             &environment,
-            &["ANTHROPIC_API_KEY"],
+            &environment_to_remove,
         );
     }
     launch_cli_agent(&executable, client.name(), &home, &[], &[])
@@ -5051,6 +5077,7 @@ fn inspect_claude_agent_config(
         .or_else(|| root.get("model").and_then(serde_json::Value::as_str))
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .map(strip_claude_code_context_suffix)
         .map(str::to_string);
     Ok((configured, model))
 }
@@ -5080,6 +5107,7 @@ fn inspect_claude_code_model_mappings(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .or(fallback)
+            .map(strip_claude_code_context_suffix)
             .map(str::to_string)
     };
     let Some(opus) = read_model("ANTHROPIC_DEFAULT_OPUS_MODEL") else {
@@ -5098,7 +5126,36 @@ fn inspect_claude_code_model_mappings(
     }))
 }
 
+fn strip_claude_code_context_suffix(value: &str) -> &str {
+    let mut value = value.trim();
+    loop {
+        let Some(suffix_start) = value.len().checked_sub(4) else {
+            return value;
+        };
+        if !value[suffix_start..].eq_ignore_ascii_case("[1m]") {
+            return value;
+        }
+        value = value[..suffix_start].trim_end();
+    }
+}
+
+fn agent_model_source_name<'a>(models: &'a [AgentModelOption], model_name: &'a str) -> &'a str {
+    let model_name = strip_claude_code_context_suffix(model_name);
+    let Some(model) = models
+        .iter()
+        .find(|model| model.name.eq_ignore_ascii_case(model_name))
+    else {
+        return model_name;
+    };
+    if model.is_alias {
+        model.alias.as_deref().unwrap_or(model.name.as_str())
+    } else {
+        model.name.as_str()
+    }
+}
+
 fn agent_model_context_window(models: &[AgentModelOption], model_name: &str) -> Option<u64> {
+    let model_name = strip_claude_code_context_suffix(model_name);
     let selected = models
         .iter()
         .find(|model| model.name.eq_ignore_ascii_case(model_name))?;
@@ -5126,46 +5183,169 @@ fn claude_code_max_context_tokens(
     mappings: &ClaudeDesktopModelMappings,
     models: &[AgentModelOption],
 ) -> Result<u64, String> {
-    [
-        ("Opus", mappings.opus.as_str()),
-        ("Sonnet", mappings.sonnet.as_str()),
-        ("Haiku", mappings.haiku.as_str()),
+    let model = mappings.sonnet.as_str();
+    let context_window = agent_model_context_window(models, model)
+        .ok_or_else(|| format!("CPA 模型 API 未返回 Claude Code 主模型 {model} 的上下文窗口"))?;
+    if context_window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW
+        && !claude_code_model_supports_1m(models, model)?
+    {
+        return Ok(DEFAULT_CLAUDE_CONTEXT_WINDOW);
+    }
+    Ok(context_window)
+}
+
+fn agent_model_display_name<'a>(models: &'a [AgentModelOption], model_name: &'a str) -> &'a str {
+    let model_name = strip_claude_code_context_suffix(model_name);
+    let Some(model) = models
+        .iter()
+        .find(|model| model.name.eq_ignore_ascii_case(model_name))
+    else {
+        return model_name;
+    };
+    if model.is_alias {
+        model.name.as_str()
+    } else {
+        model.alias.as_deref().unwrap_or(model.name.as_str())
+    }
+}
+
+fn claude_code_model_supports_1m(
+    models: &[AgentModelOption],
+    model_name: &str,
+) -> Result<bool, String> {
+    claude_catalog::supports_claude_code_1m(agent_model_source_name(models, model_name))
+}
+
+fn claude_code_model_effort_level(
+    models: &[AgentModelOption],
+    model_name: &str,
+) -> Result<Option<String>, String> {
+    claude_catalog::claude_code_effort_level_for(agent_model_source_name(models, model_name))
+}
+
+fn claude_code_model_setting(
+    models: &[AgentModelOption],
+    model_name: &str,
+    enable_1m_variant: bool,
+) -> Result<String, String> {
+    let model_name = strip_claude_code_context_suffix(model_name);
+    if enable_1m_variant && claude_code_model_supports_1m(models, model_name)? {
+        Ok(format!("{model_name}[1m]"))
+    } else {
+        Ok(model_name.to_string())
+    }
+}
+
+fn claude_code_model_settings(
+    mappings: &ClaudeDesktopModelMappings,
+    models: &[AgentModelOption],
+) -> Result<ClaudeDesktopModelMappings, String> {
+    Ok(ClaudeDesktopModelMappings {
+        opus: claude_code_model_setting(models, &mappings.opus, true)?,
+        sonnet: claude_code_model_setting(models, &mappings.sonnet, true)?,
+        haiku: claude_code_model_setting(models, &mappings.haiku, false)?,
+    })
+}
+
+fn format_context_window(context_window: u64) -> String {
+    if context_window % 1_000_000 == 0 {
+        format!("{}M", context_window / 1_000_000)
+    } else if context_window % 1_000 == 0 {
+        format!("{}K", context_window / 1_000)
+    } else {
+        context_window.to_string()
+    }
+}
+
+fn claude_code_model_presentation(
+    models: &[AgentModelOption],
+    model_name: &str,
+    role: Option<&str>,
+) -> (String, String) {
+    let display_name = agent_model_display_name(models, model_name);
+    let context_window =
+        agent_model_context_window(models, model_name).unwrap_or(DEFAULT_CLAUDE_CONTEXT_WINDOW);
+    let context_label = format_context_window(context_window);
+    let name = match role {
+        Some(role) => format!("{display_name} ({role}, {context_label} context)"),
+        None => format!("{display_name} ({context_label} context)"),
+    };
+    let description = format!("CPA model {model_name} - {context_label} context window");
+    (name, description)
+}
+
+fn claude_code_model_presentation_environment(
+    mappings: &ClaudeDesktopModelMappings,
+    models: &[AgentModelOption],
+) -> Result<Vec<(String, String)>, String> {
+    let opus = claude_code_model_presentation(models, &mappings.opus, Some("Opus mapping"));
+    let sonnet = claude_code_model_presentation(models, &mappings.sonnet, Some("Sonnet mapping"));
+    let haiku = claude_code_model_presentation(models, &mappings.haiku, Some("Haiku mapping"));
+    let fable = claude_code_model_presentation(models, &mappings.sonnet, Some("Fable mapping"));
+    let custom = claude_code_model_presentation(models, &mappings.sonnet, None);
+    let custom_model = claude_code_model_setting(models, &mappings.sonnet, true)?;
+    Ok([
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", opus.0),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION", opus.1),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", sonnet.0),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION", sonnet.1),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", haiku.0),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION", haiku.1),
+        ("ANTHROPIC_DEFAULT_FABLE_MODEL_NAME", fable.0),
+        ("ANTHROPIC_DEFAULT_FABLE_MODEL_DESCRIPTION", fable.1),
+        ("ANTHROPIC_CUSTOM_MODEL_OPTION", custom_model),
+        ("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", custom.0),
+        ("ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION", custom.1),
     ]
     .into_iter()
-    .map(|(role, model)| {
-        agent_model_context_window(models, model).ok_or_else(|| {
-            format!("CPA 模型 API 未返回 Claude Code {role} 映射模型 {model} 的上下文窗口")
-        })
-    })
-    .collect::<Result<Vec<_>, _>>()?
-    .into_iter()
-    .min()
-    .ok_or_else(|| "CPA 模型 API 未返回 Claude Code 上下文窗口".to_string())
+    .map(|(key, value)| (key.to_string(), value))
+    .collect())
 }
 
 fn claude_code_launch_environment(
     base_url: &str,
     api_key: &str,
     mappings: &ClaudeDesktopModelMappings,
+    models: &[AgentModelOption],
     max_context_tokens: u64,
-) -> Vec<(String, String)> {
+) -> Result<Vec<(String, String)>, String> {
+    let model_settings = claude_code_model_settings(mappings, models)?;
+    let subagent_model = strip_claude_code_context_suffix(&mappings.haiku).to_string();
     let mut environment = [
         ("ANTHROPIC_BASE_URL", base_url),
         ("ANTHROPIC_AUTH_TOKEN", api_key),
-        ("ANTHROPIC_MODEL", mappings.sonnet.as_str()),
-        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", mappings.haiku.as_str()),
-        ("ANTHROPIC_DEFAULT_SONNET_MODEL", mappings.sonnet.as_str()),
-        ("ANTHROPIC_DEFAULT_OPUS_MODEL", mappings.opus.as_str()),
-        ("ANTHROPIC_DEFAULT_FABLE_MODEL", mappings.sonnet.as_str()),
+        ("ANTHROPIC_MODEL", model_settings.sonnet.as_str()),
+        (
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            model_settings.haiku.as_str(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            model_settings.sonnet.as_str(),
+        ),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", model_settings.opus.as_str()),
+        (
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            model_settings.sonnet.as_str(),
+        ),
+        ("CLAUDE_CODE_SUBAGENT_MODEL", subagent_model.as_str()),
     ]
     .into_iter()
     .map(|(key, value)| (key.to_string(), value.to_string()))
     .collect::<Vec<_>>();
-    environment.push((
-        CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
-        max_context_tokens.to_string(),
-    ));
-    environment
+    environment.extend(claude_code_model_presentation_environment(
+        mappings, models,
+    )?);
+    if let Some(effort_level) = claude_code_model_effort_level(models, &mappings.sonnet)? {
+        environment.push(("CLAUDE_CODE_EFFORT_LEVEL".to_string(), effort_level));
+    }
+    if !claude_code_model_supports_1m(models, &mappings.sonnet)? {
+        environment.push((
+            CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
+            max_context_tokens.to_string(),
+        ));
+    }
+    Ok(environment)
 }
 
 fn inspect_claude_desktop_agent_config(
@@ -5645,29 +5825,56 @@ fn build_claude_agent_config(
         .cloned()
         .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
     let max_context_tokens = claude_code_max_context_tokens(&mappings, models)?;
+    let use_max_context_override = !claude_code_model_supports_1m(models, &mappings.sonnet)?;
+    let model_settings = claude_code_model_settings(&mappings, models)?;
+    let subagent_model = strip_claude_code_context_suffix(&mappings.haiku).to_string();
+    let effort_level = claude_code_model_effort_level(models, &mappings.sonnet)?;
     let env = ensure_json_object_entry(root, "env");
     env.remove("ANTHROPIC_API_KEY");
+    env.remove("CLAUDE_CODE_EFFORT_LEVEL");
+    env.remove(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV);
     for (key, value) in [
         ("ANTHROPIC_BASE_URL", base_url),
         ("ANTHROPIC_AUTH_TOKEN", api_key),
-        ("ANTHROPIC_MODEL", mappings.sonnet.as_str()),
-        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", mappings.haiku.as_str()),
-        ("ANTHROPIC_DEFAULT_SONNET_MODEL", mappings.sonnet.as_str()),
-        ("ANTHROPIC_DEFAULT_OPUS_MODEL", mappings.opus.as_str()),
-        ("ANTHROPIC_DEFAULT_FABLE_MODEL", mappings.sonnet.as_str()),
+        ("ANTHROPIC_MODEL", model_settings.sonnet.as_str()),
+        (
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            model_settings.haiku.as_str(),
+        ),
+        (
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            model_settings.sonnet.as_str(),
+        ),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", model_settings.opus.as_str()),
+        (
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            model_settings.sonnet.as_str(),
+        ),
+        ("CLAUDE_CODE_SUBAGENT_MODEL", subagent_model.as_str()),
     ] {
         env.insert(
             key.to_string(),
             serde_json::Value::String(value.to_string()),
         );
     }
-    env.insert(
-        CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
-        serde_json::Value::String(max_context_tokens.to_string()),
-    );
+    if use_max_context_override {
+        env.insert(
+            CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
+            serde_json::Value::String(max_context_tokens.to_string()),
+        );
+    }
+    for (key, value) in claude_code_model_presentation_environment(&mappings, models)? {
+        env.insert(key, serde_json::Value::String(value));
+    }
+    if let Some(effort_level) = effort_level {
+        env.insert(
+            "CLAUDE_CODE_EFFORT_LEVEL".to_string(),
+            serde_json::Value::String(effort_level),
+        );
+    }
     root.insert(
         "model".to_string(),
-        serde_json::Value::String(mappings.sonnet),
+        serde_json::Value::String(model_settings.sonnet),
     );
     let mut rendered = serde_json::to_string_pretty(&serde_json::Value::Object(root.clone()))
         .map_err(|error| format!("生成 Claude Code 配置失败: {error}"))?;
@@ -5692,7 +5899,10 @@ fn remove_claude_code_conflicting_api_key(path: &Path) -> Result<bool, String> {
     })
 }
 
-fn update_claude_code_context_window(path: &Path, max_context_tokens: u64) -> Result<bool, String> {
+fn update_claude_code_context_window(
+    path: &Path,
+    max_context_tokens: Option<u64>,
+) -> Result<bool, String> {
     update_agent_json_file(path, "Claude Code configuration", |root| {
         let managed = root
             .get("env")
@@ -5703,8 +5913,11 @@ fn update_claude_code_context_window(path: &Path, max_context_tokens: u64) -> Re
         if !managed {
             return false;
         }
-        let expected = max_context_tokens.to_string();
         let env = ensure_json_object_entry(root, "env");
+        let Some(max_context_tokens) = max_context_tokens else {
+            return env.remove(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV).is_some();
+        };
+        let expected = max_context_tokens.to_string();
         if env
             .get(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV)
             .and_then(serde_json::Value::as_str)
@@ -5814,10 +6027,7 @@ fn build_claude_desktop_profile(
     mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop 网关配置")?;
-    root.insert(
-        "coworkEgressAllowedHosts".to_string(),
-        serde_json::json!(["*"]),
-    );
+    root.remove("coworkEgressAllowedHosts");
     root.insert(
         "disableDeploymentModeChooser".to_string(),
         serde_json::json!(true),
@@ -5879,9 +6089,15 @@ fn claude_desktop_inference_model(
             route_model
         }),
     );
-    if context_window.is_some_and(|window| window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW) {
-        entry.insert("supports1m".to_string(), serde_json::json!(true));
-        entry.insert("prefer1m".to_string(), serde_json::json!(true));
+    if let Some(context_window) = context_window {
+        entry.insert(
+            "contextWindow".to_string(),
+            serde_json::json!(context_window),
+        );
+        if context_window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW {
+            entry.insert("supports1m".to_string(), serde_json::json!(true));
+            entry.insert("prefer1m".to_string(), serde_json::json!(true));
+        }
     }
     serde_json::Value::Object(entry)
 }
@@ -19855,7 +20071,9 @@ model:
     #[test]
     fn claude_agent_config_preserves_existing_fields() {
         let rendered = build_claude_agent_config(
-            Some(r#"{"theme":"dark","env":{"KEEP":"yes","ANTHROPIC_API_KEY":"legacy-key"}}"#),
+            Some(
+                r#"{"theme":"dark","env":{"KEEP":"yes","ANTHROPIC_API_KEY":"legacy-key","CLAUDE_CODE_EFFORT_LEVEL":"max"}}"#,
+            ),
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "claude-test",
@@ -19871,7 +20089,44 @@ model:
         assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317");
         assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], DEFAULT_API_KEY);
         assert_eq!(value["env"]["ANTHROPIC_MODEL"], "claude-test");
+        assert!(value["env"].get("CLAUDE_CODE_EFFORT_LEVEL").is_none());
+        assert_eq!(value["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "claude-test");
+        assert_eq!(
+            value["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+            "claude-test (200K context)"
+        );
         assert_eq!(value["model"], "claude-test");
+    }
+
+    #[test]
+    fn claude_code_inspection_normalizes_1m_suffix() {
+        let directory = agent_test_home("claude-code-1m-inspection");
+        let path = directory.join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+                "env": {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_AUTH_TOKEN": "test-key",
+                    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash"
+                },
+                "model": "deepseek-v4-pro[1m]"
+            }"#,
+        )
+        .unwrap();
+
+        let (configured, model) = inspect_claude_agent_config(&path, 8317, "test-key").unwrap();
+        let mappings = inspect_claude_code_model_mappings(&path).unwrap().unwrap();
+
+        assert!(configured);
+        assert_eq!(model.as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(mappings.opus, "deepseek-v4-pro");
+        assert_eq!(mappings.sonnet, "deepseek-v4-pro");
+        assert_eq!(mappings.haiku, "deepseek-v4-flash");
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -19904,7 +20159,7 @@ model:
                 name: mappings.haiku.clone(),
                 alias: None,
                 is_alias: false,
-                context_window: Some(512_000),
+                context_window: Some(128_000),
             },
         ];
         let rendered = build_claude_agent_config(
@@ -19922,13 +20177,19 @@ model:
         assert_eq!(value["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"], "gpt-sonnet");
         assert_eq!(value["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "gpt-haiku");
         assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "272000");
+        assert_eq!(
+            value["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+            "gpt-sonnet (272K context)"
+        );
 
         let environment = claude_code_launch_environment(
             "http://127.0.0.1:8317",
             "test-key",
             &mappings,
+            &models,
             claude_code_max_context_tokens(&mappings, &models).unwrap(),
-        );
+        )
+        .unwrap();
         let read = |key: &str| {
             environment
                 .iter()
@@ -19941,7 +20202,176 @@ model:
         assert_eq!(read("ANTHROPIC_DEFAULT_OPUS_MODEL"), Some("gpt-opus"));
         assert_eq!(read("ANTHROPIC_DEFAULT_SONNET_MODEL"), Some("gpt-sonnet"));
         assert_eq!(read("ANTHROPIC_DEFAULT_HAIKU_MODEL"), Some("gpt-haiku"));
+        assert_eq!(read("CLAUDE_CODE_SUBAGENT_MODEL"), Some("gpt-haiku"));
+        assert_eq!(read("CLAUDE_CODE_EFFORT_LEVEL"), None);
+        assert_eq!(
+            read("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"),
+            Some("gpt-sonnet (272K context)")
+        );
         assert_eq!(read(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV), Some("272000"));
+    }
+
+    #[test]
+    fn claude_code_deepseek_picker_shows_catalog_name_and_1m_context() {
+        let mappings = ClaudeDesktopModelMappings {
+            opus: "deepseek-v4-pro".to_string(),
+            sonnet: "deepseek-v4-pro".to_string(),
+            haiku: "deepseek-v4-flash".to_string(),
+        };
+        let models = vec![
+            AgentModelOption {
+                name: "deepseek-v4-pro".to_string(),
+                alias: Some("DeepSeek V4 Pro".to_string()),
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+            AgentModelOption {
+                name: "deepseek-v4-flash".to_string(),
+                alias: Some("DeepSeek V4 Flash".to_string()),
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+        ];
+        let rendered = build_claude_agent_config(
+            None,
+            "http://127.0.0.1:8317",
+            "test-key",
+            "deepseek-v4-pro",
+            &models,
+            Some(&mappings),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+        assert!(value["env"]
+            .get(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV)
+            .is_none());
+        assert_eq!(value["env"]["ANTHROPIC_MODEL"], "deepseek-v4-pro[1m]");
+        assert_eq!(
+            value["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+            "deepseek-v4-pro[1m]"
+        );
+        assert_eq!(
+            value["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+            "deepseek-v4-pro[1m]"
+        );
+        assert_eq!(
+            value["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+            "deepseek-v4-flash"
+        );
+        assert_eq!(
+            value["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"],
+            "deepseek-v4-pro[1m]"
+        );
+        assert_eq!(
+            value["env"]["CLAUDE_CODE_SUBAGENT_MODEL"],
+            "deepseek-v4-flash"
+        );
+        assert_eq!(value["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "max");
+        assert_eq!(
+            value["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION"],
+            "deepseek-v4-pro[1m]"
+        );
+        assert_eq!(
+            value["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+            "DeepSeek V4 Pro (1M context)"
+        );
+        assert_eq!(
+            value["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL_NAME"],
+            "DeepSeek V4 Pro (Fable mapping, 1M context)"
+        );
+        assert_eq!(value["model"], "deepseek-v4-pro[1m]");
+
+        let environment = claude_code_launch_environment(
+            "http://127.0.0.1:8317",
+            "test-key",
+            &mappings,
+            &models,
+            claude_code_max_context_tokens(&mappings, &models).unwrap(),
+        )
+        .unwrap();
+        assert!(!environment
+            .iter()
+            .any(|(key, _)| key == CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV));
+    }
+
+    #[test]
+    fn claude_code_1m_suffix_requires_explicit_catalog_support() {
+        let models = vec![
+            AgentModelOption {
+                name: "deepseek-v4-flash".to_string(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+            AgentModelOption {
+                name: "gpt-runtime-1m".to_string(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+        ];
+
+        assert_eq!(
+            claude_code_model_setting(&models, "deepseek-v4-flash", true).unwrap(),
+            "deepseek-v4-flash[1m]"
+        );
+        assert_eq!(
+            claude_code_model_setting(&models, "deepseek-v4-flash", false).unwrap(),
+            "deepseek-v4-flash"
+        );
+        assert_eq!(
+            claude_code_model_setting(&models, "gpt-runtime-1m", true).unwrap(),
+            "gpt-runtime-1m"
+        );
+        assert_eq!(
+            claude_code_max_context_tokens(
+                &ClaudeDesktopModelMappings::all("gpt-runtime-1m"),
+                &models,
+            )
+            .unwrap(),
+            DEFAULT_CLAUDE_CONTEXT_WINDOW
+        );
+    }
+
+    #[test]
+    fn claude_code_context_window_follows_primary_model_alias_source() {
+        let mappings = ClaudeDesktopModelMappings {
+            opus: "small-model".to_string(),
+            sonnet: "primary-alias".to_string(),
+            haiku: "large-model".to_string(),
+        };
+        let models = vec![
+            AgentModelOption {
+                name: mappings.opus.clone(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(128_000),
+            },
+            AgentModelOption {
+                name: "primary-model".to_string(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(372_000),
+            },
+            AgentModelOption {
+                name: mappings.sonnet.clone(),
+                alias: Some("primary-model".to_string()),
+                is_alias: true,
+                context_window: Some(200_000),
+            },
+            AgentModelOption {
+                name: mappings.haiku.clone(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(1_000_000),
+            },
+        ];
+
+        assert_eq!(
+            claude_code_max_context_tokens(&mappings, &models).unwrap(),
+            372_000
+        );
     }
 
     #[test]
@@ -19971,13 +20401,33 @@ model:
         .unwrap();
 
         assert!(remove_claude_code_conflicting_api_key(&path).unwrap());
-        assert!(update_claude_code_context_window(&path, 272_000).unwrap());
-        assert!(!update_claude_code_context_window(&path, 272_000).unwrap());
+        assert!(update_claude_code_context_window(&path, Some(272_000)).unwrap());
+        assert!(!update_claude_code_context_window(&path, Some(272_000)).unwrap());
         let value: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert!(value["env"].get("ANTHROPIC_API_KEY").is_none());
         assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "token");
         assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "272000");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn claude_code_1m_variant_removes_global_context_override() {
+        let directory = agent_test_home("claude-code-remove-context-override");
+        let path = directory.join("settings.json");
+        fs::write(
+            &path,
+            r#"{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1000000"}}"#,
+        )
+        .unwrap();
+
+        assert!(update_claude_code_context_window(&path, None).unwrap());
+        assert!(!update_claude_code_context_window(&path, None).unwrap());
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value["env"]
+            .get(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV)
+            .is_none());
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -20175,7 +20625,7 @@ model:
     #[test]
     fn claude_desktop_config_builds_gateway_profile_and_index() {
         let profile = build_claude_desktop_profile(
-            Some(r#"{"keep":true}"#),
+            Some(r#"{"keep":true,"coworkEgressAllowedHosts":["*"]}"#),
             "http://127.0.0.1:8317",
             DEFAULT_API_KEY,
             "claude-sonnet-test",
@@ -20193,6 +20643,7 @@ model:
         let meta: serde_json::Value = serde_json::from_str(&meta).unwrap();
 
         assert_eq!(profile["keep"], true);
+        assert!(profile.get("coworkEgressAllowedHosts").is_none());
         assert_eq!(profile["inferenceGatewayApiKey"], DEFAULT_API_KEY);
         assert_eq!(profile["inferenceGatewayBaseUrl"], "http://127.0.0.1:8317");
         assert_eq!(
@@ -20257,12 +20708,14 @@ model:
             serde_json::json!([
                 {
                     "name": CLAUDE_DESKTOP_OPUS_MODEL_ID,
+                    "contextWindow": 1000000,
                     "supports1m": true,
                     "prefer1m": true
                 },
-                { "name": CLAUDE_DESKTOP_SONNET_MODEL_ID },
+                { "name": CLAUDE_DESKTOP_SONNET_MODEL_ID, "contextWindow": 272000 },
                 {
                     "name": CLAUDE_DESKTOP_HAIKU_MODEL_ID,
+                    "contextWindow": 1000000,
                     "supports1m": true,
                     "prefer1m": true
                 }
@@ -20722,6 +21175,7 @@ oauth-model-alias:
             profile["inferenceModels"],
             serde_json::json!([{
                 "name": "gpt-high",
+                "contextWindow": 1_000_000,
                 "supports1m": true,
                 "prefer1m": true
             }])
