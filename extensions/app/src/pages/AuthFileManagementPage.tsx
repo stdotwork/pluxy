@@ -588,9 +588,12 @@ export function AuthFileManagementPage() {
                 placeholder={t('authFiles.priority.placeholder')}
                 disabled={busy}
                 aria-invalid={Boolean(priorityEditor.error)}
-                onChange={(event) => setPriorityEditor((current) => current
-                  ? { ...current, value: event.currentTarget.value, error: '' }
-                  : current)}
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
+                  setPriorityEditor((current) => current
+                    ? { ...current, value, error: '' }
+                    : current);
+                }}
               />
               <small>{t('authFiles.priority.hint')}</small>
             </label>
