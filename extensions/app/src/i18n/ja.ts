@@ -504,7 +504,6 @@ export const jaOverrides = {
   'agents.sessions.settingOn': 'オン',
   'agents.sessions.settingOff': 'オフ',
   'agents.sessions.settingLoadFailed': '自動復元設定の読み込みに失敗しました：{error}',
-  'agents.sessions.applyManagedFirst': '先に Codex の CPA 管理設定を適用してください',
   'agents.sessions.repairNow': '今すぐ復元',
   'agents.sessions.repairing': '復元中',
   'agents.sessions.loadFailed': 'Codex セッションの読み込みに失敗しました：{error}',

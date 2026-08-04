@@ -45,7 +45,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function CodexSessionsPanel({ managedProviderActive }: { managedProviderActive: boolean }) {
+export function CodexSessionsPanel() {
   const { formatDate, t } = useI18n();
   const [page, setPage] = useState<CodexSessionPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -320,8 +320,7 @@ export function CodexSessionsPanel({ managedProviderActive }: { managedProviderA
             <button
               type="button"
               className="secondary-button compact-button"
-              disabled={busy || !managedProviderActive}
-              title={!managedProviderActive ? t('agents.sessions.applyManagedFirst') : undefined}
+              disabled={busy}
               onClick={() => void repairSessions()}
             >
               {operation === 'repair' ? <LoaderCircle size={15} className="spin" /> : <ShieldCheck size={15} />}

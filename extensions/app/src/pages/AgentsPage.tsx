@@ -1677,7 +1677,7 @@ export function AgentsPage() {
               role="tabpanel"
               aria-labelledby="agent-subpage-tab-sessions"
             >
-              <CodexSessionsPanel managedProviderActive={activeStatus?.modificationState === 'applied'} />
+              <CodexSessionsPanel />
             </div>
           ) : null}
         </section>

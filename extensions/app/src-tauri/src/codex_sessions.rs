@@ -8,14 +8,15 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
-use crate::{GuiConfigState, MANAGED_AGENT_PROVIDER_ID};
+use crate::GuiConfigState;
 
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE_SIZE: usize = 100;
@@ -203,6 +204,12 @@ struct SessionIndexPlan {
     candidates: Vec<SessionIndexCleanupCandidate>,
 }
 
+#[derive(Debug, Clone)]
+struct SessionIndexMetadata {
+    title: String,
+    updated_at_ms: Option<i64>,
+}
+
 #[tauri::command]
 pub(crate) async fn list_codex_sessions(
     app: tauri::AppHandle,
@@ -254,8 +261,8 @@ pub(crate) async fn repair_codex_session_metadata(
     let codex_home = resolve_codex_home(&user_home);
     let progress_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        validate_managed_codex_provider(&codex_home)?;
-        repair_codex_session_metadata_from_home(&codex_home, |progress| {
+        let target_provider = resolve_current_codex_provider(&codex_home)?;
+        repair_codex_session_metadata_from_home(&codex_home, &target_provider, |progress| {
             let _ = progress_app.emit(REPAIR_PROGRESS_EVENT, progress);
         })
     })
@@ -339,11 +346,11 @@ pub(crate) fn repair_before_codex_launch(
 fn repair_before_codex_launch_from_home(
     codex_home: &Path,
 ) -> Result<CodexSessionRepairResult, String> {
-    validate_managed_codex_provider(codex_home)?;
-    match repair_codex_session_metadata_from_home(codex_home, |_| {}) {
+    let target_provider = resolve_current_codex_provider(codex_home)?;
+    match repair_codex_session_metadata_from_home(codex_home, &target_provider, |_| {}) {
         Ok(result) => Ok(result),
         Err(error) if is_locked_error_message(&error) => Ok(CodexSessionRepairResult {
-            target_provider: MANAGED_AGENT_PROVIDER_ID.to_string(),
+            target_provider,
             changed_rollout_files: 0,
             sqlite_rows_updated: 0,
             skipped_locked_files: Vec::new(),
@@ -526,6 +533,10 @@ fn list_codex_sessions_from_home(
             Err(error) => warnings.push(error),
         }
     }
+    let (mut rollout_sessions, rollout_warnings) = list_sessions_from_rollouts(codex_home);
+    sessions.append(&mut rollout_sessions);
+    warnings.extend(rollout_warnings);
+    let mut sessions = merge_session_summaries(sessions);
     sessions.sort_by(|left, right| {
         right
             .updated_at_ms
@@ -533,8 +544,6 @@ fn list_codex_sessions_from_home(
             .then_with(|| right.id.cmp(&left.id))
             .then_with(|| left.database_path.cmp(&right.database_path))
     });
-    let mut seen = HashSet::new();
-    sessions.retain(|session| seen.insert(session.id.clone()));
     let has_more = sessions.len() > offset.saturating_add(limit);
     let sessions = sessions.into_iter().skip(offset).take(limit).collect();
     Ok(CodexSessionPage {
@@ -550,6 +559,231 @@ fn list_codex_sessions_from_home(
         repair_on_launch,
         warnings,
     })
+}
+
+fn merge_session_summaries(sessions: Vec<CodexSessionSummary>) -> Vec<CodexSessionSummary> {
+    let mut merged = Vec::<CodexSessionSummary>::new();
+    let mut positions = HashMap::<String, usize>::new();
+    for session in sessions {
+        let key = normalize_thread_id(&session.id);
+        let key = if key.is_empty() {
+            session.id.clone()
+        } else {
+            key
+        };
+        let Some(index) = positions.get(&key).copied() else {
+            positions.insert(key, merged.len());
+            merged.push(session);
+            continue;
+        };
+        let existing = &mut merged[index];
+        let candidate_is_newer = session.updated_at_ms > existing.updated_at_ms;
+        if candidate_is_newer {
+            let mut next = session;
+            fill_missing_session_fields(&mut next, existing);
+            *existing = next;
+        } else {
+            fill_missing_session_fields(existing, &session);
+        }
+    }
+    merged
+}
+
+fn fill_missing_session_fields(target: &mut CodexSessionSummary, fallback: &CodexSessionSummary) {
+    if target.title.trim().is_empty() {
+        target.title = fallback.title.clone();
+    }
+    if target.cwd.trim().is_empty() {
+        target.cwd = fallback.cwd.clone();
+    }
+    if target.model_provider.trim().is_empty() {
+        target.model_provider = fallback.model_provider.clone();
+    }
+    if target.database_path.trim().is_empty() {
+        target.database_path = fallback.database_path.clone();
+    }
+    if target.updated_at_ms.is_none() {
+        target.updated_at_ms = fallback.updated_at_ms;
+    }
+}
+
+fn list_sessions_from_rollouts(codex_home: &Path) -> (Vec<CodexSessionSummary>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let metadata = match read_session_index_metadata(codex_home) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            warnings.push(error);
+            HashMap::new()
+        }
+    };
+    let paths = match collect_rollout_files(codex_home) {
+        Ok(paths) => paths,
+        Err(error) => {
+            warnings.push(error);
+            return (Vec::new(), warnings);
+        }
+    };
+    let mut sessions = Vec::new();
+    for path in paths {
+        match summarize_rollout_session(codex_home, &path, &metadata) {
+            Ok(Some(session)) => sessions.push(session),
+            Ok(None) => {}
+            Err(error) if is_locked_error_message(&error) => {
+                warnings.push(format!(
+                    "会话文件正在使用，已跳过 {}: {error}",
+                    path.display()
+                ));
+            }
+            Err(error) => warnings.push(error),
+        }
+    }
+    (sessions, warnings)
+}
+
+fn read_session_index_metadata(
+    codex_home: &Path,
+) -> Result<HashMap<String, SessionIndexMetadata>, String> {
+    let path = codex_home.join("session_index.jsonl");
+    if !path.is_file() {
+        return Ok(HashMap::new());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("读取 session_index.jsonl 失败: {error}"))?;
+    let mut metadata = HashMap::new();
+    for line in content.lines() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(object) = record.as_object() else {
+            continue;
+        };
+        let Some(id) = object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        let item = SessionIndexMetadata {
+            title: object
+                .get("thread_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            updated_at_ms: object
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .and_then(parse_session_timestamp_millis),
+        };
+        metadata.insert(id.to_string(), item.clone());
+        let normalized = normalize_thread_id(id);
+        if !normalized.is_empty() {
+            metadata.entry(normalized).or_insert(item);
+        }
+    }
+    Ok(metadata)
+}
+
+fn summarize_rollout_session(
+    codex_home: &Path,
+    path: &Path,
+    metadata: &HashMap<String, SessionIndexMetadata>,
+) -> Result<Option<CodexSessionSummary>, String> {
+    let file = fs::File::open(path)
+        .map_err(|error| format!("读取 rollout 失败 {}: {error}", path.display()))?;
+    let mut id = None;
+    let mut title = String::new();
+    let mut cwd = String::new();
+    let mut model_provider = String::new();
+    let mut updated_at_ms = None;
+    for line in BufReader::new(file).lines() {
+        let line =
+            line.map_err(|error| format!("读取 rollout 失败 {}: {error}", path.display()))?;
+        let Ok(record) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        let Some(payload) = record.get("payload").and_then(Value::as_object) else {
+            continue;
+        };
+        id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        title = payload
+            .get("title")
+            .or_else(|| payload.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        cwd = payload
+            .get("cwd")
+            .and_then(Value::as_str)
+            .and_then(normalize_workspace_path)
+            .unwrap_or_default();
+        model_provider = payload
+            .get("model_provider")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        updated_at_ms = record
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_session_timestamp_millis);
+        break;
+    }
+    let id = id.or_else(|| rollout_thread_id_from_file_name(path));
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let normalized_id = normalize_thread_id(&id);
+    let index_metadata = metadata.get(&id).or_else(|| metadata.get(&normalized_id));
+    if title.trim().is_empty() {
+        title = index_metadata
+            .map(|item| item.title.clone())
+            .unwrap_or_default();
+    }
+    updated_at_ms = index_metadata
+        .and_then(|item| item.updated_at_ms)
+        .or(updated_at_ms)
+        .or_else(|| {
+            fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        });
+    Ok(Some(CodexSessionSummary {
+        id,
+        title,
+        cwd,
+        model_provider,
+        archived: path.starts_with(codex_home.join("archived_sessions")),
+        updated_at_ms,
+        database_path: String::new(),
+    }))
+}
+
+fn parse_session_timestamp_millis(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(value) = value.parse::<i64>() {
+        return Some(if value.abs() < 100_000_000_000 {
+            value.saturating_mul(1_000)
+        } else {
+            value
+        });
+    }
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
 }
 
 fn list_sessions_from_database(
@@ -1225,28 +1459,37 @@ fn write_json_atomically(path: &Path, value: &Value) -> Result<(), String> {
     crate::write_bytes_atomically(path, &bytes)
 }
 
-fn validate_managed_codex_provider(codex_home: &Path) -> Result<(), String> {
+fn resolve_current_codex_provider(codex_home: &Path) -> Result<String, String> {
     let path = codex_home.join("config.toml");
+    if !path.is_file() {
+        return Ok("openai".to_string());
+    }
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("读取 Codex 配置失败 {}: {error}", path.display()))?;
     let document = text
         .parse::<toml::Value>()
         .map_err(|error| format!("Codex 配置无法解析: {error}"))?;
-    if document.get("model_provider").and_then(toml::Value::as_str)
-        != Some(MANAGED_AGENT_PROVIDER_ID)
-    {
-        return Err("请先为 Codex 应用 EasyCLIProxyAPI 托管配置，再恢复历史会话".to_string());
-    }
-    Ok(())
+    Ok(document
+        .get("model_provider")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+        .unwrap_or("openai")
+        .to_string())
 }
 
 fn repair_codex_session_metadata_from_home<F>(
     codex_home: &Path,
+    target_provider: &str,
     mut progress: F,
 ) -> Result<CodexSessionRepairResult, String>
 where
     F: FnMut(CodexSessionRepairProgress),
 {
+    let target_provider = target_provider.trim();
+    if target_provider.is_empty() {
+        return Err("当前 Codex provider 不能为空".to_string());
+    }
     let _guard = CODEX_SESSION_WRITE_LOCK
         .lock()
         .map_err(|_| "Codex 会话写入锁已损坏".to_string())?;
@@ -1262,7 +1505,7 @@ where
     let mut skipped_locked_files = Vec::new();
     let mut warnings = Vec::new();
     for (index, path) in rollout_paths.iter().enumerate() {
-        match build_rollout_repair(path, MANAGED_AGENT_PROVIDER_ID) {
+        match build_rollout_repair(path, target_provider) {
             Ok(Some(repair)) => repairs.push(repair),
             Ok(None) => {}
             Err(error) if is_locked_error_message(&error) => {
@@ -1283,7 +1526,7 @@ where
     let (database_paths, database_warnings) = discover_database_paths(codex_home, false);
     warnings.extend(database_warnings);
     let (sqlite_updates_needed, database_count_warnings) =
-        count_sqlite_repairs(&database_paths, &repairs, &projectless)?;
+        count_sqlite_repairs(&database_paths, &repairs, &projectless, target_provider)?;
     let sqlite_scan_incomplete = !database_count_warnings.is_empty();
     warnings.extend(database_count_warnings);
     let changed_repairs = repairs
@@ -1306,6 +1549,7 @@ where
                 &database_paths,
                 &changed_repairs,
                 "provider-repair",
+                target_provider,
             )?)
         };
     progress(CodexSessionRepairProgress {
@@ -1348,25 +1592,26 @@ where
         processed: 0,
         total: database_paths.len(),
     });
-    let sqlite_rows_updated = match apply_sqlite_repairs(&database_paths, &repairs, &projectless) {
-        Ok((updated, database_lock_warnings)) => {
-            warnings.extend(database_lock_warnings);
-            updated
-        }
-        Err(error) => {
-            for previous in written.iter().rev() {
-                let _ = crate::write_bytes_atomically(&previous.path, &previous.original);
-                restore_modified_time(&previous.path, previous.original_mtime);
+    let sqlite_rows_updated =
+        match apply_sqlite_repairs(&database_paths, &repairs, &projectless, target_provider) {
+            Ok((updated, database_lock_warnings)) => {
+                warnings.extend(database_lock_warnings);
+                updated
             }
-            return Err(format!(
-                "更新会话数据库失败；rollout 已尝试回滚，备份仍保留：{error}"
-            ));
-        }
-    };
+            Err(error) => {
+                for previous in written.iter().rev() {
+                    let _ = crate::write_bytes_atomically(&previous.path, &previous.original);
+                    restore_modified_time(&previous.path, previous.original_mtime);
+                }
+                return Err(format!(
+                    "更新会话数据库失败；rollout 已尝试回滚，备份仍保留：{error}"
+                ));
+            }
+        };
     if backup_path.is_some() {
         prune_repair_backups(codex_home)?;
     }
-    let encrypted_content_warning = encrypted_content_warning(&repairs);
+    let encrypted_content_warning = encrypted_content_warning(&repairs, target_provider);
     progress(CodexSessionRepairProgress {
         phase: "complete".to_string(),
         percent: 100,
@@ -1374,7 +1619,7 @@ where
         total,
     });
     Ok(CodexSessionRepairResult {
-        target_provider: MANAGED_AGENT_PROVIDER_ID.to_string(),
+        target_provider: target_provider.to_string(),
         changed_rollout_files: written.len(),
         sqlite_rows_updated,
         skipped_locked_files,
@@ -1562,6 +1807,7 @@ fn count_sqlite_repairs(
     paths: &[PathBuf],
     repairs: &[RolloutRepair],
     projectless: &HashSet<String>,
+    target_provider: &str,
 ) -> Result<(usize, Vec<String>), String> {
     let (user_event_ids, cwd_by_id) = repair_maps(repairs, projectless);
     let mut total = 0usize;
@@ -1575,7 +1821,7 @@ fn count_sqlite_repairs(
                 count += connection
                     .query_row(
                         "SELECT COUNT(*) FROM threads WHERE COALESCE(model_provider, '') <> ?1",
-                        [MANAGED_AGENT_PROVIDER_ID],
+                        [target_provider],
                         |row| row.get::<_, i64>(0),
                     )
                     .map_err(|error| format!("统计 Provider 迁移行失败: {error}"))?
@@ -1623,6 +1869,7 @@ fn apply_sqlite_repairs(
     paths: &[PathBuf],
     repairs: &[RolloutRepair],
     projectless: &HashSet<String>,
+    target_provider: &str,
 ) -> Result<(usize, Vec<String>), String> {
     let (user_event_ids, cwd_by_id) = repair_maps(repairs, projectless);
     let mut total = 0usize;
@@ -1642,7 +1889,7 @@ fn apply_sqlite_repairs(
                 updated += transaction
                     .execute(
                         "UPDATE threads SET model_provider = ?1 WHERE COALESCE(model_provider, '') <> ?1",
-                        [MANAGED_AGENT_PROVIDER_ID],
+                        [target_provider],
                     )
                     .map_err(|error| format!("更新会话 provider 失败: {error}"))?;
             }
@@ -1688,6 +1935,7 @@ fn create_repair_backup(
     database_paths: &[PathBuf],
     repairs: &[RolloutRepair],
     label: &str,
+    target_provider: &str,
 ) -> Result<PathBuf, String> {
     let directory = create_operation_directory(codex_home, "session-repair", label)?;
     for name in [
@@ -1750,7 +1998,7 @@ fn create_repair_backup(
             "schemaVersion": 1,
             "kind": label,
             "createdAt": Utc::now().to_rfc3339(),
-            "targetProvider": MANAGED_AGENT_PROVIDER_ID,
+            "targetProvider": target_provider,
             "databaseFiles": database_files,
             "rolloutFiles": rollout_files,
             "managedBy": "EasyCLIProxyAPI"
@@ -1776,12 +2024,12 @@ fn restore_modified_time(path: &Path, modified: Option<SystemTime>) {
     }
 }
 
-fn encrypted_content_warning(repairs: &[RolloutRepair]) -> Option<String> {
+fn encrypted_content_warning(repairs: &[RolloutRepair], target_provider: &str) -> Option<String> {
     let mut providers = repairs
         .iter()
         .filter(|repair| repair.encrypted_content)
         .flat_map(|repair| repair.providers.iter().cloned())
-        .filter(|provider| provider != MANAGED_AGENT_PROVIDER_ID)
+        .filter(|provider| provider != target_provider)
         .collect::<Vec<_>>();
     providers.sort();
     providers.dedup();
@@ -1791,7 +2039,7 @@ fn encrypted_content_warning(repairs: &[RolloutRepair]) -> Option<String> {
     Some(format!(
         "部分历史会话包含来自 {} 的 encrypted_content；元数据已同步到 {}，但继续或压缩这些会话可能失败。",
         providers.join("、"),
-        MANAGED_AGENT_PROVIDER_ID
+        target_provider
     ))
 }
 
@@ -2380,6 +2628,45 @@ mod tests {
     }
 
     #[test]
+    fn list_includes_rollout_sessions_from_every_provider() {
+        let root = test_root("list-all-providers");
+        let api_rollout = root.join("sessions/api.jsonl");
+        let oauth_rollout = root.join("archived_sessions/oauth.jsonl");
+        fs::create_dir_all(api_rollout.parent().unwrap()).unwrap();
+        fs::create_dir_all(oauth_rollout.parent().unwrap()).unwrap();
+        fs::write(
+            &api_rollout,
+            "{\"timestamp\":\"2026-08-04T12:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"api-thread\",\"cwd\":\"C:/api\",\"model_provider\":\"cpa-gui\"}}\n",
+        )
+        .unwrap();
+        fs::write(
+            &oauth_rollout,
+            "{\"timestamp\":\"2026-08-03T12:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"oauth-thread\",\"cwd\":\"C:/oauth\",\"model_provider\":\"openai\"}}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("session_index.jsonl"),
+            concat!(
+                "{\"id\":\"api-thread\",\"thread_name\":\"API session\",\"updated_at\":\"2026-08-04T12:00:00Z\"}\n",
+                "{\"id\":\"oauth-thread\",\"thread_name\":\"OAuth session\",\"updated_at\":\"2026-08-03T12:00:00Z\"}\n"
+            ),
+        )
+        .unwrap();
+
+        let page = list_codex_sessions_from_home(&root, 0, 50, false).unwrap();
+        assert_eq!(page.sessions.len(), 2);
+        assert_eq!(page.sessions[0].id, "api-thread");
+        assert_eq!(page.sessions[0].title, "API session");
+        assert_eq!(page.sessions[0].model_provider, "cpa-gui");
+        assert!(!page.sessions[0].archived);
+        assert_eq!(page.sessions[1].id, "oauth-thread");
+        assert_eq!(page.sessions[1].title, "OAuth session");
+        assert_eq!(page.sessions[1].model_provider, "openai");
+        assert!(page.sessions[1].archived);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn list_accepts_optional_thread_columns_and_warns_about_a_broken_database() {
         let root = test_root("list-optional");
         let sqlite = root.join("sqlite");
@@ -2668,7 +2955,7 @@ mod tests {
         .unwrap();
         create_threads_db(&root.join("state_5.sqlite"), &rollout);
 
-        let result = repair_codex_session_metadata_from_home(&root, |_| {}).unwrap();
+        let result = repair_codex_session_metadata_from_home(&root, "cpa-gui", |_| {}).unwrap();
         assert_eq!(result.changed_rollout_files, 1);
         assert_eq!(result.sqlite_rows_updated, 2);
         let backup = PathBuf::from(result.backup_path.as_ref().unwrap());
@@ -2705,7 +2992,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = repair_codex_session_metadata_from_home(&root, |_| {}).unwrap();
+        let result = repair_codex_session_metadata_from_home(&root, "cpa-gui", |_| {}).unwrap();
         assert_eq!(result.changed_rollout_files, 0);
         assert_eq!(result.sqlite_rows_updated, 0);
         assert_eq!(result.backup_path, None);
@@ -2733,7 +3020,7 @@ mod tests {
             .unwrap();
         let before_mtime = fs::metadata(&rollout).unwrap().modified().unwrap();
 
-        let result = repair_codex_session_metadata_from_home(&root, |_| {}).unwrap();
+        let result = repair_codex_session_metadata_from_home(&root, "cpa-gui", |_| {}).unwrap();
         assert_eq!(result.changed_rollout_files, 1);
         assert!(result.encrypted_content_warning.is_some());
         let next = fs::read(&rollout).unwrap();
@@ -2765,6 +3052,7 @@ mod tests {
             std::slice::from_ref(&database),
             &[],
             "provider-repair",
+            "cpa-gui",
         )
         .unwrap();
         for name in ["state_5.sqlite", "state_5.sqlite-wal", "state_5.sqlite-shm"] {
@@ -2805,20 +3093,23 @@ mod tests {
     }
 
     #[test]
-    fn launch_hook_requires_managed_config_and_repairs_before_returning() {
+    fn launch_hook_repairs_sessions_for_the_current_provider() {
         let root = test_root("repair-launch-hook");
         fs::create_dir_all(root.join("sessions")).unwrap();
         let rollout = root.join("sessions/rollout.jsonl");
         fs::write(
             &rollout,
-            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-1\",\"model_provider\":\"openai\"}}\n",
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-1\",\"model_provider\":\"legacy\"}}\n",
         )
         .unwrap();
         fs::write(root.join("config.toml"), "model_provider = \"openai\"\n").unwrap();
-        assert!(repair_before_codex_launch_from_home(&root).is_err());
+        let result = repair_before_codex_launch_from_home(&root).unwrap();
+        assert_eq!(result.target_provider, "openai");
+        assert!(fs::read_to_string(&rollout).unwrap().contains("openai"));
 
         fs::write(root.join("config.toml"), "model_provider = \"cpa-gui\"\n").unwrap();
         let result = repair_before_codex_launch_from_home(&root).unwrap();
+        assert_eq!(result.target_provider, "cpa-gui");
         assert_eq!(result.changed_rollout_files, 1);
         assert!(fs::read_to_string(&rollout).unwrap().contains("cpa-gui"));
         fs::remove_dir_all(root).unwrap();

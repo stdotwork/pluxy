@@ -2749,7 +2749,7 @@ async fn launch_agent(
     if client == AgentClient::Codex && status.oauth_configuration {
         validate_codex_oauth_login(&home)?;
     }
-    if client == AgentClient::Codex && config.codex_session_repair_on_launch && status.configured {
+    if client == AgentClient::Codex && config.codex_session_repair_on_launch {
         let repair_home = home.clone();
         tauri::async_runtime::spawn_blocking(move || {
             codex_sessions::repair_before_codex_launch(&repair_home)
