@@ -119,10 +119,16 @@ const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
   haiku: model,
 });
 
+const sameAgentModel = (left: string, right: string) => (
+  left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase()
+);
+
 const sameClaudeModelMappings = (
   left: ClaudeModelMappings,
   right: ClaudeModelMappings,
-) => left.opus === right.opus && left.sonnet === right.sonnet && left.haiku === right.haiku;
+) => sameAgentModel(left.opus, right.opus)
+  && sameAgentModel(left.sonnet, right.sonnet)
+  && sameAgentModel(left.haiku, right.haiku);
 
 const claudeMappingRoles = [
   {
@@ -738,7 +744,7 @@ export function AgentsPage() {
   const modelDraftChanged = !isClaudeModelMappingClient && Boolean(
     selectedModel.trim()
       && appliedModel.trim()
-      && selectedModel.trim() !== appliedModel.trim(),
+      && !sameAgentModel(selectedModel, appliedModel),
   );
   const appliedClaudeModelMappings = (selected === 'claude-code'
     ? activeStatus?.claudeCodeModelMappings
@@ -757,6 +763,8 @@ export function AgentsPage() {
   const oauthConfigurationChanged = selected === 'codex'
     && oauthConfiguration !== Boolean(activeStatus?.oauthConfiguration);
   const draftChanged = modelDraftChanged || claudeMappingDraftChanged || oauthConfigurationChanged;
+  const configurationUpdateRequired = activeStatus?.modificationState === 'applied'
+    && draftChanged;
   const canEnable = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
@@ -1446,20 +1454,26 @@ export function AgentsPage() {
                     <button
                       type="button"
                       className="primary-button"
-                      onClick={() => void (activeStatus?.modificationState === 'applied'
-                        ? closeConfigurationChanges()
-                        : applyConfigurationChanges())}
+                      onClick={() => void (configurationUpdateRequired
+                        ? applyConfigurationChanges()
+                        : activeStatus?.modificationState === 'applied'
+                          ? closeConfigurationChanges()
+                          : applyConfigurationChanges())}
                       disabled={
                         busy
-                        || (activeStatus?.modificationState === 'applied' ? false : !canEnable)
+                        || (activeStatus?.modificationState === 'applied' && !configurationUpdateRequired
+                          ? false
+                          : !canEnable)
                       }
                     >
                       {busyAction === 'apply' || busyAction === 'close-config'
                         ? <LoaderCircle size={16} className="spin" />
                         : null}
-                      {activeStatus?.modificationState === 'applied'
-                        ? t('agents.modify.close')
-                        : t('agents.modify.apply')}
+                      {configurationUpdateRequired
+                        ? t('agents.modify.update')
+                        : activeStatus?.modificationState === 'applied'
+                          ? t('agents.modify.close')
+                          : t('agents.modify.apply')}
                     </button>
                     <button
                       type="button"
