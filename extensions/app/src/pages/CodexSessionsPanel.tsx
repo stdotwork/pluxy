@@ -489,9 +489,10 @@ export function CodexSessionsPanel() {
                     type="checkbox"
                     checked={cleanupSelectedIds.has(candidate.id)}
                     onChange={(event) => {
+                      const checked = event.currentTarget.checked;
                       setCleanupSelectedIds((current) => {
                         const next = new Set(current);
-                        if (event.currentTarget.checked) next.add(candidate.id);
+                        if (checked) next.add(candidate.id);
                         else next.delete(candidate.id);
                         return next;
                       });
