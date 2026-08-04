@@ -10,6 +10,7 @@ import {
   exclusionsForModelSelection,
   modelSelectionForDiscovery,
   parseProviderHeaders,
+  parseProviderApiKeys,
   providerCategoryMatchesRecord,
   providerRecordWithDisabledState,
   providerSectionOrder,
@@ -17,6 +18,26 @@ import {
   sectionRecordsFromConfig,
   stripResponseFields,
 } from '../src/pages/ApiAccessPage';
+
+it('saves non-empty custom model names and removes duplicate or blank entries', () => {
+  const result = buildProviderRecord('openai-compatibility', {
+    name: 'custom-provider',
+    apiKey: 'provider-key',
+    baseUrl: 'https://api.example.com',
+    priority: '',
+    models: [
+      { name: ' custom-model ', alias: ' Custom Alias ' },
+      { name: ' ' },
+      { name: 'CUSTOM-MODEL', alias: 'duplicate' },
+    ],
+  });
+
+  expect(result.models).toEqual([{ name: 'custom-model', alias: 'Custom Alias' }]);
+});
+
+it('parses multiline API keys into unique trimmed entries', () => {
+  expect(parseProviderApiKeys(' key-a\n\nkey-b\r\nkey-a ')).toEqual(['key-a', 'key-b']);
+});
 
 describe('API 接入配置合并', () => {
   it('固定使用 Codex、OpenAI、DeepSeek、Claude、Gemini 顺序且不包含 Vertex', () => {
@@ -41,10 +62,12 @@ describe('API 接入配置合并', () => {
       apiKey: 'deepseek-key',
       models: discovered,
     });
-    const result = buildProviderRecord('openai-compatibility', prepared);
+    const identified = applyProviderRemarkIdentity('deepseek', prepared);
+    const result = buildProviderRecord('openai-compatibility', identified);
 
     expect(draft.name).toBe('DeepSeek');
-    expect(draft.remark).toBe('DeepSeek');
+    expect(draft.remark).toBe('');
+    expect(identified.name).toBe('DeepSeek');
     expect(draft.baseUrl).toBe(DEEPSEEK_BASE_URL);
     expect(draft.models).toEqual([]);
     expect(result).toMatchObject({

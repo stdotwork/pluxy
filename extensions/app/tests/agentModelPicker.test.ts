@@ -8,6 +8,10 @@ import {
   resolveAgentModelForAliasMode,
   resolveAgentModelSelection,
 } from '../src/services/agentModelPicker';
+import {
+  resolveAgentConfigurationAction,
+  type AgentConfigurationClientId,
+} from '../src/services/agentConfigurationDraft';
 
 const models = [
   { name: 'claude-sonnet-4-5', alias: 'Sonnet' },
@@ -67,5 +71,59 @@ describe('智能体模型选择器', () => {
     expect(resolveAgentModelForAliasMode(mixedModels, 'gpt-high', false)).toBe('gpt-original');
     expect(resolveAgentModelForAliasMode(mixedModels, 'claude-original', true)).toBe('gpt-high');
     expect(resolveAgentModelForAliasMode([], 'gpt-original', true)).toBe('');
+  });
+});
+
+const appliedConfiguration = (
+  client: AgentConfigurationClientId,
+  selectedModel: string,
+  appliedModel = 'model-a',
+) => resolveAgentConfigurationAction({
+  client,
+  modificationState: 'applied',
+  selectedModel,
+  appliedModel,
+  oauthConfiguration: false,
+  appliedOauthConfiguration: false,
+  modelMappings: {
+    opus: selectedModel,
+    sonnet: selectedModel,
+    haiku: selectedModel,
+  },
+  appliedModelMappings: {
+    opus: appliedModel,
+    sonnet: appliedModel,
+    haiku: appliedModel,
+  },
+});
+
+describe('agent configuration update action', () => {
+  test.each<AgentConfigurationClientId>([
+    'claude-code',
+    'claude-desktop',
+    'codex',
+    'opencode',
+    'openclaw',
+    'hermes',
+  ])('%s updates only while its model draft differs', (client) => {
+    expect(appliedConfiguration(client, 'model-b')).toBe('update');
+    expect(appliedConfiguration(client, ' MODEL-A ')).toBe('close');
+  });
+
+  test('Codex also updates when only OAuth configuration changes', () => {
+    expect(resolveAgentConfigurationAction({
+      client: 'codex',
+      modificationState: 'applied',
+      selectedModel: 'model-a',
+      appliedModel: 'model-a',
+      oauthConfiguration: true,
+      appliedOauthConfiguration: false,
+      modelMappings: { opus: '', sonnet: '', haiku: '' },
+      appliedModelMappings: { opus: '', sonnet: '', haiku: '' },
+    })).toBe('update');
+  });
+
+  test('Pi never exposes the model update action', () => {
+    expect(appliedConfiguration('pi', 'model-b')).toBe('close');
   });
 });

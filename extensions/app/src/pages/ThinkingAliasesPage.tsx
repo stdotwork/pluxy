@@ -53,6 +53,7 @@ type ThinkingAliasSource = {
 
 type ModelAliasSource = ThinkingAliasSource & {
   supportsReasoning: boolean;
+  supportsFast: boolean;
 };
 
 const effortOptions = [
@@ -96,14 +97,49 @@ export const combineModelAliasSources = (
   speedSources: ThinkingAliasSource[],
 ): ModelAliasSource[] => {
   const reasoningSourceIds = new Set(thinkingSources.map((source) => source.id));
+  const speedSourceIds = new Set(speedSources.map((source) => source.id));
   const sources = new Map<string, ModelAliasSource>();
   [...speedSources, ...thinkingSources].forEach((source) => {
     sources.set(source.id, {
       ...source,
       supportsReasoning: reasoningSourceIds.has(source.id),
+      supportsFast: speedSourceIds.has(source.id),
     });
   });
   return [...sources.values()];
+};
+
+export const defaultModelAlias = (
+  model: string | null | undefined,
+  effort: string,
+  fast: boolean,
+) => {
+  const normalizedModel = model?.trim() ?? '';
+  const normalizedEffort = effort.trim().toLowerCase();
+  if (!normalizedModel || (!normalizedEffort && !fast)) return '';
+  return `${normalizedModel}${normalizedEffort ? `-${normalizedEffort}` : ''}${fast ? '-fast' : ''}`;
+};
+
+export const uniqueModelAlias = (
+  alias: string,
+  existingModelNames: string[],
+) => {
+  const normalizedAlias = alias.trim();
+  if (!normalizedAlias) return '';
+  const existingNames = new Set(
+    existingModelNames
+      .map((name) => name.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  if (!existingNames.has(normalizedAlias.toLowerCase())) return normalizedAlias;
+
+  let suffix = 2;
+  let candidate = `${normalizedAlias}-${suffix}`;
+  while (existingNames.has(candidate.toLowerCase())) {
+    suffix += 1;
+    candidate = `${normalizedAlias}-${suffix}`;
+  }
+  return candidate;
 };
 
 export const thinkingAliasSourceKindLabel = (kind: string) => {
@@ -130,7 +166,7 @@ export function ThinkingAliasesPage() {
   const [thinkingSources, setThinkingSources] = useState<ThinkingAliasSource[]>([]);
   const [speedSources, setSpeedSources] = useState<ThinkingAliasSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState('');
-  const [effort, setEffort] = useState('xhigh');
+  const [effort, setEffort] = useState('');
   const [fastEnabled, setFastEnabled] = useState(false);
   const [customEffortOpen, setCustomEffortOpen] = useState(false);
   const [alias, setAlias] = useState('');
@@ -138,6 +174,7 @@ export function ThinkingAliasesPage() {
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
   const modelPickerRef = useRef<HTMLDivElement>(null);
+  const generatedAliasRef = useRef('');
   const [loading, setLoading] = useState(true);
   const [busyAlias, setBusyAlias] = useState('');
   const [busyAction, setBusyAction] = useState<'create' | 'delete' | ''>('');
@@ -236,9 +273,14 @@ export function ThinkingAliasesPage() {
     setSelectedSourceId(source.id);
     if (!source.supportsReasoning) {
       setEffort('');
-      setFastEnabled(true);
-      setCustomEffortOpen(false);
+      setFastEnabled(source.supportsFast);
+    } else {
+      setEffort('');
+      setFastEnabled(false);
     }
+    setCustomEffortOpen(false);
+    setAlias('');
+    generatedAliasRef.current = '';
     setModelPickerOpen(false);
     setSearch('');
   };
@@ -274,10 +316,22 @@ export function ThinkingAliasesPage() {
   };
 
   const normalizedEffort = effort.trim().toLowerCase();
+  const defaultAlias = defaultModelAlias(selectedSource?.model, normalizedEffort, fastEnabled);
+  const uniqueDefaultAlias = uniqueModelAlias(defaultAlias, sources.map((source) => source.model));
   const customEffortSelected = Boolean(
     normalizedEffort
       && !effortOptions.some((option) => option.value === normalizedEffort),
   );
+
+  useEffect(() => {
+    setAlias((current) => {
+      const currentValue = current.trim();
+      const canReplace = !currentValue || currentValue === generatedAliasRef.current;
+      if (!canReplace) return current;
+      generatedAliasRef.current = uniqueDefaultAlias;
+      return uniqueDefaultAlias;
+    });
+  }, [uniqueDefaultAlias]);
 
   const createAlias = async () => {
     if (!selectedSource) {
@@ -291,6 +345,10 @@ export function ThinkingAliasesPage() {
     }
     if (!normalizedEffort && !fastEnabled) {
       setError(t('aliases.error.emptyOptions'));
+      return;
+    }
+    if (fastEnabled && !selectedSource.supportsFast) {
+      setError(t('aliases.error.unsupportedFast'));
       return;
     }
     if (normalizedEffort && !selectedSource.supportsReasoning) {
@@ -396,8 +454,20 @@ export function ThinkingAliasesPage() {
                     event.currentTarget.select();
                   }}
                   onChange={(event) => {
-                    setSearch(event.currentTarget.value);
+                    const nextSearch = event.currentTarget.value;
+                    setSearch(nextSearch);
                     setModelPickerOpen(true);
+                    if (
+                      selectedSource
+                      && nextSearch.trim().toLowerCase() !== selectedSource.model.trim().toLowerCase()
+                    ) {
+                      setSelectedSourceId('');
+                      setEffort('');
+                      setFastEnabled(false);
+                      setCustomEffortOpen(false);
+                      setAlias('');
+                      generatedAliasRef.current = '';
+                    }
                   }}
                   onKeyDown={handleModelSearchKeyDown}
                   placeholder={loading ? t('aliases.loadingModels') : t('aliases.searchModel')}
@@ -549,23 +619,29 @@ export function ThinkingAliasesPage() {
                 <strong>{t('aliases.fast.title')}</strong>
                 <span>{t('aliases.fast.description')}</span>
               </div>
-              <button
-                type="button"
-                className={`thinking-speed-toggle${fastEnabled ? ' active' : ''}`}
-                aria-pressed={fastEnabled}
-                onClick={() => setFastEnabled((current) => !current)}
-                disabled={Boolean(busyAlias)}
-              >
-                <span>Fast</span>
-                <small>{fastEnabled ? t('aliases.fast.enabled') : t('aliases.fast.disabled')}</small>
-              </button>
+              <label className={`thinking-fast-option${fastEnabled ? ' active' : ''}`}>
+                <span className="thinking-fast-option-copy">
+                  <span><Zap size={15} /> Fast</span>
+                  <small>{fastEnabled ? t('aliases.fast.enabled') : t('aliases.fast.disabled')}</small>
+                </span>
+                <span className="switch-control thinking-fast-switch">
+                  <input
+                    type="checkbox"
+                    checked={fastEnabled}
+                    onChange={(event) => setFastEnabled(event.currentTarget.checked)}
+                    disabled={Boolean(busyAlias) || !selectedSource || !selectedSource.supportsFast}
+                    aria-label={t('aliases.fast.title')}
+                  />
+                  <span className="switch-track" />
+                </span>
+              </label>
             </div>
             <div className="thinking-alias-section-divider" aria-hidden="true" />
 
             <div className="thinking-alias-field">
               <div className="thinking-field-heading">
                 <strong>{t('aliases.aliasName.title')}</strong>
-                <span>{t('aliases.aliasName.description')}</span>
+                <span>{t('aliases.aliasName.autoDescription')}</span>
               </div>
               <input
                 id="thinking-alias-name"

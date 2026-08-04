@@ -41,6 +41,11 @@ import {
   resolveAgentModelForAliasMode,
   resolveAgentModelSelection,
 } from '../services/agentModelPicker';
+import {
+  resolveAgentConfigurationAction,
+  sameAgentModel,
+  sameAgentModelMappings,
+} from '../services/agentConfigurationDraft';
 import type { ModelOption } from '../services/modelService';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import { CodexSessionAutoRestoreCard } from './CodexSessionAutoRestoreCard';
@@ -118,11 +123,6 @@ const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
   sonnet: model,
   haiku: model,
 });
-
-const sameClaudeModelMappings = (
-  left: ClaudeModelMappings,
-  right: ClaudeModelMappings,
-) => left.opus === right.opus && left.sonnet === right.sonnet && left.haiku === right.haiku;
 
 const claudeMappingRoles = [
   {
@@ -676,6 +676,7 @@ export function AgentsPage() {
     setCloseAppNotice('');
     setCloseAppConfirmOpen(false);
     setOauthLoginRequiredAction(null);
+    setOauthConfigurationDraft(null);
     setClaudeCodeLaunchDialogOpen(false);
     setClaudeCodeDirectoryError('');
     claudeModelMappingsDirtyRef.current = false;
@@ -719,7 +720,7 @@ export function AgentsPage() {
         sonnet: findAgentModel(models, source.sonnet)?.name ?? selectedModel,
         haiku: findAgentModel(models, source.haiku)?.name ?? selectedModel,
       };
-      return sameClaudeModelMappings(current, next) ? current : next;
+      return sameAgentModelMappings(current, next) ? current : next;
     });
   }, [
     activeStatus?.claudeCodeModelMappings,
@@ -738,7 +739,7 @@ export function AgentsPage() {
   const modelDraftChanged = !isClaudeModelMappingClient && Boolean(
     selectedModel.trim()
       && appliedModel.trim()
-      && selectedModel.trim() !== appliedModel.trim(),
+      && !sameAgentModel(selectedModel, appliedModel),
   );
   const appliedClaudeModelMappings = (selected === 'claude-code'
     ? activeStatus?.claudeCodeModelMappings
@@ -750,13 +751,23 @@ export function AgentsPage() {
     );
   const claudeMappingDraftChanged = isClaudeModelMappingClient
     && activeStatus?.modificationState === 'applied'
-    && !sameClaudeModelMappings(
+    && !sameAgentModelMappings(
       claudeModelMappingsDraft,
       appliedClaudeModelMappings,
     );
   const oauthConfigurationChanged = selected === 'codex'
     && oauthConfiguration !== Boolean(activeStatus?.oauthConfiguration);
   const draftChanged = modelDraftChanged || claudeMappingDraftChanged || oauthConfigurationChanged;
+  const configurationAction = resolveAgentConfigurationAction({
+    client: selected,
+    modificationState: activeStatus?.modificationState ?? 'unconfigured',
+    selectedModel,
+    appliedModel,
+    oauthConfiguration,
+    appliedOauthConfiguration: Boolean(activeStatus?.oauthConfiguration),
+    modelMappings: claudeModelMappingsDraft,
+    appliedModelMappings: appliedClaudeModelMappings,
+  });
   const canEnable = Boolean(
     activeStatus?.supportedPlatform
       && activeStatus.installed
@@ -829,7 +840,7 @@ export function AgentsPage() {
         sonnet: resolveAgentModelForAliasMode(models, current.sonnet, enabled),
         haiku: resolveAgentModelForAliasMode(models, current.haiku, enabled),
       };
-      if (!sameClaudeModelMappings(current, next)) {
+      if (!sameAgentModelMappings(current, next)) {
         claudeModelMappingsDirtyRef.current = true;
       }
       return next;
@@ -1299,7 +1310,6 @@ export function AgentsPage() {
                 <section className="agent-core-setting-section agent-model-section">
                   <div className="agent-section-heading">
                     <div><strong>{t('agents.useModel')}</strong></div>
-                    {modelDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
                   </div>
                   <AgentModelPicker
                     models={models}
@@ -1349,7 +1359,6 @@ export function AgentsPage() {
                           <span className="switch-track" />
                         </span>
                       </label>
-                      {claudeMappingDraftChanged ? <span className="agent-pending-badge">{t('agents.pending')}</span> : null}
                     </div>
                   </div>
                   <div className="agent-claude-desktop-mapping-grid">
@@ -1446,20 +1455,22 @@ export function AgentsPage() {
                     <button
                       type="button"
                       className="primary-button"
-                      onClick={() => void (activeStatus?.modificationState === 'applied'
+                      onClick={() => void (configurationAction === 'close'
                         ? closeConfigurationChanges()
                         : applyConfigurationChanges())}
                       disabled={
                         busy
-                        || (activeStatus?.modificationState === 'applied' ? false : !canEnable)
+                        || (configurationAction === 'close' ? false : !canEnable)
                       }
                     >
                       {busyAction === 'apply' || busyAction === 'close-config'
                         ? <LoaderCircle size={16} className="spin" />
                         : null}
-                      {activeStatus?.modificationState === 'applied'
-                        ? t('agents.modify.close')
-                        : t('agents.modify.apply')}
+                      {configurationAction === 'update'
+                        ? t('agents.modify.update')
+                        : configurationAction === 'close'
+                          ? t('agents.modify.close')
+                          : t('agents.modify.apply')}
                     </button>
                     <button
                       type="button"

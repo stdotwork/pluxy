@@ -65,20 +65,21 @@ export function primaryProviderHealthCredential(apiKeys: string[]): string {
 export function mergeProviderHealthModels(
   discoveredModels: ModelOption[],
   configuredModels: ModelOption[],
-  testModel = '',
 ): ModelOption[] {
-  const models = new Map<string, ModelOption>();
-  [...discoveredModels, ...configuredModels].forEach((model) => {
+  const configured = new Map<string, ModelOption>();
+  configuredModels.forEach((model) => {
     const name = model.name.trim();
     if (!name) return;
     const key = name.toLowerCase();
-    models.set(key, { ...models.get(key), ...model, name });
+    configured.set(key, { ...configured.get(key), ...model, name });
   });
-  const normalizedTestModel = testModel.trim();
-  if (normalizedTestModel && !models.has(normalizedTestModel.toLowerCase())) {
-    models.set(normalizedTestModel.toLowerCase(), { name: normalizedTestModel });
-  }
-  return Array.from(models.values()).sort((left, right) =>
+  discoveredModels.forEach((model) => {
+    const key = model.name.trim().toLowerCase();
+    const selected = configured.get(key);
+    if (!selected) return;
+    configured.set(key, { ...model, ...selected });
+  });
+  return Array.from(configured.values()).sort((left, right) =>
     left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }),
   );
 }

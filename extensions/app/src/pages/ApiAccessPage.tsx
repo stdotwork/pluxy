@@ -101,12 +101,12 @@ export type ProviderDraft = {
 };
 
 const providerDefinitions: ProviderDefinition[] = [
-  { id: 'codex-api-key', section: 'codex-api-key', responseKey: 'codex-api-key', label: 'Codex', icon: codexIcon, openAi: false },
+  { id: 'codex-api-key', section: 'codex-api-key', responseKey: 'codex-api-key', label: 'Codex API', icon: codexIcon, openAi: false },
   {
     id: 'openai-compatibility',
     section: 'openai-compatibility',
     responseKey: 'openai-compatibility',
-    label: 'OpenAI Compatible',
+    label: 'OpenAI 兼容',
     icon: openaiIcon,
     openAi: true,
   },
@@ -244,8 +244,12 @@ export const stripResponseFields = (record: Record<string, unknown>) => {
 
 const mergeModelRecords = (current: unknown, selected: ModelOption[]) => {
   const existing = Array.isArray(current) ? current : [];
-  return selected.map((model) => {
+  const seen = new Set<string>();
+  return selected.reduce<Record<string, unknown>[]>((models, model) => {
     const name = model.name.trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) return models;
+    seen.add(key);
     const matched = existing.find(
       (item) => isRecord(item) && readString(item, 'name').toLowerCase() === name.toLowerCase(),
     );
@@ -255,8 +259,9 @@ const mergeModelRecords = (current: unknown, selected: ModelOption[]) => {
     if (alias && alias !== name) next.alias = alias;
     else delete next.alias;
     if (model.thinking) next.thinking = { ...model.thinking };
-    return next;
-  });
+    models.push(next);
+    return models;
+  }, []);
 };
 
 export const exclusionsForModelSelection = (
@@ -316,12 +321,14 @@ export const modelSelectionForDiscovery = (
 export const allModelSelectionForDiscovery = (models: ModelOption[]) =>
   new Set(models.map((model) => model.name.trim().toLowerCase()).filter(Boolean));
 
+export const parseProviderApiKeys = (value: string) => value
+  .split(/\r?\n/)
+  .map((item) => item.trim())
+  .filter((item, index, values) => item && values.indexOf(item) === index);
+
 const mergeOpenAiApiKeyEntries = (current: unknown, apiKey: string) => {
   const entries = Array.isArray(current) ? current.filter(isRecord) : [];
-  const keys = apiKey
-    .split(/\r?\n/)
-    .map((value) => value.trim())
-    .filter((value, index, values) => value && values.indexOf(value) === index);
+  const keys = parseProviderApiKeys(apiKey);
   const usedIndexes = new Set<number>();
   return keys.map((key, index) => {
     let matchedIndex = entries.findIndex(
@@ -351,41 +358,45 @@ const thinkingLevelsFromModels = (models: ModelOption[]): string[] => {
   return levels;
 };
 
-const draftFromRow = (row: ProviderRow): ProviderDraft => ({
-  name: row.name,
-  apiKey: definitionFor(row.section).openAi ? row.apiKeys.join('\n') : row.apiKey,
-  remark: row.remark || (definitionFor(row.section).openAi ? row.name : ''),
-  baseUrl: row.baseUrl,
-  priority: row.priority === null ? '' : String(row.priority),
-  models: row.models,
-  prefix: readString(row.record, 'prefix'),
-  headersText: isRecord(row.record.headers)
-    ? Object.entries(row.record.headers)
-      .map(([key, value]) => `${key}: ${String(value)}`)
-      .join('\n')
-    : '',
-  excludedModelsText: Array.isArray(row.record['excluded-models'])
-    ? row.record['excluded-models'].map(String).filter((model) => model.trim() !== '*').join('\n')
-    : '',
-  disableCooling: readBoolean(row.record, 'disable-cooling', 'disableCooling'),
-  websockets: readBoolean(row.record, 'websockets'),
-  testModel: readString(row.record, 'test-model', 'testModel'),
-  thinkingLevels: definitionFor(row.section).openAi
-    ? thinkingLevelsFromModels(row.models)
-    : undefined,
-  disabled: row.disabled,
-  cloakMode: isRecord(row.record.cloak) ? readString(row.record.cloak, 'mode') : '',
-  cloakStrictMode: isRecord(row.record.cloak)
-    ? readBoolean(row.record.cloak, 'strict-mode', 'strictMode')
-    : false,
-  cloakSensitiveWordsText:
-    isRecord(row.record.cloak) && Array.isArray(row.record.cloak['sensitive-words'])
-      ? row.record.cloak['sensitive-words'].map(String).join('\n')
+const draftFromRow = (row: ProviderRow): ProviderDraft => {
+  const definition = definitionFor(row.section);
+  const isDeepSeek = row.section === 'openai-compatibility' && isDeepSeekRecord(row.record);
+  return {
+    name: row.name,
+    apiKey: definition.openAi ? row.apiKeys.join('\n') : row.apiKey,
+    remark: row.remark || (definition.openAi && !isDeepSeek ? row.name : ''),
+    baseUrl: row.baseUrl,
+    priority: row.priority === null ? '' : String(row.priority),
+    models: row.models,
+    prefix: readString(row.record, 'prefix'),
+    headersText: isRecord(row.record.headers)
+      ? Object.entries(row.record.headers)
+        .map(([key, value]) => `${key}: ${String(value)}`)
+        .join('\n')
       : '',
-  cloakCacheUserId: isRecord(row.record.cloak)
-    ? readBoolean(row.record.cloak, 'cache-user-id', 'cacheUserId')
-    : false,
-});
+    excludedModelsText: Array.isArray(row.record['excluded-models'])
+      ? row.record['excluded-models'].map(String).filter((model) => model.trim() !== '*').join('\n')
+      : '',
+    disableCooling: readBoolean(row.record, 'disable-cooling', 'disableCooling'),
+    websockets: readBoolean(row.record, 'websockets'),
+    testModel: readString(row.record, 'test-model', 'testModel'),
+    thinkingLevels: definition.openAi
+      ? thinkingLevelsFromModels(row.models)
+      : undefined,
+    disabled: row.disabled,
+    cloakMode: isRecord(row.record.cloak) ? readString(row.record.cloak, 'mode') : '',
+    cloakStrictMode: isRecord(row.record.cloak)
+      ? readBoolean(row.record.cloak, 'strict-mode', 'strictMode')
+      : false,
+    cloakSensitiveWordsText:
+      isRecord(row.record.cloak) && Array.isArray(row.record.cloak['sensitive-words'])
+        ? row.record.cloak['sensitive-words'].map(String).join('\n')
+        : '',
+    cloakCacheUserId: isRecord(row.record.cloak)
+      ? readBoolean(row.record.cloak, 'cache-user-id', 'cacheUserId')
+      : false,
+  };
+};
 
 const emptyProviderDraft = (): ProviderDraft => ({
   name: '',
@@ -414,7 +425,7 @@ export const createProviderDraft = (category: ProviderCategory): ProviderDraft =
   return {
     ...draft,
     name: 'DeepSeek',
-    remark: 'DeepSeek',
+    remark: '',
     baseUrl: DEEPSEEK_BASE_URL,
     thinkingLevels: [...DEEPSEEK_THINKING_LEVELS],
   };
@@ -423,9 +434,11 @@ export const createProviderDraft = (category: ProviderCategory): ProviderDraft =
 export const applyProviderRemarkIdentity = (
   category: ProviderCategory,
   draft: ProviderDraft,
-): ProviderDraft => definitionFor(category).openAi
-  ? { ...draft, name: draft.remark.trim() }
-  : draft;
+): ProviderDraft => category === 'deepseek'
+  ? { ...draft, name: draft.name.trim() || 'DeepSeek' }
+  : definitionFor(category).openAi
+    ? { ...draft, name: draft.remark.trim() }
+    : draft;
 
 export const applyProviderPreset = (
   category: ProviderCategory,
@@ -765,14 +778,16 @@ export function ApiAccessPage() {
       activeCategory,
       applyProviderPreset(activeCategory, nextDraft),
     );
+    const preparedDraftForSave = {
+      ...preparedDraft,
+      models: preparedDraft.models.filter((model) => model.name.trim()),
+    };
     const baseUrlRequired = definition.openAi || definition.section === 'codex-api-key';
-    const parsedApiKeys = preparedDraft.apiKey
-      .split(/\r?\n/)
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const remarkRequired = definition.openAi && activeCategory !== 'deepseek';
+    const parsedApiKeys = parseProviderApiKeys(preparedDraft.apiKey);
     if (
       parsedApiKeys.length === 0
-      || (definition.openAi && !preparedDraft.remark.trim())
+      || (remarkRequired && !preparedDraft.remark.trim())
       || (baseUrlRequired && !preparedDraft.baseUrl.trim())
     ) {
       setError(
@@ -801,7 +816,7 @@ export function ApiAccessPage() {
     setBusy(true);
     setError('');
     try {
-      let draftToSave = { ...preparedDraft, baseUrl };
+      let draftToSave = { ...preparedDraftForSave, baseUrl };
       if (definition.openAi && draftToSave.models.length === 0) {
         const fetchedModels = await fetchModels(
           'openai',
@@ -821,33 +836,41 @@ export function ApiAccessPage() {
       const latestConfig = await managementApi.get('/config');
       const current = sectionRecordsFromConfig(latestConfig, activeSection);
       let nextList: Record<string, unknown>[];
+      let targetIndex = -1;
+      let currentRecord: Record<string, unknown> | undefined;
 
       if (editingRow) {
-        const targetIndex = resolveProviderRecordIndex(current, editingRow);
+        targetIndex = resolveProviderRecordIndex(current, editingRow);
         if (targetIndex < 0) {
           throw new Error(t('apiAccess.error.stale'));
         }
-        const nextRecord = buildProviderRecord(
-          activeSection,
-          draftToSave,
-          current[targetIndex],
-        );
-        nextList = current.map((record, index) =>
-          index === targetIndex ? nextRecord : record,
-        );
-      } else {
-        const duplicate = current.some((record) =>
-          definition.openAi
-            ? readString(record, 'name') === preparedDraft.name.trim()
-            : readString(record, 'api-key', 'apiKey') === preparedDraft.apiKey.trim()
-              && readString(record, 'base-url', 'baseUrl') === baseUrl,
-        );
-        if (duplicate) throw new Error(t('apiAccess.error.duplicate'));
-        nextList = [
-          ...current,
-          buildProviderRecord(activeSection, draftToSave),
-        ];
+        currentRecord = current[targetIndex];
       }
+
+      const duplicate = current.some((record, index) => {
+        if (index === targetIndex) return false;
+        if (definition.openAi) return readString(record, 'name') === preparedDraft.name.trim();
+        return parsedApiKeys.some((apiKey) => (
+          readString(record, 'api-key', 'apiKey').trim() === apiKey
+          && readString(record, 'base-url', 'baseUrl').trim() === baseUrl
+        ));
+      });
+      if (duplicate) throw new Error(t('apiAccess.error.duplicate'));
+
+      const recordsToSave = definition.openAi
+        ? [buildProviderRecord(activeSection, draftToSave, currentRecord)]
+        : parsedApiKeys.map((apiKey) => buildProviderRecord(
+          activeSection,
+          { ...draftToSave, apiKey },
+          currentRecord,
+        ));
+      nextList = editingRow
+        ? [
+          ...current.slice(0, targetIndex),
+          ...recordsToSave,
+          ...current.slice(targetIndex + 1),
+        ]
+        : [...current, ...recordsToSave];
 
       await managementApi.put(`/${activeSection}`, nextList.map(stripResponseFields));
       await invoke('save_api_access_remark', {
@@ -1093,10 +1116,9 @@ type ProviderModelHealthState = { status: 'checking' } | ProviderModelHealthResu
 
 function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
   const { t } = useI18n();
-  const testModel = readString(row.record, 'test-model', 'testModel');
   const configuredModels = useMemo(
-    () => mergeProviderHealthModels([], row.models, testModel),
-    [row.models, testModel],
+    () => mergeProviderHealthModels([], row.models),
+    [row.models],
   );
   const [models, setModels] = useState<ModelOption[]>(configuredModels);
   const [modelLoading, setModelLoading] = useState(true);
@@ -1126,7 +1148,7 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
       healthOptions.customHeaders,
       healthOptions.timeoutMs,
     ).then((discovered) => {
-      if (!disposed) setModels(mergeProviderHealthModels(discovered, row.models, testModel));
+      if (!disposed) setModels(mergeProviderHealthModels(discovered, row.models));
     }).catch((requestError) => {
       if (!disposed) setModelError(String(requestError).replace(/^Error:\s*/i, ''));
     }).finally(() => {
@@ -1135,7 +1157,7 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
     return () => {
       disposed = true;
     };
-  }, [healthOptions, row.apiKeys, row.models, testModel]);
+  }, [healthOptions, row.apiKeys, row.models]);
 
   const visibleModels = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -1324,6 +1346,11 @@ function ApiProviderDialog({
     return Array.from(options.values());
   }, [discoveredModels, draft.models]);
 
+  const configuredModels = useMemo(
+    () => draft.models.filter((model) => model.name.trim()),
+    [draft.models],
+  );
+
   const visibleModelOptions = useMemo(() => {
     const query = modelSearch.trim().toLowerCase();
     if (!query) return modelOptions;
@@ -1347,6 +1374,29 @@ function ApiProviderDialog({
     value: boolean,
   ) => {
     setDraft((current) => ({ ...current, [field]: value }));
+  };
+
+  const updateModel = (index: number, patch: Partial<ModelOption>) => {
+    setDraft((current) => ({
+      ...current,
+      models: current.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, ...patch } : model,
+      ),
+    }));
+  };
+
+  const addModel = () => {
+    setDraft((current) => ({
+      ...current,
+      models: [...current.models, { name: '', alias: '' }],
+    }));
+  };
+
+  const removeModel = (index: number) => {
+    setDraft((current) => ({
+      ...current,
+      models: current.models.filter((_, modelIndex) => modelIndex !== index),
+    }));
   };
 
   const addThinkingLevel = () => {
@@ -1400,7 +1450,11 @@ function ApiProviderDialog({
         { ...draft, models: fetchedModels },
       ).models;
       setDiscoveredModels(models);
-      setSelectedModelNames(allModelSelectionForDiscovery(models));
+      setSelectedModelNames(new Set(
+        [...models, ...draft.models]
+          .map((model) => model.name.trim().toLowerCase())
+          .filter(Boolean),
+      ));
       if (!models.length) setModelError(t('apiAccess.error.noAvailableModels'));
     } catch (requestError) {
       setDiscoveredModels([]);
@@ -1470,15 +1524,15 @@ function ApiProviderDialog({
 
   const hasModelExclusions = activeSection !== 'openai-compatibility'
     && Boolean(draft.excludedModelsText?.trim());
-  const modelSummaryTitle = draft.models.length > 0
-    ? t('apiAccess.models.selected', { count: draft.models.length })
+  const modelSummaryTitle = configuredModels.length > 0
+    ? t('apiAccess.models.selected', { count: configuredModels.length })
     : hasModelExclusions
       ? t('apiAccess.models.restricted')
       : activeSection === 'openai-compatibility'
         ? t('apiAccess.models.autoAll')
         : t('apiAccess.models.upstreamDefault');
-  const modelSummaryDetail = draft.models.length > 0
-    ? draft.models.slice(0, 3).map((model) => model.name).join('、')
+  const modelSummaryDetail = configuredModels.length > 0
+    ? configuredModels.slice(0, 3).map((model) => model.name).join('、')
     : hasModelExclusions
       ? t('apiAccess.models.hiddenHint')
       : activeSection === 'openai-compatibility'
@@ -1499,13 +1553,15 @@ function ApiProviderDialog({
           </button>
         </div>
         <label><span>{t('apiAccess.field.remark')}</span><input autoFocus={definition.openAi} value={draft.remark} maxLength={80} onChange={(event) => updateTextField('remark', event.currentTarget.value)} placeholder={t('apiAccess.remarkPlaceholder')} /></label>
-        <label className={definition.openAi ? 'multiline-field' : undefined}>
-          <span>{definition.openAi ? t('apiAccess.field.keysMany') : t('apiAccess.field.key')}</span>
-          {definition.openAi ? (
-            <textarea value={draft.apiKey} onChange={(event) => updateTextField('apiKey', event.currentTarget.value)} placeholder={'sk-...\nsk-...'} rows={3} />
-          ) : (
-            <input autoFocus={!definition.openAi} type="password" value={draft.apiKey} onChange={(event) => updateTextField('apiKey', event.currentTarget.value)} placeholder="sk-..." />
-          )}
+        <label className="multiline-field">
+          <span>{t('apiAccess.field.keysMany')}</span>
+          <textarea
+            autoFocus={!definition.openAi}
+            value={draft.apiKey}
+            onChange={(event) => updateTextField('apiKey', event.currentTarget.value)}
+            placeholder={'sk-...\nsk-...'}
+            rows={3}
+          />
         </label>
         <label><span>Base URL</span><input value={draft.baseUrl} onChange={(event) => updateTextField('baseUrl', event.currentTarget.value)} placeholder={activeSection === 'codex-api-key' || activeSection === 'openai-compatibility' ? t('apiAccess.baseRequiredPlaceholder') : t('apiAccess.baseOptionalPlaceholder')} /></label>
         {activeCategory === 'deepseek' ? (
@@ -1570,9 +1626,42 @@ function ApiProviderDialog({
               <RefreshCw size={15} />{t('apiAccess.models.fetch')}
             </button>
           </div>
-          <div className={`model-config-summary ${draft.models.length || hasModelExclusions ? 'has-models' : ''}`}>
+          <div className={`model-config-summary ${configuredModels.length || hasModelExclusions ? 'has-models' : ''}`}>
             <strong>{modelSummaryTitle}</strong>
             <span>{modelSummaryDetail}</span>
+          </div>
+          <div className="model-config-entries">
+            {draft.models.map((model, index) => (
+              <div className="model-config-entry" key={index}>
+                <input
+                  value={model.name}
+                  onChange={(event) => updateModel(index, { name: event.currentTarget.value })}
+                  placeholder={t('apiAccess.models.namePlaceholder')}
+                  aria-label={t('apiAccess.models.namePlaceholder')}
+                  disabled={busy}
+                />
+                <input
+                  value={model.alias ?? ''}
+                  onChange={(event) => updateModel(index, { alias: event.currentTarget.value })}
+                  placeholder={t('apiAccess.models.aliasPlaceholder')}
+                  aria-label={t('apiAccess.models.aliasPlaceholder')}
+                  disabled={busy}
+                />
+                <button
+                  type="button"
+                  className="icon-button quiet danger"
+                  onClick={() => removeModel(index)}
+                  disabled={busy}
+                  title={t('apiAccess.models.remove')}
+                  aria-label={t('apiAccess.models.remove')}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            <button type="button" className="secondary-button compact-button model-config-add" onClick={addModel} disabled={busy}>
+              <Plus size={14} />{t('apiAccess.models.add')}
+            </button>
           </div>
           {modelError && !modelDiscoveryOpen ? <small className="model-picker-error">{modelError}</small> : null}
         </div>
