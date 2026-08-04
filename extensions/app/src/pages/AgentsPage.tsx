@@ -25,6 +25,7 @@ import {
   Search,
   Terminal,
   Trash2,
+  Wrench,
   X,
 } from 'lucide-react';
 import claudeIcon from '../assets/icons/claude.svg';
@@ -73,6 +74,7 @@ type AgentConfigStatus = {
   version: string | null;
   cliVersion: string | null;
   appVersion: string | null;
+  pluginVersion: string | null;
   configValid: boolean;
   configured: boolean;
   currentModel: string | null;
@@ -101,6 +103,12 @@ type AgentConfigActionResult = {
   model: string | null;
   changedFiles: string[];
   conflictFiles: string[];
+};
+
+type PiProviderUpdateStatus = {
+  installedVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
 };
 
 type ChatGptCloseResult = {
@@ -554,7 +562,7 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'sync-pi' | 'uninstall-pi' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
+    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
@@ -572,7 +580,9 @@ export function AgentsPage() {
   const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
   const [oauthLoginRequiredAction, setOauthLoginRequiredAction] = useState<OAuthLoginRequiredAction | null>(null);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
+  const [piProviderUpdateStatus, setPiProviderUpdateStatus] = useState<PiProviderUpdateStatus | null>(null);
   const modelRequestRef = useRef(0);
+  const piUpdateRequestRef = useRef(0);
   const claudeModelMappingsDirtyRef = useRef(false);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
@@ -583,7 +593,7 @@ export function AgentsPage() {
     setStatuses(nextStatuses);
   }, []);
 
-  const loadModels = useCallback(async (client: AgentClientId) => {
+  const loadModels = useCallback(async (client: AgentClientId, preferredModel = '') => {
     const requestId = modelRequestRef.current + 1;
     modelRequestRef.current = requestId;
     setModelLoading(true);
@@ -597,7 +607,7 @@ export function AgentsPage() {
       setModelByClient((current) => {
         const next = {
           ...current,
-          [client]: resolveAgentModelSelection(nextModels, current[client] ?? ''),
+          [client]: resolveAgentModelSelection(nextModels, current[client] ?? preferredModel),
         };
         writeAgentModelSelections(next);
         return next;
@@ -630,14 +640,10 @@ export function AgentsPage() {
   }, [loadStatuses]);
 
   useEffect(() => {
-    if (selected === 'pi') {
-      setModels([]);
-      setModelLoading(false);
-      setModelError('');
-      return;
-    }
-    void loadModels(selected);
-  }, [loadModels, selected]);
+    if (loading) return;
+    const preferredModel = statuses.find((status) => status.id === selected)?.currentModel ?? '';
+    void loadModels(selected, preferredModel);
+  }, [loadModels, loading, selected]);
 
   useEffect(() => {
     let disposed = false;
@@ -697,6 +703,35 @@ export function AgentsPage() {
     () => filterAgentModelsByAlias(models, claudeCustomMapping),
     [claudeCustomMapping, models],
   );
+
+  const loadPiProviderUpdateStatus = useCallback(async () => {
+    const requestId = piUpdateRequestRef.current + 1;
+    piUpdateRequestRef.current = requestId;
+    try {
+      const nextStatus = await invoke<PiProviderUpdateStatus>('check_pi_provider_update');
+      if (piUpdateRequestRef.current === requestId) setPiProviderUpdateStatus(nextStatus);
+    } catch {
+      if (piUpdateRequestRef.current === requestId) setPiProviderUpdateStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isPiClient || !activeStatus?.pluginInstalled || !activeStatus.pluginVersion) {
+      piUpdateRequestRef.current += 1;
+      setPiProviderUpdateStatus(null);
+      return;
+    }
+    void loadPiProviderUpdateStatus();
+  }, [activeStatus?.pluginInstalled, activeStatus?.pluginVersion, isPiClient, loadPiProviderUpdateStatus]);
+
+  const piPluginUpdateAvailable = Boolean(
+    piProviderUpdateStatus?.updateAvailable
+      && piProviderUpdateStatus.installedVersion === activeStatus?.pluginVersion
+      && piProviderUpdateStatus.latestVersion,
+  );
+  const piPluginUpdateTitle = piPluginUpdateAvailable
+    ? t('agents.pi.updateAvailable', { version: piProviderUpdateStatus?.latestVersion ?? '' })
+    : activeStatus?.pluginVersion ?? undefined;
 
   useEffect(() => {
     if (!isClaudeModelMappingClient || !selectedModel) return;
@@ -772,10 +807,9 @@ export function AgentsPage() {
     activeStatus?.supportedPlatform
       && activeStatus.installed
       && !modelLoading
-      && (isPiClient
-        || (isClaudeModelMappingClient
+      && (isClaudeModelMappingClient
         ? claudeMappingsReady
-        : selectedModelOption)),
+        : selectedModelOption),
   );
   const launchEnabled = Boolean(
     activeStatus?.supportedPlatform
@@ -937,10 +971,12 @@ export function AgentsPage() {
   };
 
   const installPiProvider = async () => {
+    const model = requireSelectedModel();
+    if (!model) return;
     setBusyAction('install-pi');
     setConfigurationError('');
     try {
-      await invoke<AgentConfigActionResult>('install_pi_provider');
+      await invoke<AgentConfigActionResult>('install_pi_provider', { model });
       await reloadStatusesAfterAction();
     } catch (requestError) {
       setConfigurationError(String(requestError));
@@ -949,11 +985,30 @@ export function AgentsPage() {
     }
   };
 
-  const syncPiProvider = async () => {
-    setBusyAction('sync-pi');
+  const updatePiProvider = async () => {
+    const model = requireSelectedModel();
+    if (!model) return;
+    setBusyAction('update-pi');
+    setConfigurationError('');
+    setPiProviderUpdateStatus(null);
+    try {
+      await invoke<AgentConfigActionResult>('update_pi_provider', { model });
+      await reloadStatusesAfterAction();
+      await loadPiProviderUpdateStatus();
+    } catch (requestError) {
+      setConfigurationError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const repairPiProvider = async () => {
+    const model = requireSelectedModel();
+    if (!model) return;
+    setBusyAction('repair-pi');
     setConfigurationError('');
     try {
-      await invoke<AgentConfigActionResult>('sync_pi_provider');
+      await invoke<AgentConfigActionResult>('repair_pi_provider', { model });
       await reloadStatusesAfterAction();
     } catch (requestError) {
       setConfigurationError(String(requestError));
@@ -965,6 +1020,7 @@ export function AgentsPage() {
   const uninstallPiProvider = async () => {
     setBusyAction('uninstall-pi');
     setConfigurationError('');
+    setPiProviderUpdateStatus(null);
     try {
       await invoke<AgentConfigActionResult>('uninstall_pi_provider');
       await reloadStatusesAfterAction();
@@ -1272,7 +1328,7 @@ export function AgentsPage() {
               role="tabpanel"
               aria-labelledby="agent-subpage-tab-core"
             >
-              <div className={`agent-status-grid ${selected === 'codex' ? 'codex-status-grid' : ''}`}>
+              <div className={`agent-status-grid ${selected === 'codex' ? 'codex-status-grid' : isPiClient ? 'pi-status-grid' : ''}`}>
                 <div>
                   <span><BadgeCheck size={14} />{t('agents.installStatus')}</span>
                   <strong>{activeStatus?.installed ? t('agents.clientDetected') : t('agents.clientNotDetected')}</strong>
@@ -1288,6 +1344,27 @@ export function AgentsPage() {
                       <strong title={activeStatus?.appVersion ?? undefined}>{activeStatus?.appVersion ?? t('agents.notFetched')}</strong>
                     </div>
                   </>
+                ) : isPiClient ? (
+                  <>
+                    <div>
+                      <span>{t('agents.clientVersion')}</span>
+                      <strong title={activeStatus?.version ?? undefined}>{activeStatus?.version ?? t('agents.notFetched')}</strong>
+                    </div>
+                    <div>
+                      <span>
+                        {t('agents.pluginVersion')}
+                        {piPluginUpdateAvailable ? (
+                          <span
+                            className="agent-version-update-dot"
+                            role="status"
+                            aria-label={piPluginUpdateTitle}
+                            title={piPluginUpdateTitle}
+                          />
+                        ) : null}
+                      </span>
+                      <strong title={piPluginUpdateTitle}>{activeStatus?.pluginVersion ?? t('agents.notFetched')}</strong>
+                    </div>
+                  </>
                 ) : (
                   <div>
                     <span>{t('agents.clientVersion')}</span>
@@ -1296,7 +1373,7 @@ export function AgentsPage() {
                 )}
               </div>
 
-              {activeStatus?.error || (!isPiClient && activeStatus?.warnings.length) ? (
+              {activeStatus?.error || activeStatus?.warnings.length ? (
                 <div className="agent-status-messages" aria-live="polite">
                   {activeStatus.error ? (
                     <span className="agent-inline-message error" role="alert">{activeStatus.error}</span>
@@ -1306,7 +1383,7 @@ export function AgentsPage() {
                 </div>
               ) : null}
 
-              {!isClaudeModelMappingClient && !isPiClient ? (
+              {!isClaudeModelMappingClient ? (
                 <section className="agent-core-setting-section agent-model-section">
                   <div className="agent-section-heading">
                     <div><strong>{t('agents.useModel')}</strong></div>
@@ -1394,7 +1471,7 @@ export function AgentsPage() {
                         type="button"
                         className={activeStatus?.pluginInstalled ? 'danger-button' : 'primary-button'}
                         onClick={() => void (activeStatus?.pluginInstalled ? uninstallPiProvider() : installPiProvider())}
-                        disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform}
+                        disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform || (!activeStatus.pluginInstalled && !selectedModelOption)}
                       >
                         {busyAction === 'install-pi' || busyAction === 'uninstall-pi'
                           ? <LoaderCircle size={16} className="spin" />
@@ -1406,11 +1483,20 @@ export function AgentsPage() {
                       <button
                         type="button"
                         className="secondary-button"
-                        onClick={() => void syncPiProvider()}
-                        disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform || !activeStatus.pluginInstalled}
+                        onClick={() => void repairPiProvider()}
+                        disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform || !activeStatus.pluginInstalled || !selectedModelOption}
                       >
-                        {busyAction === 'sync-pi' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
-                        {busyAction === 'sync-pi' ? t('agents.pi.syncing') : t('agents.pi.sync')}
+                        {busyAction === 'repair-pi' ? <LoaderCircle size={16} className="spin" /> : <Wrench size={16} />}
+                        {busyAction === 'repair-pi' ? t('agents.pi.repairing') : t('agents.pi.repair')}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void updatePiProvider()}
+                        disabled={busy || !activeStatus?.installed || !activeStatus.supportedPlatform || !activeStatus.pluginInstalled || !selectedModelOption}
+                      >
+                        {busyAction === 'update-pi' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}
+                        {busyAction === 'update-pi' ? t('agents.pi.updating') : t('agents.pi.update')}
                       </button>
                     </div>
                     {configurationError ? (

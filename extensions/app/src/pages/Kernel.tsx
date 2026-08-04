@@ -631,7 +631,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     : offlineInstallRequired
       ? t('kernel.install.githubFailed')
       : message || updateStateLabel;
-  const versionStatusTone: MessageType = installTaskRunning
+  const versionStatusTone: MessageType | 'update' = installTaskRunning
     ? 'info'
     : offlineInstallRequired
       ? 'error'
@@ -641,7 +641,9 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
         ? 'error'
         : currentVersion && currentVersion === latestVersion
           ? 'success'
-          : 'info';
+          : latestVersion && currentVersion !== latestVersion
+            ? 'update'
+            : 'info';
   const installDialogTone: MessageType = progress?.result
     ? 'success'
     : progress?.phase === '安装失败'

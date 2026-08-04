@@ -1299,6 +1299,10 @@ textarea:focus-visible {
   color: var(--theme-2f6b3f);
 }
 
+.panel-detail-row dd.update {
+  color: var(--theme-c77b30);
+}
+
 .panel-detail-row dd.error {
   color: var(--theme-9f2d20);
 }
@@ -5389,6 +5393,10 @@ textarea:focus-visible {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.agent-status-grid.pi-status-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .agent-status-grid > div {
   display: grid;
   min-width: 0;
@@ -5403,6 +5411,16 @@ textarea:focus-visible {
   gap: 5px;
   color: var(--theme-8a847c);
   font-size: var(--font-size-meta);
+}
+
+.agent-status-grid .agent-version-update-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--theme-c77b30);
+  box-shadow: 0 0 0 3px rgba(199, 123, 48, 0.14);
 }
 
 .agent-status-grid strong {
@@ -7356,6 +7374,10 @@ textarea:focus-visible {
   }
 
   .agent-status-grid.codex-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-status-grid.pi-status-grid {
     grid-template-columns: 1fr;
   }
 
