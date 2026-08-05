@@ -651,7 +651,7 @@ export function AgentsPage() {
     void listen('config-files-changed', () => {
       if (disposed) return;
       setDetectionError('');
-      void loadStatuses(true).catch((requestError) => {
+      void loadStatuses().catch((requestError) => {
         if (!disposed) setDetectionError(String(requestError));
       });
     }).then((unlisten) => {
