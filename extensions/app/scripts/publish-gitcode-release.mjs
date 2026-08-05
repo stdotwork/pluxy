@@ -1,4 +1,5 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { readdir } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -46,6 +47,39 @@ async function apiRequest(path, {
   return response.status === 204 || response.status === 404 ? null : response.json();
 }
 
+export function uploadFileWithCurl({ url, headers, path }) {
+  const args = [
+    '--fail-with-body',
+    '--silent',
+    '--show-error',
+    '--location',
+    '--retry', '3',
+    '--retry-delay', '5',
+    '--retry-all-errors',
+    '--connect-timeout', '30',
+    '--max-time', '1800',
+    '--request', 'PUT',
+    '--upload-file', path,
+    '--output', process.platform === 'win32' ? 'NUL' : '/dev/null',
+  ];
+  for (const [name, value] of Object.entries(headers)) {
+    args.push('--header', `${name}: ${value}`);
+  }
+  args.push(url);
+
+  return new Promise((resolveUpload, rejectUpload) => {
+    const child = spawn('curl', args, { stdio: ['ignore', 'inherit', 'inherit'] });
+    child.once('error', rejectUpload);
+    child.once('exit', (code, signal) => {
+      if (code === 0) {
+        resolveUpload();
+      } else {
+        rejectUpload(new Error(`curl upload failed with ${signal ? `signal ${signal}` : `exit code ${code}`}`));
+      }
+    });
+  });
+}
+
 export async function publishGitcodeRelease({
   directory,
   repository,
@@ -54,6 +88,7 @@ export async function publishGitcodeRelease({
   targetCommitish = 'main',
   prerelease = false,
   fetchImpl = fetch,
+  uploadImpl = uploadFileWithCurl,
 }) {
   const [owner, repo] = parseRepository(repository);
   if (!token) throw new Error('GITCODE_ACCESS_TOKEN is required');
@@ -112,15 +147,11 @@ export async function publishGitcodeRelease({
     const headers = Array.isArray(rawHeaders)
       ? Object.fromEntries(rawHeaders.map(({ key, name, value }) => [key ?? name, value]))
       : rawHeaders && typeof rawHeaders === 'object' ? rawHeaders : {};
-    const response = await fetchImpl(uploadUrl, {
-      method: 'PUT',
+    await uploadImpl({
+      url: uploadUrl,
       headers,
-      body: await readFile(join(directory, entry.name)),
-      redirect: 'follow',
+      path: join(directory, entry.name),
     });
-    if (!response.ok) {
-      throw new Error(`Uploading ${entry.name} to GitCode failed: HTTP ${response.status}`);
-    }
     console.log(`Uploaded GitCode asset: ${entry.name}`);
   }
 }

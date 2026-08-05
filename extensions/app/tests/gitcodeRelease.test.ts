@@ -8,6 +8,7 @@ describe('GitCode release mirror', () => {
   test('creates a release and uploads compiled artifacts', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'easycli-gitcode-release-'));
     const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const uploads: Array<{ url: string; path: string }> = [];
     try {
       await writeFile(join(directory, 'EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip'), 'artifact');
       const fetchImpl = async (input: URL | RequestInfo, init: RequestInit = {}) => {
@@ -26,9 +27,6 @@ describe('GitCode release mirror', () => {
             headers: { 'x-upload-token': 'signed' },
           });
         }
-        if (method === 'PUT' && url === 'https://file-cdn.gitcode.com/presigned-upload') {
-          return new Response('', { status: 200 });
-        }
         return new Response('', { status: 500 });
       };
 
@@ -38,13 +36,19 @@ describe('GitCode release mirror', () => {
         token: 'secret-token',
         tag: 'v1.2.3',
         fetchImpl,
+        uploadImpl: async ({ url, path }) => {
+          uploads.push({ url, path });
+        },
       });
 
-      expect(calls.map(({ method }) => method)).toEqual(['GET', 'POST', 'GET', 'PUT']);
+      expect(calls.map(({ method }) => method)).toEqual(['GET', 'POST', 'GET']);
       expect(calls[0].url).toContain('/repos/mirror-owner/EasyCLIProxyAPI/releases/tags/v1.2.3');
       expect(calls[0].url).toContain('access_token=secret-token');
       expect(calls[2].url).toContain('file_name=EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip');
-      expect(calls[3].body).toBeInstanceOf(Uint8Array);
+      expect(uploads).toEqual([{
+        url: 'https://file-cdn.gitcode.com/presigned-upload',
+        path: join(directory, 'EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip'),
+      }]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
