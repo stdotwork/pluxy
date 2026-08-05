@@ -31,6 +31,7 @@ describe('Windows 便携更新清单', () => {
         directory: root,
         output,
         repository: 'router-for-me/EasyCLIProxyAPI',
+        gitcodeRepository: 'mirror-owner/EasyCLIProxyAPI',
         tag: 'v1.2.3',
         publishedAt: '2026-07-24T00:00:00.000Z',
       });
@@ -42,10 +43,16 @@ describe('Windows 便携更新清单', () => {
         expect(asset.url).toBe(
           `https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/v1.2.3/EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip`,
         );
+        expect(asset.fallbackUrls).toEqual([
+          `https://api.gitcode.com/api/v5/repos/mirror-owner/EasyCLIProxyAPI/releases/v1.2.3/attach_files/EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip/download`,
+        ]);
         const fullAsset = manifest.fullAssets[`windows-${arch}`];
         expect(fullAsset.url).toBe(
           `https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/v1.2.3/EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip`,
         );
+        expect(fullAsset.fallbackUrls).toEqual([
+          `https://api.gitcode.com/api/v5/repos/mirror-owner/EasyCLIProxyAPI/releases/v1.2.3/attach_files/EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip/download`,
+        ]);
         expect(fullAsset.sizeBytes).toBe(payloads[arch].byteLength);
         expect(fullAsset.sha256).toBe(createHash('sha256').update(payloads[arch]).digest('hex'));
       }

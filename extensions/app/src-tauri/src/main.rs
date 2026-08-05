@@ -52,6 +52,7 @@ const RELEASE_DOWNLOAD_PREFIX: &str =
 const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-windows.json";
 const APP_RELEASE_DOWNLOAD_PREFIX: &str =
     "https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/";
+const APP_UPDATE_MANIFEST_NAME: &str = "portable-update-windows.json";
 const CODEX_MODEL_CATALOG_URL: &str = "https://raw.githubusercontent.com/router-for-me/EasyCLIProxyAPI/main/src-tauri/resources/codex_models/model-catalog.json";
 const CODEX_MODEL_CATALOG_OVERRIDE_DIR: &str = "codex_models";
 const CODEX_MODEL_CATALOG_SOURCE_FILE: &str = "model-catalog.json";
@@ -365,8 +366,15 @@ struct PortableUpdateManifest {
 #[serde(rename_all = "camelCase")]
 struct PortableUpdateAsset {
     url: String,
+    #[serde(default)]
+    fallback_urls: Vec<String>,
     sha256: String,
     size_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitcodeRelease {
+    tag_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -10708,26 +10716,13 @@ async fn check_app_update(
     state: tauri::State<'_, AppUpdateState>,
 ) -> Result<AppUpdateInfo, String> {
     let client = reqwest::Client::builder()
-        .redirect(github_https_redirect_policy())
+        .redirect(release_https_redirect_policy())
         .connect_timeout(Duration::from_secs(8))
         .read_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| format!("创建版本检查客户端失败: {error}"))?;
-    let manifest = client
-        .get(APP_UPDATE_MANIFEST_URL)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
-        .send()
-        .await
-        .map_err(|error| format!("检查软件更新失败: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("读取软件更新清单失败: {error}"))?
-        .json::<PortableUpdateManifest>()
-        .await
-        .map_err(|error| format!("解析软件更新清单失败: {error}"))?;
-
-    validate_portable_update_manifest(&manifest)?;
+    let manifest = fetch_portable_update_manifest(&client).await?;
     let latest_version = normalize_version(&manifest.version);
     let current_version = normalize_version(env!("CARGO_PKG_VERSION"));
     let update_available = is_app_update_available(&current_version, &latest_version)?;
@@ -10780,6 +10775,124 @@ async fn check_app_update(
         auto_update_supported,
         download_size_bytes: asset.map(|value| value.size_bytes),
         unsupported_reason,
+    })
+}
+
+async fn fetch_portable_update_manifest(
+    client: &reqwest::Client,
+) -> Result<PortableUpdateManifest, String> {
+    match fetch_portable_update_manifest_url(client, APP_UPDATE_MANIFEST_URL).await {
+        Ok(manifest) => Ok(manifest),
+        Err(github_error) => {
+            let Some(repository) = configured_gitcode_repository() else {
+                return Err(github_error);
+            };
+            let fallback = async {
+                let release_url =
+                    format!("https://api.gitcode.com/api/v5/repos/{repository}/releases/latest");
+                let release = client
+                    .get(release_url)
+                    .header(reqwest::header::ACCEPT, "application/json")
+                    .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+                    .send()
+                    .await
+                    .map_err(|error| format!("query GitCode latest release: {error}"))?
+                    .error_for_status()
+                    .map_err(|error| format!("read GitCode latest release: {error}"))?
+                    .json::<GitcodeRelease>()
+                    .await
+                    .map_err(|error| format!("parse GitCode latest release: {error}"))?;
+                validate_release_tag(&release.tag_name)?;
+                let manifest_url = gitcode_release_attachment_url(
+                    repository,
+                    &release.tag_name,
+                    APP_UPDATE_MANIFEST_NAME,
+                );
+                fetch_portable_update_manifest_url(client, &manifest_url).await
+            }
+            .await;
+            fallback.map_err(|gitcode_error| {
+                format!(
+                    "GitHub update source failed: {github_error}; GitCode fallback failed: {gitcode_error}"
+                )
+            })
+        }
+    }
+}
+
+async fn fetch_portable_update_manifest_url(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<PortableUpdateManifest, String> {
+    let manifest = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
+        .send()
+        .await
+        .map_err(|error| format!("request update manifest: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("read update manifest: {error}"))?
+        .json::<PortableUpdateManifest>()
+        .await
+        .map_err(|error| format!("parse update manifest: {error}"))?;
+    validate_portable_update_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+fn configured_gitcode_repository() -> Option<&'static str> {
+    let repository = option_env!("GITCODE_REPOSITORY")?.trim();
+    let mut parts = repository.split('/');
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+    };
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(owner), Some(repo), None) if valid_part(owner) && valid_part(repo) => {
+            Some(repository)
+        }
+        _ => None,
+    }
+}
+
+fn validate_release_tag(tag: &str) -> Result<(), String> {
+    semver::Version::parse(tag.strip_prefix('v').unwrap_or(tag))
+        .map(|_| ())
+        .map_err(|error| format!("invalid release tag {tag}: {error}"))
+}
+
+fn gitcode_release_attachment_url(repository: &str, tag: &str, filename: &str) -> String {
+    format!(
+        "https://api.gitcode.com/api/v5/repos/{repository}/releases/{tag}/attach_files/{filename}/download"
+    )
+}
+
+fn release_https_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let url = attempt.url();
+        let trusted_host = matches!(
+            url.host_str(),
+            Some(
+                "github.com"
+                    | "objects.githubusercontent.com"
+                    | "release-assets.githubusercontent.com"
+                    | "api.gitcode.com"
+                    | "gitcode.com"
+                    | "file-cdn.gitcode.com"
+            )
+        );
+        if url.scheme() == "https"
+            && url.port().is_none()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && trusted_host
+        {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
     })
 }
 
@@ -10864,6 +10977,11 @@ fn validate_portable_update_manifest(manifest: &PortableUpdateManifest) -> Resul
         if asset.url != full_package_url && asset.url != legacy_package_url {
             return Err(format!("软件更新资产名称与 {key} 不匹配"));
         }
+        validate_portable_update_asset_fallbacks(
+            asset,
+            &format!("v{}", manifest.version.trim().trim_start_matches('v')),
+            &[&full_package_name, &legacy_package_name],
+        )?;
     }
     if let Some(full_assets) = &manifest.full_assets {
         if full_assets.len() != 2 {
@@ -10888,6 +11006,11 @@ fn validate_portable_update_manifest(manifest: &PortableUpdateManifest) -> Resul
             if asset.url != expected_url {
                 return Err(format!("Full update asset name does not match {key}"));
             }
+            validate_portable_update_asset_fallbacks(
+                asset,
+                &format!("v{}", manifest.version.trim().trim_start_matches('v')),
+                &[&package_name],
+            )?;
         }
     }
     Ok(())
@@ -10912,6 +11035,43 @@ fn validate_portable_update_asset(asset: &PortableUpdateAsset) -> Result<(), Str
     let digest = asset.sha256.trim().to_ascii_lowercase();
     if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("软件更新 SHA-256 无效".to_string());
+    }
+    Ok(())
+}
+
+fn validate_portable_update_asset_fallbacks(
+    asset: &PortableUpdateAsset,
+    tag: &str,
+    expected_filenames: &[&str],
+) -> Result<(), String> {
+    validate_portable_update_asset_fallbacks_for_repository(
+        asset,
+        tag,
+        expected_filenames,
+        configured_gitcode_repository(),
+    )
+}
+
+fn validate_portable_update_asset_fallbacks_for_repository(
+    asset: &PortableUpdateAsset,
+    tag: &str,
+    expected_filenames: &[&str],
+    repository: Option<&str>,
+) -> Result<(), String> {
+    if asset.fallback_urls.is_empty() {
+        return Ok(());
+    }
+    let repository = repository
+        .ok_or_else(|| "GitCode fallback is not configured for this build".to_string())?;
+    if asset.fallback_urls.len() != 1 {
+        return Err("Software update assets may define only one fallback URL".to_string());
+    }
+    let fallback = &asset.fallback_urls[0];
+    let trusted = expected_filenames
+        .iter()
+        .any(|filename| fallback == &gitcode_release_attachment_url(repository, tag, filename));
+    if !trusted {
+        return Err("Software update fallback URL is not trusted".to_string());
     }
     Ok(())
 }
@@ -11124,14 +11284,46 @@ async fn download_portable_update_archive(
     destination: &Path,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
-        .redirect(github_https_redirect_policy())
+        .redirect(release_https_redirect_policy())
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(15 * 60))
         .build()
         .map_err(|error| format!("创建应用更新下载客户端失败: {error}"))?;
+    let urls = std::iter::once(&pending.asset.url)
+        .chain(pending.asset.fallback_urls.iter())
+        .collect::<Vec<_>>();
+    let mut failures = Vec::new();
+    for (index, url) in urls.iter().enumerate() {
+        update_app_task(app, |task| {
+            task.downloaded_bytes = 0;
+            task.percent = Some(0.0);
+            if index > 0 {
+                task.message = Some("GitHub 下载失败，正在切换到 GitCode".to_string());
+            }
+        });
+        match download_portable_update_archive_url(app, pending, token, destination, &client, url)
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(error) if token.is_cancelled() => return Err(error),
+            Err(error) => failures.push(error),
+        }
+    }
+    Err(format!("所有应用更新下载源均失败: {}", failures.join("; ")))
+}
+
+#[cfg(windows)]
+async fn download_portable_update_archive_url(
+    app: &tauri::AppHandle,
+    pending: &PendingAppUpdate,
+    token: &CancellationToken,
+    destination: &Path,
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<(), String> {
     let response = client
-        .get(&pending.asset.url)
+        .get(url)
         .header(reqwest::header::ACCEPT, "application/octet-stream")
         .header(reqwest::header::USER_AGENT, APP_USER_AGENT)
         .send()
@@ -23435,6 +23627,7 @@ custom_option = "keep-original"
         let name = format!("EasyCLIProxyAPI-v{version}-Windows-{arch}.zip");
         PortableUpdateAsset {
             url: format!("{APP_RELEASE_DOWNLOAD_PREFIX}v{version}/{name}"),
+            fallback_urls: Vec::new(),
             sha256: "ab".repeat(32),
             size_bytes: 1024,
         }
@@ -23444,6 +23637,7 @@ custom_option = "keep-original"
         let name = format!("EasyCLIProxyAPI-update-v{version}-Windows-{arch}.zip");
         PortableUpdateAsset {
             url: format!("{APP_RELEASE_DOWNLOAD_PREFIX}v{version}/{name}"),
+            fallback_urls: Vec::new(),
             sha256: "ab".repeat(32),
             size_bytes: 1024,
         }
@@ -23538,6 +23732,31 @@ custom_option = "keep-original"
         mismatched_tag.assets.get_mut("windows-amd64").unwrap().url =
             format!("{APP_RELEASE_DOWNLOAD_PREFIX}v9.9.9/EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip");
         assert!(validate_portable_update_manifest(&mismatched_tag).is_err());
+    }
+
+    #[test]
+    fn portable_update_asset_accepts_only_the_configured_gitcode_fallback() {
+        let mut asset = portable_update_test_asset("1.2.3", "amd64");
+        let filename = "EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip";
+        asset.fallback_urls = vec![gitcode_release_attachment_url(
+            "mirror-owner/EasyCLIProxyAPI",
+            "v1.2.3",
+            filename,
+        )];
+        assert!(validate_portable_update_asset_fallbacks_for_repository(
+            &asset,
+            "v1.2.3",
+            &[filename],
+            Some("mirror-owner/EasyCLIProxyAPI"),
+        )
+        .is_ok());
+        assert!(validate_portable_update_asset_fallbacks_for_repository(
+            &asset,
+            "v1.2.3",
+            &[filename],
+            Some("another-owner/EasyCLIProxyAPI"),
+        )
+        .is_err());
     }
 
     #[test]
