@@ -1769,32 +1769,40 @@ fn refresh_agent_config_status_cache(
 }
 
 #[tauri::command]
-fn get_agent_config_statuses(
+async fn get_agent_config_statuses(
     app: tauri::AppHandle,
-    gui_config_state: tauri::State<'_, GuiConfigState>,
-    cache: tauri::State<'_, AgentConfigStatusCache>,
 ) -> Result<Vec<AgentConfigStatus>, String> {
-    {
-        let _refresh_guard = cache
-            .refresh_lock
-            .lock()
-            .map_err(|_| "智能体配置状态刷新锁已损坏".to_string())?;
-        let config = gui_config_state.snapshot()?;
-        let port = config.port;
-        if let Some(statuses) = cache.get(port, effective_agent_api_key(&config))? {
-            return Ok(statuses);
+    tauri::async_runtime::spawn_blocking(move || {
+        let gui_config_state = app.state::<GuiConfigState>();
+        let cache = app.state::<AgentConfigStatusCache>();
+        {
+            let _refresh_guard = cache
+                .refresh_lock
+                .lock()
+                .map_err(|_| "智能体配置状态刷新锁已损坏".to_string())?;
+            let config = gui_config_state.snapshot()?;
+            let port = config.port;
+            if let Some(statuses) = cache.get(port, effective_agent_api_key(&config))? {
+                return Ok(statuses);
+            }
         }
-    }
-    refresh_agent_config_status_cache(&app, gui_config_state.inner(), cache.inner())
+        refresh_agent_config_status_cache(&app, gui_config_state.inner(), cache.inner())
+    })
+    .await
+    .map_err(|error| format!("智能体检测后台任务失败: {error}"))?
 }
 
 #[tauri::command]
-fn refresh_agent_config_statuses(
+async fn refresh_agent_config_statuses(
     app: tauri::AppHandle,
-    gui_config_state: tauri::State<'_, GuiConfigState>,
-    cache: tauri::State<'_, AgentConfigStatusCache>,
 ) -> Result<Vec<AgentConfigStatus>, String> {
-    refresh_agent_config_status_cache(&app, gui_config_state.inner(), cache.inner())
+    tauri::async_runtime::spawn_blocking(move || {
+        let gui_config_state = app.state::<GuiConfigState>();
+        let cache = app.state::<AgentConfigStatusCache>();
+        refresh_agent_config_status_cache(&app, gui_config_state.inner(), cache.inner())
+    })
+    .await
+    .map_err(|error| format!("智能体检测后台任务失败: {error}"))?
 }
 
 #[tauri::command]
