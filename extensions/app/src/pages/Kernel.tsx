@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AlertCircle, Check, Copy, ExternalLink, Eye, EyeOff, Info } from 'lucide-react';
@@ -7,7 +8,6 @@ import openaiIcon from '../assets/icons/openai-light.svg';
 import claudeIcon from '../assets/icons/claude.svg';
 import geminiIcon from '../assets/icons/gemini.svg';
 import { clientApiProfiles } from '../services/clientAccess';
-import packageMetadata from '../../package.json';
 import { useI18n } from '../i18n';
 import { useAppUpdate } from '../appUpdate';
 
@@ -73,7 +73,7 @@ let cachedLatestError = '';
 let latestCheckPromise: Promise<CoreLatest> | null = null;
 
 function displayAppVersion(version: string) {
-  const resolvedVersion = version.trim() || packageMetadata.version;
+  const resolvedVersion = version.trim();
   return resolvedVersion.startsWith('v') ? resolvedVersion : `v${resolvedVersion}`;
 }
 
@@ -118,6 +118,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     refreshStatus,
     publishStatus,
   } = useCoreRuntime();
+  const [installedAppVersion, setInstalledAppVersion] = useState('');
   const [platform, setPlatform] = useState<CorePlatform | null>(null);
   const [platformError, setPlatformError] = useState('');
   const [latest, setLatest] = useState<CoreLatest | null>(cachedLatest);
@@ -233,6 +234,11 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     loadBundledCore();
     loadInstallTask();
     loadGuiSettings();
+    void getVersion()
+      .then((version) => {
+        if (!disposed) setInstalledAppVersion(version);
+      })
+      .catch(() => undefined);
     if (view === 'home') {
       void loadHomeApiKey();
     }
@@ -607,7 +613,10 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     : statusError
       ? t('common.detectionFailed')
       : t('common.detecting');
-  const currentAppVersion = displayAppVersion(appUpdate?.currentVersion || packageMetadata.version);
+  const resolvedAppVersion = appUpdate?.currentVersion || installedAppVersion;
+  const currentAppVersion = resolvedAppVersion
+    ? displayAppVersion(resolvedAppVersion)
+    : t('common.detecting');
   const latestLabel = checkingLatest
     ? t('kernel.update.checking')
     : latestVersion || (latestError ? t('kernel.update.failed') : t('kernel.update.notChecked'));

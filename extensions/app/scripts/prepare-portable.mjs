@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { readAppVersion } from './app-version.mjs';
 
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
@@ -22,12 +23,7 @@ if (!existsSync(binary)) throw new Error(`GUI binary not found: ${binary}`);
 const rawVersion = (await readFile(join(root, 'core-version.txt'), 'utf8')).trim();
 if (!/^v?\d+(?:\.\d+)+$/.test(rawVersion)) throw new Error(`Invalid core-version.txt: ${rawVersion}`);
 const version = rawVersion.replace(/^v/i, '');
-const packageMetadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-const appVersion = String(packageMetadata.version ?? '').trim();
-const semverPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-if (!semverPattern.test(appVersion)) {
-  throw new Error(`Invalid package.json version: ${appVersion}`);
-}
+const appVersion = await readAppVersion();
 const extension = targetOS === 'windows' ? 'zip' : 'tar.gz';
 const assetName = `CLIProxyAPI_${version}_${targetOS}_${targetArch}.${extension}`;
 const sourceDir = join(root, 'cpa-core');
