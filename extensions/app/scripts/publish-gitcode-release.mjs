@@ -4,6 +4,8 @@ import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const API_BASE = 'https://api.gitcode.com/api/v5';
+const API_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_SECONDS = 180;
 
 function parseRepository(value) {
   const repository = String(value ?? '').trim();
@@ -36,6 +38,7 @@ async function apiRequest(path, {
       method,
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
   } catch (error) {
     throw new Error(`GitCode API request failed for ${path}: ${error instanceof Error ? error.message : error}`);
@@ -53,11 +56,10 @@ export function uploadFileWithCurl({ url, headers, path }) {
     '--silent',
     '--show-error',
     '--location',
-    '--retry', '3',
-    '--retry-delay', '5',
-    '--retry-all-errors',
     '--connect-timeout', '30',
-    '--max-time', '1800',
+    '--speed-limit', '1',
+    '--speed-time', '30',
+    '--max-time', String(UPLOAD_TIMEOUT_SECONDS),
     '--request', 'PUT',
     '--upload-file', path,
     '--output', process.platform === 'win32' ? 'NUL' : '/dev/null',
@@ -147,11 +149,22 @@ export async function publishGitcodeRelease({
     const headers = Array.isArray(rawHeaders)
       ? Object.fromEntries(rawHeaders.map(({ key, name, value }) => [key ?? name, value]))
       : rawHeaders && typeof rawHeaders === 'object' ? rawHeaders : {};
-    await uploadImpl({
-      url: uploadUrl,
-      headers,
-      path: join(directory, entry.name),
-    });
+    console.log(`Uploading GitCode asset: ${entry.name}`);
+    try {
+      await uploadImpl({
+        url: uploadUrl,
+        headers,
+        path: join(directory, entry.name),
+      });
+    } catch (error) {
+      console.warn(`GitCode upload command did not finish cleanly; verifying asset: ${entry.name}`);
+      const refreshedRelease = await apiRequest(releaseByTagPath, { token, fetchImpl });
+      const uploadedDespiteError = (refreshedRelease.assets ?? [])
+        .some((asset) => asset.name === entry.name);
+      if (!uploadedDespiteError) throw error;
+      console.log(`GitCode asset exists despite upload error: ${entry.name}`);
+    }
+    existingAssets.add(entry.name);
     console.log(`Uploaded GitCode asset: ${entry.name}`);
   }
 }

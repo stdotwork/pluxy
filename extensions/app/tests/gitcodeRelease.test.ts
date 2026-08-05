@@ -53,4 +53,42 @@ describe('GitCode release mirror', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  test('continues when GitCode stores an asset but the upload response times out', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'easycli-gitcode-release-'));
+    const artifactName = 'EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip';
+    let releaseRequests = 0;
+    try {
+      await writeFile(join(directory, artifactName), 'artifact');
+      const fetchImpl = async (input: URL | RequestInfo) => {
+        const url = String(input);
+        if (url.includes('/releases/tags/')) {
+          releaseRequests += 1;
+          return Response.json({
+            tag_name: 'v1.2.3',
+            assets: releaseRequests === 1 ? [] : [{ name: artifactName }],
+          });
+        }
+        if (url.includes('/upload_url?')) {
+          return Response.json({ upload_url: 'https://file-cdn.gitcode.com/presigned-upload' });
+        }
+        return new Response('', { status: 500 });
+      };
+
+      await expect(publishGitcodeRelease({
+        directory,
+        repository: 'mirror-owner/EasyCLIProxyAPI',
+        token: 'secret-token',
+        tag: 'v1.2.3',
+        fetchImpl,
+        uploadImpl: async () => {
+          throw new Error('upload response timed out');
+        },
+      })).resolves.toBeUndefined();
+
+      expect(releaseRequests).toBe(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

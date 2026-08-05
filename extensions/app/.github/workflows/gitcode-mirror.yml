@@ -33,7 +33,7 @@ jobs:
         || github.event.workflow_run.conclusion == 'success'
       )
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
       - name: Resolve release tag
@@ -75,6 +75,7 @@ jobs:
         run: gh release download "${{ steps.release.outputs.tag }}" --dir artifacts
       - name: Publish GitCode mirror
         if: steps.release.outputs.should_mirror == 'true'
+        timeout-minutes: 30
         env:
           ARTIFACT_DIRECTORY: artifacts
           GITCODE_ACCESS_TOKEN: ${{ secrets.GITCODE_ACCESS_TOKEN }}

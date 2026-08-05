@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [int]$BuildJobs
+    [int]$BuildJobs,
+
+    [string]$GitCodeRepository = 'lzt404/EasyCLIProxyAPI'
 )
 
 Set-StrictMode -Version Latest
@@ -25,12 +27,16 @@ if (-not $PSBoundParameters.ContainsKey('BuildJobs')) {
 if ($BuildJobs -lt 1 -or $BuildJobs -gt 256) {
     throw 'BuildJobs must be between 1 and 256.'
 }
+if ($GitCodeRepository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw 'GitCodeRepository must use the owner/repository format.'
+}
 
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
     throw 'bun is not installed or not in PATH.'
 }
 
 Write-Host "Cargo build jobs: $BuildJobs"
+Write-Host "GitCode fallback repository: $GitCodeRepository"
 
 & bun install
 if ($LASTEXITCODE -ne 0) {
@@ -38,8 +44,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $PreviousBuildJobs = $env:CARGO_BUILD_JOBS
+$PreviousGitCodeRepository = $env:GITCODE_REPOSITORY
 try {
     $env:CARGO_BUILD_JOBS = [string]$BuildJobs
+    $env:GITCODE_REPOSITORY = $GitCodeRepository
     & bun tauri build --no-bundle
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri build failed with exit code $LASTEXITCODE."
@@ -51,6 +59,12 @@ finally {
     }
     else {
         $env:CARGO_BUILD_JOBS = $PreviousBuildJobs
+    }
+    if ($null -eq $PreviousGitCodeRepository) {
+        Remove-Item Env:GITCODE_REPOSITORY -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:GITCODE_REPOSITORY = $PreviousGitCodeRepository
     }
 }
 
