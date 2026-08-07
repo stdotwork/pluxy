@@ -44,6 +44,12 @@ const endpointRoot = (provider: ModelProvider, baseUrl: string) => {
   return normalized.replace(/\/(?:v1beta|v1)$/i, '');
 };
 
+const openAIChatCompletionsEndpoint = (baseUrl: string) => {
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (!normalized) return '';
+  return `${normalized}/chat/completions`;
+};
+
 const hasHeader = (headers: Record<string, string>, name: string) =>
   Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
 
@@ -148,7 +154,7 @@ export function buildProviderHealthProbe(
   }
 
   return {
-    url: `${root}/v1/chat/completions`,
+    url: openAIChatCompletionsEndpoint(baseUrl),
     header: headers,
     protocol: 'openai-chat',
     data: JSON.stringify({

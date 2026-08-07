@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
   generatePortableUpdateManifest,
-} from '../scripts/generate-portable-update-manifest.mjs';
+} from '../scripts/manifest.mjs';
 
 describe('Windows 便携更新清单', () => {
   test('URL、大小和哈希与实际上传资产一致', async () => {

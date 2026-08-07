@@ -40,21 +40,23 @@ const stripKnownSuffix = (baseUrl: string) =>
     .replace(/\/(?:v1beta|v1)\/models$/i, '')
     .replace(/\/models$/i, '');
 
-const endpointCandidates = (provider: ModelProvider, baseUrl: string): string[] => {
+export const modelEndpointCandidates = (provider: ModelProvider, baseUrl: string): string[] => {
   const resolvedBaseUrl = baseUrl.trim()
     || (provider === 'gemini'
       ? DEFAULT_GEMINI_BASE_URL
       : provider === 'claude'
         ? DEFAULT_CLAUDE_BASE_URL
         : '');
-  const base = stripKnownSuffix(resolvedBaseUrl);
-  if (!base) return [];
+  const normalized = normalizeBaseUrl(resolvedBaseUrl);
+  if (!normalized) return [];
+  if (provider === 'openai') {
+    return [/\/models$/i.test(normalized) ? normalized : `${normalized}/models`];
+  }
+  const base = stripKnownSuffix(normalized);
   const withoutVersion = base.replace(/\/(?:v1beta|v1)$/i, '');
   if (provider === 'gemini') return [`${withoutVersion}/v1beta/models`];
   if (provider === 'claude') return [`${withoutVersion}/v1/models`];
-  const first = /\/v1$/i.test(base) ? `${base}/models` : `${base}/v1/models`;
-  const fallback = `${base}/models`;
-  return first === fallback ? [first] : [first, fallback];
+  return [/\/v1$/i.test(base) ? `${base}/models` : `${base}/v1/models`];
 };
 
 const normalizeModelList = (payload: unknown): ModelOption[] => {
@@ -95,7 +97,7 @@ export async function fetchModels(
   timeoutMs?: number,
 ): Promise<ModelOption[]> {
   const normalized = baseUrl.trim() ? normalizeBaseUrl(baseUrl) : '';
-  const candidates = endpointCandidates(provider, normalized);
+  const candidates = modelEndpointCandidates(provider, normalized);
   if (candidates.length === 0) throw new Error(modelText('model.error.baseUrlRequired'));
   const headers: Record<string, string> = { ...customHeaders };
   const hasHeader = (name: string) =>

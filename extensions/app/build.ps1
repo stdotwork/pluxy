@@ -2,7 +2,9 @@
 param(
     [int]$BuildJobs,
 
-    [string]$GitCodeRepository = 'lzt404/EasyCLIProxyAPI'
+    [string]$GitCodeGuiRepository = 'lzt404/EasyCLIProxyAPI',
+
+    [string]$GitCodeCoreRepository = 'lzt404/CLIProxyAPI'
 )
 
 Set-StrictMode -Version Latest
@@ -12,7 +14,7 @@ $RootDir = $PSScriptRoot
 $AppBin = Join-Path $RootDir 'src-tauri\target\release\cpa-gui.exe'
 $BinDir = Join-Path $RootDir 'bin-work'
 $BinOut = Join-Path $BinDir 'EasyCLIProxyAPI.exe'
-$PreparePortable = Join-Path $RootDir 'scripts\prepare-portable.mjs'
+$PortableScript = Join-Path $RootDir 'scripts\portable.mjs'
 
 Set-Location -LiteralPath $RootDir
 
@@ -27,8 +29,11 @@ if (-not $PSBoundParameters.ContainsKey('BuildJobs')) {
 if ($BuildJobs -lt 1 -or $BuildJobs -gt 256) {
     throw 'BuildJobs must be between 1 and 256.'
 }
-if ($GitCodeRepository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
-    throw 'GitCodeRepository must use the owner/repository format.'
+if ($GitCodeGuiRepository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw 'GitCodeGuiRepository must use the owner/repository format.'
+}
+if ($GitCodeCoreRepository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw 'GitCodeCoreRepository must use the owner/repository format.'
 }
 
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
@@ -36,7 +41,8 @@ if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "Cargo build jobs: $BuildJobs"
-Write-Host "GitCode fallback repository: $GitCodeRepository"
+Write-Host "GitCode GUI fallback repository: $GitCodeGuiRepository"
+Write-Host "GitCode core fallback repository: $GitCodeCoreRepository"
 
 & bun install
 if ($LASTEXITCODE -ne 0) {
@@ -44,10 +50,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $PreviousBuildJobs = $env:CARGO_BUILD_JOBS
-$PreviousGitCodeRepository = $env:GITCODE_REPOSITORY
+$PreviousGitCodeGuiRepository = $env:GITCODE_GUI_REPOSITORY
+$PreviousGitCodeCoreRepository = $env:GITCODE_CORE_REPOSITORY
 try {
     $env:CARGO_BUILD_JOBS = [string]$BuildJobs
-    $env:GITCODE_REPOSITORY = $GitCodeRepository
+    $env:GITCODE_GUI_REPOSITORY = $GitCodeGuiRepository
+    $env:GITCODE_CORE_REPOSITORY = $GitCodeCoreRepository
     & bun tauri build --no-bundle
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri build failed with exit code $LASTEXITCODE."
@@ -60,11 +68,17 @@ finally {
     else {
         $env:CARGO_BUILD_JOBS = $PreviousBuildJobs
     }
-    if ($null -eq $PreviousGitCodeRepository) {
-        Remove-Item Env:GITCODE_REPOSITORY -ErrorAction SilentlyContinue
+    if ($null -eq $PreviousGitCodeGuiRepository) {
+        Remove-Item Env:GITCODE_GUI_REPOSITORY -ErrorAction SilentlyContinue
     }
     else {
-        $env:GITCODE_REPOSITORY = $PreviousGitCodeRepository
+        $env:GITCODE_GUI_REPOSITORY = $PreviousGitCodeGuiRepository
+    }
+    if ($null -eq $PreviousGitCodeCoreRepository) {
+        Remove-Item Env:GITCODE_CORE_REPOSITORY -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:GITCODE_CORE_REPOSITORY = $PreviousGitCodeCoreRepository
     }
 }
 
@@ -72,7 +86,7 @@ if (-not (Test-Path -LiteralPath $AppBin -PathType Leaf)) {
     throw "Build finished, but executable not found: $AppBin"
 }
 
-& bun $PreparePortable --binary $AppBin --output $BinDir --download true --preserve-runtime-config true
+& bun $PortableScript --binary $AppBin --output $BinDir --download true --preserve-runtime-config true
 if ($LASTEXITCODE -ne 0) {
     throw "Portable preparation failed with exit code $LASTEXITCODE."
 }

@@ -1,15 +1,16 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
-import { readAppVersion } from './app-version.mjs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readAppVersion } from './version.mjs';
 
 const args = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
   args.set(process.argv[index], process.argv[index + 1]);
 }
 
-const root = resolve(import.meta.dirname, '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(args.get('--output') ?? join(root, 'bin-work'));
 const binary = resolve(args.get('--binary') ?? join(root, 'src-tauri', 'target', 'release', process.platform === 'win32' ? 'cpa-gui.exe' : 'cpa-gui'));
 const targetOS = args.get('--os') ?? ({ linux: 'linux', darwin: 'darwin', win32: 'windows' })[process.platform];

@@ -1563,6 +1563,8 @@ struct GithubRelease {
 struct GithubAsset {
     name: String,
     browser_download_url: String,
+    #[serde(default)]
+    fallback_download_urls: Vec<String>,
     size: Option<u64>,
     digest: Option<String>,
 }
@@ -10784,7 +10786,7 @@ async fn fetch_portable_update_manifest(
     match fetch_portable_update_manifest_url(client, APP_UPDATE_MANIFEST_URL).await {
         Ok(manifest) => Ok(manifest),
         Err(github_error) => {
-            let Some(repository) = configured_gitcode_repository() else {
+            let Some(repository) = configured_gitcode_gui_repository() else {
                 return Err(github_error);
             };
             let fallback = async {
@@ -10840,8 +10842,16 @@ async fn fetch_portable_update_manifest_url(
     Ok(manifest)
 }
 
-fn configured_gitcode_repository() -> Option<&'static str> {
-    let repository = option_env!("GITCODE_REPOSITORY")?.trim();
+fn configured_gitcode_gui_repository() -> Option<&'static str> {
+    configured_gitcode_repository(option_env!("GITCODE_GUI_REPOSITORY"))
+}
+
+fn configured_gitcode_core_repository() -> Option<&'static str> {
+    configured_gitcode_repository(option_env!("GITCODE_CORE_REPOSITORY"))
+}
+
+fn configured_gitcode_repository(repository: Option<&'static str>) -> Option<&'static str> {
+    let repository = repository?.trim();
     let mut parts = repository.split('/');
     let valid_part = |part: &str| {
         !part.is_empty()
@@ -11048,7 +11058,7 @@ fn validate_portable_update_asset_fallbacks(
         asset,
         tag,
         expected_filenames,
-        configured_gitcode_repository(),
+        configured_gitcode_gui_repository(),
     )
 }
 
@@ -11807,17 +11817,7 @@ async fn install_core_version_inner(
         .ok_or_else(|| format!("非法 asset 文件名: {}", asset.name))?;
     let archive_path = download_dir.join(archive_file_name);
 
-    let downloaded = download_asset(
-        &client,
-        &asset.browser_download_url,
-        &archive_path,
-        asset.size,
-        asset.digest.as_deref(),
-        window,
-        state,
-        &token,
-    )
-    .await?;
+    let downloaded = download_asset(&client, asset, &archive_path, window, state, &token).await?;
     validate_downloaded_asset(asset, &downloaded)?;
 
     ensure_not_cancelled(&token, Some(&archive_path))?;
@@ -11933,12 +11933,48 @@ async fn fetch_release(
         return Ok(release_from_tag(version));
     }
     let atom_result = fetch_release_from_atom(client).await;
-    match atom_result {
+    let github_result = match atom_result {
         Ok(release) => Ok(release),
         Err(atom_error) => fetch_release_from_page(client).await.map_err(|page_error| {
             format!("GitHub 发布源请求失败: {atom_error}；release 页面请求失败: {page_error}")
         }),
+    };
+    match github_result {
+        Ok(release) => Ok(release),
+        Err(github_error) => {
+            let Some(repository) = configured_gitcode_core_repository() else {
+                return Err(github_error);
+            };
+            fetch_release_from_gitcode(client, repository)
+                .await
+                .map_err(|gitcode_error| {
+                    format!(
+                        "GitHub 内核发布源失败: {github_error}；GitCode 回退源失败: {gitcode_error}"
+                    )
+                })
+        }
     }
+}
+
+async fn fetch_release_from_gitcode(
+    client: &reqwest::Client,
+    repository: &str,
+) -> Result<GithubRelease, String> {
+    let release_url = format!("https://api.gitcode.com/api/v5/repos/{repository}/releases/latest");
+    let release = client
+        .get(release_url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()
+        .await
+        .map_err(|error| format!("查询 GitCode 最新内核发行版失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("读取 GitCode 最新内核发行版失败: {error}"))?
+        .json::<GitcodeRelease>()
+        .await
+        .map_err(|error| format!("解析 GitCode 最新内核发行版失败: {error}"))?;
+    validate_release_tag(&release.tag_name)?;
+    Ok(release_from_gitcode_tag(&release.tag_name, repository))
 }
 
 async fn fetch_release_from_page(client: &reqwest::Client) -> Result<GithubRelease, String> {
@@ -12010,6 +12046,18 @@ fn release_tag_from_atom(xml: &str) -> Option<String> {
 }
 
 fn release_from_tag(tag: &str) -> GithubRelease {
+    release_from_tag_for_repositories(tag, configured_gitcode_core_repository(), false)
+}
+
+fn release_from_gitcode_tag(tag: &str, repository: &str) -> GithubRelease {
+    release_from_tag_for_repositories(tag, Some(repository), true)
+}
+
+fn release_from_tag_for_repositories(
+    tag: &str,
+    gitcode_repository: Option<&str>,
+    prefer_gitcode: bool,
+) -> GithubRelease {
     let tag = normalize_version(tag);
     let version = tag.trim_start_matches('v');
     let assets = [
@@ -12023,8 +12071,20 @@ fn release_from_tag(tag: &str) -> GithubRelease {
     .into_iter()
     .map(|(os, arch, extension)| {
         let name = format!("CLIProxyAPI_{version}_{os}_{arch}.{extension}");
+        let github_url = format!("{RELEASE_DOWNLOAD_PREFIX}{tag}/{name}");
+        let gitcode_url = gitcode_repository
+            .map(|repository| gitcode_release_attachment_url(repository, &tag, &name));
+        let (browser_download_url, fallback_download_urls) = if prefer_gitcode {
+            (
+                gitcode_url.unwrap_or_else(|| github_url.clone()),
+                Vec::new(),
+            )
+        } else {
+            (github_url, gitcode_url.into_iter().collect())
+        };
         GithubAsset {
-            browser_download_url: format!("{RELEASE_DOWNLOAD_PREFIX}{tag}/{name}"),
+            browser_download_url,
+            fallback_download_urls,
             name,
             size: None,
             digest: None,
@@ -12099,6 +12159,7 @@ fn parse_release_assets(html: &str) -> Vec<GithubAsset> {
             assets.push(GithubAsset {
                 name: name.to_string(),
                 browser_download_url,
+                fallback_download_urls: Vec::new(),
                 size: None,
                 digest,
             });
@@ -12136,6 +12197,7 @@ async fn fetch_release_cancelable(
 
 fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
+        .redirect(release_https_redirect_policy())
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(600))
@@ -12176,30 +12238,53 @@ fn core_release_asset_name(version: &str, platform: &CorePlatform) -> String {
 #[allow(clippy::too_many_arguments)]
 async fn download_asset(
     client: &reqwest::Client,
-    url: &str,
+    asset: &GithubAsset,
     archive_path: &Path,
-    expected_total: Option<u64>,
-    expected_digest: Option<&str>,
     window: &tauri::Window,
     state: &CoreDownloadState,
     token: &CancellationToken,
 ) -> Result<DownloadedArchive, String> {
-    let result = download_asset_inner(
-        client,
-        url,
-        archive_path,
-        expected_total,
-        expected_digest,
-        window,
-        state,
-        token,
-    )
-    .await;
-    if result.is_err() {
-        let _ = fs::remove_file(archive_path);
+    let urls =
+        std::iter::once(&asset.browser_download_url).chain(asset.fallback_download_urls.iter());
+    let mut failures = Vec::new();
+    for (index, url) in urls.enumerate() {
+        if index > 0 {
+            state.progress(
+                window,
+                "GitHub 下载失败，正在切换到 GitCode",
+                0,
+                asset.size,
+                true,
+            );
+        }
+        let result = download_asset_inner(
+            client,
+            url,
+            archive_path,
+            asset.size,
+            asset.digest.as_deref(),
+            window,
+            state,
+            token,
+        )
+        .await;
+        match result {
+            Ok(downloaded) => return Ok(downloaded),
+            Err(error) if token.is_cancelled() => {
+                let _ = fs::remove_file(archive_path);
+                return Err(error);
+            }
+            Err(error) => {
+                let _ = fs::remove_file(archive_path);
+                failures.push(error);
+            }
+        }
     }
-
-    result
+    if failures.is_empty() {
+        let _ = fs::remove_file(archive_path);
+        return Err("内核发行版没有可用的下载地址".to_string());
+    }
+    Err(format!("所有内核下载源均失败: {}", failures.join("；")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -24025,6 +24110,51 @@ custom_option = "keep-original"
             asset.browser_download_url,
             "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.80/CLIProxyAPI_7.2.80_linux_amd64.tar.gz"
         );
+    }
+
+    #[test]
+    fn synthetic_core_release_uses_gitcode_as_download_fallback() {
+        let release = release_from_tag_for_repositories(
+            "7.2.80",
+            Some("lzt404/CLIProxyAPI"),
+            false,
+        );
+        let platform = CorePlatform {
+            os: "windows".to_string(),
+            arch: "x86_64".to_string(),
+            asset_os: "windows".to_string(),
+            asset_arch: "amd64".to_string(),
+            archive_kind: "zip".to_string(),
+        };
+        let asset = select_release_asset(&release, &platform).unwrap();
+
+        assert_eq!(
+            asset.browser_download_url,
+            "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.80/CLIProxyAPI_7.2.80_windows_amd64.zip"
+        );
+        assert_eq!(
+            asset.fallback_download_urls,
+            ["https://api.gitcode.com/api/v5/repos/lzt404/CLIProxyAPI/releases/v7.2.80/attach_files/CLIProxyAPI_7.2.80_windows_amd64.zip/download"]
+        );
+    }
+
+    #[test]
+    fn gitcode_discovered_core_release_downloads_from_gitcode_first() {
+        let release = release_from_gitcode_tag("v7.2.80", "lzt404/CLIProxyAPI");
+        let platform = CorePlatform {
+            os: "linux".to_string(),
+            arch: "aarch64".to_string(),
+            asset_os: "linux".to_string(),
+            asset_arch: "aarch64".to_string(),
+            archive_kind: "tar.gz".to_string(),
+        };
+        let asset = select_release_asset(&release, &platform).unwrap();
+
+        assert_eq!(
+            asset.browser_download_url,
+            "https://api.gitcode.com/api/v5/repos/lzt404/CLIProxyAPI/releases/v7.2.80/attach_files/CLIProxyAPI_7.2.80_linux_aarch64.tar.gz/download"
+        );
+        assert!(asset.fallback_download_urls.is_empty());
     }
 
     #[test]
