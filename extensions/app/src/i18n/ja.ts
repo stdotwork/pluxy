@@ -570,7 +570,7 @@ export const jaOverrides = {
   'agents.model.current': '現在適用中：{model}',
   'agents.model.firstSelection': '利用可能なモデル {count} 件。初回は先頭を選択します',
   'agents.modify.title': '設定変更',
-  'agents.modify.oauthConfiguration': 'OAuth 設定方式',
+  'agents.modify.oauthConfiguration': 'OAuth ログイン設定方式',
   'agents.claudeDesktopMapping.title': 'Claude Desktop モデル → 上流モデル',
   'agents.claudeDesktopMapping.description': '各 Claude Desktop モデルが実際に呼び出す上流モデルを選択します。',
   'agents.claudeCodeMapping.title': 'Claude Code モデル → 上流モデル',
