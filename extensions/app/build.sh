@@ -26,7 +26,7 @@ if [ ! -x "$APP_BIN" ]; then
 fi
 
 mkdir -p "$BIN_DIR"
-bun "$ROOT_DIR/scripts/prepare-portable.mjs" \
+bun "$ROOT_DIR/scripts/portable.mjs" \
   --binary "$APP_BIN" \
   --output "$BIN_DIR" \
   --download true

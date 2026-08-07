@@ -12,7 +12,7 @@ $RootDir = $PSScriptRoot
 $AppBin = Join-Path $RootDir 'src-tauri\target\release\cpa-gui.exe'
 $BinDir = Join-Path $RootDir 'bin-work'
 $BinOut = Join-Path $BinDir 'EasyCLIProxyAPI.exe'
-$PreparePortable = Join-Path $RootDir 'scripts\prepare-portable.mjs'
+$PortableScript = Join-Path $RootDir 'scripts\portable.mjs'
 
 Set-Location -LiteralPath $RootDir
 
@@ -72,7 +72,7 @@ if (-not (Test-Path -LiteralPath $AppBin -PathType Leaf)) {
     throw "Build finished, but executable not found: $AppBin"
 }
 
-& bun $PreparePortable --binary $AppBin --output $BinDir --download true --preserve-runtime-config true
+& bun $PortableScript --binary $AppBin --output $BinDir --download true --preserve-runtime-config true
 if ($LASTEXITCODE -ne 0) {
     throw "Portable preparation failed with exit code $LASTEXITCODE."
 }

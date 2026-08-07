@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { validateAppVersion } from './version.mjs';
 
 export async function generatePortableUpdateManifest({
   directory,
@@ -18,11 +19,8 @@ export async function generatePortableUpdateManifest({
   const normalizedRawTag = String(rawTag ?? '').trim();
   const tag = normalizedRawTag.startsWith('v') ? normalizedRawTag : `v${normalizedRawTag}`;
   const version = tag.slice(1);
-  const semverPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
-  if (!semverPattern.test(version)) {
-    throw new Error(`Invalid release tag: ${normalizedRawTag}`);
-  }
+  validateAppVersion(version, 'release tag');
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(resolvedRepository)) {
     throw new Error(`Invalid GitHub repository: ${resolvedRepository}`);
   }
@@ -75,6 +73,12 @@ export async function generatePortableUpdateManifest({
   return manifest;
 }
 
+export function gitcodeReleaseAttachmentUrl(repository, tag, filename) {
+  const [owner, repo] = repository.split('/');
+  return `https://api.gitcode.com/api/v5/repos/${owner}/${repo}`
+    + `/releases/${tag}/attach_files/${filename}/download`;
+}
+
 async function main() {
   const args = new Map();
   for (let index = 2; index < process.argv.length; index += 2) {
@@ -90,12 +94,6 @@ async function main() {
     tag: args.get('--tag'),
   });
   console.log(`Generated ${basename(output)} for v${manifest.version}`);
-}
-
-export function gitcodeReleaseAttachmentUrl(repository, tag, filename) {
-  const [owner, repo] = repository.split('/');
-  return `https://api.gitcode.com/api/v5/repos/${owner}/${repo}`
-    + `/releases/${tag}/attach_files/${filename}/download`;
 }
 
 const entryPoint = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : '';

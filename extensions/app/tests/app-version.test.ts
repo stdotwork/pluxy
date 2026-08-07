@@ -4,7 +4,8 @@ import {
   setCargoLockPackageVersion,
   setCargoPackageVersion,
   validateAppVersion,
-} from '../scripts/app-version.mjs';
+} from '../scripts/version.mjs';
+import { applyAppVersion, runCargoMetadata } from '../scripts/set-version.mjs';
 
 describe('app version', () => {
   it('reads the version from the package section', () => {
@@ -59,5 +60,89 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     const updated = setCargoLockPackageVersion(lockfile, 'cpa-gui', '2.0.0');
     expect(updated).toContain('name = "cpa-gui"\nversion = "2.0.0"');
     expect(updated).toContain('name = "dependency"\nversion = "1.2.3"');
+  });
+
+  it('repairs a stale lockfile even when Cargo.toml already has the requested version', async () => {
+    const files = new Map<string, string>([
+      ['Cargo.toml', '[package]\nname = "cpa-gui"\nversion = "2.0.0"\n'],
+      ['Cargo.lock', '[[package]]\nname = "cpa-gui"\nversion = "1.0.0"\n'],
+    ]);
+    const writes: string[] = [];
+
+    const result = await applyAppVersion('2.0.0', {
+      rootDir: 'test-root',
+      readText: async (path: string) => files.get(
+        path.endsWith('Cargo.toml') ? 'Cargo.toml' : 'Cargo.lock',
+      )!,
+      writeText: async (path: string, contents: string) => {
+        const name = path.endsWith('Cargo.toml') ? 'Cargo.toml' : 'Cargo.lock';
+        writes.push(name);
+        files.set(name, contents);
+      },
+      validateProject: async () => {},
+    });
+
+    expect(result).toMatchObject({ version: '2.0.0', previousVersion: '2.0.0', changed: true });
+    expect(writes).toEqual(['Cargo.lock']);
+    expect(files.get('Cargo.lock')).toContain('version = "2.0.0"');
+  });
+
+  it('restores both files when cargo metadata validation fails', async () => {
+    const originalManifest = '[package]\nname = "cpa-gui"\nversion = "1.0.0"\n';
+    const originalLockfile = '[[package]]\nname = "cpa-gui"\nversion = "1.0.0"\n';
+    const files = new Map<string, string>([
+      ['Cargo.toml', originalManifest],
+      ['Cargo.lock', originalLockfile],
+    ]);
+
+    await expect(applyAppVersion('2.0.0', {
+      rootDir: 'test-root',
+      readText: async (path: string) => files.get(
+        path.endsWith('Cargo.toml') ? 'Cargo.toml' : 'Cargo.lock',
+      )!,
+      writeText: async (path: string, contents: string) => {
+        files.set(path.endsWith('Cargo.toml') ? 'Cargo.toml' : 'Cargo.lock', contents);
+      },
+      validateProject: async () => { throw new Error('metadata validation failed'); },
+    })).rejects.toThrow('metadata validation failed');
+
+    expect(files.get('Cargo.toml')).toBe(originalManifest);
+    expect(files.get('Cargo.lock')).toBe(originalLockfile);
+  });
+
+  it('restores the manifest when writing the lockfile fails', async () => {
+    const originalManifest = '[package]\nname = "cpa-gui"\nversion = "1.0.0"\n';
+    const originalLockfile = '[[package]]\nname = "cpa-gui"\nversion = "1.0.0"\n';
+    const files = new Map<string, string>([
+      ['Cargo.toml', originalManifest],
+      ['Cargo.lock', originalLockfile],
+    ]);
+    let lockfileWrites = 0;
+
+    await expect(applyAppVersion('2.0.0', {
+      rootDir: 'test-root',
+      readText: async (path: string) => files.get(
+        path.endsWith('Cargo.toml') ? 'Cargo.toml' : 'Cargo.lock',
+      )!,
+      writeText: async (path: string, contents: string) => {
+        const name = path.endsWith('Cargo.toml') ? 'Cargo.toml' : 'Cargo.lock';
+        if (name === 'Cargo.lock' && lockfileWrites++ === 0) {
+          throw new Error('lockfile write failed');
+        }
+        files.set(name, contents);
+      },
+      validateProject: async () => {},
+    })).rejects.toThrow('lockfile write failed');
+
+    expect(files.get('Cargo.toml')).toBe(originalManifest);
+    expect(files.get('Cargo.lock')).toBe(originalLockfile);
+  });
+
+  it('includes cargo stderr when metadata validation fails', () => {
+    expect(() => runCargoMetadata('Cargo.toml', () => ({
+      status: 101,
+      stderr: 'manifest parse error',
+      stdout: '',
+    }))).toThrow('cargo metadata failed with exit code 101: manifest parse error');
   });
 });
