@@ -1848,7 +1848,8 @@ async fn check_pi_provider_update(app: tauri::AppHandle) -> Result<PiProviderUpd
             update_available: false,
         });
     };
-    let latest_version = fetch_pi_provider_latest_version().await?;
+    let proxy_url = app.state::<GuiConfigState>().snapshot()?.proxy_url;
+    let latest_version = fetch_pi_provider_latest_version(&proxy_url).await?;
     let update_available = pi_provider_update_available(installed_version_value, &latest_version)?;
     Ok(PiProviderUpdateStatus {
         installed_version,
@@ -1874,8 +1875,9 @@ async fn install_pi_provider(
     let model = resolve_pi_default_model(&config, &model).await?;
     let port = config.port;
     let api_key = effective_agent_api_key(&config).to_string();
+    let proxy_url = config.proxy_url.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        install_pi_provider_inner(&home, &executable, port, &api_key, &model)
+        install_pi_provider_inner(&home, &executable, port, &api_key, &model, &proxy_url)
     })
     .await
     .map_err(|error| format!("安装 Pi CLIProxyAPI provider 任务失败: {error}"))??;
@@ -1900,8 +1902,9 @@ async fn update_pi_provider(
     let model = resolve_pi_default_model(&config, &model).await?;
     let port = config.port;
     let api_key = effective_agent_api_key(&config).to_string();
+    let proxy_url = config.proxy_url.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        update_pi_provider_inner(&home, &executable, port, &api_key, &model)
+        update_pi_provider_inner(&home, &executable, port, &api_key, &model, &proxy_url)
     })
     .await
     .map_err(|error| format!("更新 Pi 插件任务失败: {error}"))??;
@@ -2018,13 +2021,16 @@ async fn update_codex_model_catalog(
 async fn update_codex_model_catalog_inner(
     app: &tauri::AppHandle,
 ) -> Result<CodexModelCatalogUpdateResult, String> {
-    let client = reqwest::Client::builder()
-        .redirect(github_https_redirect_policy())
-        .connect_timeout(Duration::from_secs(8))
-        .read_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(25))
-        .build()
-        .map_err(|error| format!("创建 Codex 模型目录更新客户端失败: {error}"))?;
+    let proxy_url = app.state::<GuiConfigState>().snapshot()?.proxy_url;
+    let client = build_http_client_with_proxy(
+        reqwest::Client::builder()
+            .redirect(github_https_redirect_policy())
+            .connect_timeout(Duration::from_secs(8))
+            .read_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(25)),
+        &proxy_url,
+        "创建 Codex 模型目录更新客户端失败",
+    )?;
     let response = client
         .get(CODEX_MODEL_CATALOG_URL)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -3374,12 +3380,14 @@ fn parse_pi_provider_latest_version(payload: &serde_json::Value) -> Result<Strin
         .ok_or_else(|| "npm registry 返回的 Pi provider 版本无效".to_string())
 }
 
-async fn fetch_pi_provider_latest_version() -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(12))
-        .build()
-        .map_err(|error| format!("创建 Pi provider 更新检测客户端失败: {error}"))?;
+async fn fetch_pi_provider_latest_version(proxy_url: &str) -> Result<String, String> {
+    let client = build_http_client_with_proxy(
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(12)),
+        proxy_url,
+        "创建 Pi provider 更新检测客户端失败",
+    )?;
     let response = client
         .get(PI_CLIPROXYAPI_NPM_LATEST_URL)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -3623,6 +3631,7 @@ fn install_pi_provider_inner(
     port: u16,
     api_key: &str,
     default_model: &str,
+    proxy_url: &str,
 ) -> Result<AgentConfigActionResult, String> {
     if port == 0 {
         return Err("内核端口无效".to_string());
@@ -3633,7 +3642,7 @@ fn install_pi_provider_inner(
     let settings_path = pi_provider_settings_path(home);
     let mut changed_files = Vec::new();
     if !pi_provider_package_installed(home)? {
-        install_pi_package(executable, home)?;
+        install_pi_package(executable, home, proxy_url)?;
         changed_files.push(path_to_string(&settings_path));
     }
 
@@ -3705,11 +3714,12 @@ fn update_pi_provider_inner(
     port: u16,
     api_key: &str,
     default_model: &str,
+    proxy_url: &str,
 ) -> Result<AgentConfigActionResult, String> {
     if !pi_provider_package_installed(home)? {
         return Err("Pi CLIProxyAPI provider 插件尚未安装".to_string());
     }
-    update_pi_package(executable, home)?;
+    update_pi_package(executable, home, proxy_url)?;
     let mut result = repair_pi_provider_inner(home, port, api_key, default_model)?;
     result.outcome = "updated".to_string();
     Ok(result)
@@ -3738,7 +3748,7 @@ fn uninstall_pi_provider_inner(
     ))
 }
 
-fn install_pi_package(executable: &Path, home: &Path) -> Result<(), String> {
+fn install_pi_package(executable: &Path, home: &Path, proxy_url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = windows_command_for_executable(executable, false);
     #[cfg(not(target_os = "windows"))]
@@ -3750,6 +3760,7 @@ fn install_pi_package(executable: &Path, home: &Path) -> Result<(), String> {
         .current_dir(home)
         .stdin(Stdio::null());
     configure_background_command(&mut command);
+    configure_networked_command(&mut command, proxy_url);
     let output = command
         .output()
         .map_err(|error| format!("执行 Pi 插件安装失败: {error}"))?;
@@ -3769,7 +3780,7 @@ fn install_pi_package(executable: &Path, home: &Path) -> Result<(), String> {
     ))
 }
 
-fn update_pi_package(executable: &Path, home: &Path) -> Result<(), String> {
+fn update_pi_package(executable: &Path, home: &Path, proxy_url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = windows_command_for_executable(executable, false);
     #[cfg(not(target_os = "windows"))]
@@ -3782,6 +3793,7 @@ fn update_pi_package(executable: &Path, home: &Path) -> Result<(), String> {
         .current_dir(home)
         .stdin(Stdio::null());
     configure_background_command(&mut command);
+    configure_networked_command(&mut command, proxy_url);
     let output = command
         .output()
         .map_err(|error| format!("执行 Pi 插件更新失败: {error}"))?;
@@ -10481,6 +10493,7 @@ fn provider_health_content_type_is_streaming(content_type: &str) -> bool {
 
 #[tauri::command]
 async fn provider_health_probe(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
     request: ProviderHealthProbeRequest,
 ) -> Result<ProviderHealthProbeResponse, String> {
     let url = reqwest::Url::parse(request.url.trim())
@@ -10499,11 +10512,19 @@ async fn provider_health_probe(
     }
 
     let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(15_000).clamp(1_000, 120_000));
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(timeout)
-        .build()
-        .map_err(|error| format!("创建健康检测客户端失败: {error}"))?;
+    let config = gui_config_state.snapshot()?;
+    let proxy_url = url
+        .host_str()
+        .filter(|host| !is_loopback_host(host))
+        .map(|_| config.proxy_url.as_str())
+        .unwrap_or_default();
+    let client = build_http_client_with_proxy(
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(timeout),
+        proxy_url,
+        "创建健康检测客户端失败",
+    )?;
     let mut headers = reqwest::header::HeaderMap::new();
     for (name, value) in request.header {
         let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
@@ -10753,14 +10774,18 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
 #[tauri::command]
 async fn check_app_update(
     state: tauri::State<'_, AppUpdateState>,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<AppUpdateInfo, String> {
-    let client = reqwest::Client::builder()
-        .redirect(release_https_redirect_policy())
-        .connect_timeout(Duration::from_secs(8))
-        .read_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|error| format!("创建版本检查客户端失败: {error}"))?;
+    let proxy_url = gui_config_state.snapshot()?.proxy_url;
+    let client = build_http_client_with_proxy(
+        reqwest::Client::builder()
+            .redirect(release_https_redirect_policy())
+            .connect_timeout(Duration::from_secs(8))
+            .read_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(20)),
+        &proxy_url,
+        "创建版本检查客户端失败",
+    )?;
     let manifest = fetch_portable_update_manifest(&client).await?;
     let latest_version = normalize_version(&manifest.version);
     let current_version = normalize_version(env!("CARGO_PKG_VERSION"));
@@ -11170,17 +11195,20 @@ fn cancel_app_update(state: tauri::State<'_, AppUpdateState>) -> Result<(), Stri
 async fn start_app_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppUpdateState>,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<(), String> {
     if !cfg!(windows) {
         return Err("应用内自动升级当前仅支持 Windows 便携版".to_string());
     }
+    let proxy_url = gui_config_state.snapshot()?.proxy_url;
     let token = CancellationToken::new();
     let pending = state.start(token.clone())?;
     let task = state.snapshot();
     let _ = app.emit(APP_UPDATE_PROGRESS_EVENT, task);
     let update_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let outcome = download_and_stage_portable_app_update(&update_app, &pending, &token).await;
+        let outcome =
+            download_and_stage_portable_app_update(&update_app, &pending, &token, &proxy_url).await;
         if let Err(error) = outcome {
             let state = update_app.state::<AppUpdateState>();
             let cancelled = token.is_cancelled();
@@ -11202,10 +11230,11 @@ async fn download_and_stage_portable_app_update(
     app: &tauri::AppHandle,
     pending: &PendingAppUpdate,
     token: &CancellationToken,
+    proxy_url: &str,
 ) -> Result<(), String> {
     #[cfg(not(windows))]
     {
-        let _ = (app, pending, token);
+        let _ = (app, pending, token, proxy_url);
         Err("应用内自动升级当前仅支持 Windows 便携版".to_string())
     }
 
@@ -11225,7 +11254,7 @@ async fn download_and_stage_portable_app_update(
             .map_err(|error| format!("创建应用更新临时目录失败: {error}"))?;
         let archive_path = work_dir.join("update.zip");
         let result = async {
-            download_portable_update_archive(app, pending, token, &archive_path).await?;
+            download_portable_update_archive(app, pending, token, &archive_path, proxy_url).await?;
             if token.is_cancelled() {
                 return Err("应用更新下载已取消".to_string());
             }
@@ -11329,14 +11358,17 @@ async fn download_portable_update_archive(
     pending: &PendingAppUpdate,
     token: &CancellationToken,
     destination: &Path,
+    proxy_url: &str,
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .redirect(release_https_redirect_policy())
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(15 * 60))
-        .build()
-        .map_err(|error| format!("创建应用更新下载客户端失败: {error}"))?;
+    let client = build_http_client_with_proxy(
+        reqwest::Client::builder()
+            .redirect(release_https_redirect_policy())
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(15 * 60)),
+        proxy_url,
+        "创建应用更新下载客户端失败",
+    )?;
     let urls = std::iter::once(&pending.asset.url)
         .chain(pending.asset.fallback_urls.iter())
         .collect::<Vec<_>>();
@@ -11666,9 +11698,12 @@ fn preflight_portable_update_directory(app_dir: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn check_latest_core() -> Result<CoreLatest, String> {
+async fn check_latest_core(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<CoreLatest, String> {
     let platform = current_core_platform()?;
-    let client = http_client()?;
+    let proxy_url = gui_config_state.snapshot()?.proxy_url;
+    let client = http_client(&proxy_url)?;
     let release = fetch_release(&client, None).await?;
     let asset = select_release_asset(&release, &platform)?;
 
@@ -11741,11 +11776,14 @@ fn get_core_install_task(state: tauri::State<'_, CoreDownloadState>) -> CoreInst
 async fn install_core_version(
     window: tauri::Window,
     state: tauri::State<'_, CoreDownloadState>,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
     version: Option<String>,
 ) -> Result<CoreInstallResult, String> {
+    let proxy_url = gui_config_state.snapshot()?.proxy_url;
     let token = CancellationToken::new();
     state.start(token.clone(), version.clone())?;
-    let result = install_core_version_inner(&window, state.inner(), token, version).await;
+    let result =
+        install_core_version_inner(&window, state.inner(), token, version, &proxy_url).await;
     if result.is_err() {
         let _ = cleanup_core_work_dirs();
     }
@@ -11828,9 +11866,10 @@ async fn install_core_version_inner(
     state: &CoreDownloadState,
     token: CancellationToken,
     version: Option<String>,
+    proxy_url: &str,
 ) -> Result<CoreInstallResult, String> {
     let platform = current_core_platform()?;
-    let client = http_client()?;
+    let client = http_client(proxy_url)?;
     state.progress(window, "检查版本", 0, None, true);
     let release = fetch_release_cancelable(&client, version.as_deref(), &token).await?;
     let asset = select_release_asset(&release, &platform)?;
@@ -12232,14 +12271,40 @@ async fn fetch_release_cancelable(
     }
 }
 
-fn http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .redirect(release_https_redirect_policy())
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(600))
+pub(crate) fn apply_configured_proxy(
+    builder: reqwest::ClientBuilder,
+    proxy_url: &str,
+) -> Result<reqwest::ClientBuilder, String> {
+    let proxy_url = proxy_url.trim();
+    if proxy_url.is_empty() {
+        return Ok(builder);
+    }
+    let proxy =
+        reqwest::Proxy::all(proxy_url).map_err(|error| format!("代理 URL 无效: {error}"))?;
+    Ok(builder.proxy(proxy))
+}
+
+fn build_http_client_with_proxy(
+    builder: reqwest::ClientBuilder,
+    proxy_url: &str,
+    error_prefix: &str,
+) -> Result<reqwest::Client, String> {
+    apply_configured_proxy(builder, proxy_url)
+        .map_err(|error| format!("{error_prefix}: {error}"))?
         .build()
-        .map_err(|err| format!("创建 HTTP 客户端失败: {err}"))
+        .map_err(|error| format!("{error_prefix}: {error}"))
+}
+
+fn http_client(proxy_url: &str) -> Result<reqwest::Client, String> {
+    build_http_client_with_proxy(
+        reqwest::Client::builder()
+            .redirect(release_https_redirect_policy())
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(600)),
+        proxy_url,
+        "创建 HTTP 客户端失败",
+    )
 }
 
 fn select_release_asset<'a>(
@@ -12577,6 +12642,24 @@ fn configure_background_command(command: &mut Command) {
 
     #[cfg(not(windows))]
     let _ = command;
+}
+
+fn configure_networked_command(command: &mut Command, proxy_url: &str) {
+    let proxy_url = proxy_url.trim();
+    if proxy_url.is_empty() {
+        return;
+    }
+
+    for variable in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ] {
+        command.env(variable, proxy_url);
+    }
 }
 
 fn merge_core_config_for_start(
@@ -23569,6 +23652,16 @@ custom_option = "keep-original"
             "1h"
         );
         assert!(normalize_optional_config_string("bad\nvalue".to_string(), "代理 URL").is_err());
+    }
+
+    #[test]
+    fn configured_proxy_supports_http_and_socks5_urls() {
+        for proxy_url in ["http://127.0.0.1:8080", "socks5://127.0.0.1:7890"] {
+            apply_configured_proxy(reqwest::Client::builder(), proxy_url)
+                .unwrap()
+                .build()
+                .unwrap();
+        }
     }
 
     #[test]
