@@ -166,7 +166,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - name: Build GUI
         env:
-          GITCODE_REPOSITORY: ${{ vars.GITCODE_REPOSITORY }}
+          GITCODE_GUI_REPOSITORY: ${{ vars.GITCODE_GUI_REPOSITORY }}
+          GITCODE_CORE_REPOSITORY: ${{ vars.GITCODE_CORE_REPOSITORY }}
           RUSTFLAGS: -D warnings
         run: |
           bun install --frozen-lockfile
@@ -418,7 +419,7 @@ jobs:
           --directory artifacts
           --output artifacts/portable-update-windows.json
           --repository "${{ github.repository }}"
-          --gitcode-repository "${{ vars.GITCODE_REPOSITORY }}"
+          --gitcode-repository "${{ vars.GITCODE_GUI_REPOSITORY }}"
           --tag "$RELEASE_TAG"
       - name: Publish release
         shell: bash
