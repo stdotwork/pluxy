@@ -5,6 +5,7 @@ import {
   primaryProviderHealthCredential,
   runProviderModelHealthChecks,
 } from '../src/services/providerHealthCheck';
+import { modelEndpointCandidates } from '../src/services/modelService';
 
 describe('API 接入健康检测', () => {
   it('健康检测只保留已勾选模型，并使用发现结果补充模型信息', () => {
@@ -57,6 +58,51 @@ describe('API 接入健康检测', () => {
       stream: true,
     });
     expect(probe.protocol).toBe('openai-chat');
+  });
+
+  it('为非 v1 的 OpenAI 兼容版本前缀保留原始版本号', () => {
+    const probe = buildProviderHealthProbe(
+      'openai',
+      'https://open.bigmodel.cn/api/coding/paas/v4',
+      'glm-test',
+      'secret-key',
+    );
+
+    expect(probe.url).toBe(
+      'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions',
+    );
+    expect(modelEndpointCandidates(
+      'openai',
+      'https://open.bigmodel.cn/api/coding/paas/v4',
+    )).toEqual([
+      'https://open.bigmodel.cn/api/coding/paas/v4/models',
+    ]);
+  });
+
+  it('把不含版本号的中转地址视为完整 API 路径前缀', () => {
+    const baseUrl = 'https://relay.example/custom/openai';
+    const probe = buildProviderHealthProbe(
+      'openai',
+      baseUrl,
+      'mapped-model',
+      'secret-key',
+    );
+
+    expect(probe.url).toBe(
+      'https://relay.example/custom/openai/chat/completions',
+    );
+    expect(modelEndpointCandidates('openai', baseUrl)).toEqual([
+      'https://relay.example/custom/openai/models',
+    ]);
+    expect(modelEndpointCandidates(
+      'openai',
+      'https://relay.example/custom/openai/v1/models',
+    )).toEqual([
+      'https://relay.example/custom/openai/v1/models',
+    ]);
+    expect(modelEndpointCandidates('codex', 'https://codex.example')).toEqual([
+      'https://codex.example/v1/models',
+    ]);
   });
 
   it('不会覆盖供应商已有的自定义认证头', () => {
