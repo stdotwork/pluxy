@@ -24114,11 +24114,8 @@ custom_option = "keep-original"
 
     #[test]
     fn synthetic_core_release_uses_gitcode_as_download_fallback() {
-        let release = release_from_tag_for_repositories(
-            "7.2.80",
-            Some("lzt404/CLIProxyAPI"),
-            false,
-        );
+        let repository = "lzt404/CLIProxyAPI";
+        let release = release_from_tag_for_repositories("7.2.80", Some(repository), false);
         let platform = CorePlatform {
             os: "windows".to_string(),
             arch: "x86_64".to_string(),
