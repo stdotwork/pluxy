@@ -505,9 +505,6 @@ struct GuiConfigFile {
     proxy_url: String,
     routing_session_affinity: bool,
     routing_session_affinity_ttl: String,
-    codex_session_repair_on_launch: bool,
-    claude_code_working_directory: String,
-    claude_code_working_directory_prompt_disabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -614,9 +611,6 @@ impl Default for GuiConfigFile {
             proxy_url: String::new(),
             routing_session_affinity: false,
             routing_session_affinity_ttl: String::new(),
-            codex_session_repair_on_launch: false,
-            claude_code_working_directory: String::new(),
-            claude_code_working_directory_prompt_disabled: false,
         }
     }
 }
@@ -633,15 +627,12 @@ struct GuiConfigPresence {
     api_access_remarks: Option<Vec<GuiApiAccessRemark>>,
     management_secret_key: Option<String>,
     close_behavior: Option<WindowsCloseBehavior>,
-    codex_session_repair_on_launch: Option<bool>,
     usage_statistics_enabled: Option<bool>,
     plugins_enabled: Option<bool>,
     routing_strategy: Option<String>,
     proxy_url: Option<String>,
     routing_session_affinity: Option<bool>,
     routing_session_affinity_ttl: Option<String>,
-    claude_code_working_directory: Option<String>,
-    claude_code_working_directory_prompt_disabled: Option<bool>,
 }
 
 #[derive(Clone, Serialize)]
@@ -661,8 +652,6 @@ struct AgentConfigStatus {
     supported_platform: bool,
     installed: bool,
     plugin_installed: bool,
-    executable_path: Option<String>,
-    launch_targets: Vec<AgentLaunchTarget>,
     version: Option<String>,
     cli_version: Option<String>,
     app_version: Option<String>,
@@ -679,18 +668,8 @@ struct AgentConfigStatus {
     applied_model: Option<String>,
     claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
-    claude_code_working_directory: Option<String>,
-    claude_code_working_directory_prompt_disabled: bool,
     warnings: Vec<String>,
     error: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentLaunchTarget {
-    id: String,
-    label: String,
-    detail: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -866,14 +845,6 @@ enum AgentClient {
 #[derive(Clone, Debug)]
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))] // The desktop-app variants are constructed only on macOS/Windows builds.
 enum CodexAppTarget {
-    Application(PathBuf),
-    #[cfg(target_os = "windows")]
-    WindowsAppId(String),
-}
-
-#[derive(Clone, Debug)]
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
-enum ClaudeDesktopTarget {
     Application(PathBuf),
     #[cfg(target_os = "windows")]
     WindowsAppId(String),
@@ -1404,27 +1375,6 @@ impl GuiConfigState {
         })
     }
 
-    fn set_codex_session_repair_on_launch(&self, enabled: bool) -> Result<GuiConfigFile, String> {
-        self.update(|config| {
-            config.codex_session_repair_on_launch = enabled;
-            Ok(())
-        })
-    }
-
-    fn set_claude_code_launch_preferences(
-        &self,
-        working_directory: Option<&Path>,
-        prompt_disabled: bool,
-    ) -> Result<GuiConfigFile, String> {
-        self.update(|config| {
-            if let Some(working_directory) = working_directory {
-                config.claude_code_working_directory = path_to_string(working_directory);
-            }
-            config.claude_code_working_directory_prompt_disabled = prompt_disabled;
-            Ok(())
-        })
-    }
-
     fn set_locale(&self, locale: String) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.locale = normalize_app_locale(&locale).to_string();
@@ -1748,16 +1698,6 @@ fn inspect_agent_config_statuses(
     .map(|client| inspect_agent_config(client, &home, config.port, api_key))
     .collect::<Vec<_>>();
     statuses.push(inspect_pi_provider_status(&home, config.port, api_key));
-    if let Some(status) = statuses
-        .iter_mut()
-        .find(|status| status.id == AgentClient::ClaudeCode.id())
-    {
-        status.claude_code_working_directory =
-            (!config.claude_code_working_directory.trim().is_empty())
-                .then(|| config.claude_code_working_directory.clone());
-        status.claude_code_working_directory_prompt_disabled =
-            config.claude_code_working_directory_prompt_disabled;
-    }
     Ok(statuses)
 }
 
@@ -1954,52 +1894,6 @@ async fn uninstall_pi_provider(
     .map_err(|error| format!("鍗歌浇 Pi 鎻掍欢浠诲姟澶辫触: {error}"))??;
     cache.clear()?;
     Ok(result)
-}
-
-fn validate_agent_working_directory(value: &str) -> Result<PathBuf, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(
-            "AGENT_WORKING_DIRECTORY_REQUIRED: Please select a working directory".to_string(),
-        );
-    }
-    if value.chars().any(char::is_control) {
-        return Err("The working directory contains invalid characters".to_string());
-    }
-    let path = PathBuf::from(value);
-    if !path.is_absolute() {
-        return Err("The working directory must be an absolute path".to_string());
-    }
-    if !path.is_dir() {
-        return Err(format!(
-            "AGENT_WORKING_DIRECTORY_INVALID: The working directory does not exist: {}",
-            path_to_string(&path)
-        ));
-    }
-    Ok(path)
-}
-
-fn validate_claude_code_working_directory(value: &str) -> Result<PathBuf, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(
-            "CLAUDE_CODE_WORKING_DIRECTORY_REQUIRED: Please select a working directory".to_string(),
-        );
-    }
-    if value.chars().any(char::is_control) {
-        return Err("The Claude Code working directory contains invalid characters".to_string());
-    }
-    let path = PathBuf::from(value);
-    if !path.is_absolute() {
-        return Err("The Claude Code working directory must be an absolute path".to_string());
-    }
-    if !path.is_dir() {
-        return Err(format!(
-            "CLAUDE_CODE_WORKING_DIRECTORY_INVALID: The working directory does not exist: {}",
-            path_to_string(&path)
-        ));
-    }
-    Ok(path)
 }
 
 #[tauri::command]
@@ -2742,237 +2636,6 @@ async fn update_agent_config(
     )
 }
 
-#[tauri::command]
-async fn launch_agent(
-    app: tauri::AppHandle,
-    gui_config_state: tauri::State<'_, GuiConfigState>,
-    cache: tauri::State<'_, AgentConfigStatusCache>,
-    client: String,
-    target: Option<String>,
-    working_directory: Option<String>,
-    suppress_working_directory_prompt: Option<bool>,
-) -> Result<(), String> {
-    if client.trim().eq_ignore_ascii_case(PI_AGENT_ID) {
-        let home = app
-            .path()
-            .home_dir()
-            .map_err(|error| format!("无法获取用户目录: {error}"))?;
-        let config = gui_config_state.snapshot()?;
-        let status =
-            inspect_pi_provider_status(&home, config.port, effective_agent_api_key(&config));
-        if !status.installed {
-            return Err("未检测到 Pi CLI，请先安装 Pi 并确保 pi 命令在 PATH 中".to_string());
-        }
-        if !status.configured {
-            return Err("请先安装并配置 Pi CLIProxyAPI provider 插件".to_string());
-        }
-        let requested_target = target
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if requested_target.is_some_and(|value| value != "cli") {
-            return Err("Pi 只支持 CLI 启动方式".to_string());
-        }
-        let executable =
-            find_pi_executable(&home).ok_or_else(|| "未找到 Pi CLI 可执行文件".to_string())?;
-        let launch_directory = working_directory
-            .as_deref()
-            .map(validate_agent_working_directory)
-            .transpose()?
-            .unwrap_or_else(|| home.clone());
-        return launch_cli_agent(&executable, PI_AGENT_NAME, &launch_directory, &[], &[]);
-    }
-    let client = AgentClient::parse(&client)?;
-    if !client.supported_platform() {
-        return Err(format!("当前平台不支持启动 {}", client.name()));
-    }
-    let home = app
-        .path()
-        .home_dir()
-        .map_err(|error| format!("无法获取用户目录: {error}"))?;
-    let config = gui_config_state.snapshot()?;
-    let port = config.port;
-    let status = inspect_agent_config(client, &home, port, effective_agent_api_key(&config));
-    validate_agent_launch_modification(
-        client,
-        status.modification_enabled,
-        &status.modification_state,
-    )?;
-    if client == AgentClient::Codex && status.oauth_configuration {
-        validate_codex_oauth_login(&home)?;
-    }
-    if client == AgentClient::Codex && config.codex_session_repair_on_launch {
-        let repair_home = home.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            codex_sessions::repair_before_codex_launch(&repair_home)
-        })
-        .await
-        .map_err(|error| format!("启动前会话修复任务失败: {error}"))??;
-    }
-    let requested_target = target
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    if client == AgentClient::Codex && requested_target != Some("cli") {
-        if let Some(app_target) = find_codex_app_target(&home) {
-            return launch_codex_app(&app_target);
-        }
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(codex_cli) = find_agent_executable(AgentClient::Codex, &home) {
-            if launch_codex_app_via_cli(&codex_cli, &home).is_ok() {
-                return Ok(());
-            }
-        }
-        if requested_target == Some("app") {
-            return Err("未检测到 ChatGPT App，请重新检测或改用 Codex CLI".to_string());
-        }
-    }
-    if requested_target.is_some_and(|value| value != "cli" && value != "app") {
-        return Err("不支持的智能体启动方式".to_string());
-    }
-    if client == AgentClient::ClaudeDesktop && requested_target == Some("cli") {
-        return Err("Claude Desktop 不支持 CLI 启动方式".to_string());
-    }
-    if client != AgentClient::Codex
-        && client != AgentClient::ClaudeDesktop
-        && requested_target == Some("app")
-    {
-        return Err(format!("{} 不支持桌面 App 启动方式", client.name()));
-    }
-
-    if client == AgentClient::ClaudeDesktop {
-        let target = find_claude_desktop_target(&home)
-            .ok_or_else(|| "未检测到 Claude Desktop 应用，请先安装或重新检测。".to_string())?;
-        return launch_claude_desktop(&target);
-    }
-    let executable = find_agent_executable(client, &home)
-        .ok_or_else(|| format!("未找到 {} 的可执行文件", client.name()))?;
-    if client == AgentClient::ClaudeCode {
-        let explicit_working_directory = working_directory
-            .as_deref()
-            .map(validate_claude_code_working_directory)
-            .transpose()?;
-        let selected_working_directory = match explicit_working_directory {
-            Some(path) => path,
-            None if config.claude_code_working_directory_prompt_disabled => {
-                validate_claude_code_working_directory(&config.claude_code_working_directory)?
-            }
-            None => {
-                return Err(
-                    "CLAUDE_CODE_WORKING_DIRECTORY_REQUIRED: Please select a working directory"
-                        .to_string(),
-                )
-            }
-        };
-        if working_directory.is_some() {
-            gui_config_state.set_claude_code_launch_preferences(
-                Some(&selected_working_directory),
-                suppress_working_directory_prompt.unwrap_or(false),
-            )?;
-            cache.clear()?;
-        }
-        let claude_config_path = agent_config_paths(client, &home)[0].clone();
-        {
-            let _guard = AGENT_CONFIG_FILE_LOCK
-                .lock()
-                .map_err(|_| "Claude Code configuration lock is poisoned".to_string())?;
-            remove_claude_code_conflicting_api_key(&claude_config_path)?;
-        }
-        let mappings = inspect_claude_code_model_mappings(&claude_config_path)?
-            .or_else(|| {
-                status
-                    .current_model
-                    .as_deref()
-                    .map(ClaudeDesktopModelMappings::all)
-            })
-            .ok_or_else(|| "Claude Code model environment is not configured".to_string())?;
-        let prepared = fetch_prepared_agent_models(client, &config).await?;
-        let max_context_tokens = claude_code_max_context_tokens(&mappings, &prepared.models)?;
-        let max_context_override =
-            (!claude_code_model_supports_1m(&prepared.models, &mappings.sonnet)?)
-                .then_some(max_context_tokens);
-        {
-            let _guard = AGENT_CONFIG_FILE_LOCK
-                .lock()
-                .map_err(|_| "Claude Code configuration lock is poisoned".to_string())?;
-            update_claude_code_context_window(&claude_config_path, max_context_override)?;
-        }
-        let environment = claude_code_launch_environment(
-            &format!("http://127.0.0.1:{port}"),
-            effective_agent_api_key(&config),
-            &mappings,
-            &prepared.models,
-            max_context_tokens,
-        )?;
-        let mut environment_to_remove = vec!["ANTHROPIC_API_KEY"];
-        if !environment
-            .iter()
-            .any(|(key, _)| key == "CLAUDE_CODE_EFFORT_LEVEL")
-        {
-            environment_to_remove.push("CLAUDE_CODE_EFFORT_LEVEL");
-        }
-        if max_context_override.is_none() {
-            environment_to_remove.push(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV);
-        }
-        return launch_cli_agent(
-            &executable,
-            client.name(),
-            &selected_working_directory,
-            &environment,
-            &environment_to_remove,
-        );
-    }
-    let launch_directory = if client == AgentClient::Codex && requested_target == Some("cli") {
-        working_directory
-            .as_deref()
-            .map(validate_agent_working_directory)
-            .transpose()?
-            .unwrap_or_else(|| home.clone())
-    } else {
-        home.clone()
-    };
-    launch_cli_agent(&executable, client.name(), &launch_directory, &[], &[])
-}
-
-fn validate_agent_launch_modification(
-    client: AgentClient,
-    enabled: bool,
-    state: &str,
-) -> Result<(), String> {
-    if client == AgentClient::Codex || (enabled && state == "applied") {
-        return Ok(());
-    }
-    Err(format!(
-        "请先为 {} 应用配置修改，确保 CPA 配置生效后再启动",
-        client.name()
-    ))
-}
-
-#[allow(dead_code)]
-fn validate_agent_can_enable_legacy(
-    client: AgentClient,
-    home: &Path,
-    port: u16,
-) -> Result<(), String> {
-    if !client.supported_platform() {
-        return Err(format!(
-            "{} 当前仅支持在 Windows、macOS 和 Linux 上配置",
-            client.name()
-        ));
-    }
-    let detection = inspect_agent_config(client, home, port, DEFAULT_API_KEY);
-    if !detection.installed {
-        return Err(format!("未检测到 {}，请先安装后再配置", client.name()));
-    }
-    if !detection.config_valid {
-        return Err(detection
-            .error
-            .unwrap_or_else(|| "原配置格式异常，请先修复后再应用配置修改".to_string()));
-    }
-    Ok(())
-}
-
 fn validate_agent_can_enable(
     client: AgentClient,
     home: &Path,
@@ -3510,16 +3173,6 @@ fn inspect_pi_provider_status(home: &Path, port: u16, api_key: &str) -> AgentCon
     let config_path = pi_provider_config_path(home);
     let settings_path = pi_provider_settings_path(home);
     let executable = find_pi_executable(home);
-    let launch_targets = executable
-        .as_ref()
-        .map(|path| {
-            vec![AgentLaunchTarget {
-                id: "cli".to_string(),
-                label: PI_AGENT_NAME.to_string(),
-                detail: path_to_string(path),
-            }]
-        })
-        .unwrap_or_default();
     let mut errors = Vec::new();
     let (plugin_installed, default_provider_matches, current_model) = match read_pi_settings(home) {
         Ok(Some(settings)) => {
@@ -3600,8 +3253,6 @@ fn inspect_pi_provider_status(home: &Path, port: u16, api_key: &str) -> AgentCon
         supported_platform: true,
         installed: executable.is_some(),
         plugin_installed,
-        executable_path: launch_targets.first().map(|target| target.detail.clone()),
-        launch_targets,
         version: cli_version.clone(),
         cli_version,
         app_version: None,
@@ -3618,8 +3269,6 @@ fn inspect_pi_provider_status(home: &Path, port: u16, api_key: &str) -> AgentCon
         applied_model: current_model,
         claude_code_model_mappings: None,
         claude_desktop_model_mappings: None,
-        claude_code_working_directory: None,
-        claude_code_working_directory_prompt_disabled: false,
         warnings,
         error,
     }
@@ -4046,7 +3695,6 @@ fn inspect_agent_config(
         }
         Err(error) => (false, None, false, false, Some(error)),
     };
-    let launch_targets = agent_launch_targets(client, home);
     let executable = find_agent_executable(client, home);
     let cli_version = executable.as_deref().and_then(read_agent_version);
     let app_version = match client {
@@ -4055,14 +3703,12 @@ fn inspect_agent_config(
         _ => None,
     };
     let version = cli_version.clone().or_else(|| app_version.clone());
-    let installed = agent_client_is_installed(client, &launch_targets, version.as_deref());
+    let installed = version.is_some();
     let mut warnings = Vec::new();
     if !client.supported_platform() {
         warnings.push("当前平台不支持 Claude Desktop 3P 配置".to_string());
-    } else if launch_targets.is_empty() && config_exists {
-        warnings.push("只检测到配置文件，未在 PATH 中找到客户端命令".to_string());
-    } else if !installed && !launch_targets.is_empty() && version.is_none() {
-        warnings.push("检测到客户端入口，但无法读取有效版本，未标记为已安装".to_string());
+    } else if !installed && config_exists {
+        warnings.push("只检测到配置文件，未检测到客户端".to_string());
     }
     if let Some(message) = error.as_ref() {
         warnings.push(message.clone());
@@ -4076,8 +3722,6 @@ fn inspect_agent_config(
         supported_platform: client.supported_platform(),
         installed,
         plugin_installed: true,
-        executable_path: launch_targets.first().map(|target| target.detail.clone()),
-        launch_targets,
         version,
         cli_version,
         app_version,
@@ -4096,8 +3740,6 @@ fn inspect_agent_config(
             .then(|| inspect_claude_code_model_mappings(&paths[0]).ok().flatten())
             .flatten(),
         claude_desktop_model_mappings: modification.claude_desktop_model_mappings,
-        claude_code_working_directory: None,
-        claude_code_working_directory_prompt_disabled: false,
         warnings,
         error,
     }
@@ -4315,103 +3957,7 @@ fn is_managed_agent_base_url(value: &str) -> bool {
     value.starts_with("http://127.0.0.1:") || value.starts_with("http://localhost:")
 }
 
-fn agent_client_is_installed(
-    client: AgentClient,
-    launch_targets: &[AgentLaunchTarget],
-    version: Option<&str>,
-) -> bool {
-    if client == AgentClient::Codex {
-        // Codex can be installed as either a CLI or a desktop app. Discovery
-        // of either real entry is enough; version lookup is independent.
-        launch_targets
-            .iter()
-            .any(|target| target.id == "cli" || target.id == "app")
-    } else {
-        version.is_some()
-    }
-}
-
-fn agent_launch_targets(client: AgentClient, home: &Path) -> Vec<AgentLaunchTarget> {
-    let mut targets = Vec::new();
-    if client == AgentClient::ClaudeDesktop {
-        if let Some(target) = find_claude_desktop_target(home) {
-            targets.push(AgentLaunchTarget {
-                id: "app".to_string(),
-                label: "Claude Desktop".to_string(),
-                detail: claude_desktop_target_detail(&target),
-            });
-        }
-        return targets;
-    }
-    if client == AgentClient::Codex {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(target) = find_codex_app_target(home) {
-            targets.push(AgentLaunchTarget {
-                id: "app".to_string(),
-                label: "ChatGPT App".to_string(),
-                detail: codex_app_target_detail(&target),
-            });
-        }
-    }
-
-    if let Some(executable) = find_agent_executable(client, home) {
-        targets.push(AgentLaunchTarget {
-            id: if client == AgentClient::ClaudeDesktop {
-                "app".to_string()
-            } else {
-                "cli".to_string()
-            },
-            label: match client {
-                AgentClient::ClaudeDesktop => "Claude Desktop".to_string(),
-                AgentClient::Codex => "Codex CLI".to_string(),
-                _ => client.name().to_string(),
-            },
-            detail: path_to_string(&executable),
-        });
-    }
-    targets
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn codex_app_target_detail(target: &CodexAppTarget) -> String {
-    match target {
-        CodexAppTarget::Application(path) => path_to_string(path),
-        #[cfg(target_os = "windows")]
-        CodexAppTarget::WindowsAppId(app_id) => format!("Microsoft Store · {app_id}"),
-    }
-}
-
-fn claude_desktop_target_detail(target: &ClaudeDesktopTarget) -> String {
-    match target {
-        ClaudeDesktopTarget::Application(path) => path_to_string(path),
-        #[cfg(target_os = "windows")]
-        ClaudeDesktopTarget::WindowsAppId(app_id) => format!("Microsoft Store · {app_id}"),
-    }
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn launch_codex_app_via_cli(executable: &Path, home: &Path) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let mut command = windows_command_for_executable(executable, false);
-
-    #[cfg(not(target_os = "windows"))]
-    let mut command = Command::new(executable);
-
-    command
-        .arg("app")
-        .arg(home)
-        .current_dir(home)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    configure_background_command(&mut command);
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("通过 Codex CLI 启动 ChatGPT App 失败: {error}"))
-}
-
-fn find_codex_app_target(home: &Path) -> Option<CodexAppTarget> {
+fn find_codex_app_installation(home: &Path) -> Option<CodexAppTarget> {
     #[cfg(target_os = "macos")]
     {
         [PathBuf::from("/Applications"), home.join("Applications")]
@@ -4432,7 +3978,7 @@ fn find_codex_app_target(home: &Path) -> Option<CodexAppTarget> {
 
     #[cfg(target_os = "windows")]
     {
-        find_windows_codex_app_target(home)
+        find_windows_codex_app_installation(home)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -4440,15 +3986,6 @@ fn find_codex_app_target(home: &Path) -> Option<CodexAppTarget> {
         let _ = home;
         None
     }
-}
-
-fn find_claude_desktop_target(home: &Path) -> Option<ClaudeDesktopTarget> {
-    #[cfg(target_os = "windows")]
-    {
-        find_windows_claude_desktop_target(home)
-    }
-    #[cfg(not(target_os = "windows"))]
-    find_claude_desktop_executable(home).map(ClaudeDesktopTarget::Application)
 }
 
 fn read_claude_desktop_version(home: &Path) -> Option<String> {
@@ -4465,8 +4002,11 @@ fn read_claude_desktop_version(home: &Path) -> Option<String> {
 fn read_codex_app_version(home: &Path) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        match find_codex_app_target(home)? {
-            CodexAppTarget::WindowsAppId(_) => read_windows_codex_store_version(),
+        match find_codex_app_installation(home)? {
+            CodexAppTarget::WindowsAppId(app_id) => {
+                let _ = app_id;
+                read_windows_codex_store_version()
+            }
             CodexAppTarget::Application(path) => {
                 read_windows_executable_version(&path).or_else(|| read_agent_version(&path))
             }
@@ -4474,7 +4014,7 @@ fn read_codex_app_version(home: &Path) -> Option<String> {
     }
     #[cfg(target_os = "macos")]
     {
-        let CodexAppTarget::Application(path) = find_codex_app_target(home)?;
+        let CodexAppTarget::Application(path) = find_codex_app_installation(home)?;
         read_macos_app_version(&path)
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -4552,70 +4092,10 @@ fn windows_command_processor() -> PathBuf {
 }
 
 #[cfg(target_os = "windows")]
-fn find_windows_codex_app_target(home: &Path) -> Option<CodexAppTarget> {
-    find_windows_registered_codex_app_target()
+fn find_windows_codex_app_installation(home: &Path) -> Option<CodexAppTarget> {
+    find_windows_registered_codex_app_installation()
         .or_else(|| find_windows_codex_app_id_via_registry().map(CodexAppTarget::WindowsAppId))
         .or_else(|| find_windows_codex_app_executable(home).map(CodexAppTarget::Application))
-}
-
-#[cfg(target_os = "windows")]
-fn find_windows_claude_desktop_target(home: &Path) -> Option<ClaudeDesktopTarget> {
-    find_windows_registered_claude_desktop_target()
-        .or_else(|| find_claude_desktop_executable(home).map(ClaudeDesktopTarget::Application))
-}
-
-#[cfg(target_os = "windows")]
-fn find_windows_registered_claude_desktop_target() -> Option<ClaudeDesktopTarget> {
-    const DISCOVERY_SCRIPT: &str = r#"
-$ErrorActionPreference = 'SilentlyContinue'
-$ProgressPreference = 'SilentlyContinue'
-$startApps = @(Get-StartApps)
-$appId = $startApps |
-    Where-Object {
-        $_.AppID -like 'Claude_*!*' -or
-        $_.AppID -like 'Anthropic.Claude_*!*'
-    } |
-    Select-Object -First 1 -ExpandProperty AppID
-if ($appId) {
-    Write-Output "APPID:$appId"
-    exit 0
-}
-
-$packages = @(Get-AppxPackage) |
-    Where-Object {
-        $_.Name -eq 'Claude' -or
-        $_.Name -like 'Anthropic.Claude*' -or
-        $_.PackageFamilyName -match '^(Claude|Anthropic\.Claude)_'
-    }
-foreach ($package in $packages) {
-    $manifest = Get-AppxPackageManifest -Package $package.PackageFullName
-    $application = @($manifest.Package.Applications.Application) |
-        Where-Object { $_.Id } |
-        Select-Object -First 1
-    if ($application -and $package.PackageFamilyName) {
-        Write-Output "APPID:$($package.PackageFamilyName)!$($application.Id)"
-        exit 0
-    }
-}
-"#;
-
-    let encoded_command = windows_powershell_encoded_command(DISCOVERY_SCRIPT);
-    let mut command = Command::new(windows_powershell_executable());
-    command.args([
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        &encoded_command,
-    ]);
-    configure_background_command(&mut command);
-    let output = command.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_windows_claude_desktop_discovery_output(&String::from_utf8_lossy(&output.stdout))
 }
 
 #[cfg(target_os = "windows")]
@@ -4690,7 +4170,7 @@ if ($package -and $package.Version) {
 }
 
 #[cfg(target_os = "windows")]
-fn find_windows_registered_codex_app_target() -> Option<CodexAppTarget> {
+fn find_windows_registered_codex_app_installation() -> Option<CodexAppTarget> {
     const DISCOVERY_SCRIPT: &str = r#"
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
@@ -4844,14 +4324,6 @@ fn parse_windows_codex_app_discovery_output(output: &str) -> Option<CodexAppTarg
 }
 
 #[cfg(target_os = "windows")]
-fn parse_windows_claude_desktop_discovery_output(output: &str) -> Option<ClaudeDesktopTarget> {
-    output.lines().find_map(|line| {
-        let app_id = line.trim().strip_prefix("APPID:")?.trim();
-        (!app_id.is_empty()).then(|| ClaudeDesktopTarget::WindowsAppId(app_id.to_string()))
-    })
-}
-
-#[cfg(target_os = "windows")]
 fn parse_windows_claude_desktop_version_output(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         line.trim()
@@ -4949,45 +4421,6 @@ fn find_windows_codex_app_executable(home: &Path) -> Option<PathBuf> {
         ]);
     }
     candidates.into_iter().find(|path| path.is_file())
-}
-
-#[cfg(target_os = "macos")]
-fn launch_codex_app(target: &CodexAppTarget) -> Result<(), String> {
-    let CodexAppTarget::Application(application) = target;
-    Command::new("open")
-        .arg(application)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("启动 ChatGPT App 失败: {error}"))
-}
-
-#[cfg(target_os = "windows")]
-fn launch_codex_app(target: &CodexAppTarget) -> Result<(), String> {
-    let mut command = match target {
-        CodexAppTarget::Application(executable) => Command::new(executable),
-        CodexAppTarget::WindowsAppId(app_id) => {
-            let mut command = Command::new(windows_explorer_executable());
-            command.arg(format!("shell:AppsFolder\\{app_id}"));
-            command
-        }
-    };
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    configure_background_command(&mut command);
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("启动 ChatGPT App 失败: {error}"))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn launch_codex_app(_target: &CodexAppTarget) -> Result<(), String> {
-    Err("当前平台不支持 ChatGPT App".to_string())
 }
 
 fn find_agent_executable(client: AgentClient, home: &Path) -> Option<PathBuf> {
@@ -5180,203 +4613,6 @@ fn normalize_detected_agent_version(value: &str) -> Option<String> {
         && value.chars().any(|character| character.is_ascii_digit())
         && !value.chars().any(char::is_control))
     .then(|| value.to_string())
-}
-
-fn launch_desktop_agent(executable: &Path, label: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let application = executable
-            .ancestors()
-            .find(|path| path.extension().and_then(|value| value.to_str()) == Some("app"))
-            .unwrap_or(executable);
-        let mut command = Command::new("open");
-        command.arg(application);
-        command
-    };
-
-    #[cfg(target_os = "windows")]
-    let mut command = Command::new(executable);
-
-    #[cfg(target_os = "linux")]
-    let mut command = Command::new(executable);
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    {
-        let _ = (executable, label);
-        return Err("当前平台不支持桌面智能体".to_string());
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    configure_background_command(&mut command);
-
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("启动 {label} 失败: {error}"))
-}
-
-fn launch_claude_desktop(target: &ClaudeDesktopTarget) -> Result<(), String> {
-    match target {
-        ClaudeDesktopTarget::Application(executable) => {
-            launch_desktop_agent(executable, "Claude Desktop")
-        }
-        #[cfg(target_os = "windows")]
-        ClaudeDesktopTarget::WindowsAppId(app_id) => {
-            let mut command = Command::new(windows_explorer_executable());
-            command.arg(format!("shell:AppsFolder\\{app_id}"));
-            command
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            configure_background_command(&mut command);
-            command
-                .spawn()
-                .map(|_| ())
-                .map_err(|error| format!("启动 Claude Desktop 失败: {error}"))
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-#[cfg(target_os = "macos")]
-fn launch_cli_agent(
-    executable: &Path,
-    label: &str,
-    working_directory: &Path,
-    environment: &[(String, String)],
-    environment_to_remove: &[&str],
-) -> Result<(), String> {
-    let environment_removals = environment_to_remove
-        .iter()
-        .map(|key| format!("-u {}", shell_single_quote(key)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let environment = environment
-        .iter()
-        .map(|(key, value)| format!("{key}={}", shell_single_quote(value)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let command_line = format!(
-        "cd {} && exec env {} {} {}",
-        shell_single_quote(&path_to_string(working_directory)),
-        environment_removals,
-        environment,
-        shell_single_quote(&path_to_string(executable))
-    );
-    let apple_script_command = command_line.replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!(
-        "tell application \"Terminal\"\nactivate\ndo script \"{apple_script_command}\"\nend tell"
-    );
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .map_err(|error| format!("启动 {label} 终端失败: {error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(format!(
-        "启动 {label} 终端失败{}",
-        if message.is_empty() {
-            String::new()
-        } else {
-            format!(": {message}")
-        }
-    ))
-}
-
-#[cfg(target_os = "linux")]
-fn launch_cli_agent(
-    executable: &Path,
-    label: &str,
-    working_directory: &Path,
-    environment: &[(String, String)],
-    environment_to_remove: &[&str],
-) -> Result<(), String> {
-    let terminals: &[(&str, &[&str])] = &[
-        ("x-terminal-emulator", &["-e"]),
-        ("gnome-terminal", &["--"]),
-        ("konsole", &["-e"]),
-        ("xfce4-terminal", &["-e"]),
-        ("mate-terminal", &["--"]),
-        ("kitty", &["-e"]),
-        ("alacritty", &["-e"]),
-        ("ghostty", &["-e"]),
-        ("xterm", &["-e"]),
-    ];
-    let path = env::var_os("PATH").unwrap_or_default();
-    let mut last_error = None;
-    for (terminal, arguments) in terminals {
-        let available = env::split_paths(&path).any(|directory| directory.join(terminal).is_file());
-        if !available {
-            continue;
-        }
-        let mut command = Command::new(terminal);
-        command
-            .args(*arguments)
-            .arg(executable)
-            .envs(environment.iter().map(|(key, value)| (key, value)))
-            .current_dir(working_directory)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        for key in environment_to_remove {
-            command.env_remove(key);
-        }
-        match command.spawn() {
-            Ok(_) => return Ok(()),
-            Err(error) => last_error = Some(error.to_string()),
-        }
-    }
-    Err(match last_error {
-        Some(error) => format!("启动 {label} 失败: {error}"),
-        None => format!("启动 {label} 失败：未找到可用的终端程序"),
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn launch_cli_agent(
-    executable: &Path,
-    label: &str,
-    working_directory: &Path,
-    environment: &[(String, String)],
-    environment_to_remove: &[&str],
-) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-
-    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-    let mut command = windows_command_for_executable(executable, true);
-    command
-        .envs(environment.iter().map(|(key, value)| (key, value)))
-        .current_dir(working_directory)
-        .creation_flags(CREATE_NEW_CONSOLE);
-    for key in environment_to_remove {
-        command.env_remove(key);
-    }
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("启动 {label} 失败: {error}"))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn launch_cli_agent(
-    _executable: &Path,
-    label: &str,
-    _working_directory: &Path,
-    _environment: &[(String, String)],
-    _environment_to_remove: &[&str],
-) -> Result<(), String> {
-    Err(format!("当前平台不支持启动 {label}"))
 }
 
 fn inspect_claude_agent_config(
@@ -5631,52 +4867,6 @@ fn claude_code_model_presentation_environment(
     .into_iter()
     .map(|(key, value)| (key.to_string(), value))
     .collect())
-}
-
-fn claude_code_launch_environment(
-    base_url: &str,
-    api_key: &str,
-    mappings: &ClaudeDesktopModelMappings,
-    models: &[AgentModelOption],
-    max_context_tokens: u64,
-) -> Result<Vec<(String, String)>, String> {
-    let model_settings = claude_code_model_settings(mappings, models)?;
-    let subagent_model = strip_claude_code_context_suffix(&mappings.haiku).to_string();
-    let mut environment = [
-        ("ANTHROPIC_BASE_URL", base_url),
-        ("ANTHROPIC_AUTH_TOKEN", api_key),
-        ("ANTHROPIC_MODEL", model_settings.sonnet.as_str()),
-        (
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-            model_settings.haiku.as_str(),
-        ),
-        (
-            "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            model_settings.sonnet.as_str(),
-        ),
-        ("ANTHROPIC_DEFAULT_OPUS_MODEL", model_settings.opus.as_str()),
-        (
-            "ANTHROPIC_DEFAULT_FABLE_MODEL",
-            model_settings.sonnet.as_str(),
-        ),
-        ("CLAUDE_CODE_SUBAGENT_MODEL", subagent_model.as_str()),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.to_string(), value.to_string()))
-    .collect::<Vec<_>>();
-    environment.extend(claude_code_model_presentation_environment(
-        mappings, models,
-    )?);
-    if let Some(effort_level) = claude_code_model_effort_level(models, &mappings.sonnet)? {
-        environment.push(("CLAUDE_CODE_EFFORT_LEVEL".to_string(), effort_level));
-    }
-    if !claude_code_model_supports_1m(models, &mappings.sonnet)? {
-        environment.push((
-            CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
-            max_context_tokens.to_string(),
-        ));
-    }
-    Ok(environment)
 }
 
 fn inspect_claude_desktop_agent_config(
@@ -6211,57 +5401,6 @@ fn build_claude_agent_config(
         .map_err(|error| format!("生成 Claude Code 配置失败: {error}"))?;
     rendered.push('\n');
     Ok(rendered)
-}
-
-fn remove_claude_code_conflicting_api_key(path: &Path) -> Result<bool, String> {
-    update_agent_json_file(path, "Claude Code configuration", |root| {
-        let managed = root
-            .get("env")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(is_managed_agent_base_url);
-        if !managed {
-            return false;
-        }
-        root.get_mut("env")
-            .and_then(serde_json::Value::as_object_mut)
-            .is_some_and(|env| env.remove("ANTHROPIC_API_KEY").is_some())
-    })
-}
-
-fn update_claude_code_context_window(
-    path: &Path,
-    max_context_tokens: Option<u64>,
-) -> Result<bool, String> {
-    update_agent_json_file(path, "Claude Code configuration", |root| {
-        let managed = root
-            .get("env")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(is_managed_agent_base_url);
-        if !managed {
-            return false;
-        }
-        let env = ensure_json_object_entry(root, "env");
-        let Some(max_context_tokens) = max_context_tokens else {
-            return env.remove(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV).is_some();
-        };
-        let expected = max_context_tokens.to_string();
-        if env
-            .get(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV)
-            .and_then(serde_json::Value::as_str)
-            == Some(expected.as_str())
-        {
-            return false;
-        }
-        env.insert(
-            CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
-            serde_json::Value::String(expected),
-        );
-        true
-    })
 }
 
 fn parse_agent_json_object(
@@ -16237,6 +15376,22 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
         )
     };
 
+    if gui_config_exists {
+        if let Ok(content) = fs::read_to_string(&config_path) {
+            changed |= [
+                "codex-session-repair-on-launch",
+                "claude-code-working-directory",
+                "claude-code-working-directory-prompt-disabled",
+            ]
+            .iter()
+            .any(|key| {
+                content
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(key))
+            });
+        }
+    }
+
     let core_config_path = core_install_dir()?.join(CORE_CONFIG_FILE);
     let core_is_newer = file_modified_time(&core_config_path)
         .zip(file_modified_time(&config_path))
@@ -16326,16 +15481,6 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
         changed = true;
     }
     if presence.close_behavior.is_none() {
-        changed = true;
-    }
-    if presence.codex_session_repair_on_launch.is_none() {
-        changed = true;
-    }
-    if presence.claude_code_working_directory.is_none()
-        || presence
-            .claude_code_working_directory_prompt_disabled
-            .is_none()
-    {
         changed = true;
     }
     let management_secret_rotated = ensure_strong_management_secret(&mut config)?;
@@ -16618,11 +15763,6 @@ fn sanitize_gui_config(config: &mut GuiConfigFile) -> Result<bool, String> {
         config.routing_session_affinity_ttl = routing_session_affinity_ttl;
         changed = true;
     }
-    let claude_code_working_directory = config.claude_code_working_directory.trim().to_string();
-    if config.claude_code_working_directory != claude_code_working_directory {
-        config.claude_code_working_directory = claude_code_working_directory;
-        changed = true;
-    }
     let window_size = configured_window_size(config);
     let normalized_width = window_size.map(|size| size.width);
     let normalized_height = window_size.map(|size| size.height);
@@ -16685,20 +15825,15 @@ fn write_gui_config_to_path(config: &GuiConfigFile, config_path: &Path) -> Resul
             "routing-session-affinity-ttl",
             value(config.routing_session_affinity_ttl.as_str()),
         ),
-        (
-            "codex-session-repair-on-launch",
-            value(config.codex_session_repair_on_launch),
-        ),
-        (
-            "claude-code-working-directory",
-            value(config.claude_code_working_directory.as_str()),
-        ),
-        (
-            "claude-code-working-directory-prompt-disabled",
-            value(config.claude_code_working_directory_prompt_disabled),
-        ),
     ] {
         set_codex_table_item(root, key, item);
+    }
+    for key in [
+        "codex-session-repair-on-launch",
+        "claude-code-working-directory",
+        "claude-code-working-directory-prompt-disabled",
+    ] {
+        root.remove(key);
     }
     for (key, dimension) in [
         ("window-width", config.window_width),
@@ -16781,13 +15916,6 @@ fn validate_gui_config(config: &GuiConfigFile) -> Result<(), String> {
         .any(char::is_control)
     {
         return Err("会话粘性 TTL 不能包含控制字符".to_string());
-    }
-    if config
-        .claude_code_working_directory
-        .chars()
-        .any(char::is_control)
-    {
-        return Err("Claude Code working directory cannot contain control characters".to_string());
     }
     Ok(())
 }
@@ -18994,7 +18122,6 @@ fn main() {
     let initial_window_size = configured_window_size(&gui_config);
 
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -19179,7 +18306,6 @@ fn main() {
             clear_codex_config,
             set_agent_config_enabled,
             update_agent_config,
-            launch_agent,
             get_lan_ipv4,
             save_gui_settings,
             save_network_routing_settings,
@@ -19227,10 +18353,7 @@ fn main() {
             codex_sessions::delete_codex_sessions,
             codex_sessions::repair_codex_session_metadata,
             codex_sessions::preview_codex_session_index_cleanup,
-            codex_sessions::apply_codex_session_index_cleanup,
-            codex_sessions::get_codex_session_repair_on_launch,
-            codex_sessions::set_codex_session_repair_on_launch,
-            codex_sessions::close_chatgpt_app
+            codex_sessions::apply_codex_session_index_cleanup
         ])
         .build(tauri::generate_context!())
         .expect("failed to build app");
@@ -19472,7 +18595,7 @@ data: {"delta":{"type":"text_delta","text":"H"}}
     }
 
     #[test]
-    fn codex_oauth_launch_requires_auth_json_with_tokens() {
+    fn codex_oauth_requires_auth_json_with_tokens() {
         let home = agent_test_home("codex-oauth-login");
         let auth_path = home.join("auth.json");
 
@@ -20659,7 +19782,7 @@ model:
         let path = home.join("config.toml");
         fs::write(
             &path,
-            "# keep this comment\ncustom-option = \"keep\"\nport = 7000\n\n[third-party]\nenabled = true\n",
+            "# keep this comment\ncustom-option = \"keep\"\ncodex-session-repair-on-launch = true\nclaude-code-working-directory = \"legacy\"\nclaude-code-working-directory-prompt-disabled = true\nport = 7000\n\n[third-party]\nenabled = true\n",
         )
         .unwrap();
         let config = GuiConfigFile {
@@ -20669,9 +19792,6 @@ model:
             auth_dir: path_to_string(&home.join("custom-auth")),
             management_secret_key: "custom-secret".to_string(),
             usage_statistics_enabled: false,
-            codex_session_repair_on_launch: true,
-            claude_code_working_directory: path_to_string(&home),
-            claude_code_working_directory_prompt_disabled: true,
             ..GuiConfigFile::default()
         };
 
@@ -20684,9 +19804,8 @@ model:
         assert!(content.contains("host = \"0.0.0.0\""));
         assert!(content.contains("management-secret-key = \"custom-secret\""));
         assert!(content.contains("usage-statistics-enabled = false"));
-        assert!(content.contains("codex-session-repair-on-launch = true"));
-        assert!(content.contains("claude-code-working-directory = "));
-        assert!(content.contains("claude-code-working-directory-prompt-disabled = true"));
+        assert!(!content.contains("codex-session-repair-on-launch"));
+        assert!(!content.contains("claude-code-working-directory"));
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -20755,7 +19874,6 @@ model:
         assert!(content.contains("management-secret-key = \"\""));
         assert!(content.contains("plugins-enabled = false"));
         assert!(content.contains("routing-strategy = \"round-robin\""));
-        assert!(content.contains("codex-session-repair-on-launch = false"));
     }
 
     #[test]
@@ -20874,7 +19992,7 @@ model:
     }
 
     #[test]
-    fn claude_code_role_mappings_drive_settings_and_launch_environment() {
+    fn claude_code_role_mappings_drive_settings() {
         let mappings = ClaudeDesktopModelMappings {
             opus: "gpt-opus".to_string(),
             sonnet: "gpt-sonnet".to_string(),
@@ -20925,34 +20043,6 @@ model:
             value["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
             "gpt-sonnet (272K context)"
         );
-
-        let environment = claude_code_launch_environment(
-            "http://127.0.0.1:8317",
-            "test-key",
-            &mappings,
-            &models,
-            claude_code_max_context_tokens(&mappings, &models).unwrap(),
-        )
-        .unwrap();
-        let read = |key: &str| {
-            environment
-                .iter()
-                .find(|(candidate, _)| candidate == key)
-                .map(|(_, value)| value.as_str())
-        };
-        assert_eq!(read("ANTHROPIC_BASE_URL"), Some("http://127.0.0.1:8317"));
-        assert_eq!(read("ANTHROPIC_AUTH_TOKEN"), Some("test-key"));
-        assert_eq!(read("ANTHROPIC_API_KEY"), None);
-        assert_eq!(read("ANTHROPIC_DEFAULT_OPUS_MODEL"), Some("gpt-opus"));
-        assert_eq!(read("ANTHROPIC_DEFAULT_SONNET_MODEL"), Some("gpt-sonnet"));
-        assert_eq!(read("ANTHROPIC_DEFAULT_HAIKU_MODEL"), Some("gpt-haiku"));
-        assert_eq!(read("CLAUDE_CODE_SUBAGENT_MODEL"), Some("gpt-haiku"));
-        assert_eq!(read("CLAUDE_CODE_EFFORT_LEVEL"), None);
-        assert_eq!(
-            read("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"),
-            Some("gpt-sonnet (272K context)")
-        );
-        assert_eq!(read(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV), Some("272000"));
     }
 
     #[test]
@@ -21025,18 +20115,6 @@ model:
             "DeepSeek V4 Pro (Fable mapping, 1M context)"
         );
         assert_eq!(value["model"], "deepseek-v4-pro[1m]");
-
-        let environment = claude_code_launch_environment(
-            "http://127.0.0.1:8317",
-            "test-key",
-            &mappings,
-            &models,
-            claude_code_max_context_tokens(&mappings, &models).unwrap(),
-        )
-        .unwrap();
-        assert!(!environment
-            .iter()
-            .any(|(key, _)| key == CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV));
     }
 
     #[test]
@@ -21132,62 +20210,6 @@ model:
             claude_code_max_context_tokens(&mappings, &models).unwrap(),
             DEFAULT_CLAUDE_CONTEXT_WINDOW
         );
-    }
-
-    #[test]
-    fn claude_code_launch_migrates_legacy_dual_auth_configuration() {
-        let directory = agent_test_home("claude-code-dual-auth-migration");
-        let path = directory.join("settings.json");
-        fs::write(
-            &path,
-            r#"{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317","ANTHROPIC_API_KEY":"legacy","ANTHROPIC_AUTH_TOKEN":"token"}}"#,
-        )
-        .unwrap();
-
-        assert!(remove_claude_code_conflicting_api_key(&path).unwrap());
-        assert!(update_claude_code_context_window(&path, Some(272_000)).unwrap());
-        assert!(!update_claude_code_context_window(&path, Some(272_000)).unwrap());
-        let value: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(value["env"].get("ANTHROPIC_API_KEY").is_none());
-        assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "token");
-        assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "272000");
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn claude_code_1m_variant_removes_global_context_override() {
-        let directory = agent_test_home("claude-code-remove-context-override");
-        let path = directory.join("settings.json");
-        fs::write(
-            &path,
-            r#"{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"1000000"}}"#,
-        )
-        .unwrap();
-
-        assert!(update_claude_code_context_window(&path, None).unwrap());
-        assert!(!update_claude_code_context_window(&path, None).unwrap());
-        let value: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(value["env"]
-            .get(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV)
-            .is_none());
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn claude_code_working_directory_must_be_absolute_and_exist() {
-        let directory = agent_test_home("claude-code-working-directory");
-        assert_eq!(
-            validate_claude_code_working_directory(&path_to_string(&directory)).unwrap(),
-            directory
-        );
-        assert!(validate_claude_code_working_directory("relative/path").is_err());
-        assert!(validate_claude_code_working_directory(&path_to_string(
-            &directory.join("missing")
-        ))
-        .is_err());
-        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -22163,32 +21185,6 @@ oauth-model-alias:
         assert_eq!(GuiConfigFile::default().locale, "zh-CN");
     }
 
-    #[test]
-    fn codex_installation_is_detected_from_either_cli_or_app_entry() {
-        let cli_target = vec![AgentLaunchTarget {
-            id: "cli".to_string(),
-            label: "Codex CLI".to_string(),
-            detail: "codex".to_string(),
-        }];
-        let app_target = vec![AgentLaunchTarget {
-            id: "app".to_string(),
-            label: "ChatGPT App".to_string(),
-            detail: "Microsoft Store · OpenAI.Codex_2p2nqsd0c76g0!App".to_string(),
-        }];
-
-        assert!(agent_client_is_installed(
-            AgentClient::Codex,
-            &cli_target,
-            None
-        ));
-        assert!(agent_client_is_installed(
-            AgentClient::Codex,
-            &app_target,
-            None
-        ));
-        assert!(!agent_client_is_installed(AgentClient::Codex, &[], None));
-    }
-
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_chatgpt_discovery_parser_accepts_registered_app_and_executable() {
@@ -22234,34 +21230,6 @@ oauth-model-alias:
             "Microsoft.MicrosoftEdge_1.0.0.0_x64__8wekyb3d8bbwe"
         )
         .is_none());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_claude_desktop_discovery_parser_accepts_store_app() {
-        let target = parse_windows_claude_desktop_discovery_output(
-            "notice\r\nAPPID:Claude_pzs8sxrjxfjjc!Claude\r\n",
-        )
-        .unwrap();
-        match target {
-            ClaudeDesktopTarget::WindowsAppId(app_id) => {
-                assert_eq!(app_id, "Claude_pzs8sxrjxfjjc!Claude");
-            }
-            ClaudeDesktopTarget::Application(_) => panic!("expected Store application ID"),
-        }
-        assert!(parse_windows_claude_desktop_discovery_output("no app found\r\n").is_none());
-        assert_eq!(
-            parse_windows_claude_desktop_version_output("VERSION:1.24012.9.0\r\n").as_deref(),
-            Some("1.24012.9.0")
-        );
-        assert!(parse_windows_claude_desktop_version_output("VERSION:\r\n").is_none());
-        assert!(parse_windows_claude_desktop_version_output("VERSION:unknown\r\n").is_none());
-        assert_eq!(
-            parse_windows_codex_version_output("VERSION:26.727.6591.0\r\n").as_deref(),
-            Some("26.727.6591.0")
-        );
-        assert!(parse_windows_codex_version_output("VERSION:\r\n").is_none());
-        assert!(parse_windows_codex_version_output("VERSION:unknown\r\n").is_none());
     }
 
     #[test]
@@ -23722,9 +22690,6 @@ custom_option = "keep-original"
             proxy_url: "socks5://127.0.0.1:7890".to_string(),
             routing_session_affinity: true,
             routing_session_affinity_ttl: "1h".to_string(),
-            codex_session_repair_on_launch: false,
-            claude_code_working_directory: String::new(),
-            claude_code_working_directory_prompt_disabled: false,
         };
         let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
 
@@ -24307,20 +23272,6 @@ custom_option = "keep-original"
                 format!("CLIProxyAPI_7.2.83_{os}_{arch}.{archive_kind}")
             );
         }
-    }
-
-    #[test]
-    fn codex_launch_is_independent_from_managed_configuration_state() {
-        assert!(validate_agent_launch_modification(AgentClient::Codex, true, "applied").is_ok());
-        assert!(
-            validate_agent_launch_modification(AgentClient::Codex, false, "unconfigured").is_ok()
-        );
-        assert!(validate_agent_launch_modification(AgentClient::Codex, true, "invalid",).is_ok());
-        assert!(
-            validate_agent_launch_modification(AgentClient::OpenCode, false, "unconfigured")
-                .is_err()
-        );
-        assert!(validate_agent_launch_modification(AgentClient::OpenCode, true, "applied").is_ok());
     }
 
     #[test]

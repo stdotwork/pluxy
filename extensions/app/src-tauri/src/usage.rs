@@ -2201,9 +2201,6 @@ mod tests {
             proxy_url: String::new(),
             routing_session_affinity: false,
             routing_session_affinity_ttl: String::new(),
-            codex_session_repair_on_launch: false,
-            claude_code_working_directory: String::new(),
-            claude_code_working_directory_prompt_disabled: false,
         };
         let record = normalize_usage_record(
             serde_json::json!({

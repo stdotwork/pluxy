@@ -5361,7 +5361,6 @@ textarea:focus-visible {
   padding: 0 2px;
 }
 
-.agent-config-footer,
 .agent-status-grid span {
   display: flex;
   align-items: center;
@@ -5370,16 +5369,6 @@ textarea:focus-visible {
 .agent-config-footer {
   justify-content: flex-end;
   gap: 14px;
-}
-
-.agent-launch-actions {
-  display: flex;
-  min-width: 0;
-  max-width: 100%;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .agent-status-grid {
@@ -5500,81 +5489,6 @@ textarea:focus-visible {
 .agent-claude-desktop-mapping-filter:has(input:disabled) {
   cursor: not-allowed;
   opacity: 0.62;
-}
-
-.agent-claude-code-launch-dialog {
-  grid-template-rows: auto;
-  width: min(620px, calc(100vw - 32px));
-  height: auto;
-  min-height: 0;
-}
-
-.agent-claude-code-launch-dialog > p {
-  margin: 0;
-  color: var(--theme-5f5a53);
-  font-size: var(--font-size-label);
-  line-height: var(--line-height-relaxed);
-}
-
-.agent-claude-code-directory-picker {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  min-height: 64px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 11px 13px;
-  border: 1px solid var(--theme-d8d2c8);
-  border-radius: 9px;
-  background: var(--theme-fff);
-  color: var(--theme-2d2a26);
-  text-align: left;
-  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
-}
-
-.agent-claude-code-directory-picker:hover:not(:disabled) {
-  border-color: var(--theme-bdb5a9);
-  background: var(--theme-faf8f4);
-}
-
-.agent-claude-code-directory-picker:focus-visible {
-  border-color: var(--theme-8d8377);
-  outline: 0;
-  box-shadow: 0 0 0 3px rgba(45, 42, 38, 0.1);
-}
-
-.agent-claude-code-directory-picker > span {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.agent-claude-code-directory-picker small {
-  color: var(--theme-8a847c);
-  font-size: var(--font-size-meta);
-}
-
-.agent-claude-code-directory-picker strong {
-  overflow: hidden;
-  font-size: var(--font-size-label);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-claude-code-directory-picker > b {
-  flex: none;
-  color: var(--theme-8069ad);
-  font-size: var(--font-size-label);
-}
-
-.agent-claude-code-suppress-prompt {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--theme-5f5a53);
-  font-size: var(--font-size-label);
-  cursor: pointer;
 }
 
 .agent-section-heading {
@@ -5809,17 +5723,6 @@ textarea:focus-visible {
   min-height: 0;
 }
 
-.codex-auto-restore-card {
-  height: 100%;
-  min-height: 54px;
-  gap: 6px;
-  padding: 10px 12px;
-  border-color: var(--theme-d8d2c8);
-  border-radius: 9px;
-  background: var(--theme-faf8f4);
-  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
-}
-
 .agent-codex-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5839,54 +5742,6 @@ textarea:focus-visible {
   font-size: var(--font-size-meta);
   font-weight: 600;
   line-height: var(--line-height-tight);
-}
-
-.codex-auto-restore-toggle {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.codex-auto-restore-switch input:focus-visible + .switch-track {
-  outline: 3px solid var(--ui-focus-ring);
-  outline-offset: 2px;
-}
-
-.codex-auto-restore-toggle:has(input:disabled) {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.codex-auto-restore-toggle > strong {
-  min-width: 34px;
-  color: var(--theme-5f5a53);
-  font-size: var(--font-size-meta);
-  font-weight: 600;
-  text-align: right;
-}
-
-.codex-auto-restore-card.enabled {
-  border-color: var(--theme-9db8a5);
-  background: var(--theme-f3f8f4);
-}
-
-.codex-auto-restore-card.enabled .codex-auto-restore-toggle > strong {
-  color: var(--theme-2f6b3f);
-}
-
-.codex-auto-restore-message {
-  max-width: 100%;
-  color: var(--theme-2f6b3f);
-  font-size: var(--font-size-meta);
-  line-height: var(--line-height-body);
-  overflow-wrap: anywhere;
-}
-
-.codex-auto-restore-message.error {
-  color: var(--theme-9f2d20);
 }
 
 .agent-modification-control {
@@ -5984,44 +5839,6 @@ textarea:focus-visible {
 
 .agent-restore-dialog > .agent-inline-message {
   margin-top: -6px;
-}
-
-.agent-config-footer {
-  min-height: 48px;
-  padding-top: 14px;
-  border-top: 1px solid var(--theme-e3e1db);
-}
-
-.agent-config-footer > .agent-launch-control {
-  display: grid;
-  min-width: 0;
-  max-width: 100%;
-  justify-items: end;
-  gap: 5px;
-  margin-left: auto;
-}
-
-.agent-launch-control > .agent-inline-message {
-  max-width: 360px;
-  text-align: right;
-}
-
-.agent-config-footer .primary-button {
-  min-width: 120px;
-}
-
-.agent-config-footer .agent-close-app-button {
-  min-width: 120px;
-}
-
-.agent-launch-actions > button {
-  min-width: 0;
-  max-width: 100%;
-  height: auto;
-  padding-block: 8px;
-  line-height: var(--line-height-tight);
-  overflow-wrap: anywhere;
-  white-space: normal;
 }
 
 .usage-records-page {
@@ -7306,8 +7123,7 @@ textarea:focus-visible {
   }
 
   .agent-status-grid,
-  .agent-status-messages,
-  .agent-config-footer {
+  .agent-status-messages {
     grid-column: 1 / -1;
   }
 
@@ -7324,30 +7140,6 @@ textarea:focus-visible {
 }
 
 @container agent-panel (max-width: 760px) {
-  .agent-config-footer {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .agent-config-footer > .agent-launch-control {
-    width: 100%;
-    justify-items: stretch;
-    margin-left: 0;
-  }
-
-  .agent-launch-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 100%;
-  }
-
-  .agent-launch-actions > .primary-button:last-child {
-    grid-column: 1 / -1;
-  }
-
-  .agent-launch-actions > .agent-close-app-button {
-    grid-column: 1 / -1;
-  }
 }
 
 @container agent-panel (max-width: 640px) {
@@ -7930,41 +7722,14 @@ textarea:focus-visible {
     height: auto;
   }
 
-  .agent-config-footer,
   .agent-section-heading {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .codex-auto-restore-toggle {
-    width: 100%;
-    min-width: 0;
-    justify-content: space-between;
-  }
-
-  .codex-auto-restore-toggle > strong {
-    text-align: left;
-  }
-
-  .agent-config-footer .primary-button {
-    width: 100%;
-  }
-
-  .agent-modification-control > .agent-inline-message,
-  .agent-launch-control > .agent-inline-message {
+  .agent-modification-control > .agent-inline-message {
     max-width: none;
     text-align: left;
-  }
-
-  .agent-config-footer > .agent-launch-control {
-    width: 100%;
-    justify-items: stretch;
-  }
-
-  .agent-launch-actions {
-    width: 100%;
-    align-items: stretch;
-    flex-direction: column;
   }
 
   .oauth-card {
