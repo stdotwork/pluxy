@@ -1953,6 +1953,29 @@ async fn uninstall_pi_provider(
     Ok(result)
 }
 
+fn validate_agent_working_directory(value: &str) -> Result<PathBuf, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(
+            "AGENT_WORKING_DIRECTORY_REQUIRED: Please select a working directory".to_string(),
+        );
+    }
+    if value.chars().any(char::is_control) {
+        return Err("The working directory contains invalid characters".to_string());
+    }
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err("The working directory must be an absolute path".to_string());
+    }
+    if !path.is_dir() {
+        return Err(format!(
+            "AGENT_WORKING_DIRECTORY_INVALID: The working directory does not exist: {}",
+            path_to_string(&path)
+        ));
+    }
+    Ok(path)
+}
+
 fn validate_claude_code_working_directory(value: &str) -> Result<PathBuf, String> {
     let value = value.trim();
     if value.is_empty() {
@@ -2746,7 +2769,12 @@ async fn launch_agent(
         }
         let executable =
             find_pi_executable(&home).ok_or_else(|| "未找到 Pi CLI 可执行文件".to_string())?;
-        return launch_cli_agent(&executable, PI_AGENT_NAME, &home, &[], &[]);
+        let launch_directory = working_directory
+            .as_deref()
+            .map(validate_agent_working_directory)
+            .transpose()?
+            .unwrap_or_else(|| home.clone());
+        return launch_cli_agent(&executable, PI_AGENT_NAME, &launch_directory, &[], &[]);
     }
     let client = AgentClient::parse(&client)?;
     if !client.supported_platform() {
@@ -2889,7 +2917,16 @@ async fn launch_agent(
             &environment_to_remove,
         );
     }
-    launch_cli_agent(&executable, client.name(), &home, &[], &[])
+    let launch_directory = if client == AgentClient::Codex && requested_target == Some("cli") {
+        working_directory
+            .as_deref()
+            .map(validate_agent_working_directory)
+            .transpose()?
+            .unwrap_or_else(|| home.clone())
+    } else {
+        home.clone()
+    };
+    launch_cli_agent(&executable, client.name(), &launch_directory, &[], &[])
 }
 
 fn validate_agent_launch_modification(

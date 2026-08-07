@@ -555,10 +555,11 @@ export function AgentsPage() {
     createClaudeModelMappings(''),
   );
   const [claudeCustomMapping, setClaudeCustomMapping] = useState(false);
-  const [claudeCodeLaunchDialogOpen, setClaudeCodeLaunchDialogOpen] = useState(false);
-  const [claudeCodeLaunchDirectory, setClaudeCodeLaunchDirectory] = useState('');
-  const [claudeCodeSuppressDirectoryPrompt, setClaudeCodeSuppressDirectoryPrompt] = useState(false);
-  const [claudeCodeDirectoryError, setClaudeCodeDirectoryError] = useState('');
+  const [launchDirectoryDialogOpen, setLaunchDirectoryDialogOpen] = useState(false);
+  const [launchDirectory, setLaunchDirectory] = useState('');
+  const [launchDirectoryTarget, setLaunchDirectoryTarget] = useState<AgentLaunchTarget | null>(null);
+  const [suppressLaunchDirectoryPrompt, setSuppressLaunchDirectoryPrompt] = useState(false);
+  const [launchDirectoryError, setLaunchDirectoryError] = useState('');
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
@@ -683,8 +684,9 @@ export function AgentsPage() {
     setCloseAppConfirmOpen(false);
     setOauthLoginRequiredAction(null);
     setOauthConfigurationDraft(null);
-    setClaudeCodeLaunchDialogOpen(false);
-    setClaudeCodeDirectoryError('');
+    setLaunchDirectoryDialogOpen(false);
+    setLaunchDirectoryTarget(null);
+    setLaunchDirectoryError('');
     claudeModelMappingsDirtyRef.current = false;
   }, [selected]);
 
@@ -818,6 +820,12 @@ export function AgentsPage() {
         || (activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
   );
   const canLaunchTarget = (target: AgentLaunchTarget | null) => launchEnabled && Boolean(target);
+  const requiresLaunchDirectory = (target: AgentLaunchTarget | null) => Boolean(
+    target
+      && (selected === 'claude-code'
+        || selected === 'pi'
+        || (selected === 'codex' && target.id === 'cli')),
+  );
   const modelHint = modelSelectionError
     || modelError
     || (modelLoading
@@ -1092,28 +1100,31 @@ export function AgentsPage() {
     }
   };
 
-  const openClaudeCodeLaunchDialog = () => {
-    setClaudeCodeLaunchDirectory(activeStatus?.claudeCodeWorkingDirectory ?? '');
-    setClaudeCodeSuppressDirectoryPrompt(false);
-    setClaudeCodeDirectoryError('');
-    setClaudeCodeLaunchDialogOpen(true);
+  const openLaunchDirectoryDialog = (target: AgentLaunchTarget) => {
+    setLaunchDirectory(
+      selected === 'claude-code' ? activeStatus?.claudeCodeWorkingDirectory ?? '' : '',
+    );
+    setLaunchDirectoryTarget(target);
+    setSuppressLaunchDirectoryPrompt(false);
+    setLaunchDirectoryError('');
+    setLaunchDirectoryDialogOpen(true);
   };
 
-  const chooseClaudeCodeWorkingDirectory = async () => {
+  const chooseLaunchDirectory = async () => {
     setBusyAction('directory');
-    setClaudeCodeDirectoryError('');
+    setLaunchDirectoryError('');
     try {
       const selectedDirectory = await open({
         directory: true,
         multiple: false,
-        defaultPath: claudeCodeLaunchDirectory || activeStatus?.claudeCodeWorkingDirectory || undefined,
-        title: t('agents.claudeCodeLaunch.dialogTitle'),
+        defaultPath: launchDirectory || activeStatus?.claudeCodeWorkingDirectory || undefined,
+        title: t('agents.claudeCodeLaunch.dialogTitle', { client: activeDefinition.name }),
       });
       if (typeof selectedDirectory === 'string') {
-        setClaudeCodeLaunchDirectory(selectedDirectory);
+        setLaunchDirectory(selectedDirectory);
       }
     } catch (requestError) {
-      setClaudeCodeDirectoryError(String(requestError));
+      setLaunchDirectoryError(String(requestError));
     } finally {
       setBusyAction(null);
     }
@@ -1140,9 +1151,12 @@ export function AgentsPage() {
         workingDirectory,
         suppressWorkingDirectoryPrompt,
       });
-      if (selected === 'claude-code' && workingDirectory) {
-        setClaudeCodeLaunchDialogOpen(false);
-        await reloadStatusesAfterAction();
+      if (requiresLaunchDirectory(target) && workingDirectory) {
+        setLaunchDirectoryDialogOpen(false);
+        setLaunchDirectoryTarget(null);
+        if (selected === 'claude-code') {
+          await reloadStatusesAfterAction();
+        }
       }
     } catch (requestError) {
       const message = String(requestError);
@@ -1151,12 +1165,12 @@ export function AgentsPage() {
         && (message.includes('CLAUDE_CODE_WORKING_DIRECTORY_REQUIRED')
           || message.includes('CLAUDE_CODE_WORKING_DIRECTORY_INVALID'))
       ) {
-        openClaudeCodeLaunchDialog();
-        setClaudeCodeDirectoryError(
+        openLaunchDirectoryDialog(target);
+        setLaunchDirectoryError(
           message.includes('CLAUDE_CODE_WORKING_DIRECTORY_INVALID') ? message : '',
         );
-      } else if (selected === 'claude-code' && workingDirectory) {
-        setClaudeCodeDirectoryError(message);
+      } else if (requiresLaunchDirectory(target) && workingDirectory) {
+        setLaunchDirectoryError(message);
       } else if (!handleOAuthLoginError(requestError, 'launch')) {
         setLaunchError(message);
       }
@@ -1167,26 +1181,29 @@ export function AgentsPage() {
 
   const launchAgent = async (target: AgentLaunchTarget | null) => {
     if (!target) return;
-    if (selected === 'claude-code' && !activeStatus?.claudeCodeWorkingDirectoryPromptDisabled) {
-      openClaudeCodeLaunchDialog();
+    if (
+      requiresLaunchDirectory(target)
+      && !(selected === 'claude-code' && activeStatus?.claudeCodeWorkingDirectoryPromptDisabled)
+    ) {
+      openLaunchDirectoryDialog(target);
       return;
     }
     await invokeAgentLaunch(target);
   };
 
-  const launchClaudeCodeFromDialog = async () => {
-    const target = defaultLaunchTarget;
+  const launchFromDirectoryDialog = async () => {
+    const target = launchDirectoryTarget;
     if (!target) return;
-    const workingDirectory = claudeCodeLaunchDirectory.trim();
+    const workingDirectory = launchDirectory.trim();
     if (!workingDirectory) {
-      setClaudeCodeDirectoryError(t('agents.claudeCodeLaunch.directoryRequired'));
+      setLaunchDirectoryError(t('agents.claudeCodeLaunch.directoryRequired'));
       return;
     }
-    setClaudeCodeDirectoryError('');
+    setLaunchDirectoryError('');
     await invokeAgentLaunch(
       target,
       workingDirectory,
-      claudeCodeSuppressDirectoryPrompt,
+      selected === 'claude-code' ? suppressLaunchDirectoryPrompt : null,
     );
   };
 
@@ -1683,41 +1700,42 @@ export function AgentsPage() {
         </section>
       </div>
 
-      {claudeCodeLaunchDialogOpen ? (
+      {launchDirectoryDialogOpen ? (
         <div className="config-dialog-backdrop" onMouseDown={(event) => {
           if (event.currentTarget === event.target && !busy) {
-            setClaudeCodeLaunchDialogOpen(false);
+            setLaunchDirectoryDialogOpen(false);
+            setLaunchDirectoryTarget(null);
           }
         }}>
           <section
             className="config-dialog agent-claude-code-launch-dialog"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="agent-claude-code-launch-title"
+            aria-labelledby="agent-launch-directory-title"
           >
             <div className="config-dialog-heading">
               <div>
-                <h2 id="agent-claude-code-launch-title">
-                  {t('agents.claudeCodeLaunch.dialogTitle')}
+                <h2 id="agent-launch-directory-title">
+                  {t('agents.claudeCodeLaunch.dialogTitle', { client: activeDefinition.name })}
                 </h2>
               </div>
             </div>
-            <p>{t('agents.claudeCodeLaunch.dialogDescription')}</p>
+            <p>{t('agents.claudeCodeLaunch.dialogDescription', { client: activeDefinition.name })}</p>
             <div className="config-dialog-field">
               <span>{t('agents.claudeCodeLaunch.workingDirectory')}</span>
               <button
                 type="button"
                 className="agent-claude-code-directory-picker"
-                onClick={() => void chooseClaudeCodeWorkingDirectory()}
+                onClick={() => void chooseLaunchDirectory()}
                 disabled={busy}
                 autoFocus
               >
                 <span>
-                  <small>{claudeCodeLaunchDirectory
+                  <small>{launchDirectory
                     ? t('agents.claudeCodeLaunch.selectedDirectory')
                     : t('agents.claudeCodeLaunch.noDirectory')}</small>
-                  <strong title={claudeCodeLaunchDirectory || undefined}>
-                    {claudeCodeLaunchDirectory || t('agents.claudeCodeLaunch.chooseDirectory')}
+                  <strong title={launchDirectory || undefined}>
+                    {launchDirectory || t('agents.claudeCodeLaunch.chooseDirectory')}
                   </strong>
                 </span>
                 <b>{busyAction === 'directory'
@@ -1725,25 +1743,30 @@ export function AgentsPage() {
                   : t('agents.claudeCodeLaunch.browse')}</b>
               </button>
             </div>
-            <label className="agent-claude-code-suppress-prompt">
-              <input
-                type="checkbox"
-                checked={claudeCodeSuppressDirectoryPrompt}
-                onChange={(event) => setClaudeCodeSuppressDirectoryPrompt(event.currentTarget.checked)}
-                disabled={busy}
-              />
-              <span>{t('agents.claudeCodeLaunch.neverAskAgain')}</span>
-            </label>
-            {claudeCodeDirectoryError ? (
+            {selected === 'claude-code' ? (
+              <label className="agent-claude-code-suppress-prompt">
+                <input
+                  type="checkbox"
+                  checked={suppressLaunchDirectoryPrompt}
+                  onChange={(event) => setSuppressLaunchDirectoryPrompt(event.currentTarget.checked)}
+                  disabled={busy}
+                />
+                <span>{t('agents.claudeCodeLaunch.neverAskAgain')}</span>
+              </label>
+            ) : null}
+            {launchDirectoryError ? (
               <span className="agent-inline-message error" role="alert" aria-live="polite">
-                {claudeCodeDirectoryError}
+                {launchDirectoryError}
               </span>
             ) : null}
             <div className="config-dialog-actions two-actions">
               <button
                 type="button"
                 className="secondary-button"
-                onClick={() => setClaudeCodeLaunchDialogOpen(false)}
+                onClick={() => {
+                  setLaunchDirectoryDialogOpen(false);
+                  setLaunchDirectoryTarget(null);
+                }}
                 disabled={busy}
               >
                 {t('common.cancel')}
@@ -1751,11 +1774,11 @@ export function AgentsPage() {
               <button
                 type="button"
                 className="primary-button"
-                onClick={() => void launchClaudeCodeFromDialog()}
-                disabled={busy || !claudeCodeLaunchDirectory.trim()}
+                onClick={() => void launchFromDirectoryDialog()}
+                disabled={busy || !launchDirectory.trim() || !launchDirectoryTarget}
               >
                 {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : null}
-                {t('agents.claudeCodeLaunch.launch')}
+                {t('agents.claudeCodeLaunch.launch', { client: activeDefinition.name })}
               </button>
             </div>
           </section>
