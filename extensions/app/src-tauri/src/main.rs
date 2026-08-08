@@ -2124,14 +2124,23 @@ async fn create_thinking_alias(
         return Err("请先选择原模型".to_string());
     }
     let alias = validate_thinking_alias_model_id(&alias, "别名模型")?;
-    let effort = validate_thinking_alias_effort(&effort)?;
+    let effort = if effort.trim().is_empty() {
+        String::new()
+    } else {
+        validate_thinking_alias_effort(&effort)?
+    };
+    let fast = fast.unwrap_or(false);
     let content = fetch_management_config_yaml(&config).await?;
     let available_models =
         fetch_agent_models(config.port, effective_agent_api_key(&config)).await?;
     let definitions = fetch_codex_model_definitions(&config)
         .await
         .unwrap_or_default();
-    let sources = resolved_thinking_alias_sources(&content, &definitions, &available_models)?;
+    let sources = if effort.is_empty() {
+        resolved_alias_sources(&content, &definitions, &available_models, false)?
+    } else {
+        resolved_thinking_alias_sources(&content, &definitions, &available_models)?
+    };
     let source = sources
         .iter()
         .find(|source| source.source.id == source_id)
@@ -2158,8 +2167,7 @@ async fn create_thinking_alias(
         return Err(format!("别名模型 {alias} 已存在"));
     }
 
-    let updated =
-        add_model_alias_to_yaml(&content, &source, &alias, &effort, fast.unwrap_or(false))?;
+    let updated = add_model_alias_to_yaml(&content, &source, &alias, &effort, fast)?;
     put_management_config_yaml(&config, &updated).await?;
     thinking_aliases_from_yaml(&updated)
 }
@@ -13762,13 +13770,14 @@ fn collect_config_thinking_alias_entries(
             if source_model == alias {
                 continue;
             }
-            let Some(effort) = find_thinking_alias_effort(root, &alias, protocol) else {
+            let effort = find_thinking_alias_effort(root, &alias, protocol);
+            if effort.is_none() && find_speed_alias_service_tier(root, &alias, protocol).is_some() {
                 continue;
-            };
+            }
             entries.push(ThinkingAliasEntry {
                 source_model,
                 alias,
-                effort: Some(effort),
+                effort,
                 provider: provider_name.clone(),
                 kind: kind.to_string(),
             });
@@ -13955,6 +13964,9 @@ fn add_model_alias_to_yaml(
     }
 
     remove_thinking_payload_model(root, alias)?;
+    if effort.is_empty() && !fast {
+        return render_updated_core_yaml(&mut document, updated);
+    }
     let payload = root
         .entry(yaml_key("payload"))
         .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
@@ -13976,21 +13988,24 @@ fn add_model_alias_to_yaml(
         serde_norway::Value::String(source.source.protocol.clone()),
     );
     let mut params_mapping = serde_norway::Mapping::new();
-    params_mapping.insert(
-        yaml_key(if source.source.protocol == "openai" {
-            "reasoning_effort"
-        } else {
-            "reasoning.effort"
-        }),
-        serde_norway::Value::String(effort.to_string()),
-    );
+    if !effort.is_empty() {
+        params_mapping.insert(
+            yaml_key(if source.source.protocol == "openai" {
+                "reasoning_effort"
+            } else {
+                "reasoning.effort"
+            }),
+            serde_norway::Value::String(effort.to_string()),
+        );
+    }
     if fast {
         params_mapping.insert(
             yaml_key("service_tier"),
             serde_norway::Value::String("priority".to_string()),
         );
     }
-    if source.source.protocol == "openai"
+    if !effort.is_empty()
+        && source.source.protocol == "openai"
         && source
             .source
             .model
@@ -14161,24 +14176,26 @@ fn append_config_thinking_alias(
         yaml_key("alias"),
         serde_norway::Value::String(alias.to_string()),
     );
-    if let Some(display_name) = yaml_mapping_value(&alias_model, "display-name")
-        .and_then(serde_norway::Value::as_str)
-        .map(str::to_string)
-    {
-        alias_model.insert(
-            yaml_key("display-name"),
-            serde_norway::Value::String(format!("{display_name} ({effort})")),
+    if !effort.is_empty() {
+        if let Some(display_name) = yaml_mapping_value(&alias_model, "display-name")
+            .and_then(serde_norway::Value::as_str)
+            .map(str::to_string)
+        {
+            alias_model.insert(
+                yaml_key("display-name"),
+                serde_norway::Value::String(format!("{display_name} ({effort})")),
+            );
+        }
+        let thinking = alias_model
+            .entry(yaml_key("thinking"))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "模型 thinking 必须是映射".to_string())?;
+        thinking.insert(
+            yaml_key("levels"),
+            serde_norway::Value::Sequence(vec![serde_norway::Value::String(effort.to_string())]),
         );
     }
-    let thinking = alias_model
-        .entry(yaml_key("thinking"))
-        .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
-        .as_mapping_mut()
-        .ok_or_else(|| "模型 thinking 必须是映射".to_string())?;
-    thinking.insert(
-        yaml_key("levels"),
-        serde_norway::Value::Sequence(vec![serde_norway::Value::String(effort.to_string())]),
-    );
     models.push(serde_norway::Value::Mapping(alias_model));
     Ok(())
 }
@@ -21337,6 +21354,46 @@ oauth-model-alias:
                 kind: "codex-oauth".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn model_alias_can_be_created_without_overrides() {
+        let source = test_codex_oauth_thinking_source("gpt-5.5");
+        let rendered =
+            add_model_alias_to_yaml("{}\n", &source, "gpt-5.5-alias", "", false).unwrap();
+
+        assert!(rendered.contains("alias: gpt-5.5-alias"), "{rendered}");
+        assert!(!rendered.contains("payload:"), "{rendered}");
+        assert_eq!(
+            thinking_aliases_from_yaml(&rendered).unwrap(),
+            vec![ThinkingAliasEntry {
+                source_model: "gpt-5.5".to_string(),
+                alias: "gpt-5.5-alias".to_string(),
+                effort: None,
+                provider: "Codex OAuth".to_string(),
+                kind: "codex-oauth".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn configured_model_alias_can_be_created_without_overrides() {
+        let input = "codex-api-key:\n  - api-key: test\n    base-url: https://example.com/v1\n    models:\n      - name: gpt-custom\n";
+        let available_models = test_agent_models(&["gpt-custom"]);
+        let sources = resolved_alias_sources(input, &[], &available_models, false).unwrap();
+        let source = sources
+            .iter()
+            .find(|source| source.source.model == "gpt-custom")
+            .unwrap();
+        let rendered =
+            add_model_alias_to_yaml(input, source, "gpt-custom-alias", "", false).unwrap();
+
+        assert!(rendered.contains("alias: gpt-custom-alias"), "{rendered}");
+        assert!(!rendered.contains("thinking:"), "{rendered}");
+        assert!(!rendered.contains("payload:"), "{rendered}");
+        let entries = thinking_aliases_from_yaml(&rendered).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].effort, None);
     }
 
     #[test]

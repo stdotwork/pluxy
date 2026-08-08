@@ -12,7 +12,7 @@ describe('模型别名默认名称', () => {
     expect(defaultModelAlias('gpt-5.6-sol', 'XHigh', false)).toBe('gpt-5.6-sol-xhigh');
     expect(defaultModelAlias('gpt-5.6-sol', '', true)).toBe('gpt-5.6-sol-fast');
     expect(defaultModelAlias('gpt-5.6-sol', 'xhigh', true)).toBe('gpt-5.6-sol-xhigh-fast');
-    expect(defaultModelAlias('gpt-5.6-sol', '', false)).toBe('');
+    expect(defaultModelAlias('gpt-5.6-sol', '', false)).toBe('gpt-5.6-sol-alias');
   });
 
   test('默认别名与现有模型重名时递增数字后缀', () => {
