@@ -41,6 +41,7 @@ use tauri::{
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 use tauri::{Emitter, LogicalSize, Manager};
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_opener::OpenerExt;
 use tokio_util::sync::CancellationToken;
 use zip::ZipArchive;
@@ -642,6 +643,20 @@ struct GuiSettings {
     allow_lan: bool,
     run_on_startup: bool,
     close_behavior: WindowsCloseBehavior,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareSettings {
+    close_behavior: WindowsCloseBehavior,
+    autostart_enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SoftwareSettingsInput {
+    close_behavior: WindowsCloseBehavior,
+    autostart_enabled: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -1668,13 +1683,78 @@ fn resolve_windows_close_request(
     Ok(())
 }
 
+fn app_autostart_enabled(app: &tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| format!("读取系统开机自启状态失败: {error}"))
+}
+
+fn set_app_autostart_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager
+            .enable()
+            .map_err(|error| format!("启用开机自启失败: {error}"))
+    } else {
+        manager
+            .disable()
+            .map_err(|error| format!("关闭开机自启失败: {error}"))
+    }
+}
+
+fn software_settings(
+    app: &tauri::AppHandle,
+    config: &GuiConfigFile,
+) -> Result<SoftwareSettings, String> {
+    Ok(SoftwareSettings {
+        close_behavior: config.close_behavior,
+        autostart_enabled: app_autostart_enabled(app)?,
+    })
+}
+
 #[tauri::command]
-fn save_app_close_behavior(
+fn get_software_settings(
+    app: tauri::AppHandle,
     gui_config_state: tauri::State<'_, GuiConfigState>,
-    behavior: WindowsCloseBehavior,
-) -> Result<GuiSettings, String> {
-    let config = gui_config_state.set_close_behavior(behavior)?;
-    Ok(GuiSettings::from(&config))
+) -> Result<SoftwareSettings, String> {
+    let config = gui_config_state.snapshot()?;
+    software_settings(&app, &config)
+}
+
+#[tauri::command]
+fn save_software_settings(
+    app: tauri::AppHandle,
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    settings: SoftwareSettingsInput,
+) -> Result<SoftwareSettings, String> {
+    let previous_config = gui_config_state.snapshot()?;
+    let previous_autostart_enabled = app_autostart_enabled(&app)?;
+    let autostart_changed = previous_autostart_enabled != settings.autostart_enabled;
+
+    if autostart_changed {
+        set_app_autostart_enabled(&app, settings.autostart_enabled)?;
+    }
+
+    let config = if previous_config.close_behavior == settings.close_behavior {
+        previous_config
+    } else {
+        match gui_config_state.set_close_behavior(settings.close_behavior) {
+            Ok(config) => config,
+            Err(error) => {
+                let rollback_error = autostart_changed
+                    .then(|| set_app_autostart_enabled(&app, previous_autostart_enabled).err())
+                    .flatten();
+                return Err(match rollback_error {
+                    Some(rollback_error) => {
+                        format!("{error}; 回滚开机自启设置也失败: {rollback_error}")
+                    }
+                    None => error,
+                });
+            }
+        }
+    };
+
+    software_settings(&app, &config)
 }
 
 fn inspect_agent_config_statuses(
@@ -18122,6 +18202,10 @@ fn main() {
     let initial_window_size = configured_window_size(&gui_config);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -18281,7 +18365,8 @@ fn main() {
             save_api_access_remark,
             set_app_locale,
             resolve_windows_close_request,
-            save_app_close_behavior,
+            get_software_settings,
+            save_software_settings,
             get_agent_config_statuses,
             refresh_agent_config_statuses,
             get_agent_models,

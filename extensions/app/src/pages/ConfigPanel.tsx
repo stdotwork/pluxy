@@ -59,8 +59,9 @@ type DraftRefreshMode = 'replace' | 'preserve';
 
 type NetworkDraftDirty = Record<NetworkDraftField, boolean>;
 
-type GuiSettings = {
+type SoftwareSettings = {
   closeBehavior: CloseBehavior;
+  autostartEnabled: boolean;
 };
 
 const cleanNetworkDraft = (): NetworkDraftDirty => ({
@@ -80,9 +81,10 @@ export function ConfigPanelPage() {
   const { t } = useI18n();
   const { status: coreStatus, publishStatus, refreshStatus } = useCoreRuntime();
   const [settings, setSettings] = useState<CoreConfigSettings | null>(null);
-  const [softwareSettings, setSoftwareSettings] = useState<GuiSettings | null>(null);
+  const [softwareSettings, setSoftwareSettings] = useState<SoftwareSettings | null>(null);
   const [softwareSettingsLoading, setSoftwareSettingsLoading] = useState(true);
   const [softwareCloseBehaviorDraft, setSoftwareCloseBehaviorDraft] = useState<CloseBehavior>('ask');
+  const [softwareAutostartDraft, setSoftwareAutostartDraft] = useState(false);
   const [softwareSavedStatusVisible, setSoftwareSavedStatusVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -196,9 +198,10 @@ export function ConfigPanelPage() {
     setSoftwareSettingsLoading(true);
     setSoftwareSavedStatusVisible(false);
     try {
-      const result = await invoke<GuiSettings>('get_gui_settings');
+      const result = await invoke<SoftwareSettings>('get_software_settings');
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
+      setSoftwareAutostartDraft(result.autostartEnabled);
     } catch (error) {
       setSoftwareSettings(null);
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
@@ -461,23 +464,32 @@ export function ConfigPanelPage() {
     }
   };
 
-  const saveSoftwareCloseBehavior = async () => {
+  const saveSoftwareSettings = async () => {
     if (!softwareSettings || busyAction !== null) return;
-    if (softwareCloseBehaviorDraft === softwareSettings.closeBehavior) return;
+    if (
+      softwareCloseBehaviorDraft === softwareSettings.closeBehavior
+      && softwareAutostartDraft === softwareSettings.autostartEnabled
+    ) return;
 
     setBusyAction('software');
     try {
-      const result = await invoke<GuiSettings>('save_app_close_behavior', {
-        behavior: softwareCloseBehaviorDraft,
+      const result = await invoke<SoftwareSettings>('save_software_settings', {
+        settings: {
+          closeBehavior: softwareCloseBehaviorDraft,
+          autostartEnabled: softwareAutostartDraft,
+        },
       });
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
+      setSoftwareAutostartDraft(result.autostartEnabled);
       setSoftwareSavedStatusVisible(true);
-      showNotice(t('config.notice.softwareCloseBehaviorUpdated'), 'success');
+      showNotice(t('config.notice.softwareUpdated'), 'success');
     } catch (error) {
       setSoftwareCloseBehaviorDraft(softwareSettings.closeBehavior);
+      setSoftwareAutostartDraft(softwareSettings.autostartEnabled);
       setSoftwareSavedStatusVisible(false);
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
+      void loadSoftwareSettings();
     } finally {
       setBusyAction(null);
     }
@@ -504,18 +516,21 @@ export function ConfigPanelPage() {
             : '';
   const softwareCloseBehaviorDirty = softwareSettings !== null
     && softwareCloseBehaviorDraft !== softwareSettings.closeBehavior;
+  const softwareAutostartDirty = softwareSettings !== null
+    && softwareAutostartDraft !== softwareSettings.autostartEnabled;
+  const softwareSettingsDirty = softwareCloseBehaviorDirty || softwareAutostartDirty;
   const softwareStatusLabel = softwareSettingsLoading
     ? t('common.loading')
     : softwareSettings === null
       ? t('common.unavailable')
-      : softwareCloseBehaviorDirty
+      : softwareSettingsDirty
         ? t('config.network.unsaved')
         : softwareSavedStatusVisible
           ? t('config.network.saved')
           : '';
   const softwareStatusIsSaved = !softwareSettingsLoading
     && softwareSettings !== null
-    && !softwareCloseBehaviorDirty
+    && !softwareSettingsDirty
     && softwareSavedStatusVisible;
   const networkStatusIsSaved = !loading
     && settings !== null
@@ -1033,8 +1048,8 @@ export function ConfigPanelPage() {
                 <button
                   type="button"
                   className="primary-button compact-button"
-                  disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null || !softwareCloseBehaviorDirty}
-                  onClick={() => void saveSoftwareCloseBehavior()}
+                  disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null || !softwareSettingsDirty}
+                  onClick={() => void saveSoftwareSettings()}
                 >
                   <Check size={16} aria-hidden="true" />
                   {busyAction === 'software' ? t('common.saving') : t('config.network.confirmSave')}
@@ -1042,25 +1057,60 @@ export function ConfigPanelPage() {
               </div>
             </div>
             <div className="config-software-content">
-              <div className="config-software-description">
-                <p>{t('config.software.description')}</p>
+              <div className="config-software-settings-list">
+                <div className="config-software-setting-row">
+                  <div className="config-software-setting-copy">
+                    <span className="config-software-setting-icon" aria-hidden="true">
+                      <Clock3 size={18} />
+                    </span>
+                    <div>
+                      <strong>{t('config.software.autostart')}</strong>
+                      <small>{t('config.software.autostartDescription')}</small>
+                    </div>
+                  </div>
+                  <label className="switch-control" title={t('config.software.autostart')}>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label={t('config.software.autostart')}
+                      checked={softwareAutostartDraft}
+                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
+                      onChange={(event) => {
+                        setSoftwareSavedStatusVisible(false);
+                        setSoftwareAutostartDraft(event.currentTarget.checked);
+                      }}
+                    />
+                    <span className="switch-track" />
+                  </label>
+                </div>
+                <div className="config-software-setting-row config-software-close-row">
+                  <div className="config-software-setting-copy">
+                    <span className="config-software-setting-icon" aria-hidden="true">
+                      <X size={18} />
+                    </span>
+                    <div>
+                      <strong>{t('config.software.closeBehavior')}</strong>
+                      <small>{t('config.software.closeBehaviorDescription')}</small>
+                    </div>
+                  </div>
+                  <label className="config-software-select">
+                    <span className="sr-only">{t('config.software.closeBehavior')}</span>
+                    <select
+                      className="config-network-input"
+                      value={softwareCloseBehaviorDraft}
+                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
+                      onChange={(event) => {
+                        setSoftwareSavedStatusVisible(false);
+                        setSoftwareCloseBehaviorDraft(event.currentTarget.value as CloseBehavior);
+                      }}
+                    >
+                      <option value="ask">{t('config.software.behavior.ask')}</option>
+                      <option value="minimize-to-tray">{t('config.software.behavior.minimize')}</option>
+                      <option value="exit">{t('config.software.behavior.exit')}</option>
+                    </select>
+                  </label>
+                </div>
               </div>
-              <label className="config-software-field">
-                <span>{t('config.software.closeBehavior')}</span>
-                <select
-                  className="config-network-input"
-                  value={softwareCloseBehaviorDraft}
-                  disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
-                  onChange={(event) => {
-                    setSoftwareSavedStatusVisible(false);
-                    setSoftwareCloseBehaviorDraft(event.currentTarget.value as CloseBehavior);
-                  }}
-                >
-                  <option value="ask">{t('config.software.behavior.ask')}</option>
-                  <option value="minimize-to-tray">{t('config.software.behavior.minimize')}</option>
-                  <option value="exit">{t('config.software.behavior.exit')}</option>
-                </select>
-              </label>
             </div>
           </section>
         </div>
