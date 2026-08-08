@@ -7155,6 +7155,9 @@ textarea:focus-visible {
 }
 
 .app-update-dialog {
+  grid-template-rows: none;
+  height: auto;
+  min-height: 0;
   gap: 16px;
 }
 
