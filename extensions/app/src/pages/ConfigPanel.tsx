@@ -62,6 +62,7 @@ type NetworkDraftDirty = Record<NetworkDraftField, boolean>;
 type SoftwareSettings = {
   closeBehavior: CloseBehavior;
   autostartEnabled: boolean;
+  silentStartEnabled: boolean;
 };
 
 const cleanNetworkDraft = (): NetworkDraftDirty => ({
@@ -85,6 +86,7 @@ export function ConfigPanelPage() {
   const [softwareSettingsLoading, setSoftwareSettingsLoading] = useState(true);
   const [softwareCloseBehaviorDraft, setSoftwareCloseBehaviorDraft] = useState<CloseBehavior>('ask');
   const [softwareAutostartDraft, setSoftwareAutostartDraft] = useState(false);
+  const [softwareSilentStartDraft, setSoftwareSilentStartDraft] = useState(false);
   const [softwareSavedStatusVisible, setSoftwareSavedStatusVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -202,6 +204,7 @@ export function ConfigPanelPage() {
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
       setSoftwareAutostartDraft(result.autostartEnabled);
+      setSoftwareSilentStartDraft(result.silentStartEnabled);
     } catch (error) {
       setSoftwareSettings(null);
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
@@ -469,6 +472,7 @@ export function ConfigPanelPage() {
     if (
       softwareCloseBehaviorDraft === softwareSettings.closeBehavior
       && softwareAutostartDraft === softwareSettings.autostartEnabled
+      && softwareSilentStartDraft === softwareSettings.silentStartEnabled
     ) return;
 
     setBusyAction('software');
@@ -477,16 +481,19 @@ export function ConfigPanelPage() {
         settings: {
           closeBehavior: softwareCloseBehaviorDraft,
           autostartEnabled: softwareAutostartDraft,
+          silentStartEnabled: softwareSilentStartDraft,
         },
       });
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
       setSoftwareAutostartDraft(result.autostartEnabled);
+      setSoftwareSilentStartDraft(result.silentStartEnabled);
       setSoftwareSavedStatusVisible(true);
       showNotice(t('config.notice.softwareUpdated'), 'success');
     } catch (error) {
       setSoftwareCloseBehaviorDraft(softwareSettings.closeBehavior);
       setSoftwareAutostartDraft(softwareSettings.autostartEnabled);
+      setSoftwareSilentStartDraft(softwareSettings.silentStartEnabled);
       setSoftwareSavedStatusVisible(false);
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
       void loadSoftwareSettings();
@@ -518,7 +525,11 @@ export function ConfigPanelPage() {
     && softwareCloseBehaviorDraft !== softwareSettings.closeBehavior;
   const softwareAutostartDirty = softwareSettings !== null
     && softwareAutostartDraft !== softwareSettings.autostartEnabled;
-  const softwareSettingsDirty = softwareCloseBehaviorDirty || softwareAutostartDirty;
+  const softwareSilentStartDirty = softwareSettings !== null
+    && softwareSilentStartDraft !== softwareSettings.silentStartEnabled;
+  const softwareSettingsDirty = softwareCloseBehaviorDirty
+    || softwareAutostartDirty
+    || softwareSilentStartDirty;
   const softwareStatusLabel = softwareSettingsLoading
     ? t('common.loading')
     : softwareSettings === null
@@ -1078,6 +1089,31 @@ export function ConfigPanelPage() {
                       onChange={(event) => {
                         setSoftwareSavedStatusVisible(false);
                         setSoftwareAutostartDraft(event.currentTarget.checked);
+                      }}
+                    />
+                    <span className="switch-track" />
+                  </label>
+                </div>
+                <div className="config-software-setting-row">
+                  <div className="config-software-setting-copy">
+                    <span className="config-software-setting-icon" aria-hidden="true">
+                      <EyeOff size={18} />
+                    </span>
+                    <div>
+                      <strong>{t('config.software.silentStart')}</strong>
+                      <small>{t('config.software.silentStartDescription')}</small>
+                    </div>
+                  </div>
+                  <label className="switch-control" title={t('config.software.silentStart')}>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label={t('config.software.silentStart')}
+                      checked={softwareSilentStartDraft}
+                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
+                      onChange={(event) => {
+                        setSoftwareSavedStatusVisible(false);
+                        setSoftwareSilentStartDraft(event.currentTarget.checked);
                       }}
                     />
                     <span className="switch-track" />

@@ -492,6 +492,7 @@ struct GuiConfigFile {
     allow_lan: bool,
     host: String,
     run_on_startup: bool,
+    silent_start: bool,
     close_behavior: WindowsCloseBehavior,
     window_width: Option<u32>,
     window_height: Option<u32>,
@@ -597,6 +598,7 @@ impl Default for GuiConfigFile {
             allow_lan: false,
             host: "127.0.0.1".to_string(),
             run_on_startup: false,
+            silent_start: false,
             close_behavior: WindowsCloseBehavior::Ask,
             window_width: Some(DEFAULT_MAIN_WINDOW_WIDTH),
             window_height: Some(DEFAULT_MAIN_WINDOW_HEIGHT),
@@ -628,6 +630,7 @@ struct GuiConfigPresence {
     api_access_remarks: Option<Vec<GuiApiAccessRemark>>,
     management_secret_key: Option<String>,
     close_behavior: Option<WindowsCloseBehavior>,
+    silent_start: Option<bool>,
     usage_statistics_enabled: Option<bool>,
     plugins_enabled: Option<bool>,
     routing_strategy: Option<String>,
@@ -650,6 +653,7 @@ struct GuiSettings {
 struct SoftwareSettings {
     close_behavior: WindowsCloseBehavior,
     autostart_enabled: bool,
+    silent_start_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -657,6 +661,7 @@ struct SoftwareSettings {
 struct SoftwareSettingsInput {
     close_behavior: WindowsCloseBehavior,
     autostart_enabled: bool,
+    silent_start_enabled: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -1390,6 +1395,18 @@ impl GuiConfigState {
         })
     }
 
+    fn set_software_preferences(
+        &self,
+        close_behavior: WindowsCloseBehavior,
+        silent_start: bool,
+    ) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.close_behavior = close_behavior;
+            config.silent_start = silent_start;
+            Ok(())
+        })
+    }
+
     fn set_locale(&self, locale: String) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.locale = normalize_app_locale(&locale).to_string();
@@ -1709,6 +1726,7 @@ fn software_settings(
     Ok(SoftwareSettings {
         close_behavior: config.close_behavior,
         autostart_enabled: app_autostart_enabled(app)?,
+        silent_start_enabled: config.silent_start,
     })
 }
 
@@ -1735,10 +1753,14 @@ fn save_software_settings(
         set_app_autostart_enabled(&app, settings.autostart_enabled)?;
     }
 
-    let config = if previous_config.close_behavior == settings.close_behavior {
+    let config = if previous_config.close_behavior == settings.close_behavior
+        && previous_config.silent_start == settings.silent_start_enabled
+    {
         previous_config
     } else {
-        match gui_config_state.set_close_behavior(settings.close_behavior) {
+        match gui_config_state
+            .set_software_preferences(settings.close_behavior, settings.silent_start_enabled)
+        {
             Ok(config) => config,
             Err(error) => {
                 let rollback_error = autostart_changed
@@ -15580,6 +15602,9 @@ fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     if presence.close_behavior.is_none() {
         changed = true;
     }
+    if presence.silent_start.is_none() {
+        changed = true;
+    }
     let management_secret_rotated = ensure_strong_management_secret(&mut config)?;
     changed |= management_secret_rotated;
     changed |= sanitize_gui_config(&mut config)?;
@@ -15901,6 +15926,7 @@ fn write_gui_config_to_path(config: &GuiConfigFile, config_path: &Path) -> Resul
         ("allow-lan", value(config.allow_lan)),
         ("host", value(config.host.as_str())),
         ("run-on-startup", value(config.run_on_startup)),
+        ("silent-start", value(config.silent_start)),
         ("close-behavior", value(config.close_behavior.as_str())),
         ("auth-dir", value(config.auth_dir.as_str())),
         (
@@ -16852,6 +16878,42 @@ fn core_binary_name() -> &'static str {
     } else {
         "cli-proxy-api"
     }
+}
+
+fn should_start_hidden(config: &GuiConfigFile) -> bool {
+    config.silent_start && cfg!(any(target_os = "windows", target_os = "macos"))
+}
+
+fn configure_initial_main_window(
+    app_handle: &tauri::AppHandle,
+    start_hidden: bool,
+) -> Result<(), String> {
+    let window = app_handle
+        .get_webview_window("main")
+        .ok_or_else(|| "主窗口不存在".to_string())?;
+
+    #[cfg(target_os = "macos")]
+    if !set_macos_dock_visible(!start_hidden) {
+        return Err("更新 Dock 图标状态失败".to_string());
+    }
+
+    if start_hidden {
+        return window
+            .hide()
+            .map_err(|error| format!("静默启动时隐藏主窗口失败: {error}"));
+    }
+
+    window
+        .show()
+        .map_err(|error| format!("显示主窗口失败: {error}"))?;
+    if window.is_minimized().unwrap_or(false) {
+        window
+            .unminimize()
+            .map_err(|error| format!("恢复主窗口失败: {error}"))?;
+    }
+    window
+        .set_focus()
+        .map_err(|error| format!("聚焦主窗口失败: {error}"))
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -18217,6 +18279,7 @@ fn main() {
         }
     };
     let initial_window_size = configured_window_size(&gui_config);
+    let start_hidden = should_start_hidden(&gui_config);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
@@ -18313,6 +18376,10 @@ fn main() {
             setup_macos_tray(app)?;
             #[cfg(target_os = "windows")]
             setup_windows_tray(app)?;
+
+            if let Err(error) = configure_initial_main_window(app.handle(), start_hidden) {
+                eprintln!("配置启动窗口状态失败: {error}");
+            }
 
             if let Err(error) = start_configuration_file_watcher(app.handle().clone()) {
                 eprintln!("启动配置文件监控失败: {error}");
@@ -19891,6 +19958,7 @@ model:
             port: 9527,
             host: "0.0.0.0".to_string(),
             allow_lan: true,
+            silent_start: true,
             auth_dir: path_to_string(&home.join("custom-auth")),
             management_secret_key: "custom-secret".to_string(),
             usage_statistics_enabled: false,
@@ -19904,6 +19972,7 @@ model:
         assert!(content.contains("[third-party]"));
         assert!(content.contains("port = 9527"));
         assert!(content.contains("host = \"0.0.0.0\""));
+        assert!(content.contains("silent-start = true"));
         assert!(content.contains("management-secret-key = \"custom-secret\""));
         assert!(content.contains("usage-statistics-enabled = false"));
         assert!(!content.contains("codex-session-repair-on-launch"));
@@ -19966,6 +20035,7 @@ model:
         assert!(content.contains("port = 8317"));
         assert!(content.contains("allow-lan = false"));
         assert!(content.contains("run-on-startup = false"));
+        assert!(content.contains("silent-start = false"));
         assert!(content.contains("close-behavior = \"ask\""));
         assert!(content.contains("window-width = 1531"));
         assert!(content.contains("window-height = 891"));
@@ -19997,6 +20067,22 @@ model:
                 width: 1440,
                 height: 900,
             })
+        );
+    }
+
+    #[test]
+    fn silent_start_defaults_off_and_requires_tray_support() {
+        let legacy = toml::from_str::<GuiConfigFile>("port = 8317\n").unwrap();
+        assert!(!legacy.silent_start);
+        assert!(!should_start_hidden(&legacy));
+
+        let enabled = GuiConfigFile {
+            silent_start: true,
+            ..GuiConfigFile::default()
+        };
+        assert_eq!(
+            should_start_hidden(&enabled),
+            cfg!(any(target_os = "windows", target_os = "macos"))
         );
     }
 
@@ -22813,6 +22899,7 @@ custom_option = "keep-original"
             allow_lan: true,
             host: "0.0.0.0".to_string(),
             run_on_startup: false,
+            silent_start: false,
             close_behavior: WindowsCloseBehavior::Ask,
             window_width: None,
             window_height: None,

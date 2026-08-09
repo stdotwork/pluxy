@@ -349,6 +349,8 @@ export const jaOverrides = {
   'config.software.title': 'ソフトウェア設定',
   'config.software.autostart': 'システム起動時に開始',
   'config.software.autostartDescription': 'サインイン後に EasyCLIProxyAPI を自動的に起動します',
+  'config.software.silentStart': 'サイレント起動',
+  'config.software.silentStartDescription': 'メインウィンドウを表示せず、システムトレイで直接起動します',
   'config.software.closeBehavior': '終了動作',
   'config.software.closeBehaviorDescription': 'ウィンドウを閉じたときにアプリを終了するか、システムトレイで実行を続けるかを選択します',
   'config.software.behavior.ask': '毎回確認',
