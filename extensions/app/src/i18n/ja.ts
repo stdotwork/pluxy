@@ -401,6 +401,7 @@ export const jaOverrides = {
   'authFiles.summary': 'ファイル {files} 件 · 無効 {disabled} 件',
   'common.refresh': '更新',
   'common.upload': 'アップロード',
+  'authFiles.import': 'インポート',
   'authFiles.searchPlaceholder': 'ファイル名、アカウント、プロバイダーを検索',
   'authFiles.filter.allProviders': 'すべてのプロバイダー',
   'authFiles.filter.allStatuses': 'すべての状態',

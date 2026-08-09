@@ -4,12 +4,12 @@ import {
   Copy,
   FileDown,
   FolderOpen,
+  Import,
   LoaderCircle,
   Pencil,
   RefreshCw,
   Search,
   Trash2,
-  Upload,
   X,
 } from 'lucide-react';
 import antigravityIcon from '../assets/icons/antigravity.svg';
@@ -478,7 +478,7 @@ export function AuthFileManagementPage() {
             <FolderOpen size={16} />{t('authFiles.openDirectory')}
           </button>
           <button type="button" className="primary-button compact-button" onClick={() => fileInputRef.current?.click()} disabled={busy}>
-            <Upload size={16} />{t('common.upload')}
+            <Import size={16} />{t('authFiles.import')}
           </button>
           <input ref={fileInputRef} type="file" accept=".json,application/json" multiple hidden onChange={(event) => void handleUpload(event)} />
         </div>
