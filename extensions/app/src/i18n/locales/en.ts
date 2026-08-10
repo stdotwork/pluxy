@@ -638,7 +638,7 @@ export const en: Record<MessageKey, string> = {
   'apiAccess.keys.summary': '{key} · {count} keys total',
   'apiAccess.remarkValue': 'Remark: {remark}',
   'apiAccess.defaultUrl': 'Using default address',
-  'apiAccess.models.summary': '{count} models · {models}',
+  'apiAccess.models.summary': '{count} models',
   'apiAccess.priorityValue': 'Priority {priority}',
   'apiAccess.enable': 'Enable connection',
   'apiAccess.disable': 'Disable connection',

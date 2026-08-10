@@ -638,7 +638,7 @@ export const jaOverrides = {
   'apiAccess.keys.summary': '{key} · 合計 {count} 件',
   'apiAccess.remarkValue': 'メモ：{remark}',
   'apiAccess.defaultUrl': '既定のアドレスを使用',
-  'apiAccess.models.summary': 'モデル {count} 件 · {models}',
+  'apiAccess.models.summary': 'モデル {count} 件',
   'apiAccess.priorityValue': '優先度 {priority}',
   'apiAccess.enable': '接続を有効化',
   'apiAccess.disable': '接続を無効化',

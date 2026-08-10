@@ -636,7 +636,7 @@ export const zhCN = {
   'apiAccess.keys.summary': '{key} · 共 {count} 个密钥',
   'apiAccess.remarkValue': '备注：{remark}',
   'apiAccess.defaultUrl': '使用默认地址',
-  'apiAccess.models.summary': '模型 {count} 个 · {models}',
+  'apiAccess.models.summary': '模型 {count} 个',
   'apiAccess.priorityValue': '优先级 {priority}',
   'apiAccess.enable': '启用接入',
   'apiAccess.disable': '停用接入',
