@@ -1,4 +1,4 @@
-import type { MessageKey } from './resources';
+import type { MessageKey } from './locales/zh-CN';
 
 export const jaOverrides = {
   'apiAccess.models.add': 'カスタムモデルを追加',
