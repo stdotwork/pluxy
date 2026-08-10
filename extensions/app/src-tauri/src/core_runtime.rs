@@ -1829,9 +1829,7 @@ pub(crate) fn configure_initial_main_window(
         .ok_or_else(|| "主窗口不存在".to_string())?;
 
     #[cfg(target_os = "macos")]
-    if !set_macos_dock_visible(!start_hidden) {
-        return Err("更新 Dock 图标状态失败".to_string());
-    }
+    set_macos_dock_visible(app_handle, !start_hidden);
 
     if start_hidden {
         return window
