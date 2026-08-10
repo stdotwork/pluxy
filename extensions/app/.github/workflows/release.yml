@@ -239,6 +239,7 @@ jobs:
           keychain_password="$(uuidgen)"
           signed_core_dir="$RUNNER_TEMP/signed-core"
           verification_dir="$RUNNER_TEMP/verify-bundled-core"
+          staging_dir="$RUNNER_TEMP/easycli-dmg-staging"
           bundle_dir="src-tauri/target/release/bundle"
           output_dmg="${{ steps.package.outputs.stem }}.dmg"
           mount_dir="$RUNNER_TEMP/easycli-dmg"
@@ -259,7 +260,7 @@ jobs:
               hdiutil detach "$mount_dir"
             fi
             rm -f "$certificate_path"
-            rm -rf "$mount_dir" "$signed_core_dir" "$verification_dir"
+            rm -rf "$mount_dir" "$signed_core_dir" "$verification_dir" "$staging_dir"
             security delete-keychain "$keychain_path"
           }
           trap cleanup EXIT
@@ -292,13 +293,27 @@ jobs:
           COPYFILE_DISABLE=1 tar -czf "$signed_archive" -C "$signed_core_dir" .
           mv "$signed_archive" "$core_archive"
 
+          # Build the notarized app with Tauri, then create the DMG with hdiutil.
+          # Tauri's generated create-dmg script is unreliable on GitHub's macOS runners.
           env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
-            bun tauri bundle --bundles dmg --ci --config src-tauri/tauri.dmg.conf.json
+            bun tauri bundle --bundles app --ci --config src-tauri/tauri.dmg.conf.json
 
-          dmg_path="$(find "$bundle_dir/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
-          test -n "$dmg_path"
-          mv "$dmg_path" "$output_dmg"
+          app_path="$bundle_dir/macos/EasyCLIProxyAPI.app"
+          test -d "$app_path"
+          xcrun stapler validate "$app_path"
+
+          rm -rf "$staging_dir"
+          mkdir -p "$staging_dir"
+          ditto "$app_path" "$staging_dir/EasyCLIProxyAPI.app"
+          ln -s /Applications "$staging_dir/Applications"
+          hdiutil create \
+            -volname "EasyCLIProxyAPI" \
+            -srcfolder "$staging_dir" \
+            -format UDZO \
+            -ov \
+            "$output_dmg"
           test -s "$output_dmg"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" --keychain "$keychain_path" "$output_dmg"
           codesign --verify --strict --verbose=2 "$output_dmg"
           xcrun notarytool submit "$output_dmg" \
             --apple-id "$APPLE_ID" \
