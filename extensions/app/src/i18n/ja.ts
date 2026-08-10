@@ -1,4 +1,4 @@
-import type { MessageKey } from './resources';
+import type { MessageKey } from './locales/zh-CN';
 
 export const jaOverrides = {
   'apiAccess.models.add': 'カスタムモデルを追加',
@@ -568,14 +568,16 @@ export const jaOverrides = {
   'agents.modify.title': '設定変更',
   'agents.modify.oauthConfiguration': 'OAuth ログイン設定方式',
   'agents.claudeDesktopMapping.title': 'Claude Desktop モデル → 上流モデル',
-  'agents.claudeDesktopMapping.description': '各 Claude Desktop モデルが実際に呼び出す上流モデルを選択します。',
+  'agents.claudeDesktopMapping.description': '役割ごとに上流モデルとコンテキスト機能を選択します。対応モデルでのみ 1M を有効にしてください。',
   'agents.claudeCodeMapping.title': 'Claude Code モデル → 上流モデル',
-  'agents.claudeCodeMapping.description': '各タスク役割に対して使用する上流モデルを選択します。',
-  'agents.claudeDesktopMapping.customMapping': 'カスタムマッピング',
+  'agents.claudeCodeMapping.description': 'タスク役割ごとに上流モデルとコンテキスト機能を選択します。対応モデルでのみ 1M を有効にしてください。',
+  'agents.claudeDesktopMapping.customMapping': 'モデルエイリアスを使用',
   'agents.claudeDesktopMapping.customMappingHint': '有効にするとエイリアスモデルのみ、無効にするとエイリアス未設定の元モデルのみ表示します。',
-  'agents.claudeDesktopMapping.opus': 'Claude Opus 5 のマッピング先',
-  'agents.claudeDesktopMapping.sonnet': 'Claude Sonnet 4.6 のマッピング先',
-  'agents.claudeDesktopMapping.haiku': 'Claude Haiku 4.5 のマッピング先',
+  'agents.claudeDesktopMapping.opus': 'Claude Opus 5',
+  'agents.claudeDesktopMapping.sonnet': 'Claude Sonnet 4.6',
+  'agents.claudeDesktopMapping.haiku': 'Claude Haiku 4.5',
+  'agents.claudeMapping.context1m': '1M',
+  'agents.claudeMapping.context1mHint': '1M コンテキストとして設定します。選択した上流モデルが対応していることを確認してください。',
   'agents.oauthLoginRequired.title': 'Codex へのログインが必要です',
   'agents.oauthLoginRequired.enableDescription': '有効な Codex のログイン認証情報が見つからないため、OAuth 設定方式を有効にできません。Codex アプリで ChatGPT アカウントにログインしてください。Codex アプリでログインを開始できない場合は、先に',
   'agents.oauthLoginRequired.enableClearConfiguration': '設定を消去',
@@ -638,7 +640,7 @@ export const jaOverrides = {
   'apiAccess.keys.summary': '{key} · 合計 {count} 件',
   'apiAccess.remarkValue': 'メモ：{remark}',
   'apiAccess.defaultUrl': '既定のアドレスを使用',
-  'apiAccess.models.summary': 'モデル {count} 件 · {models}',
+  'apiAccess.models.summary': 'モデル {count} 件',
   'apiAccess.priorityValue': '優先度 {priority}',
   'apiAccess.enable': '接続を有効化',
   'apiAccess.disable': '接続を無効化',

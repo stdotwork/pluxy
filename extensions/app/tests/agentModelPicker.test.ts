@@ -123,6 +123,32 @@ describe('agent configuration update action', () => {
     })).toBe('update');
   });
 
+  test.each<AgentConfigurationClientId>(['claude-code', 'claude-desktop'])(
+    '%s updates when only a 1M preference changes',
+    (client) => {
+      expect(resolveAgentConfigurationAction({
+        client,
+        modificationState: 'applied',
+        selectedModel: 'model-a',
+        appliedModel: 'model-a',
+        oauthConfiguration: false,
+        appliedOauthConfiguration: false,
+        modelMappings: {
+          opus: 'model-a',
+          sonnet: 'model-a',
+          haiku: 'model-a',
+          opus1m: true,
+        },
+        appliedModelMappings: {
+          opus: 'model-a',
+          sonnet: 'model-a',
+          haiku: 'model-a',
+          opus1m: false,
+        },
+      })).toBe('update');
+    },
+  );
+
   test('Pi never exposes the model update action', () => {
     expect(appliedConfiguration('pi', 'model-b')).toBe('close');
   });

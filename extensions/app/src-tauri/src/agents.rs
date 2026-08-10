@@ -1,0 +1,12 @@
+//! Agent client discovery, configuration generation, and reversible state management.
+
+use super::*;
+
+mod commands;
+mod configuration;
+mod discovery;
+mod state;
+pub(crate) use commands::*;
+pub(crate) use configuration::*;
+pub(crate) use discovery::*;
+pub(crate) use state::*;

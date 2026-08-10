@@ -101,6 +101,9 @@ type ClaudeModelMappings = {
   opus: string;
   sonnet: string;
   haiku: string;
+  opus1m: boolean;
+  sonnet1m: boolean;
+  haiku1m: boolean;
 };
 
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR = 'CODEX_OAUTH_LOGIN_REQUIRED';
@@ -109,19 +112,25 @@ const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
   opus: model,
   sonnet: model,
   haiku: model,
+  opus1m: false,
+  sonnet1m: false,
+  haiku1m: false,
 });
 
 const claudeMappingRoles = [
   {
     key: 'opus',
+    contextKey: 'opus1m',
     labelKey: 'agents.claudeDesktopMapping.opus',
   },
   {
     key: 'sonnet',
+    contextKey: 'sonnet1m',
     labelKey: 'agents.claudeDesktopMapping.sonnet',
   },
   {
     key: 'haiku',
+    contextKey: 'haiku1m',
     labelKey: 'agents.claudeDesktopMapping.haiku',
   },
 ] as const;
@@ -719,6 +728,9 @@ export function AgentsPage() {
         opus: findAgentModel(models, source.opus)?.name ?? selectedModel,
         sonnet: findAgentModel(models, source.sonnet)?.name ?? selectedModel,
         haiku: findAgentModel(models, source.haiku)?.name ?? selectedModel,
+        opus1m: Boolean(source.opus1m),
+        sonnet1m: Boolean(source.sonnet1m),
+        haiku1m: Boolean(source.haiku1m),
       };
       return sameAgentModelMappings(current, next) ? current : next;
     });
@@ -809,7 +821,7 @@ export function AgentsPage() {
   };
 
   const selectClaudeModelMapping = (
-    role: keyof ClaudeModelMappings,
+    role: 'opus' | 'sonnet' | 'haiku',
     value: string,
   ) => {
     const model = findAgentModel(models, value);
@@ -817,6 +829,14 @@ export function AgentsPage() {
     claudeModelMappingsDirtyRef.current = true;
     setModelSelectionError('');
     setClaudeModelMappingsDraft((current) => ({ ...current, [role]: model.name }));
+  };
+
+  const changeClaude1mPreference = (
+    preference: 'opus1m' | 'sonnet1m' | 'haiku1m',
+    enabled: boolean,
+  ) => {
+    claudeModelMappingsDirtyRef.current = true;
+    setClaudeModelMappingsDraft((current) => ({ ...current, [preference]: enabled }));
   };
 
   const changeClaudeCustomMapping = (enabled: boolean) => {
@@ -827,6 +847,9 @@ export function AgentsPage() {
         opus: resolveAgentModelForAliasMode(models, current.opus, enabled),
         sonnet: resolveAgentModelForAliasMode(models, current.sonnet, enabled),
         haiku: resolveAgentModelForAliasMode(models, current.haiku, enabled),
+        opus1m: current.opus1m,
+        sonnet1m: current.sonnet1m,
+        haiku1m: current.haiku1m,
       };
       if (!sameAgentModelMappings(current, next)) {
         claudeModelMappingsDirtyRef.current = true;
@@ -863,6 +886,7 @@ export function AgentsPage() {
         return null;
       }
       resolved[role.key] = model.name;
+      resolved[role.contextKey] = claudeModelMappingsDraft[role.contextKey];
     }
     return resolved;
   };
@@ -1270,7 +1294,27 @@ export function AgentsPage() {
                   <div className="agent-claude-desktop-mapping-grid">
                     {claudeMappingRoles.map((role) => (
                       <div className="agent-claude-desktop-mapping-row" key={role.key}>
-                        <strong>{t(role.labelKey)}</strong>
+                        <div className="agent-claude-mapping-card-heading">
+                          <strong>{t(role.labelKey)}</strong>
+                          <label
+                            className="agent-claude-context-toggle"
+                            title={t('agents.claudeMapping.context1mHint')}
+                          >
+                            <span>{t('agents.claudeMapping.context1m')}</span>
+                            <span className="switch-control">
+                              <input
+                                type="checkbox"
+                                checked={claudeModelMappingsDraft[role.contextKey]}
+                                onChange={(event) => changeClaude1mPreference(
+                                  role.contextKey,
+                                  event.currentTarget.checked,
+                                )}
+                                disabled={busy || modelLoading}
+                              />
+                              <span className="switch-track" />
+                            </span>
+                          </label>
+                        </div>
                         <AgentModelPicker
                           models={claudeMappingModels}
                           value={claudeModelMappingsDraft[role.key]}

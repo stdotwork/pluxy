@@ -1043,7 +1043,7 @@ export function ApiAccessPage() {
                         : maskSecret(row.apiKey)}
                     </code>
                     <span className="provider-row-url" title={row.baseUrl || undefined}>{row.baseUrl || t('apiAccess.defaultUrl')}</span>
-                    {row.models.length > 0 ? <span className="provider-row-models" title={row.models.map((model) => model.name).join(', ')}>{t('apiAccess.models.summary', { count: row.models.length, models: row.models.slice(0, 3).map((model) => model.name).join(', ') })}</span> : null}
+                    {row.models.length > 0 ? <span className="provider-row-models">{t('apiAccess.models.summary', { count: row.models.length })}</span> : null}
                   </div>
                   {row.priority === null ? null : (
                     <div className="provider-row-meta">

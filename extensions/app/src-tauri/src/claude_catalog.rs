@@ -11,7 +11,6 @@ struct ClaudeCatalog {
     fallback_context_window: u64,
     context_windows: HashMap<String, u64>,
     display_names: HashMap<String, String>,
-    claude_code_1m_models: HashSet<String>,
     claude_code_effort_levels: HashMap<String, String>,
 }
 
@@ -34,13 +33,6 @@ pub(crate) fn display_name_for(model_name: &str) -> Result<Option<String>, Strin
         .display_names
         .get(&normalize_id(model_name))
         .cloned())
-}
-
-pub(crate) fn supports_claude_code_1m(model_name: &str) -> Result<bool, String> {
-    let catalog = catalog_state()?;
-    Ok(catalog
-        .claude_code_1m_models
-        .contains(&normalize_id(model_name)))
 }
 
 pub(crate) fn claude_code_effort_level_for(model_name: &str) -> Result<Option<String>, String> {
@@ -78,7 +70,6 @@ fn parse_catalog(content: &str) -> Result<ClaudeCatalog, String> {
         .ok_or_else(|| "内置 Claude model-catalog.json 必须包含 models 数组".to_string())?;
     let mut context_windows = HashMap::with_capacity(models.len());
     let mut display_names = HashMap::with_capacity(models.len());
-    let mut claude_code_1m_models = HashSet::with_capacity(models.len());
     let mut claude_code_effort_levels = HashMap::with_capacity(models.len());
     let mut model_ids = HashSet::with_capacity(models.len());
     for (index, model) in models.iter().enumerate() {
@@ -116,13 +107,6 @@ fn parse_catalog(content: &str) -> Result<ClaudeCatalog, String> {
         {
             display_names.insert(key.clone(), display_name.to_string());
         }
-        if model
-            .get("claude_code_1m")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            claude_code_1m_models.insert(key.clone());
-        }
         if let Some(effort_level) = model
             .get("claude_code_effort_level")
             .and_then(Value::as_str)
@@ -136,7 +120,6 @@ fn parse_catalog(content: &str) -> Result<ClaudeCatalog, String> {
         fallback_context_window,
         context_windows,
         display_names,
-        claude_code_1m_models,
         claude_code_effort_levels,
     })
 }
@@ -163,18 +146,15 @@ mod tests {
     use super::{parse_catalog, MODEL_CATALOG_JSON};
 
     #[test]
-    fn bundled_catalog_marks_deepseek_v4_as_1m() {
+    fn bundled_catalog_describes_deepseek_v4() {
         let catalog = parse_catalog(MODEL_CATALOG_JSON).unwrap();
         assert_eq!(catalog.context_windows["deepseek-v4-flash"], 1_000_000);
         assert_eq!(catalog.context_windows["deepseek-v4-pro"], 1_000_000);
-        assert!(catalog.claude_code_1m_models.contains("deepseek-v4-flash"));
-        assert!(catalog.claude_code_1m_models.contains("deepseek-v4-pro"));
         assert_eq!(
             catalog.claude_code_effort_levels["deepseek-v4-flash"],
             "max"
         );
         assert_eq!(catalog.claude_code_effort_levels["deepseek-v4-pro"], "max");
-        assert!(!catalog.claude_code_1m_models.contains("gpt-5.6-luna"));
         assert_eq!(
             catalog.display_names["deepseek-v4-flash"],
             "DeepSeek V4 Flash"
@@ -191,7 +171,6 @@ mod tests {
                     "slug": "gpt-test",
                     "display_name": "GPT Test",
                     "context_window": 272000,
-                    "claude_code_1m": true,
                     "claude_code_effort_level": "max"
                 }]
             }"#,
@@ -199,7 +178,6 @@ mod tests {
         .unwrap();
         assert_eq!(catalog.context_windows["gpt-test"], 272000);
         assert_eq!(catalog.display_names["gpt-test"], "GPT Test");
-        assert!(catalog.claude_code_1m_models.contains("gpt-test"));
         assert_eq!(catalog.claude_code_effort_levels["gpt-test"], "max");
     }
 
@@ -229,7 +207,6 @@ mod tests {
         .unwrap();
         assert!(catalog.context_windows.is_empty());
         assert!(catalog.display_names.is_empty());
-        assert!(catalog.claude_code_1m_models.is_empty());
         assert!(catalog.claude_code_effort_levels.is_empty());
     }
 }
