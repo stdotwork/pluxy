@@ -67,10 +67,8 @@ fn claude_code_inspection_normalizes_1m_suffix() {
 
 #[test]
 fn claude_mapping_legacy_json_defaults_1m_preferences_off() {
-    let mappings: ClaudeDesktopModelMappings = serde_json::from_str(
-        r#"{"opus":"model-a","sonnet":"model-b","haiku":"model-c"}"#,
-    )
-    .unwrap();
+    let mappings: ClaudeDesktopModelMappings =
+        serde_json::from_str(r#"{"opus":"model-a","sonnet":"model-b","haiku":"model-c"}"#).unwrap();
 
     assert!(!mappings.opus_1m);
     assert!(!mappings.sonnet_1m);
