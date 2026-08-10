@@ -1743,28 +1743,38 @@ pub(crate) fn inspect_claude_code_model_mappings(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let read_model = |key: &str| {
-        env.get(key)
+        let value = env.get(key)
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .or(fallback)
-            .map(strip_claude_code_context_suffix)
-            .map(str::to_string)
+            .or(fallback)?;
+        Some((
+            strip_claude_code_context_suffix(value).to_string(),
+            has_claude_code_context_suffix(value),
+        ))
     };
-    let Some(opus) = read_model("ANTHROPIC_DEFAULT_OPUS_MODEL") else {
+    let Some((opus, opus_1m)) = read_model("ANTHROPIC_DEFAULT_OPUS_MODEL") else {
         return Ok(None);
     };
-    let Some(sonnet) = read_model("ANTHROPIC_DEFAULT_SONNET_MODEL") else {
+    let Some((sonnet, sonnet_1m)) = read_model("ANTHROPIC_DEFAULT_SONNET_MODEL") else {
         return Ok(None);
     };
-    let Some(haiku) = read_model("ANTHROPIC_DEFAULT_HAIKU_MODEL") else {
+    let Some((haiku, haiku_1m)) = read_model("ANTHROPIC_DEFAULT_HAIKU_MODEL") else {
         return Ok(None);
     };
     Ok(Some(ClaudeDesktopModelMappings {
         opus,
         sonnet,
         haiku,
+        opus_1m,
+        sonnet_1m,
+        haiku_1m,
     }))
+}
+
+pub(crate) fn has_claude_code_context_suffix(value: &str) -> bool {
+    let value = value.trim();
+    value.len() >= 4 && value[value.len() - 4..].eq_ignore_ascii_case("[1m]")
 }
 
 pub(crate) fn strip_claude_code_context_suffix(value: &str) -> &str {
@@ -1826,18 +1836,35 @@ pub(crate) fn agent_model_context_window(
         .or(Some(DEFAULT_CLAUDE_CONTEXT_WINDOW))
 }
 
+pub(crate) fn claude_effective_context_window(
+    models: &[AgentModelOption],
+    model_name: &str,
+    enable_1m: bool,
+) -> Option<u64> {
+    let context_window = agent_model_context_window(models, model_name);
+    if enable_1m {
+        return Some(
+            context_window
+                .unwrap_or(DEFAULT_CLAUDE_CONTEXT_WINDOW)
+                .max(CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW),
+        );
+    }
+    context_window.map(|context_window| {
+        if context_window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW {
+            DEFAULT_CLAUDE_CONTEXT_WINDOW
+        } else {
+            context_window
+        }
+    })
+}
+
 pub(crate) fn claude_code_max_context_tokens(
     mappings: &ClaudeDesktopModelMappings,
     models: &[AgentModelOption],
 ) -> Result<u64, String> {
     let model = mappings.sonnet.as_str();
-    let context_window = agent_model_context_window(models, model)
+    let context_window = claude_effective_context_window(models, model, mappings.sonnet_1m)
         .ok_or_else(|| format!("CPA 模型 API 未返回 Claude Code 主模型 {model} 的上下文窗口"))?;
-    if context_window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW
-        && !claude_code_model_supports_1m(models, model)?
-    {
-        return Ok(DEFAULT_CLAUDE_CONTEXT_WINDOW);
-    }
     Ok(context_window)
 }
 
@@ -1859,13 +1886,6 @@ pub(crate) fn agent_model_display_name<'a>(
     }
 }
 
-pub(crate) fn claude_code_model_supports_1m(
-    models: &[AgentModelOption],
-    model_name: &str,
-) -> Result<bool, String> {
-    claude_catalog::supports_claude_code_1m(agent_model_source_name(models, model_name))
-}
-
 pub(crate) fn claude_code_model_effort_level(
     models: &[AgentModelOption],
     model_name: &str,
@@ -1874,27 +1894,28 @@ pub(crate) fn claude_code_model_effort_level(
 }
 
 pub(crate) fn claude_code_model_setting(
-    models: &[AgentModelOption],
     model_name: &str,
     enable_1m_variant: bool,
-) -> Result<String, String> {
+) -> String {
     let model_name = strip_claude_code_context_suffix(model_name);
-    if enable_1m_variant && claude_code_model_supports_1m(models, model_name)? {
-        Ok(format!("{model_name}[1m]"))
+    if enable_1m_variant {
+        format!("{model_name}[1m]")
     } else {
-        Ok(model_name.to_string())
+        model_name.to_string()
     }
 }
 
 pub(crate) fn claude_code_model_settings(
     mappings: &ClaudeDesktopModelMappings,
-    models: &[AgentModelOption],
-) -> Result<ClaudeDesktopModelMappings, String> {
-    Ok(ClaudeDesktopModelMappings {
-        opus: claude_code_model_setting(models, &mappings.opus, true)?,
-        sonnet: claude_code_model_setting(models, &mappings.sonnet, true)?,
-        haiku: claude_code_model_setting(models, &mappings.haiku, false)?,
-    })
+) -> ClaudeDesktopModelMappings {
+    ClaudeDesktopModelMappings {
+        opus: claude_code_model_setting(&mappings.opus, mappings.opus_1m),
+        sonnet: claude_code_model_setting(&mappings.sonnet, mappings.sonnet_1m),
+        haiku: claude_code_model_setting(&mappings.haiku, mappings.haiku_1m),
+        opus_1m: mappings.opus_1m,
+        sonnet_1m: mappings.sonnet_1m,
+        haiku_1m: mappings.haiku_1m,
+    }
 }
 
 pub(crate) fn format_context_window(context_window: u64) -> String {
@@ -1910,11 +1931,12 @@ pub(crate) fn format_context_window(context_window: u64) -> String {
 pub(crate) fn claude_code_model_presentation(
     models: &[AgentModelOption],
     model_name: &str,
+    enable_1m: bool,
     role: Option<&str>,
 ) -> (String, String) {
     let display_name = agent_model_display_name(models, model_name);
-    let context_window =
-        agent_model_context_window(models, model_name).unwrap_or(DEFAULT_CLAUDE_CONTEXT_WINDOW);
+    let context_window = claude_effective_context_window(models, model_name, enable_1m)
+        .unwrap_or(DEFAULT_CLAUDE_CONTEXT_WINDOW);
     let context_label = format_context_window(context_window);
     let name = match role {
         Some(role) => format!("{display_name} ({role}, {context_label} context)"),
@@ -1928,12 +1950,37 @@ pub(crate) fn claude_code_model_presentation_environment(
     mappings: &ClaudeDesktopModelMappings,
     models: &[AgentModelOption],
 ) -> Result<Vec<(String, String)>, String> {
-    let opus = claude_code_model_presentation(models, &mappings.opus, Some("Opus mapping"));
-    let sonnet = claude_code_model_presentation(models, &mappings.sonnet, Some("Sonnet mapping"));
-    let haiku = claude_code_model_presentation(models, &mappings.haiku, Some("Haiku mapping"));
-    let fable = claude_code_model_presentation(models, &mappings.sonnet, Some("Fable mapping"));
-    let custom = claude_code_model_presentation(models, &mappings.sonnet, None);
-    let custom_model = claude_code_model_setting(models, &mappings.sonnet, true)?;
+    let opus = claude_code_model_presentation(
+        models,
+        &mappings.opus,
+        mappings.opus_1m,
+        Some("Opus mapping"),
+    );
+    let sonnet = claude_code_model_presentation(
+        models,
+        &mappings.sonnet,
+        mappings.sonnet_1m,
+        Some("Sonnet mapping"),
+    );
+    let haiku = claude_code_model_presentation(
+        models,
+        &mappings.haiku,
+        mappings.haiku_1m,
+        Some("Haiku mapping"),
+    );
+    let fable = claude_code_model_presentation(
+        models,
+        &mappings.sonnet,
+        mappings.sonnet_1m,
+        Some("Fable mapping"),
+    );
+    let custom = claude_code_model_presentation(
+        models,
+        &mappings.sonnet,
+        mappings.sonnet_1m,
+        None,
+    );
+    let custom_model = claude_code_model_setting(&mappings.sonnet, mappings.sonnet_1m);
     Ok([
         ("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", opus.0),
         ("ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION", opus.1),

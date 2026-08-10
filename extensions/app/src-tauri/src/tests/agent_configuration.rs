@@ -59,7 +59,22 @@ fn claude_code_inspection_normalizes_1m_suffix() {
     assert_eq!(mappings.opus, "deepseek-v4-pro");
     assert_eq!(mappings.sonnet, "deepseek-v4-pro");
     assert_eq!(mappings.haiku, "deepseek-v4-flash");
+    assert!(mappings.opus_1m);
+    assert!(mappings.sonnet_1m);
+    assert!(!mappings.haiku_1m);
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn claude_mapping_legacy_json_defaults_1m_preferences_off() {
+    let mappings: ClaudeDesktopModelMappings = serde_json::from_str(
+        r#"{"opus":"model-a","sonnet":"model-b","haiku":"model-c"}"#,
+    )
+    .unwrap();
+
+    assert!(!mappings.opus_1m);
+    assert!(!mappings.sonnet_1m);
+    assert!(!mappings.haiku_1m);
 }
 
 #[test]
@@ -68,6 +83,9 @@ fn claude_code_role_mappings_drive_settings() {
         opus: "gpt-opus".to_string(),
         sonnet: "gpt-sonnet".to_string(),
         haiku: "gpt-haiku".to_string(),
+        opus_1m: false,
+        sonnet_1m: false,
+        haiku_1m: false,
     };
     let models = vec![
         AgentModelOption {
@@ -122,6 +140,9 @@ fn claude_code_deepseek_picker_shows_catalog_name_and_1m_context() {
         opus: "deepseek-v4-pro".to_string(),
         sonnet: "deepseek-v4-pro".to_string(),
         haiku: "deepseek-v4-flash".to_string(),
+        opus_1m: true,
+        sonnet_1m: true,
+        haiku_1m: false,
     };
     let models = vec![
         AgentModelOption {
@@ -189,7 +210,7 @@ fn claude_code_deepseek_picker_shows_catalog_name_and_1m_context() {
 }
 
 #[test]
-fn claude_code_1m_suffix_requires_explicit_catalog_support() {
+fn claude_code_1m_suffix_follows_user_preference() {
     let models = vec![
         AgentModelOption {
             name: "deepseek-v4-flash".to_string(),
@@ -206,16 +227,16 @@ fn claude_code_1m_suffix_requires_explicit_catalog_support() {
     ];
 
     assert_eq!(
-        claude_code_model_setting(&models, "deepseek-v4-flash", true).unwrap(),
+        claude_code_model_setting("deepseek-v4-flash", true),
         "deepseek-v4-flash[1m]"
     );
     assert_eq!(
-        claude_code_model_setting(&models, "deepseek-v4-flash", false).unwrap(),
+        claude_code_model_setting("deepseek-v4-flash", false),
         "deepseek-v4-flash"
     );
     assert_eq!(
-        claude_code_model_setting(&models, "gpt-runtime-1m", true).unwrap(),
-        "gpt-runtime-1m"
+        claude_code_model_setting("gpt-runtime-1m", true),
+        "gpt-runtime-1m[1m]"
     );
     assert_eq!(
             claude_code_max_context_tokens(
@@ -233,6 +254,9 @@ fn claude_code_context_window_follows_primary_model_alias_source() {
         opus: "small-model".to_string(),
         sonnet: "primary-alias".to_string(),
         haiku: "large-model".to_string(),
+        opus_1m: false,
+        sonnet_1m: false,
+        haiku_1m: false,
     };
     let models = vec![
         AgentModelOption {
@@ -507,6 +531,9 @@ fn claude_desktop_profile_keeps_non_claude_models_internal() {
         opus: "gpt-5.6-sol".to_string(),
         sonnet: "gpt-5.6".to_string(),
         haiku: "gpt-5.6-mini".to_string(),
+        opus_1m: true,
+        sonnet_1m: false,
+        haiku_1m: true,
     };
     let models = vec![
         AgentModelOption {
@@ -830,6 +857,9 @@ fn claude_desktop_aliases_expose_role_routes_only() {
         opus: "gpt-5.6-sol".to_string(),
         sonnet: "gpt-5.6-sol".to_string(),
         haiku: "gpt-5.6-sol".to_string(),
+        opus_1m: false,
+        sonnet_1m: false,
+        haiku_1m: false,
     };
     let available_models = test_agent_models(&["gpt-5.6-sol"]);
     let rendered =
@@ -960,6 +990,9 @@ fn claude_desktop_uses_selected_alias_directly_with_original_context() {
         opus: "gpt-high".to_string(),
         sonnet: "gpt-high".to_string(),
         haiku: "gpt-high".to_string(),
+        opus_1m: false,
+        sonnet_1m: true,
+        haiku_1m: false,
     };
     let models = vec![
         AgentModelOption {
@@ -1024,6 +1057,9 @@ fn claude_desktop_role_mappings_can_use_different_available_models() {
             opus: "gpt-5.6-sol".to_string(),
             sonnet: "deepseek-chat".to_string(),
             haiku: "gemini-3-pro".to_string(),
+            opus_1m: true,
+            sonnet_1m: false,
+            haiku_1m: true,
         }),
     )
     .unwrap()
@@ -1032,6 +1068,9 @@ fn claude_desktop_role_mappings_can_use_different_available_models() {
     assert_eq!(mappings.opus, "gpt-5.6-sol");
     assert_eq!(mappings.sonnet, "deepseek-chat");
     assert_eq!(mappings.haiku, "gemini-3-pro");
+    assert!(mappings.opus_1m);
+    assert!(!mappings.sonnet_1m);
+    assert!(mappings.haiku_1m);
     assert!(resolve_claude_desktop_model_mappings(
         AgentClient::ClaudeCode,
         &models,

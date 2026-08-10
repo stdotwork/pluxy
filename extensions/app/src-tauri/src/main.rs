@@ -782,6 +782,12 @@ struct ClaudeDesktopModelMappings {
     opus: String,
     sonnet: String,
     haiku: String,
+    #[serde(default)]
+    opus_1m: bool,
+    #[serde(default)]
+    sonnet_1m: bool,
+    #[serde(default)]
+    haiku_1m: bool,
 }
 
 impl ClaudeDesktopModelMappings {
@@ -790,6 +796,9 @@ impl ClaudeDesktopModelMappings {
             opus: model.to_string(),
             sonnet: model.to_string(),
             haiku: model.to_string(),
+            opus_1m: false,
+            sonnet_1m: false,
+            haiku_1m: false,
         }
     }
 }

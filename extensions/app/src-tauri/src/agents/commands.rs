@@ -674,6 +674,9 @@ pub(crate) fn resolve_claude_desktop_model_mappings(
         opus: resolve(&requested.opus)?,
         sonnet: resolve(&requested.sonnet)?,
         haiku: resolve(&requested.haiku)?,
+        opus_1m: requested.opus_1m,
+        sonnet_1m: requested.sonnet_1m,
+        haiku_1m: requested.haiku_1m,
     }))
 }
 
@@ -693,6 +696,9 @@ pub(crate) fn resolve_claude_code_model_mappings(
         opus: resolve(&requested.opus)?,
         sonnet: resolve(&requested.sonnet)?,
         haiku: resolve(&requested.haiku)?,
+        opus_1m: requested.opus_1m,
+        sonnet_1m: requested.sonnet_1m,
+        haiku_1m: requested.haiku_1m,
     }))
 }
 

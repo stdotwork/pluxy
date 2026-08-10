@@ -15,6 +15,9 @@ export type AgentModelMappings = {
   opus: string;
   sonnet: string;
   haiku: string;
+  opus1m?: boolean;
+  sonnet1m?: boolean;
+  haiku1m?: boolean;
 };
 
 type ResolveAgentConfigurationActionOptions = {
@@ -39,7 +42,10 @@ export const sameAgentModelMappings = (
   right: AgentModelMappings,
 ) => sameAgentModel(left.opus, right.opus)
   && sameAgentModel(left.sonnet, right.sonnet)
-  && sameAgentModel(left.haiku, right.haiku);
+  && sameAgentModel(left.haiku, right.haiku)
+  && Boolean(left.opus1m) === Boolean(right.opus1m)
+  && Boolean(left.sonnet1m) === Boolean(right.sonnet1m)
+  && Boolean(left.haiku1m) === Boolean(right.haiku1m);
 
 export function resolveAgentConfigurationAction({
   client,

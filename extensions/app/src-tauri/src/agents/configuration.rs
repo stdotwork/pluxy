@@ -221,9 +221,9 @@ pub(crate) fn build_claude_agent_config(
         .cloned()
         .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
     let max_context_tokens = claude_code_max_context_tokens(&mappings, models)?;
-    let use_max_context_override = !claude_code_model_supports_1m(models, &mappings.sonnet)?;
-    let model_settings = claude_code_model_settings(&mappings, models)?;
-    let subagent_model = strip_claude_code_context_suffix(&mappings.haiku).to_string();
+    let use_max_context_override = !mappings.sonnet_1m;
+    let model_settings = claude_code_model_settings(&mappings);
+    let subagent_model = model_settings.haiku.clone();
     let effort_level = claude_code_model_effort_level(models, &mappings.sonnet)?;
     let env = ensure_json_object_entry(root, "env");
     env.remove("ANTHROPIC_API_KEY");
@@ -398,21 +398,48 @@ pub(crate) fn build_claude_desktop_profile(
     let mappings = mappings
         .cloned()
         .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
-    let mut inference_models = vec![
-        claude_desktop_inference_model(CLAUDE_DESKTOP_OPUS_MODEL_ID, &mappings.opus, models),
-        claude_desktop_inference_model(CLAUDE_DESKTOP_SONNET_MODEL_ID, &mappings.sonnet, models),
-        claude_desktop_inference_model(CLAUDE_DESKTOP_HAIKU_MODEL_ID, &mappings.haiku, models),
+    let inference_models = vec![
+        claude_desktop_inference_model(
+            CLAUDE_DESKTOP_OPUS_MODEL_ID,
+            &mappings.opus,
+            mappings.opus_1m,
+            models,
+        ),
+        claude_desktop_inference_model(
+            CLAUDE_DESKTOP_SONNET_MODEL_ID,
+            &mappings.sonnet,
+            mappings.sonnet_1m,
+            models,
+        ),
+        claude_desktop_inference_model(
+            CLAUDE_DESKTOP_HAIKU_MODEL_ID,
+            &mappings.haiku,
+            mappings.haiku_1m,
+            models,
+        ),
     ];
-    let mut seen_models = HashSet::new();
-    inference_models.retain(|entry| {
-        entry
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|name| seen_models.insert(name.to_ascii_lowercase()))
-    });
+    let mut deduplicated_models = Vec::<serde_json::Value>::with_capacity(inference_models.len());
+    for entry in inference_models {
+        let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let existing = deduplicated_models.iter_mut().find(|existing| {
+            existing
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|existing_name| existing_name.eq_ignore_ascii_case(name))
+        });
+        if let Some(existing) = existing {
+            if entry.get("supports1m").and_then(serde_json::Value::as_bool) == Some(true) {
+                *existing = entry;
+            }
+        } else {
+            deduplicated_models.push(entry);
+        }
+    }
     root.insert(
         "inferenceModels".to_string(),
-        serde_json::Value::Array(inference_models),
+        serde_json::Value::Array(deduplicated_models),
     );
     render_agent_json(root, "Claude Desktop 网关配置")
 }
@@ -420,13 +447,14 @@ pub(crate) fn build_claude_desktop_profile(
 pub(crate) fn claude_desktop_inference_model(
     route_model: &str,
     source_model: &str,
+    enable_1m: bool,
     models: &[AgentModelOption],
 ) -> serde_json::Value {
     let selected = models
         .iter()
         .find(|model| model.name.eq_ignore_ascii_case(source_model));
     let direct_alias = selected.is_some_and(|model| model.is_alias);
-    let context_window = agent_model_context_window(models, source_model);
+    let context_window = claude_effective_context_window(models, source_model, enable_1m);
     let mut entry = serde_json::Map::new();
     entry.insert(
         "name".to_string(),
@@ -441,7 +469,7 @@ pub(crate) fn claude_desktop_inference_model(
             "contextWindow".to_string(),
             serde_json::json!(context_window),
         );
-        if context_window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW {
+        if enable_1m {
             entry.insert("supports1m".to_string(), serde_json::json!(true));
             entry.insert("prefer1m".to_string(), serde_json::json!(true));
         }
