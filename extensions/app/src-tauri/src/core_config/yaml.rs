@@ -243,34 +243,47 @@ pub(crate) fn render_yaml_value_changes(
             remaining_changes.push(change);
         }
     }
-    let mut missing_nested_groups: Vec<(String, Vec<(String, serde_norway::Value)>)> = Vec::new();
-    for change in &remaining_changes {
-        if change.path.len() != 2
+    let mut missing_nested_groups: Vec<(Vec<String>, Vec<(String, serde_norway::Value)>)> =
+        Vec::new();
+    let mut yaml_edit_changes = Vec::new();
+    for change in remaining_changes {
+        if change.path.len() < 2
             || yaml_value_at_path(original, &change.path).is_some()
-            || yaml_value_at_path(original, &change.path[..1])
+            || yaml_value_at_path(original, &change.path[..change.path.len() - 1])
                 .and_then(serde_norway::Value::as_mapping)
                 .is_none()
         {
+            yaml_edit_changes.push(change);
             continue;
         }
-        let section = change.path[0].clone();
-        let entry = (change.path[1].clone(), change.value.clone());
+        let parent_path = change.path[..change.path.len() - 1].to_vec();
+        let entry = (
+            change.path.last().cloned().unwrap_or_default(),
+            change.value,
+        );
         if let Some((_, entries)) = missing_nested_groups
             .iter_mut()
-            .find(|(existing, _)| existing == &section)
+            .find(|(existing, _)| existing == &parent_path)
         {
             entries.push(entry);
         } else {
-            missing_nested_groups.push((section, vec![entry]));
+            missing_nested_groups.push((parent_path, vec![entry]));
         }
     }
-    for (section, entries) in missing_nested_groups {
+    for (parent_path, entries) in missing_nested_groups {
         if let Some(updated_content) =
-            insert_yaml_block_mapping_values(&editable_content, &section, &entries)?
+            insert_yaml_block_mapping_values_at_path(&editable_content, &parent_path, &entries)?
         {
             editable_content = updated_content;
+        } else {
+            for (key, value) in entries {
+                let mut path = parent_path.clone();
+                path.push(key);
+                yaml_edit_changes.push(YamlValueChange { path, value });
+            }
         }
     }
+    remaining_changes = yaml_edit_changes;
     let file = editable_content
         .parse::<yaml_edit::YamlFile>()
         .map_err(|err| format!("解析可编辑内核配置失败: {err}"))?;
@@ -287,9 +300,75 @@ pub(crate) fn render_yaml_value_changes(
     let validated = serde_norway::from_str::<serde_norway::Value>(&rendered)
         .map_err(|err| format!("验证更新后的内核配置失败: {err}"))?;
     if validated != *updated {
-        return Err("更新后的内核配置与预期值不一致，已拒绝写入".to_string());
+        let path = first_yaml_mismatch_path(updated, &validated, &mut Vec::new())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        return Err(format!(
+            "更新后的内核配置与预期值不一致（路径: {path}），已拒绝写入"
+        ));
     }
     Ok(rendered)
+}
+
+pub(crate) fn first_yaml_mismatch_path(
+    expected: &serde_norway::Value,
+    actual: &serde_norway::Value,
+    path: &mut Vec<String>,
+) -> Option<String> {
+    if expected == actual {
+        return None;
+    }
+    match (expected, actual) {
+        (
+            serde_norway::Value::Mapping(expected_mapping),
+            serde_norway::Value::Mapping(actual_mapping),
+        ) => {
+            for (key, expected_value) in expected_mapping {
+                let key_name = key
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "<non-string-key>".to_string());
+                path.push(key_name);
+                let mismatch = actual_mapping
+                    .get(key)
+                    .and_then(|actual_value| {
+                        first_yaml_mismatch_path(expected_value, actual_value, path)
+                    })
+                    .or_else(|| (!actual_mapping.contains_key(key)).then(|| path.join(".")));
+                path.pop();
+                if mismatch.is_some() {
+                    return mismatch;
+                }
+            }
+            for key in actual_mapping.keys() {
+                if !expected_mapping.contains_key(key) {
+                    let key = key.as_str().unwrap_or("<non-string-key>");
+                    return Some(if path.is_empty() {
+                        key.to_string()
+                    } else {
+                        format!("{}.{}", path.join("."), key)
+                    });
+                }
+            }
+            Some(path.join("."))
+        }
+        (
+            serde_norway::Value::Sequence(expected_values),
+            serde_norway::Value::Sequence(actual_values),
+        ) => {
+            for (index, (expected_value, actual_value)) in
+                expected_values.iter().zip(actual_values).enumerate()
+            {
+                path.push(format!("[{index}]"));
+                let mismatch = first_yaml_mismatch_path(expected_value, actual_value, path);
+                path.pop();
+                if mismatch.is_some() {
+                    return mismatch;
+                }
+            }
+            Some(format!("{}[length]", path.join(".")))
+        }
+        _ => Some(path.join(".")),
+    }
 }
 
 pub(crate) fn normalize_nested_yaml_comment_indentation(content: &str) -> String {
@@ -394,36 +473,48 @@ pub(crate) fn yaml_value_at_path<'a>(
     })
 }
 
-pub(crate) fn insert_yaml_block_mapping_values(
+pub(crate) fn insert_yaml_block_mapping_values_at_path(
     content: &str,
-    section: &str,
+    parent_path: &[String],
     entries: &[(String, serde_norway::Value)],
 ) -> Result<Option<String>, String> {
     let mut offset = 0;
-    let mut section_end = None;
+    let mut parent_end = None;
+    let mut parent_indent = 0;
     let mut child_indent = None;
+    let mut mapping_stack: Vec<(usize, String)> = Vec::new();
     for line in content.split_inclusive('\n') {
         let body = line.trim_end_matches(['\r', '\n']);
         let trimmed = body.trim_start_matches([' ', '\t']);
         let indent = body.len().saturating_sub(trimmed.len());
-        if section_end.is_none() {
-            let section_header = trimmed
-                .split_once('#')
-                .map(|(value, _)| value)
-                .unwrap_or(trimmed)
-                .trim_end();
-            if indent == 0 && section_header == format!("{section}:") {
-                section_end = Some(offset + line.len());
+        if parent_end.is_none() {
+            if let Some(key) = yaml_block_mapping_key(trimmed) {
+                while mapping_stack
+                    .last()
+                    .is_some_and(|(ancestor_indent, _)| *ancestor_indent >= indent)
+                {
+                    mapping_stack.pop();
+                }
+                mapping_stack.push((indent, key));
+                if mapping_stack.len() == parent_path.len()
+                    && mapping_stack
+                        .iter()
+                        .zip(parent_path)
+                        .all(|((_, actual), expected)| actual == expected)
+                {
+                    parent_end = Some(offset + line.len());
+                    parent_indent = indent;
+                }
             }
         } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
-            if indent == 0 {
+            if indent <= parent_indent {
                 break;
             }
             child_indent.get_or_insert(indent);
         }
         offset += line.len();
     }
-    let Some(section_end) = section_end else {
+    let Some(parent_end) = parent_end else {
         return Ok(None);
     };
     let newline = if content.contains("\r\n") {
@@ -431,22 +522,53 @@ pub(crate) fn insert_yaml_block_mapping_values(
     } else {
         "\n"
     };
-    let indent = " ".repeat(child_indent.unwrap_or(2));
+    let indent = " ".repeat(child_indent.unwrap_or(parent_indent + 2));
     let mut insertion = String::new();
     for (key, value) in entries {
         let value = serde_json::to_string(value)
             .map_err(|error| format!("序列化内核配置值失败: {error}"))?;
         insertion.push_str(&indent);
-        insertion.push_str(key);
+        insertion.push_str(&render_yaml_mapping_key(key));
         insertion.push_str(": ");
         insertion.push_str(&value);
         insertion.push_str(newline);
     }
     let mut updated = String::with_capacity(content.len() + insertion.len());
-    updated.push_str(&content[..section_end]);
+    updated.push_str(&content[..parent_end]);
     updated.push_str(&insertion);
-    updated.push_str(&content[section_end..]);
+    updated.push_str(&content[parent_end..]);
     Ok(Some(updated))
+}
+
+pub(crate) fn yaml_block_mapping_key(line: &str) -> Option<String> {
+    let header = line
+        .split_once('#')
+        .map(|(value, _)| value)
+        .unwrap_or(line)
+        .trim_end();
+    let key = header.strip_suffix(':')?.trim_end();
+    if key.is_empty() {
+        return None;
+    }
+    if key.starts_with('"') && key.ends_with('"') {
+        return serde_json::from_str(key).ok();
+    }
+    if key.starts_with('\'') && key.ends_with('\'') {
+        return Some(key[1..key.len() - 1].replace("''", "'"));
+    }
+    Some(key.to_string())
+}
+
+pub(crate) fn render_yaml_mapping_key(key: &str) -> String {
+    if !key.is_empty()
+        && key
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        key.to_string()
+    } else {
+        serde_json::to_string(key).unwrap_or_else(|_| key.to_string())
+    }
 }
 
 pub(crate) fn replace_yaml_sequence_value(

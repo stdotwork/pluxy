@@ -178,8 +178,11 @@ pub(crate) fn merge_core_config_yaml(
     current: Option<&str>,
     config: &GuiConfigFile,
 ) -> Result<String, String> {
-    let merged = merge_core_config_fields(template, current)?;
-    apply_gui_managed_settings(&merged, config)
+    let base = match current {
+        Some(current) => current.to_string(),
+        None => merge_core_config_fields(template, None)?,
+    };
+    apply_gui_managed_settings(&base, config)
 }
 
 pub(crate) fn merge_core_config_fields(

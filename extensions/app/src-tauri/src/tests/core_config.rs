@@ -708,9 +708,9 @@ fn unchanged_yaml_is_not_written_again() {
 }
 
 #[test]
-fn startup_merge_uses_template_and_preserves_current_values() {
+fn startup_preserves_all_user_owned_yaml_and_only_applies_gui_managed_values() {
     let template = "# Current release template\nhost: \"\" # template bind address\nport: 8317\n\n# Client authentication\napi-keys:\n  - template-key\n\n# Plugin runtime\nplugins:\n  enabled: false # plugin switch\n\n# Credential routing\nrouting:\n  strategy: round-robin # routing switch\n\n# New release option\nnew-option: true\nnested:\n  # Nested template comment\n  keep: template\n  added: from-template\nlist:\n  - template-item\n";
-    let current = "host: 127.0.0.1\nport: 9000\nnested:\n  keep: current\n  current-only: retained\nlist:\n  - current-a\n  - current-b\nextra: true\n";
+    let current = "# User-edited configuration\nhost: 127.0.0.1\nport: 9000\n# User-owned nested values\nnested:\n  keep: current\n  current-only: retained\nlist:\n  - current-a\n  - current-b\nextra: true\ncustom-provider:\n  base-url: https://example.com/v1\n  headers:\n    X-Custom-Header: custom-value\n  models:\n    - name: custom-model\n      aliases: [custom-a, custom-b]\nplugins:\n  custom-runtime-options:\n    sandbox: strict\n    environment:\n      CUSTOM_FLAG: enabled\nrouting:\n  custom-rules:\n    - match: custom-*\n      target: custom-provider\nremote-management:\n  custom-dashboard-option: retained\n";
     let config = GuiConfigFile {
         locale: "zh-CN".to_string(),
         port: 9527,
@@ -739,11 +739,12 @@ fn startup_merge_uses_template_and_preserves_current_values() {
         routing_session_affinity_ttl: "1h".to_string(),
     };
     let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
+    let current_document = serde_norway::from_str::<serde_norway::Value>(current).unwrap();
 
-    assert!(merged.contains("# Current release template"));
-    assert!(merged.contains("# template bind address"), "{merged}");
-    assert!(merged.contains("# New release option"));
-    assert!(merged.contains("# Nested template comment"));
+    assert!(merged.contains("# User-edited configuration"));
+    assert!(merged.contains("# User-owned nested values"));
+    assert!(!merged.contains("# Current release template"));
+    assert!(!merged.contains("# New release option"));
 
     let document = serde_norway::from_str::<serde_norway::Value>(&merged).unwrap();
     assert_eq!(
@@ -759,27 +760,57 @@ fn startup_merge_uses_template_and_preserves_current_values() {
     assert_eq!(document["routing"]["session-affinity"], true);
     assert_eq!(document["routing"]["session-affinity-ttl"], "1h");
     assert_eq!(document["usage-statistics-enabled"], false);
-    assert_eq!(document["new-option"], serde_norway::Value::Bool(true));
+    assert!(document.get("new-option").is_none());
+    assert_eq!(document["nested"], current_document["nested"]);
+    assert!(document["nested"].get("added").is_none());
+    for key in ["list", "extra", "custom-provider"] {
+        assert_eq!(document[key], current_document[key], "user field {key}");
+    }
     assert_eq!(
-        document["nested"]["keep"],
-        serde_norway::Value::String("current".to_string())
+        document["plugins"]["custom-runtime-options"],
+        current_document["plugins"]["custom-runtime-options"]
     );
     assert_eq!(
-        document["nested"]["added"],
-        serde_norway::Value::String("from-template".to_string())
+        document["routing"]["custom-rules"],
+        current_document["routing"]["custom-rules"]
     );
     assert_eq!(
-        document["nested"]["current-only"],
-        serde_norway::Value::String("retained".to_string())
+        document["remote-management"]["custom-dashboard-option"],
+        current_document["remote-management"]["custom-dashboard-option"]
     );
-    assert_eq!(document["extra"], serde_norway::Value::Bool(true));
+}
+
+#[test]
+fn startup_merge_preserves_plugin_store_config_written_by_core() {
+    let template = "host: \"\"\nport: 8317\nauth-dir: ~/.cli-proxy-api\napi-keys:\n  - template-key\nremote-management:\n  secret-key: \"\"\nusage-statistics-enabled: true\nplugins:\n  enabled: false\n  dir: plugins\n  configs:\n    example:\n      enabled: true\n      priority: 1\nrouting:\n  strategy: round-robin\n  session-affinity: false\n  session-affinity-ttl: \"\"\nproxy-url: \"\"\ncommercial-mode: false\n";
+    let current = "host: 127.0.0.1\nport: 8317\nauth-dir: ~/.cli-proxy-api\napi-keys:\n  - '123456'\nremote-management:\n  secret-key: \"\"\nusage-statistics-enabled: true\nplugins:\n  enabled: true\n  dir: plugins\n  configs:\n    model-fallback-router:\n      enabled: true\n      store:\n        id: model-fallback-router\n        name: Model Fallback Router\n        description: Retries matching model requests through configured fallback model names when the primary model fails with quota, rate-limit, transport, or configured HTTP status errors.\n        author: thebtf\n        version: 0.2.0\n        release-tag: v0.2.0\n        repository: https://github.com/thebtf/cpa-model-fallback-router\n        tags:\n          - Router\n          - Model Router\n          - Fallback\n        install:\n          type: github-release\nrouting:\n  strategy: round-robin\n  session-affinity: false\n  session-affinity-ttl: \"\"\nproxy-url: \"\"\n";
+    let config = GuiConfigFile {
+        host: "0.0.0.0".to_string(),
+        allow_lan: true,
+        plugins_enabled: true,
+        ..GuiConfigFile::default()
+    };
+
+    let merged = merge_core_config_yaml(template, Some(current), &config)
+        .unwrap_or_else(|error| panic!("plugin config merge failed: {error}"));
+    let document = serde_norway::from_str::<serde_norway::Value>(&merged).unwrap();
+    let current_document = serde_norway::from_str::<serde_norway::Value>(current).unwrap();
+
+    assert_eq!(document["host"], "0.0.0.0");
     assert_eq!(
-        document["list"],
-        serde_norway::Value::Sequence(vec![
-            serde_norway::Value::String("current-a".to_string()),
-            serde_norway::Value::String("current-b".to_string()),
-        ])
+        document["plugins"]["configs"]["model-fallback-router"],
+        current_document["plugins"]["configs"]["model-fallback-router"]
     );
+    assert_eq!(
+        document["plugins"]["configs"]["model-fallback-router"]["store"]["version"],
+        "0.2.0"
+    );
+    assert_eq!(
+        document["plugins"]["configs"]["model-fallback-router"]["store"]["install"]["type"],
+        "github-release"
+    );
+    assert!(document.get("commercial-mode").is_none());
+    assert!(document["plugins"]["configs"].get("example").is_none());
 }
 
 #[test]
