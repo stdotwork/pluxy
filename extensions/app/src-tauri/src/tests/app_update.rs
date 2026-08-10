@@ -25,7 +25,8 @@ fn app_update_comparison_uses_semantic_versions() {
 }
 
 fn portable_update_test_asset(version: &str, arch: &str) -> PortableUpdateAsset {
-    let name = format!("EasyCLIProxyAPI-v{version}-Windows-{arch}.zip");
+    let (_, display, suffix) = portable_update_asset_platform().unwrap();
+    let name = format!("EasyCLIProxyAPI-v{version}-{display}-{arch}.{suffix}");
     PortableUpdateAsset {
         url: format!("{APP_RELEASE_DOWNLOAD_PREFIX}v{version}/{name}"),
         fallback_urls: Vec::new(),
@@ -34,6 +35,7 @@ fn portable_update_test_asset(version: &str, arch: &str) -> PortableUpdateAsset 
     }
 }
 
+#[cfg(windows)]
 fn portable_update_test_legacy_asset(version: &str, arch: &str) -> PortableUpdateAsset {
     let name = format!("EasyCLIProxyAPI-update-v{version}-Windows-{arch}.zip");
     PortableUpdateAsset {
@@ -45,6 +47,7 @@ fn portable_update_test_legacy_asset(version: &str, arch: &str) -> PortableUpdat
 }
 
 fn portable_update_test_manifest(version: &str) -> PortableUpdateManifest {
+    let (platform, _, _) = portable_update_asset_platform().unwrap();
     PortableUpdateManifest {
         schema_version: 1,
         version: version.to_string(),
@@ -54,11 +57,11 @@ fn portable_update_test_manifest(version: &str) -> PortableUpdateManifest {
         ),
         assets: [
             (
-                "windows-amd64".to_string(),
+                format!("{platform}-amd64"),
                 portable_update_test_asset(version, "amd64"),
             ),
             (
-                "windows-aarch64".to_string(),
+                format!("{platform}-aarch64"),
                 portable_update_test_asset(version, "aarch64"),
             ),
         ]
@@ -73,48 +76,52 @@ fn portable_update_manifest_requires_both_matching_github_assets() {
     let manifest = portable_update_test_manifest("1.2.3");
     assert!(validate_portable_update_manifest(&manifest).is_ok());
 
-    let mut legacy_manifest = portable_update_test_manifest("1.2.3");
-    legacy_manifest.assets.insert(
-        "windows-amd64".to_string(),
-        portable_update_test_legacy_asset("1.2.3", "amd64"),
-    );
-    legacy_manifest.assets.insert(
-        "windows-aarch64".to_string(),
-        portable_update_test_legacy_asset("1.2.3", "aarch64"),
-    );
-    assert!(validate_portable_update_manifest(&legacy_manifest).is_ok());
-
-    let mut dual_manifest = portable_update_test_manifest("1.2.3");
-    dual_manifest.assets = [
-        (
+    #[cfg(windows)]
+    {
+        let mut legacy_manifest = portable_update_test_manifest("1.2.3");
+        legacy_manifest.assets.insert(
             "windows-amd64".to_string(),
             portable_update_test_legacy_asset("1.2.3", "amd64"),
-        ),
-        (
+        );
+        legacy_manifest.assets.insert(
             "windows-aarch64".to_string(),
             portable_update_test_legacy_asset("1.2.3", "aarch64"),
-        ),
-    ]
-    .into_iter()
-    .collect();
-    dual_manifest.full_assets = Some(
-        [
+        );
+        assert!(validate_portable_update_manifest(&legacy_manifest).is_ok());
+
+        let mut dual_manifest = portable_update_test_manifest("1.2.3");
+        dual_manifest.assets = [
             (
                 "windows-amd64".to_string(),
-                portable_update_test_asset("1.2.3", "amd64"),
+                portable_update_test_legacy_asset("1.2.3", "amd64"),
             ),
             (
                 "windows-aarch64".to_string(),
-                portable_update_test_asset("1.2.3", "aarch64"),
+                portable_update_test_legacy_asset("1.2.3", "aarch64"),
             ),
         ]
         .into_iter()
-        .collect(),
-    );
-    assert!(validate_portable_update_manifest(&dual_manifest).is_ok());
+        .collect();
+        dual_manifest.full_assets = Some(
+            [
+                (
+                    "windows-amd64".to_string(),
+                    portable_update_test_asset("1.2.3", "amd64"),
+                ),
+                (
+                    "windows-aarch64".to_string(),
+                    portable_update_test_asset("1.2.3", "aarch64"),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert!(validate_portable_update_manifest(&dual_manifest).is_ok());
+    }
 
+    let (platform, _, _) = portable_update_asset_platform().unwrap();
     let mut missing_arch = portable_update_test_manifest("1.2.3");
-    missing_arch.assets.remove("windows-aarch64");
+    missing_arch.assets.remove(&format!("{platform}-aarch64"));
     assert!(validate_portable_update_manifest(&missing_arch).is_err());
 
     let mut invalid_timestamp = portable_update_test_manifest("1.2.3");
@@ -124,37 +131,44 @@ fn portable_update_manifest_requires_both_matching_github_assets() {
     let mut foreign_host = portable_update_test_manifest("1.2.3");
     foreign_host
             .assets
-            .get_mut("windows-amd64")
+            .get_mut(&format!("{platform}-amd64"))
             .unwrap()
             .url = "https://github.com.example.invalid/router-for-me/EasyCLIProxyAPI/releases/download/v1.2.3/update.zip".to_string();
     assert!(validate_portable_update_manifest(&foreign_host).is_err());
 
     let mut mismatched_tag = portable_update_test_manifest("1.2.3");
-    mismatched_tag.assets.get_mut("windows-amd64").unwrap().url =
-        format!("{APP_RELEASE_DOWNLOAD_PREFIX}v9.9.9/EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip");
+    let (_, display, suffix) = portable_update_asset_platform().unwrap();
+    mismatched_tag
+        .assets
+        .get_mut(&format!("{platform}-amd64"))
+        .unwrap()
+        .url = format!(
+        "{APP_RELEASE_DOWNLOAD_PREFIX}v9.9.9/EasyCLIProxyAPI-v1.2.3-{display}-amd64.{suffix}"
+    );
     assert!(validate_portable_update_manifest(&mismatched_tag).is_err());
 }
 
 #[test]
 fn portable_update_asset_accepts_only_the_configured_gitcode_fallback() {
     let mut asset = portable_update_test_asset("1.2.3", "amd64");
-    let filename = "EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip";
+    let (_, display, suffix) = portable_update_asset_platform().unwrap();
+    let filename = format!("EasyCLIProxyAPI-v1.2.3-{display}-amd64.{suffix}");
     asset.fallback_urls = vec![gitcode_release_attachment_url(
         "mirror-owner/EasyCLIProxyAPI",
         "v1.2.3",
-        filename,
+        &filename,
     )];
     assert!(validate_portable_update_asset_fallbacks_for_repository(
         &asset,
         "v1.2.3",
-        &[filename],
+        &[&filename],
         Some("mirror-owner/EasyCLIProxyAPI"),
     )
     .is_ok());
     assert!(validate_portable_update_asset_fallbacks_for_repository(
         &asset,
         "v1.2.3",
-        &[filename],
+        &[&filename],
         Some("another-owner/EasyCLIProxyAPI"),
     )
     .is_err());
@@ -405,6 +419,106 @@ fn portable_update_replacement_preserves_user_data_and_can_roll_back() {
         b"7.2.100"
     );
     assert!(!descriptor.target_core_archive.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn portable_update_tar_gz_accepts_the_complete_linux_release() {
+    use flate2::{write::GzEncoder, Compression};
+    use tar::{Builder, Header};
+
+    let root = agent_test_home("portable-linux-tar");
+    let archive_path = root.join("update.tar.gz");
+    let file = File::create(&archive_path).unwrap();
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut archive = Builder::new(encoder);
+    let package_root = "EasyCLIProxyAPI-v1.2.3-Linux-amd64";
+    let manifest = br#"{"schemaVersion":1,"application":"EasyCLIProxyAPI","version":"1.2.3","platform":"linux","arch":"amd64","autoUpdate":true}"#;
+    for (path, contents, mode) in [
+        (
+            format!("{package_root}/EasyCLIProxyAPI"),
+            b"binary".as_slice(),
+            0o755,
+        ),
+        (
+            format!("{package_root}/portable-app.json"),
+            manifest.as_slice(),
+            0o644,
+        ),
+        (
+            format!("{package_root}/core-version.txt"),
+            b"7.2.109\n".as_slice(),
+            0o644,
+        ),
+        (
+            format!("{package_root}/cpa-core/CLIProxyAPI_7.2.109_linux_amd64.tar.gz"),
+            b"core archive".as_slice(),
+            0o644,
+        ),
+    ] {
+        let mut header = Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(mode);
+        header.set_cksum();
+        archive.append_data(&mut header, path, contents).unwrap();
+    }
+    archive.into_inner().unwrap().finish().unwrap();
+
+    let staging = root.join("staging");
+    let package = extract_portable_update_tar_gz(&archive_path, &staging).unwrap();
+    assert_eq!(package.manifest.platform, "linux");
+    assert_eq!(package.manifest.arch, "amd64");
+    assert_eq!(
+        package.core_archive_name.as_deref(),
+        Some("CLIProxyAPI_7.2.109_linux_amd64.tar.gz")
+    );
+    assert_eq!(
+        fs::read(staging.join(PORTABLE_APP_BINARY)).unwrap(),
+        b"binary"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_update_descriptor_is_confined_to_the_app_and_temp_directories() {
+    let root = agent_test_home("portable-macos-descriptor");
+    let work_dir = root.join("EasyCLIProxyAPI-update-1.2.3-1-1");
+    let current_app = root.join("Applications").join("EasyCLIProxyAPI.app");
+    let executable_relative_path = PathBuf::from("Contents/MacOS/cpa-gui");
+    let current_exe = current_app.join(&executable_relative_path);
+    let staged_app = work_dir.join("staging").join("EasyCLIProxyAPI.app");
+    let staged_exe = staged_app.join(&executable_relative_path);
+    fs::create_dir_all(current_exe.parent().unwrap()).unwrap();
+    fs::create_dir_all(staged_exe.parent().unwrap()).unwrap();
+    fs::write(&current_exe, b"old").unwrap();
+    fs::write(&staged_exe, b"new").unwrap();
+    let descriptor = MacosUpdateDescriptor {
+        parent_pid: 1,
+        current_app: current_app.clone(),
+        staged_app,
+        backup_app: current_app
+            .parent()
+            .unwrap()
+            .join(".EasyCLIProxyAPI.app.update-backup"),
+        executable_relative_path,
+        ack_path: work_dir.join("update-started.ack"),
+        work_dir: work_dir.clone(),
+        target_version: "1.2.3".to_string(),
+    };
+    fs::create_dir_all(&work_dir).unwrap();
+    let descriptor_path = work_dir.join("update-descriptor.json");
+    fs::write(
+        &descriptor_path,
+        serde_json::to_vec_pretty(&descriptor).unwrap(),
+    )
+    .unwrap();
+    assert!(validate_macos_update_descriptor(&descriptor_path, &descriptor).is_ok());
+    assert_eq!(
+        macos_application_bundle_from_executable(&current_exe).unwrap(),
+        current_app
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

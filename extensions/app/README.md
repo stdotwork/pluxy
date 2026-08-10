@@ -123,6 +123,10 @@ previous configuration.
 
 Every Windows release publishes both the complete ZIP and the legacy `update` ZIP. This keeps in-app updates available to older clients that have not migrated yet, while newer clients use the complete package so the bundled core can be updated too.
 
+Current Windows, Linux, and macOS release packages support in-app automatic updates. Linux replaces the portable application files while preserving runtime data, and macOS replaces the signed application bundle. Each platform waits for the new version to confirm a successful launch and rolls back automatically if startup fails. The installation directory must be writable by the current user.
+
+Existing Linux and macOS installations need one manual upgrade to a release that includes the cross-platform auto-update marker. In-app updates are available after that release has been launched once.
+
 If you are running v0.2.5 or earlier, perform one manual migration: exit EasyCLIProxyAPI, download the latest complete Windows ZIP for your architecture, then copy the contents of its top-level directory over the existing installation directory. Do not delete the existing directory first; user data such as `config.toml`, `oauth`, and `cpa-core/config.yaml` will remain in place. After launching the new version, later releases can use in-app automatic updates.
 
 ## Supported Platforms

@@ -69,7 +69,7 @@ await writeFile(join(output, 'portable-app.json'), `${JSON.stringify({
   version: appVersion,
   platform: targetOS,
   arch: targetArch,
-  autoUpdate: targetOS === 'windows',
+  autoUpdate: ['windows', 'linux', 'darwin'].includes(targetOS),
 }, null, 2)}\n`);
 
 const coreOutput = join(output, 'cpa-core');

@@ -117,3 +117,39 @@ describe('Windows 便携更新清单', () => {
     }
   });
 });
+
+describe('跨平台便携更新清单', () => {
+  test.each([
+    ['linux', 'Linux', 'tar.gz'],
+    ['darwin', 'Darwin', 'dmg'],
+  ] as const)('%s 清单直接引用完整发布包', async (platform, display, suffix) => {
+    const root = await mkdtemp(join(tmpdir(), `easycli-${platform}-manifest-test-`));
+    try {
+      for (const arch of ['amd64', 'aarch64']) {
+        await writeFile(
+          join(root, `EasyCLIProxyAPI-v1.2.3-${display}-${arch}.${suffix}`),
+          `${platform} ${arch} full package`,
+        );
+      }
+      const output = join(root, `portable-update-${platform}.json`);
+      const manifest = await generatePortableUpdateManifest({
+        directory: root,
+        output,
+        platform,
+        repository: 'router-for-me/EasyCLIProxyAPI',
+        tag: 'v1.2.3',
+        publishedAt: '2026-08-10T00:00:00.000Z',
+      });
+
+      expect(manifest.fullAssets).toBeUndefined();
+      for (const arch of ['amd64', 'aarch64']) {
+        expect(manifest.assets[`${platform}-${arch}`].url).toEndWith(
+          `/EasyCLIProxyAPI-v1.2.3-${display}-${arch}.${suffix}`,
+        );
+      }
+      expect(JSON.parse(await readFile(output, 'utf8'))).toEqual(manifest);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -7,13 +7,22 @@ import { validateAppVersion } from './version.mjs';
 export async function generatePortableUpdateManifest({
   directory,
   output,
+  platform = 'windows',
   repository,
   gitcodeRepository,
   tag: rawTag,
   publishedAt = new Date().toISOString(),
 }) {
   const resolvedDirectory = resolve(directory ?? 'artifacts');
-  const resolvedOutput = resolve(output ?? join(resolvedDirectory, 'portable-update-windows.json'));
+  const platformSpecs = {
+    windows: { display: 'Windows', suffix: 'zip', legacy: true },
+    linux: { display: 'Linux', suffix: 'tar.gz', legacy: false },
+    darwin: { display: 'Darwin', suffix: 'dmg', legacy: false },
+  };
+  const normalizedPlatform = String(platform).trim().toLowerCase();
+  const platformSpec = platformSpecs[normalizedPlatform];
+  if (!platformSpec) throw new Error(`Unsupported update platform: ${platform}`);
+  const resolvedOutput = resolve(output ?? join(resolvedDirectory, `portable-update-${normalizedPlatform}.json`));
   const resolvedRepository = repository ?? 'router-for-me/EasyCLIProxyAPI';
   const resolvedGitcodeRepository = String(gitcodeRepository ?? '').trim();
   const normalizedRawTag = String(rawTag ?? '').trim();
@@ -35,10 +44,14 @@ export async function generatePortableUpdateManifest({
   const assets = {};
   const fullAssets = {};
   for (const arch of ['amd64', 'aarch64']) {
-    for (const [collection, filename] of [
-      [assets, `EasyCLIProxyAPI-update-${tag}-Windows-${arch}.zip`],
-      [fullAssets, `EasyCLIProxyAPI-${tag}-Windows-${arch}.zip`],
-    ]) {
+    const fullFilename = `EasyCLIProxyAPI-${tag}-${platformSpec.display}-${arch}.${platformSpec.suffix}`;
+    const candidates = platformSpec.legacy
+      ? [
+        [assets, `EasyCLIProxyAPI-update-${tag}-Windows-${arch}.zip`],
+        [fullAssets, fullFilename],
+      ]
+      : [[assets, fullFilename]];
+    for (const [collection, filename] of candidates) {
       const path = join(resolvedDirectory, filename);
       const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
       if (!metadata.isFile() || metadata.size === 0) {
@@ -56,7 +69,7 @@ export async function generatePortableUpdateManifest({
           filename,
         )];
       }
-      collection[`windows-${arch}`] = asset;
+      collection[`${normalizedPlatform}-${arch}`] = asset;
     }
   }
 
@@ -66,7 +79,7 @@ export async function generatePortableUpdateManifest({
     publishedAt,
     releaseUrl: `https://github.com/${resolvedRepository}/releases/tag/${tag}`,
     assets,
-    fullAssets,
+    ...(platformSpec.legacy ? { fullAssets } : {}),
   };
 
   await writeFile(resolvedOutput, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -85,10 +98,12 @@ async function main() {
     args.set(process.argv[index], process.argv[index + 1]);
   }
   const directory = resolve(args.get('--directory') ?? 'artifacts');
-  const output = resolve(args.get('--output') ?? join(directory, 'portable-update-windows.json'));
+  const platform = args.get('--platform') ?? 'windows';
+  const output = resolve(args.get('--output') ?? join(directory, `portable-update-${platform}.json`));
   const manifest = await generatePortableUpdateManifest({
     directory,
     output,
+    platform,
     repository: args.get('--repository'),
     gitcodeRepository: args.get('--gitcode-repository'),
     tag: args.get('--tag'),

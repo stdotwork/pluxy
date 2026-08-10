@@ -4,6 +4,7 @@ src-tauri/gen/
 src-tauri/target/
 bin-work/
 cpa-core/
+/portable-app.json
 
 agent_docs/
 

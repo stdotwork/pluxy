@@ -293,6 +293,16 @@ jobs:
           COPYFILE_DISABLE=1 tar -czf "$signed_archive" -C "$signed_core_dir" .
           mv "$signed_archive" "$core_archive"
 
+          cp "release/${{ steps.package.outputs.stem }}/portable-app.json" portable-app.json
+          node -e '
+            const marker = require("./portable-app.json");
+            if (marker.schemaVersion !== 1 || marker.application !== "EasyCLIProxyAPI"
+                || marker.version !== process.argv[1] || marker.platform !== "darwin"
+                || marker.arch !== process.argv[2] || marker.autoUpdate !== true) {
+              throw new Error("macOS auto-update marker does not match the release target");
+            }
+          ' "${{ steps.package.outputs.version }}" "${{ matrix.arch }}"
+
           # Build the notarized app with Tauri, then create the DMG with hdiutil.
           # Tauri's generated create-dmg script is unreliable on GitHub's macOS runners.
           env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD \
@@ -331,6 +341,7 @@ jobs:
           resources_dir="$app_path/Contents/Resources"
           test -d "$app_path"
           test -s "$resources_dir/core-version.txt"
+          test -s "$resources_dir/portable-app.json"
           core_count="$(find "$resources_dir/cpa-core" -maxdepth 1 -type f -name 'CLIProxyAPI_*.tar.gz' | wc -l | tr -d '[:space:]')"
           if [ "$core_count" -ne 1 ]; then
             echo "macOS app must contain exactly one bundled core archive" >&2
@@ -425,17 +436,21 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Generate Windows portable update manifest
+      - name: Generate portable update manifests
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.version.outputs.tag }}
-        run: >-
-          node scripts/manifest.mjs
-          --directory artifacts
-          --output artifacts/portable-update-windows.json
-          --repository "${{ github.repository }}"
-          --gitcode-repository "${{ vars.GITCODE_GUI_REPOSITORY }}"
-          --tag "$RELEASE_TAG"
+        run: |
+          set -euo pipefail
+          for platform in windows linux darwin; do
+            node scripts/manifest.mjs \
+              --directory artifacts \
+              --output "artifacts/portable-update-${platform}.json" \
+              --platform "$platform" \
+              --repository "${{ github.repository }}" \
+              --gitcode-repository "${{ vars.GITCODE_GUI_REPOSITORY }}" \
+              --tag "$RELEASE_TAG"
+          done
       - name: Publish release
         shell: bash
         env:

@@ -73,10 +73,20 @@ const RELEASE_PAGE_URL: &str = "https://github.com/router-for-me/CLIProxyAPI/rel
 const RELEASE_ATOM_URL: &str = "https://github.com/router-for-me/CLIProxyAPI/releases.atom";
 const RELEASE_DOWNLOAD_PREFIX: &str =
     "https://github.com/router-for-me/CLIProxyAPI/releases/download/";
+#[cfg(windows)]
 const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-windows.json";
+#[cfg(target_os = "linux")]
+const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-linux.json";
+#[cfg(target_os = "macos")]
+const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-darwin.json";
 const APP_RELEASE_DOWNLOAD_PREFIX: &str =
     "https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/";
+#[cfg(windows)]
 const APP_UPDATE_MANIFEST_NAME: &str = "portable-update-windows.json";
+#[cfg(target_os = "linux")]
+const APP_UPDATE_MANIFEST_NAME: &str = "portable-update-linux.json";
+#[cfg(target_os = "macos")]
+const APP_UPDATE_MANIFEST_NAME: &str = "portable-update-darwin.json";
 const CODEX_MODEL_CATALOG_URL: &str = "https://raw.githubusercontent.com/router-for-me/EasyCLIProxyAPI/main/src-tauri/resources/codex_models/model-catalog.json";
 const CODEX_MODEL_CATALOG_OVERRIDE_DIR: &str = "codex_models";
 const CODEX_MODEL_CATALOG_SOURCE_FILE: &str = "model-catalog.json";
@@ -85,6 +95,8 @@ const APP_UPDATE_PROGRESS_EVENT: &str = "app-update-progress";
 const PORTABLE_APP_MANIFEST_FILE: &str = "portable-app.json";
 #[cfg(windows)]
 const PORTABLE_APP_BINARY: &str = "EasyCLIProxyAPI.exe";
+#[cfg(target_os = "linux")]
+const PORTABLE_APP_BINARY: &str = "EasyCLIProxyAPI";
 const CORE_INSTALL_PROGRESS_EVENT: &str = "core-install-progress";
 const CORE_STATUS_EVENT: &str = "core-status-changed";
 const CONFIG_FILES_CHANGED_EVENT: &str = "config-files-changed";
@@ -449,13 +461,13 @@ impl Default for AppUpdateTask {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 struct PortablePackagePayload {
     manifest: PortableAppManifest,
     core_archive_name: Option<String>,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PortableUpdateDescriptor {
@@ -472,6 +484,20 @@ struct PortableUpdateDescriptor {
     staged_core_archive: PathBuf,
     target_core_archive: PathBuf,
     install_core_archive: bool,
+    ack_path: PathBuf,
+    work_dir: PathBuf,
+    target_version: String,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MacosUpdateDescriptor {
+    parent_pid: u32,
+    current_app: PathBuf,
+    staged_app: PathBuf,
+    backup_app: PathBuf,
+    executable_relative_path: PathBuf,
     ack_path: PathBuf,
     work_dir: PathBuf,
     target_version: String,
@@ -1215,7 +1241,7 @@ impl AppUpdateState {
         Ok(pending)
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     fn update_task<F>(&self, update: F) -> AppUpdateTask
     where
         F: FnOnce(&mut AppUpdateTask),
@@ -1575,7 +1601,7 @@ struct GithubAsset {
 }
 
 fn main() {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     {
         let mut args = env::args_os();
         while let Some(argument) = args.next() {

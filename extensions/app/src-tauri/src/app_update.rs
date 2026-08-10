@@ -30,15 +30,13 @@ pub(crate) async fn check_app_update(
     let portable_support = target
         .map(|(_, arch)| validate_local_portable_app_manifest(arch))
         .transpose()?;
-    let auto_update_supported = cfg!(windows) && portable_support == Some(true) && asset.is_some();
+    let auto_update_supported = portable_support == Some(true) && asset.is_some();
     let unsupported_reason = if auto_update_supported {
         None
-    } else if !cfg!(windows) {
-        Some("应用内自动升级当前仅支持 Windows 便携版".to_string())
     } else if portable_support != Some(true) {
         Some("当前程序不是支持自动升级的便携版，请手动下载首个支持版本".to_string())
     } else {
-        Some("更新清单不包含当前 Windows 架构".to_string())
+        Some("更新清单不包含当前平台或架构".to_string())
     };
 
     let pending = if update_available && auto_update_supported {
@@ -261,71 +259,73 @@ pub(crate) fn validate_portable_update_manifest(
     {
         return Err("软件更新发布地址不受信任".to_string());
     }
-    if manifest.assets.len() != 2 {
-        return Err("软件更新清单必须包含两个 Windows 架构".to_string());
-    }
-    for (key, arch) in [("windows-amd64", "amd64"), ("windows-aarch64", "aarch64")] {
-        let asset = manifest
-            .assets
-            .get(key)
-            .ok_or_else(|| format!("软件更新清单缺少 {key}"))?;
-        validate_portable_update_asset(asset)?;
-        let full_package_name = format!(
-            "EasyCLIProxyAPI-v{}-Windows-{arch}.zip",
-            manifest.version.trim().trim_start_matches('v')
-        );
-        let full_package_url = format!(
-            "{APP_RELEASE_DOWNLOAD_PREFIX}v{}/{}",
-            manifest.version.trim().trim_start_matches('v'),
-            full_package_name
-        );
-        let legacy_package_name = format!(
-            "EasyCLIProxyAPI-update-v{}-Windows-{arch}.zip",
-            manifest.version.trim().trim_start_matches('v')
-        );
-        let legacy_package_url = format!(
-            "{APP_RELEASE_DOWNLOAD_PREFIX}v{}/{}",
-            manifest.version.trim().trim_start_matches('v'),
-            legacy_package_name
-        );
-        if asset.url != full_package_url && asset.url != legacy_package_url {
-            return Err(format!("软件更新资产名称与 {key} 不匹配"));
-        }
-        validate_portable_update_asset_fallbacks(
-            asset,
-            &format!("v{}", manifest.version.trim().trim_start_matches('v')),
-            &[&full_package_name, &legacy_package_name],
+    let (platform, display_platform, suffix) = portable_update_asset_platform()?;
+    validate_portable_update_asset_catalog(
+        &manifest.assets,
+        manifest,
+        platform,
+        display_platform,
+        suffix,
+        platform == "windows",
+    )?;
+    if let Some(full_assets) = &manifest.full_assets {
+        validate_portable_update_asset_catalog(
+            full_assets,
+            manifest,
+            platform,
+            display_platform,
+            suffix,
+            false,
         )?;
     }
-    if let Some(full_assets) = &manifest.full_assets {
-        if full_assets.len() != 2 {
-            return Err(
-                "Full update asset catalog must contain both Windows architectures".to_string(),
-            );
+    Ok(())
+}
+
+pub(crate) fn portable_update_asset_platform(
+) -> Result<(&'static str, &'static str, &'static str), String> {
+    match portable_update_platform_key() {
+        Some("windows") => Ok(("windows", "Windows", "zip")),
+        Some("linux") => Ok(("linux", "Linux", "tar.gz")),
+        Some("darwin") => Ok(("darwin", "Darwin", "dmg")),
+        _ => Err("当前平台不支持应用内自动升级".to_string()),
+    }
+}
+
+fn validate_portable_update_asset_catalog(
+    assets: &std::collections::HashMap<String, PortableUpdateAsset>,
+    manifest: &PortableUpdateManifest,
+    platform: &str,
+    display_platform: &str,
+    suffix: &str,
+    allow_windows_legacy: bool,
+) -> Result<(), String> {
+    if assets.len() != 2 {
+        return Err(format!("软件更新清单必须包含两个 {display_platform} 架构"));
+    }
+    let version = manifest.version.trim().trim_start_matches('v');
+    let tag = format!("v{version}");
+    for arch in ["amd64", "aarch64"] {
+        let key = format!("{platform}-{arch}");
+        let asset = assets
+            .get(&key)
+            .ok_or_else(|| format!("软件更新清单缺少 {key}"))?;
+        validate_portable_update_asset(asset)?;
+        let full_package_name =
+            format!("EasyCLIProxyAPI-v{version}-{display_platform}-{arch}.{suffix}");
+        let full_package_url = format!("{APP_RELEASE_DOWNLOAD_PREFIX}{tag}/{full_package_name}");
+        let legacy_package_name = format!("EasyCLIProxyAPI-update-v{version}-Windows-{arch}.zip");
+        let legacy_package_url =
+            format!("{APP_RELEASE_DOWNLOAD_PREFIX}{tag}/{legacy_package_name}");
+        let is_expected = asset.url == full_package_url
+            || (allow_windows_legacy && asset.url == legacy_package_url);
+        if !is_expected {
+            return Err(format!("软件更新资产名称与 {key} 不匹配"));
         }
-        for (key, arch) in [("windows-amd64", "amd64"), ("windows-aarch64", "aarch64")] {
-            let asset = full_assets
-                .get(key)
-                .ok_or_else(|| format!("Full update asset catalog is missing {key}"))?;
-            validate_portable_update_asset(asset)?;
-            let package_name = format!(
-                "EasyCLIProxyAPI-v{}-Windows-{arch}.zip",
-                manifest.version.trim().trim_start_matches('v')
-            );
-            let expected_url = format!(
-                "{APP_RELEASE_DOWNLOAD_PREFIX}v{}/{}",
-                manifest.version.trim().trim_start_matches('v'),
-                package_name
-            );
-            if asset.url != expected_url {
-                return Err(format!("Full update asset name does not match {key}"));
-            }
-            validate_portable_update_asset_fallbacks(
-                asset,
-                &format!("v{}", manifest.version.trim().trim_start_matches('v')),
-                &[&package_name],
-            )?;
+        let mut expected_filenames = vec![full_package_name.as_str()];
+        if allow_windows_legacy {
+            expected_filenames.push(legacy_package_name.as_str());
         }
+        validate_portable_update_asset_fallbacks(asset, &tag, &expected_filenames)?;
     }
     Ok(())
 }
@@ -391,18 +391,43 @@ pub(crate) fn validate_portable_update_asset_fallbacks_for_repository(
 }
 
 pub(crate) fn portable_update_target() -> Option<(&'static str, &'static str)> {
-    if !cfg!(windows) {
-        return None;
-    }
-    match env::consts::ARCH {
-        "x86_64" => Some(("windows-amd64", "amd64")),
-        "aarch64" => Some(("windows-aarch64", "aarch64")),
+    let platform = portable_update_platform_key()?;
+    let arch = match env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "aarch64",
+        _ => return None,
+    };
+    match (platform, arch) {
+        ("windows", "amd64") => Some(("windows-amd64", "amd64")),
+        ("windows", "aarch64") => Some(("windows-aarch64", "aarch64")),
+        ("linux", "amd64") => Some(("linux-amd64", "amd64")),
+        ("linux", "aarch64") => Some(("linux-aarch64", "aarch64")),
+        ("darwin", "amd64") => Some(("darwin-amd64", "amd64")),
+        ("darwin", "aarch64") => Some(("darwin-aarch64", "aarch64")),
         _ => None,
     }
 }
 
+pub(crate) fn portable_update_platform_key() -> Option<&'static str> {
+    match env::consts::OS {
+        "windows" => Some("windows"),
+        "linux" => Some("linux"),
+        "macos" => Some("darwin"),
+        _ => None,
+    }
+}
+
+pub(crate) fn local_portable_app_manifest_path() -> Result<PathBuf, String> {
+    let executable_dir = executable_dir()?;
+    #[cfg(target_os = "macos")]
+    if let Some(resources_dir) = macos_app_resources_dir(&executable_dir) {
+        return Ok(resources_dir.join(PORTABLE_APP_MANIFEST_FILE));
+    }
+    Ok(executable_dir.join(PORTABLE_APP_MANIFEST_FILE))
+}
+
 pub(crate) fn validate_local_portable_app_manifest(expected_arch: &str) -> Result<bool, String> {
-    let path = executable_dir()?.join(PORTABLE_APP_MANIFEST_FILE);
+    let path = local_portable_app_manifest_path()?;
     if !path.is_file() {
         return Ok(false);
     }
@@ -412,7 +437,7 @@ pub(crate) fn validate_local_portable_app_manifest(expected_arch: &str) -> Resul
         .map_err(|error| format!("解析便携版标识失败: {error}"))?;
     Ok(manifest.schema_version == 1
         && manifest.application == "EasyCLIProxyAPI"
-        && manifest.platform == "windows"
+        && Some(manifest.platform.as_str()) == portable_update_platform_key()
         && manifest.arch == expected_arch
         && manifest.auto_update
         && normalize_version(&manifest.version) == normalize_version(env!("CARGO_PKG_VERSION")))
@@ -439,8 +464,8 @@ pub(crate) async fn start_app_update(
     state: tauri::State<'_, AppUpdateState>,
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<(), String> {
-    if !cfg!(windows) {
-        return Err("应用内自动升级当前仅支持 Windows 便携版".to_string());
+    if portable_update_platform_key().is_none() {
+        return Err("当前平台不支持应用内自动升级".to_string());
     }
     let proxy_url = gui_config_state.snapshot()?.proxy_url;
     let token = CancellationToken::new();
@@ -474,10 +499,10 @@ pub(crate) async fn download_and_stage_portable_app_update(
     token: &CancellationToken,
     proxy_url: &str,
 ) -> Result<(), String> {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = (app, pending, token, proxy_url);
-        Err("应用内自动升级当前仅支持 Windows 便携版".to_string())
+        Err("当前平台不支持应用内自动升级".to_string())
     }
 
     #[cfg(windows)]
@@ -592,9 +617,188 @@ pub(crate) async fn download_and_stage_portable_app_update(
         }
         result
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        validate_portable_update_asset(&pending.asset)?;
+        let work_dir = portable_update_work_dir(&pending.version);
+        fs::create_dir_all(&work_dir)
+            .map_err(|error| format!("创建应用更新临时目录失败: {error}"))?;
+        let archive_path = work_dir.join("update.tar.gz");
+        let result = async {
+            download_portable_update_archive(app, pending, token, &archive_path, proxy_url).await?;
+            ensure_portable_update_download(token, &archive_path, pending)?;
+            update_app_task(app, |task| {
+                task.cancellable = false;
+                task.phase = "staging".to_string();
+                task.message = Some("正在准备应用更新".to_string());
+            });
+
+            let staging_dir = work_dir.join("staging");
+            let package = extract_portable_update_tar_gz(&archive_path, &staging_dir)?;
+            if normalize_version(&package.manifest.version) != normalize_version(&pending.version)
+                || package.manifest.platform != "linux"
+                || package.manifest.arch != pending.arch
+            {
+                return Err("应用更新包版本或架构不匹配".to_string());
+            }
+            let core_archive_name = package
+                .core_archive_name
+                .ok_or_else(|| "Linux 应用更新包缺少内置核心".to_string())?;
+            let current_exe =
+                env::current_exe().map_err(|error| format!("读取当前程序路径失败: {error}"))?;
+            let app_dir = current_exe
+                .parent()
+                .ok_or_else(|| "当前程序路径没有父目录".to_string())?;
+            preflight_portable_update_directory(app_dir)?;
+            let helper_path = work_dir.join("EasyCLIProxyAPI-updater");
+            fs::copy(&current_exe, &helper_path)
+                .map_err(|error| format!("准备应用更新助手失败: {error}"))?;
+
+            let descriptor = PortableUpdateDescriptor {
+                parent_pid: std::process::id(),
+                current_exe: current_exe.clone(),
+                staged_exe: staging_dir.join(PORTABLE_APP_BINARY),
+                current_manifest: app_dir.join(PORTABLE_APP_MANIFEST_FILE),
+                staged_manifest: staging_dir.join(PORTABLE_APP_MANIFEST_FILE),
+                backup_exe: app_dir.join(".EasyCLIProxyAPI.update-backup"),
+                backup_manifest: app_dir.join(".portable-app.json.update-backup"),
+                current_core_version: app_dir.join(CORE_VERSION_FILE),
+                staged_core_version: staging_dir.join(CORE_VERSION_FILE),
+                backup_core_version: app_dir.join(".core-version.txt.update-backup"),
+                staged_core_archive: staging_dir.join("cpa-core").join(&core_archive_name),
+                target_core_archive: app_dir.join("cpa-core").join(&core_archive_name),
+                install_core_archive: !app_dir.join("cpa-core").join(&core_archive_name).is_file(),
+                ack_path: work_dir.join("update-started.ack"),
+                work_dir: work_dir.clone(),
+                target_version: pending.version.clone(),
+            };
+            launch_portable_update_helper(app, &helper_path, &work_dir, &descriptor).await
+        }
+        .await;
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&work_dir);
+        }
+        result
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        validate_portable_update_asset(&pending.asset)?;
+        let work_dir = portable_update_work_dir(&pending.version);
+        fs::create_dir_all(&work_dir)
+            .map_err(|error| format!("创建应用更新临时目录失败: {error}"))?;
+        let archive_path = work_dir.join("update.dmg");
+        let result = async {
+            download_portable_update_archive(app, pending, token, &archive_path, proxy_url).await?;
+            ensure_portable_update_download(token, &archive_path, pending)?;
+            update_app_task(app, |task| {
+                task.cancellable = false;
+                task.phase = "staging".to_string();
+                task.message = Some("正在准备应用更新".to_string());
+            });
+
+            let staged_app = work_dir.join("staging").join("EasyCLIProxyAPI.app");
+            stage_macos_application_from_dmg(&archive_path, &work_dir, &staged_app)?;
+            validate_macos_staged_application(&staged_app, pending)?;
+            let current_exe =
+                env::current_exe().map_err(|error| format!("读取当前程序路径失败: {error}"))?;
+            let current_app = macos_application_bundle_from_executable(&current_exe)?;
+            preflight_macos_update_directory(&current_app)?;
+            let executable_relative_path = current_exe
+                .strip_prefix(&current_app)
+                .map_err(|_| "macOS 应用程序路径无效".to_string())?
+                .to_path_buf();
+            let helper_path = work_dir.join("EasyCLIProxyAPI-updater");
+            fs::copy(&current_exe, &helper_path)
+                .map_err(|error| format!("准备应用更新助手失败: {error}"))?;
+            let app_parent = current_app
+                .parent()
+                .ok_or_else(|| "macOS 应用程序路径没有父目录".to_string())?;
+            let descriptor = MacosUpdateDescriptor {
+                parent_pid: std::process::id(),
+                current_app,
+                staged_app,
+                backup_app: app_parent.join(".EasyCLIProxyAPI.app.update-backup"),
+                executable_relative_path,
+                ack_path: work_dir.join("update-started.ack"),
+                work_dir: work_dir.clone(),
+                target_version: pending.version.clone(),
+            };
+            launch_portable_update_helper(app, &helper_path, &work_dir, &descriptor).await
+        }
+        .await;
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&work_dir);
+        }
+        result
+    }
 }
 
-#[cfg(windows)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn portable_update_work_dir(version: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "EasyCLIProxyAPI-update-{}-{}-{}",
+        version,
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn ensure_portable_update_download(
+    token: &CancellationToken,
+    archive_path: &Path,
+    pending: &PendingAppUpdate,
+) -> Result<(), String> {
+    if token.is_cancelled() {
+        return Err("应用更新下载已取消".to_string());
+    }
+    let actual_sha256 = sha256_file(archive_path)?;
+    if actual_sha256 != pending.asset.sha256.trim().to_ascii_lowercase() {
+        return Err("应用更新包 SHA-256 校验失败".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn launch_portable_update_helper<T: Serialize>(
+    app: &tauri::AppHandle,
+    helper_path: &Path,
+    work_dir: &Path,
+    descriptor: &T,
+) -> Result<(), String> {
+    let descriptor_path = work_dir.join("update-descriptor.json");
+    fs::write(
+        &descriptor_path,
+        serde_json::to_vec_pretty(descriptor)
+            .map_err(|error| format!("序列化应用更新描述失败: {error}"))?,
+    )
+    .map_err(|error| format!("写入应用更新描述失败: {error}"))?;
+    let mut command = Command::new(helper_path);
+    command
+        .arg("--portable-update-helper")
+        .arg(&descriptor_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+        .spawn()
+        .map_err(|error| format!("启动应用更新助手失败: {error}"))?;
+    update_app_task(app, |task| {
+        task.cancellable = false;
+        task.phase = "restarting".to_string();
+        task.message = Some("更新已准备完成，应用即将重启".to_string());
+    });
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    app.exit(0);
+    Ok(())
+}
+
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 pub(crate) async fn download_portable_update_archive(
     app: &tauri::AppHandle,
     pending: &PendingAppUpdate,
@@ -634,7 +838,7 @@ pub(crate) async fn download_portable_update_archive(
     Err(format!("所有应用更新下载源均失败: {}", failures.join("; ")))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 pub(crate) async fn download_portable_update_archive_url(
     app: &tauri::AppHandle,
     pending: &PendingAppUpdate,
@@ -689,7 +893,7 @@ pub(crate) async fn download_portable_update_archive_url(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 pub(crate) fn update_app_task<F>(app: &tauri::AppHandle, update: F)
 where
     F: FnOnce(&mut AppUpdateTask),
@@ -699,7 +903,7 @@ where
     let _ = app.emit(APP_UPDATE_PROGRESS_EVENT, task);
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 pub(crate) fn format_byte_count(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut value = bytes as f64;
@@ -879,6 +1083,165 @@ pub(crate) fn extract_portable_update_archive(
     })
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn extract_portable_update_tar_gz(
+    archive_path: &Path,
+    staging_dir: &Path,
+) -> Result<PortablePackagePayload, String> {
+    fs::create_dir_all(staging_dir)
+        .map_err(|error| format!("创建应用更新暂存目录失败: {error}"))?;
+    let file = File::open(archive_path).map_err(|error| format!("打开应用更新包失败: {error}"))?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+    let entries = archive
+        .entries()
+        .map_err(|error| format!("读取应用更新 TAR.GZ 失败: {error}"))?;
+    let mut package_root = None::<String>;
+    let mut seen_binary = false;
+    let mut seen_manifest = false;
+    let mut seen_core_version = false;
+    let mut core_archive_name = None::<String>;
+    let mut regular_file_count = 0_u32;
+
+    for entry in entries {
+        let mut entry = entry.map_err(|error| format!("读取应用更新条目失败: {error}"))?;
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            continue;
+        }
+        if !entry_type.is_file() {
+            return Err("应用更新包不能包含链接或特殊文件".to_string());
+        }
+        let entry_path = entry
+            .path()
+            .map_err(|error| format!("读取应用更新条目路径失败: {error}"))?;
+        let mut components = Vec::new();
+        for component in entry_path.components() {
+            match component {
+                Component::Normal(value) => components.push(value.to_string_lossy().into_owned()),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err("应用更新包包含不安全路径".to_string());
+                }
+            }
+        }
+        if components.len() < 2 || components.iter().any(String::is_empty) {
+            return Err("应用更新包目录结构无效".to_string());
+        }
+        let root = &components[0];
+        if package_root.as_deref().is_some_and(|value| value != root) {
+            return Err("应用更新包必须只包含一个顶层目录".to_string());
+        }
+        package_root.get_or_insert_with(|| root.clone());
+        let relative = &components[1..];
+        let relative_name = relative.join("/");
+        regular_file_count = regular_file_count.saturating_add(1);
+        let size = entry.size();
+        let destination = match relative_name.as_str() {
+            PORTABLE_APP_BINARY if !seen_binary => {
+                if size == 0 || size > 256 * 1024 * 1024 {
+                    return Err("应用更新程序大小异常".to_string());
+                }
+                seen_binary = true;
+                staging_dir.join(PORTABLE_APP_BINARY)
+            }
+            PORTABLE_APP_MANIFEST_FILE if !seen_manifest => {
+                if size == 0 || size > 64 * 1024 {
+                    return Err("应用更新标识大小异常".to_string());
+                }
+                seen_manifest = true;
+                staging_dir.join(PORTABLE_APP_MANIFEST_FILE)
+            }
+            CORE_VERSION_FILE if !seen_core_version => {
+                if size == 0 || size > 1024 {
+                    return Err("应用更新包内核版本文件大小异常".to_string());
+                }
+                seen_core_version = true;
+                staging_dir.join(CORE_VERSION_FILE)
+            }
+            _ if relative.len() == 2
+                && relative[0] == "cpa-core"
+                && core_archive_name.is_none() =>
+            {
+                let filename = &relative[1];
+                if !filename.starts_with("CLIProxyAPI_")
+                    || !filename.ends_with(".tar.gz")
+                    || filename.contains("_no-plugin")
+                    || size == 0
+                    || size > 512 * 1024 * 1024
+                {
+                    return Err("应用更新包内置内核压缩包无效".to_string());
+                }
+                core_archive_name = Some(filename.clone());
+                let core_staging_dir = staging_dir.join("cpa-core");
+                fs::create_dir_all(&core_staging_dir)
+                    .map_err(|error| format!("创建内置内核暂存目录失败: {error}"))?;
+                core_staging_dir.join(filename)
+            }
+            _ => return Err(format!("应用更新包包含未知文件: {relative_name}")),
+        };
+        let mut output = File::create(&destination)
+            .map_err(|error| format!("创建应用更新暂存文件失败: {error}"))?;
+        io::copy(&mut entry, &mut output)
+            .map_err(|error| format!("解压应用更新文件失败: {error}"))?;
+        output
+            .flush()
+            .map_err(|error| format!("保存应用更新暂存文件失败: {error}"))?;
+    }
+    if regular_file_count != 4
+        || !seen_binary
+        || !seen_manifest
+        || !seen_core_version
+        || core_archive_name.is_none()
+    {
+        return Err("应用更新包缺少必要文件".to_string());
+    }
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(
+        staging_dir.join(PORTABLE_APP_BINARY),
+        fs::Permissions::from_mode(0o755),
+    )
+    .map_err(|error| format!("设置应用更新程序权限失败: {error}"))?;
+    let manifest = fs::read_to_string(staging_dir.join(PORTABLE_APP_MANIFEST_FILE))
+        .map_err(|error| format!("读取应用更新标识失败: {error}"))?;
+    let manifest = serde_json::from_str::<PortableAppManifest>(&manifest)
+        .map_err(|error| format!("解析应用更新标识失败: {error}"))?;
+    if manifest.schema_version != 1
+        || manifest.application != "EasyCLIProxyAPI"
+        || manifest.platform != "linux"
+        || !manifest.auto_update
+    {
+        return Err("应用更新标识无效".to_string());
+    }
+    let expected_root = format!(
+        "EasyCLIProxyAPI-v{}-Linux-{}",
+        manifest.version.trim().trim_start_matches('v'),
+        manifest.arch
+    );
+    if package_root.as_deref() != Some(expected_root.as_str()) {
+        return Err("应用更新包顶层目录与版本或架构不匹配".to_string());
+    }
+    let core_version = fs::read_to_string(staging_dir.join(CORE_VERSION_FILE))
+        .map_err(|error| format!("读取内置内核版本失败: {error}"))?;
+    let core_version = core_version.trim().trim_start_matches('v');
+    if core_version.is_empty()
+        || !core_version
+            .split('.')
+            .all(|segment| !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err("应用更新包内置内核版本无效".to_string());
+    }
+    let expected_core_archive =
+        format!("CLIProxyAPI_{core_version}_linux_{}.tar.gz", manifest.arch);
+    if core_archive_name.as_deref() != Some(expected_core_archive.as_str()) {
+        return Err("应用更新包内置内核版本或架构不匹配".to_string());
+    }
+    Ok(PortablePackagePayload {
+        manifest,
+        core_archive_name,
+    })
+}
+
 #[cfg(windows)]
 pub(crate) fn stage_current_portable_core_payload(
     app_dir: &Path,
@@ -916,7 +1279,7 @@ pub(crate) fn stage_current_portable_core_payload(
     Ok(core_archive_name)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn preflight_portable_update_directory(app_dir: &Path) -> Result<(), String> {
     if !app_dir.join(CORE_VERSION_FILE).is_file() || !app_dir.join("cpa-core").is_dir() {
         return Err("当前便携版目录不完整，请下载最新版完整包覆盖升级".to_string());
@@ -974,6 +1337,35 @@ pub(crate) fn wait_for_windows_process_exit(
 }
 
 #[cfg(windows)]
+pub(crate) fn wait_for_portable_parent_exit(pid: u32, timeout: Duration) -> Result<(), String> {
+    wait_for_windows_process_exit(pid, timeout)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn wait_for_portable_parent_exit(pid: u32, timeout: Duration) -> Result<(), String> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return Err("应用更新父进程编号无效".to_string());
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        let result = unsafe { libc::kill(pid as i32, 0) };
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(());
+            }
+            if error.raw_os_error() != Some(libc::EPERM) {
+                return Err(format!("检查旧版应用进程失败: {error}"));
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("等待旧版应用退出超时".to_string());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn validate_portable_update_descriptor(
     descriptor_path: &Path,
     descriptor: &PortableUpdateDescriptor,
@@ -990,7 +1382,7 @@ pub(crate) fn validate_portable_update_descriptor(
     if !descriptor.current_exe.is_absolute()
         || descriptor.current_exe != app_dir.join(PORTABLE_APP_BINARY)
         || descriptor.current_manifest != app_dir.join(PORTABLE_APP_MANIFEST_FILE)
-        || descriptor.backup_exe != app_dir.join(".EasyCLIProxyAPI.exe.update-backup")
+        || descriptor.backup_exe != app_dir.join(portable_update_backup_executable_name())
         || descriptor.backup_manifest != app_dir.join(".portable-app.json.update-backup")
         || descriptor.current_core_version != app_dir.join(CORE_VERSION_FILE)
         || descriptor.backup_core_version != app_dir.join(".core-version.txt.update-backup")
@@ -1005,7 +1397,9 @@ pub(crate) fn validate_portable_update_descriptor(
         || !core_archive_name
             .to_string_lossy()
             .starts_with("CLIProxyAPI_")
-        || !core_archive_name.to_string_lossy().ends_with(".zip")
+        || !core_archive_name
+            .to_string_lossy()
+            .ends_with(portable_update_core_archive_suffix())
         || descriptor.install_core_archive == descriptor.target_core_archive.is_file()
     {
         return Err("应用更新内置内核目标路径无效".to_string());
@@ -1069,7 +1463,34 @@ pub(crate) fn validate_portable_update_descriptor(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
+fn portable_update_backup_executable_name() -> &'static str {
+    if cfg!(windows) {
+        ".EasyCLIProxyAPI.exe.update-backup"
+    } else {
+        ".EasyCLIProxyAPI.update-backup"
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn portable_update_replacement_executable_name() -> &'static str {
+    if cfg!(windows) {
+        ".EasyCLIProxyAPI.exe.update-new"
+    } else {
+        ".EasyCLIProxyAPI.update-new"
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn portable_update_core_archive_suffix() -> &'static str {
+    if cfg!(windows) {
+        ".zip"
+    } else {
+        ".tar.gz"
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn restore_portable_update_backup(
     descriptor: &PortableUpdateDescriptor,
 ) -> Result<(), String> {
@@ -1107,7 +1528,7 @@ pub(crate) fn restore_portable_update_backup(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn replace_portable_update_files(
     descriptor: &PortableUpdateDescriptor,
 ) -> Result<(), String> {
@@ -1115,7 +1536,7 @@ pub(crate) fn replace_portable_update_files(
         .current_exe
         .parent()
         .ok_or_else(|| "应用更新目标路径无效".to_string())?;
-    let replacement_exe = app_dir.join(".EasyCLIProxyAPI.exe.update-new");
+    let replacement_exe = app_dir.join(portable_update_replacement_executable_name());
     let replacement_manifest = app_dir.join(".portable-app.json.update-new");
     let replacement_core_version = app_dir.join(".core-version.txt.update-new");
     let replacement_core_archive = app_dir.join(".cpa-core-archive.update-new");
@@ -1199,7 +1620,7 @@ pub(crate) fn replace_portable_update_files(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn cleanup_superseded_bundled_core_archives(descriptor: &PortableUpdateDescriptor) {
     let Some(core_dir) = descriptor.target_core_archive.parent() else {
         return;
@@ -1220,7 +1641,7 @@ pub(crate) fn cleanup_superseded_bundled_core_archives(descriptor: &PortableUpda
         if path.is_file()
             && name != current_name
             && name.starts_with("CLIProxyAPI_")
-            && name.ends_with(".zip")
+            && name.ends_with(portable_update_core_archive_suffix())
             && !name.contains("_no-plugin")
         {
             if let Err(error) = fs::remove_file(&path) {
@@ -1233,25 +1654,29 @@ pub(crate) fn cleanup_superseded_bundled_core_archives(descriptor: &PortableUpda
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn cleanup_portable_update_payload(
     descriptor_path: &Path,
     descriptor: &PortableUpdateDescriptor,
 ) {
-    let _ = fs::remove_file(descriptor.work_dir.join("update.zip"));
+    let _ = fs::remove_file(descriptor.work_dir.join(if cfg!(windows) {
+        "update.zip"
+    } else {
+        "update.tar.gz"
+    }));
     let _ = fs::remove_dir_all(descriptor.work_dir.join("staging"));
     let _ = fs::remove_file(&descriptor.ack_path);
     let _ = fs::remove_file(descriptor_path);
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), String> {
     let descriptor = serde_json::from_slice::<PortableUpdateDescriptor>(
         &fs::read(descriptor_path).map_err(|error| format!("读取应用更新描述失败: {error}"))?,
     )
     .map_err(|error| format!("解析应用更新描述失败: {error}"))?;
     validate_portable_update_descriptor(descriptor_path, &descriptor)?;
-    wait_for_windows_process_exit(descriptor.parent_pid, Duration::from_secs(120))?;
+    wait_for_portable_parent_exit(descriptor.parent_pid, Duration::from_secs(120))?;
 
     if let Err(error) = replace_portable_update_files(&descriptor) {
         let mut rollback = Command::new(&descriptor.current_exe);
@@ -1315,6 +1740,333 @@ pub(crate) fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), S
     configure_background_command(&mut rollback);
     let _ = rollback.spawn();
     cleanup_portable_update_payload(descriptor_path, &descriptor);
+    Err(format!(
+        "新版应用 {} 未能在 60 秒内完成启动确认，已回滚",
+        descriptor.target_version
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos_update_command(command: &mut Command, action: &str) -> Result<(), String> {
+    let output = command
+        .output()
+        .map_err(|error| format!("{action}失败: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("{action}失败: {}", stderr.trim()))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn stage_macos_application_from_dmg(
+    dmg_path: &Path,
+    work_dir: &Path,
+    staged_app: &Path,
+) -> Result<(), String> {
+    let mount_dir = work_dir.join("mount");
+    fs::create_dir_all(&mount_dir).map_err(|error| format!("创建 DMG 挂载目录失败: {error}"))?;
+    let mut attach = Command::new("hdiutil");
+    attach
+        .arg("attach")
+        .arg(dmg_path)
+        .args(["-nobrowse", "-readonly", "-mountpoint"])
+        .arg(&mount_dir);
+    run_macos_update_command(&mut attach, "挂载应用更新 DMG")?;
+
+    let source_app = mount_dir.join("EasyCLIProxyAPI.app");
+    let stage_result = (|| -> Result<(), String> {
+        if !source_app.is_dir() {
+            return Err("应用更新 DMG 缺少 EasyCLIProxyAPI.app".to_string());
+        }
+        let staging_parent = staged_app
+            .parent()
+            .ok_or_else(|| "应用更新暂存路径无效".to_string())?;
+        fs::create_dir_all(staging_parent)
+            .map_err(|error| format!("创建应用更新暂存目录失败: {error}"))?;
+        let mut ditto = Command::new("ditto");
+        ditto.arg(&source_app).arg(staged_app);
+        run_macos_update_command(&mut ditto, "暂存新版 macOS 应用")?;
+        let mut codesign = Command::new("codesign");
+        codesign
+            .args(["--verify", "--deep", "--strict"])
+            .arg(staged_app);
+        run_macos_update_command(&mut codesign, "校验新版 macOS 应用签名")
+    })();
+
+    let mut detach = Command::new("hdiutil");
+    detach.arg("detach").arg(&mount_dir);
+    let detach_result = run_macos_update_command(&mut detach, "卸载应用更新 DMG");
+    match (stage_result, detach_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn validate_macos_staged_application(
+    staged_app: &Path,
+    pending: &PendingAppUpdate,
+) -> Result<(), String> {
+    let manifest_path = staged_app
+        .join("Contents")
+        .join("Resources")
+        .join(PORTABLE_APP_MANIFEST_FILE);
+    let contents = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("读取新版 macOS 自动更新标识失败: {error}"))?;
+    let manifest = serde_json::from_str::<PortableAppManifest>(&contents)
+        .map_err(|error| format!("解析新版 macOS 自动更新标识失败: {error}"))?;
+    if manifest.schema_version != 1
+        || manifest.application != "EasyCLIProxyAPI"
+        || manifest.platform != "darwin"
+        || manifest.arch != pending.arch
+        || !manifest.auto_update
+        || normalize_version(&manifest.version) != normalize_version(&pending.version)
+    {
+        return Err("新版 macOS 应用标识与更新目标不匹配".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_application_bundle_from_executable(
+    executable: &Path,
+) -> Result<PathBuf, String> {
+    let macos_dir = executable
+        .parent()
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some("MacOS"))
+        .ok_or_else(|| "当前程序不在标准 macOS 应用包中".to_string())?;
+    let contents_dir = macos_dir
+        .parent()
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some("Contents"))
+        .ok_or_else(|| "当前程序不在标准 macOS 应用包中".to_string())?;
+    let app = contents_dir
+        .parent()
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("app"))
+        .ok_or_else(|| "当前程序不在标准 macOS 应用包中".to_string())?;
+    Ok(app.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn preflight_macos_update_directory(current_app: &Path) -> Result<(), String> {
+    if !current_app.is_dir() {
+        return Err("当前 macOS 应用包不存在".to_string());
+    }
+    let app_parent = current_app
+        .parent()
+        .ok_or_else(|| "macOS 应用包没有父目录".to_string())?;
+    let probe = app_parent.join(format!(
+        ".easycliproxy-update-write-test-{}",
+        std::process::id()
+    ));
+    fs::write(&probe, b"update-write-test")
+        .map_err(|error| format!("macOS 应用目录不可写，无法自动升级: {error}"))?;
+    fs::remove_file(&probe).map_err(|error| format!("清理应用更新写入测试失败: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn validate_macos_update_descriptor(
+    descriptor_path: &Path,
+    descriptor: &MacosUpdateDescriptor,
+) -> Result<(), String> {
+    if descriptor.parent_pid == 0
+        || semver::Version::parse(descriptor.target_version.trim().trim_start_matches('v')).is_err()
+        || !descriptor.current_app.is_absolute()
+        || descriptor
+            .current_app
+            .extension()
+            .and_then(|value| value.to_str())
+            != Some("app")
+    {
+        return Err("macOS 应用更新描述无效".to_string());
+    }
+    let app_parent = descriptor
+        .current_app
+        .parent()
+        .ok_or_else(|| "macOS 应用更新目标路径无效".to_string())?;
+    if descriptor.backup_app != app_parent.join(".EasyCLIProxyAPI.app.update-backup")
+        || descriptor.executable_relative_path.is_absolute()
+        || descriptor
+            .executable_relative_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || !descriptor
+            .executable_relative_path
+            .starts_with(Path::new("Contents").join("MacOS"))
+    {
+        return Err("macOS 应用更新目标路径无效".to_string());
+    }
+    let canonical_work_dir = fs::canonicalize(&descriptor.work_dir)
+        .map_err(|error| format!("读取应用更新临时目录失败: {error}"))?;
+    let canonical_temp_dir = fs::canonicalize(env::temp_dir())
+        .map_err(|error| format!("读取系统临时目录失败: {error}"))?;
+    if !canonical_work_dir.starts_with(&canonical_temp_dir)
+        || !canonical_work_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.starts_with("EasyCLIProxyAPI-update-"))
+    {
+        return Err("应用更新工作目录无效".to_string());
+    }
+    let canonical_descriptor = fs::canonicalize(descriptor_path)
+        .map_err(|error| format!("读取应用更新描述路径失败: {error}"))?;
+    let canonical_staged_app = fs::canonicalize(&descriptor.staged_app)
+        .map_err(|error| format!("读取新版 macOS 应用路径失败: {error}"))?;
+    if canonical_descriptor.parent() != Some(canonical_work_dir.as_path())
+        || canonical_descriptor
+            .file_name()
+            .and_then(|value| value.to_str())
+            != Some("update-descriptor.json")
+        || descriptor.staged_app
+            != descriptor
+                .work_dir
+                .join("staging")
+                .join("EasyCLIProxyAPI.app")
+        || !canonical_staged_app.starts_with(&canonical_work_dir)
+        || descriptor.ack_path != descriptor.work_dir.join("update-started.ack")
+    {
+        return Err("macOS 应用更新暂存路径越界".to_string());
+    }
+    if !descriptor
+        .current_app
+        .join(&descriptor.executable_relative_path)
+        .is_file()
+        || !descriptor
+            .staged_app
+            .join(&descriptor.executable_relative_path)
+            .is_file()
+    {
+        return Err("macOS 应用更新可执行文件缺失".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn restore_macos_update_backup(
+    descriptor: &MacosUpdateDescriptor,
+) -> Result<(), String> {
+    if !descriptor.backup_app.is_dir() {
+        return Err("macOS 应用更新备份不完整，无法回滚".to_string());
+    }
+    if descriptor.current_app.exists() {
+        fs::remove_dir_all(&descriptor.current_app)
+            .map_err(|error| format!("移除新版 macOS 应用失败: {error}"))?;
+    }
+    fs::rename(&descriptor.backup_app, &descriptor.current_app)
+        .map_err(|error| format!("恢复旧版 macOS 应用失败: {error}"))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn replace_macos_application(descriptor: &MacosUpdateDescriptor) -> Result<(), String> {
+    let app_parent = descriptor
+        .current_app
+        .parent()
+        .ok_or_else(|| "macOS 应用更新目标路径无效".to_string())?;
+    let replacement_app = app_parent.join(".EasyCLIProxyAPI.app.update-new");
+    if replacement_app.exists() {
+        fs::remove_dir_all(&replacement_app)
+            .map_err(|error| format!("清理旧的 macOS 更新暂存失败: {error}"))?;
+    }
+    let mut ditto = Command::new("ditto");
+    ditto.arg(&descriptor.staged_app).arg(&replacement_app);
+    run_macos_update_command(&mut ditto, "准备新版 macOS 应用")?;
+    let mut codesign = Command::new("codesign");
+    codesign
+        .args(["--verify", "--deep", "--strict"])
+        .arg(&replacement_app);
+    if let Err(error) = run_macos_update_command(&mut codesign, "校验待替换 macOS 应用签名")
+    {
+        let _ = fs::remove_dir_all(&replacement_app);
+        return Err(error);
+    }
+    if descriptor.backup_app.exists() {
+        fs::remove_dir_all(&descriptor.backup_app)
+            .map_err(|error| format!("清理旧的 macOS 应用备份失败: {error}"))?;
+    }
+    fs::rename(&descriptor.current_app, &descriptor.backup_app)
+        .map_err(|error| format!("备份旧版 macOS 应用失败: {error}"))?;
+    if let Err(error) = fs::rename(&replacement_app, &descriptor.current_app) {
+        let _ = fs::rename(&descriptor.backup_app, &descriptor.current_app);
+        let _ = fs::remove_dir_all(&replacement_app);
+        return Err(format!("替换 macOS 应用失败: {error}"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn cleanup_macos_update_payload(descriptor_path: &Path, descriptor: &MacosUpdateDescriptor) {
+    let _ = fs::remove_file(descriptor.work_dir.join("update.dmg"));
+    let _ = fs::remove_dir_all(descriptor.work_dir.join("staging"));
+    let _ = fs::remove_dir_all(descriptor.work_dir.join("mount"));
+    let _ = fs::remove_file(&descriptor.ack_path);
+    let _ = fs::remove_file(descriptor_path);
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), String> {
+    let descriptor = serde_json::from_slice::<MacosUpdateDescriptor>(
+        &fs::read(descriptor_path).map_err(|error| format!("读取应用更新描述失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析应用更新描述失败: {error}"))?;
+    validate_macos_update_descriptor(descriptor_path, &descriptor)?;
+    wait_for_portable_parent_exit(descriptor.parent_pid, Duration::from_secs(120))?;
+    if let Err(error) = replace_macos_application(&descriptor) {
+        let rollback_exe = descriptor
+            .current_app
+            .join(&descriptor.executable_relative_path);
+        let _ = Command::new(rollback_exe).spawn();
+        cleanup_macos_update_payload(descriptor_path, &descriptor);
+        return Err(error);
+    }
+
+    let current_exe = descriptor
+        .current_app
+        .join(&descriptor.executable_relative_path);
+    let _ = fs::remove_file(&descriptor.ack_path);
+    let mut command = Command::new(&current_exe);
+    command
+        .arg("--portable-update-ack")
+        .arg(&descriptor.ack_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            restore_macos_update_backup(&descriptor)?;
+            let rollback_exe = descriptor
+                .current_app
+                .join(&descriptor.executable_relative_path);
+            let _ = Command::new(rollback_exe).spawn();
+            cleanup_macos_update_payload(descriptor_path, &descriptor);
+            return Err(format!("启动新版 macOS 应用失败: {error}"));
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if descriptor.ack_path.is_file() {
+            let _ = fs::remove_dir_all(&descriptor.backup_app);
+            cleanup_macos_update_payload(descriptor_path, &descriptor);
+            return Ok(());
+        }
+        if child
+            .try_wait()
+            .map_err(|error| format!("检查新版 macOS 应用状态失败: {error}"))?
+            .is_some()
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    restore_macos_update_backup(&descriptor)?;
+    let rollback_exe = descriptor
+        .current_app
+        .join(&descriptor.executable_relative_path);
+    let _ = Command::new(rollback_exe).spawn();
+    cleanup_macos_update_payload(descriptor_path, &descriptor);
     Err(format!(
         "新版应用 {} 未能在 60 秒内完成启动确认，已回滚",
         descriptor.target_version
