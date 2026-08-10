@@ -4067,6 +4067,7 @@ fn is_managed_agent_base_url(value: &str) -> bool {
     value.starts_with("http://127.0.0.1:") || value.starts_with("http://localhost:")
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn find_codex_app_installation(home: &Path) -> Option<CodexAppTarget> {
     #[cfg(target_os = "macos")]
     {
