@@ -1743,7 +1743,8 @@ pub(crate) fn inspect_claude_code_model_mappings(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let read_model = |key: &str| {
-        let value = env.get(key)
+        let value = env
+            .get(key)
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1893,10 +1894,7 @@ pub(crate) fn claude_code_model_effort_level(
     claude_catalog::claude_code_effort_level_for(agent_model_source_name(models, model_name))
 }
 
-pub(crate) fn claude_code_model_setting(
-    model_name: &str,
-    enable_1m_variant: bool,
-) -> String {
+pub(crate) fn claude_code_model_setting(model_name: &str, enable_1m_variant: bool) -> String {
     let model_name = strip_claude_code_context_suffix(model_name);
     if enable_1m_variant {
         format!("{model_name}[1m]")
@@ -1974,12 +1972,7 @@ pub(crate) fn claude_code_model_presentation_environment(
         mappings.sonnet_1m,
         Some("Fable mapping"),
     );
-    let custom = claude_code_model_presentation(
-        models,
-        &mappings.sonnet,
-        mappings.sonnet_1m,
-        None,
-    );
+    let custom = claude_code_model_presentation(models, &mappings.sonnet, mappings.sonnet_1m, None);
     let custom_model = claude_code_model_setting(&mappings.sonnet, mappings.sonnet_1m);
     Ok([
         ("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", opus.0),
