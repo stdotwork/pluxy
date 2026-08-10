@@ -11,6 +11,7 @@ mod core_config;
 mod core_runtime;
 mod management_api;
 mod provider_health;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
 mod usage;
 
@@ -66,6 +67,7 @@ use tauri::{Emitter, LogicalSize, Manager};
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_opener::OpenerExt;
 use tokio_util::sync::CancellationToken;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tray::*;
 use zip::ZipArchive;
 
