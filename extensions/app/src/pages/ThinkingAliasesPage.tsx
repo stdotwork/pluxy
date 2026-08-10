@@ -116,7 +116,8 @@ export const defaultModelAlias = (
 ) => {
   const normalizedModel = model?.trim() ?? '';
   const normalizedEffort = effort.trim().toLowerCase();
-  if (!normalizedModel || (!normalizedEffort && !fast)) return '';
+  if (!normalizedModel) return '';
+  if (!normalizedEffort && !fast) return `${normalizedModel}-alias`;
   return `${normalizedModel}${normalizedEffort ? `-${normalizedEffort}` : ''}${fast ? '-fast' : ''}`;
 };
 
@@ -273,10 +274,10 @@ export function ThinkingAliasesPage() {
     setSelectedSourceId(source.id);
     if (!source.supportsReasoning) {
       setEffort('');
-      setFastEnabled(source.supportsFast);
+      setFastEnabled(source.supportsFast && (fastEnabled || !source.supportsReasoning));
     } else {
       setEffort('');
-      setFastEnabled(false);
+      setFastEnabled(source.supportsFast && fastEnabled);
     }
     setCustomEffortOpen(false);
     setAlias('');
@@ -343,10 +344,6 @@ export function ThinkingAliasesPage() {
       setError(t('aliases.error.emptyAlias'));
       return;
     }
-    if (!normalizedEffort && !fastEnabled) {
-      setError(t('aliases.error.emptyOptions'));
-      return;
-    }
     if (fastEnabled && !selectedSource.supportsFast) {
       setError(t('aliases.error.unsupportedFast'));
       return;
@@ -371,12 +368,23 @@ export function ThinkingAliasesPage() {
           alias: normalizedAlias,
           effort: normalizedEffort,
         }));
-      } else {
+      } else if (fastEnabled) {
         await invoke<SpeedAliasEntry[]>('create_speed_alias', {
           sourceId: selectedSource.id,
           alias: normalizedAlias,
         });
         setNotice(t('speedAliases.created', { alias: normalizedAlias }));
+      } else {
+        await invoke<ThinkingAliasEntry[]>('create_thinking_alias', {
+          sourceId: selectedSource.id,
+          alias: normalizedAlias,
+          effort: '',
+          fast: false,
+        });
+        setNotice(t('aliases.created', {
+          alias: normalizedAlias,
+          effort: t('aliases.effort.none'),
+        }));
       }
       setAlias('');
       await load();
@@ -397,7 +405,7 @@ export function ThinkingAliasesPage() {
     setError('');
     setNotice('');
     try {
-      if (entry.effort) {
+      if (entry.effort || !entry.serviceTier) {
         await invoke<ThinkingAliasEntry[]>('delete_thinking_alias', {
           alias: entry.alias,
         });
@@ -629,7 +637,7 @@ export function ThinkingAliasesPage() {
                     type="checkbox"
                     checked={fastEnabled}
                     onChange={(event) => setFastEnabled(event.currentTarget.checked)}
-                    disabled={Boolean(busyAlias) || !selectedSource || !selectedSource.supportsFast}
+                    disabled={Boolean(busyAlias) || Boolean(selectedSource && !selectedSource.supportsFast)}
                     aria-label={t('aliases.fast.title')}
                   />
                   <span className="switch-track" />
@@ -651,7 +659,9 @@ export function ThinkingAliasesPage() {
                 placeholder={selectedSource
                   ? normalizedEffort
                     ? t('aliases.aliasName.example', { model: selectedSource.model, effort: normalizedEffort })
-                    : t('speedAliases.aliasName.example', { model: selectedSource.model })
+                    : fastEnabled
+                      ? t('speedAliases.aliasName.example', { model: selectedSource.model })
+                      : t('aliases.aliasName.example', { model: selectedSource.model, effort: 'alias' })
                   : t('aliases.aliasName.selectFirst')}
                 disabled={Boolean(busyAlias)}
               />
@@ -674,7 +684,7 @@ export function ThinkingAliasesPage() {
               type="button"
               className="primary-button thinking-alias-create"
               onClick={() => void createAlias()}
-              disabled={loading || Boolean(busyAlias) || !selectedSource || (!normalizedEffort && !fastEnabled) || !alias.trim()}
+              disabled={loading || Boolean(busyAlias)}
             >
               {busyAction === 'create'
                 ? <LoaderCircle size={16} className="spin" />

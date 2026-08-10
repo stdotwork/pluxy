@@ -16,8 +16,6 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
-use crate::GuiConfigState;
-
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE_SIZE: usize = 100;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -76,7 +74,6 @@ pub(crate) struct CodexSessionPage {
     offset: usize,
     limit: usize,
     has_more: bool,
-    repair_on_launch: bool,
     warnings: Vec<String>,
 }
 
@@ -153,25 +150,6 @@ pub(crate) struct SessionIndexCleanupResult {
     backup_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ChatGptCloseResult {
-    was_running: bool,
-    closed_processes: usize,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SetRepairOnLaunchRequest {
-    enabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RepairOnLaunchSetting {
-    enabled: bool,
-}
-
 #[derive(Debug)]
 struct DatabaseDeletePlan {
     path: PathBuf,
@@ -213,7 +191,6 @@ struct SessionIndexMetadata {
 #[tauri::command]
 pub(crate) async fn list_codex_sessions(
     app: tauri::AppHandle,
-    gui_config_state: tauri::State<'_, GuiConfigState>,
     request: Option<ListCodexSessionsRequest>,
 ) -> Result<CodexSessionPage, String> {
     let user_home = app
@@ -221,13 +198,12 @@ pub(crate) async fn list_codex_sessions(
         .home_dir()
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
     let codex_home = resolve_codex_home(&user_home);
-    let repair_on_launch = gui_config_state.snapshot()?.codex_session_repair_on_launch;
     let request = request.unwrap_or(ListCodexSessionsRequest {
         offset: 0,
         limit: DEFAULT_PAGE_SIZE,
     });
     tauri::async_runtime::spawn_blocking(move || {
-        list_codex_sessions_from_home(&codex_home, request.offset, request.limit, repair_on_launch)
+        list_codex_sessions_from_home(&codex_home, request.offset, request.limit)
     })
     .await
     .map_err(|error| format!("读取 Codex 会话任务失败: {error}"))?
@@ -306,62 +282,6 @@ pub(crate) async fn apply_codex_session_index_cleanup(
     })
     .await
     .map_err(|error| format!("清理 Codex 会话索引任务失败: {error}"))?
-}
-
-#[tauri::command]
-pub(crate) fn get_codex_session_repair_on_launch(
-    gui_config_state: tauri::State<'_, GuiConfigState>,
-) -> Result<RepairOnLaunchSetting, String> {
-    let config = gui_config_state.snapshot()?;
-    Ok(RepairOnLaunchSetting {
-        enabled: config.codex_session_repair_on_launch,
-    })
-}
-
-#[tauri::command]
-pub(crate) fn set_codex_session_repair_on_launch(
-    gui_config_state: tauri::State<'_, GuiConfigState>,
-    request: SetRepairOnLaunchRequest,
-) -> Result<RepairOnLaunchSetting, String> {
-    let config = gui_config_state.set_codex_session_repair_on_launch(request.enabled)?;
-    Ok(RepairOnLaunchSetting {
-        enabled: config.codex_session_repair_on_launch,
-    })
-}
-
-#[tauri::command]
-pub(crate) async fn close_chatgpt_app() -> Result<ChatGptCloseResult, String> {
-    tauri::async_runtime::spawn_blocking(close_chatgpt_app_processes)
-        .await
-        .map_err(|error| format!("关闭 ChatGPT App 任务失败: {error}"))?
-}
-
-pub(crate) fn repair_before_codex_launch(
-    user_home: &Path,
-) -> Result<CodexSessionRepairResult, String> {
-    let codex_home = resolve_codex_home(user_home);
-    repair_before_codex_launch_from_home(&codex_home)
-}
-
-fn repair_before_codex_launch_from_home(
-    codex_home: &Path,
-) -> Result<CodexSessionRepairResult, String> {
-    let target_provider = resolve_current_codex_provider(codex_home)?;
-    match repair_codex_session_metadata_from_home(codex_home, &target_provider, |_| {}) {
-        Ok(result) => Ok(result),
-        Err(error) if is_locked_error_message(&error) => Ok(CodexSessionRepairResult {
-            target_provider,
-            changed_rollout_files: 0,
-            sqlite_rows_updated: 0,
-            skipped_locked_files: Vec::new(),
-            backup_path: None,
-            encrypted_content_warning: None,
-            warnings: vec![format!(
-                "启动前恢复历史会话时遇到占用文件，已跳过且继续启动：{error}"
-            )],
-        }),
-        Err(error) => Err(error),
-    }
 }
 
 fn resolve_codex_home(user_home: &Path) -> PathBuf {
@@ -521,7 +441,6 @@ fn list_codex_sessions_from_home(
     codex_home: &Path,
     offset: usize,
     requested_limit: usize,
-    repair_on_launch: bool,
 ) -> Result<CodexSessionPage, String> {
     let limit = requested_limit.clamp(1, MAX_PAGE_SIZE);
     let fetch_limit = offset.saturating_add(limit).saturating_add(1);
@@ -556,7 +475,6 @@ fn list_codex_sessions_from_home(
         offset,
         limit,
         has_more,
-        repair_on_launch,
         warnings,
     })
 }
@@ -2363,11 +2281,6 @@ fn codex_app_process_ids() -> Result<Vec<u32>, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn chatgpt_app_process_ids() -> Result<Vec<u32>, String> {
-    windows_app_process_ids(&["ChatGPT.exe"])
-}
-
-#[cfg(target_os = "windows")]
 fn windows_app_process_ids(names: &[&str]) -> Result<Vec<u32>, String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -2413,11 +2326,6 @@ fn codex_app_process_ids() -> Result<Vec<u32>, String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn chatgpt_app_process_ids() -> Result<Vec<u32>, String> {
-    unix_app_process_ids(&["ChatGPT"])
-}
-
-#[cfg(not(target_os = "windows"))]
 fn unix_app_process_ids(names: &[&str]) -> Result<Vec<u32>, String> {
     let mut ids = Vec::new();
     for name in names {
@@ -2443,108 +2351,6 @@ fn unix_app_process_ids(names: &[&str]) -> Result<Vec<u32>, String> {
     ids.sort_unstable();
     ids.dedup();
     Ok(ids)
-}
-
-#[cfg(target_os = "windows")]
-fn close_chatgpt_app_processes() -> Result<ChatGptCloseResult, String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    let process_ids = chatgpt_app_process_ids()?;
-    if process_ids.is_empty() {
-        return Ok(ChatGptCloseResult {
-            was_running: false,
-            closed_processes: 0,
-        });
-    }
-
-    let output = Command::new("taskkill")
-        .args(["/IM", "ChatGPT.exe", "/T", "/F"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|error| format!("无法关闭 ChatGPT.exe: {error}"))?;
-    let mut remaining = chatgpt_app_process_ids()?;
-    for _ in 0..20 {
-        if remaining.is_empty() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-        remaining = chatgpt_app_process_ids()?;
-    }
-    if !remaining.is_empty() {
-        let detail = String::from_utf8_lossy(if output.stderr.is_empty() {
-            &output.stdout
-        } else {
-            &output.stderr
-        });
-        return Err(format!(
-            "ChatGPT App 未能完全关闭（剩余进程：{}）{}{}",
-            remaining
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join("、"),
-            if detail.trim().is_empty() { "" } else { "：" },
-            detail.trim()
-        ));
-    }
-
-    Ok(ChatGptCloseResult {
-        was_running: true,
-        closed_processes: process_ids.len(),
-    })
-}
-
-#[cfg(not(target_os = "windows"))]
-fn close_chatgpt_app_processes() -> Result<ChatGptCloseResult, String> {
-    let process_ids = chatgpt_app_process_ids()?;
-    if process_ids.is_empty() {
-        return Ok(ChatGptCloseResult {
-            was_running: false,
-            closed_processes: 0,
-        });
-    }
-
-    let mut terminate = Command::new("kill");
-    terminate.arg("-TERM");
-    for process_id in &process_ids {
-        terminate.arg(process_id.to_string());
-    }
-    let _ = terminate.status();
-
-    for _ in 0..20 {
-        if chatgpt_app_process_ids()?.is_empty() {
-            return Ok(ChatGptCloseResult {
-                was_running: true,
-                closed_processes: process_ids.len(),
-            });
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-
-    let remaining = chatgpt_app_process_ids()?;
-    let mut force = Command::new("kill");
-    force.arg("-KILL");
-    for process_id in &remaining {
-        force.arg(process_id.to_string());
-    }
-    let _ = force.status();
-    std::thread::sleep(Duration::from_millis(100));
-    let remaining = chatgpt_app_process_ids()?;
-    if !remaining.is_empty() {
-        return Err(format!(
-            "ChatGPT App 未能完全关闭（剩余进程：{}）",
-            remaining
-                .iter()
-                .map(u32::to_string)
-                .collect::<Vec<_>>()
-                .join("、")
-        ));
-    }
-
-    Ok(ChatGptCloseResult {
-        was_running: true,
-        closed_processes: process_ids.len(),
-    })
 }
 
 #[cfg(test)]
@@ -2613,14 +2419,14 @@ mod tests {
             .unwrap();
         drop(automation);
 
-        let page = list_codex_sessions_from_home(&root, 0, 50, false).unwrap();
+        let page = list_codex_sessions_from_home(&root, 0, 50).unwrap();
         assert_eq!(page.sessions.len(), 2);
         assert_eq!(page.sessions[0].id, "thread-1");
         assert_eq!(page.sessions[0].title, "First new");
         assert_eq!(page.sessions[0].updated_at_ms, Some(4000));
         assert_eq!(page.sessions[1].id, "thread-2");
         assert!(page.sessions[1].archived);
-        let second_page = list_codex_sessions_from_home(&root, 1, 1, false).unwrap();
+        let second_page = list_codex_sessions_from_home(&root, 1, 1).unwrap();
         assert_eq!(second_page.sessions.len(), 1);
         assert_eq!(second_page.sessions[0].id, "thread-2");
         assert!(!second_page.has_more);
@@ -2653,7 +2459,7 @@ mod tests {
         )
         .unwrap();
 
-        let page = list_codex_sessions_from_home(&root, 0, 50, false).unwrap();
+        let page = list_codex_sessions_from_home(&root, 0, 50).unwrap();
         assert_eq!(page.sessions.len(), 2);
         assert_eq!(page.sessions[0].id, "api-thread");
         assert_eq!(page.sessions[0].title, "API session");
@@ -2682,7 +2488,7 @@ mod tests {
         drop(connection);
         fs::write(sqlite.join("broken.db"), b"not a sqlite database").unwrap();
 
-        let page = list_codex_sessions_from_home(&root, 0, 0, true).unwrap();
+        let page = list_codex_sessions_from_home(&root, 0, 0).unwrap();
         assert_eq!(page.limit, 1);
         assert_eq!(page.sessions.len(), 1);
         assert_eq!(page.sessions[0].id, "optional-thread");
@@ -2692,9 +2498,8 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("broken.db")));
-        assert!(page.repair_on_launch);
         assert_eq!(
-            list_codex_sessions_from_home(&root, 0, usize::MAX, false)
+            list_codex_sessions_from_home(&root, 0, usize::MAX)
                 .unwrap()
                 .limit,
             MAX_PAGE_SIZE
@@ -3090,29 +2895,6 @@ mod tests {
             "The process cannot access the file because it is being used by another process"
         ));
         assert!(!is_locked_error_message("database disk image is malformed"));
-    }
-
-    #[test]
-    fn launch_hook_repairs_sessions_for_the_current_provider() {
-        let root = test_root("repair-launch-hook");
-        fs::create_dir_all(root.join("sessions")).unwrap();
-        let rollout = root.join("sessions/rollout.jsonl");
-        fs::write(
-            &rollout,
-            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-1\",\"model_provider\":\"legacy\"}}\n",
-        )
-        .unwrap();
-        fs::write(root.join("config.toml"), "model_provider = \"openai\"\n").unwrap();
-        let result = repair_before_codex_launch_from_home(&root).unwrap();
-        assert_eq!(result.target_provider, "openai");
-        assert!(fs::read_to_string(&rollout).unwrap().contains("openai"));
-
-        fs::write(root.join("config.toml"), "model_provider = \"cpa-gui\"\n").unwrap();
-        let result = repair_before_codex_launch_from_home(&root).unwrap();
-        assert_eq!(result.target_provider, "cpa-gui");
-        assert_eq!(result.changed_rollout_files, 1);
-        assert!(fs::read_to_string(&rollout).unwrap().contains("cpa-gui"));
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

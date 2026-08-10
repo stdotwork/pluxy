@@ -1,6 +1,6 @@
 use super::{
-    current_core_status, management_authorization, management_endpoint, management_http_client,
-    CoreProcessState, GuiConfigFile, GuiConfigState,
+    apply_configured_proxy, current_core_status, management_authorization, management_endpoint,
+    management_http_client, CoreProcessState, GuiConfigFile, GuiConfigState,
 };
 use chrono::{DateTime, Local};
 use rusqlite::{
@@ -1595,28 +1595,23 @@ pub(crate) async fn sync_usage_model_prices(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<ModelPriceSyncResult, String> {
     let config = gui_config_state.snapshot()?;
-    let mut client_builder = reqwest::Client::builder()
+    let client_builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30));
     let proxy_url = config.proxy_url.trim();
-    let proxy_valid = if proxy_url.is_empty() {
-        true
-    } else if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
-        client_builder = client_builder.proxy(proxy);
-        true
+    let client = if proxy_url.is_empty() {
+        client_builder.build().ok()
     } else {
-        false
+        apply_configured_proxy(client_builder, proxy_url)
+            .ok()
+            .and_then(|builder| builder.build().ok())
     };
-    let remote_content = if proxy_valid {
-        match client_builder.build() {
-            Ok(client) => match client.get(MODEL_PRICE_SYNC_URL).send().await {
-                Ok(response) if response.status().is_success() => response.text().await.ok(),
-                _ => None,
-            },
-            Err(_) => None,
-        }
-    } else {
-        None
+    let remote_content = match client {
+        Some(client) => match client.get(MODEL_PRICE_SYNC_URL).send().await {
+            Ok(response) if response.status().is_success() => response.text().await.ok(),
+            _ => None,
+        },
+        None => None,
     };
     let now = Local::now().timestamp_millis();
     let (remote_prices, used_builtin) = match remote_content
@@ -2193,6 +2188,7 @@ mod tests {
             allow_lan: false,
             host: "127.0.0.1".to_string(),
             run_on_startup: false,
+            silent_start: false,
             close_behavior: crate::WindowsCloseBehavior::Ask,
             window_width: None,
             window_height: None,
@@ -2206,9 +2202,6 @@ mod tests {
             proxy_url: String::new(),
             routing_session_affinity: false,
             routing_session_affinity_ttl: String::new(),
-            codex_session_repair_on_launch: false,
-            claude_code_working_directory: String::new(),
-            claude_code_working_directory_prompt_disabled: false,
         };
         let record = normalize_usage_record(
             serde_json::json!({

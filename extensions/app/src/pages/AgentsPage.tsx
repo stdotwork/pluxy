@@ -10,20 +10,15 @@ import {
 } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
 import {
   AlertTriangle,
-  AppWindow,
   BadgeCheck,
   Bot,
   Check,
   ChevronDown,
   LoaderCircle,
-  Play,
-  Power,
   RefreshCw,
   Search,
-  Terminal,
   Trash2,
   Wrench,
   X,
@@ -49,7 +44,6 @@ import {
 } from '../services/agentConfigurationDraft';
 import type { ModelOption } from '../services/modelService';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
-import { CodexSessionAutoRestoreCard } from './CodexSessionAutoRestoreCard';
 import { CodexSessionsPanel } from './CodexSessionsPanel';
 
 type AgentClientId =
@@ -69,8 +63,6 @@ type AgentConfigStatus = {
   supportedPlatform: boolean;
   installed: boolean;
   pluginInstalled: boolean;
-  executablePath: string | null;
-  launchTargets: AgentLaunchTarget[];
   version: string | null;
   cliVersion: string | null;
   appVersion: string | null;
@@ -85,16 +77,8 @@ type AgentConfigStatus = {
   appliedModel: string | null;
   claudeCodeModelMappings: ClaudeModelMappings | null;
   claudeDesktopModelMappings: ClaudeModelMappings | null;
-  claudeCodeWorkingDirectory: string | null;
-  claudeCodeWorkingDirectoryPromptDisabled: boolean;
   warnings: string[];
   error: string | null;
-};
-
-type AgentLaunchTarget = {
-  id: string;
-  label: string;
-  detail: string;
 };
 
 type AgentConfigActionResult = {
@@ -111,12 +95,7 @@ type PiProviderUpdateStatus = {
   updateAvailable: boolean;
 };
 
-type ChatGptCloseResult = {
-  wasRunning: boolean;
-  closedProcesses: number;
-};
-
-type OAuthLoginRequiredAction = 'enable' | 'apply' | 'launch';
+type OAuthLoginRequiredAction = 'enable' | 'apply';
 
 type ClaudeModelMappings = {
   opus: string;
@@ -555,29 +534,21 @@ export function AgentsPage() {
     createClaudeModelMappings(''),
   );
   const [claudeCustomMapping, setClaudeCustomMapping] = useState(false);
-  const [claudeCodeLaunchDialogOpen, setClaudeCodeLaunchDialogOpen] = useState(false);
-  const [claudeCodeLaunchDirectory, setClaudeCodeLaunchDirectory] = useState('');
-  const [claudeCodeSuppressDirectoryPrompt, setClaudeCodeSuppressDirectoryPrompt] = useState(false);
-  const [claudeCodeDirectoryError, setClaudeCodeDirectoryError] = useState('');
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'launch' | 'launch-cli' | 'launch-app' | 'close-app' | 'oauth-check' | 'directory' | null
+    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'oauth-check' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
   const [modelError, setModelError] = useState('');
   const [modelSelectionError, setModelSelectionError] = useState('');
   const [configurationError, setConfigurationError] = useState('');
-  const [launchError, setLaunchError] = useState('');
   const [defaultError, setDefaultError] = useState('');
   const [defaultConfirmOpen, setDefaultConfirmOpen] = useState(false);
   const [clearError, setClearError] = useState('');
   const [clearNotice, setClearNotice] = useState('');
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
-  const [closeAppError, setCloseAppError] = useState('');
-  const [closeAppNotice, setCloseAppNotice] = useState('');
-  const [closeAppConfirmOpen, setCloseAppConfirmOpen] = useState(false);
   const [oauthLoginRequiredAction, setOauthLoginRequiredAction] = useState<OAuthLoginRequiredAction | null>(null);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const [piProviderUpdateStatus, setPiProviderUpdateStatus] = useState<PiProviderUpdateStatus | null>(null);
@@ -672,19 +643,13 @@ export function AgentsPage() {
     setActiveSubpage(DEFAULT_AGENT_SUBPAGE);
     setModelSelectionError('');
     setConfigurationError('');
-    setLaunchError('');
     setDefaultError('');
     setDefaultConfirmOpen(false);
     setClearError('');
     setClearNotice('');
     setClearConfirmOpen(false);
-    setCloseAppError('');
-    setCloseAppNotice('');
-    setCloseAppConfirmOpen(false);
     setOauthLoginRequiredAction(null);
     setOauthConfigurationDraft(null);
-    setClaudeCodeLaunchDialogOpen(false);
-    setClaudeCodeDirectoryError('');
     claudeModelMappingsDirtyRef.current = false;
   }, [selected]);
 
@@ -766,10 +731,6 @@ export function AgentsPage() {
     selectedModel,
   ]);
 
-  const activeLaunchTargets = activeStatus?.launchTargets ?? [];
-  const defaultLaunchTarget = activeLaunchTargets[0] ?? null;
-  const cliLaunchTarget = activeLaunchTargets.find((target) => target.id === 'cli') ?? null;
-  const appLaunchTarget = activeLaunchTargets.find((target) => target.id === 'app') ?? null;
   const appliedModel = activeStatus?.appliedModel ?? activeStatus?.currentModel ?? '';
   const modelDraftChanged = !isClaudeModelMappingClient && Boolean(
     selectedModel.trim()
@@ -811,13 +772,6 @@ export function AgentsPage() {
         ? claudeMappingsReady
         : selectedModelOption),
   );
-  const launchEnabled = Boolean(
-    activeStatus?.supportedPlatform
-      && activeStatus.installed
-      && (selected === 'codex'
-        || (activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
-  );
-  const canLaunchTarget = (target: AgentLaunchTarget | null) => launchEnabled && Boolean(target);
   const modelHint = modelSelectionError
     || modelError
     || (modelLoading
@@ -1092,121 +1046,6 @@ export function AgentsPage() {
     }
   };
 
-  const openClaudeCodeLaunchDialog = () => {
-    setClaudeCodeLaunchDirectory(activeStatus?.claudeCodeWorkingDirectory ?? '');
-    setClaudeCodeSuppressDirectoryPrompt(false);
-    setClaudeCodeDirectoryError('');
-    setClaudeCodeLaunchDialogOpen(true);
-  };
-
-  const chooseClaudeCodeWorkingDirectory = async () => {
-    setBusyAction('directory');
-    setClaudeCodeDirectoryError('');
-    try {
-      const selectedDirectory = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: claudeCodeLaunchDirectory || activeStatus?.claudeCodeWorkingDirectory || undefined,
-        title: t('agents.claudeCodeLaunch.dialogTitle'),
-      });
-      if (typeof selectedDirectory === 'string') {
-        setClaudeCodeLaunchDirectory(selectedDirectory);
-      }
-    } catch (requestError) {
-      setClaudeCodeDirectoryError(String(requestError));
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const invokeAgentLaunch = async (
-    target: AgentLaunchTarget,
-    workingDirectory: string | null = null,
-    suppressWorkingDirectoryPrompt: boolean | null = null,
-  ) => {
-    if (!target) return;
-    const launchAction = selected === 'codex'
-      ? target.id === 'cli' ? 'launch-cli' : 'launch-app'
-      : 'launch';
-    setBusyAction(launchAction);
-    setLaunchError('');
-    try {
-      if (draftChanged) {
-        throw new Error(t('agents.error.applyFirst'));
-      }
-      await invoke('launch_agent', {
-        client: selected,
-        target: target.id,
-        workingDirectory,
-        suppressWorkingDirectoryPrompt,
-      });
-      if (selected === 'claude-code' && workingDirectory) {
-        setClaudeCodeLaunchDialogOpen(false);
-        await reloadStatusesAfterAction();
-      }
-    } catch (requestError) {
-      const message = String(requestError);
-      if (
-        selected === 'claude-code'
-        && (message.includes('CLAUDE_CODE_WORKING_DIRECTORY_REQUIRED')
-          || message.includes('CLAUDE_CODE_WORKING_DIRECTORY_INVALID'))
-      ) {
-        openClaudeCodeLaunchDialog();
-        setClaudeCodeDirectoryError(
-          message.includes('CLAUDE_CODE_WORKING_DIRECTORY_INVALID') ? message : '',
-        );
-      } else if (selected === 'claude-code' && workingDirectory) {
-        setClaudeCodeDirectoryError(message);
-      } else if (!handleOAuthLoginError(requestError, 'launch')) {
-        setLaunchError(message);
-      }
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const launchAgent = async (target: AgentLaunchTarget | null) => {
-    if (!target) return;
-    if (selected === 'claude-code' && !activeStatus?.claudeCodeWorkingDirectoryPromptDisabled) {
-      openClaudeCodeLaunchDialog();
-      return;
-    }
-    await invokeAgentLaunch(target);
-  };
-
-  const launchClaudeCodeFromDialog = async () => {
-    const target = defaultLaunchTarget;
-    if (!target) return;
-    const workingDirectory = claudeCodeLaunchDirectory.trim();
-    if (!workingDirectory) {
-      setClaudeCodeDirectoryError(t('agents.claudeCodeLaunch.directoryRequired'));
-      return;
-    }
-    setClaudeCodeDirectoryError('');
-    await invokeAgentLaunch(
-      target,
-      workingDirectory,
-      claudeCodeSuppressDirectoryPrompt,
-    );
-  };
-
-  const closeChatGptApp = async () => {
-    setBusyAction('close-app');
-    setCloseAppError('');
-    setCloseAppNotice('');
-    try {
-      const result = await invoke<ChatGptCloseResult>('close_chatgpt_app');
-      setCloseAppConfirmOpen(false);
-      setCloseAppNotice(result.wasRunning
-        ? t('agents.closeApp.success', { count: result.closedProcesses })
-        : t('agents.closeApp.notRunning'));
-    } catch (requestError) {
-      setCloseAppError(String(requestError));
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
   const openDefaultConfirmation = () => {
     setDefaultError('');
     setDefaultConfirmOpen(true);
@@ -1225,16 +1064,6 @@ export function AgentsPage() {
   const closeClearConfirmation = () => {
     setClearError('');
     setClearConfirmOpen(false);
-  };
-
-  const openCloseAppConfirmation = () => {
-    setCloseAppError('');
-    setCloseAppConfirmOpen(true);
-  };
-
-  const closeCloseAppConfirmation = () => {
-    setCloseAppError('');
-    setCloseAppConfirmOpen(false);
   };
 
   const availableSubpages = agentSubpages.filter(
@@ -1517,7 +1346,6 @@ export function AgentsPage() {
                 <div className="agent-modification-control">
                   {selected === 'codex' ? (
                     <div className="agent-codex-options">
-                      <CodexSessionAutoRestoreCard />
                       <label
                         className="agent-oauth-configuration"
                         title={t('agents.modify.oauthConfiguration')}
@@ -1595,78 +1423,6 @@ export function AgentsPage() {
               </section>
               )}
 
-              <div className="agent-config-footer">
-                <div className="agent-launch-control">
-                  <div className="agent-launch-actions">
-                    {selected === 'codex' ? (
-                      <>
-                        <button
-                          type="button"
-                          className="secondary-button agent-launch-button"
-                          onClick={() => void launchAgent(cliLaunchTarget)}
-                          disabled={busy || !canLaunchTarget(cliLaunchTarget) || draftChanged}
-                          title={draftChanged
-                            ? t('agents.launch.applyFirst')
-                            : cliLaunchTarget?.detail ?? t('agents.launch.unavailable')}
-                        >
-                          {busyAction === 'launch-cli' ? <LoaderCircle size={16} className="spin" /> : <Terminal size={16} />}
-                          {busyAction === 'launch-cli' ? t('agents.launch.starting') : t('agents.launch.startCli')}
-                        </button>
-                        <button
-                          type="button"
-                          className="primary-button agent-launch-button"
-                          onClick={() => void launchAgent(appLaunchTarget)}
-                          disabled={busy || !canLaunchTarget(appLaunchTarget) || draftChanged}
-                          title={draftChanged
-                            ? t('agents.launch.applyFirst')
-                            : appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
-                        >
-                          {busyAction === 'launch-app' ? <LoaderCircle size={16} className="spin" /> : <AppWindow size={16} />}
-                          {busyAction === 'launch-app' ? t('agents.launch.starting') : t('agents.launch.startApp')}
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="primary-button agent-launch-button"
-                        onClick={() => void launchAgent(defaultLaunchTarget)}
-                        disabled={busy || !canLaunchTarget(defaultLaunchTarget) || draftChanged}
-                        title={draftChanged
-                          ? t('agents.launch.applyFirst')
-                          : activeStatus?.modificationState === 'applied'
-                            ? defaultLaunchTarget?.detail
-                            : t('agents.launch.enableFirst')}
-                      >
-                        {busyAction === 'launch'
-                          ? <LoaderCircle size={16} className="spin" />
-                          : <Play size={16} />}
-                        {busyAction === 'launch' ? t('agents.launch.starting') : defaultLaunchTarget ? t('agents.launch.start', { target: defaultLaunchTarget.label }) : t('agents.launch.unavailable')}
-                      </button>
-                    )}
-                    {selected === 'codex' ? (
-                      <button
-                        type="button"
-                        className="danger-button agent-close-app-button"
-                        onClick={openCloseAppConfirmation}
-                        disabled={busy}
-                      >
-                        {busyAction === 'close-app' ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}
-                        {busyAction === 'close-app' ? t('agents.launch.closingChatgpt') : t('agents.launch.closeChatgpt')}
-                      </button>
-                    ) : null}
-                  </div>
-                  {launchError ? (
-                    <span className="agent-inline-message error" role="alert" aria-live="polite">
-                      {launchError}
-                    </span>
-                  ) : null}
-                  {closeAppNotice ? (
-                    <span className="agent-inline-message" role="status" aria-live="polite">
-                      {closeAppNotice}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
             </div>
           ) : null}
 
@@ -1682,85 +1438,6 @@ export function AgentsPage() {
           ) : null}
         </section>
       </div>
-
-      {claudeCodeLaunchDialogOpen ? (
-        <div className="config-dialog-backdrop" onMouseDown={(event) => {
-          if (event.currentTarget === event.target && !busy) {
-            setClaudeCodeLaunchDialogOpen(false);
-          }
-        }}>
-          <section
-            className="config-dialog agent-claude-code-launch-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="agent-claude-code-launch-title"
-          >
-            <div className="config-dialog-heading">
-              <div>
-                <h2 id="agent-claude-code-launch-title">
-                  {t('agents.claudeCodeLaunch.dialogTitle')}
-                </h2>
-              </div>
-            </div>
-            <p>{t('agents.claudeCodeLaunch.dialogDescription')}</p>
-            <div className="config-dialog-field">
-              <span>{t('agents.claudeCodeLaunch.workingDirectory')}</span>
-              <button
-                type="button"
-                className="agent-claude-code-directory-picker"
-                onClick={() => void chooseClaudeCodeWorkingDirectory()}
-                disabled={busy}
-                autoFocus
-              >
-                <span>
-                  <small>{claudeCodeLaunchDirectory
-                    ? t('agents.claudeCodeLaunch.selectedDirectory')
-                    : t('agents.claudeCodeLaunch.noDirectory')}</small>
-                  <strong title={claudeCodeLaunchDirectory || undefined}>
-                    {claudeCodeLaunchDirectory || t('agents.claudeCodeLaunch.chooseDirectory')}
-                  </strong>
-                </span>
-                <b>{busyAction === 'directory'
-                  ? t('agents.claudeCodeLaunch.choosing')
-                  : t('agents.claudeCodeLaunch.browse')}</b>
-              </button>
-            </div>
-            <label className="agent-claude-code-suppress-prompt">
-              <input
-                type="checkbox"
-                checked={claudeCodeSuppressDirectoryPrompt}
-                onChange={(event) => setClaudeCodeSuppressDirectoryPrompt(event.currentTarget.checked)}
-                disabled={busy}
-              />
-              <span>{t('agents.claudeCodeLaunch.neverAskAgain')}</span>
-            </label>
-            {claudeCodeDirectoryError ? (
-              <span className="agent-inline-message error" role="alert" aria-live="polite">
-                {claudeCodeDirectoryError}
-              </span>
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setClaudeCodeLaunchDialogOpen(false)}
-                disabled={busy}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => void launchClaudeCodeFromDialog()}
-                disabled={busy || !claudeCodeLaunchDirectory.trim()}
-              >
-                {busyAction === 'launch' ? <LoaderCircle size={16} className="spin" /> : null}
-                {t('agents.claudeCodeLaunch.launch')}
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
 
       {defaultConfirmOpen ? (
         <div className="config-dialog-backdrop">
@@ -1804,29 +1481,6 @@ export function AgentsPage() {
               <button type="button" className="danger-button" onClick={() => void clearCodexConfiguration()} disabled={busy}>
                 {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
                 {t('agents.clear.confirm')}
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
-
-      {closeAppConfirmOpen ? (
-        <div className="config-dialog-backdrop">
-          <section className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-close-app-title">
-            <div className="config-dialog-heading">
-              <div><AlertTriangle size={19} /><h2 id="agent-close-app-title">{t('agents.closeApp.title')}</h2></div>
-            </div>
-            <p>{t('agents.closeApp.description')}</p>
-            {closeAppError ? (
-              <span className="agent-inline-message error" role="alert" aria-live="polite">
-                {closeAppError}
-              </span>
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" onClick={closeCloseAppConfirmation} disabled={busy}>{t('common.cancel')}</button>
-              <button type="button" className="danger-button" onClick={() => void closeChatGptApp()} disabled={busy}>
-                {busyAction === 'close-app' ? <LoaderCircle size={16} className="spin" /> : <Power size={16} />}
-                {t('agents.closeApp.confirm')}
               </button>
             </div>
           </section>

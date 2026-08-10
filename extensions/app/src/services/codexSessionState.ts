@@ -15,7 +15,6 @@ export type CodexSessionPage = {
   offset: number;
   limit: number;
   hasMore: boolean;
-  repairOnLaunch: boolean;
   warnings: string[];
 };
 
