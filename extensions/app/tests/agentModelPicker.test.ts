@@ -10,7 +10,7 @@ import {
 } from '../src/services/agentModelPicker';
 import {
   resolveAgentConfigurationAction,
-  resolveAgentModelMappingsDraftSource,
+  resolveAgentModelMappingsDraftSourceForClient,
   sameAgentModelMappings,
   type AgentConfigurationClientId,
 } from '../src/services/agentConfigurationDraft';
@@ -102,19 +102,37 @@ const appliedConfiguration = (
 describe('agent configuration update action', () => {
   test('Claude mapping clients do not inherit another client draft', () => {
     const codeDraft = { opus: 'code-opus', sonnet: 'code-sonnet', haiku: 'code-haiku' };
+    const desktopDraft = {
+      opus: 'desktop-opus',
+      sonnet: 'desktop-sonnet',
+      haiku: 'desktop-haiku',
+    };
     const desktopFallback = {
       opus: 'desktop-model',
       sonnet: 'desktop-model',
       haiku: 'desktop-model',
     };
-    expect(resolveAgentModelMappingsDraftSource(
-      codeDraft,
+    const drafts = {
+      'claude-code': codeDraft,
+      'claude-desktop': desktopDraft,
+    };
+    expect(resolveAgentModelMappingsDraftSourceForClient(
+      drafts,
+      'claude-desktop',
       null,
       desktopFallback,
       false,
     )).toEqual(desktopFallback);
-    expect(resolveAgentModelMappingsDraftSource(
-      codeDraft,
+    expect(resolveAgentModelMappingsDraftSourceForClient(
+      drafts,
+      'claude-desktop',
+      null,
+      desktopFallback,
+      true,
+    )).toEqual(desktopDraft);
+    expect(resolveAgentModelMappingsDraftSourceForClient(
+      drafts,
+      'claude-code',
       null,
       desktopFallback,
       true,

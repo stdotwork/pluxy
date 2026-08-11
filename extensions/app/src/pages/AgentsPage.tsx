@@ -39,7 +39,7 @@ import {
 } from '../services/agentModelPicker';
 import {
   resolveAgentConfigurationAction,
-  resolveAgentModelMappingsDraftSource,
+  resolveAgentModelMappingsDraftSourceForClient,
   sameAgentModel,
   sameAgentModelMappings,
 } from '../services/agentConfigurationDraft';
@@ -55,6 +55,8 @@ type AgentClientId =
   | 'openclaw'
   | 'hermes'
   | 'pi';
+
+type ClaudeModelMappingClientId = 'claude-code' | 'claude-desktop';
 
 type AgentModificationState = 'unconfigured' | 'applied' | 'invalid';
 
@@ -124,6 +126,19 @@ const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
   maxContextTokens: DEFAULT_CLAUDE_CODE_MAX_CONTEXT_TOKENS,
   autoCompactPct: DEFAULT_CLAUDE_AUTO_COMPACT_PCT,
   disableAutoCompact: false,
+});
+
+const createClaudeModelMappingsByClient = (): Record<
+  ClaudeModelMappingClientId,
+  ClaudeModelMappings
+> => ({
+  'claude-code': createClaudeModelMappings(''),
+  'claude-desktop': createClaudeModelMappings(''),
+});
+
+const createClaudeBooleanByClient = (): Record<ClaudeModelMappingClientId, boolean> => ({
+  'claude-code': false,
+  'claude-desktop': false,
 });
 
 const claudeMappingRoles = [
@@ -548,10 +563,12 @@ export function AgentsPage() {
   const [modelByClient, setModelByClient] = useState<Partial<Record<AgentClientId, string>>>(
     readAgentModelSelections,
   );
-  const [claudeModelMappingsDraft, setClaudeModelMappingsDraft] = useState<ClaudeModelMappings>(
-    createClaudeModelMappings(''),
+  const [claudeModelMappingsDraftByClient, setClaudeModelMappingsDraftByClient] = useState(
+    createClaudeModelMappingsByClient,
   );
-  const [claudeCustomMapping, setClaudeCustomMapping] = useState(false);
+  const [claudeCustomMappingByClient, setClaudeCustomMappingByClient] = useState(
+    createClaudeBooleanByClient,
+  );
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
@@ -572,7 +589,7 @@ export function AgentsPage() {
   const [piProviderUpdateStatus, setPiProviderUpdateStatus] = useState<PiProviderUpdateStatus | null>(null);
   const modelRequestRef = useRef(0);
   const piUpdateRequestRef = useRef(0);
-  const claudeModelMappingsDirtyRef = useRef(false);
+  const claudeModelMappingsDirtyRef = useRef(createClaudeBooleanByClient());
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -668,7 +685,9 @@ export function AgentsPage() {
     setClearConfirmOpen(false);
     setOauthLoginRequiredAction(null);
     setOauthConfigurationDraft(null);
-    claudeModelMappingsDirtyRef.current = false;
+    if (selected === 'claude-code' || selected === 'claude-desktop') {
+      claudeModelMappingsDirtyRef.current[selected] = false;
+    }
   }, [selected]);
 
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
@@ -682,6 +701,12 @@ export function AgentsPage() {
   const selectedModel = selectedModelOption?.name ?? '';
   const isPiClient = selected === 'pi';
   const isClaudeModelMappingClient = selected === 'claude-code' || selected === 'claude-desktop';
+  const claudeModelMappingsDraft = isClaudeModelMappingClient
+    ? claudeModelMappingsDraftByClient[selected]
+    : createClaudeModelMappings('');
+  const claudeCustomMapping = isClaudeModelMappingClient
+    ? claudeCustomMappingByClient[selected]
+    : false;
   const claudeMappingModels = useMemo(
     () => filterAgentModelsByAlias(models, claudeCustomMapping),
     [claudeCustomMapping, models],
@@ -721,23 +746,27 @@ export function AgentsPage() {
     const appliedMappings = selected === 'claude-code'
       ? activeStatus?.claudeCodeModelMappings
       : activeStatus?.claudeDesktopModelMappings;
-    if (!claudeModelMappingsDirtyRef.current) {
+    const dirty = claudeModelMappingsDirtyRef.current[selected];
+    if (!dirty) {
       const appliedModels = appliedMappings
         ? claudeMappingRoles
             .map((role) => findAgentModel(models, appliedMappings[role.key]))
             .filter((model): model is ModelOption => model !== null)
         : [];
-      setClaudeCustomMapping(
-        appliedModels.length === claudeMappingRoles.length
+      setClaudeCustomMappingByClient((current) => ({
+        ...current,
+        [selected]: appliedModels.length === claudeMappingRoles.length
           && appliedModels.every((model) => Boolean(model.isAlias)),
-      );
+      }));
     }
-    setClaudeModelMappingsDraft((current) => {
-      const source = resolveAgentModelMappingsDraftSource(
+    setClaudeModelMappingsDraftByClient((current) => {
+      const currentClientDraft = current[selected];
+      const source = resolveAgentModelMappingsDraftSourceForClient(
         current,
+        selected,
         appliedMappings,
         createClaudeModelMappings(selectedModel),
-        claudeModelMappingsDirtyRef.current,
+        dirty,
       );
       const next: ClaudeModelMappings = {
         opus: findAgentModel(models, source.opus)?.name ?? selectedModel,
@@ -750,7 +779,9 @@ export function AgentsPage() {
         autoCompactPct: source.autoCompactPct ?? DEFAULT_CLAUDE_AUTO_COMPACT_PCT,
         disableAutoCompact: Boolean(source.disableAutoCompact),
       };
-      return sameAgentModelMappings(current, next) ? current : next;
+      return sameAgentModelMappings(currentClientDraft, next)
+        ? current
+        : { ...current, [selected]: next };
     });
   }, [
     activeStatus?.claudeCodeModelMappings,
@@ -849,26 +880,30 @@ export function AgentsPage() {
     value: string,
   ) => {
     const model = findAgentModel(models, value);
-    if (!model) return;
-    claudeModelMappingsDirtyRef.current = true;
+    if (!model || !isClaudeModelMappingClient) return;
+    claudeModelMappingsDirtyRef.current[selected] = true;
     setModelSelectionError('');
-    setClaudeModelMappingsDraft((current) => ({ ...current, [role]: model.name }));
+    setClaudeModelMappingsDraftByClient((current) => ({
+      ...current,
+      [selected]: { ...current[selected], [role]: model.name },
+    }));
   };
 
   const changeClaude1mPreference = (
     preference: 'opus1m' | 'sonnet1m' | 'haiku1m',
     enabled: boolean,
   ) => {
-    claudeModelMappingsDirtyRef.current = true;
-    setClaudeModelMappingsDraft((current) => {
-      const next = { ...current, [preference]: enabled };
+    if (!isClaudeModelMappingClient) return;
+    claudeModelMappingsDirtyRef.current[selected] = true;
+    setClaudeModelMappingsDraftByClient((current) => {
+      const next = { ...current[selected], [preference]: enabled };
       if (selected === 'claude-code') {
         const any1mEnabled = next.opus1m || next.sonnet1m || next.haiku1m;
         next.maxContextTokens = any1mEnabled
           ? 1_000_000
           : DEFAULT_CLAUDE_CODE_MAX_CONTEXT_TOKENS;
       }
-      return next;
+      return { ...current, [selected]: next };
     });
   };
 
@@ -876,37 +911,47 @@ export function AgentsPage() {
     key: 'maxContextTokens' | 'autoCompactPct',
     value: number,
   ) => {
-    claudeModelMappingsDirtyRef.current = true;
-    setClaudeModelMappingsDraft((current) => ({ ...current, [key]: value }));
+    if (selected !== 'claude-code') return;
+    claudeModelMappingsDirtyRef.current[selected] = true;
+    setClaudeModelMappingsDraftByClient((current) => ({
+      ...current,
+      [selected]: { ...current[selected], [key]: value },
+    }));
   };
 
   const changeClaudeCodeAutoCompactDisabled = (disabled: boolean) => {
-    claudeModelMappingsDirtyRef.current = true;
-    setClaudeModelMappingsDraft((current) => ({
+    if (selected !== 'claude-code') return;
+    claudeModelMappingsDirtyRef.current[selected] = true;
+    setClaudeModelMappingsDraftByClient((current) => ({
       ...current,
-      disableAutoCompact: disabled,
+      [selected]: {
+        ...current[selected],
+        disableAutoCompact: disabled,
+      },
     }));
   };
 
   const changeClaudeCustomMapping = (enabled: boolean) => {
-    setClaudeCustomMapping(enabled);
+    if (!isClaudeModelMappingClient) return;
+    setClaudeCustomMappingByClient((current) => ({ ...current, [selected]: enabled }));
     setModelSelectionError('');
-    setClaudeModelMappingsDraft((current) => {
+    setClaudeModelMappingsDraftByClient((current) => {
+      const currentClientDraft = current[selected];
       const next: ClaudeModelMappings = {
-        opus: resolveAgentModelForAliasMode(models, current.opus, enabled),
-        sonnet: resolveAgentModelForAliasMode(models, current.sonnet, enabled),
-        haiku: resolveAgentModelForAliasMode(models, current.haiku, enabled),
-        opus1m: current.opus1m,
-        sonnet1m: current.sonnet1m,
-        haiku1m: current.haiku1m,
-        maxContextTokens: current.maxContextTokens,
-        autoCompactPct: current.autoCompactPct,
-        disableAutoCompact: current.disableAutoCompact,
+        opus: resolveAgentModelForAliasMode(models, currentClientDraft.opus, enabled),
+        sonnet: resolveAgentModelForAliasMode(models, currentClientDraft.sonnet, enabled),
+        haiku: resolveAgentModelForAliasMode(models, currentClientDraft.haiku, enabled),
+        opus1m: currentClientDraft.opus1m,
+        sonnet1m: currentClientDraft.sonnet1m,
+        haiku1m: currentClientDraft.haiku1m,
+        maxContextTokens: currentClientDraft.maxContextTokens,
+        autoCompactPct: currentClientDraft.autoCompactPct,
+        disableAutoCompact: currentClientDraft.disableAutoCompact,
       };
-      if (!sameAgentModelMappings(current, next)) {
-        claudeModelMappingsDirtyRef.current = true;
+      if (!sameAgentModelMappings(currentClientDraft, next)) {
+        claudeModelMappingsDirtyRef.current[selected] = true;
       }
-      return next;
+      return { ...current, [selected]: next };
     });
   };
 
@@ -997,9 +1042,11 @@ export function AgentsPage() {
         claudeCodeModelMappings: selected === 'claude-code' ? claudeModelMappings : null,
         claudeDesktopModelMappings: selected === 'claude-desktop' ? claudeModelMappings : null,
       });
+      if (isClaudeModelMappingClient) {
+        claudeModelMappingsDirtyRef.current[selected] = false;
+      }
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
-      claudeModelMappingsDirtyRef.current = false;
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'apply')) {
         setConfigurationError(String(requestError));
@@ -1075,6 +1122,9 @@ export function AgentsPage() {
     setBusyAction('close-config');
     try {
       await invoke<AgentConfigActionResult>('close_agent_config_modification', { client: selected });
+      if (isClaudeModelMappingClient) {
+        claudeModelMappingsDirtyRef.current[selected] = false;
+      }
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
     } catch (requestError) {
@@ -1102,9 +1152,11 @@ export function AgentsPage() {
         claudeDesktopModelMappings: selected === 'claude-desktop' ? claudeModelMappings : null,
       });
       setDefaultConfirmOpen(false);
+      if (isClaudeModelMappingClient) {
+        claudeModelMappingsDirtyRef.current[selected] = false;
+      }
       await reloadStatusesAfterAction();
       setOauthConfigurationDraft(null);
-      claudeModelMappingsDirtyRef.current = false;
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'apply')) {
         setDefaultError(String(requestError));

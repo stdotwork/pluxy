@@ -11,6 +11,8 @@ export type AgentConfigurationModificationState = 'unconfigured' | 'applied' | '
 
 export type AgentConfigurationAction = 'apply' | 'update' | 'close';
 
+export type ClaudeModelMappingClientId = 'claude-code' | 'claude-desktop';
+
 export type AgentModelMappings = {
   opus: string;
   sonnet: string;
@@ -59,6 +61,19 @@ export const resolveAgentModelMappingsDraftSource = <T>(
   fallback: T,
   dirty: boolean,
 ): T => (dirty ? current : applied ?? fallback);
+
+export const resolveAgentModelMappingsDraftSourceForClient = <T>(
+  currentByClient: Record<ClaudeModelMappingClientId, T>,
+  client: ClaudeModelMappingClientId,
+  applied: T | null | undefined,
+  fallback: T,
+  dirty: boolean,
+): T => resolveAgentModelMappingsDraftSource(
+  currentByClient[client],
+  applied,
+  fallback,
+  dirty,
+);
 
 export function resolveAgentConfigurationAction({
   client,
