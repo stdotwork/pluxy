@@ -20,6 +20,10 @@ import {
   type AuthFileSnapshot,
 } from '../services/authFiles';
 import { managementApi, responseList } from '../services/managementApi';
+import {
+  createOAuthLoginSuccessCache,
+  shouldShowOAuthLoginStatus,
+} from '../services/oauthLoginState';
 import { AuthFileManagementPage } from './AuthFileManagementPage';
 import { QuotaPage } from './QuotaPage';
 
@@ -65,8 +69,15 @@ const OAUTH_CALLBACK_SUPPORTED = new Set<OAuthProviderId>([
   'xai',
 ]);
 const XAI_CALLBACK_URL = 'http://127.0.0.1:56121/callback';
-const OAUTH_SUCCESS_RESET_MS = 5000;
 const OAUTH_POLL_INTERVAL_MS = 3000;
+const oauthLoginSuccessCache = createOAuthLoginSuccessCache<OAuthProviderId>();
+
+const cachedOAuthProviderStates = (): Partial<Record<OAuthProviderId, OAuthProviderState>> => (
+  oauthLoginSuccessCache.snapshot().reduce<Partial<Record<OAuthProviderId, OAuthProviderState>>>(
+    (states, provider) => ({ ...states, [provider]: { status: 'success' } }),
+    {},
+  )
+);
 
 export function OAuthManagementPage() {
   const { t } = useI18n();
@@ -115,14 +126,15 @@ export function OAuthManagementPage() {
 
 export function OAuthLoginPage() {
   const { t } = useI18n();
-  const [states, setStates] = useState<Partial<Record<OAuthProviderId, OAuthProviderState>>>({});
+  const [states, setStates] = useState<Partial<Record<OAuthProviderId, OAuthProviderState>>>(
+    cachedOAuthProviderStates,
+  );
   const [notice, setNotice] = useState<{
     message: string;
     tone: 'success' | 'error' | 'info';
   } | null>(null);
   const pollingTimers = useRef<Partial<Record<OAuthProviderId, number>>>({});
   const pollingRequests = useRef<Partial<Record<OAuthProviderId, boolean>>>({});
-  const successResetTimers = useRef<Partial<Record<OAuthProviderId, number>>>({});
   const credentialSnapshots = useRef<Partial<Record<OAuthProviderId, AuthFileSnapshot>>>({});
   const noticeTimerRef = useRef<number | null>(null);
 
@@ -156,32 +168,10 @@ export function OAuthLoginPage() {
     delete pollingRequests.current[provider];
   }, []);
 
-  const clearSuccessResetTimer = useCallback((provider: OAuthProviderId) => {
-    const timer = successResetTimers.current[provider];
-    if (timer !== undefined) window.clearTimeout(timer);
-    delete successResetTimers.current[provider];
-  }, []);
-
-  const clearProviderTimers = useCallback(
-    (provider: OAuthProviderId) => {
-      clearPollingTimer(provider);
-      clearSuccessResetTimer(provider);
-    },
-    [clearPollingTimer, clearSuccessResetTimer],
-  );
-
-  const resetProviderAttempt = useCallback(
-    (provider: OAuthProviderId) => {
-      clearProviderTimers(provider);
-      delete credentialSnapshots.current[provider];
-      setStates((current) => ({ ...current, [provider]: { status: 'idle' } }));
-    },
-    [clearProviderTimers],
-  );
-
   const completeProviderAuth = useCallback(
     (provider: OAuthProviderId) => {
-      clearProviderTimers(provider);
+      clearPollingTimer(provider);
+      oauthLoginSuccessCache.mark(provider);
       updateProviderState(provider, {
         url: undefined,
         state: undefined,
@@ -193,11 +183,8 @@ export function OAuthLoginPage() {
         callbackStatus: undefined,
         callbackError: undefined,
       });
-      successResetTimers.current[provider] = window.setTimeout(() => {
-        resetProviderAttempt(provider);
-      }, OAUTH_SUCCESS_RESET_MS);
     },
-    [clearProviderTimers, resetProviderAttempt, updateProviderState],
+    [clearPollingTimer, updateProviderState],
   );
 
   const captureCredentialSnapshot = useCallback(async (provider: OAuthProviderId) => {
@@ -281,15 +268,12 @@ export function OAuthLoginPage() {
       Object.values(pollingTimers.current).forEach((timer) => {
         if (timer !== undefined) window.clearInterval(timer);
       });
-      Object.values(successResetTimers.current).forEach((timer) => {
-        if (timer !== undefined) window.clearTimeout(timer);
-      });
       if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
     };
   }, []);
 
   const startLogin = async (provider: OAuthProviderId) => {
-    clearProviderTimers(provider);
+    clearPollingTimer(provider);
     updateProviderState(provider, {
       url: undefined,
       state: undefined,
@@ -434,9 +418,9 @@ export function OAuthLoginPage() {
                 <img src={provider.icon} alt="" className="provider-logo" />
                 <div>
                   <h2>{provider.name}</h2>
-                  <span className={`state-pill ${state.status === 'success' ? 'success' : state.status === 'error' ? 'error' : ''}`}>
-                    {oauthStatusLabel(state, t)}
-                  </span>
+                  {shouldShowOAuthLoginStatus(state.status) ? (
+                    <span className="state-pill success">{t('oauth.status.completed')}</span>
+                  ) : null}
                 </div>
               </div>
 
@@ -508,13 +492,6 @@ export function OAuthLoginPage() {
       </div>
     </section>
   );
-}
-
-function oauthStatusLabel(state: OAuthProviderState, t: ReturnType<typeof useI18n>['t']) {
-  if (state.status === 'success') return t('oauth.status.completed');
-  if (state.status === 'error') return t('oauth.status.failed');
-  if (state.status === 'waiting' || state.polling) return t('oauth.status.waiting');
-  return t('oauth.status.signedOut');
 }
 
 function providerLabel(provider: OAuthProviderId) {
