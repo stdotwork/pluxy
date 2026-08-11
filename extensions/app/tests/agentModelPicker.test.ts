@@ -100,7 +100,7 @@ const appliedConfiguration = (
 });
 
 describe('agent configuration update action', () => {
-  test('Claude mapping clients do not inherit another client draft', () => {
+  test('Claude mapping clients keep their own unsaved draft after switching away and back', () => {
     const codeDraft = { opus: 'code-opus', sonnet: 'code-sonnet', haiku: 'code-haiku' };
     const desktopDraft = {
       opus: 'desktop-opus',
@@ -116,26 +116,27 @@ describe('agent configuration update action', () => {
       'claude-code': codeDraft,
       'claude-desktop': desktopDraft,
     };
+    const dirtyByClient = {
+      'claude-code': true,
+      'claude-desktop': false,
+    };
+
+    // Switch from Claude Code to Desktop: Desktop still loads its own default.
     expect(resolveAgentModelMappingsDraftSourceForClient(
       drafts,
       'claude-desktop',
       null,
       desktopFallback,
-      false,
+      dirtyByClient['claude-desktop'],
     )).toEqual(desktopFallback);
-    expect(resolveAgentModelMappingsDraftSourceForClient(
-      drafts,
-      'claude-desktop',
-      null,
-      desktopFallback,
-      true,
-    )).toEqual(desktopDraft);
+
+    // Switch back to Claude Code: its unapplied selection must not be overwritten.
     expect(resolveAgentModelMappingsDraftSourceForClient(
       drafts,
       'claude-code',
-      null,
+      { opus: 'applied', sonnet: 'applied', haiku: 'applied' },
       desktopFallback,
-      true,
+      dirtyByClient['claude-code'],
     )).toEqual(codeDraft);
   });
 

@@ -141,6 +141,10 @@ const createClaudeBooleanByClient = (): Record<ClaudeModelMappingClientId, boole
   'claude-desktop': false,
 });
 
+let claudeModelMappingsDraftCache = createClaudeModelMappingsByClient();
+let claudeCustomMappingCache = createClaudeBooleanByClient();
+const claudeModelMappingsDirtyCache = createClaudeBooleanByClient();
+
 const claudeMappingRoles = [
   {
     key: 'opus',
@@ -563,11 +567,14 @@ export function AgentsPage() {
   const [modelByClient, setModelByClient] = useState<Partial<Record<AgentClientId, string>>>(
     readAgentModelSelections,
   );
-  const [claudeModelMappingsDraftByClient, setClaudeModelMappingsDraftByClient] = useState(
-    createClaudeModelMappingsByClient,
+  const [claudeModelMappingsDraftByClient, setClaudeModelMappingsDraftByClientState] = useState(
+    () => ({
+      'claude-code': { ...claudeModelMappingsDraftCache['claude-code'] },
+      'claude-desktop': { ...claudeModelMappingsDraftCache['claude-desktop'] },
+    }),
   );
-  const [claudeCustomMappingByClient, setClaudeCustomMappingByClient] = useState(
-    createClaudeBooleanByClient,
+  const [claudeCustomMappingByClient, setClaudeCustomMappingByClientState] = useState(
+    () => ({ ...claudeCustomMappingCache }),
   );
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
@@ -589,7 +596,31 @@ export function AgentsPage() {
   const [piProviderUpdateStatus, setPiProviderUpdateStatus] = useState<PiProviderUpdateStatus | null>(null);
   const modelRequestRef = useRef(0);
   const piUpdateRequestRef = useRef(0);
-  const claudeModelMappingsDirtyRef = useRef(createClaudeBooleanByClient());
+  const claudeModelMappingsDirtyRef = useRef(claudeModelMappingsDirtyCache);
+
+  const setClaudeModelMappingsDraftByClient = useCallback((
+    update: (
+      current: Record<ClaudeModelMappingClientId, ClaudeModelMappings>,
+    ) => Record<ClaudeModelMappingClientId, ClaudeModelMappings>,
+  ) => {
+    setClaudeModelMappingsDraftByClientState((current) => {
+      const next = update(current);
+      claudeModelMappingsDraftCache = next;
+      return next;
+    });
+  }, []);
+
+  const setClaudeCustomMappingByClient = useCallback((
+    update: (
+      current: Record<ClaudeModelMappingClientId, boolean>,
+    ) => Record<ClaudeModelMappingClientId, boolean>,
+  ) => {
+    setClaudeCustomMappingByClientState((current) => {
+      const next = update(current);
+      claudeCustomMappingCache = next;
+      return next;
+    });
+  }, []);
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const command = forceRefresh
@@ -685,9 +716,8 @@ export function AgentsPage() {
     setClearConfirmOpen(false);
     setOauthLoginRequiredAction(null);
     setOauthConfigurationDraft(null);
-    if (selected === 'claude-code' || selected === 'claude-desktop') {
-      claudeModelMappingsDirtyRef.current[selected] = false;
-    }
+    // Preserve each Claude client's unsaved draft while navigating between clients.
+    // Its dirty flag is cleared only after a successful apply, close, or reset action.
   }, [selected]);
 
   const activeDefinition = agentDefinitions.find((agent) => agent.id === selected)
