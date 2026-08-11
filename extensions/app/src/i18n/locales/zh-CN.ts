@@ -349,7 +349,7 @@ export const zhCN = {
   'config.network.allowLanHint': '启用后将监听0.0.0.0',
   'config.network.proxyUrl': '代理 URL',
   'config.network.proxyPlaceholder': '例如 socks5://127.0.0.1:7890',
-  'config.network.proxyHint': '用于内核和软件本体访问外部服务的全局代理；留空表示不使用',
+  'config.network.proxyHint': '支持socks协议与http协议',
   'config.network.sessionAffinity': '会话粘性路由',
   'config.network.sessionAffinityHint': '同一会话优先复用已选择的凭据',
   'config.network.sessionTtl': '会话粘性 TTL',
