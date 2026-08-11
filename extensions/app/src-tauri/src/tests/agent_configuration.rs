@@ -906,6 +906,37 @@ fn claude_desktop_aliases_support_codex_oauth_models() {
 }
 
 #[test]
+fn claude_oauth_alias_changes_use_the_runtime_refresh_endpoint() {
+    let current = "port: 8317\nopenai-compatibility: []\n";
+    let oauth_only = "port: 8317\nopenai-compatibility: []\noauth-model-alias:\n  codex:\n    - name: gpt-5.6-sol\n      alias: claude-opus-5\n      fork: true\n";
+    let changes = management_alias_config_changes(current, oauth_only).unwrap();
+
+    assert!(!changes.update_config_yaml);
+    assert_eq!(
+        changes.oauth_model_aliases,
+        Some(serde_json::json!({
+            "codex": [{
+                "name": "gpt-5.6-sol",
+                "alias": "claude-opus-5",
+                "fork": true,
+            }]
+        }))
+    );
+
+    let mixed = oauth_only.replace(
+        "openai-compatibility: []",
+        "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1",
+    );
+    let changes = management_alias_config_changes(current, &mixed).unwrap();
+    assert!(changes.update_config_yaml);
+    assert!(changes.oauth_model_aliases.is_some());
+
+    let changes = management_alias_config_changes(oauth_only, current).unwrap();
+    assert!(!changes.update_config_yaml);
+    assert_eq!(changes.oauth_model_aliases, Some(serde_json::json!({})));
+}
+
+#[test]
 fn claude_managed_aliases_expand_flow_yaml_and_are_removed_selectively() {
     let compact = "# keep this comment\ncodex-api-key: [{api-key: test, models: [{name: gpt-5.6-sol, alias: ''}]}]\ncredential-concurrency: {max-limit: 1000000, cleanup-interval: 5s}\n";
     let mappings = ClaudeDesktopModelMappings::all("gpt-5.6-sol");
