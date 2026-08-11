@@ -11,21 +11,10 @@ pub(crate) struct MacosTrayClickState {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn set_macos_dock_visible(visible: bool) -> bool {
-    let Some(mtm) = MainThreadMarker::new() else {
-        eprintln!("更新 Dock 图标状态必须在主线程执行");
-        return false;
-    };
-    let policy = if visible {
-        NSApplicationActivationPolicy::Regular
-    } else {
-        NSApplicationActivationPolicy::Accessory
-    };
-    if !NSApplication::sharedApplication(mtm).setActivationPolicy(policy) {
-        eprintln!("更新 Dock 图标状态失败");
-        return false;
+pub(crate) fn set_macos_dock_visible(app_handle: &tauri::AppHandle, visible: bool) {
+    if let Err(error) = app_handle.set_dock_visibility(visible) {
+        eprintln!("更新 Dock 图标状态失败: {error}");
     }
-    true
 }
 
 #[cfg(target_os = "macos")]
@@ -33,12 +22,10 @@ pub(crate) fn show_main_window_on_main_thread(app_handle: &tauri::AppHandle) {
     let Some(window) = app_handle.get_webview_window("main") else {
         return;
     };
-    if !set_macos_dock_visible(true) {
-        return;
-    }
+    set_macos_dock_visible(app_handle, true);
     if let Err(error) = window.show() {
         eprintln!("显示主窗口失败: {error}");
-        set_macos_dock_visible(false);
+        set_macos_dock_visible(app_handle, false);
         return;
     }
     if window.is_minimized().unwrap_or(false) {

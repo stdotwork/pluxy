@@ -216,6 +216,8 @@ pub(crate) struct YamlValueChange {
     value: serde_norway::Value,
 }
 
+type MissingNestedYamlGroup = (Vec<String>, Vec<(String, serde_norway::Value)>);
+
 pub(crate) fn render_yaml_value_changes(
     content: &str,
     original: &serde_norway::Value,
@@ -243,8 +245,7 @@ pub(crate) fn render_yaml_value_changes(
             remaining_changes.push(change);
         }
     }
-    let mut missing_nested_groups: Vec<(Vec<String>, Vec<(String, serde_norway::Value)>)> =
-        Vec::new();
+    let mut missing_nested_groups: Vec<MissingNestedYamlGroup> = Vec::new();
     let mut yaml_edit_changes = Vec::new();
     for change in remaining_changes {
         if change.path.len() < 2

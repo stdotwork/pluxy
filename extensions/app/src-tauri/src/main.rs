@@ -11,6 +11,7 @@ mod core_config;
 mod core_runtime;
 mod management_api;
 mod provider_health;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
 mod usage;
 
@@ -33,7 +34,7 @@ use futures_util::StreamExt;
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEvent};
+use objc2_app_kit::NSEvent;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "windows")]
@@ -66,6 +67,7 @@ use tauri::{Emitter, LogicalSize, Manager};
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_opener::OpenerExt;
 use tokio_util::sync::CancellationToken;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use tray::*;
 use zip::ZipArchive;
 
@@ -1717,12 +1719,10 @@ fn main() {
         if window.label() == "main" {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                if !set_macos_dock_visible(false) {
-                    return;
-                }
+                set_macos_dock_visible(window.app_handle(), false);
                 if let Err(error) = window.hide() {
                     eprintln!("隐藏主窗口失败: {error}");
-                    set_macos_dock_visible(true);
+                    set_macos_dock_visible(window.app_handle(), true);
                 }
             }
         }

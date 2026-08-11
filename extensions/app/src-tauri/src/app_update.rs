@@ -712,14 +712,15 @@ pub(crate) async fn download_and_stage_portable_app_update(
             let helper_path = work_dir.join("EasyCLIProxyAPI-updater");
             fs::copy(&current_exe, &helper_path)
                 .map_err(|error| format!("准备应用更新助手失败: {error}"))?;
-            let app_parent = current_app
+            let backup_app = current_app
                 .parent()
-                .ok_or_else(|| "macOS 应用程序路径没有父目录".to_string())?;
+                .ok_or_else(|| "macOS 应用程序路径没有父目录".to_string())?
+                .join(".EasyCLIProxyAPI.app.update-backup");
             let descriptor = MacosUpdateDescriptor {
                 parent_pid: std::process::id(),
                 current_app,
                 staged_app,
-                backup_app: app_parent.join(".EasyCLIProxyAPI.app.update-backup"),
+                backup_app,
                 executable_relative_path,
                 ack_path: work_dir.join("update-started.ack"),
                 work_dir: work_dir.clone(),
