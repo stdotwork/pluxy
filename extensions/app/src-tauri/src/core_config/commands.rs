@@ -103,16 +103,14 @@ pub(crate) fn save_network_routing_settings(
     next.proxy_url = proxy_url.clone();
     next.routing_session_affinity = settings.routing_session_affinity;
     next.routing_session_affinity_ttl = routing_session_affinity_ttl.clone();
+    next.request_retry = settings.request_retry;
+    next.max_retry_credentials = settings.max_retry_credentials;
+    next.max_retry_interval = settings.max_retry_interval;
+    next.streaming_bootstrap_retries = settings.streaming_bootstrap_retries;
     validate_gui_config(&next)?;
 
     patch_core_network_routing_settings(&next)?;
-    let config = match gui_config_state.update_network_routing(
-        settings.port,
-        settings.allow_lan,
-        &proxy_url,
-        settings.routing_session_affinity,
-        &routing_session_affinity_ttl,
-    ) {
+    let config = match gui_config_state.update_network_routing(&next) {
         Ok(config) => config,
         Err(error) => {
             let rollback_error = patch_core_network_routing_settings(&previous).err();
