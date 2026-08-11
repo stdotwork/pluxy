@@ -576,7 +576,7 @@ export const jaOverrides = {
   'agents.claudeCodeRuntime.maxContextTokensHint': 'Claude Code の既定値は 200000 です。上流モデルの上限を超えないでください。',
   'agents.claudeCodeRuntime.context1mHint': 'このマッピングで [1m] モデルを使用し、最大コンテキストを 1000000 にします。3 つすべてを無効にすると 200000 に戻ります。',
   'agents.claudeCodeRuntime.autoCompactPct': '自動圧縮の開始率',
-  'agents.claudeCodeRuntime.autoCompactPctHint': '既定値は 100% です。小さい値ほど早く圧縮します。',
+  'agents.claudeCodeRuntime.autoCompactPctHint': '既定値は 90% です。小さい値ほど早く圧縮します。',
   'agents.claudeCodeRuntime.disableAutoCompact': '自動圧縮を無効化',
   'agents.claudeCodeRuntime.disableAutoCompactHint': '有効時は /compact による手動圧縮のみ利用できます。',
   'agents.claudeDesktopMapping.customMapping': 'モデルエイリアスを使用',

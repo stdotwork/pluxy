@@ -64,6 +64,79 @@ pub(crate) async fn put_management_config_yaml(
     read_management_value(response).await.map(|_| ())
 }
 
+pub(crate) async fn put_management_oauth_model_aliases(
+    config: &GuiConfigFile,
+    aliases: &serde_json::Value,
+) -> Result<(), String> {
+    let client = management_http_client()?;
+    let response = client
+        .put(management_endpoint(config, "oauth-model-alias")?)
+        .header("Authorization", management_authorization(config)?)
+        .json(aliases)
+        .send()
+        .await
+        .map_err(|error| format!("保存 OAuth 模型别名失败: {error}"))?;
+    read_management_value(response).await.map(|_| ())
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct ManagementAliasConfigChanges {
+    pub(crate) oauth_model_aliases: Option<serde_json::Value>,
+    pub(crate) update_config_yaml: bool,
+}
+
+pub(crate) fn management_alias_config_changes(
+    current: &str,
+    updated: &str,
+) -> Result<ManagementAliasConfigChanges, String> {
+    let split = |content: &str| {
+        let mut document = serde_norway::from_str::<serde_norway::Value>(content)
+            .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
+        let root = document
+            .as_mapping_mut()
+            .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
+        let oauth_aliases = root
+            .remove(yaml_key("oauth-model-alias"))
+            .unwrap_or_else(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()));
+        Ok::<_, String>((document, oauth_aliases))
+    };
+    let (current_without_oauth, current_oauth) = split(current)?;
+    let (updated_without_oauth, updated_oauth) = split(updated)?;
+    let oauth_model_aliases = if current_oauth == updated_oauth {
+        None
+    } else {
+        Some(
+            serde_json::to_value(updated_oauth)
+                .map_err(|error| format!("序列化 OAuth 模型别名失败: {error}"))?,
+        )
+    };
+    Ok(ManagementAliasConfigChanges {
+        oauth_model_aliases,
+        update_config_yaml: current_without_oauth != updated_without_oauth,
+    })
+}
+
+pub(crate) async fn put_management_alias_config_changes(
+    config: &GuiConfigFile,
+    current: &str,
+    updated: &str,
+) -> Result<(), String> {
+    if updated == current {
+        return Ok(());
+    }
+    let changes = management_alias_config_changes(current, updated)?;
+    if let Some(oauth_model_aliases) = changes.oauth_model_aliases.as_ref() {
+        // The dedicated endpoint refreshes CPA's OAuth model registry immediately.
+        // Writing the same section only through config.yaml updates the file and
+        // management snapshot, but can leave /v1/models and routing stale.
+        put_management_oauth_model_aliases(config, oauth_model_aliases).await?;
+    }
+    if changes.update_config_yaml {
+        put_management_config_yaml(config, updated).await?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn ensure_claude_desktop_model_aliases(
     config: &GuiConfigFile,
     mappings: &ClaudeDesktopModelMappings,
@@ -84,10 +157,7 @@ pub(crate) async fn ensure_claude_desktop_model_aliases(
             )?
         }
     };
-    if updated != content {
-        put_management_config_yaml(config, &updated).await?;
-    }
-    Ok(())
+    put_management_alias_config_changes(config, &content, &updated).await
 }
 
 pub(crate) async fn remove_managed_claude_model_aliases(
@@ -95,10 +165,7 @@ pub(crate) async fn remove_managed_claude_model_aliases(
 ) -> Result<(), String> {
     let content = fetch_management_config_yaml(config).await?;
     let updated = remove_managed_claude_model_aliases_in_yaml(&content)?;
-    if updated != content {
-        put_management_config_yaml(config, &updated).await?;
-    }
-    Ok(())
+    put_management_alias_config_changes(config, &content, &updated).await
 }
 
 pub(crate) fn ensure_claude_desktop_model_aliases_in_yaml(

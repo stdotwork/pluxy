@@ -10,6 +10,8 @@ import {
 } from '../src/services/agentModelPicker';
 import {
   resolveAgentConfigurationAction,
+  resolveAgentModelMappingsDraftSourceForClient,
+  sameAgentModelMappings,
   type AgentConfigurationClientId,
 } from '../src/services/agentConfigurationDraft';
 
@@ -98,6 +100,52 @@ const appliedConfiguration = (
 });
 
 describe('agent configuration update action', () => {
+  test('Claude mapping clients keep their own unsaved draft after switching away and back', () => {
+    const codeDraft = { opus: 'code-opus', sonnet: 'code-sonnet', haiku: 'code-haiku' };
+    const desktopDraft = {
+      opus: 'desktop-opus',
+      sonnet: 'desktop-sonnet',
+      haiku: 'desktop-haiku',
+    };
+    const desktopFallback = {
+      opus: 'desktop-model',
+      sonnet: 'desktop-model',
+      haiku: 'desktop-model',
+    };
+    const drafts = {
+      'claude-code': codeDraft,
+      'claude-desktop': desktopDraft,
+    };
+    const dirtyByClient = {
+      'claude-code': true,
+      'claude-desktop': false,
+    };
+
+    // Switch from Claude Code to Desktop: Desktop still loads its own default.
+    expect(resolveAgentModelMappingsDraftSourceForClient(
+      drafts,
+      'claude-desktop',
+      null,
+      desktopFallback,
+      dirtyByClient['claude-desktop'],
+    )).toEqual(desktopFallback);
+
+    // Switch back to Claude Code: its unapplied selection must not be overwritten.
+    expect(resolveAgentModelMappingsDraftSourceForClient(
+      drafts,
+      'claude-code',
+      { opus: 'applied', sonnet: 'applied', haiku: 'applied' },
+      desktopFallback,
+      dirtyByClient['claude-code'],
+    )).toEqual(codeDraft);
+  });
+
+  test('Claude Code missing auto-compact preference defaults to 90%', () => {
+    const mappings = { opus: 'model-a', sonnet: 'model-a', haiku: 'model-a' };
+    expect(sameAgentModelMappings(mappings, { ...mappings, autoCompactPct: 90 })).toBeTrue();
+    expect(sameAgentModelMappings(mappings, { ...mappings, autoCompactPct: 100 })).toBeFalse();
+  });
+
   test.each<AgentConfigurationClientId>([
     'claude-code',
     'claude-desktop',

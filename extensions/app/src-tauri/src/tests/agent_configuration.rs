@@ -23,7 +23,7 @@ fn claude_agent_config_preserves_existing_fields() {
     assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], DEFAULT_API_KEY);
     assert_eq!(value["env"]["ANTHROPIC_MODEL"], "claude-test");
     assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "200000");
-    assert_eq!(value["env"][CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV], "100");
+    assert_eq!(value["env"][CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV], "90");
     assert!(value["env"].get(DISABLE_AUTO_COMPACT_ENV).is_none());
     assert!(value["env"].get("CLAUDE_CODE_EFFORT_LEVEL").is_none());
     assert_eq!(value["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "claude-test");
@@ -66,7 +66,7 @@ fn claude_code_inspection_normalizes_legacy_1m_suffix() {
     assert!(mappings.sonnet_1m);
     assert!(!mappings.haiku_1m);
     assert_eq!(mappings.max_context_tokens, 1_000_000);
-    assert_eq!(mappings.auto_compact_pct, 100);
+    assert_eq!(mappings.auto_compact_pct, 90);
     assert!(!mappings.disable_auto_compact);
     fs::remove_dir_all(directory).unwrap();
 }
@@ -80,7 +80,7 @@ fn claude_mapping_legacy_json_defaults_1m_preferences_off() {
     assert!(!mappings.sonnet_1m);
     assert!(!mappings.haiku_1m);
     assert_eq!(mappings.max_context_tokens, 200_000);
-    assert_eq!(mappings.auto_compact_pct, 100);
+    assert_eq!(mappings.auto_compact_pct, 90);
     assert!(!mappings.disable_auto_compact);
 }
 
@@ -903,6 +903,37 @@ fn claude_desktop_aliases_support_codex_oauth_models() {
         yaml_mapping_value(cleaned, "port").and_then(serde_norway::Value::as_i64),
         Some(8317)
     );
+}
+
+#[test]
+fn claude_oauth_alias_changes_use_the_runtime_refresh_endpoint() {
+    let current = "port: 8317\nopenai-compatibility: []\n";
+    let oauth_only = "port: 8317\nopenai-compatibility: []\noauth-model-alias:\n  codex:\n    - name: gpt-5.6-sol\n      alias: claude-opus-5\n      fork: true\n";
+    let changes = management_alias_config_changes(current, oauth_only).unwrap();
+
+    assert!(!changes.update_config_yaml);
+    assert_eq!(
+        changes.oauth_model_aliases,
+        Some(serde_json::json!({
+            "codex": [{
+                "name": "gpt-5.6-sol",
+                "alias": "claude-opus-5",
+                "fork": true,
+            }]
+        }))
+    );
+
+    let mixed = oauth_only.replace(
+        "openai-compatibility: []",
+        "openai-compatibility:\n  - name: CPA\n    base-url: https://example.com/v1",
+    );
+    let changes = management_alias_config_changes(current, &mixed).unwrap();
+    assert!(changes.update_config_yaml);
+    assert!(changes.oauth_model_aliases.is_some());
+
+    let changes = management_alias_config_changes(oauth_only, current).unwrap();
+    assert!(!changes.update_config_yaml);
+    assert_eq!(changes.oauth_model_aliases, Some(serde_json::json!({})));
 }
 
 #[test]
