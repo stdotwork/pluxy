@@ -351,7 +351,7 @@ export const en: Record<MessageKey, string> = {
   'config.network.allowLanHint': 'Allow other devices on the LAN to access this proxy',
   'config.network.proxyUrl': 'Proxy URL',
   'config.network.proxyPlaceholder': 'For example, socks5://127.0.0.1:7890',
-  'config.network.proxyHint': 'Global proxy for the core and app external services; leave blank to disable',
+  'config.network.proxyHint': 'Supports SOCKS and HTTP protocols',
   'config.network.sessionAffinity': 'Session Affinity',
   'config.network.sessionAffinityHint': 'Prefer the previously selected credential for the same session',
   'config.network.sessionTtl': 'Session Affinity TTL',

@@ -340,7 +340,7 @@ export const jaOverrides = {
   'config.network.allowLanHint': 'LAN 内の他のデバイスからこのプロキシへのアクセスを許可します',
   'config.network.proxyUrl': 'プロキシ URL',
   'config.network.proxyPlaceholder': '例：socks5://127.0.0.1:7890',
-  'config.network.proxyHint': 'コアとアプリ本体の外部サービスに使用するグローバルプロキシ。空欄の場合は使用しません',
+  'config.network.proxyHint': 'SOCKS プロトコルと HTTP プロトコルに対応しています',
   'config.network.sessionAffinity': 'セッションアフィニティ',
   'config.network.sessionAffinityHint': '同じセッションでは以前選択した認証情報を優先します',
   'config.network.sessionTtl': 'セッションアフィニティ TTL',
