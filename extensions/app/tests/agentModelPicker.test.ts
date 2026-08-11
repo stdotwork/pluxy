@@ -10,6 +10,8 @@ import {
 } from '../src/services/agentModelPicker';
 import {
   resolveAgentConfigurationAction,
+  resolveAgentModelMappingsDraftSource,
+  sameAgentModelMappings,
   type AgentConfigurationClientId,
 } from '../src/services/agentConfigurationDraft';
 
@@ -98,6 +100,33 @@ const appliedConfiguration = (
 });
 
 describe('agent configuration update action', () => {
+  test('Claude mapping clients do not inherit another client draft', () => {
+    const codeDraft = { opus: 'code-opus', sonnet: 'code-sonnet', haiku: 'code-haiku' };
+    const desktopFallback = {
+      opus: 'desktop-model',
+      sonnet: 'desktop-model',
+      haiku: 'desktop-model',
+    };
+    expect(resolveAgentModelMappingsDraftSource(
+      codeDraft,
+      null,
+      desktopFallback,
+      false,
+    )).toEqual(desktopFallback);
+    expect(resolveAgentModelMappingsDraftSource(
+      codeDraft,
+      null,
+      desktopFallback,
+      true,
+    )).toEqual(codeDraft);
+  });
+
+  test('Claude Code missing auto-compact preference defaults to 90%', () => {
+    const mappings = { opus: 'model-a', sonnet: 'model-a', haiku: 'model-a' };
+    expect(sameAgentModelMappings(mappings, { ...mappings, autoCompactPct: 90 })).toBeTrue();
+    expect(sameAgentModelMappings(mappings, { ...mappings, autoCompactPct: 100 })).toBeFalse();
+  });
+
   test.each<AgentConfigurationClientId>([
     'claude-code',
     'claude-desktop',

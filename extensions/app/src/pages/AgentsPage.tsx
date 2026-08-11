@@ -39,6 +39,7 @@ import {
 } from '../services/agentModelPicker';
 import {
   resolveAgentConfigurationAction,
+  resolveAgentModelMappingsDraftSource,
   sameAgentModel,
   sameAgentModelMappings,
 } from '../services/agentConfigurationDraft';
@@ -111,7 +112,7 @@ type ClaudeModelMappings = {
 
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR = 'CODEX_OAUTH_LOGIN_REQUIRED';
 const DEFAULT_CLAUDE_CODE_MAX_CONTEXT_TOKENS = 200_000;
-const DEFAULT_CLAUDE_AUTO_COMPACT_PCT = 100;
+const DEFAULT_CLAUDE_AUTO_COMPACT_PCT = 90;
 
 const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
   opus: model,
@@ -720,18 +721,24 @@ export function AgentsPage() {
     const appliedMappings = selected === 'claude-code'
       ? activeStatus?.claudeCodeModelMappings
       : activeStatus?.claudeDesktopModelMappings;
-    if (!claudeModelMappingsDirtyRef.current && appliedMappings) {
-      const appliedModels = claudeMappingRoles
-        .map((role) => findAgentModel(models, appliedMappings[role.key]))
-        .filter((model): model is ModelOption => model !== null);
-      if (appliedModels.length === claudeMappingRoles.length) {
-        setClaudeCustomMapping(appliedModels.every((model) => Boolean(model.isAlias)));
-      }
+    if (!claudeModelMappingsDirtyRef.current) {
+      const appliedModels = appliedMappings
+        ? claudeMappingRoles
+            .map((role) => findAgentModel(models, appliedMappings[role.key]))
+            .filter((model): model is ModelOption => model !== null)
+        : [];
+      setClaudeCustomMapping(
+        appliedModels.length === claudeMappingRoles.length
+          && appliedModels.every((model) => Boolean(model.isAlias)),
+      );
     }
     setClaudeModelMappingsDraft((current) => {
-      const source = claudeModelMappingsDirtyRef.current
-        ? current
-        : appliedMappings ?? current;
+      const source = resolveAgentModelMappingsDraftSource(
+        current,
+        appliedMappings,
+        createClaudeModelMappings(selectedModel),
+        claudeModelMappingsDirtyRef.current,
+      );
       const next: ClaudeModelMappings = {
         opus: findAgentModel(models, source.opus)?.name ?? selectedModel,
         sonnet: findAgentModel(models, source.sonnet)?.name ?? selectedModel,

@@ -571,7 +571,7 @@ export const en: Record<MessageKey, string> = {
   'agents.claudeCodeRuntime.maxContextTokensHint': 'Claude Code defaults to 200000. Do not exceed the upstream model limit.',
   'agents.claudeCodeRuntime.context1mHint': 'Uses the [1m] model for this mapping and sets the maximum context to 1000000. It returns to 200000 after all three mappings are off.',
   'agents.claudeCodeRuntime.autoCompactPct': 'Auto-compact trigger',
-  'agents.claudeCodeRuntime.autoCompactPctHint': 'Defaults to 100%. Lower values compact earlier.',
+  'agents.claudeCodeRuntime.autoCompactPctHint': 'Defaults to 90%. Lower values compact earlier.',
   'agents.claudeCodeRuntime.disableAutoCompact': 'Disable auto-compaction',
   'agents.claudeCodeRuntime.disableAutoCompactHint': 'Only manual /compact remains available when enabled.',
   'agents.claudeDesktopMapping.customMapping': 'Use Model Aliases',

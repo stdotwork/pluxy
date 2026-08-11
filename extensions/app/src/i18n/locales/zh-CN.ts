@@ -569,7 +569,7 @@ export const zhCN = {
   'agents.claudeCodeRuntime.maxContextTokensHint': 'Claude Code 默认 200000；请勿超过上游模型实际支持的窗口。',
   'agents.claudeCodeRuntime.context1mHint': '为此映射使用 [1m] 模型并将最大窗口设为 1000000；三个映射均关闭后恢复为 200000。',
   'agents.claudeCodeRuntime.autoCompactPct': '触发压缩百分比',
-  'agents.claudeCodeRuntime.autoCompactPctHint': '默认 100；调低后会更早自动压缩。',
+  'agents.claudeCodeRuntime.autoCompactPctHint': '默认 90%；调低后会更早自动压缩。',
   'agents.claudeCodeRuntime.disableAutoCompact': '禁止自动压缩',
   'agents.claudeCodeRuntime.disableAutoCompactHint': '开启后仅允许用户通过 /compact 手动压缩。',
   'agents.claudeDesktopMapping.customMapping': '使用模型别名',

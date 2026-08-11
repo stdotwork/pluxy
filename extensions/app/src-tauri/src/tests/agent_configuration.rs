@@ -23,7 +23,7 @@ fn claude_agent_config_preserves_existing_fields() {
     assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], DEFAULT_API_KEY);
     assert_eq!(value["env"]["ANTHROPIC_MODEL"], "claude-test");
     assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "200000");
-    assert_eq!(value["env"][CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV], "100");
+    assert_eq!(value["env"][CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV], "90");
     assert!(value["env"].get(DISABLE_AUTO_COMPACT_ENV).is_none());
     assert!(value["env"].get("CLAUDE_CODE_EFFORT_LEVEL").is_none());
     assert_eq!(value["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "claude-test");
@@ -66,7 +66,7 @@ fn claude_code_inspection_normalizes_legacy_1m_suffix() {
     assert!(mappings.sonnet_1m);
     assert!(!mappings.haiku_1m);
     assert_eq!(mappings.max_context_tokens, 1_000_000);
-    assert_eq!(mappings.auto_compact_pct, 100);
+    assert_eq!(mappings.auto_compact_pct, 90);
     assert!(!mappings.disable_auto_compact);
     fs::remove_dir_all(directory).unwrap();
 }
@@ -80,7 +80,7 @@ fn claude_mapping_legacy_json_defaults_1m_preferences_off() {
     assert!(!mappings.sonnet_1m);
     assert!(!mappings.haiku_1m);
     assert_eq!(mappings.max_context_tokens, 200_000);
-    assert_eq!(mappings.auto_compact_pct, 100);
+    assert_eq!(mappings.auto_compact_pct, 90);
     assert!(!mappings.disable_auto_compact);
 }
 

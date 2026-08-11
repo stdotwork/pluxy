@@ -50,8 +50,15 @@ export const sameAgentModelMappings = (
   && Boolean(left.sonnet1m) === Boolean(right.sonnet1m)
   && Boolean(left.haiku1m) === Boolean(right.haiku1m)
   && (left.maxContextTokens ?? 200_000) === (right.maxContextTokens ?? 200_000)
-  && (left.autoCompactPct ?? 100) === (right.autoCompactPct ?? 100)
+  && (left.autoCompactPct ?? 90) === (right.autoCompactPct ?? 90)
   && Boolean(left.disableAutoCompact) === Boolean(right.disableAutoCompact);
+
+export const resolveAgentModelMappingsDraftSource = <T>(
+  current: T,
+  applied: T | null | undefined,
+  fallback: T,
+  dirty: boolean,
+): T => (dirty ? current : applied ?? fallback);
 
 export function resolveAgentConfigurationAction({
   client,
