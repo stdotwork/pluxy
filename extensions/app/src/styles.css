@@ -3104,6 +3104,29 @@ textarea:focus-visible {
   overflow: auto;
 }
 
+.model-discovery-results {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.model-discovery-inline-error {
+  display: grid;
+  gap: 2px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--theme-dfb7b0);
+  background: var(--theme-fff1ee);
+  color: var(--theme-9f2d20);
+  font-size: var(--font-size-meta);
+}
+
+.model-discovery-inline-error span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .model-discovery-row {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 18px;

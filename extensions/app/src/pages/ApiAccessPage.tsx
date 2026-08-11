@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Check,
@@ -78,6 +78,13 @@ type ProviderRow = {
   authIndex: string;
   remark: string;
 };
+
+type ProviderSaveResult =
+  | { saved: true }
+  | { saved: false; error: string; target: 'form' | 'models' };
+
+const requestErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 export type ProviderDraft = {
   name: string;
@@ -758,12 +765,14 @@ export function ApiAccessPage() {
   );
 
   const openCreate = () => {
+    setError('');
     setEditingRow(null);
     setDialogDraft(createProviderDraft(activeCategory));
     setDialogOpen(true);
   };
 
   const openEdit = (row: ProviderRow) => {
+    setError('');
     setEditingRow(row);
     const draft = draftFromRow(row);
     setDialogDraft(activeCategory === 'deepseek'
@@ -772,7 +781,7 @@ export function ApiAccessPage() {
     setDialogOpen(true);
   };
 
-  const saveProvider = async (nextDraft: ProviderDraft): Promise<boolean> => {
+  const saveProvider = async (nextDraft: ProviderDraft): Promise<ProviderSaveResult> => {
     const definition = activeDefinition;
     const preparedDraft = applyProviderRemarkIdentity(
       activeCategory,
@@ -790,18 +799,18 @@ export function ApiAccessPage() {
       || (remarkRequired && !preparedDraft.remark.trim())
       || (baseUrlRequired && !preparedDraft.baseUrl.trim())
     ) {
-      setError(
-        definition.openAi
+      return {
+        saved: false,
+        target: 'form',
+        error: definition.openAi
           ? t('apiAccess.error.requiredAll')
           : baseUrlRequired
             ? t('apiAccess.error.requiredBaseKey')
             : t('apiAccess.error.requiredKey'),
-      );
-      return false;
+      };
     }
     if (Array.from(preparedDraft.remark.trim()).length > 80 || /[\u0000-\u001f\u007f]/.test(preparedDraft.remark)) {
-      setError(t('apiAccess.error.remarkInvalid'));
-      return false;
+      return { saved: false, target: 'form', error: t('apiAccess.error.remarkInvalid') };
     }
     let baseUrl = preparedDraft.baseUrl.trim();
     let providerHeaders: Record<string, string> = {};
@@ -810,23 +819,31 @@ export function ApiAccessPage() {
       if (baseUrlRequired && !baseUrl) throw new Error(t('apiAccess.error.baseRequired', { provider: definition.label }));
       providerHeaders = parseProviderHeaders(preparedDraft.headersText ?? '');
     } catch (requestError) {
-      setError(String(requestError));
-      return false;
+      return { saved: false, target: 'form', error: requestErrorMessage(requestError) };
     }
     setBusy(true);
     setError('');
     try {
       let draftToSave = { ...preparedDraftForSave, baseUrl };
       if (definition.openAi && draftToSave.models.length === 0) {
-        const fetchedModels = await fetchModels(
-          'openai',
-          baseUrl,
-          parsedApiKeys[0],
-          editingRow?.authIndex,
-          providerHeaders,
-        );
-        if (fetchedModels.length === 0) {
-          throw new Error(t('apiAccess.error.noModels'));
+        let fetchedModels: ModelOption[];
+        try {
+          fetchedModels = await fetchModels(
+            'openai',
+            baseUrl,
+            parsedApiKeys[0],
+            editingRow?.authIndex,
+            providerHeaders,
+          );
+          if (fetchedModels.length === 0) {
+            throw new Error(t('apiAccess.error.noModels'));
+          }
+        } catch (requestError) {
+          return {
+            saved: false,
+            target: 'models',
+            error: requestErrorMessage(requestError),
+          };
         }
         draftToSave = applyProviderPreset(activeCategory, {
           ...draftToSave,
@@ -883,10 +900,9 @@ export function ApiAccessPage() {
       });
       setNotice(editingRow ? t('apiAccess.notice.updated') : t('apiAccess.notice.added'));
       await loadProviders();
-      return true;
+      return { saved: true };
     } catch (requestError) {
-      setError(String(requestError));
-      return false;
+      return { saved: false, target: 'form', error: requestErrorMessage(requestError) };
     } finally {
       setBusy(false);
     }
@@ -1312,7 +1328,7 @@ type ApiProviderDialogProps = {
   initialDraft: ProviderDraft;
   busy: boolean;
   onClose: () => void;
-  onSave: (draft: ProviderDraft) => Promise<boolean>;
+  onSave: (draft: ProviderDraft) => Promise<ProviderSaveResult>;
 };
 
 function ApiProviderDialog({
@@ -1329,6 +1345,7 @@ function ApiProviderDialog({
   const [draft, setDraft] = useState<ProviderDraft>(initialDraft);
   const [modelLoading, setModelLoading] = useState(false);
   const [modelError, setModelError] = useState('');
+  const [formError, setFormError] = useState('');
   const [discoveredModels, setDiscoveredModels] = useState<ModelOption[]>([]);
   const [modelDiscoveryOpen, setModelDiscoveryOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
@@ -1336,6 +1353,7 @@ function ApiProviderDialog({
   const [selectedModelNames, setSelectedModelNames] = useState<Set<string>>(
     () => new Set(initialDraft.models.map((model) => model.name.toLowerCase())),
   );
+  const modelCardRef = useRef<HTMLDivElement>(null);
 
   const modelOptions = useMemo(() => {
     const options = new Map<string, ModelOption>();
@@ -1366,6 +1384,10 @@ function ApiProviderDialog({
     field: 'apiKey' | 'remark' | 'baseUrl' | 'priority' | 'prefix' | 'headersText' | 'excludedModelsText' | 'testModel' | 'cloakMode' | 'cloakSensitiveWordsText',
     value: string,
   ) => {
+    setFormError('');
+    if (field === 'apiKey' || field === 'baseUrl' || field === 'headersText') {
+      setModelError('');
+    }
     setDraft((current) => ({ ...current, [field]: value }));
   };
 
@@ -1373,6 +1395,7 @@ function ApiProviderDialog({
     field: 'disableCooling' | 'websockets' | 'cloakStrictMode' | 'cloakCacheUserId',
     value: boolean,
   ) => {
+    setFormError('');
     setDraft((current) => ({ ...current, [field]: value }));
   };
 
@@ -1457,8 +1480,7 @@ function ApiProviderDialog({
       ));
       if (!models.length) setModelError(t('apiAccess.error.noAvailableModels'));
     } catch (requestError) {
-      setDiscoveredModels([]);
-      setModelError(String(requestError));
+      setModelError(requestErrorMessage(requestError));
     } finally {
       setModelLoading(false);
     }
@@ -1519,7 +1541,20 @@ function ApiProviderDialog({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (await onSave(draft)) onClose();
+    setFormError('');
+    const result = await onSave(draft);
+    if (result.saved) {
+      onClose();
+      return;
+    }
+    if (result.target === 'models') {
+      setModelError(result.error);
+      window.requestAnimationFrame(() => {
+        modelCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      return;
+    }
+    setFormError(result.error);
   };
 
   const hasModelExclusions = activeSection !== 'openai-compatibility'
@@ -1619,7 +1654,7 @@ function ApiProviderDialog({
             ) : <small className="thinking-level-empty">{t('apiAccess.thinking.empty')}</small>}
             </div>
         ) : null}
-        <div className="model-config-card">
+        <div className="model-config-card" ref={modelCardRef}>
           <div className="model-config-heading">
             <div><span>{t('apiAccess.models.title')}</span><small>{t('apiAccess.models.description')}</small></div>
             <button type="button" className="secondary-button compact-button" onClick={openModelDiscovery} disabled={busy}>
@@ -1720,6 +1755,11 @@ function ApiProviderDialog({
             </div>
           </div>
         </details>
+        {formError ? (
+          <div className="management-alert error api-provider-dialog-error" role="alert">
+            {formError}
+          </div>
+        ) : null}
         <div className="config-dialog-actions two-actions">
           <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>{t('common.cancel')}</button>
           <button type="submit" className="primary-button" disabled={busy}>{busy ? t('common.saving') : t('common.save')}</button>
@@ -1754,22 +1794,30 @@ function ApiProviderDialog({
             <div className="model-discovery-content">
               {modelLoading ? (
                 <div className="model-discovery-message"><LoaderCircle size={20} className="spin" />{t('apiAccess.modelDialog.fetching')}</div>
-              ) : modelError ? (
+              ) : modelError && modelOptions.length === 0 ? (
                 <div className="model-discovery-message error"><strong>{t('apiAccess.modelDialog.fetchFailed')}</strong><span>{modelError}</span></div>
               ) : visibleModelOptions.length === 0 ? (
                 <div className="model-discovery-message"><strong>{modelOptions.length ? t('apiAccess.modelDialog.noMatch') : t('apiAccess.modelDialog.none')}</strong><span>{modelOptions.length ? t('apiAccess.modelDialog.tryKeyword') : t('apiAccess.modelDialog.checkCredentials')}</span></div>
               ) : (
-                <div className="model-discovery-list">
-                  {visibleModelOptions.map((model) => {
-                    const checked = selectedModelNames.has(model.name.toLowerCase());
-                    return (
-                      <label className={`model-discovery-row ${checked ? 'selected' : ''}`} key={model.name}>
-                        <input type="checkbox" checked={checked} onChange={() => toggleModelSelection(model)} />
-                        <span><strong title={model.name}>{model.name}</strong>{model.alias ? <small title={model.alias}>{model.alias}</small> : null}</span>
-                        {checked ? <Check size={16} aria-hidden="true" /> : null}
-                      </label>
-                    );
-                  })}
+                <div className="model-discovery-results">
+                  {modelError ? (
+                    <div className="model-discovery-inline-error" role="alert">
+                      <strong>{t('apiAccess.modelDialog.fetchFailed')}</strong>
+                      <span title={modelError}>{modelError}</span>
+                    </div>
+                  ) : null}
+                  <div className="model-discovery-list">
+                    {visibleModelOptions.map((model) => {
+                      const checked = selectedModelNames.has(model.name.toLowerCase());
+                      return (
+                        <label className={`model-discovery-row ${checked ? 'selected' : ''}`} key={model.name}>
+                          <input type="checkbox" checked={checked} onChange={() => toggleModelSelection(model)} />
+                          <span><strong title={model.name}>{model.name}</strong>{model.alias ? <small title={model.alias}>{model.alias}</small> : null}</span>
+                          {checked ? <Check size={16} aria-hidden="true" /> : null}
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
