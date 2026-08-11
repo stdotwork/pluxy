@@ -150,11 +150,12 @@ mod tests {
         let catalog = parse_catalog(MODEL_CATALOG_JSON).unwrap();
         assert_eq!(catalog.context_windows["deepseek-v4-flash"], 1_000_000);
         assert_eq!(catalog.context_windows["deepseek-v4-pro"], 1_000_000);
-        assert_eq!(
-            catalog.claude_code_effort_levels["deepseek-v4-flash"],
-            "max"
-        );
-        assert_eq!(catalog.claude_code_effort_levels["deepseek-v4-pro"], "max");
+        assert!(!catalog
+            .claude_code_effort_levels
+            .contains_key("deepseek-v4-flash"));
+        assert!(!catalog
+            .claude_code_effort_levels
+            .contains_key("deepseek-v4-pro"));
         assert_eq!(
             catalog.display_names["deepseek-v4-flash"],
             "DeepSeek V4 Flash"

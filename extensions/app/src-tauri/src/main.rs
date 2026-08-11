@@ -142,6 +142,9 @@ const MANAGED_CLAUDE_HAIKU_ALIAS_DISPLAY_NAME: &str =
 const DEFAULT_CLAUDE_CONTEXT_WINDOW: u64 = 200_000;
 const CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW: u64 = 1_000_000;
 const CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV: &str = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
+const CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV: &str = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
+const DISABLE_AUTO_COMPACT_ENV: &str = "DISABLE_AUTO_COMPACT";
+const DEFAULT_CLAUDE_AUTO_COMPACT_PCT: u8 = 100;
 const MODEL_ALIAS_CONFIG_SECTIONS: &[&str] = &[
     "codex-api-key",
     "openai-compatibility",
@@ -788,6 +791,20 @@ struct ClaudeDesktopModelMappings {
     sonnet_1m: bool,
     #[serde(default)]
     haiku_1m: bool,
+    #[serde(default = "default_claude_code_max_context_tokens")]
+    max_context_tokens: u64,
+    #[serde(default = "default_claude_auto_compact_pct")]
+    auto_compact_pct: u8,
+    #[serde(default)]
+    disable_auto_compact: bool,
+}
+
+fn default_claude_code_max_context_tokens() -> u64 {
+    DEFAULT_CLAUDE_CONTEXT_WINDOW
+}
+
+fn default_claude_auto_compact_pct() -> u8 {
+    DEFAULT_CLAUDE_AUTO_COMPACT_PCT
 }
 
 impl ClaudeDesktopModelMappings {
@@ -799,6 +816,9 @@ impl ClaudeDesktopModelMappings {
             opus_1m: false,
             sonnet_1m: false,
             haiku_1m: false,
+            max_context_tokens: default_claude_code_max_context_tokens(),
+            auto_compact_pct: default_claude_auto_compact_pct(),
+            disable_auto_compact: false,
         }
     }
 }

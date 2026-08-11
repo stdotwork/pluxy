@@ -5519,6 +5519,98 @@ textarea:focus-visible {
   gap: 12px;
 }
 
+.agent-claude-code-runtime-settings {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(240px, 1.2fr);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--theme-e3e1db);
+  border-radius: 9px;
+  background: var(--theme-faf9f5);
+}
+
+.agent-claude-code-number-field {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  color: var(--theme-5f5a53);
+  font-size: var(--font-size-label);
+  font-weight: 700;
+}
+
+.agent-claude-code-number-field > input,
+.agent-claude-code-percent-input input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--theme-d3d0c9);
+  border-radius: 7px;
+  background: var(--theme-fff);
+  color: var(--theme-2f2c28);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-claude-code-number-field > input:focus,
+.agent-claude-code-percent-input input:focus {
+  border-color: var(--theme-8069ad);
+  outline: 2px solid rgba(128, 105, 173, 0.14);
+}
+
+.agent-claude-code-number-field > input:disabled,
+.agent-claude-code-percent-input input:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.agent-claude-code-number-field small,
+.agent-claude-code-disable-compact small {
+  color: var(--theme-817b72);
+  font-size: var(--font-size-caption);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.agent-claude-code-percent-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.agent-claude-code-percent-input > span {
+  color: var(--theme-817b72);
+  font-weight: 700;
+}
+
+.agent-claude-code-disable-compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--theme-e3e1db);
+  border-radius: 8px;
+  background: var(--theme-fff);
+  color: var(--theme-5f5a53);
+  cursor: pointer;
+}
+
+.agent-claude-code-disable-compact > span:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-claude-code-disable-compact:has(input:checked) {
+  border-color: rgba(174, 92, 82, 0.48);
+  background: rgba(174, 92, 82, 0.06);
+}
+
+.agent-claude-code-disable-compact:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .agent-claude-desktop-mapping-row {
   display: grid;
   min-width: 0;
@@ -7264,6 +7356,14 @@ textarea:focus-visible {
 }
 
 @container agent-panel (max-width: 760px) {
+  .agent-claude-code-runtime-settings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-claude-code-disable-compact {
+    grid-column: 1 / -1;
+  }
+
   .agent-claude-desktop-mapping-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -7281,6 +7381,14 @@ textarea:focus-visible {
 
   .agent-claude-desktop-mapping-grid {
     grid-template-columns: 1fr;
+  }
+
+  .agent-claude-code-runtime-settings {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-claude-code-disable-compact {
+    grid-column: auto;
   }
 
   .agent-codex-options {
