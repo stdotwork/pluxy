@@ -677,6 +677,9 @@ pub(crate) fn resolve_claude_desktop_model_mappings(
         opus_1m: requested.opus_1m,
         sonnet_1m: requested.sonnet_1m,
         haiku_1m: requested.haiku_1m,
+        max_context_tokens: requested.max_context_tokens,
+        auto_compact_pct: requested.auto_compact_pct,
+        disable_auto_compact: requested.disable_auto_compact,
     }))
 }
 
@@ -690,6 +693,17 @@ pub(crate) fn resolve_claude_code_model_mappings(
         return Ok(None);
     }
     let requested = requested.unwrap_or_else(|| ClaudeDesktopModelMappings::all(selected_model));
+    if !(100_000..=1_000_000).contains(&requested.max_context_tokens) {
+        return Err("Claude Code 最大窗口必须介于 100000 和 1000000 之间".to_string());
+    }
+    if !(1..=100).contains(&requested.auto_compact_pct) {
+        return Err("Claude Code 触发压缩百分比必须介于 1 和 100 之间".to_string());
+    }
+    let max_context_tokens = if requested.opus_1m || requested.sonnet_1m || requested.haiku_1m {
+        CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW
+    } else {
+        requested.max_context_tokens
+    };
     let resolve =
         |model: &str| resolve_available_agent_model(models, &validate_agent_model(model)?);
     Ok(Some(ClaudeDesktopModelMappings {
@@ -699,6 +713,9 @@ pub(crate) fn resolve_claude_code_model_mappings(
         opus_1m: requested.opus_1m,
         sonnet_1m: requested.sonnet_1m,
         haiku_1m: requested.haiku_1m,
+        max_context_tokens,
+        auto_compact_pct: requested.auto_compact_pct,
+        disable_auto_compact: requested.disable_auto_compact,
     }))
 }
 

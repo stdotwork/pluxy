@@ -123,11 +123,9 @@ describe('agent configuration update action', () => {
     })).toBe('update');
   });
 
-  test.each<AgentConfigurationClientId>(['claude-code', 'claude-desktop'])(
-    '%s updates when only a 1M preference changes',
-    (client) => {
+  test('Claude Desktop updates when only a 1M preference changes', () => {
       expect(resolveAgentConfigurationAction({
-        client,
+        client: 'claude-desktop',
         modificationState: 'applied',
         selectedModel: 'model-a',
         appliedModel: 'model-a',
@@ -146,8 +144,34 @@ describe('agent configuration update action', () => {
           opus1m: false,
         },
       })).toBe('update');
-    },
-  );
+  });
+
+  test('Claude Code updates when its shared context policy changes', () => {
+    expect(resolveAgentConfigurationAction({
+      client: 'claude-code',
+      modificationState: 'applied',
+      selectedModel: 'model-a',
+      appliedModel: 'model-a',
+      oauthConfiguration: false,
+      appliedOauthConfiguration: false,
+      modelMappings: {
+        opus: 'model-a',
+        sonnet: 'model-a',
+        haiku: 'model-a',
+        maxContextTokens: 372000,
+        autoCompactPct: 80,
+        disableAutoCompact: true,
+      },
+      appliedModelMappings: {
+        opus: 'model-a',
+        sonnet: 'model-a',
+        haiku: 'model-a',
+        maxContextTokens: 200000,
+        autoCompactPct: 100,
+        disableAutoCompact: false,
+      },
+    })).toBe('update');
+  });
 
   test('Pi never exposes the model update action', () => {
     expect(appliedConfiguration('pi', 'model-b')).toBe('close');

@@ -1749,33 +1749,50 @@ pub(crate) fn inspect_claude_code_model_mappings(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .or(fallback)?;
-        Some((
-            strip_claude_code_context_suffix(value).to_string(),
-            has_claude_code_context_suffix(value),
-        ))
+        let normalized = strip_claude_code_context_suffix(value);
+        Some((normalized.to_string(), normalized.len() != value.len()))
     };
-    let Some((opus, opus_1m)) = read_model("ANTHROPIC_DEFAULT_OPUS_MODEL") else {
+    let Some((opus, opus_had_1m)) = read_model("ANTHROPIC_DEFAULT_OPUS_MODEL") else {
         return Ok(None);
     };
-    let Some((sonnet, sonnet_1m)) = read_model("ANTHROPIC_DEFAULT_SONNET_MODEL") else {
+    let Some((sonnet, sonnet_had_1m)) = read_model("ANTHROPIC_DEFAULT_SONNET_MODEL") else {
         return Ok(None);
     };
-    let Some((haiku, haiku_1m)) = read_model("ANTHROPIC_DEFAULT_HAIKU_MODEL") else {
+    let Some((haiku, haiku_had_1m)) = read_model("ANTHROPIC_DEFAULT_HAIKU_MODEL") else {
         return Ok(None);
     };
+    let legacy_1m = opus_had_1m || sonnet_had_1m || haiku_had_1m;
+    let max_context_tokens = env
+        .get(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or_else(|| {
+            if legacy_1m {
+                CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW
+            } else {
+                default_claude_code_max_context_tokens()
+            }
+        });
+    let auto_compact_pct = env
+        .get(CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| value.trim().parse::<u8>().ok())
+        .unwrap_or_else(default_claude_auto_compact_pct);
+    let disable_auto_compact = env
+        .get(DISABLE_AUTO_COMPACT_ENV)
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
     Ok(Some(ClaudeDesktopModelMappings {
         opus,
         sonnet,
         haiku,
-        opus_1m,
-        sonnet_1m,
-        haiku_1m,
+        opus_1m: opus_had_1m,
+        sonnet_1m: sonnet_had_1m,
+        haiku_1m: haiku_had_1m,
+        max_context_tokens,
+        auto_compact_pct,
+        disable_auto_compact,
     }))
-}
-
-pub(crate) fn has_claude_code_context_suffix(value: &str) -> bool {
-    let value = value.trim();
-    value.len() >= 4 && value[value.len() - 4..].eq_ignore_ascii_case("[1m]")
 }
 
 pub(crate) fn strip_claude_code_context_suffix(value: &str) -> &str {
@@ -1850,15 +1867,10 @@ pub(crate) fn claude_effective_context_window(
                 .max(CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW),
         );
     }
-    context_window.map(|context_window| {
-        if context_window >= CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW {
-            DEFAULT_CLAUDE_CONTEXT_WINDOW
-        } else {
-            context_window
-        }
-    })
+    context_window
 }
 
+#[allow(dead_code)]
 pub(crate) fn claude_code_max_context_tokens(
     mappings: &ClaudeDesktopModelMappings,
     models: &[AgentModelOption],
@@ -1913,6 +1925,9 @@ pub(crate) fn claude_code_model_settings(
         opus_1m: mappings.opus_1m,
         sonnet_1m: mappings.sonnet_1m,
         haiku_1m: mappings.haiku_1m,
+        max_context_tokens: mappings.max_context_tokens,
+        auto_compact_pct: mappings.auto_compact_pct,
+        disable_auto_compact: mappings.disable_auto_compact,
     }
 }
 
@@ -1930,10 +1945,12 @@ pub(crate) fn claude_code_model_presentation(
     models: &[AgentModelOption],
     model_name: &str,
     enable_1m: bool,
+    context_window_override: Option<u64>,
     role: Option<&str>,
 ) -> (String, String) {
     let display_name = agent_model_display_name(models, model_name);
-    let context_window = claude_effective_context_window(models, model_name, enable_1m)
+    let context_window = context_window_override
+        .or_else(|| claude_effective_context_window(models, model_name, enable_1m))
         .unwrap_or(DEFAULT_CLAUDE_CONTEXT_WINDOW);
     let context_label = format_context_window(context_window);
     let name = match role {
@@ -1952,27 +1969,37 @@ pub(crate) fn claude_code_model_presentation_environment(
         models,
         &mappings.opus,
         mappings.opus_1m,
+        Some(mappings.max_context_tokens),
         Some("Opus mapping"),
     );
     let sonnet = claude_code_model_presentation(
         models,
         &mappings.sonnet,
         mappings.sonnet_1m,
+        Some(mappings.max_context_tokens),
         Some("Sonnet mapping"),
     );
     let haiku = claude_code_model_presentation(
         models,
         &mappings.haiku,
         mappings.haiku_1m,
+        Some(mappings.max_context_tokens),
         Some("Haiku mapping"),
     );
     let fable = claude_code_model_presentation(
         models,
         &mappings.sonnet,
         mappings.sonnet_1m,
+        Some(mappings.max_context_tokens),
         Some("Fable mapping"),
     );
-    let custom = claude_code_model_presentation(models, &mappings.sonnet, mappings.sonnet_1m, None);
+    let custom = claude_code_model_presentation(
+        models,
+        &mappings.sonnet,
+        mappings.sonnet_1m,
+        Some(mappings.max_context_tokens),
+        None,
+    );
     let custom_model = claude_code_model_setting(&mappings.sonnet, mappings.sonnet_1m);
     Ok([
         ("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", opus.0),

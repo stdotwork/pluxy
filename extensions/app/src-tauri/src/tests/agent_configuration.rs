@@ -22,6 +22,9 @@ fn claude_agent_config_preserves_existing_fields() {
     assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317");
     assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], DEFAULT_API_KEY);
     assert_eq!(value["env"]["ANTHROPIC_MODEL"], "claude-test");
+    assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "200000");
+    assert_eq!(value["env"][CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV], "100");
+    assert!(value["env"].get(DISABLE_AUTO_COMPACT_ENV).is_none());
     assert!(value["env"].get("CLAUDE_CODE_EFFORT_LEVEL").is_none());
     assert_eq!(value["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "claude-test");
     assert_eq!(
@@ -32,7 +35,7 @@ fn claude_agent_config_preserves_existing_fields() {
 }
 
 #[test]
-fn claude_code_inspection_normalizes_1m_suffix() {
+fn claude_code_inspection_normalizes_legacy_1m_suffix() {
     let directory = agent_test_home("claude-code-1m-inspection");
     let path = directory.join("settings.json");
     fs::write(
@@ -62,6 +65,9 @@ fn claude_code_inspection_normalizes_1m_suffix() {
     assert!(mappings.opus_1m);
     assert!(mappings.sonnet_1m);
     assert!(!mappings.haiku_1m);
+    assert_eq!(mappings.max_context_tokens, 1_000_000);
+    assert_eq!(mappings.auto_compact_pct, 100);
+    assert!(!mappings.disable_auto_compact);
     fs::remove_dir_all(directory).unwrap();
 }
 
@@ -73,6 +79,9 @@ fn claude_mapping_legacy_json_defaults_1m_preferences_off() {
     assert!(!mappings.opus_1m);
     assert!(!mappings.sonnet_1m);
     assert!(!mappings.haiku_1m);
+    assert_eq!(mappings.max_context_tokens, 200_000);
+    assert_eq!(mappings.auto_compact_pct, 100);
+    assert!(!mappings.disable_auto_compact);
 }
 
 #[test]
@@ -84,6 +93,9 @@ fn claude_code_role_mappings_drive_settings() {
         opus_1m: false,
         sonnet_1m: false,
         haiku_1m: false,
+        max_context_tokens: 272_000,
+        auto_compact_pct: 80,
+        disable_auto_compact: false,
     };
     let models = vec![
         AgentModelOption {
@@ -133,176 +145,98 @@ fn claude_code_role_mappings_drive_settings() {
 }
 
 #[test]
-fn claude_code_deepseek_picker_shows_catalog_name_and_1m_context() {
+fn claude_code_runtime_settings_keep_per_role_1m_suffixes() {
     let mappings = ClaudeDesktopModelMappings {
-        opus: "deepseek-v4-pro".to_string(),
-        sonnet: "deepseek-v4-pro".to_string(),
-        haiku: "deepseek-v4-flash".to_string(),
+        opus: "custom-pro".to_string(),
+        sonnet: "custom-pro".to_string(),
+        haiku: "custom-flash".to_string(),
         opus_1m: true,
         sonnet_1m: true,
         haiku_1m: false,
+        max_context_tokens: 1_000_000,
+        auto_compact_pct: 75,
+        disable_auto_compact: true,
     };
     let models = vec![
         AgentModelOption {
-            name: "deepseek-v4-pro".to_string(),
-            alias: Some("DeepSeek V4 Pro".to_string()),
+            name: "custom-pro".to_string(),
+            alias: Some("Custom Pro".to_string()),
             is_alias: false,
-            context_window: Some(1_000_000),
+            context_window: Some(200_000),
         },
         AgentModelOption {
-            name: "deepseek-v4-flash".to_string(),
-            alias: Some("DeepSeek V4 Flash".to_string()),
+            name: "custom-flash".to_string(),
+            alias: Some("Custom Flash".to_string()),
             is_alias: false,
-            context_window: Some(1_000_000),
+            context_window: Some(200_000),
         },
     ];
     let rendered = build_claude_agent_config(
         None,
         "http://127.0.0.1:8317",
         "test-key",
-        "deepseek-v4-pro",
+        "custom-pro",
         &models,
         Some(&mappings),
     )
     .unwrap();
     let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
 
-    assert!(value["env"]
-        .get(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV)
-        .is_none());
-    assert_eq!(value["env"]["ANTHROPIC_MODEL"], "deepseek-v4-pro[1m]");
+    assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "1000000");
+    assert_eq!(value["env"][CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV], "75");
+    assert_eq!(value["env"][DISABLE_AUTO_COMPACT_ENV], "1");
+    assert_eq!(value["env"]["ANTHROPIC_MODEL"], "custom-pro[1m]");
     assert_eq!(
         value["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
-        "deepseek-v4-pro[1m]"
+        "custom-pro[1m]"
     );
     assert_eq!(
         value["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"],
-        "deepseek-v4-pro[1m]"
+        "custom-pro[1m]"
     );
     assert_eq!(
         value["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
-        "deepseek-v4-flash"
+        "custom-flash"
     );
     assert_eq!(
         value["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"],
-        "deepseek-v4-pro[1m]"
+        "custom-pro[1m]"
     );
-    assert_eq!(
-        value["env"]["CLAUDE_CODE_SUBAGENT_MODEL"],
-        "deepseek-v4-flash"
-    );
-    assert_eq!(value["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "max");
+    assert_eq!(value["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "custom-flash");
+    assert!(value["env"].get("CLAUDE_CODE_EFFORT_LEVEL").is_none());
     assert_eq!(
         value["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION"],
-        "deepseek-v4-pro[1m]"
+        "custom-pro[1m]"
     );
     assert_eq!(
         value["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
-        "DeepSeek V4 Pro (1M context)"
+        "Custom Pro (1M context)"
     );
     assert_eq!(
         value["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL_NAME"],
-        "DeepSeek V4 Pro (Fable mapping, 1M context)"
+        "Custom Pro (Fable mapping, 1M context)"
     );
-    assert_eq!(value["model"], "deepseek-v4-pro[1m]");
+    assert_eq!(value["model"], "custom-pro[1m]");
 }
 
 #[test]
-fn claude_code_1m_suffix_follows_user_preference() {
-    let models = vec![
-        AgentModelOption {
-            name: "deepseek-v4-flash".to_string(),
-            alias: None,
-            is_alias: false,
-            context_window: Some(1_000_000),
-        },
-        AgentModelOption {
-            name: "gpt-runtime-1m".to_string(),
-            alias: None,
-            is_alias: false,
-            context_window: Some(1_000_000),
-        },
-    ];
-
-    assert_eq!(
-        claude_code_model_setting("deepseek-v4-flash", true),
-        "deepseek-v4-flash[1m]"
-    );
-    assert_eq!(
-        claude_code_model_setting("deepseek-v4-flash", false),
-        "deepseek-v4-flash"
-    );
-    assert_eq!(
-        claude_code_model_setting("gpt-runtime-1m", true),
-        "gpt-runtime-1m[1m]"
-    );
-    assert_eq!(
-            claude_code_max_context_tokens(
-                &ClaudeDesktopModelMappings::all("gpt-runtime-1m"),
-                &models,
-            )
-            .unwrap(),
-            DEFAULT_CLAUDE_CONTEXT_WINDOW
-        );
-}
-
-#[test]
-fn claude_code_context_window_follows_primary_model_alias_source() {
-    let mappings = ClaudeDesktopModelMappings {
-        opus: "small-model".to_string(),
-        sonnet: "primary-alias".to_string(),
-        haiku: "large-model".to_string(),
-        opus_1m: false,
-        sonnet_1m: false,
-        haiku_1m: false,
-    };
-    let models = vec![
-        AgentModelOption {
-            name: mappings.opus.clone(),
-            alias: None,
-            is_alias: false,
-            context_window: Some(128_000),
-        },
-        AgentModelOption {
-            name: "primary-model".to_string(),
-            alias: None,
-            is_alias: false,
-            context_window: Some(372_000),
-        },
-        AgentModelOption {
-            name: mappings.sonnet.clone(),
-            alias: Some("primary-model".to_string()),
-            is_alias: true,
-            context_window: Some(200_000),
-        },
-        AgentModelOption {
-            name: mappings.haiku.clone(),
-            alias: None,
-            is_alias: false,
-            context_window: Some(1_000_000),
-        },
-    ];
-
-    assert_eq!(
-        claude_code_max_context_tokens(&mappings, &models).unwrap(),
-        372_000
-    );
-}
-
-#[test]
-fn claude_code_uses_200k_when_cpa_context_metadata_is_missing() {
-    let mappings = ClaudeDesktopModelMappings::all("custom-model");
+fn claude_desktop_keeps_original_context_when_1m_is_off() {
     let models = vec![AgentModelOption {
-        name: "custom-model".to_string(),
+        name: "runtime-model".to_string(),
         alias: None,
         is_alias: false,
-        context_window: None,
+        context_window: Some(1_000_000),
     }];
-
-    assert_eq!(
-        claude_code_max_context_tokens(&mappings, &models).unwrap(),
-        DEFAULT_CLAUDE_CONTEXT_WINDOW
+    let entry = claude_desktop_inference_model(
+        CLAUDE_DESKTOP_SONNET_MODEL_ID,
+        "runtime-model",
+        false,
+        &models,
     );
+
+    assert_eq!(entry["contextWindow"], 1_000_000);
+    assert!(entry.get("supports1m").is_none());
+    assert!(entry.get("prefer1m").is_none());
 }
 
 #[test]
@@ -532,6 +466,7 @@ fn claude_desktop_profile_keeps_non_claude_models_internal() {
         opus_1m: true,
         sonnet_1m: false,
         haiku_1m: true,
+        ..ClaudeDesktopModelMappings::all("")
     };
     let models = vec![
         AgentModelOption {
@@ -858,6 +793,7 @@ fn claude_desktop_aliases_expose_role_routes_only() {
         opus_1m: false,
         sonnet_1m: false,
         haiku_1m: false,
+        ..ClaudeDesktopModelMappings::all("")
     };
     let available_models = test_agent_models(&["gpt-5.6-sol"]);
     let rendered =
@@ -906,6 +842,66 @@ fn claude_desktop_aliases_expose_role_routes_only() {
         ensure_claude_desktop_model_aliases_in_yaml(&rendered, &mappings, &available_models,)
             .unwrap(),
         rendered
+    );
+}
+
+#[test]
+fn claude_desktop_aliases_support_codex_oauth_models() {
+    let input = "port: 8317\n";
+    let mappings = ClaudeDesktopModelMappings::all("gpt-5.6-sol");
+    let available_models = test_agent_models(&["gpt-5.6-sol"]);
+    let definitions = vec![CodexModelDefinition {
+        id: "gpt-5.6-sol".to_string(),
+        display_name: None,
+        description: None,
+        context_window: Some(372_000),
+        reasoning_levels: vec!["high".to_string()],
+        supports_tools: Some(true),
+    }];
+
+    let rendered = ensure_claude_desktop_model_aliases_with_codex_oauth_in_yaml(
+        input,
+        &mappings,
+        &available_models,
+        &definitions,
+    )
+    .unwrap();
+    let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
+    let root = value.as_mapping().unwrap();
+    let aliases = yaml_mapping_value(root, "oauth-model-alias")
+        .and_then(serde_norway::Value::as_mapping)
+        .and_then(|channels| yaml_mapping_value(channels, "codex"))
+        .and_then(serde_norway::Value::as_sequence)
+        .unwrap();
+
+    assert_eq!(aliases.len(), 3);
+    assert!(aliases.iter().all(|entry| {
+        configured_model_identity(entry).is_some_and(|(source, _, _)| source == "gpt-5.6-sol")
+    }));
+    assert!(aliases.iter().all(|entry| {
+        entry
+            .as_mapping()
+            .and_then(|entry| yaml_mapping_value(entry, "fork"))
+            == Some(&serde_norway::Value::Bool(true))
+    }));
+    assert_eq!(
+        ensure_claude_desktop_model_aliases_with_codex_oauth_in_yaml(
+            &rendered,
+            &mappings,
+            &available_models,
+            &definitions,
+        )
+        .unwrap(),
+        rendered
+    );
+
+    let cleaned = remove_managed_claude_model_aliases_in_yaml(&rendered).unwrap();
+    let cleaned: serde_norway::Value = serde_norway::from_str(&cleaned).unwrap();
+    let cleaned = cleaned.as_mapping().unwrap();
+    assert!(yaml_mapping_value(cleaned, "oauth-model-alias").is_none());
+    assert_eq!(
+        yaml_mapping_value(cleaned, "port").and_then(serde_norway::Value::as_i64),
+        Some(8317)
     );
 }
 
@@ -961,6 +957,27 @@ fn claude_alias_cleanup_does_not_delete_user_owned_routes() {
 }
 
 #[test]
+fn claude_alias_cleanup_preserves_user_owned_oauth_routes() {
+    let input = format!(
+        "oauth-model-alias:\n  codex:\n    - name: user-opus\n      alias: {opus}\n      fork: true\n    - name: app-sonnet\n      alias: {sonnet}\n      fork: true\n      display-name: {managed_sonnet}\n",
+        opus = CLAUDE_DESKTOP_OPUS_MODEL_ID,
+        sonnet = CLAUDE_DESKTOP_SONNET_MODEL_ID,
+        managed_sonnet = MANAGED_CLAUDE_SONNET_ALIAS_DISPLAY_NAME,
+    );
+
+    let cleaned = remove_managed_claude_model_aliases_in_yaml(&input).unwrap();
+    let value: serde_norway::Value = serde_norway::from_str(&cleaned).unwrap();
+    let root = value.as_mapping().unwrap();
+    assert_eq!(
+        configured_model_client_identity(root, CLAUDE_DESKTOP_OPUS_MODEL_ID)
+            .unwrap()
+            .0,
+        "user-opus"
+    );
+    assert!(configured_model_client_identity(root, CLAUDE_DESKTOP_SONNET_MODEL_ID).is_none());
+}
+
+#[test]
 fn claude_legacy_aliases_are_adopted_and_moved_to_the_selected_model() {
     let input = format!(
             "codex-api-key:\n  - api-key: test\n    models:\n      - name: old-model\n      - name: new-model\n      - name: old-model\n        alias: {opus}\n",
@@ -991,6 +1008,7 @@ fn claude_desktop_uses_selected_alias_directly_with_original_context() {
         opus_1m: false,
         sonnet_1m: true,
         haiku_1m: false,
+        ..ClaudeDesktopModelMappings::all("")
     };
     let models = vec![
         AgentModelOption {
@@ -1058,6 +1076,7 @@ fn claude_desktop_role_mappings_can_use_different_available_models() {
             opus_1m: true,
             sonnet_1m: false,
             haiku_1m: true,
+            ..ClaudeDesktopModelMappings::all("")
         }),
     )
     .unwrap()

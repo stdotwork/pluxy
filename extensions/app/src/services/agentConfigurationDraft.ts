@@ -18,6 +18,9 @@ export type AgentModelMappings = {
   opus1m?: boolean;
   sonnet1m?: boolean;
   haiku1m?: boolean;
+  maxContextTokens?: number;
+  autoCompactPct?: number;
+  disableAutoCompact?: boolean;
 };
 
 type ResolveAgentConfigurationActionOptions = {
@@ -45,7 +48,10 @@ export const sameAgentModelMappings = (
   && sameAgentModel(left.haiku, right.haiku)
   && Boolean(left.opus1m) === Boolean(right.opus1m)
   && Boolean(left.sonnet1m) === Boolean(right.sonnet1m)
-  && Boolean(left.haiku1m) === Boolean(right.haiku1m);
+  && Boolean(left.haiku1m) === Boolean(right.haiku1m)
+  && (left.maxContextTokens ?? 200_000) === (right.maxContextTokens ?? 200_000)
+  && (left.autoCompactPct ?? 100) === (right.autoCompactPct ?? 100)
+  && Boolean(left.disableAutoCompact) === Boolean(right.disableAutoCompact);
 
 export function resolveAgentConfigurationAction({
   client,

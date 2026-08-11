@@ -104,9 +104,14 @@ type ClaudeModelMappings = {
   opus1m: boolean;
   sonnet1m: boolean;
   haiku1m: boolean;
+  maxContextTokens: number;
+  autoCompactPct: number;
+  disableAutoCompact: boolean;
 };
 
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR = 'CODEX_OAUTH_LOGIN_REQUIRED';
+const DEFAULT_CLAUDE_CODE_MAX_CONTEXT_TOKENS = 200_000;
+const DEFAULT_CLAUDE_AUTO_COMPACT_PCT = 100;
 
 const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
   opus: model,
@@ -115,6 +120,9 @@ const createClaudeModelMappings = (model: string): ClaudeModelMappings => ({
   opus1m: false,
   sonnet1m: false,
   haiku1m: false,
+  maxContextTokens: DEFAULT_CLAUDE_CODE_MAX_CONTEXT_TOKENS,
+  autoCompactPct: DEFAULT_CLAUDE_AUTO_COMPACT_PCT,
+  disableAutoCompact: false,
 });
 
 const claudeMappingRoles = [
@@ -731,6 +739,9 @@ export function AgentsPage() {
         opus1m: Boolean(source.opus1m),
         sonnet1m: Boolean(source.sonnet1m),
         haiku1m: Boolean(source.haiku1m),
+        maxContextTokens: source.maxContextTokens ?? DEFAULT_CLAUDE_CODE_MAX_CONTEXT_TOKENS,
+        autoCompactPct: source.autoCompactPct ?? DEFAULT_CLAUDE_AUTO_COMPACT_PCT,
+        disableAutoCompact: Boolean(source.disableAutoCompact),
       };
       return sameAgentModelMappings(current, next) ? current : next;
     });
@@ -757,6 +768,12 @@ export function AgentsPage() {
     || claudeMappingRoles.every((role) =>
       Boolean(findAgentModel(models, claudeModelMappingsDraft[role.key])),
     );
+  const claudeCodeRuntimeSettingsReady = selected !== 'claude-code' || (
+    claudeModelMappingsDraft.maxContextTokens >= 100_000
+    && claudeModelMappingsDraft.maxContextTokens <= 1_000_000
+    && claudeModelMappingsDraft.autoCompactPct >= 1
+    && claudeModelMappingsDraft.autoCompactPct <= 100
+  );
   const claudeMappingDraftChanged = isClaudeModelMappingClient
     && activeStatus?.modificationState === 'applied'
     && !sameAgentModelMappings(
@@ -781,7 +798,7 @@ export function AgentsPage() {
       && activeStatus.installed
       && !modelLoading
       && (isClaudeModelMappingClient
-        ? claudeMappingsReady
+        ? claudeMappingsReady && claudeCodeRuntimeSettingsReady
         : selectedModelOption),
   );
   const modelHint = modelSelectionError
@@ -836,7 +853,32 @@ export function AgentsPage() {
     enabled: boolean,
   ) => {
     claudeModelMappingsDirtyRef.current = true;
-    setClaudeModelMappingsDraft((current) => ({ ...current, [preference]: enabled }));
+    setClaudeModelMappingsDraft((current) => {
+      const next = { ...current, [preference]: enabled };
+      if (selected === 'claude-code') {
+        const any1mEnabled = next.opus1m || next.sonnet1m || next.haiku1m;
+        next.maxContextTokens = any1mEnabled
+          ? 1_000_000
+          : DEFAULT_CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+      }
+      return next;
+    });
+  };
+
+  const changeClaudeCodeRuntimeSetting = (
+    key: 'maxContextTokens' | 'autoCompactPct',
+    value: number,
+  ) => {
+    claudeModelMappingsDirtyRef.current = true;
+    setClaudeModelMappingsDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const changeClaudeCodeAutoCompactDisabled = (disabled: boolean) => {
+    claudeModelMappingsDirtyRef.current = true;
+    setClaudeModelMappingsDraft((current) => ({
+      ...current,
+      disableAutoCompact: disabled,
+    }));
   };
 
   const changeClaudeCustomMapping = (enabled: boolean) => {
@@ -850,6 +892,9 @@ export function AgentsPage() {
         opus1m: current.opus1m,
         sonnet1m: current.sonnet1m,
         haiku1m: current.haiku1m,
+        maxContextTokens: current.maxContextTokens,
+        autoCompactPct: current.autoCompactPct,
+        disableAutoCompact: current.disableAutoCompact,
       };
       if (!sameAgentModelMappings(current, next)) {
         claudeModelMappingsDirtyRef.current = true;
@@ -888,6 +933,15 @@ export function AgentsPage() {
       resolved[role.key] = model.name;
       resolved[role.contextKey] = claudeModelMappingsDraft[role.contextKey];
     }
+    if (selected === 'claude-code') {
+      if (!claudeCodeRuntimeSettingsReady) {
+        setModelSelectionError(t('agents.error.claudeCodeRuntimeSettingsInvalid'));
+        return null;
+      }
+    }
+    resolved.maxContextTokens = claudeModelMappingsDraft.maxContextTokens;
+    resolved.autoCompactPct = claudeModelMappingsDraft.autoCompactPct;
+    resolved.disableAutoCompact = claudeModelMappingsDraft.disableAutoCompact;
     return resolved;
   };
 
@@ -1291,6 +1345,72 @@ export function AgentsPage() {
                       </label>
                     </div>
                   </div>
+                  {selected === 'claude-code' ? (
+                    <div className="agent-claude-code-runtime-settings">
+                      <div className="agent-claude-code-number-field">
+                        <span>{t('agents.claudeCodeRuntime.maxContextTokens')}</span>
+                        <input
+                          type="number"
+                          min={100_000}
+                          max={1_000_000}
+                          step={1_000}
+                          value={claudeModelMappingsDraft.maxContextTokens}
+                          onChange={(event) => changeClaudeCodeRuntimeSetting(
+                            'maxContextTokens',
+                            Math.trunc(event.currentTarget.valueAsNumber || 0),
+                          )}
+                          disabled={busy || modelLoading}
+                          aria-label={t('agents.claudeCodeRuntime.maxContextTokens')}
+                          aria-describedby="claude-code-max-context-hint"
+                        />
+                        <small id="claude-code-max-context-hint">
+                          {t('agents.claudeCodeRuntime.maxContextTokensHint')}
+                        </small>
+                      </div>
+                      <label className="agent-claude-code-number-field">
+                        <span>{t('agents.claudeCodeRuntime.autoCompactPct')}</span>
+                        <div className="agent-claude-code-percent-input">
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            step={1}
+                            value={claudeModelMappingsDraft.autoCompactPct}
+                            onChange={(event) => changeClaudeCodeRuntimeSetting(
+                              'autoCompactPct',
+                              Math.trunc(event.currentTarget.valueAsNumber || 0),
+                            )}
+                            disabled={busy || modelLoading || claudeModelMappingsDraft.disableAutoCompact}
+                            aria-describedby="claude-code-auto-compact-hint"
+                          />
+                          <span>%</span>
+                        </div>
+                        <small id="claude-code-auto-compact-hint">
+                          {t('agents.claudeCodeRuntime.autoCompactPctHint')}
+                        </small>
+                      </label>
+                      <label
+                        className="agent-claude-code-disable-compact"
+                        title={t('agents.claudeCodeRuntime.disableAutoCompactHint')}
+                      >
+                        <span>
+                          <strong>{t('agents.claudeCodeRuntime.disableAutoCompact')}</strong>
+                          <small>{t('agents.claudeCodeRuntime.disableAutoCompactHint')}</small>
+                        </span>
+                        <span className="switch-control">
+                          <input
+                            type="checkbox"
+                            checked={claudeModelMappingsDraft.disableAutoCompact}
+                            onChange={(event) => changeClaudeCodeAutoCompactDisabled(
+                              event.currentTarget.checked,
+                            )}
+                            disabled={busy || modelLoading}
+                          />
+                          <span className="switch-track" />
+                        </span>
+                      </label>
+                    </div>
+                  ) : null}
                   <div className="agent-claude-desktop-mapping-grid">
                     {claudeMappingRoles.map((role) => (
                       <div className="agent-claude-desktop-mapping-row" key={role.key}>
@@ -1298,7 +1418,9 @@ export function AgentsPage() {
                           <strong>{t(role.labelKey)}</strong>
                           <label
                             className="agent-claude-context-toggle"
-                            title={t('agents.claudeMapping.context1mHint')}
+                            title={t(selected === 'claude-code'
+                              ? 'agents.claudeCodeRuntime.context1mHint'
+                              : 'agents.claudeMapping.context1mHint')}
                           >
                             <span>{t('agents.claudeMapping.context1m')}</span>
                             <span className="switch-control">

@@ -220,8 +220,7 @@ pub(crate) fn build_claude_agent_config(
     let mappings = mappings
         .cloned()
         .unwrap_or_else(|| ClaudeDesktopModelMappings::all(model));
-    let max_context_tokens = claude_code_max_context_tokens(&mappings, models)?;
-    let use_max_context_override = !mappings.sonnet_1m;
+    let max_context_tokens = mappings.max_context_tokens;
     let model_settings = claude_code_model_settings(&mappings);
     let subagent_model = model_settings.haiku.clone();
     let effort_level = claude_code_model_effort_level(models, &mappings.sonnet)?;
@@ -229,6 +228,8 @@ pub(crate) fn build_claude_agent_config(
     env.remove("ANTHROPIC_API_KEY");
     env.remove("CLAUDE_CODE_EFFORT_LEVEL");
     env.remove(CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV);
+    env.remove(CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV);
+    env.remove(DISABLE_AUTO_COMPACT_ENV);
     for (key, value) in [
         ("ANTHROPIC_BASE_URL", base_url),
         ("ANTHROPIC_AUTH_TOKEN", api_key),
@@ -253,10 +254,18 @@ pub(crate) fn build_claude_agent_config(
             serde_json::Value::String(value.to_string()),
         );
     }
-    if use_max_context_override {
+    env.insert(
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
+        serde_json::Value::String(max_context_tokens.to_string()),
+    );
+    env.insert(
+        CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV.to_string(),
+        serde_json::Value::String(mappings.auto_compact_pct.to_string()),
+    );
+    if mappings.disable_auto_compact {
         env.insert(
-            CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV.to_string(),
-            serde_json::Value::String(max_context_tokens.to_string()),
+            DISABLE_AUTO_COMPACT_ENV.to_string(),
+            serde_json::Value::String("1".to_string()),
         );
     }
     for (key, value) in claude_code_model_presentation_environment(&mappings, models)? {
@@ -647,6 +656,8 @@ pub(crate) fn remove_claude_code_managed_configuration(
                 "ANTHROPIC_DEFAULT_OPUS_MODEL",
                 "ANTHROPIC_DEFAULT_FABLE_MODEL",
                 CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV,
+                CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV,
+                DISABLE_AUTO_COMPACT_ENV,
             ] {
                 env.remove(key);
             }
@@ -1018,6 +1029,8 @@ pub(crate) fn build_restored_claude_code_config(
             "ANTHROPIC_DEFAULT_OPUS_MODEL",
             "ANTHROPIC_DEFAULT_FABLE_MODEL",
             CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV,
+            CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV,
+            DISABLE_AUTO_COMPACT_ENV,
         ] {
             restore_json_key(env, original_env, key);
         }
