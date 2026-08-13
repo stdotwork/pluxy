@@ -10,6 +10,7 @@ mod configuration_watcher;
 mod core_config;
 mod core_runtime;
 mod management_api;
+mod oauth_browser;
 mod provider_health;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
@@ -21,6 +22,7 @@ use management_api::{
     management_authorization, management_endpoint, management_http_client, read_management_text,
     read_management_value,
 };
+use oauth_browser::*;
 #[cfg(test)]
 use provider_health::{provider_health_content_type_is_streaming, provider_health_stream_has_text};
 
@@ -1921,6 +1923,8 @@ fn main() {
             management_api::start_oauth_login,
             management_api::get_oauth_status,
             management_api::submit_oauth_callback,
+            list_oauth_browsers,
+            open_oauth_url,
             open_external_url,
             check_app_update,
             get_app_update_task,

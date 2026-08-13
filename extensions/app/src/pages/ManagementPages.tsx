@@ -6,6 +6,7 @@ import {
   ExternalLink,
   LoaderCircle,
   LogIn,
+  RefreshCw,
 } from 'lucide-react';
 import antigravityIcon from '../assets/icons/antigravity.svg';
 import claudeIcon from '../assets/icons/claude.svg';
@@ -40,6 +41,7 @@ type OAuthProviderState = {
   callbackSubmitting?: boolean;
   callbackStatus?: 'success' | 'error';
   callbackError?: string;
+  refreshing?: boolean;
 };
 
 type OAuthStartResult = {
@@ -47,6 +49,11 @@ type OAuthStartResult = {
   state?: string | null;
   opened: boolean;
   openError?: string | null;
+};
+
+type OAuthBrowserOption = {
+  id: string;
+  label: string;
 };
 
 type OAuthStatusResult = {
@@ -70,7 +77,28 @@ const OAUTH_CALLBACK_SUPPORTED = new Set<OAuthProviderId>([
 ]);
 const XAI_CALLBACK_URL = 'http://127.0.0.1:56121/callback';
 const OAUTH_POLL_INTERVAL_MS = 3000;
+const OAUTH_BROWSER_STORAGE_KEY = 'easy-cli-proxy-api.oauth-browser.v3';
+const NO_AUTO_OPEN_BROWSER_ID = 'none';
 const oauthLoginSuccessCache = createOAuthLoginSuccessCache<OAuthProviderId>();
+
+const resolveOAuthBrowserSelection = (
+  available: OAuthBrowserOption[],
+  preferred: string,
+): string => {
+  if (preferred === NO_AUTO_OPEN_BROWSER_ID) return preferred;
+  if (available.some((browser) => browser.id === preferred)) return preferred;
+  return available.find((browser) => browser.id !== 'default')?.id
+    ?? available.find((browser) => browser.id === 'default')?.id
+    ?? NO_AUTO_OPEN_BROWSER_ID;
+};
+
+const loadOAuthBrowserPreference = (): string => {
+  try {
+    return window.localStorage.getItem(OAUTH_BROWSER_STORAGE_KEY)?.trim() || '';
+  } catch {
+    return '';
+  }
+};
 
 const cachedOAuthProviderStates = (): Partial<Record<OAuthProviderId, OAuthProviderState>> => (
   oauthLoginSuccessCache.snapshot().reduce<Partial<Record<OAuthProviderId, OAuthProviderState>>>(
@@ -133,10 +161,42 @@ export function OAuthLoginPage() {
     message: string;
     tone: 'success' | 'error' | 'info';
   } | null>(null);
+  const [browsers, setBrowsers] = useState<OAuthBrowserOption[]>([]);
+  const [browsersLoading, setBrowsersLoading] = useState(true);
+  const [selectedBrowser, setSelectedBrowser] = useState(loadOAuthBrowserPreference);
   const pollingTimers = useRef<Partial<Record<OAuthProviderId, number>>>({});
   const pollingRequests = useRef<Partial<Record<OAuthProviderId, boolean>>>({});
   const credentialSnapshots = useRef<Partial<Record<OAuthProviderId, AuthFileSnapshot>>>({});
   const noticeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void invoke<OAuthBrowserOption[]>('list_oauth_browsers')
+      .then((available) => {
+        if (!active) return;
+        setBrowsers(available);
+        setSelectedBrowser((current) => resolveOAuthBrowserSelection(available, current));
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.warn('Failed to detect installed browsers', error);
+        const fallback = [{ id: 'default', label: 'System Default' }];
+        setBrowsers(fallback);
+        setSelectedBrowser((current) => resolveOAuthBrowserSelection(fallback, current));
+      })
+      .finally(() => {
+        if (active) setBrowsersLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(OAUTH_BROWSER_STORAGE_KEY, selectedBrowser);
+    } catch {
+      // Keep the in-memory selection when persistent storage is unavailable.
+    }
+  }, [selectedBrowser]);
 
   const showNotice = useCallback((message: string, tone: 'success' | 'error' | 'info') => {
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
@@ -287,7 +347,10 @@ export function OAuthLoginPage() {
 
     try {
       await captureCredentialSnapshot(provider);
-      const result = await invoke<OAuthStartResult>('start_oauth_login', { provider });
+      const result = await invoke<OAuthStartResult>('start_oauth_login', {
+        provider,
+        browser: selectedBrowser,
+      });
       if (!result.state) {
         updateProviderState(provider, {
           url: result.url,
@@ -327,10 +390,31 @@ export function OAuthLoginPage() {
     }
   };
 
+  const refreshLoginLink = async (provider: OAuthProviderId) => {
+    const currentState = states[provider]?.state;
+    clearPollingTimer(provider);
+    updateProviderState(provider, { refreshing: true });
+    try {
+      if (currentState) {
+        await managementApi.delete('/oauth-session', { query: { state: currentState } });
+      }
+    } catch (error) {
+      console.warn('Failed to cancel the previous OAuth session before refreshing', error);
+    }
+    try {
+      await startLogin(provider);
+    } finally {
+      updateProviderState(provider, { refreshing: false });
+    }
+  };
+
   const openAuthUrl = async (url?: string) => {
     if (!url) return;
     try {
-      await invoke('open_external_url', { url });
+      await invoke('open_oauth_url', {
+        url,
+        browser: selectedBrowser === NO_AUTO_OPEN_BROWSER_ID ? 'default' : selectedBrowser,
+      });
     } catch (error) {
       showNotice(String(error), 'error');
     }
@@ -394,6 +478,24 @@ export function OAuthLoginPage() {
     <section className="page management-page">
       <header className="management-header">
         <div><span>OAuth</span><h1>{t('oauth.title')}</h1></div>
+        <label className="oauth-browser-picker">
+          <span>{t('oauth.browser.label')}</span>
+          <select
+            value={selectedBrowser}
+            onChange={(event) => setSelectedBrowser(event.currentTarget.value)}
+            aria-label={t('oauth.browser.label')}
+            disabled={browsersLoading}
+          >
+            {browsersLoading ? <option value="">{t('oauth.browser.detecting')}</option> : null}
+            {browsers.map((browser) => (
+              <option value={browser.id} key={browser.id}>
+                {browser.id === 'default' ? t('oauth.browser.systemDefault') : browser.label}
+              </option>
+            ))}
+            <option value={NO_AUTO_OPEN_BROWSER_ID}>{t('oauth.browser.noAutoOpen')}</option>
+          </select>
+          <small>{t('oauth.browser.remembered')}</small>
+        </label>
       </header>
 
       {notice ? (
@@ -476,13 +578,14 @@ export function OAuthLoginPage() {
               </div>
 
               <div className="button-row management-card-actions">
-                <button type="button" className="primary-button" disabled={Boolean(state.polling)} onClick={() => void startLogin(provider.id)}>
+                <button type="button" className="primary-button" disabled={Boolean(state.polling) || browsersLoading} onClick={() => void startLogin(provider.id)}>
                   {state.polling ? <LoaderCircle size={16} className="spin" aria-hidden="true" /> : <LogIn size={16} aria-hidden="true" />}
                   {loginLabel}
                 </button>
                 {state.url ? (
-                  <button type="button" className="secondary-button" onClick={() => void openAuthUrl(state.url)}>
-                    <ExternalLink size={16} aria-hidden="true" />{t('oauth.openBrowser')}
+                  <button type="button" className="secondary-button" disabled={browsersLoading || state.refreshing} onClick={() => void refreshLoginLink(provider.id)}>
+                    <RefreshCw size={16} className={state.refreshing ? 'spin' : undefined} aria-hidden="true" />
+                    {state.refreshing ? t('oauth.refreshingLink') : t('oauth.refreshLink')}
                   </button>
                 ) : null}
               </div>

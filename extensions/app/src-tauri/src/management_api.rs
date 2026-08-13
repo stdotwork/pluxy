@@ -2,7 +2,7 @@
 use super::windows_explorer_executable;
 use super::{
     auth_dir_path_for_core, configure_background_command, core_install_dir,
-    is_hashed_management_secret_key, open_external_url_inner, path_to_string, truncate_for_error,
+    is_hashed_management_secret_key, open_oauth_url_inner, path_to_string, truncate_for_error,
     GuiConfigFile, GuiConfigState,
 };
 use serde::{Deserialize, Serialize};
@@ -162,6 +162,7 @@ pub(crate) async fn start_oauth_login(
     app: tauri::AppHandle,
     gui_config_state: tauri::State<'_, GuiConfigState>,
     provider: String,
+    browser: Option<String>,
 ) -> Result<OAuthStartResult, String> {
     let config = gui_config_state.snapshot()?;
     let provider_key = normalize_management_oauth_provider(&provider)?;
@@ -197,7 +198,7 @@ pub(crate) async fn start_oauth_login(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    let (opened, open_error) = match open_external_url_inner(&app, &url) {
+    let (opened, open_error) = match open_oauth_url_inner(&app, &url, browser.as_deref()) {
         Ok(()) => (true, None),
         Err(error) => (false, Some(error)),
     };
