@@ -1820,6 +1820,10 @@ pub(crate) fn should_start_hidden(config: &GuiConfigFile) -> bool {
     config.silent_start && cfg!(any(target_os = "windows", target_os = "macos"))
 }
 
+pub(crate) fn should_start_core_on_launch(config: &GuiConfigFile) -> bool {
+    config.start_core_on_launch
+}
+
 pub(crate) fn configure_initial_main_window(
     app_handle: &tauri::AppHandle,
     start_hidden: bool,

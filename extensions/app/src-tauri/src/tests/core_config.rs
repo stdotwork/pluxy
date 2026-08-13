@@ -767,6 +767,7 @@ fn startup_preserves_all_user_owned_yaml_and_only_applies_gui_managed_values() {
         allow_lan: true,
         host: "0.0.0.0".to_string(),
         run_on_startup: false,
+        start_core_on_launch: true,
         silent_start: false,
         close_behavior: WindowsCloseBehavior::Ask,
         window_width: None,

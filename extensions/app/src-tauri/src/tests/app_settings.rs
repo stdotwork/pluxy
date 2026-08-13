@@ -77,6 +77,7 @@ fn gui_config_defaults_are_stable() {
     assert!(content.contains("port = 8317"));
     assert!(content.contains("allow-lan = false"));
     assert!(content.contains("run-on-startup = false"));
+    assert!(content.contains("start-core-on-launch = true"));
     assert!(content.contains("silent-start = false"));
     assert!(content.contains("close-behavior = \"ask\""));
     assert!(content.contains("window-width = 1531"));
@@ -119,6 +120,7 @@ fn gui_window_size_round_trips_through_portable_config() {
 #[test]
 fn silent_start_defaults_off_and_requires_tray_support() {
     let legacy = toml::from_str::<GuiConfigFile>("port = 8317\n").unwrap();
+    assert!(legacy.start_core_on_launch);
     assert!(!legacy.silent_start);
     assert!(!should_start_hidden(&legacy));
 
@@ -130,6 +132,18 @@ fn silent_start_defaults_off_and_requires_tray_support() {
         should_start_hidden(&enabled),
         cfg!(any(target_os = "windows", target_os = "macos"))
     );
+}
+
+#[test]
+fn core_start_on_launch_defaults_on_and_can_be_disabled() {
+    let legacy = toml::from_str::<GuiConfigFile>("port = 8317\n").unwrap();
+    assert!(should_start_core_on_launch(&legacy));
+
+    let disabled = GuiConfigFile {
+        start_core_on_launch: false,
+        ..GuiConfigFile::default()
+    };
+    assert!(!should_start_core_on_launch(&disabled));
 }
 
 #[test]

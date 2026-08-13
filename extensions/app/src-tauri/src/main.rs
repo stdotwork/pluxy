@@ -552,6 +552,7 @@ struct GuiConfigFile {
     allow_lan: bool,
     host: String,
     run_on_startup: bool,
+    start_core_on_launch: bool,
     silent_start: bool,
     close_behavior: WindowsCloseBehavior,
     window_width: Option<u32>,
@@ -662,6 +663,7 @@ impl Default for GuiConfigFile {
             allow_lan: false,
             host: "127.0.0.1".to_string(),
             run_on_startup: false,
+            start_core_on_launch: true,
             silent_start: false,
             close_behavior: WindowsCloseBehavior::Ask,
             window_width: Some(DEFAULT_MAIN_WINDOW_WIDTH),
@@ -698,6 +700,7 @@ struct GuiConfigPresence {
     api_access_remarks: Option<Vec<GuiApiAccessRemark>>,
     management_secret_key: Option<String>,
     close_behavior: Option<WindowsCloseBehavior>,
+    start_core_on_launch: Option<bool>,
     silent_start: Option<bool>,
     usage_statistics_enabled: Option<bool>,
     plugins_enabled: Option<bool>,
@@ -725,6 +728,7 @@ struct GuiSettings {
 struct SoftwareSettings {
     close_behavior: WindowsCloseBehavior,
     autostart_enabled: bool,
+    start_core_on_launch: bool,
     silent_start_enabled: bool,
 }
 
@@ -733,6 +737,7 @@ struct SoftwareSettings {
 struct SoftwareSettingsInput {
     close_behavior: WindowsCloseBehavior,
     autostart_enabled: bool,
+    start_core_on_launch: bool,
     silent_start_enabled: bool,
 }
 
@@ -1505,10 +1510,12 @@ impl GuiConfigState {
     fn set_software_preferences(
         &self,
         close_behavior: WindowsCloseBehavior,
+        start_core_on_launch: bool,
         silent_start: bool,
     ) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.close_behavior = close_behavior;
+            config.start_core_on_launch = start_core_on_launch;
             config.silent_start = silent_start;
             Ok(())
         })
@@ -1847,7 +1854,7 @@ fn main() {
                     Err(error) => eprintln!("自动安装 CPA 离线内核失败: {error}"),
                 }
 
-                if config.run_on_startup {
+                if should_start_core_on_launch(&config) {
                     if let Err(error) = start_core_process_inner(process_state.inner(), &config) {
                         eprintln!("自动启动 CPA 内核失败: {error}");
                     }

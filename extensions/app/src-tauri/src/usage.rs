@@ -3024,6 +3024,7 @@ mod tests {
             allow_lan: false,
             host: "127.0.0.1".to_string(),
             run_on_startup: false,
+            start_core_on_launch: true,
             silent_start: false,
             close_behavior: crate::WindowsCloseBehavior::Ask,
             window_width: None,

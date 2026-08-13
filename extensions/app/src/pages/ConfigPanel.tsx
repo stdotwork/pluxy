@@ -18,6 +18,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Power,
   Trash2,
   X,
 } from 'lucide-react';
@@ -75,6 +76,7 @@ type NetworkDraftDirty = Record<NetworkDraftField, boolean>;
 type SoftwareSettings = {
   closeBehavior: CloseBehavior;
   autostartEnabled: boolean;
+  startCoreOnLaunch: boolean;
   silentStartEnabled: boolean;
 };
 
@@ -103,6 +105,7 @@ export function ConfigPanelPage() {
   const [softwareSettingsLoading, setSoftwareSettingsLoading] = useState(true);
   const [softwareCloseBehaviorDraft, setSoftwareCloseBehaviorDraft] = useState<CloseBehavior>('ask');
   const [softwareAutostartDraft, setSoftwareAutostartDraft] = useState(false);
+  const [softwareStartCoreDraft, setSoftwareStartCoreDraft] = useState(true);
   const [softwareSilentStartDraft, setSoftwareSilentStartDraft] = useState(false);
   const [softwareSavedStatusVisible, setSoftwareSavedStatusVisible] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -237,6 +240,7 @@ export function ConfigPanelPage() {
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
       setSoftwareAutostartDraft(result.autostartEnabled);
+      setSoftwareStartCoreDraft(result.startCoreOnLaunch);
       setSoftwareSilentStartDraft(result.silentStartEnabled);
     } catch (error) {
       setSoftwareSettings(null);
@@ -526,6 +530,7 @@ export function ConfigPanelPage() {
     if (
       softwareCloseBehaviorDraft === softwareSettings.closeBehavior
       && softwareAutostartDraft === softwareSettings.autostartEnabled
+      && softwareStartCoreDraft === softwareSettings.startCoreOnLaunch
       && softwareSilentStartDraft === softwareSettings.silentStartEnabled
     ) return;
 
@@ -535,18 +540,21 @@ export function ConfigPanelPage() {
         settings: {
           closeBehavior: softwareCloseBehaviorDraft,
           autostartEnabled: softwareAutostartDraft,
+          startCoreOnLaunch: softwareStartCoreDraft,
           silentStartEnabled: softwareSilentStartDraft,
         },
       });
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
       setSoftwareAutostartDraft(result.autostartEnabled);
+      setSoftwareStartCoreDraft(result.startCoreOnLaunch);
       setSoftwareSilentStartDraft(result.silentStartEnabled);
       setSoftwareSavedStatusVisible(true);
       showNotice(t('config.notice.softwareUpdated'), 'success');
     } catch (error) {
       setSoftwareCloseBehaviorDraft(softwareSettings.closeBehavior);
       setSoftwareAutostartDraft(softwareSettings.autostartEnabled);
+      setSoftwareStartCoreDraft(softwareSettings.startCoreOnLaunch);
       setSoftwareSilentStartDraft(softwareSettings.silentStartEnabled);
       setSoftwareSavedStatusVisible(false);
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
@@ -585,8 +593,11 @@ export function ConfigPanelPage() {
     && softwareAutostartDraft !== softwareSettings.autostartEnabled;
   const softwareSilentStartDirty = softwareSettings !== null
     && softwareSilentStartDraft !== softwareSettings.silentStartEnabled;
+  const softwareStartCoreDirty = softwareSettings !== null
+    && softwareStartCoreDraft !== softwareSettings.startCoreOnLaunch;
   const softwareSettingsDirty = softwareCloseBehaviorDirty
     || softwareAutostartDirty
+    || softwareStartCoreDirty
     || softwareSilentStartDirty;
   const softwareStatusLabel = softwareSettingsLoading
     ? t('common.loading')
@@ -1267,6 +1278,31 @@ export function ConfigPanelPage() {
                       onChange={(event) => {
                         setSoftwareSavedStatusVisible(false);
                         setSoftwareAutostartDraft(event.currentTarget.checked);
+                      }}
+                    />
+                    <span className="switch-track" />
+                  </label>
+                </div>
+                <div className="config-software-setting-row">
+                  <div className="config-software-setting-copy">
+                    <span className="config-software-setting-icon" aria-hidden="true">
+                      <Power size={18} />
+                    </span>
+                    <div>
+                      <strong>{t('config.software.startCoreOnLaunch')}</strong>
+                      <small>{t('config.software.startCoreOnLaunchDescription')}</small>
+                    </div>
+                  </div>
+                  <label className="switch-control" title={t('config.software.startCoreOnLaunch')}>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label={t('config.software.startCoreOnLaunch')}
+                      checked={softwareStartCoreDraft}
+                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
+                      onChange={(event) => {
+                        setSoftwareSavedStatusVisible(false);
+                        setSoftwareStartCoreDraft(event.currentTarget.checked);
                       }}
                     />
                     <span className="switch-track" />

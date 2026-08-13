@@ -847,6 +847,9 @@ pub(crate) fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     if presence.close_behavior.is_none() {
         changed = true;
     }
+    if presence.start_core_on_launch.is_none() {
+        changed = true;
+    }
     if presence.silent_start.is_none() {
         changed = true;
     }
@@ -1178,6 +1181,7 @@ pub(crate) fn write_gui_config_to_path(
         ("allow-lan", value(config.allow_lan)),
         ("host", value(config.host.as_str())),
         ("run-on-startup", value(config.run_on_startup)),
+        ("start-core-on-launch", value(config.start_core_on_launch)),
         ("silent-start", value(config.silent_start)),
         ("close-behavior", value(config.close_behavior.as_str())),
         ("auth-dir", value(config.auth_dir.as_str())),

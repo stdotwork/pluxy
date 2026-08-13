@@ -300,6 +300,8 @@ export const en: Record<MessageKey, string> = {
   'config.software.title': 'Software Settings',
   'config.software.autostart': 'Launch at startup',
   'config.software.autostartDescription': 'Automatically launch EasyCLIProxyAPI when you sign in',
+  'config.software.startCoreOnLaunch': 'Start Core on Launch',
+  'config.software.startCoreOnLaunchDescription': 'Automatically start the CPA core whenever EasyCLIProxyAPI launches',
   'config.software.silentStart': 'Silent Launch',
   'config.software.silentStartDescription': 'Start without showing the main window and run directly in the system tray',
   'config.software.closeBehavior': 'Close behavior',

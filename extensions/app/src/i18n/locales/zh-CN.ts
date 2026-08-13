@@ -298,6 +298,8 @@ export const zhCN = {
   'config.software.title': '软件设置',
   'config.software.autostart': '开机自启',
   'config.software.autostartDescription': '登录系统后自动启动 EasyCLIProxyAPI',
+  'config.software.startCoreOnLaunch': '启动时启动内核',
+  'config.software.startCoreOnLaunchDescription': '每次启动 EasyCLIProxyAPI 时自动启动 CPA 内核',
   'config.software.silentStart': '静默启动',
   'config.software.silentStartDescription': '启动应用时不显示主窗口，直接在系统托盘运行',
   'config.software.closeBehavior': '关闭行为',
