@@ -39,7 +39,6 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::NSEvent;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-#[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::Arc;
@@ -276,6 +275,7 @@ struct AppUpdateInner {
 #[derive(Default)]
 struct CoreProcessState {
     child: Mutex<Option<Child>>,
+    starting: AtomicBool,
     #[cfg(windows)]
     job: Mutex<Option<isize>>,
 }
@@ -370,6 +370,7 @@ struct CorePlatform {
 struct CoreStatus {
     installed: bool,
     running: bool,
+    starting: bool,
     managed: bool,
     process_id: Option<u32>,
     current_version: Option<String>,
@@ -1341,6 +1342,23 @@ impl AppUpdateState {
 }
 
 impl CoreProcessState {
+    fn new(starting: bool) -> Self {
+        Self {
+            child: Mutex::new(None),
+            starting: AtomicBool::new(starting),
+            #[cfg(windows)]
+            job: Mutex::new(None),
+        }
+    }
+
+    fn is_starting(&self) -> bool {
+        self.starting.load(Ordering::Acquire)
+    }
+
+    fn set_starting(&self, starting: bool) {
+        self.starting.store(starting, Ordering::Release);
+    }
+
     fn managed_pid(&self) -> Option<u32> {
         let Ok(mut child) = self.child.lock() else {
             return None;
@@ -1727,7 +1745,7 @@ fn main() {
         )
         .manage(CoreDownloadState::default())
         .manage(AppUpdateState::default())
-        .manage(CoreProcessState::default())
+        .manage(CoreProcessState::new(gui_config.start_core_on_launch))
         .manage(usage::UsageCollectorState::default())
         .manage(GuiConfigState::new(gui_config))
         .manage(MainWindowSizeState::new(initial_window_size))
@@ -1845,8 +1863,17 @@ fn main() {
                 let gui_config_state = core_app.state::<GuiConfigState>();
                 let process_state = core_app.state::<CoreProcessState>();
                 let Ok(config) = gui_config_state.snapshot() else {
+                    process_state.set_starting(false);
                     return;
                 };
+
+                if config.start_core_on_launch {
+                    if let Ok(status) =
+                        current_core_status(Some(process_state.inner()), Some(config.port))
+                    {
+                        emit_core_status(&core_app, &status);
+                    }
+                }
 
                 match auto_install_bundled_core_if_missing(&core_app) {
                     Ok(true) => eprintln!("未检测到 CPA 内核，已自动安装内置离线版本"),
@@ -1859,6 +1886,8 @@ fn main() {
                         eprintln!("自动启动 CPA 内核失败: {error}");
                     }
                 }
+
+                process_state.set_starting(false);
 
                 if let Ok(status) =
                     current_core_status(Some(process_state.inner()), Some(config.port))

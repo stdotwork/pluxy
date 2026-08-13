@@ -2,6 +2,14 @@ use super::support::*;
 use super::*;
 
 #[test]
+fn core_process_starting_state_tracks_automatic_launch() {
+    let state = CoreProcessState::new(true);
+    assert!(state.is_starting());
+    state.set_starting(false);
+    assert!(!state.is_starting());
+}
+
+#[test]
 fn replacing_a_core_preserves_only_regular_bundled_assets() {
     let root = agent_test_home("bundled-assets");
     let source = root.join("source");
