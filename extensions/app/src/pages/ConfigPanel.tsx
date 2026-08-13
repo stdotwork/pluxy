@@ -35,6 +35,10 @@ type CoreConfigSettings = {
   proxyUrl: string;
   routingSessionAffinity: boolean;
   routingSessionAffinityTtl: string;
+  requestRetry: number;
+  maxRetryCredentials: number;
+  maxRetryInterval: number;
+  streamingBootstrapRetries: number;
 };
 
 type CoreApiKey = {
@@ -54,7 +58,16 @@ type ConfigAction =
 type NoticeTone = 'success' | 'error';
 type ConfigSubpage = 'general' | 'network' | 'software' | 'aliases';
 type CloseBehavior = 'ask' | 'exit' | 'minimize-to-tray';
-type NetworkDraftField = 'port' | 'allowLan' | 'proxyUrl' | 'sessionAffinity' | 'sessionTtl';
+type NetworkDraftField =
+  | 'port'
+  | 'allowLan'
+  | 'proxyUrl'
+  | 'sessionAffinity'
+  | 'sessionTtl'
+  | 'requestRetry'
+  | 'maxRetryCredentials'
+  | 'maxRetryInterval'
+  | 'streamingBootstrapRetries';
 type DraftRefreshMode = 'replace' | 'preserve';
 
 type NetworkDraftDirty = Record<NetworkDraftField, boolean>;
@@ -71,6 +84,10 @@ const cleanNetworkDraft = (): NetworkDraftDirty => ({
   proxyUrl: false,
   sessionAffinity: false,
   sessionTtl: false,
+  requestRetry: false,
+  maxRetryCredentials: false,
+  maxRetryInterval: false,
+  streamingBootstrapRetries: false,
 });
 
 const ROUTING_OPTIONS = [
@@ -110,7 +127,12 @@ export function ConfigPanelPage() {
   const [proxyUrlDraft, setProxyUrlDraft] = useState('');
   const [sessionAffinityDraft, setSessionAffinityDraft] = useState(false);
   const [sessionTtlDraft, setSessionTtlDraft] = useState('');
+  const [requestRetryDraft, setRequestRetryDraft] = useState('3');
+  const [maxRetryCredentialsDraft, setMaxRetryCredentialsDraft] = useState('0');
+  const [maxRetryIntervalDraft, setMaxRetryIntervalDraft] = useState('30');
+  const [streamingBootstrapRetriesDraft, setStreamingBootstrapRetriesDraft] = useState('0');
   const [portError, setPortError] = useState('');
+  const [retryError, setRetryError] = useState('');
   const [savedStatusVisible, setSavedStatusVisible] = useState(false);
   const networkDraftDirtyRef = useRef<NetworkDraftDirty>(cleanNetworkDraft());
   const noticeTimerRef = useRef<number | null>(null);
@@ -162,6 +184,12 @@ export function ConfigPanelPage() {
       if (!dirty.proxyUrl) setProxyUrlDraft(result.proxyUrl);
       if (!dirty.sessionAffinity) setSessionAffinityDraft(result.routingSessionAffinity);
       if (!dirty.sessionTtl) setSessionTtlDraft(result.routingSessionAffinityTtl);
+      if (!dirty.requestRetry) setRequestRetryDraft(String(result.requestRetry));
+      if (!dirty.maxRetryCredentials) setMaxRetryCredentialsDraft(String(result.maxRetryCredentials));
+      if (!dirty.maxRetryInterval) setMaxRetryIntervalDraft(String(result.maxRetryInterval));
+      if (!dirty.streamingBootstrapRetries) {
+        setStreamingBootstrapRetriesDraft(String(result.streamingBootstrapRetries));
+      }
       return;
     }
     networkDraftDirtyRef.current = cleanNetworkDraft();
@@ -170,7 +198,12 @@ export function ConfigPanelPage() {
     setProxyUrlDraft(result.proxyUrl);
     setSessionAffinityDraft(result.routingSessionAffinity);
     setSessionTtlDraft(result.routingSessionAffinityTtl);
+    setRequestRetryDraft(String(result.requestRetry));
+    setMaxRetryCredentialsDraft(String(result.maxRetryCredentials));
+    setMaxRetryIntervalDraft(String(result.maxRetryInterval));
+    setStreamingBootstrapRetriesDraft(String(result.streamingBootstrapRetries));
     setPortError('');
+    setRetryError('');
   };
 
   const markDraftDirty = (field: NetworkDraftField) => {
@@ -426,8 +459,25 @@ export function ConfigPanelPage() {
 
     const proxyUrl = proxyUrlDraft.trim();
     const routingSessionAffinityTtl = sessionTtlDraft.trim();
+    const retryDrafts = [
+      requestRetryDraft,
+      maxRetryCredentialsDraft,
+      maxRetryIntervalDraft,
+      streamingBootstrapRetriesDraft,
+    ];
+    const retryValues = retryDrafts.map(Number);
+    if (
+      retryDrafts.some((value) => value.length === 0)
+      || retryValues.some((value) => !Number.isInteger(value) || value < 0 || value > 4294967295)
+    ) {
+      setRetryError(t('config.error.retryRange'));
+      showNotice(t('config.error.retryRange'), 'error');
+      return;
+    }
+    const [requestRetry, maxRetryCredentials, maxRetryInterval, streamingBootstrapRetries] = retryValues;
     const networkChanged = port !== settings.port || allowLanDraft !== settings.allowLan;
     setPortError('');
+    setRetryError('');
     setSavedStatusVisible(false);
     setBusyAction('network');
     try {
@@ -438,6 +488,10 @@ export function ConfigPanelPage() {
           proxyUrl,
           routingSessionAffinity: sessionAffinityDraft,
           routingSessionAffinityTtl,
+          requestRetry,
+          maxRetryCredentials,
+          maxRetryInterval,
+          streamingBootstrapRetries,
         },
       });
       applySettings(result);
@@ -509,6 +563,10 @@ export function ConfigPanelPage() {
     || proxyUrlDraft.trim() !== settings?.proxyUrl
     || sessionAffinityDraft !== settings?.routingSessionAffinity
     || sessionTtlDraft.trim() !== settings?.routingSessionAffinityTtl
+    || requestRetryDraft !== String(settings?.requestRetry)
+    || maxRetryCredentialsDraft !== String(settings?.maxRetryCredentials)
+    || maxRetryIntervalDraft !== String(settings?.maxRetryInterval)
+    || streamingBootstrapRetriesDraft !== String(settings?.streamingBootstrapRetries)
   );
   const networkStatusLabel = loading
     ? t('common.loading')
@@ -1032,6 +1090,126 @@ export function ConfigPanelPage() {
                       : routingStrategyLabel(settings.routingStrategy, t)}
                 </small>
               </div>
+            </div>
+          </section>
+
+          <section className="config-network-section" aria-labelledby="config-retry-section-title">
+            <div className="config-network-section-heading">
+              <RefreshCw size={16} aria-hidden="true" />
+              <h3 id="config-retry-section-title">{t('config.network.retrySection')}</h3>
+            </div>
+            <div className="config-network-grid">
+              <label className="config-network-field">
+                <span>{t('config.network.requestRetry')}</span>
+                <input
+                  className={`config-network-input ${retryError ? 'error' : ''}`}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={10}
+                  value={requestRetryDraft}
+                  disabled={controlsDisabled}
+                  aria-invalid={Boolean(retryError)}
+                  onChange={(event) => {
+                    markDraftDirty('requestRetry');
+                    setRequestRetryDraft(event.currentTarget.value.replace(/\D/g, '').slice(0, 10));
+                    setRetryError('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && settings) {
+                      clearDraftDirty('requestRetry');
+                      setRequestRetryDraft(String(settings.requestRetry));
+                      setRetryError('');
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <small>{t('config.network.requestRetryHint')}</small>
+              </label>
+
+              <label className="config-network-field">
+                <span>{t('config.network.maxRetryCredentials')}</span>
+                <input
+                  className={`config-network-input ${retryError ? 'error' : ''}`}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={10}
+                  value={maxRetryCredentialsDraft}
+                  disabled={controlsDisabled}
+                  aria-invalid={Boolean(retryError)}
+                  onChange={(event) => {
+                    markDraftDirty('maxRetryCredentials');
+                    setMaxRetryCredentialsDraft(event.currentTarget.value.replace(/\D/g, '').slice(0, 10));
+                    setRetryError('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && settings) {
+                      clearDraftDirty('maxRetryCredentials');
+                      setMaxRetryCredentialsDraft(String(settings.maxRetryCredentials));
+                      setRetryError('');
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <small>{t('config.network.maxRetryCredentialsHint')}</small>
+              </label>
+
+              <label className="config-network-field">
+                <span>{t('config.network.maxRetryInterval')}</span>
+                <input
+                  className={`config-network-input ${retryError ? 'error' : ''}`}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={10}
+                  value={maxRetryIntervalDraft}
+                  disabled={controlsDisabled}
+                  aria-invalid={Boolean(retryError)}
+                  onChange={(event) => {
+                    markDraftDirty('maxRetryInterval');
+                    setMaxRetryIntervalDraft(event.currentTarget.value.replace(/\D/g, '').slice(0, 10));
+                    setRetryError('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && settings) {
+                      clearDraftDirty('maxRetryInterval');
+                      setMaxRetryIntervalDraft(String(settings.maxRetryInterval));
+                      setRetryError('');
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <small>{t('config.network.maxRetryIntervalHint')}</small>
+              </label>
+
+              <label className="config-network-field">
+                <span>{t('config.network.streamingBootstrapRetries')}</span>
+                <input
+                  className={`config-network-input ${retryError ? 'error' : ''}`}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={10}
+                  value={streamingBootstrapRetriesDraft}
+                  disabled={controlsDisabled}
+                  aria-invalid={Boolean(retryError)}
+                  onChange={(event) => {
+                    markDraftDirty('streamingBootstrapRetries');
+                    setStreamingBootstrapRetriesDraft(event.currentTarget.value.replace(/\D/g, '').slice(0, 10));
+                    setRetryError('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && settings) {
+                      clearDraftDirty('streamingBootstrapRetries');
+                      setStreamingBootstrapRetriesDraft(String(settings.streamingBootstrapRetries));
+                      setRetryError('');
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <small>{t('config.network.streamingBootstrapRetriesHint')}</small>
+              </label>
             </div>
           </section>
         </div>

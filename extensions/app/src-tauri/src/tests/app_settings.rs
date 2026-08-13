@@ -88,6 +88,10 @@ fn gui_config_defaults_are_stable() {
     assert!(content.contains("management-secret-key = \"\""));
     assert!(content.contains("plugins-enabled = false"));
     assert!(content.contains("routing-strategy = \"round-robin\""));
+    assert!(content.contains("request-retry = 3"));
+    assert!(content.contains("max-retry-credentials = 0"));
+    assert!(content.contains("max-retry-interval = 30"));
+    assert!(content.contains("streaming-bootstrap-retries = 0"));
 }
 
 #[test]

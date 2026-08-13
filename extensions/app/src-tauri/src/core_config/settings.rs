@@ -341,6 +341,31 @@ pub(crate) fn patch_core_network_routing_yaml(
             "session-affinity-ttl",
             serde_norway::Value::String(config.routing_session_affinity_ttl.clone()),
         )?;
+        set_core_yaml_top_level_value(
+            document,
+            "request-retry",
+            serde_norway::to_value(config.request_retry)
+                .map_err(|err| format!("序列化请求重试次数失败: {err}"))?,
+        )?;
+        set_core_yaml_top_level_value(
+            document,
+            "max-retry-credentials",
+            serde_norway::to_value(config.max_retry_credentials)
+                .map_err(|err| format!("序列化最大重试凭据数失败: {err}"))?,
+        )?;
+        set_core_yaml_top_level_value(
+            document,
+            "max-retry-interval",
+            serde_norway::to_value(config.max_retry_interval)
+                .map_err(|err| format!("序列化最大重试等待时间失败: {err}"))?,
+        )?;
+        set_core_yaml_nested_value(
+            document,
+            "streaming",
+            "bootstrap-retries",
+            serde_norway::to_value(config.streaming_bootstrap_retries)
+                .map_err(|err| format!("序列化流式启动重试次数失败: {err}"))?,
+        )?;
         Ok(*document != original)
     })
 }
@@ -445,6 +470,31 @@ pub(crate) fn apply_gui_managed_settings(
             "routing",
             "session-affinity-ttl",
             serde_norway::Value::String(config.routing_session_affinity_ttl.clone()),
+        )?;
+        changed |= set_core_yaml_top_level_value(
+            document,
+            "request-retry",
+            serde_norway::to_value(config.request_retry)
+                .map_err(|err| format!("序列化请求重试次数失败: {err}"))?,
+        )?;
+        changed |= set_core_yaml_top_level_value(
+            document,
+            "max-retry-credentials",
+            serde_norway::to_value(config.max_retry_credentials)
+                .map_err(|err| format!("序列化最大重试凭据数失败: {err}"))?,
+        )?;
+        changed |= set_core_yaml_top_level_value(
+            document,
+            "max-retry-interval",
+            serde_norway::to_value(config.max_retry_interval)
+                .map_err(|err| format!("序列化最大重试等待时间失败: {err}"))?,
+        )?;
+        changed |= set_core_yaml_nested_value(
+            document,
+            "streaming",
+            "bootstrap-retries",
+            serde_norway::to_value(config.streaming_bootstrap_retries)
+                .map_err(|err| format!("序列化流式启动重试次数失败: {err}"))?,
         )?;
         Ok(changed)
     })?
@@ -711,7 +761,11 @@ pub(crate) fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
         || presence.routing_strategy.is_none()
         || presence.proxy_url.is_none()
         || presence.routing_session_affinity.is_none()
-        || presence.routing_session_affinity_ttl.is_none();
+        || presence.routing_session_affinity_ttl.is_none()
+        || presence.request_retry.is_none()
+        || presence.max_retry_credentials.is_none()
+        || presence.max_retry_interval.is_none()
+        || presence.streaming_bootstrap_retries.is_none();
     if missing_core_settings && !gui_parse_failed {
         if let Ok(core_settings) = read_installed_core_config_settings() {
             if presence.host.is_none() {
@@ -758,6 +812,18 @@ pub(crate) fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
             }
             if presence.routing_session_affinity_ttl.is_none() {
                 config.routing_session_affinity_ttl = core_settings.routing_session_affinity_ttl;
+            }
+            if presence.request_retry.is_none() {
+                config.request_retry = core_settings.request_retry;
+            }
+            if presence.max_retry_credentials.is_none() {
+                config.max_retry_credentials = core_settings.max_retry_credentials;
+            }
+            if presence.max_retry_interval.is_none() {
+                config.max_retry_interval = core_settings.max_retry_interval;
+            }
+            if presence.streaming_bootstrap_retries.is_none() {
+                config.streaming_bootstrap_retries = core_settings.streaming_bootstrap_retries;
             }
         }
         changed = true;
@@ -828,6 +894,10 @@ pub(crate) fn apply_core_settings_to_gui_config(
     config.proxy_url = core_settings.proxy_url.clone();
     config.routing_session_affinity = core_settings.routing_session_affinity;
     config.routing_session_affinity_ttl = core_settings.routing_session_affinity_ttl.clone();
+    config.request_retry = core_settings.request_retry;
+    config.max_retry_credentials = core_settings.max_retry_credentials;
+    config.max_retry_interval = core_settings.max_retry_interval;
+    config.streaming_bootstrap_retries = core_settings.streaming_bootstrap_retries;
 }
 
 pub(crate) fn default_api_key_entry() -> GuiApiKeyEntry {
@@ -1129,6 +1199,19 @@ pub(crate) fn write_gui_config_to_path(
         (
             "routing-session-affinity-ttl",
             value(config.routing_session_affinity_ttl.as_str()),
+        ),
+        ("request-retry", value(i64::from(config.request_retry))),
+        (
+            "max-retry-credentials",
+            value(i64::from(config.max_retry_credentials)),
+        ),
+        (
+            "max-retry-interval",
+            value(i64::from(config.max_retry_interval)),
+        ),
+        (
+            "streaming-bootstrap-retries",
+            value(i64::from(config.streaming_bootstrap_retries)),
         ),
     ] {
         set_codex_table_item(root, key, item);

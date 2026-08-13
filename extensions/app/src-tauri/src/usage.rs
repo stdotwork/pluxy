@@ -1,3 +1,5 @@
+mod resp;
+
 use super::{
     apply_configured_proxy, current_core_status, management_authorization, management_endpoint,
     management_http_client, CoreProcessState, GuiConfigFile, GuiConfigState,
@@ -10,26 +12,32 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-#[cfg(test)]
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
+use self::resp::UsageSubscription;
+
 const USAGE_DIR_NAME: &str = "usage-records";
 const USAGE_DATABASE_FILE: &str = "usage.db";
+const USAGE_BACKUP_DIR_NAME: &str = "backups";
 const LEGACY_USAGE_EVENTS_DIR: &str = "events";
 const LEGACY_USAGE_INBOX_DIR: &str = "inbox";
 const LEGACY_JSON_MIGRATION_KEY: &str = "legacy_json_v1";
+const USAGE_DATABASE_MIGRATION_KEY: &str = "keeper_v3";
 const USAGE_UPDATED_EVENT: &str = "usage-records-updated";
 const USAGE_SCHEMA_VERSION: u8 = 1;
+const USAGE_DATABASE_SCHEMA_VERSION: i64 = 3;
 const USAGE_QUEUE_BATCH_SIZE: usize = 500;
+const USAGE_INBOX_PROCESS_LIMIT: usize = 500;
+const USAGE_INBOX_MAX_ATTEMPTS: i64 = 5;
+const USAGE_SUBSCRIBE_RETRY_SECONDS: u64 = 30;
 const SQLITE_BUSY_TIMEOUT_SECONDS: u64 = 5;
 const TOKENS_PER_PRICE_UNIT: f64 = 1_000_000.0;
 const LONG_CONTEXT_INPUT_TOKEN_THRESHOLD: u64 = 272_000;
@@ -44,6 +52,36 @@ pub(crate) struct UsageCollectorState {
 struct UsageCollectorInner {
     token: Option<CancellationToken>,
     status: UsageCollectorStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsageDatabaseLayout {
+    Empty,
+    LegacyV2,
+    CurrentV3,
+}
+
+#[derive(Debug)]
+struct UsageInboxRow {
+    id: i64,
+    source: String,
+    raw_message: String,
+    attempt_count: i64,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct UsageMigrationSnapshot {
+    records: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    reasoning_tokens: i64,
+    cache_read_tokens: i64,
+    cache_creation_tokens: i64,
+    total_tokens: i64,
+    successes: i64,
+    failures: i64,
+    first_timestamp: Option<String>,
+    last_timestamp: Option<String>,
 }
 
 impl Default for UsageCollectorState {
@@ -111,10 +149,18 @@ pub(crate) struct UsageRecord {
     failed: bool,
     #[serde(default)]
     provider: String,
+    #[serde(default, skip_serializing)]
+    api_group_key: String,
     #[serde(default)]
     model: String,
     #[serde(default)]
     alias: String,
+    #[serde(default, skip_serializing)]
+    client_ip: Option<String>,
+    #[serde(default, skip_serializing)]
+    x_forwarded_for: Option<String>,
+    #[serde(default, skip_serializing)]
+    user_agent: Option<String>,
     #[serde(default)]
     reasoning_effort: String,
     #[serde(default)]
@@ -135,6 +181,12 @@ pub(crate) struct UsageRecord {
     api_key_remark: String,
     #[serde(default)]
     request_id: String,
+    #[serde(default = "default_usage_generate", skip_serializing)]
+    generate: bool,
+    #[serde(default, skip_serializing)]
+    cached_tokens: u64,
+    #[serde(default, skip_serializing)]
+    collector_source: String,
     #[serde(default)]
     tokens: UsageTokenStats,
 }
@@ -393,8 +445,207 @@ fn initialize_usage_storage_at(root: &Path) -> Result<(), String> {
     connection
         .pragma_update(None, "journal_mode", "WAL")
         .map_err(|error| format!("启用 SQLite WAL 失败: {error}"))?;
-    initialize_usage_schema(&connection)?;
-    migrate_legacy_json_storage(&mut connection, root)
+    migrate_usage_database(&mut connection, root)?;
+    migrate_legacy_json_storage(&mut connection, root)?;
+    cleanup_usage_inbox(&connection, Local::now())
+}
+
+fn migrate_usage_database(connection: &mut Connection, root: &Path) -> Result<(), String> {
+    match detect_usage_database_layout(connection)? {
+        UsageDatabaseLayout::Empty => initialize_usage_schema(connection),
+        UsageDatabaseLayout::CurrentV3 => initialize_usage_schema(connection),
+        UsageDatabaseLayout::LegacyV2 => {
+            let backup_path = create_usage_migration_backup(connection, root)?;
+            if let Err(error) = migrate_legacy_v2_usage_schema(connection) {
+                return Err(format!(
+                    "迁移旧版使用记录数据库失败，备份保留在 {}: {error}",
+                    backup_path.display()
+                ));
+            }
+            initialize_usage_schema(connection)
+        }
+    }
+}
+
+fn detect_usage_database_layout(connection: &Connection) -> Result<UsageDatabaseLayout, String> {
+    if !usage_table_exists(connection, "usage_events")? {
+        return Ok(UsageDatabaseLayout::Empty);
+    }
+    let columns = usage_table_columns(connection, "usage_events")?;
+    let legacy_columns = [
+        "event_key",
+        "timestamp_ms",
+        "local_hour",
+        "api_key_hash",
+        "api_key_display",
+        "api_key_remark",
+    ];
+    if !legacy_columns
+        .iter()
+        .all(|column| columns.contains(*column))
+    {
+        return Err("无法识别使用记录数据库结构，已拒绝自动迁移".to_string());
+    }
+    let keeper_columns = [
+        "api_group_key",
+        "model_alias",
+        "client_ip",
+        "x_forwarded_for",
+        "user_agent",
+        "generate",
+        "cached_tokens",
+        "collector_source",
+    ];
+    let keeper_column_count = keeper_columns
+        .iter()
+        .filter(|column| columns.contains(**column))
+        .count();
+    if keeper_column_count == 0 && !usage_table_exists(connection, "usage_inbox")? {
+        return Ok(UsageDatabaseLayout::LegacyV2);
+    }
+    if keeper_column_count == keeper_columns.len()
+        && usage_table_exists(connection, "usage_inbox")?
+        && usage_table_exists(connection, "usage_aggregation_checkpoints")?
+    {
+        return Ok(UsageDatabaseLayout::CurrentV3);
+    }
+    Err("检测到不完整的使用记录数据库迁移，已拒绝继续修改".to_string())
+}
+
+fn usage_table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            params![table],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|exists| exists != 0)
+        .map_err(|error| format!("检查 SQLite 表 {table} 失败: {error}"))
+}
+
+fn usage_table_columns(connection: &Connection, table: &str) -> Result<HashSet<String>, String> {
+    let mut statement = connection
+        .prepare("SELECT name FROM pragma_table_info(?1)")
+        .map_err(|error| format!("准备读取 SQLite 表结构失败 {table}: {error}"))?;
+    let columns = statement
+        .query_map(params![table], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("读取 SQLite 表结构失败 {table}: {error}"))?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(|error| format!("解析 SQLite 表结构失败 {table}: {error}"))?;
+    Ok(columns)
+}
+
+fn create_usage_migration_backup(connection: &Connection, root: &Path) -> Result<PathBuf, String> {
+    let backup_dir = root.join(USAGE_BACKUP_DIR_NAME);
+    fs::create_dir_all(&backup_dir)
+        .map_err(|error| format!("创建使用记录备份目录失败: {error}"))?;
+    let backup_path = backup_dir.join(format!("usage-before-keeper-v3-{}.db", unique_file_stamp()));
+    connection
+        .execute(
+            "VACUUM INTO ?1",
+            params![backup_path.to_string_lossy().to_string()],
+        )
+        .map_err(|error| format!("备份旧版使用记录数据库失败: {error}"))?;
+    Ok(backup_path)
+}
+
+fn migrate_legacy_v2_usage_schema(connection: &mut Connection) -> Result<(), String> {
+    let before = load_usage_migration_snapshot(connection)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开始使用记录数据库迁移事务失败: {error}"))?;
+    transaction
+        .execute_batch(
+            r#"
+            ALTER TABLE usage_events ADD COLUMN api_group_key TEXT NOT NULL DEFAULT '';
+            ALTER TABLE usage_events ADD COLUMN model_alias TEXT;
+            ALTER TABLE usage_events ADD COLUMN client_ip TEXT;
+            ALTER TABLE usage_events ADD COLUMN x_forwarded_for TEXT;
+            ALTER TABLE usage_events ADD COLUMN user_agent TEXT;
+            ALTER TABLE usage_events ADD COLUMN generate INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE usage_events ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE usage_events ADD COLUMN collector_source TEXT NOT NULL DEFAULT 'legacy_migration';
+
+            UPDATE usage_events
+            SET api_group_key = CASE
+                    WHEN api_key_hash != '' THEN api_key_hash
+                    WHEN provider != '' THEN provider
+                    WHEN endpoint != '' THEN endpoint
+                    ELSE 'unknown'
+                END,
+                model_alias = NULLIF(alias, ''),
+                generate = CASE
+                    WHEN failed = 0
+                         AND executor_type = 'CodexWebsocketsExecutor'
+                         AND input_tokens = 0
+                         AND output_tokens = 0
+                         AND reasoning_tokens = 0
+                         AND cache_read_tokens = 0
+                         AND cache_creation_tokens = 0
+                         AND total_tokens = 0
+                    THEN 0 ELSE 1
+                END,
+                cached_tokens = cache_read_tokens + cache_creation_tokens,
+                collector_source = 'legacy_migration';
+            "#,
+        )
+        .map_err(|error| format!("转换旧版使用记录字段失败: {error}"))?;
+    let after = load_usage_migration_snapshot(&transaction)?;
+    if before != after {
+        return Err(format!(
+            "使用记录迁移校验不一致，迁移前 {before:?}，迁移后 {after:?}"
+        ));
+    }
+    initialize_usage_schema(&transaction)?;
+    transaction
+        .execute(
+            "INSERT INTO usage_metadata (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![USAGE_DATABASE_MIGRATION_KEY, Local::now().to_rfc3339()],
+        )
+        .map_err(|error| format!("写入使用记录迁移标记失败: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("提交使用记录数据库迁移失败: {error}"))
+}
+
+fn load_usage_migration_snapshot(
+    connection: &Connection,
+) -> Result<UsageMigrationSnapshot, String> {
+    connection
+        .query_row(
+            r#"
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(reasoning_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(cache_creation_tokens), 0),
+                COALESCE(SUM(total_tokens), 0),
+                COALESCE(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN failed != 0 THEN 1 ELSE 0 END), 0),
+                MIN(timestamp),
+                MAX(timestamp)
+            FROM usage_events
+            "#,
+            [],
+            |row| {
+                Ok(UsageMigrationSnapshot {
+                    records: row.get(0)?,
+                    input_tokens: row.get(1)?,
+                    output_tokens: row.get(2)?,
+                    reasoning_tokens: row.get(3)?,
+                    cache_read_tokens: row.get(4)?,
+                    cache_creation_tokens: row.get(5)?,
+                    total_tokens: row.get(6)?,
+                    successes: row.get(7)?,
+                    failures: row.get(8)?,
+                    first_timestamp: row.get(9)?,
+                    last_timestamp: row.get(10)?,
+                })
+            },
+        )
+        .map_err(|error| format!("读取使用记录迁移校验快照失败: {error}"))
 }
 
 fn initialize_usage_schema(connection: &Connection) -> Result<(), String> {
@@ -430,6 +681,14 @@ fn initialize_usage_schema(connection: &Connection) -> Result<(), String> {
                 api_key_display TEXT NOT NULL DEFAULT '',
                 api_key_remark TEXT NOT NULL DEFAULT '',
                 request_id TEXT NOT NULL DEFAULT '',
+                api_group_key TEXT NOT NULL DEFAULT '',
+                model_alias TEXT,
+                client_ip TEXT,
+                x_forwarded_for TEXT,
+                user_agent TEXT,
+                generate INTEGER NOT NULL DEFAULT 1,
+                cached_tokens INTEGER NOT NULL DEFAULT 0,
+                collector_source TEXT NOT NULL DEFAULT '',
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 reasoning_tokens INTEGER NOT NULL DEFAULT 0,
@@ -453,6 +712,31 @@ fn initialize_usage_schema(connection: &Connection) -> Result<(), String> {
                 ON usage_events(api_key_hash, timestamp_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_usage_events_failed_timestamp
                 ON usage_events(failed, timestamp_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_usage_events_api_group_timestamp
+                ON usage_events(api_group_key, timestamp_ms DESC);
+
+            CREATE TABLE IF NOT EXISTS usage_inbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                message_hash TEXT NOT NULL,
+                raw_message TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                usage_event_key TEXT NOT NULL DEFAULT '',
+                received_at TEXT NOT NULL,
+                processed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_inbox_status_id
+                ON usage_inbox(status, id);
+
+            CREATE TABLE IF NOT EXISTS usage_aggregation_checkpoints (
+                name TEXT PRIMARY KEY NOT NULL,
+                last_usage_event_id INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS model_prices (
                 model TEXT PRIMARY KEY NOT NULL,
@@ -469,11 +753,12 @@ fn initialize_usage_schema(connection: &Connection) -> Result<(), String> {
                 source_model_id TEXT NOT NULL DEFAULT '',
                 updated_at_ms INTEGER NOT NULL DEFAULT 0
             );
-
-            PRAGMA user_version = 2;
             "#,
         )
-        .map_err(|error| format!("初始化 SQLite 使用记录结构失败: {error}"))
+        .map_err(|error| format!("初始化 SQLite 使用记录结构失败: {error}"))?;
+    connection
+        .pragma_update(None, "user_version", USAGE_DATABASE_SCHEMA_VERSION)
+        .map_err(|error| format!("更新 SQLite 使用记录版本失败: {error}"))
 }
 
 fn open_usage_database() -> Result<Connection, String> {
@@ -604,6 +889,9 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
     };
 
     let mut retry_seconds = 1_u64;
+    let mut subscription: Option<UsageSubscription> = None;
+    let mut subscribe_retry_at = tokio::time::Instant::now();
+    let mut next_inbox_cleanup_at = tokio::time::Instant::now() + Duration::from_secs(60 * 60);
     loop {
         if token.is_cancelled() {
             return;
@@ -617,15 +905,138 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
                 continue;
             }
         };
+        if tokio::time::Instant::now() >= next_inbox_cleanup_at {
+            if let Err(error) = open_usage_database_at(&root)
+                .and_then(|connection| cleanup_usage_inbox(&connection, Local::now()))
+            {
+                eprintln!("清理使用记录 inbox 失败: {error}");
+            }
+            next_inbox_cleanup_at = tokio::time::Instant::now() + Duration::from_secs(60 * 60);
+        }
+        let recovered = open_usage_database_at(&root)
+            .and_then(|mut connection| process_usage_inbox(&mut connection, &config));
+        match recovered {
+            Ok(saved) if saved > 0 => {
+                let collected_at = Local::now().to_rfc3339();
+                app.state::<UsageCollectorState>()
+                    .increment_total_records(saved);
+                set_collector_status(
+                    &app,
+                    "collecting",
+                    &format!("已恢复 {saved} 条待处理记录"),
+                    Some(collected_at.clone()),
+                );
+                let _ = app.emit(USAGE_UPDATED_EVENT, collected_at);
+                retry_seconds = 1;
+                continue;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                set_collector_error(&app, error);
+                wait_or_cancel(&token, retry_seconds).await;
+                retry_seconds = (retry_seconds * 2).min(10);
+                continue;
+            }
+        }
         let process_state = app.state::<CoreProcessState>();
         let core_running = current_core_status(Some(process_state.inner()), Some(config.port))
             .map(|status| status.running)
             .unwrap_or(false);
         if !core_running {
+            subscription = None;
             set_collector_status(&app, "waiting-core", "等待内核启动", None);
             retry_seconds = 1;
             wait_or_cancel(&token, 1).await;
             continue;
+        }
+
+        if subscription.is_none() && tokio::time::Instant::now() >= subscribe_retry_at {
+            match UsageSubscription::connect(config.port, &config.management_secret_key).await {
+                Ok(next_subscription) => {
+                    subscription = Some(next_subscription);
+                    set_collector_status(&app, "collecting", "已连接 CPA usage 实时订阅", None);
+                    match backfill_usage_queue(&root, &config).await {
+                        Ok(saved) => {
+                            publish_collected_records(
+                                &app,
+                                saved,
+                                &format!("实时订阅已连接，补录 {saved} 条队列记录"),
+                            );
+                            retry_seconds = 1;
+                        }
+                        Err(error) => {
+                            set_collector_status(
+                                &app,
+                                "collecting",
+                                &format!("实时订阅已连接，历史队列补录失败: {error}"),
+                                None,
+                            );
+                        }
+                    }
+                    continue;
+                }
+                Err(error) => {
+                    subscribe_retry_at = tokio::time::Instant::now()
+                        + Duration::from_secs(USAGE_SUBSCRIBE_RETRY_SECONDS);
+                    set_collector_status(
+                        &app,
+                        "collecting",
+                        &format!("使用 HTTP 兼容模式采集；实时订阅不可用: {error}"),
+                        None,
+                    );
+                }
+            }
+        }
+
+        if let Some(active_subscription) = subscription.as_mut() {
+            let message = tokio::select! {
+                _ = token.cancelled() => return,
+                result = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    active_subscription.next_message(),
+                ) => result,
+            };
+            match message {
+                Ok(Ok(payload)) => {
+                    match persist_raw_usage_message_from_source(
+                        &root,
+                        "redis_subscribe:usage",
+                        payload,
+                        &config,
+                    ) {
+                        Ok(saved) => {
+                            publish_collected_records(
+                                &app,
+                                saved,
+                                &format!("实时订阅已保存 {saved} 条新记录"),
+                            );
+                            retry_seconds = 1;
+                        }
+                        Err(error) => {
+                            set_collector_error(&app, error);
+                            wait_or_cancel(&token, retry_seconds).await;
+                            retry_seconds = (retry_seconds * 2).min(10);
+                        }
+                    }
+                    continue;
+                }
+                Err(_) => {
+                    set_collector_status(&app, "collecting", "CPA usage 实时订阅采集中", None);
+                    retry_seconds = 1;
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    subscription = None;
+                    subscribe_retry_at = tokio::time::Instant::now()
+                        + Duration::from_secs(USAGE_SUBSCRIBE_RETRY_SECONDS);
+                    set_collector_status(
+                        &app,
+                        "collecting",
+                        &format!("实时订阅断开，已切换 HTTP 兼容模式: {error}"),
+                        None,
+                    );
+                }
+            }
         }
 
         match fetch_usage_queue(&config).await {
@@ -636,20 +1047,11 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
             }
             Ok(items) => match persist_queue_items(&root, items, &config) {
                 Ok(saved) => {
-                    let collected_at = Local::now().to_rfc3339();
-                    if saved > 0 {
-                        app.state::<UsageCollectorState>()
-                            .increment_total_records(saved);
-                    }
-                    set_collector_status(
+                    publish_collected_records(
                         &app,
-                        "collecting",
-                        &format!("已保存 {saved} 条新记录"),
-                        Some(collected_at.clone()),
+                        saved,
+                        &format!("HTTP 兼容模式已保存 {saved} 条新记录"),
                     );
-                    if saved > 0 {
-                        let _ = app.emit(USAGE_UPDATED_EVENT, collected_at);
-                    }
                     retry_seconds = 1;
                 }
                 Err(error) => {
@@ -664,6 +1066,43 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
                 retry_seconds = (retry_seconds * 2).min(10);
             }
         }
+    }
+}
+
+async fn backfill_usage_queue(root: &Path, config: &GuiConfigFile) -> Result<usize, String> {
+    let mut saved_total = 0_usize;
+    loop {
+        let items = fetch_usage_queue(config).await?;
+        let fetched = items.len();
+        if fetched == 0 {
+            return Ok(saved_total);
+        }
+        saved_total = saved_total.saturating_add(persist_queue_items_from_source(
+            root,
+            "http_backfill",
+            items,
+            config,
+        )?);
+        if fetched < USAGE_QUEUE_BATCH_SIZE {
+            return Ok(saved_total);
+        }
+    }
+}
+
+fn publish_collected_records(app: &tauri::AppHandle, saved: usize, message: &str) {
+    let collected_at = Local::now().to_rfc3339();
+    if saved > 0 {
+        app.state::<UsageCollectorState>()
+            .increment_total_records(saved);
+    }
+    set_collector_status(
+        app,
+        "collecting",
+        message,
+        (saved > 0).then_some(collected_at.clone()),
+    );
+    if saved > 0 {
+        let _ = app.emit(USAGE_UPDATED_EVENT, collected_at);
     }
 }
 
@@ -729,18 +1168,268 @@ fn persist_queue_items(
     items: Vec<Value>,
     config: &GuiConfigFile,
 ) -> Result<usize, String> {
-    let records = items
+    persist_queue_items_from_source(root, "http_pull", items, config)
+}
+
+fn persist_queue_items_from_source(
+    root: &Path,
+    source: &str,
+    items: Vec<Value>,
+    config: &GuiConfigFile,
+) -> Result<usize, String> {
+    let mut connection = open_usage_database_at(root)?;
+    enqueue_usage_queue_items(&mut connection, source, items)?;
+    process_usage_inbox(&mut connection, config)
+}
+
+fn enqueue_usage_queue_items(
+    connection: &mut Connection,
+    source: &str,
+    items: Vec<Value>,
+) -> Result<usize, String> {
+    let messages = items
         .into_iter()
-        .filter(Value::is_object)
-        .map(|item| normalize_usage_record(item, config))
+        .map(|item| {
+            serde_json::to_string(&item)
+                .map_err(|error| format!("序列化 CPA 使用记录失败: {error}"))
+        })
         .collect::<Result<Vec<_>, _>>()?;
+    enqueue_usage_raw_messages(connection, source, messages)
+}
+
+fn enqueue_usage_raw_messages(
+    connection: &mut Connection,
+    source: &str,
+    messages: Vec<String>,
+) -> Result<usize, String> {
+    if messages.is_empty() {
+        return Ok(0);
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开始 SQLite 使用记录 inbox 事务失败: {error}"))?;
+    let mut statement = transaction
+        .prepare(
+            r#"
+            INSERT INTO usage_inbox (
+                source, message_hash, raw_message, status, attempt_count,
+                received_at, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, 'pending', 0, ?4, ?4, ?4)
+            "#,
+        )
+        .map_err(|error| format!("准备 SQLite 使用记录 inbox 写入失败: {error}"))?;
+    let received_at = Local::now().to_rfc3339();
+    let mut inserted = 0_usize;
+    for raw_message in messages {
+        inserted = inserted.saturating_add(
+            statement
+                .execute(params![
+                    source,
+                    hash_text(&raw_message),
+                    raw_message,
+                    received_at,
+                ])
+                .map_err(|error| format!("写入 SQLite 使用记录 inbox 失败: {error}"))?,
+        );
+    }
+    drop(statement);
+    transaction
+        .commit()
+        .map_err(|error| format!("提交 SQLite 使用记录 inbox 失败: {error}"))?;
+    Ok(inserted)
+}
+
+fn persist_raw_usage_message_from_source(
+    root: &Path,
+    source: &str,
+    raw_message: String,
+    config: &GuiConfigFile,
+) -> Result<usize, String> {
+    let mut connection = open_usage_database_at(root)?;
+    enqueue_usage_raw_messages(&mut connection, source, vec![raw_message])?;
+    process_usage_inbox(&mut connection, config)
+}
+
+fn process_usage_inbox(
+    connection: &mut Connection,
+    config: &GuiConfigFile,
+) -> Result<usize, String> {
+    let rows = list_processable_usage_inbox(connection, USAGE_INBOX_PROCESS_LIMIT)?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let mut valid_rows = Vec::with_capacity(rows.len());
+    let mut records = Vec::with_capacity(rows.len());
+    for row in rows {
+        let parsed = serde_json::from_str::<Value>(&row.raw_message)
+            .map_err(|error| format!("解析 inbox JSON 失败: {error}"))
+            .and_then(|value| normalize_usage_record(value, config));
+        match parsed {
+            Ok(mut record) => {
+                record.collector_source = row.source.clone();
+                valid_rows.push(row);
+                records.push(record);
+            }
+            Err(error) => mark_usage_inbox_decode_failed(connection, row.id, &error)?,
+        }
+    }
     if records.is_empty() {
         return Ok(0);
     }
-    let mut connection = open_usage_database_at(root)?;
-    insert_usage_records(&mut connection, &records)
+
+    let persist_result = (|| -> Result<usize, String> {
+        let transaction = connection
+            .transaction()
+            .map_err(|error| format!("开始 SQLite inbox 处理事务失败: {error}"))?;
+        let inserted = insert_usage_records_in_transaction(&transaction, &records)?;
+        let processed_at = Local::now().to_rfc3339();
+        for (row, record) in valid_rows.iter().zip(records.iter()) {
+            transaction
+                .execute(
+                    r#"
+                    UPDATE usage_inbox
+                    SET status = 'processed', attempt_count = attempt_count + 1,
+                        last_error = '', usage_event_key = ?1,
+                        processed_at = ?2, updated_at = ?2
+                    WHERE id = ?3
+                    "#,
+                    params![record.id, processed_at, row.id],
+                )
+                .map_err(|error| format!("标记 SQLite 使用记录 inbox 已处理失败: {error}"))?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("提交 SQLite inbox 处理事务失败: {error}"))?;
+        Ok(inserted)
+    })();
+    match persist_result {
+        Ok(inserted) => Ok(inserted),
+        Err(error) => {
+            mark_usage_inbox_process_failed(connection, &valid_rows, &error)?;
+            Err(error)
+        }
+    }
 }
 
+fn list_processable_usage_inbox(
+    connection: &Connection,
+    limit: usize,
+) -> Result<Vec<UsageInboxRow>, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, source, raw_message, attempt_count
+            FROM usage_inbox
+            WHERE status IN ('pending', 'process_failed')
+              AND attempt_count < ?1
+            ORDER BY id ASC
+            LIMIT ?2
+            "#,
+        )
+        .map_err(|error| format!("准备读取 SQLite 使用记录 inbox 失败: {error}"))?;
+    let rows = statement
+        .query_map(
+            params![
+                USAGE_INBOX_MAX_ATTEMPTS,
+                limit.min(i64::MAX as usize) as i64
+            ],
+            |row| {
+                Ok(UsageInboxRow {
+                    id: row.get(0)?,
+                    source: row.get(1)?,
+                    raw_message: row.get(2)?,
+                    attempt_count: row.get(3)?,
+                })
+            },
+        )
+        .map_err(|error| format!("查询 SQLite 使用记录 inbox 失败: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("读取 SQLite 使用记录 inbox 失败: {error}"))?;
+    Ok(rows)
+}
+
+fn mark_usage_inbox_decode_failed(
+    connection: &Connection,
+    id: i64,
+    error: &str,
+) -> Result<(), String> {
+    let now = Local::now().to_rfc3339();
+    connection
+        .execute(
+            r#"
+            UPDATE usage_inbox
+            SET status = 'decode_failed', attempt_count = attempt_count + 1,
+                last_error = ?1, processed_at = ?2, updated_at = ?2
+            WHERE id = ?3
+            "#,
+            params![bounded_usage_inbox_error(error), now, id],
+        )
+        .map(|_| ())
+        .map_err(|update_error| {
+            format!("标记 SQLite 使用记录 inbox 解码失败时出错: {update_error}")
+        })
+}
+
+fn mark_usage_inbox_process_failed(
+    connection: &Connection,
+    rows: &[UsageInboxRow],
+    error: &str,
+) -> Result<(), String> {
+    let now = Local::now().to_rfc3339();
+    let error = bounded_usage_inbox_error(error);
+    for row in rows {
+        let next_attempt = row.attempt_count.saturating_add(1);
+        let status = if next_attempt >= USAGE_INBOX_MAX_ATTEMPTS {
+            "discarded"
+        } else {
+            "process_failed"
+        };
+        connection
+            .execute(
+                r#"
+                UPDATE usage_inbox
+                SET status = ?1, attempt_count = ?2, last_error = ?3,
+                    processed_at = CASE WHEN ?1 = 'discarded' THEN ?4 ELSE NULL END,
+                    updated_at = ?4
+                WHERE id = ?5
+                "#,
+                params![status, next_attempt, error, now, row.id],
+            )
+            .map_err(|update_error| {
+                format!("标记 SQLite 使用记录 inbox 处理失败时出错: {update_error}")
+            })?;
+    }
+    Ok(())
+}
+
+fn bounded_usage_inbox_error(error: &str) -> String {
+    error.chars().take(1_000).collect()
+}
+
+fn cleanup_usage_inbox(connection: &Connection, now: DateTime<Local>) -> Result<(), String> {
+    let processed_cutoff = now
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|value| value.and_local_timezone(Local).single())
+        .unwrap_or(now)
+        .to_rfc3339();
+    let failed_cutoff = (now - chrono::Duration::days(7)).to_rfc3339();
+    connection
+        .execute(
+            "DELETE FROM usage_inbox WHERE status = 'processed' AND processed_at < ?1",
+            params![processed_cutoff],
+        )
+        .map_err(|error| format!("清理已处理使用记录 inbox 失败: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM usage_inbox WHERE status IN ('decode_failed', 'discarded') AND updated_at < ?1",
+            params![failed_cutoff],
+        )
+        .map_err(|error| format!("清理失败使用记录 inbox 失败: {error}"))?;
+    Ok(())
+}
+
+#[cfg(test)]
 fn insert_usage_records(
     connection: &mut Connection,
     records: &[UsageRecord],
@@ -770,12 +1459,15 @@ fn insert_usage_records_in_transaction(
                 source, auth_index, failed, provider, model, alias, reasoning_effort,
                 service_tier, response_service_tier, executor_type, endpoint, auth_type,
                 api_key_hash, api_key_display, api_key_remark, request_id,
+                api_group_key, model_alias, client_ip, x_forwarded_for, user_agent,
+                generate, cached_tokens, collector_source,
                 input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,
                 cache_creation_tokens, total_tokens, created_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
+                ?31, ?32, ?33, ?34, ?35, ?36, ?37
             )
             "#,
         )
@@ -783,6 +1475,28 @@ fn insert_usage_records_in_transaction(
     let created_at = Local::now().to_rfc3339();
     let mut inserted = 0_usize;
     for record in records {
+        let api_group_key = if !record.api_group_key.trim().is_empty() {
+            record.api_group_key.as_str()
+        } else if !record.api_key_hash.trim().is_empty() {
+            record.api_key_hash.as_str()
+        } else if !record.provider.trim().is_empty() {
+            record.provider.as_str()
+        } else if !record.endpoint.trim().is_empty() {
+            record.endpoint.as_str()
+        } else {
+            "unknown"
+        };
+        let cached_tokens = record.cached_tokens.max(
+            record
+                .tokens
+                .cache_read_tokens
+                .saturating_add(record.tokens.cache_creation_tokens),
+        );
+        let collector_source = if record.collector_source.trim().is_empty() {
+            "legacy_json"
+        } else {
+            record.collector_source.as_str()
+        };
         inserted = inserted.saturating_add(
             statement
                 .execute(params![
@@ -808,6 +1522,18 @@ fn insert_usage_records_in_transaction(
                     record.api_key_display,
                     record.api_key_remark,
                     record.request_id,
+                    api_group_key,
+                    if record.alias.trim().is_empty() {
+                        None::<&str>
+                    } else {
+                        Some(record.alias.as_str())
+                    },
+                    record.client_ip,
+                    record.x_forwarded_for,
+                    record.user_agent,
+                    record.generate,
+                    to_sql_i64(cached_tokens),
+                    collector_source,
                     to_sql_i64(record.tokens.input_tokens),
                     to_sql_i64(record.tokens.output_tokens),
                     to_sql_i64(record.tokens.reasoning_tokens),
@@ -841,8 +1567,9 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
     let tokens_object = object.get("tokens").and_then(Value::as_object);
     let raw_cache_read_tokens = token_u64(tokens_object, "cache_read_tokens");
     let cache_creation_tokens = token_u64(tokens_object, "cache_creation_tokens");
-    let compatible_cached_tokens = token_u64(tokens_object, "cached_tokens")
-        .max(token_u64(tokens_object, "cache_tokens"))
+    let raw_cached_tokens =
+        token_u64(tokens_object, "cached_tokens").max(token_u64(tokens_object, "cache_tokens"));
+    let compatible_cached_tokens = raw_cached_tokens
         .saturating_sub(raw_cache_read_tokens.saturating_add(cache_creation_tokens));
     let mut tokens = UsageTokenStats {
         input_tokens: token_u64(tokens_object, "input_tokens"),
@@ -863,6 +1590,36 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
     } else {
         request_id.clone()
     };
+    let provider = string_field(object, "provider").unwrap_or_default();
+    let endpoint = string_field(object, "endpoint").unwrap_or_default();
+    let executor_type = string_field(object, "executor_type").unwrap_or_default();
+    let generate = object
+        .get("generate")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            !(executor_type == "CodexWebsocketsExecutor"
+                && !object
+                    .get("failed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                && tokens.input_tokens == 0
+                && tokens.output_tokens == 0
+                && tokens.reasoning_tokens == 0
+                && tokens.cache_read_tokens == 0
+                && tokens.cache_creation_tokens == 0
+                && tokens.total_tokens == 0)
+        });
+    let api_group_key = if api_key_hash.is_empty() {
+        if !provider.is_empty() {
+            provider.clone()
+        } else if !endpoint.is_empty() {
+            endpoint.clone()
+        } else {
+            "unknown".to_string()
+        }
+    } else {
+        api_key_hash.clone()
+    };
     Ok(UsageRecord {
         id,
         timestamp,
@@ -875,21 +1632,36 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
             .get("failed")
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        provider: string_field(object, "provider").unwrap_or_default(),
+        provider,
+        api_group_key,
         model: string_field(object, "model").unwrap_or_else(|| "unknown".to_string()),
         alias: string_field(object, "alias").unwrap_or_default(),
+        client_ip: string_field(object, "client_ip"),
+        x_forwarded_for: string_field(object, "x_forwarded_for"),
+        user_agent: string_field(object, "user_agent"),
         reasoning_effort: string_field(object, "reasoning_effort").unwrap_or_default(),
         service_tier: string_field(object, "service_tier").unwrap_or_default(),
         response_service_tier: string_field(object, "response_service_tier").unwrap_or_default(),
-        executor_type: string_field(object, "executor_type").unwrap_or_default(),
-        endpoint: string_field(object, "endpoint").unwrap_or_default(),
+        executor_type,
+        endpoint,
         auth_type: string_field(object, "auth_type").unwrap_or_default(),
         api_key_hash,
         api_key_display: mask_api_key(&api_key),
         api_key_remark,
         request_id,
+        generate,
+        cached_tokens: raw_cached_tokens.max(
+            tokens
+                .cache_read_tokens
+                .saturating_add(tokens.cache_creation_tokens),
+        ),
+        collector_source: "http_pull".to_string(),
         tokens,
     })
+}
+
+fn default_usage_generate() -> bool {
+    true
 }
 
 fn build_usage_filter(query: &UsageQuery) -> UsageSqlFilter {
@@ -1844,6 +2616,8 @@ fn load_usage_events(
             provider, model, alias, reasoning_effort, service_tier,
             response_service_tier, executor_type, endpoint, auth_type,
             api_key_hash, api_key_display, api_key_remark, request_id,
+            api_group_key, client_ip, x_forwarded_for, user_agent, generate,
+            cached_tokens, collector_source,
             input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,
             cache_creation_tokens, total_tokens
         FROM usage_events{}
@@ -1886,8 +2660,12 @@ fn usage_record_from_row(row: &Row<'_>) -> rusqlite::Result<UsageRecord> {
         auth_index: row.get(5)?,
         failed: row.get::<_, i64>(6)? != 0,
         provider: row.get(7)?,
+        api_group_key: row.get(20)?,
         model: row.get(8)?,
         alias: row.get(9)?,
+        client_ip: row.get(21)?,
+        x_forwarded_for: row.get(22)?,
+        user_agent: row.get(23)?,
         reasoning_effort: row.get(10)?,
         service_tier: row.get(11)?,
         response_service_tier: row.get(12)?,
@@ -1898,13 +2676,16 @@ fn usage_record_from_row(row: &Row<'_>) -> rusqlite::Result<UsageRecord> {
         api_key_display: row.get(17)?,
         api_key_remark: row.get(18)?,
         request_id: row.get(19)?,
+        generate: row.get::<_, i64>(24)? != 0,
+        cached_tokens: from_sql_i64(row.get(25)?),
+        collector_source: row.get(26)?,
         tokens: UsageTokenStats {
-            input_tokens: from_sql_i64(row.get(20)?),
-            output_tokens: from_sql_i64(row.get(21)?),
-            reasoning_tokens: from_sql_i64(row.get(22)?),
-            cache_read_tokens: from_sql_i64(row.get(23)?),
-            cache_creation_tokens: from_sql_i64(row.get(24)?),
-            total_tokens: from_sql_i64(row.get(25)?),
+            input_tokens: from_sql_i64(row.get(27)?),
+            output_tokens: from_sql_i64(row.get(28)?),
+            reasoning_tokens: from_sql_i64(row.get(29)?),
+            cache_read_tokens: from_sql_i64(row.get(30)?),
+            cache_creation_tokens: from_sql_i64(row.get(31)?),
+            total_tokens: from_sql_i64(row.get(32)?),
         },
     })
 }
@@ -1976,7 +2757,6 @@ fn from_sql_i64(value: i64) -> u64 {
     value.max(0) as u64
 }
 
-#[cfg(test)]
 fn unique_file_stamp() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2101,6 +2881,55 @@ mod tests {
         open_usage_database_at(root).unwrap()
     }
 
+    fn create_legacy_v2_database(root: &Path) -> Connection {
+        fs::create_dir_all(root).unwrap();
+        let connection = Connection::open(root.join(USAGE_DATABASE_FILE)).unwrap();
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE usage_metadata (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL
+                );
+                CREATE TABLE usage_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_key TEXT NOT NULL UNIQUE,
+                    timestamp TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    local_hour TEXT NOT NULL,
+                    latency_ms INTEGER NOT NULL DEFAULT 0,
+                    ttft_ms INTEGER,
+                    source TEXT NOT NULL DEFAULT '',
+                    auth_index TEXT NOT NULL DEFAULT '',
+                    failed INTEGER NOT NULL DEFAULT 0,
+                    provider TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    alias TEXT NOT NULL DEFAULT '',
+                    reasoning_effort TEXT NOT NULL DEFAULT '',
+                    service_tier TEXT NOT NULL DEFAULT '',
+                    response_service_tier TEXT NOT NULL DEFAULT '',
+                    executor_type TEXT NOT NULL DEFAULT '',
+                    endpoint TEXT NOT NULL DEFAULT '',
+                    auth_type TEXT NOT NULL DEFAULT '',
+                    api_key_hash TEXT NOT NULL DEFAULT '',
+                    api_key_display TEXT NOT NULL DEFAULT '',
+                    api_key_remark TEXT NOT NULL DEFAULT '',
+                    request_id TEXT NOT NULL DEFAULT '',
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                PRAGMA user_version = 2;
+                "#,
+            )
+            .unwrap();
+        connection
+    }
+
     fn sample_record(id: &str, timestamp: &str, model: &str) -> UsageRecord {
         UsageRecord {
             id: id.to_string(),
@@ -2112,8 +2941,12 @@ mod tests {
             auth_index: "auth".to_string(),
             failed: false,
             provider: "openai".to_string(),
+            api_group_key: "hash".to_string(),
             model: model.to_string(),
             alias: String::new(),
+            client_ip: None,
+            x_forwarded_for: None,
+            user_agent: None,
             reasoning_effort: "high".to_string(),
             service_tier: String::new(),
             response_service_tier: String::new(),
@@ -2124,6 +2957,9 @@ mod tests {
             api_key_display: "12••••".to_string(),
             api_key_remark: "内置密钥".to_string(),
             request_id: id.to_string(),
+            generate: true,
+            cached_tokens: 2,
+            collector_source: "test".to_string(),
             tokens: UsageTokenStats {
                 input_tokens: 10,
                 output_tokens: 20,
@@ -2202,6 +3038,10 @@ mod tests {
             proxy_url: String::new(),
             routing_session_affinity: false,
             routing_session_affinity_ttl: String::new(),
+            request_retry: crate::DEFAULT_REQUEST_RETRY,
+            max_retry_credentials: crate::DEFAULT_MAX_RETRY_CREDENTIALS,
+            max_retry_interval: crate::DEFAULT_MAX_RETRY_INTERVAL,
+            streaming_bootstrap_retries: crate::DEFAULT_STREAMING_BOOTSTRAP_RETRIES,
         };
         let record = normalize_usage_record(
             serde_json::json!({
@@ -2313,6 +3153,192 @@ mod tests {
         assert_eq!(busy_timeout, 5_000);
         assert_eq!(foreign_keys, 1);
         assert!(root.join(USAGE_DATABASE_FILE).is_file());
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_v2_database_is_backed_up_and_migrated_once() {
+        let root = test_root("keeper-v3-migration");
+        let connection = create_legacy_v2_database(&root);
+        connection
+            .execute(
+                r#"
+                INSERT INTO usage_events (
+                    event_key, timestamp, timestamp_ms, local_hour, latency_ms, ttft_ms,
+                    source, auth_index, failed, provider, model, alias, reasoning_effort,
+                    service_tier, response_service_tier, executor_type, endpoint, auth_type,
+                    api_key_hash, api_key_display, api_key_remark, request_id,
+                    input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,
+                    cache_creation_tokens, total_tokens, created_at
+                ) VALUES (
+                    'request-1', '2026-07-17T20:30:00+08:00', 1784291400000,
+                    '2026-07-17-20', 100, 20, 'source', 'auth', 0, 'openai',
+                    'gpt-test', 'alias-test', 'high', '', '', '',
+                    'POST /v1/responses', 'oauth', 'legacy-hash', '12••••',
+                    '旧密钥', 'request-1', 10, 20, 5, 2, 3, 30,
+                    '2026-07-17T20:30:01+08:00'
+                )
+                "#,
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        initialize_usage_storage_at(&root).unwrap();
+        initialize_usage_storage_at(&root).unwrap();
+        let connection = open_usage_database_at(&root).unwrap();
+        let user_version = connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+        let migrated = connection
+            .query_row(
+                r#"
+                SELECT COUNT(*), SUM(total_tokens), api_group_key, model_alias,
+                       cached_tokens, collector_source
+                FROM usage_events
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let marker = connection
+            .query_row(
+                "SELECT value FROM usage_metadata WHERE key = ?1",
+                params![USAGE_DATABASE_MIGRATION_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        let backups = fs::read_dir(root.join(USAGE_BACKUP_DIR_NAME))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(user_version, USAGE_DATABASE_SCHEMA_VERSION);
+        assert_eq!(migrated.0, 1);
+        assert_eq!(migrated.1, 30);
+        assert_eq!(migrated.2, "legacy-hash");
+        assert_eq!(migrated.3.as_deref(), Some("alias-test"));
+        assert_eq!(migrated.4, 5);
+        assert_eq!(migrated.5, "legacy_migration");
+        assert!(!marker.is_empty());
+        assert_eq!(backups.len(), 1);
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn durable_inbox_recovers_valid_rows_and_isolates_malformed_rows() {
+        let root = test_root("durable-inbox");
+        initialize_usage_storage_at(&root).unwrap();
+        let mut connection = open_usage_database_at(&root).unwrap();
+        enqueue_usage_queue_items(
+            &mut connection,
+            "http_pull",
+            vec![
+                serde_json::json!({
+                    "timestamp": "2026-07-17T20:30:00+08:00",
+                    "request_id": "request-1",
+                    "model": "gpt-test",
+                    "tokens": { "input_tokens": 10, "output_tokens": 20 }
+                }),
+                serde_json::json!("not-an-object"),
+            ],
+        )
+        .unwrap();
+        drop(connection);
+
+        let mut connection = open_usage_database_at(&root).unwrap();
+        let inserted = process_usage_inbox(&mut connection, &GuiConfigFile::default()).unwrap();
+        let event_count = connection
+            .query_row("SELECT COUNT(*) FROM usage_events", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        let processed_count = connection
+            .query_row(
+                "SELECT COUNT(*) FROM usage_inbox WHERE status = 'processed'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        let failed_count = connection
+            .query_row(
+                "SELECT COUNT(*) FROM usage_inbox WHERE status = 'decode_failed'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+
+        assert_eq!(inserted, 1);
+        assert_eq!(event_count, 1);
+        assert_eq!(processed_count, 1);
+        assert_eq!(failed_count, 1);
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inbox_cleanup_preserves_pending_and_recent_failure_rows() {
+        let root = test_root("inbox-cleanup");
+        let connection = open_test_database(&root);
+        let now = Local::now();
+        let old_processed = (now - chrono::Duration::days(1)).to_rfc3339();
+        let recent_failure = (now - chrono::Duration::days(1)).to_rfc3339();
+        let old_failure = (now - chrono::Duration::days(8)).to_rfc3339();
+        for (status, processed_at, updated_at) in [
+            (
+                "processed",
+                Some(old_processed.as_str()),
+                old_processed.as_str(),
+            ),
+            ("pending", None, old_failure.as_str()),
+            (
+                "decode_failed",
+                Some(recent_failure.as_str()),
+                recent_failure.as_str(),
+            ),
+            (
+                "discarded",
+                Some(old_failure.as_str()),
+                old_failure.as_str(),
+            ),
+        ] {
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO usage_inbox (
+                        source, message_hash, raw_message, status, attempt_count,
+                        received_at, processed_at, created_at, updated_at
+                    ) VALUES ('test', 'hash', '{}', ?1, 0, ?3, ?2, ?3, ?3)
+                    "#,
+                    params![status, processed_at, updated_at],
+                )
+                .unwrap();
+        }
+
+        cleanup_usage_inbox(&connection, now).unwrap();
+        let statuses = {
+            let mut statement = connection
+                .prepare("SELECT status FROM usage_inbox ORDER BY id")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+
+        assert_eq!(statuses, vec!["pending", "decode_failed"]);
         drop(connection);
         fs::remove_dir_all(root).unwrap();
     }

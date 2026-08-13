@@ -213,6 +213,10 @@ fn legacy_gui_config_can_seed_managed_core_settings() {
         proxy_url: "http://127.0.0.1:8080".to_string(),
         routing_session_affinity: true,
         routing_session_affinity_ttl: "45m".to_string(),
+        request_retry: 1,
+        max_retry_credentials: 2,
+        max_retry_interval: 5,
+        streaming_bootstrap_retries: 1,
         management_secret_key: Some("management-secret".to_string()),
     };
 
@@ -233,6 +237,10 @@ fn legacy_gui_config_can_seed_managed_core_settings() {
     assert_eq!(config.proxy_url, "http://127.0.0.1:8080");
     assert!(config.routing_session_affinity);
     assert_eq!(config.routing_session_affinity_ttl, "45m");
+    assert_eq!(config.request_retry, 1);
+    assert_eq!(config.max_retry_credentials, 2);
+    assert_eq!(config.max_retry_interval, 5);
+    assert_eq!(config.streaming_bootstrap_retries, 1);
     assert!(config.run_on_startup);
 }
 
@@ -343,6 +351,10 @@ fn confirmed_network_routing_patch_updates_all_fields_together() {
         proxy_url: "socks5://127.0.0.1:7890".to_string(),
         routing_session_affinity: true,
         routing_session_affinity_ttl: "2h".to_string(),
+        request_retry: 1,
+        max_retry_credentials: 2,
+        max_retry_interval: 5,
+        streaming_bootstrap_retries: 1,
         ..GuiConfigFile::default()
     };
     let input = "# network\nhost: 127.0.0.1\nport: 8317\nproxy-url: \"\"\n# routing\nrouting:\n  strategy: round-robin\n# unrelated\ndebug: true\n";
@@ -356,6 +368,10 @@ fn confirmed_network_routing_patch_updates_all_fields_together() {
     assert_eq!(document["proxy-url"], "socks5://127.0.0.1:7890");
     assert_eq!(document["routing"]["session-affinity"], true);
     assert_eq!(document["routing"]["session-affinity-ttl"], "2h");
+    assert_eq!(document["request-retry"], 1);
+    assert_eq!(document["max-retry-credentials"], 2);
+    assert_eq!(document["max-retry-interval"], 5);
+    assert_eq!(document["streaming"]["bootstrap-retries"], 1);
     assert_eq!(document["routing"]["strategy"], "round-robin");
     assert_eq!(document["debug"], true);
     assert!(updated.contains("# network"));
@@ -635,12 +651,42 @@ fn core_config_reads_proxy_and_session_affinity_fields() {
 }
 
 #[test]
+fn core_config_reads_retry_fields_and_uses_core_defaults() {
+    let document = serde_norway::from_str::<serde_norway::Value>(
+        "request-retry: 1\nmax-retry-credentials: 2\nmax-retry-interval: 5\nstreaming:\n  bootstrap-retries: 4\n",
+    )
+    .unwrap();
+    let settings = core_config_settings_from_value(&document).unwrap();
+
+    assert_eq!(settings.request_retry, 1);
+    assert_eq!(settings.max_retry_credentials, 2);
+    assert_eq!(settings.max_retry_interval, 5);
+    assert_eq!(settings.streaming_bootstrap_retries, 4);
+
+    let defaults = core_config_settings_from_value(&serde_norway::from_str("{}").unwrap()).unwrap();
+    assert_eq!(defaults.request_retry, DEFAULT_REQUEST_RETRY);
+    assert_eq!(
+        defaults.max_retry_credentials,
+        DEFAULT_MAX_RETRY_CREDENTIALS
+    );
+    assert_eq!(defaults.max_retry_interval, DEFAULT_MAX_RETRY_INTERVAL);
+    assert_eq!(
+        defaults.streaming_bootstrap_retries,
+        DEFAULT_STREAMING_BOOTSTRAP_RETRIES
+    );
+}
+
+#[test]
 fn managed_session_settings_use_canonical_yaml_and_preserve_unrelated_content() {
     let input = "# global proxy\nproxy-url: old\n# routing options\nrouting:\n  strategy: round-robin\n  sessionAffinity: false\n  sessionAffinityTTL: 10m\n# unrelated option\ndebug: true\n";
     let config = GuiConfigFile {
         proxy_url: "http://127.0.0.1:8080".to_string(),
         routing_session_affinity: true,
         routing_session_affinity_ttl: "1h".to_string(),
+        request_retry: 1,
+        max_retry_credentials: 2,
+        max_retry_interval: 5,
+        streaming_bootstrap_retries: 1,
         ..GuiConfigFile::default()
     };
     let rendered = apply_gui_managed_settings(input, &config).unwrap();
@@ -649,6 +695,10 @@ fn managed_session_settings_use_canonical_yaml_and_preserve_unrelated_content() 
     assert_eq!(document["proxy-url"], "http://127.0.0.1:8080");
     assert_eq!(document["routing"]["session-affinity"], true);
     assert_eq!(document["routing"]["session-affinity-ttl"], "1h");
+    assert_eq!(document["request-retry"], 1);
+    assert_eq!(document["max-retry-credentials"], 2);
+    assert_eq!(document["max-retry-interval"], 5);
+    assert_eq!(document["streaming"]["bootstrap-retries"], 1);
     assert!(rendered.contains("# global proxy"));
     assert!(rendered.contains("# unrelated option"));
     assert_eq!(document["debug"], true);
@@ -737,6 +787,10 @@ fn startup_preserves_all_user_owned_yaml_and_only_applies_gui_managed_values() {
         proxy_url: "socks5://127.0.0.1:7890".to_string(),
         routing_session_affinity: true,
         routing_session_affinity_ttl: "1h".to_string(),
+        request_retry: 1,
+        max_retry_credentials: 2,
+        max_retry_interval: 5,
+        streaming_bootstrap_retries: 1,
     };
     let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
     let current_document = serde_norway::from_str::<serde_norway::Value>(current).unwrap();
@@ -759,6 +813,10 @@ fn startup_preserves_all_user_owned_yaml_and_only_applies_gui_managed_values() {
     assert_eq!(document["proxy-url"], "socks5://127.0.0.1:7890");
     assert_eq!(document["routing"]["session-affinity"], true);
     assert_eq!(document["routing"]["session-affinity-ttl"], "1h");
+    assert_eq!(document["request-retry"], 1);
+    assert_eq!(document["max-retry-credentials"], 2);
+    assert_eq!(document["max-retry-interval"], 5);
+    assert_eq!(document["streaming"]["bootstrap-retries"], 1);
     assert_eq!(document["usage-statistics-enabled"], false);
     assert!(document.get("new-option").is_none());
     assert_eq!(document["nested"], current_document["nested"]);

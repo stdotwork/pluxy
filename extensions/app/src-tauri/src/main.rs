@@ -120,6 +120,10 @@ const OAUTH_DIR_NAME: &str = "oauth";
 const DEFAULT_AUTH_DIR: &str = "../oauth";
 const DEFAULT_API_KEY: &str = "123456";
 const DEFAULT_API_KEY_INITIAL_REMARK: &str = "默认密钥";
+const DEFAULT_REQUEST_RETRY: u32 = 3;
+const DEFAULT_MAX_RETRY_CREDENTIALS: u32 = 0;
+const DEFAULT_MAX_RETRY_INTERVAL: u32 = 30;
+const DEFAULT_STREAMING_BOOTSTRAP_RETRIES: u32 = 0;
 const LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
 const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
 const PI_AGENT_ID: &str = "pi";
@@ -561,6 +565,10 @@ struct GuiConfigFile {
     proxy_url: String,
     routing_session_affinity: bool,
     routing_session_affinity_ttl: String,
+    request_retry: u32,
+    max_retry_credentials: u32,
+    max_retry_interval: u32,
+    streaming_bootstrap_retries: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -668,6 +676,10 @@ impl Default for GuiConfigFile {
             proxy_url: String::new(),
             routing_session_affinity: false,
             routing_session_affinity_ttl: String::new(),
+            request_retry: DEFAULT_REQUEST_RETRY,
+            max_retry_credentials: DEFAULT_MAX_RETRY_CREDENTIALS,
+            max_retry_interval: DEFAULT_MAX_RETRY_INTERVAL,
+            streaming_bootstrap_retries: DEFAULT_STREAMING_BOOTSTRAP_RETRIES,
         }
     }
 }
@@ -691,6 +703,10 @@ struct GuiConfigPresence {
     proxy_url: Option<String>,
     routing_session_affinity: Option<bool>,
     routing_session_affinity_ttl: Option<String>,
+    request_retry: Option<u32>,
+    max_retry_credentials: Option<u32>,
+    max_retry_interval: Option<u32>,
+    streaming_bootstrap_retries: Option<u32>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1043,6 +1059,10 @@ struct GuiNetworkRoutingSettings {
     proxy_url: String,
     routing_session_affinity: bool,
     routing_session_affinity_ttl: String,
+    request_retry: u32,
+    max_retry_credentials: u32,
+    max_retry_interval: u32,
+    streaming_bootstrap_retries: u32,
 }
 
 #[derive(Clone, Serialize)]
@@ -1063,6 +1083,10 @@ struct CoreConfigSettings {
     proxy_url: String,
     routing_session_affinity: bool,
     routing_session_affinity_ttl: String,
+    request_retry: u32,
+    max_retry_credentials: u32,
+    max_retry_interval: u32,
+    streaming_bootstrap_retries: u32,
     // Kept for internal config migration/tests; never exposed to the WebView.
     #[allow(dead_code)]
     #[serde(skip_serializing)]
@@ -1088,6 +1112,10 @@ struct CoreConfigView {
     proxy_url: String,
     routing_session_affinity: bool,
     routing_session_affinity_ttl: String,
+    request_retry: u32,
+    max_retry_credentials: u32,
+    max_retry_interval: u32,
+    streaming_bootstrap_retries: u32,
 }
 
 impl Default for CoreInstallTask {
@@ -1439,21 +1467,18 @@ impl GuiConfigState {
         })
     }
 
-    fn update_network_routing(
-        &self,
-        port: u16,
-        allow_lan: bool,
-        proxy_url: &str,
-        routing_session_affinity: bool,
-        routing_session_affinity_ttl: &str,
-    ) -> Result<GuiConfigFile, String> {
+    fn update_network_routing(&self, settings: &GuiConfigFile) -> Result<GuiConfigFile, String> {
         self.update(|config| {
-            config.port = port;
-            config.allow_lan = allow_lan;
-            config.host = if allow_lan { "0.0.0.0" } else { "127.0.0.1" }.to_string();
-            config.proxy_url = proxy_url.to_string();
-            config.routing_session_affinity = routing_session_affinity;
-            config.routing_session_affinity_ttl = routing_session_affinity_ttl.to_string();
+            config.port = settings.port;
+            config.allow_lan = settings.allow_lan;
+            config.host = settings.host.clone();
+            config.proxy_url = settings.proxy_url.clone();
+            config.routing_session_affinity = settings.routing_session_affinity;
+            config.routing_session_affinity_ttl = settings.routing_session_affinity_ttl.clone();
+            config.request_retry = settings.request_retry;
+            config.max_retry_credentials = settings.max_retry_credentials;
+            config.max_retry_interval = settings.max_retry_interval;
+            config.streaming_bootstrap_retries = settings.streaming_bootstrap_retries;
             Ok(())
         })
     }
@@ -1542,6 +1567,10 @@ impl GuiConfigState {
             config.proxy_url = settings.proxy_url.clone();
             config.routing_session_affinity = settings.routing_session_affinity;
             config.routing_session_affinity_ttl = settings.routing_session_affinity_ttl.clone();
+            config.request_retry = settings.request_retry;
+            config.max_retry_credentials = settings.max_retry_credentials;
+            config.max_retry_interval = settings.max_retry_interval;
+            config.streaming_bootstrap_retries = settings.streaming_bootstrap_retries;
             Ok(())
         })
     }
@@ -1587,6 +1616,10 @@ impl From<&GuiConfigFile> for CoreConfigSettings {
             proxy_url: config.proxy_url.clone(),
             routing_session_affinity: config.routing_session_affinity,
             routing_session_affinity_ttl: config.routing_session_affinity_ttl.clone(),
+            request_retry: config.request_retry,
+            max_retry_credentials: config.max_retry_credentials,
+            max_retry_interval: config.max_retry_interval,
+            streaming_bootstrap_retries: config.streaming_bootstrap_retries,
             management_secret_key: Some(config.management_secret_key.clone()),
         }
     }
@@ -1611,6 +1644,10 @@ impl From<&GuiConfigFile> for CoreConfigView {
             proxy_url: config.proxy_url.clone(),
             routing_session_affinity: config.routing_session_affinity,
             routing_session_affinity_ttl: config.routing_session_affinity_ttl.clone(),
+            request_retry: config.request_retry,
+            max_retry_credentials: config.max_retry_credentials,
+            max_retry_interval: config.max_retry_interval,
+            streaming_bootstrap_retries: config.streaming_bootstrap_retries,
         }
     }
 }

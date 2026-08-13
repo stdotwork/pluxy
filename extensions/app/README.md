@@ -82,6 +82,8 @@ The Usage page helps you understand local request activity and token consumption
 - Filter usage by time, model, provider, source, key, and result.
 - Inspect request/token trends and input, output, reasoning, and cache usage.
 - Browse request details, analysis views, and price statistics.
+- Collect through CPA's real-time usage subscription with a durable local inbox and automatic HTTP fallback.
+- Upgrade legacy usage databases once at startup after saving a backup under `usage-records/backups`.
 
 ### Agent client configuration
 

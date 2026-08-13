@@ -1056,6 +1056,42 @@ pub(crate) fn core_config_settings_from_value(
             })
             .transpose()?
             .unwrap_or_default();
+    let request_retry = yaml_mapping_value(root, "request-retry")
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| "request-retry 必须是非负整数".to_string())
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_REQUEST_RETRY);
+    let max_retry_credentials = yaml_mapping_value(root, "max-retry-credentials")
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| "max-retry-credentials 必须是非负整数".to_string())
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_MAX_RETRY_CREDENTIALS);
+    let max_retry_interval = yaml_mapping_value(root, "max-retry-interval")
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| "max-retry-interval 必须是非负整数".to_string())
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_MAX_RETRY_INTERVAL);
+    let streaming_bootstrap_retries = nested_yaml_value(root, &["streaming", "bootstrap-retries"])
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| "streaming.bootstrap-retries 必须是非负整数".to_string())
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_STREAMING_BOOTSTRAP_RETRIES);
 
     Ok(CoreConfigSettings {
         host,
@@ -1071,6 +1107,10 @@ pub(crate) fn core_config_settings_from_value(
         proxy_url,
         routing_session_affinity,
         routing_session_affinity_ttl,
+        request_retry,
+        max_retry_credentials,
+        max_retry_interval,
+        streaming_bootstrap_retries,
         management_secret_key,
     })
 }
