@@ -584,9 +584,10 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
   const currentVersion = coreStatus?.currentVersion ?? '';
   const coreInstalled = Boolean(coreStatus?.installed);
   const coreRunning = Boolean(coreStatus?.running);
-  const busy = checkingLatest || installing || processBusy;
+  const coreProcessBusy = processBusy || Boolean(coreStatus?.starting);
+  const busy = checkingLatest || installing || coreProcessBusy;
   const installDisabled = busy || Boolean(coreStatus?.running);
-  const offlineInstallDisabled = installing || processBusy || coreRunning;
+  const offlineInstallDisabled = installing || coreProcessBusy || coreRunning;
   const computedPercent =
     progress?.percent ??
     (progress?.total && progress.total > 0 ? (progress.downloaded / progress.total) * 100 : null);
@@ -702,7 +703,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
               <h2>{t('kernel.control.title')}</h2>
             </div>
             <span className={`state-pill ${statusTone}`} title={statusError || undefined}>
-              {processBusy ? t('common.processing') : statusLabel}
+              {coreProcessBusy ? t('common.processing') : statusLabel}
             </span>
           </div>
 
@@ -736,7 +737,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
             <button
               type="button"
               className={coreRunning ? 'danger-button' : 'primary-button'}
-              disabled={!coreInstalled || installing || processBusy}
+              disabled={!coreInstalled || installing || coreProcessBusy}
               onClick={() =>
                 void runCoreProcessCommand(
                   coreRunning ? 'stop_core_process' : 'start_core_process',
@@ -744,12 +745,12 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
                 )
               }
             >
-              {processBusy ? t('common.processing') : coreRunning ? t('kernel.action.stop') : t('kernel.action.start')}
+              {coreProcessBusy ? t('common.processing') : coreRunning ? t('kernel.action.stop') : t('kernel.action.start')}
             </button>
             <button
               type="button"
               className="secondary-button"
-              disabled={!coreInstalled || !coreRunning || installing || processBusy}
+              disabled={!coreInstalled || !coreRunning || installing || coreProcessBusy}
               onClick={() =>
                 void runCoreProcessCommand('restart_core_process', { success: t('kernel.notice.restarted') })
               }
@@ -759,7 +760,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
             <button
               type="button"
               className="secondary-button"
-              disabled={processBusy}
+              disabled={coreProcessBusy}
               onClick={() => void refreshStatus()}
             >
               {t('kernel.control.refresh')}

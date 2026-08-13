@@ -10,6 +10,7 @@ mod configuration_watcher;
 mod core_config;
 mod core_runtime;
 mod management_api;
+mod oauth_browser;
 mod provider_health;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod tray;
@@ -21,6 +22,7 @@ use management_api::{
     management_authorization, management_endpoint, management_http_client, read_management_text,
     read_management_value,
 };
+use oauth_browser::*;
 #[cfg(test)]
 use provider_health::{provider_health_content_type_is_streaming, provider_health_stream_has_text};
 
@@ -37,7 +39,6 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::NSEvent;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-#[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::Arc;
@@ -274,6 +275,7 @@ struct AppUpdateInner {
 #[derive(Default)]
 struct CoreProcessState {
     child: Mutex<Option<Child>>,
+    starting: AtomicBool,
     #[cfg(windows)]
     job: Mutex<Option<isize>>,
 }
@@ -368,6 +370,7 @@ struct CorePlatform {
 struct CoreStatus {
     installed: bool,
     running: bool,
+    starting: bool,
     managed: bool,
     process_id: Option<u32>,
     current_version: Option<String>,
@@ -550,6 +553,7 @@ struct GuiConfigFile {
     allow_lan: bool,
     host: String,
     run_on_startup: bool,
+    start_core_on_launch: bool,
     silent_start: bool,
     close_behavior: WindowsCloseBehavior,
     window_width: Option<u32>,
@@ -660,6 +664,7 @@ impl Default for GuiConfigFile {
             allow_lan: false,
             host: "127.0.0.1".to_string(),
             run_on_startup: false,
+            start_core_on_launch: true,
             silent_start: false,
             close_behavior: WindowsCloseBehavior::Ask,
             window_width: Some(DEFAULT_MAIN_WINDOW_WIDTH),
@@ -696,6 +701,7 @@ struct GuiConfigPresence {
     api_access_remarks: Option<Vec<GuiApiAccessRemark>>,
     management_secret_key: Option<String>,
     close_behavior: Option<WindowsCloseBehavior>,
+    start_core_on_launch: Option<bool>,
     silent_start: Option<bool>,
     usage_statistics_enabled: Option<bool>,
     plugins_enabled: Option<bool>,
@@ -723,6 +729,7 @@ struct GuiSettings {
 struct SoftwareSettings {
     close_behavior: WindowsCloseBehavior,
     autostart_enabled: bool,
+    start_core_on_launch: bool,
     silent_start_enabled: bool,
 }
 
@@ -731,6 +738,7 @@ struct SoftwareSettings {
 struct SoftwareSettingsInput {
     close_behavior: WindowsCloseBehavior,
     autostart_enabled: bool,
+    start_core_on_launch: bool,
     silent_start_enabled: bool,
 }
 
@@ -1334,6 +1342,23 @@ impl AppUpdateState {
 }
 
 impl CoreProcessState {
+    fn new(starting: bool) -> Self {
+        Self {
+            child: Mutex::new(None),
+            starting: AtomicBool::new(starting),
+            #[cfg(windows)]
+            job: Mutex::new(None),
+        }
+    }
+
+    fn is_starting(&self) -> bool {
+        self.starting.load(Ordering::Acquire)
+    }
+
+    fn set_starting(&self, starting: bool) {
+        self.starting.store(starting, Ordering::Release);
+    }
+
     fn managed_pid(&self) -> Option<u32> {
         let Ok(mut child) = self.child.lock() else {
             return None;
@@ -1503,10 +1528,12 @@ impl GuiConfigState {
     fn set_software_preferences(
         &self,
         close_behavior: WindowsCloseBehavior,
+        start_core_on_launch: bool,
         silent_start: bool,
     ) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.close_behavior = close_behavior;
+            config.start_core_on_launch = start_core_on_launch;
             config.silent_start = silent_start;
             Ok(())
         })
@@ -1718,7 +1745,7 @@ fn main() {
         )
         .manage(CoreDownloadState::default())
         .manage(AppUpdateState::default())
-        .manage(CoreProcessState::default())
+        .manage(CoreProcessState::new(gui_config.start_core_on_launch))
         .manage(usage::UsageCollectorState::default())
         .manage(GuiConfigState::new(gui_config))
         .manage(MainWindowSizeState::new(initial_window_size))
@@ -1836,8 +1863,17 @@ fn main() {
                 let gui_config_state = core_app.state::<GuiConfigState>();
                 let process_state = core_app.state::<CoreProcessState>();
                 let Ok(config) = gui_config_state.snapshot() else {
+                    process_state.set_starting(false);
                     return;
                 };
+
+                if config.start_core_on_launch {
+                    if let Ok(status) =
+                        current_core_status(Some(process_state.inner()), Some(config.port))
+                    {
+                        emit_core_status(&core_app, &status);
+                    }
+                }
 
                 match auto_install_bundled_core_if_missing(&core_app) {
                     Ok(true) => eprintln!("未检测到 CPA 内核，已自动安装内置离线版本"),
@@ -1845,11 +1881,13 @@ fn main() {
                     Err(error) => eprintln!("自动安装 CPA 离线内核失败: {error}"),
                 }
 
-                if config.run_on_startup {
+                if should_start_core_on_launch(&config) {
                     if let Err(error) = start_core_process_inner(process_state.inner(), &config) {
                         eprintln!("自动启动 CPA 内核失败: {error}");
                     }
                 }
+
+                process_state.set_starting(false);
 
                 if let Ok(status) =
                     current_core_status(Some(process_state.inner()), Some(config.port))
@@ -1921,6 +1959,8 @@ fn main() {
             management_api::start_oauth_login,
             management_api::get_oauth_status,
             management_api::submit_oauth_callback,
+            list_oauth_browsers,
+            open_oauth_url,
             open_external_url,
             check_app_update,
             get_app_update_task,

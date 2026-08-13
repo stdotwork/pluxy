@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 export type CoreStatus = {
   installed: boolean;
   running: boolean;
+  starting: boolean;
   managed: boolean;
   processId: number | null;
   currentVersion: string | null;

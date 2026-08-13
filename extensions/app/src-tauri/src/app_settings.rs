@@ -178,6 +178,7 @@ pub(crate) fn software_settings(
     Ok(SoftwareSettings {
         close_behavior: config.close_behavior,
         autostart_enabled: app_autostart_enabled(app)?,
+        start_core_on_launch: config.start_core_on_launch,
         silent_start_enabled: config.silent_start,
     })
 }
@@ -206,13 +207,16 @@ pub(crate) fn save_software_settings(
     }
 
     let config = if previous_config.close_behavior == settings.close_behavior
+        && previous_config.start_core_on_launch == settings.start_core_on_launch
         && previous_config.silent_start == settings.silent_start_enabled
     {
         previous_config
     } else {
-        match gui_config_state
-            .set_software_preferences(settings.close_behavior, settings.silent_start_enabled)
-        {
+        match gui_config_state.set_software_preferences(
+            settings.close_behavior,
+            settings.start_core_on_launch,
+            settings.silent_start_enabled,
+        ) {
             Ok(config) => config,
             Err(error) => {
                 let rollback_error = autostart_changed

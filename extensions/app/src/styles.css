@@ -2713,6 +2713,34 @@ textarea:focus-visible {
   gap: 14px;
 }
 
+.oauth-browser-picker {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 240px);
+  align-items: center;
+  justify-content: end;
+  gap: 5px 10px;
+  color: var(--theme-7a746c);
+  font-size: var(--font-size-label);
+  font-weight: 700;
+}
+
+.oauth-browser-picker select {
+  width: 100%;
+  height: 38px;
+  padding: 0 34px 0 11px;
+  border: 1px solid var(--theme-d5d2cb);
+  border-radius: 6px;
+  background: var(--theme-ffffff);
+  color: var(--theme-2d2a26);
+}
+
+.oauth-browser-picker small {
+  grid-column: 1 / -1;
+  font-size: var(--font-size-caption);
+  font-weight: 400;
+  text-align: right;
+}
+
 .oauth-card {
   display: grid;
   grid-template-rows: auto auto auto;
@@ -7993,6 +8021,17 @@ textarea:focus-visible {
   .oauth-card {
     grid-template-rows: auto auto auto;
     min-height: 0;
+  }
+
+  .oauth-browser-picker {
+    width: 100%;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .oauth-browser-picker small {
+    grid-column: 1;
+    text-align: left;
   }
 
   .oauth-card-body,

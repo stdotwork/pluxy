@@ -6,6 +6,7 @@ fn windows_tray_presentation_tracks_core_state_and_busy_actions() {
     let mut status = CoreStatus {
         installed: false,
         running: false,
+        starting: false,
         managed: false,
         process_id: None,
         current_version: None,

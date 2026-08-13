@@ -802,6 +802,7 @@ pub(crate) fn current_core_status(
     let install_dir = core_install_dir()?;
     let binary_path = find_core_binary(&install_dir);
     let installed = binary_path.is_some();
+    let starting = process_state.is_some_and(CoreProcessState::is_starting);
     let managed_pid = process_state.and_then(|state| state.managed_pid());
     let management_port_open = management_port.map(is_management_port_open);
     let process_id = match managed_pid {
@@ -814,7 +815,9 @@ pub(crate) fn current_core_status(
     let running = process_id.is_some() && management_port_open.unwrap_or(true);
     let current_version = read_core_metadata(&install_dir).map(|metadata| metadata.version);
 
-    let message = if !installed {
+    let message = if starting {
+        "CPA 内核正在启动".to_string()
+    } else if !installed {
         "未安装 CPA 内核，请先安装最新版".to_string()
     } else if running {
         "CPA 内核正在运行".to_string()
@@ -825,6 +828,7 @@ pub(crate) fn current_core_status(
     Ok(CoreStatus {
         installed,
         running,
+        starting,
         managed: managed_pid.is_some(),
         process_id,
         current_version,
@@ -1818,6 +1822,10 @@ pub(crate) fn core_binary_name() -> &'static str {
 
 pub(crate) fn should_start_hidden(config: &GuiConfigFile) -> bool {
     config.silent_start && cfg!(any(target_os = "windows", target_os = "macos"))
+}
+
+pub(crate) fn should_start_core_on_launch(config: &GuiConfigFile) -> bool {
+    config.start_core_on_launch
 }
 
 pub(crate) fn configure_initial_main_window(
