@@ -14,6 +14,7 @@ import {
   providerCategoryMatchesRecord,
   providerRecordWithDisabledState,
   providerSectionOrder,
+  reorderProviderRecords,
   resolveProviderRecordIndex,
   sectionRecordsFromConfig,
   stripResponseFields,
@@ -293,6 +294,37 @@ describe('API 接入配置合并', () => {
     });
 
     expect(index).toBe(1);
+  });
+
+  it('拖动筛选后的供应商时保留隐藏供应商所在槽位', () => {
+    const records = [
+      { name: 'OpenAI A', 'auth-index': 'runtime-a' },
+      { name: 'DeepSeek', 'base-url': 'https://api.deepseek.com' },
+      { name: 'OpenAI B', 'auth-index': 'runtime-b' },
+    ];
+    const openAiA = {
+      section: 'openai-compatibility' as const,
+      index: 0,
+      name: 'OpenAI A',
+      apiKey: '',
+      baseUrl: '',
+    };
+    const openAiB = {
+      section: 'openai-compatibility' as const,
+      index: 2,
+      name: 'OpenAI B',
+      apiKey: '',
+      baseUrl: '',
+    };
+
+    const reordered = reorderProviderRecords(records, [openAiA, openAiB], openAiB, openAiA);
+
+    expect(reordered?.map((record) => record.name)).toEqual([
+      'OpenAI B',
+      'DeepSeek',
+      'OpenAI A',
+    ]);
+    expect(reordered?.[0]['auth-index']).toBeUndefined();
   });
 
   it('校验自定义请求头格式', () => {
