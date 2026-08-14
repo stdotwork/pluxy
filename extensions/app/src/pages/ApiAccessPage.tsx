@@ -105,8 +105,17 @@ type ProviderRow = {
   remark: string;
 };
 
-const providerDragId = (row: Pick<ProviderRow, 'section' | 'index'>) =>
-  `${row.section}:${row.index}`;
+const providerDragId = (
+  row: Pick<ProviderRow, 'section' | 'name' | 'apiKey' | 'baseUrl'>,
+) => {
+  const identity = `${row.section}\u0000${row.name}\u0000${row.apiKey}\u0000${row.baseUrl}`;
+  let hash = 2166136261;
+  for (let index = 0; index < identity.length; index += 1) {
+    hash ^= identity.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${row.section}:${(hash >>> 0).toString(36)}`;
+};
 
 function SortableProviderRow({
   row,
@@ -128,10 +137,26 @@ function SortableProviderRow({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: providerDragId(row), disabled });
+  } = useSortable({
+    id: providerDragId(row),
+    disabled,
+    transition: {
+      duration: 220,
+      easing: 'cubic-bezier(0.2, 0, 0, 1)',
+    },
+  });
+  const renderedTransform = transform
+    ? {
+      ...transform,
+      scaleX: isDragging ? 1.012 : transform.scaleX,
+      scaleY: isDragging ? 1.012 : transform.scaleY,
+    }
+    : transform;
   const style: CSSProperties = {
-    transform: DndCss.Transform.toString(transform),
-    transition,
+    position: 'relative',
+    zIndex: isDragging ? 2 : undefined,
+    transform: DndCss.Transform.toString(renderedTransform),
+    transition: isDragging ? undefined : transition,
   };
 
   return (
@@ -1100,9 +1125,9 @@ export function ApiAccessPage() {
       const nextRows = reorderProviderRecords(latestRows, rows, source, target);
       if (!nextRows) throw new Error(t('apiAccess.error.stale'));
       await managementApi.put(`/${source.section}`, nextRows);
-      setNotice(t('apiAccess.notice.reordered'));
       await loadProviders();
     } catch (requestError) {
+      await loadProviders();
       setError(requestErrorMessage(requestError));
     } finally {
       setDragOverId(null);
@@ -1114,7 +1139,18 @@ export function ApiAccessPage() {
     setDragOverId(null);
     const source = rows.find((row) => providerDragId(row) === String(event.active.id));
     const target = rows.find((row) => providerDragId(row) === String(event.over?.id ?? ''));
-    if (source && target) void reorderProviders(source, target);
+    if (!source || !target || source.index === target.index) return;
+
+    const optimisticRows = reorderProviderRecords(
+      records[source.section],
+      rows,
+      source,
+      target,
+    );
+    if (optimisticRows) {
+      setRecords((current) => ({ ...current, [source.section]: optimisticRows }));
+    }
+    void reorderProviders(source, target);
   };
 
   const totalCount = Object.values(records).reduce((sum, items) => sum + items.length, 0);
@@ -1200,7 +1236,7 @@ export function ApiAccessPage() {
                 <div className="real-provider-list">
                   {rows.map((row) => (
                     <SortableProviderRow
-                      key={`${row.section}-${row.index}-${row.authIndex}`}
+                      key={providerDragId(row)}
                       row={row}
                       disabled={busy || rows.length < 2}
                       dragLabel={t('apiAccess.dragHandle', { remark: row.remark || row.name })}

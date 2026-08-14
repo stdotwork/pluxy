@@ -650,7 +650,6 @@ export const zhCN = {
   'apiAccess.notice.deleted': '接入已删除',
   'apiAccess.notice.enabled': '接入已启用',
   'apiAccess.notice.disabled': '接入已停用',
-  'apiAccess.notice.reordered': '供应商排序已更新',
   'apiAccess.title': 'API 接入',
   'apiAccess.count': '{count} 个接入',
   'apiAccess.add': '新增',

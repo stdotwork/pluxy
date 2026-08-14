@@ -652,7 +652,6 @@ export const jaOverrides = {
   'apiAccess.notice.deleted': '接続を削除しました',
   'apiAccess.notice.enabled': '接続を有効にしました',
   'apiAccess.notice.disabled': '接続を無効にしました',
-  'apiAccess.notice.reordered': 'プロバイダーの順序を更新しました',
   'apiAccess.title': 'API 接続',
   'apiAccess.count': '接続 {count} 件',
   'apiAccess.add': '追加',

@@ -652,7 +652,6 @@ export const en: Record<MessageKey, string> = {
   'apiAccess.notice.deleted': 'Connection deleted',
   'apiAccess.notice.enabled': 'Connection enabled',
   'apiAccess.notice.disabled': 'Connection disabled',
-  'apiAccess.notice.reordered': 'Provider order updated',
   'apiAccess.title': 'API Access',
   'apiAccess.count': '{count} connections',
   'apiAccess.add': 'Add',
