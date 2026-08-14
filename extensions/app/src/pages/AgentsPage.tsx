@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import claudeIcon from '../assets/icons/claude.svg';
 import codexIcon from '../assets/icons/codex.svg';
+import deepseekIcon from '../assets/icons/deepseek.svg';
 import hermesIcon from '../assets/icons/hermes.png';
 import openclawIcon from '../assets/icons/openclaw.svg';
 import opencodeIcon from '../assets/icons/opencode.svg';
@@ -54,6 +55,7 @@ type AgentClientId =
   | 'opencode'
   | 'openclaw'
   | 'hermes'
+  | 'deepseek-harness'
   | 'pi';
 
 type ClaudeModelMappingClientId = 'claude-code' | 'claude-desktop';
@@ -168,7 +170,7 @@ type AgentDefinition = {
   name: string;
   icon?: string;
   Icon?: ComponentType<{ size?: number; 'aria-hidden'?: boolean }>;
-  descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes' | 'agents.description.pi';
+  descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes' | 'agents.description.deepseekHarness' | 'agents.description.pi';
 };
 
 type AgentSubpageId = 'core' | 'sessions';
@@ -215,6 +217,12 @@ const agentDefinitions: AgentDefinition[] = [
     name: 'Hermes Agent',
     icon: hermesIcon,
     descriptionKey: 'agents.description.hermes',
+  },
+  {
+    id: 'deepseek-harness',
+    name: 'DeepSeek Harness',
+    icon: deepseekIcon,
+    descriptionKey: 'agents.description.deepseekHarness',
   },
   {
     id: 'pi',

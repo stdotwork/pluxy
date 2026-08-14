@@ -205,6 +205,85 @@ fn agent_configuration_is_restored_from_the_dated_session_backup_on_exit() {
 }
 
 #[test]
+fn deepseek_harness_session_restore_keeps_concurrent_unmanaged_yaml_changes() {
+    let home = agent_test_home("deepseek-harness-session-restore");
+    let paths = agent_config_paths(AgentClient::DeepSeekHarness, &home);
+    fs::create_dir_all(paths[0].parent().unwrap()).unwrap();
+    let original_settings = r#"# original settings
+llm-pi-ai:
+  providers:
+    existing:
+      api: openai-completions
+      baseURL: https://example.invalid/v1
+agent-default-model:
+  provider: existing
+  model: old-model
+"#;
+    let original_credentials = "OTHER_API_KEY: old-secret\n";
+    fs::write(&paths[0], original_settings).unwrap();
+    fs::write(&paths[1], original_credentials).unwrap();
+    let models = test_agent_models(&["gpt-test", "gpt-other"]);
+
+    apply_agent_configuration(
+        AgentClient::DeepSeekHarness,
+        &home,
+        8317,
+        "agent-key",
+        "gpt-test",
+        &models,
+        None,
+    )
+    .unwrap();
+    let (configured, model) = inspect_deepseek_harness_config(&paths, 8317, "agent-key").unwrap();
+    assert!(configured);
+    assert_eq!(model.as_deref(), Some("gpt-test"));
+
+    let settings = fs::read_to_string(&paths[0]).unwrap();
+    let settings =
+        render_agent_yaml_mapping_update(Some(&settings), "test Harness settings", |root| {
+            root.insert(
+                yaml_key("added-after-apply"),
+                serde_norway::Value::Bool(true),
+            );
+            Ok(())
+        })
+        .unwrap();
+    fs::write(&paths[0], settings).unwrap();
+    let credentials = fs::read_to_string(&paths[1]).unwrap();
+    let credentials =
+        render_agent_yaml_mapping_update(Some(&credentials), "test Harness credentials", |root| {
+            root.insert(
+                yaml_key("NEW_API_KEY"),
+                serde_norway::Value::String("new-secret".to_string()),
+            );
+            Ok(())
+        })
+        .unwrap();
+    fs::write(&paths[1], credentials).unwrap();
+
+    restore_agent_session_configuration(AgentClient::DeepSeekHarness, &home).unwrap();
+    let settings: serde_norway::Value =
+        serde_norway::from_str(&fs::read_to_string(&paths[0]).unwrap()).unwrap();
+    let credentials: serde_norway::Value =
+        serde_norway::from_str(&fs::read_to_string(&paths[1]).unwrap()).unwrap();
+    assert_eq!(
+        settings["agent-default-model"]["provider"].as_str(),
+        Some("existing")
+    );
+    assert!(settings["llm-pi-ai"]["providers"]
+        .get(DEEPSEEK_HARNESS_PROVIDER_ID)
+        .is_none());
+    assert_eq!(settings["added-after-apply"].as_bool(), Some(true));
+    assert_eq!(credentials["OTHER_API_KEY"].as_str(), Some("old-secret"));
+    assert_eq!(credentials["NEW_API_KEY"].as_str(), Some("new-secret"));
+    assert!(credentials.get(DEEPSEEK_HARNESS_CREDENTIAL).is_none());
+    assert!(!dated_agent_backup_path(&paths[0]).unwrap().exists());
+    assert!(!dated_agent_backup_path(&paths[1]).unwrap().exists());
+    assert!(!agent_state_path(&paths).unwrap().exists());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn opencode_runtime_edits_survive_close_and_next_apply_owns_conflicts() {
     let home = agent_test_home("opencode-runtime-edit-merge");
     let path = home.join(".config/opencode/opencode.json");

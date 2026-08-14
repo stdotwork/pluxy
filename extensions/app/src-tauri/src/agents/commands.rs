@@ -16,6 +16,7 @@ pub(crate) fn inspect_agent_config_statuses(
         AgentClient::OpenCode,
         AgentClient::OpenClaw,
         AgentClient::Hermes,
+        AgentClient::DeepSeekHarness,
     ]
     .into_iter()
     .map(|client| inspect_agent_config(client, &home, config.port, api_key))

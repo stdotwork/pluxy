@@ -465,6 +465,7 @@ export const jaOverrides = {
   'agents.description.opencode': 'CPA OpenAI Compatible プロバイダーを使用',
   'agents.description.openclaw': 'CPA モデルプロバイダーと既定モデルを使用',
   'agents.description.hermes': 'CPA カスタムプロバイダーを使用',
+  'agents.description.deepseekHarness': 'Harness のネイティブ DeepSeek 設定と分離された OpenAI 互換ルートで CPA を使用',
   'agents.description.pi': 'CLIProxyAPI プロバイダーを使用して Pi CLI のモデルを動的に読み込みます',
   'agents.list.detecting': '検出中',
   'agents.list.unsupported': '現在のプラットフォームでは非対応',
