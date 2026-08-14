@@ -9,11 +9,15 @@ export type ProviderHealthProbe = {
   header: Record<string, string>;
   data: string;
   protocol: 'openai-chat' | 'openai-responses' | 'claude' | 'gemini';
+  model: string;
+  source: string;
+  authIndex: string;
 };
 
 export type ProviderHealthProbeResult = {
   success: boolean;
   firstTokenLatencyMs?: number;
+  responseLatencyMs?: number;
   error?: string;
   timedOut?: boolean;
   errorCode?: 'missing-direct-key';
@@ -101,13 +105,21 @@ export function buildProviderHealthProbe(
   const root = endpointRoot(provider, baseUrl);
   const headers = { ...customHeaders };
   const key = apiKey.trim();
+  const normalizedModel = provider === 'gemini'
+    ? model.trim().replace(/^models\//i, '')
+    : model.trim();
+  const metadata = {
+    model: normalizedModel,
+    source: key,
+    authIndex: authIndex.trim(),
+  };
   setHeaderIfMissing(headers, 'Content-Type', 'application/json');
 
   if (provider === 'gemini') {
     if (key) setHeaderIfMissing(headers, 'x-goog-api-key', key);
     else if (authIndex) setHeaderIfMissing(headers, 'x-goog-api-key', '$TOKEN$');
-    const normalizedModel = model.trim().replace(/^models\//i, '');
     return {
+      ...metadata,
       url: `${root}/v1beta/models/${encodeURIComponent(normalizedModel)}:generateContent?alt=sse`,
       header: headers,
       protocol: 'gemini',
@@ -125,11 +137,12 @@ export function buildProviderHealthProbe(
     else if (authIndex) setHeaderIfMissing(headers, 'x-api-key', '$TOKEN$');
     setHeaderIfMissing(headers, 'anthropic-version', '2023-06-01');
     return {
+      ...metadata,
       url: `${root}/v1/messages`,
       header: headers,
       protocol: 'claude',
       data: JSON.stringify({
-        model: model.trim(),
+        model: normalizedModel,
         max_tokens: 16,
         stream: true,
         messages: [{ role: 'user', content: 'hi' }],
@@ -142,11 +155,12 @@ export function buildProviderHealthProbe(
 
   if (provider === 'codex') {
     return {
+      ...metadata,
       url: `${root}/v1/responses`,
       header: headers,
       protocol: 'openai-responses',
       data: JSON.stringify({
-        model: model.trim(),
+        model: normalizedModel,
         input: 'hi',
         stream: true,
       }),
@@ -154,11 +168,12 @@ export function buildProviderHealthProbe(
   }
 
   return {
+    ...metadata,
     url: openAIChatCompletionsEndpoint(baseUrl),
     header: headers,
     protocol: 'openai-chat',
     data: JSON.stringify({
-      model: model.trim(),
+      model: normalizedModel,
       messages: [{ role: 'user', content: 'hi' }],
       stream: true,
     }),
@@ -197,18 +212,31 @@ export async function checkProviderHealthProbe(
         errorCode: 'missing-direct-key',
       };
     }
-    const response = await invoke<{ firstTokenLatencyMs: number }>('provider_health_probe', {
+    const response = await invoke<{
+      firstTokenLatencyMs?: number;
+      responseLatencyMs: number;
+    }>('provider_health_probe', {
       request: {
         protocol: probe.protocol,
         timeoutMs,
         data: probe.data,
         header: probe.header,
         url: probe.url,
+        model: probe.model,
+        source: probe.source,
+        authIndex: probe.authIndex,
       },
     });
+    const firstTokenLatencyMs = Number.isFinite(response.firstTokenLatencyMs)
+      ? Math.max(1, Math.round(response.firstTokenLatencyMs as number))
+      : undefined;
+    const responseLatencyMs = Number.isFinite(response.responseLatencyMs)
+      ? Math.max(1, Math.round(response.responseLatencyMs))
+      : firstTokenLatencyMs;
     return {
       success: true,
-      firstTokenLatencyMs: Math.max(1, Math.round(response.firstTokenLatencyMs)),
+      ...(firstTokenLatencyMs === undefined ? {} : { firstTokenLatencyMs }),
+      ...(responseLatencyMs === undefined ? {} : { responseLatencyMs }),
     };
   } catch (error) {
     const message = errorMessage(error);

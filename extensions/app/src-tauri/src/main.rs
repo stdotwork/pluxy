@@ -24,7 +24,10 @@ use management_api::{
 };
 use oauth_browser::*;
 #[cfg(test)]
-use provider_health::{provider_health_content_type_is_streaming, provider_health_stream_has_text};
+use provider_health::{
+    provider_health_content_type_is_streaming, provider_health_stream_has_terminal_success,
+    provider_health_stream_has_text,
+};
 
 use agents::*;
 use app_settings::*;

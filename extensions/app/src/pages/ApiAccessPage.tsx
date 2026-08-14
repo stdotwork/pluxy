@@ -1,9 +1,35 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  sortableKeyboardCoordinates,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS as DndCss } from '@dnd-kit/utilities';
 import {
   Check,
   Edit3,
   Filter,
+  GripVertical,
   LoaderCircle,
   Plus,
   RefreshCw,
@@ -78,6 +104,82 @@ type ProviderRow = {
   authIndex: string;
   remark: string;
 };
+
+const providerDragId = (
+  row: Pick<ProviderRow, 'section' | 'name' | 'apiKey' | 'baseUrl'>,
+) => {
+  const identity = `${row.section}\u0000${row.name}\u0000${row.apiKey}\u0000${row.baseUrl}`;
+  let hash = 2166136261;
+  for (let index = 0; index < identity.length; index += 1) {
+    hash ^= identity.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${row.section}:${(hash >>> 0).toString(36)}`;
+};
+
+function SortableProviderRow({
+  row,
+  disabled,
+  dragLabel,
+  isDragOver,
+  children,
+}: {
+  row: ProviderRow;
+  disabled: boolean;
+  dragLabel: string;
+  isDragOver: boolean;
+  children: ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: providerDragId(row),
+    disabled,
+    transition: {
+      duration: 220,
+      easing: 'cubic-bezier(0.2, 0, 0, 1)',
+    },
+  });
+  const renderedTransform = transform
+    ? {
+      ...transform,
+      scaleX: isDragging ? 1.012 : transform.scaleX,
+      scaleY: isDragging ? 1.012 : transform.scaleY,
+    }
+    : transform;
+  const style: CSSProperties = {
+    position: 'relative',
+    zIndex: isDragging ? 2 : undefined,
+    transform: DndCss.Transform.toString(renderedTransform),
+    transition: isDragging ? undefined : transition,
+  };
+
+  return (
+    <article
+      ref={setNodeRef}
+      style={style}
+      className={`real-provider-row${isDragging ? ' dragging' : ''}${isDragOver && !isDragging ? ' drag-over' : ''}`}
+    >
+      <button
+        type="button"
+        className="icon-button quiet provider-drag-handle"
+        disabled={disabled}
+        aria-label={dragLabel}
+        title={dragLabel}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical size={17} aria-hidden="true" />
+      </button>
+      {children}
+    </article>
+  );
+}
 
 type ProviderSaveResult =
   | { saved: true }
@@ -610,7 +712,7 @@ const providerIdentityMatches = (
   );
 };
 
-type ProviderRecordIdentity = Pick<
+export type ProviderRecordIdentity = Pick<
   ProviderRow,
   'section' | 'index' | 'name' | 'apiKey' | 'baseUrl'
 >;
@@ -638,6 +740,35 @@ export const resolveProviderRecordIndex = (
     .map((record, index) => ({ record, index }))
     .filter(({ record }) => providerPrimaryIdentityMatches(row, record));
   return primaryMatches.length === 1 ? primaryMatches[0].index : -1;
+};
+
+export const reorderProviderRecords = (
+  records: Record<string, unknown>[],
+  scopeRows: ProviderRecordIdentity[],
+  source: ProviderRecordIdentity,
+  target: ProviderRecordIdentity,
+) => {
+  const sourceIndex = resolveProviderRecordIndex(records, source);
+  const targetIndex = resolveProviderRecordIndex(records, target);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return null;
+
+  const scopedIndexes = scopeRows
+    .map((row) => resolveProviderRecordIndex(records, row))
+    .filter((index, position, indexes) => index >= 0 && indexes.indexOf(index) === position)
+    .sort((left, right) => left - right);
+  const sourcePosition = scopedIndexes.indexOf(sourceIndex);
+  const targetPosition = scopedIndexes.indexOf(targetIndex);
+  if (sourcePosition < 0 || targetPosition < 0) return null;
+
+  const reordered = scopedIndexes.map((index) => stripResponseFields(records[index]));
+  const [moved] = reordered.splice(sourcePosition, 1);
+  reordered.splice(targetPosition, 0, moved);
+
+  const next = records.map(stripResponseFields);
+  scopedIndexes.forEach((recordIndex, position) => {
+    next[recordIndex] = reordered[position];
+  });
+  return next;
 };
 
 export const providerRecordWithDisabledState = (
@@ -674,8 +805,13 @@ export function ApiAccessPage() {
   const [dialogDraft, setDialogDraft] = useState<ProviderDraft>(emptyProviderDraft);
   const [apiAccessRemarks, setApiAccessRemarks] = useState<Record<string, string>>({});
   const [healthDialogRow, setHealthDialogRow] = useState<ProviderRow | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
   const activeDefinition = definitionFor(activeCategory);
   const activeSection = activeDefinition.section;
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const loadProviders = useCallback(async () => {
     setLoading(true);
@@ -978,6 +1114,45 @@ export function ApiAccessPage() {
     }
   };
 
+  const reorderProviders = async (source: ProviderRow, target: ProviderRow) => {
+    if (source.section !== target.section || source.index === target.index) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const latestConfig = await managementApi.get('/config');
+      const latestRows = sectionRecordsFromConfig(latestConfig, source.section);
+      const nextRows = reorderProviderRecords(latestRows, rows, source, target);
+      if (!nextRows) throw new Error(t('apiAccess.error.stale'));
+      await managementApi.put(`/${source.section}`, nextRows);
+      await loadProviders();
+    } catch (requestError) {
+      await loadProviders();
+      setError(requestErrorMessage(requestError));
+    } finally {
+      setDragOverId(null);
+      setBusy(false);
+    }
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setDragOverId(null);
+    const source = rows.find((row) => providerDragId(row) === String(event.active.id));
+    const target = rows.find((row) => providerDragId(row) === String(event.over?.id ?? ''));
+    if (!source || !target || source.index === target.index) return;
+
+    const optimisticRows = reorderProviderRecords(
+      records[source.section],
+      rows,
+      source,
+      target,
+    );
+    if (optimisticRows) {
+      setRecords((current) => ({ ...current, [source.section]: optimisticRows }));
+    }
+    void reorderProviders(source, target);
+  };
+
   const totalCount = Object.values(records).reduce((sum, items) => sum + items.length, 0);
 
   const countForDefinition = (definition: ProviderDefinition) =>
@@ -1046,9 +1221,27 @@ export function ApiAccessPage() {
               <span>{filter ? t('apiAccess.empty.tryKeyword') : t('apiAccess.empty.addFirst')}</span>
             </div>
           ) : (
-            <div className="real-provider-list">
-              {rows.map((row) => (
-                <article className="real-provider-row" key={`${row.section}-${row.index}-${row.authIndex}`}>
+            <DndContext
+              sensors={dragSensors}
+              collisionDetection={closestCenter}
+              onDragStart={() => setNotice('')}
+              onDragOver={({ over }) => setDragOverId(over ? String(over.id) : null)}
+              onDragCancel={() => setDragOverId(null)}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={rows.map(providerDragId)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="real-provider-list">
+                  {rows.map((row) => (
+                    <SortableProviderRow
+                      key={providerDragId(row)}
+                      row={row}
+                      disabled={busy || rows.length < 2}
+                      dragLabel={t('apiAccess.dragHandle', { remark: row.remark || row.name })}
+                      isDragOver={dragOverId === providerDragId(row)}
+                    >
                   <div className="provider-row-main">
                     <div className="provider-row-title">
                       <strong title={row.remark || row.name}>{row.remark || row.name}</strong>
@@ -1095,9 +1288,11 @@ export function ApiAccessPage() {
                       <Trash2 size={16} />
                     </button>
                   </div>
-                </article>
-              ))}
-            </div>
+                    </SortableProviderRow>
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </section>
       </div>
@@ -1272,6 +1467,16 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
                   ? t('apiAccess.health.timeout')
                   : checked.error || t('apiAccess.health.failed')
               : '';
+            const latencyTitle = checked?.firstTokenLatencyMs !== undefined
+              ? t('apiAccess.health.firstTokenLatencyResult', { latency: checked.firstTokenLatencyMs })
+              : checked?.responseLatencyMs !== undefined
+                ? t('apiAccess.health.responseLatencyResult', { latency: checked.responseLatencyMs })
+                : error || undefined;
+            const latencyInline = checked?.firstTokenLatencyMs !== undefined
+              ? t('apiAccess.health.firstTokenInline', { latency: checked.firstTokenLatencyMs })
+              : checked?.responseLatencyMs !== undefined
+                ? t('apiAccess.health.responseInline', { latency: checked.responseLatencyMs })
+                : '';
             return (
               <div className={`provider-health-model-row ${checked?.status === 'failed' ? 'failed' : ''}`} key={model.name}>
                 <div className="provider-health-model-name">
@@ -1284,12 +1489,10 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
                 </div>
                 <span
                   className={`state-pill provider-health-pill ${state?.status === 'checking' ? 'checking' : checked?.status === 'healthy' ? 'success' : checked?.status === 'failed' ? 'error' : ''}`}
-                  title={checked?.firstTokenLatencyMs === undefined ? error || undefined : t('apiAccess.health.firstTokenLatencyResult', { latency: checked.firstTokenLatencyMs })}
+                  title={latencyTitle}
                 >
                   {statusLabel(state)}
-                  {checked?.firstTokenLatencyMs === undefined
-                    ? ''
-                    : ` · ${t('apiAccess.health.firstTokenInline', { latency: checked.firstTokenLatencyMs })}`}
+                  {latencyInline ? ` · ${latencyInline}` : ''}
                 </span>
                 <button
                   type="button"

@@ -63,4 +63,37 @@ data: {"delta":{"type":"text_delta","text":"H"}}
 
 "#;
     assert!(provider_health_stream_has_text("gemini", gemini_text));
+
+    let gemini_thought_only = br#"data: {"candidates":[{"content":{},"finishReason":"MAX_TOKENS","index":0}],"usageMetadata":{"promptTokenCount":1,"totalTokenCount":14,"thoughtsTokenCount":13},"modelVersion":"gemini-3.7-flash"}
+
+"#;
+    assert!(!provider_health_stream_has_text(
+        "gemini",
+        gemini_thought_only
+    ));
+    assert!(provider_health_stream_has_terminal_success(
+        "gemini",
+        gemini_thought_only
+    ));
+
+    let gemini_empty_max_tokens =
+        br#"data: {"candidates":[{"finishReason":"MAX_TOKENS"}],"usageMetadata":{"totalTokenCount":1,"thoughtsTokenCount":0}}
+
+"#;
+    assert!(!provider_health_stream_has_terminal_success(
+        "gemini",
+        gemini_empty_max_tokens
+    ));
+
+    let gemini_safety = br#"data: {"candidates":[{"finishReason":"SAFETY"}],"usageMetadata":{"totalTokenCount":14,"thoughtsTokenCount":13}}
+
+"#;
+    assert!(!provider_health_stream_has_terminal_success(
+        "gemini",
+        gemini_safety
+    ));
+    assert!(!provider_health_stream_has_terminal_success(
+        "openai-chat",
+        gemini_thought_only
+    ));
 }
