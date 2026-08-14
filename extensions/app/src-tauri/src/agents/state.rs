@@ -724,6 +724,10 @@ pub(crate) fn fresh_agent_contents_with_oauth(
             model,
             models,
         )?]),
+        AgentClient::DeepSeekHarness => Ok(vec![
+            build_deepseek_harness_settings(None, &openai_base, model, models)?,
+            build_deepseek_harness_credentials(None, api_key)?,
+        ]),
     }
 }
 
@@ -741,6 +745,10 @@ pub(crate) fn agent_contents_equal(client: AgentClient, actual: &str, expected: 
         AgentClient::Hermes => {
             serde_yaml::from_str::<serde_yaml::Value>(actual).ok()
                 == serde_yaml::from_str::<serde_yaml::Value>(expected).ok()
+        }
+        AgentClient::DeepSeekHarness => {
+            serde_norway::from_str::<serde_norway::Value>(actual).ok()
+                == serde_norway::from_str::<serde_norway::Value>(expected).ok()
         }
         _ => {
             serde_json::from_str::<serde_json::Value>(actual).ok()
@@ -1187,15 +1195,23 @@ pub(crate) fn dated_agent_backup_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn prepare_agent_session_backups(
+    client: AgentClient,
     updates: &[AgentFileUpdate],
 ) -> Result<Vec<AgentAppliedBackupFile>, String> {
-    let mut backups = Vec::with_capacity(updates.len());
+    let mut backups: Vec<AgentAppliedBackupFile> = Vec::with_capacity(updates.len());
     let mut renamed = Vec::new();
     for update in updates {
         let existed_before = update.path.is_file();
         let backup_path = dated_agent_backup_path(&update.path)?;
         if existed_before {
             if backup_path.exists() {
+                if client == AgentClient::DeepSeekHarness {
+                    for backup in &backups {
+                        if backup.existed_before {
+                            let _ = fs::remove_file(&backup.backup_path);
+                        }
+                    }
+                }
                 for (path, backup) in renamed.iter().rev() {
                     let _ = fs::rename(backup, path);
                 }
@@ -1204,13 +1220,27 @@ pub(crate) fn prepare_agent_session_backups(
                     path_to_string(&backup_path)
                 ));
             }
-            fs::rename(&update.path, &backup_path).map_err(|error| {
-                format!(
-                    "重命名原智能体配置为备份失败 {}: {error}",
-                    path_to_string(&update.path)
-                )
-            })?;
-            renamed.push((update.path.clone(), backup_path.clone()));
+            if client == AgentClient::DeepSeekHarness {
+                if let Err(error) = fs::copy(&update.path, &backup_path) {
+                    for backup in &backups {
+                        if backup.existed_before {
+                            let _ = fs::remove_file(&backup.backup_path);
+                        }
+                    }
+                    return Err(format!(
+                        "备份 DeepSeek Harness 配置失败 {}: {error}",
+                        path_to_string(&update.path)
+                    ));
+                }
+            } else {
+                fs::rename(&update.path, &backup_path).map_err(|error| {
+                    format!(
+                        "重命名原智能体配置为备份失败 {}: {error}",
+                        path_to_string(&update.path)
+                    )
+                })?;
+                renamed.push((update.path.clone(), backup_path.clone()));
+            }
         }
         backups.push(AgentAppliedBackupFile {
             path: update.path.clone(),
@@ -1284,7 +1314,7 @@ pub(crate) fn restore_agent_applied_state_configuration(
         let restore_result = (|| -> Result<(), String> {
             for (file, replacement) in state.backup_files.iter().zip(&replacements).rev() {
                 if let Some(replacement) = replacement {
-                    write_bytes_directly(&file.path, replacement)?;
+                    write_agent_configuration_file(client, &file.path, replacement)?;
                 } else if file.path.exists() {
                     fs::remove_file(&file.path).map_err(|error| {
                         format!(
@@ -1327,12 +1357,13 @@ pub(crate) fn restore_agent_applied_state_configuration(
     Ok(())
 }
 
-pub(crate) fn agent_clients_restored_on_exit() -> [AgentClient; 4] {
+pub(crate) fn agent_clients_restored_on_exit() -> [AgentClient; 5] {
     [
         AgentClient::Codex,
         AgentClient::OpenCode,
         AgentClient::OpenClaw,
         AgentClient::Hermes,
+        AgentClient::DeepSeekHarness,
     ]
 }
 
@@ -1382,7 +1413,7 @@ pub(crate) fn commit_agent_configuration(
         if let Some(state) = existing_state.filter(|state| !state.backup_files.is_empty()) {
             state.backup_files
         } else {
-            prepare_agent_session_backups(updates)?
+            prepare_agent_session_backups(client, updates)?
         };
 
     let transaction = (|| -> Result<Vec<String>, String> {
@@ -1392,7 +1423,7 @@ pub(crate) fn commit_agent_configuration(
             if read_agent_bytes(&update.path)?.as_deref() == Some(next) {
                 continue;
             }
-            write_bytes_directly(&update.path, next)?;
+            write_agent_configuration_file(client, &update.path, next)?;
             changed.push(path_to_string(&update.path));
         }
         let state = AgentAppliedState {
@@ -1546,6 +1577,30 @@ pub(crate) fn reset_agent_configuration_to_default_with_oauth(
         claude_code_model_mappings,
         claude_desktop_model_mappings,
     } = request;
+    if client == AgentClient::DeepSeekHarness {
+        let updates = build_agent_updates_with_oauth(
+            client,
+            home,
+            port,
+            api_key,
+            model,
+            AgentConfigurationOptions {
+                models,
+                codex_catalog,
+                oauth_configuration,
+                claude_code_model_mappings,
+                claude_desktop_model_mappings,
+            },
+        )?;
+        return commit_agent_configuration(
+            client,
+            home,
+            model,
+            &updates,
+            "default",
+            claude_desktop_model_mappings,
+        );
+    }
     let paths = agent_config_paths(client, home);
     let contents = fresh_agent_contents_with_oauth(
         client,

@@ -189,6 +189,31 @@ pub(crate) fn build_agent_updates_with_oauth(
                 after,
             }])
         }
+        AgentClient::DeepSeekHarness => {
+            if paths.len() != 2 {
+                return Err("DeepSeek Harness 配置路径数量无效".to_string());
+            }
+            let settings_before = read_optional_text(&paths[0])?;
+            let credentials_before = read_optional_text(&paths[1])?;
+            Ok(vec![
+                AgentFileUpdate {
+                    path: paths[0].clone(),
+                    after: build_deepseek_harness_settings(
+                        settings_before.as_deref(),
+                        &openai_base,
+                        model,
+                        models,
+                    )?,
+                },
+                AgentFileUpdate {
+                    path: paths[1].clone(),
+                    after: build_deepseek_harness_credentials(
+                        credentials_before.as_deref(),
+                        api_key,
+                    )?,
+                },
+            ])
+        }
     }
 }
 
@@ -199,6 +224,187 @@ pub(crate) fn read_optional_text(path: &Path) -> Result<Option<String>, String> 
     fs::read_to_string(path)
         .map(Some)
         .map_err(|error| format!("读取配置失败 {}: {error}", path_to_string(path)))
+}
+
+pub(crate) fn read_agent_yaml_mapping_or_empty(
+    path: &Path,
+    label: &str,
+) -> Result<serde_norway::Mapping, String> {
+    if !path.is_file() {
+        return Ok(serde_norway::Mapping::new());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 {label} 失败 {}: {error}", path_to_string(path)))?;
+    parse_agent_yaml_mapping(Some(&content), label)
+}
+
+pub(crate) fn parse_agent_yaml_mapping(
+    content: Option<&str>,
+    label: &str,
+) -> Result<serde_norway::Mapping, String> {
+    let Some(content) = content.map(str::trim).filter(|content| !content.is_empty()) else {
+        return Ok(serde_norway::Mapping::new());
+    };
+    serde_norway::from_str::<serde_norway::Value>(content)
+        .map_err(|error| format!("{label} YAML 格式无效: {error}"))?
+        .as_mapping()
+        .cloned()
+        .ok_or_else(|| format!("{label} 根节点必须是 YAML 映射"))
+}
+
+pub(crate) fn render_agent_yaml_mapping_update<F>(
+    existing: Option<&str>,
+    label: &str,
+    update: F,
+) -> Result<String, String>
+where
+    F: FnOnce(&mut serde_norway::Mapping) -> Result<(), String>,
+{
+    let original_mapping = parse_agent_yaml_mapping(existing, label)?;
+    let original = serde_norway::Value::Mapping(original_mapping.clone());
+    let mut updated_mapping = original_mapping;
+    update(&mut updated_mapping)?;
+    let updated = serde_norway::Value::Mapping(updated_mapping);
+    if updated == original {
+        return Ok(existing.unwrap_or("{}\n").to_string());
+    }
+    let source = existing
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+        .map(|_| existing.unwrap_or_default())
+        .unwrap_or("{}\n");
+    let mut document = yaml_serde_edit::YamlValue::parse(source)
+        .map_err(|error| format!("{label} YAML 格式无效: {error}"))?;
+    render_updated_core_yaml(&mut document, updated)
+        .map_err(|error| format!("更新 {label} 失败: {error}"))
+}
+
+pub(crate) fn build_deepseek_harness_models(
+    models: &[AgentModelOption],
+    selected_model: &str,
+) -> Result<serde_norway::Value, String> {
+    let entries = ordered_agent_models(models, selected_model)
+        .into_iter()
+        .map(|model| {
+            let mut entry = serde_norway::Mapping::new();
+            entry.insert(yaml_key("id"), serde_norway::Value::String(model.name));
+            if let Some(name) = model.alias.filter(|name| !name.trim().is_empty()) {
+                entry.insert(yaml_key("name"), serde_norway::Value::String(name));
+            }
+            if let Some(context_window) = model.context_window {
+                entry.insert(
+                    yaml_key("contextWindow"),
+                    serde_norway::to_value(context_window)
+                        .map_err(|error| format!("序列化 Harness 模型上下文失败: {error}"))?,
+                );
+            }
+            Ok(serde_norway::Value::Mapping(entry))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(serde_norway::Value::Sequence(entries))
+}
+
+pub(crate) fn build_deepseek_harness_settings(
+    existing: Option<&str>,
+    base_url: &str,
+    model: &str,
+    models: &[AgentModelOption],
+) -> Result<String, String> {
+    let published_models = build_deepseek_harness_models(models, model)?;
+    render_agent_yaml_mapping_update(existing, "DeepSeek Harness settings", |root| {
+        let llm = root
+            .entry(yaml_key("llm-pi-ai"))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "DeepSeek Harness llm-pi-ai 必须是映射".to_string())?;
+        let providers = llm
+            .entry(yaml_key("providers"))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "DeepSeek Harness llm-pi-ai.providers 必须是映射".to_string())?;
+        let provider = providers
+            .entry(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "DeepSeek Harness EasyCLIProxyAPI provider 必须是映射".to_string())?;
+        for (key, value) in [
+            ("displayName", "EasyCLIProxyAPI"),
+            ("apiKeyEnv", DEEPSEEK_HARNESS_CREDENTIAL),
+            ("api", "openai-completions"),
+            ("baseURL", base_url),
+        ] {
+            provider.insert(
+                yaml_key(key),
+                serde_norway::Value::String(value.to_string()),
+            );
+        }
+        provider.insert(yaml_key("models"), published_models);
+
+        let selection = root
+            .entry(yaml_key("agent-default-model"))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "DeepSeek Harness agent-default-model 必须是映射".to_string())?;
+        selection.insert(
+            yaml_key("provider"),
+            serde_norway::Value::String(DEEPSEEK_HARNESS_PROVIDER_ID.to_string()),
+        );
+        selection.insert(
+            yaml_key("model"),
+            serde_norway::Value::String(model.to_string()),
+        );
+        selection.remove(yaml_key("reasoningEffort"));
+        Ok(())
+    })
+}
+
+pub(crate) fn build_deepseek_harness_credentials(
+    existing: Option<&str>,
+    api_key: &str,
+) -> Result<String, String> {
+    render_agent_yaml_mapping_update(existing, "DeepSeek Harness credentials", |root| {
+        root.insert(
+            yaml_key(DEEPSEEK_HARNESS_CREDENTIAL),
+            serde_norway::Value::String(api_key.to_string()),
+        );
+        Ok(())
+    })
+}
+
+pub(crate) fn write_deepseek_harness_file(
+    path: &Path,
+    content: &[u8],
+    owner_only: bool,
+) -> Result<(), String> {
+    write_bytes_directly(path, content)?;
+    #[cfg(unix)]
+    if owner_only {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+            format!(
+                "设置 DeepSeek Harness 凭据权限失败 {}: {error}",
+                path_to_string(path)
+            )
+        })?;
+    }
+    #[cfg(not(unix))]
+    let _ = owner_only;
+    Ok(())
+}
+
+pub(crate) fn write_agent_configuration_file(
+    client: AgentClient,
+    path: &Path,
+    content: &[u8],
+) -> Result<(), String> {
+    if client == AgentClient::DeepSeekHarness {
+        let owner_only = path.file_name().and_then(|name| name.to_str())
+            == Some(DEEPSEEK_HARNESS_CREDENTIALS_FILE);
+        write_deepseek_harness_file(path, content, owner_only)
+    } else {
+        write_bytes_directly(path, content)
+    }
 }
 
 pub(crate) fn build_claude_agent_config(
@@ -967,7 +1173,103 @@ pub(crate) fn remove_agent_managed_configuration(
         AgentClient::OpenCode => remove_opencode_managed_configuration(paths),
         AgentClient::OpenClaw => remove_openclaw_managed_configuration(paths),
         AgentClient::Hermes => remove_hermes_managed_configuration(paths),
+        AgentClient::DeepSeekHarness => remove_deepseek_harness_managed_configuration(paths),
     }
+}
+
+pub(crate) fn remove_deepseek_harness_settings_fields(root: &mut serde_norway::Mapping) -> bool {
+    let mut changed = false;
+    let mut remove_llm = false;
+    if let Some(llm) = root
+        .get_mut(yaml_key("llm-pi-ai"))
+        .and_then(serde_norway::Value::as_mapping_mut)
+    {
+        let mut remove_providers = false;
+        if let Some(providers) = llm
+            .get_mut(yaml_key("providers"))
+            .and_then(serde_norway::Value::as_mapping_mut)
+        {
+            changed |= providers
+                .remove(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID))
+                .is_some();
+            remove_providers = providers.is_empty();
+        }
+        if remove_providers {
+            llm.remove(yaml_key("providers"));
+        }
+        remove_llm = llm.is_empty();
+    }
+    if remove_llm {
+        root.remove(yaml_key("llm-pi-ai"));
+    }
+    let managed_selection = root
+        .get(yaml_key("agent-default-model"))
+        .and_then(serde_norway::Value::as_mapping)
+        .and_then(|selection| yaml_mapping_value(selection, "provider"))
+        .and_then(serde_norway::Value::as_str)
+        == Some(DEEPSEEK_HARNESS_PROVIDER_ID);
+    if managed_selection {
+        root.remove(yaml_key("agent-default-model"));
+        changed = true;
+    }
+    changed
+}
+
+pub(crate) fn remove_deepseek_harness_managed_configuration(
+    paths: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    if paths.len() != 2 {
+        return Err("DeepSeek Harness 配置路径数量无效".to_string());
+    }
+    let mut changed_paths = Vec::new();
+    if paths[0].is_file() {
+        let current = fs::read_to_string(&paths[0])
+            .map_err(|error| format!("读取 DeepSeek Harness settings 失败: {error}"))?;
+        let mut changed = false;
+        let rendered = render_agent_yaml_mapping_update(
+            Some(&current),
+            "DeepSeek Harness settings",
+            |root| {
+                changed = remove_deepseek_harness_settings_fields(root);
+                Ok(())
+            },
+        )?;
+        if changed {
+            let root = parse_agent_yaml_mapping(Some(&rendered), "DeepSeek Harness settings")?;
+            if root.is_empty() {
+                fs::remove_file(&paths[0])
+                    .map_err(|error| format!("删除空的 DeepSeek Harness settings 失败: {error}"))?;
+            } else {
+                write_bytes_directly(&paths[0], rendered.as_bytes())?;
+            }
+            changed_paths.push(path_to_string(&paths[0]));
+        }
+    }
+    if paths[1].is_file() {
+        let current = fs::read_to_string(&paths[1])
+            .map_err(|error| format!("读取 DeepSeek Harness credentials 失败: {error}"))?;
+        let mut changed = false;
+        let rendered = render_agent_yaml_mapping_update(
+            Some(&current),
+            "DeepSeek Harness credentials",
+            |root| {
+                changed = root.remove(yaml_key(DEEPSEEK_HARNESS_CREDENTIAL)).is_some();
+                Ok(())
+            },
+        )?;
+        if changed {
+            let root = parse_agent_yaml_mapping(Some(&rendered), "DeepSeek Harness credentials")?;
+            if root.is_empty() {
+                fs::remove_file(&paths[1]).map_err(|error| {
+                    format!("删除空的 DeepSeek Harness credentials 失败: {error}")
+                })?;
+            } else {
+                write_deepseek_harness_file(&paths[1], rendered.as_bytes(), true)?;
+            }
+            changed_paths.push(path_to_string(&paths[1]));
+        }
+    }
+    Ok(changed_paths)
 }
 
 pub(crate) fn restore_json_key(
@@ -1442,6 +1744,93 @@ pub(crate) fn build_restored_hermes_config(
     render_updated_core_yaml(&mut document, updated).map(Some)
 }
 
+pub(crate) fn restore_deepseek_harness_provider(
+    current: &mut serde_norway::Mapping,
+    original: Option<&serde_norway::Mapping>,
+) -> Result<(), String> {
+    let original_llm = original
+        .and_then(|root| yaml_mapping_value(root, "llm-pi-ai"))
+        .and_then(serde_norway::Value::as_mapping);
+    let original_providers = original_llm
+        .and_then(|llm| yaml_mapping_value(llm, "providers"))
+        .and_then(serde_norway::Value::as_mapping);
+    let original_provider = original_providers
+        .and_then(|providers| yaml_mapping_value(providers, DEEPSEEK_HARNESS_PROVIDER_ID))
+        .cloned();
+
+    if let Some(original_provider) = original_provider {
+        let llm = current
+            .entry(yaml_key("llm-pi-ai"))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "当前 DeepSeek Harness llm-pi-ai 必须是映射".to_string())?;
+        let providers = llm
+            .entry(yaml_key("providers"))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "当前 DeepSeek Harness llm-pi-ai.providers 必须是映射".to_string())?;
+        providers.insert(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID), original_provider);
+    } else {
+        let mut remove_llm = false;
+        if let Some(llm) = current
+            .get_mut(yaml_key("llm-pi-ai"))
+            .and_then(serde_norway::Value::as_mapping_mut)
+        {
+            let mut remove_providers = false;
+            if let Some(providers) = llm
+                .get_mut(yaml_key("providers"))
+                .and_then(serde_norway::Value::as_mapping_mut)
+            {
+                providers.remove(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID));
+                remove_providers = providers.is_empty() && original_providers.is_none();
+            }
+            if remove_providers {
+                llm.remove(yaml_key("providers"));
+            }
+            remove_llm = llm.is_empty() && original_llm.is_none();
+        }
+        if remove_llm {
+            current.remove(yaml_key("llm-pi-ai"));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn build_restored_deepseek_harness_settings(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    let original_root = parse_agent_yaml_mapping(original, "原始 DeepSeek Harness settings")?;
+    let rendered = render_agent_yaml_mapping_update(
+        Some(current),
+        "当前 DeepSeek Harness settings",
+        |root| {
+            restore_deepseek_harness_provider(root, Some(&original_root))?;
+            restore_yaml_key(root, Some(&original_root), "agent-default-model");
+            Ok(())
+        },
+    )?;
+    let root = parse_agent_yaml_mapping(Some(&rendered), "恢复后的 DeepSeek Harness settings")?;
+    Ok((!root.is_empty() || original.is_some()).then_some(rendered))
+}
+
+pub(crate) fn build_restored_deepseek_harness_credentials(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    let original_root = parse_agent_yaml_mapping(original, "原始 DeepSeek Harness credentials")?;
+    let rendered = render_agent_yaml_mapping_update(
+        Some(current),
+        "当前 DeepSeek Harness credentials",
+        |root| {
+            restore_yaml_key(root, Some(&original_root), DEEPSEEK_HARNESS_CREDENTIAL);
+            Ok(())
+        },
+    )?;
+    let root = parse_agent_yaml_mapping(Some(&rendered), "恢复后的 DeepSeek Harness credentials")?;
+    Ok((!root.is_empty() || original.is_some()).then_some(rendered))
+}
+
 pub(crate) fn agent_config_semantically_equal(
     client: AgentClient,
     actual: &str,
@@ -1457,6 +1846,10 @@ pub(crate) fn agent_config_semantically_equal(
                 == json5::from_str::<serde_json::Value>(expected).ok()
         }
         AgentClient::Hermes => {
+            serde_norway::from_str::<serde_norway::Value>(actual).ok()
+                == serde_norway::from_str::<serde_norway::Value>(expected).ok()
+        }
+        AgentClient::DeepSeekHarness => {
             serde_norway::from_str::<serde_norway::Value>(actual).ok()
                 == serde_norway::from_str::<serde_norway::Value>(expected).ok()
         }
@@ -1502,6 +1895,17 @@ pub(crate) fn build_agent_session_restored_bytes(
         AgentClient::OpenCode => build_restored_opencode_config(current, original)?,
         AgentClient::OpenClaw => build_restored_openclaw_config(current, original)?,
         AgentClient::Hermes => build_restored_hermes_config(current, original)?,
+        AgentClient::DeepSeekHarness => {
+            let index = paths
+                .iter()
+                .position(|candidate| candidate == path)
+                .ok_or_else(|| "DeepSeek Harness 恢复路径不匹配".to_string())?;
+            match index {
+                0 => build_restored_deepseek_harness_settings(current, original)?,
+                1 => build_restored_deepseek_harness_credentials(current, original)?,
+                _ => return Err("DeepSeek Harness 恢复路径索引无效".to_string()),
+            }
+        }
     };
     if let (Some(restored), Some(original), Some(original_bytes)) =
         (restored.as_deref(), original, original_bytes)

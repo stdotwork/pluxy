@@ -463,6 +463,7 @@ export const zhCN = {
   'agents.description.opencode': '使用 CPA OpenAI Compatible provider',
   'agents.description.openclaw': '使用 CPA 模型供应商和默认模型',
   'agents.description.hermes': '使用 CPA custom provider',
+  'agents.description.deepseekHarness': '通过通用 OpenAI 兼容路由使用 CPA，并与 Harness 原生 DeepSeek 配置隔离',
   'agents.description.pi': '使用 Pi CLI 和 CLIProxyAPI provider 动态加载模型',
   'agents.list.detecting': '正在检测',
   'agents.list.unsupported': '当前平台不支持',

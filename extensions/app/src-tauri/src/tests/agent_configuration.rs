@@ -781,6 +781,145 @@ fn exit_preserves_claude_client_configurations() {
     assert!(!restored.contains(&AgentClient::ClaudeDesktop));
     assert!(restored.contains(&AgentClient::Codex));
     assert!(restored.contains(&AgentClient::OpenCode));
+    assert!(restored.contains(&AgentClient::DeepSeekHarness));
+}
+
+#[test]
+fn deepseek_harness_settings_preserve_unrelated_sections_and_publish_models() {
+    let existing = r#"# keep this comment
+ui-onboarding:
+  welcomeNoticeVersion: 3
+llm-pi-ai:
+  providers:
+    existing:
+      api: openai-completions
+      baseURL: https://example.invalid/v1
+agent-default-model:
+  provider: existing
+  model: old-model
+  reasoningEffort: high
+"#;
+    let models = vec![
+        AgentModelOption {
+            name: "gpt-selected".to_string(),
+            alias: Some("Selected Model".to_string()),
+            is_alias: false,
+            context_window: Some(272_000),
+        },
+        AgentModelOption {
+            name: "gpt-other".to_string(),
+            alias: None,
+            is_alias: false,
+            context_window: None,
+        },
+    ];
+    let rendered = build_deepseek_harness_settings(
+        Some(existing),
+        "http://127.0.0.1:8317/v1",
+        "gpt-selected",
+        &models,
+    )
+    .unwrap();
+    let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
+
+    assert!(rendered.contains("# keep this comment"));
+    assert_eq!(
+        value["ui-onboarding"]["welcomeNoticeVersion"].as_u64(),
+        Some(3)
+    );
+    assert_eq!(
+        value["llm-pi-ai"]["providers"]["existing"]["baseURL"].as_str(),
+        Some("https://example.invalid/v1")
+    );
+    let provider = &value["llm-pi-ai"]["providers"][DEEPSEEK_HARNESS_PROVIDER_ID];
+    assert_eq!(
+        provider["apiKeyEnv"].as_str(),
+        Some(DEEPSEEK_HARNESS_CREDENTIAL)
+    );
+    assert_eq!(provider["api"].as_str(), Some("openai-completions"));
+    assert_eq!(
+        provider["baseURL"].as_str(),
+        Some("http://127.0.0.1:8317/v1")
+    );
+    assert_eq!(provider["models"][0]["id"].as_str(), Some("gpt-selected"));
+    assert_eq!(
+        provider["models"][0]["name"].as_str(),
+        Some("Selected Model")
+    );
+    assert_eq!(
+        provider["models"][0]["contextWindow"].as_u64(),
+        Some(272_000)
+    );
+    assert_eq!(provider["models"][1]["id"].as_str(), Some("gpt-other"));
+    assert_eq!(
+        value["agent-default-model"]["provider"].as_str(),
+        Some(DEEPSEEK_HARNESS_PROVIDER_ID)
+    );
+    assert_eq!(
+        value["agent-default-model"]["model"].as_str(),
+        Some("gpt-selected")
+    );
+    assert!(value["agent-default-model"]
+        .get("reasoningEffort")
+        .is_none());
+}
+
+#[test]
+fn deepseek_harness_credentials_preserve_other_entries() {
+    let rendered = build_deepseek_harness_credentials(
+        Some("# existing key\nOTHER_API_KEY: other-secret\n"),
+        "cpa-secret",
+    )
+    .unwrap();
+    let value: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
+
+    assert!(rendered.contains("# existing key"));
+    assert_eq!(value["OTHER_API_KEY"].as_str(), Some("other-secret"));
+    assert_eq!(
+        value[DEEPSEEK_HARNESS_CREDENTIAL].as_str(),
+        Some("cpa-secret")
+    );
+}
+
+#[test]
+fn deepseek_harness_inspection_requires_managed_route_selection_and_credential() {
+    let home = agent_test_home("deepseek-harness-inspection");
+    let paths = vec![home.join("settings.yaml"), home.join(".credentials.yaml")];
+    let models = test_agent_models(&["gpt-test"]);
+    fs::write(
+        &paths[0],
+        build_deepseek_harness_settings(None, "http://127.0.0.1:8317/v1", "gpt-test", &models)
+            .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &paths[1],
+        build_deepseek_harness_credentials(None, "agent-key").unwrap(),
+    )
+    .unwrap();
+
+    let (configured, model) = inspect_deepseek_harness_config(&paths, 8317, "agent-key").unwrap();
+    assert!(configured);
+    assert_eq!(model.as_deref(), Some("gpt-test"));
+    assert!(deepseek_harness_has_managed_marker(&paths).unwrap());
+
+    let (wrong_key, _) = inspect_deepseek_harness_config(&paths, 8317, "different-key").unwrap();
+    assert!(!wrong_key);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn deepseek_harness_profile_version_comes_from_installed_profile() {
+    let home = agent_test_home("deepseek-harness-version");
+    let package = home.join(".dsh/profiles/node_modules/@deepseek-ai/dsh/package.json");
+    fs::create_dir_all(package.parent().unwrap()).unwrap();
+    fs::write(&package, r#"{"version":"0.1.0-rc.5"}"#).unwrap();
+
+    assert_eq!(
+        read_deepseek_harness_profile_version(&home).as_deref(),
+        Some("0.1.0-rc.5")
+    );
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
