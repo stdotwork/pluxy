@@ -154,6 +154,8 @@ describe('API 接入健康检测', () => {
     );
     expect(probe.header['x-goog-api-key']).toBe('gemini-key');
     expect(probe.protocol).toBe('gemini');
+    expect(probe.model).toBe('gemini-2.5-flash');
+    expect(probe.source).toBe('gemini-key');
   });
 
   it('检测全部时每个模型只请求一次并保持结果顺序', async () => {

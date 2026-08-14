@@ -1106,6 +1106,18 @@ fn publish_collected_records(app: &tauri::AppHandle, saved: usize, message: &str
     }
 }
 
+pub(crate) fn persist_local_usage_event(
+    app: &tauri::AppHandle,
+    collector_source: &str,
+    value: Value,
+) -> Result<usize, String> {
+    let config = app.state::<GuiConfigState>().snapshot()?;
+    let root = usage_root_dir()?;
+    let saved = persist_queue_items_from_source(&root, collector_source, vec![value], &config)?;
+    publish_collected_records(app, saved, "已保存桌面健康检测使用记录");
+    Ok(saved)
+}
+
 async fn wait_or_cancel(token: &CancellationToken, seconds: u64) {
     tokio::select! {
         _ = token.cancelled() => {},

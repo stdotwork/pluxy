@@ -1467,6 +1467,16 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
                   ? t('apiAccess.health.timeout')
                   : checked.error || t('apiAccess.health.failed')
               : '';
+            const latencyTitle = checked?.firstTokenLatencyMs !== undefined
+              ? t('apiAccess.health.firstTokenLatencyResult', { latency: checked.firstTokenLatencyMs })
+              : checked?.responseLatencyMs !== undefined
+                ? t('apiAccess.health.responseLatencyResult', { latency: checked.responseLatencyMs })
+                : error || undefined;
+            const latencyInline = checked?.firstTokenLatencyMs !== undefined
+              ? t('apiAccess.health.firstTokenInline', { latency: checked.firstTokenLatencyMs })
+              : checked?.responseLatencyMs !== undefined
+                ? t('apiAccess.health.responseInline', { latency: checked.responseLatencyMs })
+                : '';
             return (
               <div className={`provider-health-model-row ${checked?.status === 'failed' ? 'failed' : ''}`} key={model.name}>
                 <div className="provider-health-model-name">
@@ -1479,12 +1489,10 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
                 </div>
                 <span
                   className={`state-pill provider-health-pill ${state?.status === 'checking' ? 'checking' : checked?.status === 'healthy' ? 'success' : checked?.status === 'failed' ? 'error' : ''}`}
-                  title={checked?.firstTokenLatencyMs === undefined ? error || undefined : t('apiAccess.health.firstTokenLatencyResult', { latency: checked.firstTokenLatencyMs })}
+                  title={latencyTitle}
                 >
                   {statusLabel(state)}
-                  {checked?.firstTokenLatencyMs === undefined
-                    ? ''
-                    : ` · ${t('apiAccess.health.firstTokenInline', { latency: checked.firstTokenLatencyMs })}`}
+                  {latencyInline ? ` · ${latencyInline}` : ''}
                 </span>
                 <button
                   type="button"
