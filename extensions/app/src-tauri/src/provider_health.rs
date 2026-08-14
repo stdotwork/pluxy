@@ -322,7 +322,7 @@ pub(crate) async fn provider_health_probe(
     for (name, value) in &request.header {
         let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
             .map_err(|error| format!("健康检测请求头名称无效: {error}"))?;
-        let value = reqwest::header::HeaderValue::from_str(&value)
+        let value = reqwest::header::HeaderValue::from_str(value)
             .map_err(|error| format!("健康检测请求头值无效: {error}"))?;
         headers.insert(name, value);
     }
