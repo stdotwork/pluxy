@@ -41,6 +41,81 @@ fn replacing_a_core_preserves_only_regular_bundled_assets() {
 }
 
 #[test]
+fn overlaying_a_core_updates_packaged_files_and_preserves_plugins() {
+    let root = agent_test_home("core-overlay-preserves-plugins");
+    let install_dir = root.join("cpa-core");
+    let staging_dir = root.join("cpa-core.staging");
+    fs::create_dir_all(install_dir.join("plugins/custom-router")).unwrap();
+    fs::create_dir_all(staging_dir.join("plugins/bundled-router")).unwrap();
+    fs::create_dir_all(staging_dir.join("runtime")).unwrap();
+    fs::write(install_dir.join(core_binary_name()), b"old core").unwrap();
+    fs::write(install_dir.join("README.md"), b"old readme").unwrap();
+    fs::write(install_dir.join("user-data.json"), b"user data").unwrap();
+    fs::write(
+        install_dir.join("plugins/custom-router/plugin.js"),
+        b"custom plugin",
+    )
+    .unwrap();
+    fs::write(staging_dir.join(core_binary_name()), b"new core").unwrap();
+    fs::write(staging_dir.join("README.md"), b"new readme").unwrap();
+    fs::write(
+        staging_dir.join("plugins/bundled-router/plugin.js"),
+        b"bundled plugin",
+    )
+    .unwrap();
+    fs::write(staging_dir.join("runtime/default.json"), b"new runtime").unwrap();
+
+    overlay_install_dir(&install_dir, &staging_dir).unwrap();
+
+    assert_eq!(
+        fs::read(install_dir.join(core_binary_name())).unwrap(),
+        b"new core"
+    );
+    assert_eq!(
+        fs::read(install_dir.join("README.md")).unwrap(),
+        b"new readme"
+    );
+    assert_eq!(
+        fs::read(install_dir.join("runtime/default.json")).unwrap(),
+        b"new runtime"
+    );
+    assert_eq!(
+        fs::read(install_dir.join("plugins/custom-router/plugin.js")).unwrap(),
+        b"custom plugin"
+    );
+    assert_eq!(
+        fs::read(install_dir.join("plugins/bundled-router/plugin.js")).unwrap(),
+        b"bundled plugin"
+    );
+    assert_eq!(
+        fs::read(install_dir.join("user-data.json")).unwrap(),
+        b"user data"
+    );
+    assert!(!staging_dir.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn installing_a_core_into_a_missing_directory_moves_the_complete_staging_tree() {
+    let root = agent_test_home("core-overlay-first-install");
+    let install_dir = root.join("cpa-core");
+    let staging_dir = root.join("cpa-core.staging");
+    fs::create_dir_all(&staging_dir).unwrap();
+    fs::write(staging_dir.join(core_binary_name()), b"new core").unwrap();
+    fs::write(staging_dir.join(CORE_EXAMPLE_CONFIG_FILE), b"port: 8317\n").unwrap();
+
+    overlay_install_dir(&install_dir, &staging_dir).unwrap();
+
+    assert_eq!(
+        fs::read(install_dir.join(core_binary_name())).unwrap(),
+        b"new core"
+    );
+    assert!(install_dir.join(CORE_EXAMPLE_CONFIG_FILE).is_file());
+    assert!(!staging_dir.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn replacing_a_core_migrates_old_fields_into_the_new_template() {
     let root = agent_test_home("core-config-migrate");
     let source = root.join("source");
