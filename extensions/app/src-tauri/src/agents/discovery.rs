@@ -1975,11 +1975,11 @@ pub(crate) fn command_output_with_timeout(
     let mut stdout = child
         .stdout
         .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "无法读取智能体探测标准输出"))?;
+        .ok_or_else(|| io::Error::other("无法读取智能体探测标准输出"))?;
     let mut stderr = child
         .stderr
         .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "无法读取智能体探测错误输出"))?;
+        .ok_or_else(|| io::Error::other("无法读取智能体探测错误输出"))?;
     thread::scope(|scope| {
         let stdout_reader = scope.spawn(move || {
             let mut output = Vec::new();
@@ -2002,10 +2002,10 @@ pub(crate) fn command_output_with_timeout(
         };
         let stdout = stdout_reader
             .join()
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "智能体探测输出线程异常退出"))??;
+            .map_err(|_| io::Error::other("智能体探测输出线程异常退出"))??;
         let stderr = stderr_reader
             .join()
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "智能体探测错误线程异常退出"))??;
+            .map_err(|_| io::Error::other("智能体探测错误线程异常退出"))??;
         Ok(status.map(|status| std::process::Output {
             status,
             stdout,
