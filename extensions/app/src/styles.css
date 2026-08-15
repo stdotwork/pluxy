@@ -5560,9 +5560,12 @@ textarea:focus-visible {
 
 .agent-launch-directory-dialog {
   grid-template-rows: auto;
-  width: min(620px, calc(100vw - 32px));
+  align-content: start;
+  width: min(620px, 100%);
+  max-height: calc(100vh - 40px);
   height: auto;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .agent-launch-directory-dialog > p {
@@ -5570,6 +5573,11 @@ textarea:focus-visible {
   color: var(--theme-5f5a53);
   font-size: var(--font-size-label);
   line-height: var(--line-height-relaxed);
+}
+
+.agent-launch-directory-dialog .config-dialog-field {
+  grid-template-rows: auto auto;
+  min-height: 0;
 }
 
 .agent-launch-directory-picker {
