@@ -51,6 +51,11 @@ import {
   sameAgentModel,
   sameAgentModelMappings,
 } from '../services/agentConfigurationDraft';
+import {
+  parseAgentLaunchDirectoryHistory,
+  rememberAgentLaunchDirectory,
+  type AgentLaunchDirectoryHistory,
+} from '../services/agentLaunchDirectoryHistory';
 import type { ModelOption } from '../services/modelService';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import { CodexSessionsPanel } from './CodexSessionsPanel';
@@ -284,6 +289,7 @@ const DEFAULT_AGENT_SUBPAGE: AgentSubpageId = 'core';
 
 const AGENT_MODEL_SELECTIONS_KEY = 'cpa-gui.agent-model-selections.v1';
 const AGENT_SELECTED_CLIENT_KEY = 'cpa-gui.agent-selected-client.v1';
+const AGENT_LAUNCH_DIRECTORY_HISTORY_KEY = 'cpa-gui.agent-launch-directory-history.v1';
 
 const readSelectedAgentClient = (): AgentClientId => {
   const fallback = agentDefinitions[0].id;
@@ -331,6 +337,27 @@ const writeAgentModelSelections = (
     window.localStorage.setItem(AGENT_MODEL_SELECTIONS_KEY, JSON.stringify(selections));
   } catch {
     // Local storage can be unavailable in hardened webviews; the in-memory selection still works.
+  }
+};
+
+const readAgentLaunchDirectoryHistory = (): AgentLaunchDirectoryHistory => {
+  if (typeof window === 'undefined') return {};
+  try {
+    return parseAgentLaunchDirectoryHistory(
+      window.localStorage.getItem(AGENT_LAUNCH_DIRECTORY_HISTORY_KEY),
+      agentDefinitions.map((agent) => agent.id),
+    );
+  } catch {
+    return {};
+  }
+};
+
+const writeAgentLaunchDirectoryHistory = (history: AgentLaunchDirectoryHistory) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(AGENT_LAUNCH_DIRECTORY_HISTORY_KEY, JSON.stringify(history));
+  } catch {
+    // Keep the current in-memory history when persistent storage is unavailable.
   }
 };
 
@@ -623,7 +650,7 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'oauth-check' | 'directory' | 'launch' | 'launch-cli' | 'launch-app' | null
+    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'oauth-check' | 'directory' | 'launch' | 'launch-cli' | 'launch-app' | 'restart-app' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
@@ -640,6 +667,9 @@ export function AgentsPage() {
   const [launchDirectory, setLaunchDirectory] = useState('');
   const [launchDirectoryTarget, setLaunchDirectoryTarget] = useState<AgentLaunchTarget | null>(null);
   const [launchDirectoryError, setLaunchDirectoryError] = useState('');
+  const [launchDirectoryHistory, setLaunchDirectoryHistory] = useState(
+    readAgentLaunchDirectoryHistory,
+  );
   const [oauthLoginRequiredAction, setOauthLoginRequiredAction] = useState<OAuthLoginRequiredAction | null>(null);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const [piProviderUpdateStatus, setPiProviderUpdateStatus] = useState<PiProviderUpdateStatus | null>(null);
@@ -936,6 +966,7 @@ export function AgentsPage() {
           : activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
   );
   const canLaunchTarget = (target: AgentLaunchTarget | null) => launchEnabled && Boolean(target);
+  const activeLaunchDirectoryHistory = launchDirectoryHistory[selected] ?? [];
   const modelHint = modelSelectionError
     || modelError
     || (modelLoading
@@ -1283,7 +1314,7 @@ export function AgentsPage() {
   };
 
   const openLaunchDirectoryDialog = (target: AgentLaunchTarget) => {
-    setLaunchDirectory('');
+    setLaunchDirectory(activeLaunchDirectoryHistory[0] ?? '');
     setLaunchDirectoryTarget(target);
     setLaunchDirectoryError('');
     setLaunchDirectoryDialogOpen(true);
@@ -1307,6 +1338,14 @@ export function AgentsPage() {
     }
   };
 
+  const rememberLaunchDirectory = (client: AgentClientId, directory: string) => {
+    setLaunchDirectoryHistory((current) => {
+      const next = rememberAgentLaunchDirectory(current, client, directory);
+      writeAgentLaunchDirectoryHistory(next);
+      return next;
+    });
+  };
+
   const invokeAgentLaunch = async (
     target: AgentLaunchTarget,
     workingDirectory: string | null = null,
@@ -1324,6 +1363,7 @@ export function AgentsPage() {
         workingDirectory,
       });
       if (workingDirectory) {
+        rememberLaunchDirectory(selected, workingDirectory);
         setLaunchDirectoryDialogOpen(false);
         setLaunchDirectoryTarget(null);
       }
@@ -1345,6 +1385,21 @@ export function AgentsPage() {
       return;
     }
     await invokeAgentLaunch(target);
+  };
+
+  const restartCodexApp = async () => {
+    setBusyAction('restart-app');
+    setLaunchError('');
+    try {
+      if (draftChanged) throw new Error(t('agents.error.applyFirst'));
+      await invoke('restart_codex_app');
+    } catch (requestError) {
+      if (!handleOAuthLoginError(requestError, 'launch')) {
+        setLaunchError(String(requestError));
+      }
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const launchFromDirectoryDialog = async () => {
@@ -1860,6 +1915,22 @@ export function AgentsPage() {
                             ? t('agents.launch.starting')
                             : t('agents.launch.startApp')}
                         </button>
+                        <button
+                          type="button"
+                          className="secondary-button agent-launch-button"
+                          onClick={() => void restartCodexApp()}
+                          disabled={busy || !canLaunchTarget(appLaunchTarget) || draftChanged}
+                          title={draftChanged
+                            ? t('agents.launch.applyFirst')
+                            : appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                        >
+                          {busyAction === 'restart-app'
+                            ? <LoaderCircle size={16} className="spin" />
+                            : <RefreshCw size={16} />}
+                          {busyAction === 'restart-app'
+                            ? t('agents.launch.restartingApp')
+                            : t('agents.launch.restartApp')}
+                        </button>
                       </>
                     ) : (
                       <button
@@ -1953,6 +2024,42 @@ export function AgentsPage() {
                   : t('agents.launchDirectory.browse')}</b>
               </button>
             </div>
+            {activeLaunchDirectoryHistory.length ? (
+              <div className="agent-launch-directory-history">
+                <strong>{t('agents.launchDirectory.historyTitle')}</strong>
+                <div className="agent-launch-directory-history-list">
+                  {activeLaunchDirectoryHistory.map((directory, index) => {
+                    const active = directory === launchDirectory;
+                    return (
+                      <button
+                        type="button"
+                        className={active ? 'active' : ''}
+                        key={directory}
+                        onClick={() => {
+                          setLaunchDirectory(directory);
+                          setLaunchDirectoryError('');
+                        }}
+                        disabled={busy}
+                        title={directory}
+                      >
+                        <span>
+                          <strong>{directory}</strong>
+                          <small>{index === 0
+                            ? t('agents.launchDirectory.lastUsed')
+                            : t('agents.launchDirectory.recentItem')}</small>
+                        </span>
+                        <b>
+                          {active ? <Check size={15} aria-hidden /> : null}
+                          {active
+                            ? t('agents.launchDirectory.historySelected')
+                            : t('agents.launchDirectory.historyUse')}
+                        </b>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             {launchDirectoryError ? (
               <span className="agent-inline-message error" role="alert" aria-live="polite">
                 {launchDirectoryError}

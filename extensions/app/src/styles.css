@@ -5631,6 +5631,85 @@ textarea:focus-visible {
   font-size: var(--font-size-label);
 }
 
+.agent-launch-directory-history {
+  display: grid;
+  min-height: 0;
+  gap: 7px;
+}
+
+.agent-launch-directory-history > strong {
+  color: var(--theme-5f5a53);
+  font-size: var(--font-size-body);
+}
+
+.agent-launch-directory-history-list {
+  display: grid;
+  min-height: 64px;
+  max-height: 176px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--theme-d8d2c8);
+  border-radius: 9px;
+  background: var(--theme-fff);
+}
+
+.agent-launch-directory-history-list > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 8px 11px;
+  border: 0;
+  border-bottom: 1px solid var(--theme-eeeae2);
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-2d2a26);
+  text-align: left;
+}
+
+.agent-launch-directory-history-list > button:last-child {
+  border-bottom: 0;
+}
+
+.agent-launch-directory-history-list > button:hover:not(:disabled) {
+  background: var(--theme-faf8f4);
+}
+
+.agent-launch-directory-history-list > button.active {
+  background: var(--theme-f1ecfb);
+  box-shadow: inset 3px 0 0 var(--theme-8069ad);
+}
+
+.agent-launch-directory-history-list > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-launch-directory-history-list > button strong {
+  overflow: hidden;
+  font-size: var(--font-size-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-launch-directory-history-list > button small {
+  color: var(--theme-8a847c);
+  font-size: var(--font-size-meta);
+}
+
+.agent-launch-directory-history-list > button > b {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--theme-8069ad);
+  font-size: var(--font-size-label);
+}
+
 .agent-status-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

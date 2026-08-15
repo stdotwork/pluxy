@@ -1985,6 +1985,7 @@ fn main() {
             set_agent_config_enabled,
             update_agent_config,
             launch_agent,
+            restart_codex_app,
             get_lan_ipv4,
             save_gui_settings,
             save_network_routing_settings,
