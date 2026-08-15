@@ -30,30 +30,49 @@ const assetName = `CLIProxyAPI_${version}_${targetOS}_${targetArch}.${extension}
 const sourceDir = join(root, 'cpa-core');
 const sourceArchive = join(sourceDir, assetName);
 const checksumsPath = join(sourceDir, 'checksums.txt');
+const tag = `v${version}`;
+const releaseBase = `https://github.com/router-for-me/CLIProxyAPI/releases/download/${tag}`;
+
+const downloadReleaseFile = async (name, destination) => {
+  const response = await fetch(`${releaseBase}/${name}`);
+  if (!response.ok) throw new Error(`Download ${name} failed: HTTP ${response.status}`);
+  await writeFile(destination, Buffer.from(await response.arrayBuffer()));
+};
+
+const downloadCoreRelease = () => Promise.all([
+  downloadReleaseFile(assetName, sourceArchive),
+  downloadReleaseFile('checksums.txt', checksumsPath),
+]);
+
+const verifyCoreArchive = async () => {
+  if (!existsSync(checksumsPath)) return null;
+  const checksums = await readFile(checksumsPath, 'utf8');
+  const expected = checksums.split(/\r?\n/).map((line) => line.trim().split(/\s+/)).find((parts) => parts[1]?.replace(/^\*/, '') === assetName)?.[0]?.toLowerCase();
+  if (!expected) throw new Error(`checksums.txt does not contain ${assetName}`);
+  const actual = createHash('sha256').update(await readFile(sourceArchive)).digest('hex');
+  return { actual, expected };
+};
 
 await mkdir(sourceDir, { recursive: true });
 if (!existsSync(sourceArchive)) {
   if (!shouldDownload) {
     throw new Error(`Built-in core archive not found: ${sourceArchive}`);
   }
-  const tag = `v${version}`;
-  const releaseBase = `https://github.com/router-for-me/CLIProxyAPI/releases/download/${tag}`;
-  const [archiveResponse, checksumsResponse] = await Promise.all([
-    fetch(`${releaseBase}/${assetName}`),
-    fetch(`${releaseBase}/checksums.txt`),
-  ]);
-  if (!archiveResponse.ok) throw new Error(`Download ${assetName} failed: HTTP ${archiveResponse.status}`);
-  if (!checksumsResponse.ok) throw new Error(`Download checksums.txt failed: HTTP ${checksumsResponse.status}`);
-  await writeFile(sourceArchive, Buffer.from(await archiveResponse.arrayBuffer()));
-  await writeFile(checksumsPath, await checksumsResponse.text());
+  await downloadCoreRelease();
+} else if (shouldDownload && !existsSync(checksumsPath)) {
+  await downloadReleaseFile('checksums.txt', checksumsPath);
 }
 
-if (existsSync(checksumsPath)) {
-  const checksums = await readFile(checksumsPath, 'utf8');
-  const expected = checksums.split(/\r?\n/).map((line) => line.trim().split(/\s+/)).find((parts) => parts[1]?.replace(/^\*/, '') === assetName)?.[0]?.toLowerCase();
-  if (!expected) throw new Error(`checksums.txt does not contain ${assetName}`);
-  const actual = createHash('sha256').update(await readFile(sourceArchive)).digest('hex');
-  if (actual !== expected) throw new Error(`SHA-256 mismatch for ${assetName}`);
+let verification = await verifyCoreArchive();
+if (verification && verification.actual !== verification.expected && shouldDownload) {
+  console.warn(`Cached ${assetName} failed SHA-256 verification; downloading a fresh copy`);
+  await downloadCoreRelease();
+  verification = await verifyCoreArchive();
+}
+if (verification && verification.actual !== verification.expected) {
+  throw new Error(
+    `SHA-256 mismatch for ${assetName}: expected ${verification.expected}, got ${verification.actual}`,
+  );
 }
 
 await mkdir(output, { recursive: true });
