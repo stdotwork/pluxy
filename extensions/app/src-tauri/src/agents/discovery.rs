@@ -360,6 +360,16 @@ pub(crate) fn inspect_pi_provider_status(
         supported_platform: true,
         installed: executable.is_some(),
         plugin_installed,
+        launch_targets: executable
+            .as_ref()
+            .map(|path| {
+                vec![AgentLaunchTarget {
+                    id: "cli".to_string(),
+                    label: PI_AGENT_NAME.to_string(),
+                    detail: path_to_string(path),
+                }]
+            })
+            .unwrap_or_default(),
         version: cli_version.clone(),
         cli_version,
         app_version: None,
@@ -831,15 +841,28 @@ pub(crate) fn inspect_agent_config(
     } else {
         executable.as_deref().and_then(read_agent_version)
     };
+    let codex_app_installation = (client == AgentClient::Codex)
+        .then(|| find_codex_app_installation(home))
+        .flatten();
     let app_version = match client {
         AgentClient::ClaudeDesktop => read_claude_desktop_version(home),
-        AgentClient::Codex => read_codex_app_version(home),
+        AgentClient::Codex => codex_app_installation
+            .as_ref()
+            .and_then(read_codex_app_installation_version),
         AgentClient::DeepSeekHarness => read_deepseek_harness_profile_version(home),
         AgentClient::ZCode => read_zcode_app_version(home),
         _ => None,
     };
     let version = cli_version.clone().or_else(|| app_version.clone());
-    let installed = version.is_some() || (client == AgentClient::ZCode && executable.is_some());
+    let installed = version.is_some()
+        || (client == AgentClient::ZCode && executable.is_some())
+        || codex_app_installation.is_some();
+    let launch_targets = agent_launch_targets(
+        client,
+        executable.as_deref(),
+        app_version.as_deref(),
+        codex_app_installation.is_some(),
+    );
     let mut warnings = Vec::new();
     if !client.supported_platform() {
         warnings.push("当前平台不支持 Claude Desktop 3P 配置".to_string());
@@ -859,6 +882,7 @@ pub(crate) fn inspect_agent_config(
         supported_platform: client.supported_platform(),
         installed,
         plugin_installed: true,
+        launch_targets,
         version,
         cli_version,
         app_version,
@@ -881,6 +905,63 @@ pub(crate) fn inspect_agent_config(
         warnings,
         error,
     }
+}
+
+pub(crate) fn agent_launch_targets(
+    client: AgentClient,
+    executable: Option<&Path>,
+    app_version: Option<&str>,
+    app_installed: bool,
+) -> Vec<AgentLaunchTarget> {
+    let mut targets = Vec::new();
+    match client {
+        AgentClient::ClaudeDesktop => {
+            if executable.is_some() || app_version.is_some() {
+                targets.push(AgentLaunchTarget {
+                    id: "app".to_string(),
+                    label: "Claude Desktop".to_string(),
+                    detail: executable
+                        .map(path_to_string)
+                        .unwrap_or_else(|| "Claude Desktop application".to_string()),
+                });
+            }
+        }
+        AgentClient::Codex => {
+            if app_installed {
+                targets.push(AgentLaunchTarget {
+                    id: "app".to_string(),
+                    label: "Codex App".to_string(),
+                    detail: "Codex desktop application".to_string(),
+                });
+            }
+            if let Some(executable) = executable {
+                targets.push(AgentLaunchTarget {
+                    id: "cli".to_string(),
+                    label: "Codex CLI".to_string(),
+                    detail: path_to_string(executable),
+                });
+            }
+        }
+        AgentClient::ZCode => {
+            if let Some(executable) = executable {
+                targets.push(AgentLaunchTarget {
+                    id: "app".to_string(),
+                    label: "ZCode".to_string(),
+                    detail: path_to_string(executable),
+                });
+            }
+        }
+        _ => {
+            if let Some(executable) = executable {
+                targets.push(AgentLaunchTarget {
+                    id: "cli".to_string(),
+                    label: client.name().to_string(),
+                    detail: path_to_string(executable),
+                });
+            }
+        }
+    }
+    targets
 }
 
 pub(crate) fn agent_configuration_is_synchronized(
@@ -1260,27 +1341,27 @@ pub(crate) fn read_claude_desktop_version(home: &Path) -> Option<String> {
     find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path))
 }
 
-pub(crate) fn read_codex_app_version(home: &Path) -> Option<String> {
+pub(crate) fn read_codex_app_installation_version(installation: &CodexAppTarget) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        match find_codex_app_installation(home)? {
+        match installation {
             CodexAppTarget::WindowsAppId(app_id) => {
                 let _ = app_id;
                 read_windows_codex_store_version()
             }
             CodexAppTarget::Application(path) => {
-                read_windows_executable_version(&path).or_else(|| read_agent_version(&path))
+                read_windows_executable_version(path).or_else(|| read_agent_version(path))
             }
         }
     }
     #[cfg(target_os = "macos")]
     {
-        let CodexAppTarget::Application(path) = find_codex_app_installation(home)?;
-        read_macos_app_version(&path)
+        let CodexAppTarget::Application(path) = installation;
+        read_macos_app_version(path)
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = home;
+        let _ = installation;
         None
     }
 }

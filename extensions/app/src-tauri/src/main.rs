@@ -763,6 +763,7 @@ struct AgentConfigStatus {
     supported_platform: bool,
     installed: bool,
     plugin_installed: bool,
+    launch_targets: Vec<AgentLaunchTarget>,
     version: Option<String>,
     cli_version: Option<String>,
     app_version: Option<String>,
@@ -782,6 +783,14 @@ struct AgentConfigStatus {
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
     warnings: Vec<String>,
     error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentLaunchTarget {
+    id: String,
+    label: String,
+    detail: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1770,6 +1779,7 @@ fn main() {
     let start_hidden = should_start_hidden(&gui_config);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -1974,6 +1984,7 @@ fn main() {
             clear_codex_config,
             set_agent_config_enabled,
             update_agent_config,
+            launch_agent,
             get_lan_ipv4,
             save_gui_settings,
             save_network_routing_settings,
