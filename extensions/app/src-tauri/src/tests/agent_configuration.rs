@@ -22,6 +22,10 @@ fn claude_agent_config_preserves_existing_fields() {
     assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317");
     assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], DEFAULT_API_KEY);
     assert_eq!(value["env"]["ANTHROPIC_MODEL"], "claude-test");
+    assert_eq!(
+        value["env"][CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV],
+        "1"
+    );
     assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "200000");
     assert_eq!(value["env"][CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV], "90");
     assert!(value["env"].get(DISABLE_AUTO_COMPACT_ENV).is_none());
@@ -44,6 +48,7 @@ fn claude_code_inspection_normalizes_legacy_1m_suffix() {
                 "env": {
                     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
                     "ANTHROPIC_AUTH_TOKEN": "test-key",
+                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
                     "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
                     "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
                     "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
@@ -68,6 +73,30 @@ fn claude_code_inspection_normalizes_legacy_1m_suffix() {
     assert_eq!(mappings.max_context_tokens, 1_000_000);
     assert_eq!(mappings.auto_compact_pct, 90);
     assert!(!mappings.disable_auto_compact);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn claude_code_requires_gateway_model_discovery_to_be_enabled() {
+    let directory = agent_test_home("claude-code-gateway-model-discovery");
+    let path = directory.join("settings.json");
+    fs::write(
+        &path,
+        r#"{
+                "env": {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_AUTH_TOKEN": "test-key",
+                    "ANTHROPIC_MODEL": "gpt-test",
+                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0"
+                }
+            }"#,
+    )
+    .unwrap();
+
+    let (configured, model) = inspect_claude_agent_config(&path, 8317, "test-key").unwrap();
+
+    assert!(!configured);
+    assert_eq!(model.as_deref(), Some("gpt-test"));
     fs::remove_dir_all(directory).unwrap();
 }
 
@@ -762,7 +791,9 @@ fn kimi_code_config_preserves_existing_tables_and_uses_openai_provider() {
     let home = agent_test_home("kimi-code-agent-config");
     let path = home.join(".kimi-code/config.toml");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let mut models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    models[0].context_window = Some(1_048_576);
+    models[1].context_window = Some(131_072);
     let rendered = build_kimi_code_agent_config(
         Some(
             r#"theme = "dark"
@@ -807,6 +838,14 @@ model = "model"
         Some("tool_use")
     );
     assert_eq!(
+        value["models"]["cpa-gui/gpt-test"]["max_context_size"].as_integer(),
+        Some(1_048_576)
+    );
+    assert_eq!(
+        value["models"]["cpa-gui/deepseek-test"]["max_context_size"].as_integer(),
+        Some(131_072)
+    );
+    assert_eq!(
         inspect_kimi_code_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
         (true, Some("gpt-test".to_string()))
     );
@@ -818,7 +857,9 @@ fn grok_build_config_preserves_existing_models_and_uses_chat_completions() {
     let home = agent_test_home("grok-build-agent-config");
     let path = home.join(".grok/config.toml");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let mut models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    models[0].context_window = Some(1_048_576);
+    models[1].context_window = Some(131_072);
     let rendered = build_grok_build_agent_config(
         Some(
             r#"theme = "dark"
@@ -857,6 +898,14 @@ api_key = "other-key"
     assert_eq!(
         value["model"]["cpa-gui/gpt-test"]["api_backend"].as_str(),
         Some("chat_completions")
+    );
+    assert_eq!(
+        value["model"]["cpa-gui/gpt-test"]["context_window"].as_integer(),
+        Some(1_048_576)
+    );
+    assert_eq!(
+        value["model"]["cpa-gui/deepseek-test"]["context_window"].as_integer(),
+        Some(131_072)
     );
     assert_eq!(
         inspect_grok_build_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
@@ -1075,6 +1124,28 @@ fn agent_model_list_parser_exposes_aliases_as_selectable_model_ids() {
             },
         ]
     );
+}
+
+#[test]
+fn kimi_grok_and_zcode_use_cpa_runtime_context_windows() {
+    for client in [
+        AgentClient::KimiCode,
+        AgentClient::GrokBuild,
+        AgentClient::ZCode,
+    ] {
+        assert!(agent_uses_cpa_runtime_context_windows(client));
+    }
+    for client in [
+        AgentClient::ClaudeCode,
+        AgentClient::ClaudeDesktop,
+        AgentClient::Codex,
+        AgentClient::OpenCode,
+        AgentClient::OpenClaw,
+        AgentClient::Hermes,
+        AgentClient::DeepSeekHarness,
+    ] {
+        assert!(!agent_uses_cpa_runtime_context_windows(client));
+    }
 }
 
 #[test]

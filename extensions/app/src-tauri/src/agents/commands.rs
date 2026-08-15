@@ -688,7 +688,7 @@ pub(crate) async fn fetch_prepared_agent_models(
         prepare_codex_agent_models(&runtime_models)
     } else {
         let mut models = fetch_agent_models(config.port, api_key).await?;
-        if client == AgentClient::ZCode {
+        if agent_uses_cpa_runtime_context_windows(client) {
             let runtime_models = fetch_codex_runtime_models(config.port, api_key).await?;
             codex_catalog::merge_runtime_context_windows(&mut models, &runtime_models);
         }
@@ -712,6 +712,13 @@ pub(crate) async fn fetch_prepared_agent_models(
             codex_catalog: None,
         })
     }
+}
+
+pub(crate) fn agent_uses_cpa_runtime_context_windows(client: AgentClient) -> bool {
+    matches!(
+        client,
+        AgentClient::ZCode | AgentClient::KimiCode | AgentClient::GrokBuild
+    )
 }
 
 pub(crate) fn resolve_claude_desktop_model_mappings(

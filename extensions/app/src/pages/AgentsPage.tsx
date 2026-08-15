@@ -32,6 +32,7 @@ import kimiIcon from '../assets/icons/kimi-light.svg';
 import openclawIcon from '../assets/icons/openclaw.svg';
 import opencodeIcon from '../assets/icons/opencode.svg';
 import piIcon from '../assets/icons/pi-logo-on-light.svg';
+import zcodeIcon from '../assets/icons/zcode.png';
 import {
   agentModelAlias,
   filterAgentModels,
@@ -79,6 +80,7 @@ type AgentConfigStatus = {
   pluginVersion: string | null;
   configValid: boolean;
   configured: boolean;
+  configurationSynchronized: boolean;
   currentModel: string | null;
   oauthConfiguration: boolean;
   modificationEnabled: boolean;
@@ -206,10 +208,40 @@ const agentDefinitions: AgentDefinition[] = [
     descriptionKey: 'agents.description.codex',
   },
   {
+    id: 'deepseek-harness',
+    name: 'DeepSeek Harness',
+    icon: deepseekIcon,
+    descriptionKey: 'agents.description.deepseekHarness',
+  },
+  {
     id: 'opencode',
     name: 'OpenCode',
     icon: opencodeIcon,
     descriptionKey: 'agents.description.opencode',
+  },
+  {
+    id: 'pi',
+    name: 'Pi',
+    icon: piIcon,
+    descriptionKey: 'agents.description.pi',
+  },
+  {
+    id: 'grok-build',
+    name: 'Grok Build',
+    icon: grokIcon,
+    descriptionKey: 'agents.description.grokBuild',
+  },
+  {
+    id: 'zcode',
+    name: 'ZCode',
+    icon: zcodeIcon,
+    descriptionKey: 'agents.description.zcode',
+  },
+  {
+    id: 'kimi-code',
+    name: 'Kimi Code',
+    icon: kimiIcon,
+    descriptionKey: 'agents.description.kimiCode',
   },
   {
     id: 'openclaw',
@@ -222,36 +254,6 @@ const agentDefinitions: AgentDefinition[] = [
     name: 'Hermes Agent',
     icon: hermesIcon,
     descriptionKey: 'agents.description.hermes',
-  },
-  {
-    id: 'deepseek-harness',
-    name: 'DeepSeek Harness',
-    icon: deepseekIcon,
-    descriptionKey: 'agents.description.deepseekHarness',
-  },
-  {
-    id: 'zcode',
-    name: 'ZCode',
-    Icon: Bot,
-    descriptionKey: 'agents.description.zcode',
-  },
-  {
-    id: 'kimi-code',
-    name: 'Kimi Code',
-    icon: kimiIcon,
-    descriptionKey: 'agents.description.kimiCode',
-  },
-  {
-    id: 'grok-build',
-    name: 'Grok Build',
-    icon: grokIcon,
-    descriptionKey: 'agents.description.grokBuild',
-  },
-  {
-    id: 'pi',
-    name: 'Pi',
-    icon: piIcon,
-    descriptionKey: 'agents.description.pi',
   },
 ];
 
@@ -885,7 +887,7 @@ export function AgentsPage() {
   const configurationAction = resolveAgentConfigurationAction({
     client: selected,
     modificationState: activeStatus?.modificationState ?? 'unconfigured',
-    configurationSynchronized: Boolean(activeStatus?.configured),
+    configurationSynchronized: Boolean(activeStatus?.configurationSynchronized),
     selectedModel,
     appliedModel,
     oauthConfiguration,

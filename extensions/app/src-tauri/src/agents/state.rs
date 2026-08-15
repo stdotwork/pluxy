@@ -161,6 +161,7 @@ pub(crate) fn recover_codex_applied_state_from_backups(
         version: AGENT_APPLIED_STATE_VERSION,
         client: AgentClient::Codex.id().to_string(),
         model,
+        configuration_revision: AGENT_CONFIGURATION_REVISION,
         claude_desktop_model_mappings: None,
         backup_files,
         updated_at_unix: SystemTime::now()
@@ -284,6 +285,7 @@ pub(crate) fn load_agent_applied_state(
         version: AGENT_APPLIED_STATE_VERSION,
         client: client.id().to_string(),
         model: record.model,
+        configuration_revision: 0,
         claude_desktop_model_mappings: None,
         backup_files,
         updated_at_unix: SystemTime::now()
@@ -1485,6 +1487,7 @@ pub(crate) fn commit_agent_configuration(
             version: AGENT_APPLIED_STATE_VERSION,
             client: client.id().to_string(),
             model: model.to_string(),
+            configuration_revision: AGENT_CONFIGURATION_REVISION,
             claude_desktop_model_mappings: (client == AgentClient::ClaudeDesktop)
                 .then(|| claude_desktop_model_mappings.cloned())
                 .flatten(),

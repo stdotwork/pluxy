@@ -368,6 +368,7 @@ pub(crate) fn inspect_pi_provider_status(
         config_exists,
         config_valid,
         configured,
+        configuration_synchronized: configured,
         current_model: current_model.clone(),
         oauth_configuration: false,
         modification_enabled: configured,
@@ -849,6 +850,7 @@ pub(crate) fn inspect_agent_config(
         warnings.push(message.clone());
     }
     let modification = inspect_agent_application(client, home);
+    let configuration_synchronized = agent_configuration_is_synchronized(client, home, configured);
     warnings.extend(modification.warnings.iter().cloned());
 
     AgentConfigStatus {
@@ -865,6 +867,7 @@ pub(crate) fn inspect_agent_config(
         config_exists,
         config_valid,
         configured,
+        configuration_synchronized,
         current_model,
         oauth_configuration,
         modification_enabled: modification.enabled,
@@ -878,6 +881,23 @@ pub(crate) fn inspect_agent_config(
         warnings,
         error,
     }
+}
+
+pub(crate) fn agent_configuration_is_synchronized(
+    client: AgentClient,
+    home: &Path,
+    configured: bool,
+) -> bool {
+    if !configured {
+        return false;
+    }
+    if !matches!(client, AgentClient::KimiCode | AgentClient::GrokBuild) {
+        return true;
+    }
+    load_agent_applied_state(client, home)
+        .ok()
+        .flatten()
+        .is_some_and(|state| state.configuration_revision >= AGENT_CONFIGURATION_REVISION)
 }
 
 pub(crate) fn inspect_agent_application(
@@ -2063,7 +2083,11 @@ pub(crate) fn inspect_claude_agent_config(
         && env
             .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
             .and_then(serde_json::Value::as_str)
-            == Some(api_key);
+            == Some(api_key)
+        && env
+            .and_then(|env| env.get(CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV))
+            .and_then(serde_json::Value::as_str)
+            == Some("1");
     let model = env
         .and_then(|env| env.get("ANTHROPIC_MODEL"))
         .and_then(serde_json::Value::as_str)

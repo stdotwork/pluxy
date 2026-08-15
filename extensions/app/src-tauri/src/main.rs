@@ -159,6 +159,8 @@ const MANAGED_CLAUDE_HAIKU_ALIAS_DISPLAY_NAME: &str =
 const DEFAULT_CLAUDE_CONTEXT_WINDOW: u64 = 200_000;
 const CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW: u64 = 1_000_000;
 const CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV: &str = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
+const CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV: &str =
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY";
 const CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV: &str = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
 const DISABLE_AUTO_COMPACT_ENV: &str = "DISABLE_AUTO_COMPACT";
 const DEFAULT_CLAUDE_AUTO_COMPACT_PCT: u8 = 90;
@@ -171,6 +173,7 @@ const MODEL_ALIAS_CONFIG_SECTIONS: &[&str] = &[
 const LEGACY_AGENT_MODIFICATION_STATE_VERSION: u8 = 1;
 const AGENT_MODIFICATION_STATE_VERSION: u8 = 2;
 const AGENT_APPLIED_STATE_VERSION: u8 = 4;
+const AGENT_CONFIGURATION_REVISION: u8 = 1;
 const AGENT_PHASE_APPLYING: &str = "applying";
 const AGENT_PHASE_ACTIVE: &str = "active";
 const AGENT_PHASE_RESTORING: &str = "restoring";
@@ -768,6 +771,7 @@ struct AgentConfigStatus {
     config_exists: bool,
     config_valid: bool,
     configured: bool,
+    configuration_synchronized: bool,
     current_model: Option<String>,
     oauth_configuration: bool,
     modification_enabled: bool,
@@ -951,6 +955,8 @@ struct AgentAppliedState {
     version: u8,
     client: String,
     model: String,
+    #[serde(default)]
+    configuration_revision: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

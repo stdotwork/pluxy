@@ -93,7 +93,10 @@ export function resolveAgentConfigurationAction({
 }: ResolveAgentConfigurationActionOptions): AgentConfigurationAction {
   if (modificationState !== 'applied') return 'apply';
   if (client === 'pi') return 'close';
-  if (client === 'zcode' && !configurationSynchronized) return 'update';
+  if (
+    (client === 'zcode' || client === 'kimi-code' || client === 'grok-build')
+    && !configurationSynchronized
+  ) return 'update';
 
   const modelChanged = client === 'claude-code' || client === 'claude-desktop'
     ? !sameAgentModelMappings(modelMappings, appliedModelMappings)

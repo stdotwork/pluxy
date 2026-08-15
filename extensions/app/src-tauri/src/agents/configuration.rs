@@ -526,6 +526,10 @@ pub(crate) fn build_claude_agent_config(
         serde_json::Value::String(max_context_tokens.to_string()),
     );
     env.insert(
+        CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV.to_string(),
+        serde_json::Value::String("1".to_string()),
+    );
+    env.insert(
         CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV.to_string(),
         serde_json::Value::String(mappings.auto_compact_pct.to_string()),
     );
@@ -922,6 +926,7 @@ pub(crate) fn remove_claude_code_managed_configuration(
                 "ANTHROPIC_DEFAULT_SONNET_MODEL",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL",
                 "ANTHROPIC_DEFAULT_FABLE_MODEL",
+                CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV,
                 CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV,
                 CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV,
                 DISABLE_AUTO_COMPACT_ENV,
@@ -1582,6 +1587,7 @@ pub(crate) fn build_restored_claude_code_config(
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
             "ANTHROPIC_DEFAULT_OPUS_MODEL",
             "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV,
             CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV,
             CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV,
             DISABLE_AUTO_COMPACT_ENV,

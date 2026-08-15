@@ -175,6 +175,23 @@ describe('agent configuration update action', () => {
     })).toBe('update');
   });
 
+  test.each<AgentConfigurationClientId>(['kimi-code', 'grok-build'])(
+    '%s updates an applied configuration whose CPA context catalog is stale',
+    (client) => {
+      expect(resolveAgentConfigurationAction({
+        client,
+        modificationState: 'applied',
+        configurationSynchronized: false,
+        selectedModel: 'model-a',
+        appliedModel: 'model-a',
+        oauthConfiguration: false,
+        appliedOauthConfiguration: false,
+        modelMappings: { opus: '', sonnet: '', haiku: '' },
+        appliedModelMappings: { opus: '', sonnet: '', haiku: '' },
+      })).toBe('update');
+    },
+  );
+
   test('Codex also updates when only OAuth configuration changes', () => {
     expect(resolveAgentConfigurationAction({
       client: 'codex',
