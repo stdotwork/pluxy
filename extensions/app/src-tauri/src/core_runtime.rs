@@ -180,7 +180,6 @@ pub(crate) async fn install_core_version_inner(
     let install_dir = core_install_dir()?;
     let base_dir = core_base_dir()?;
     let staging_dir = base_dir.join("cpa-core.staging");
-    let backup_dir = base_dir.join("cpa-core.backup");
     let download_dir = base_dir.join("cpa-core.download");
 
     if current_core_status(None, None)?.running {
@@ -231,7 +230,7 @@ pub(crate) async fn install_core_version_inner(
         },
     )?;
 
-    replace_install_dir(&install_dir, &staging_dir, &backup_dir)?;
+    overlay_install_dir(&install_dir, &staging_dir)?;
     let _ = fs::remove_dir_all(&download_dir);
 
     Ok(CoreInstallResult {
@@ -252,7 +251,6 @@ pub(crate) fn install_bundled_core_inner(
     let install_dir = core_install_dir()?;
     let base_dir = core_base_dir()?;
     let staging_dir = base_dir.join("cpa-core.staging");
-    let backup_dir = base_dir.join("cpa-core.backup");
 
     if current_core_status(None, None)?.running {
         return Err("CPA 内核正在运行，请先停止后再使用内置内核".to_string());
@@ -294,7 +292,7 @@ pub(crate) fn install_bundled_core_inner(
             installed_at_unix: unix_now(),
         },
     )?;
-    replace_install_dir(&install_dir, &staging_dir, &backup_dir)?;
+    overlay_install_dir(&install_dir, &staging_dir)?;
 
     Ok(CoreInstallResult {
         version: info.version.clone(),
@@ -1654,30 +1652,70 @@ pub(crate) fn reset_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|err| format!("创建目录失败 {}: {err}", path_to_string(path)))
 }
 
-pub(crate) fn replace_install_dir(
-    install_dir: &Path,
-    staging_dir: &Path,
-    backup_dir: &Path,
-) -> Result<(), String> {
-    if backup_dir.exists() {
-        fs::remove_dir_all(backup_dir).map_err(|err| format!("清理备份目录失败: {err}"))?;
+pub(crate) fn overlay_install_dir(install_dir: &Path, staging_dir: &Path) -> Result<(), String> {
+    if !staging_dir.is_dir() {
+        return Err(format!(
+            "内核暂存目录不存在: {}",
+            path_to_string(staging_dir)
+        ));
     }
 
-    if install_dir.exists() {
-        fs::rename(install_dir, backup_dir)
-            .map_err(|err| format!("备份旧内核目录失败，请确认 CPA 内核未运行: {err}"))?;
+    if !install_dir.exists() {
+        return fs::rename(staging_dir, install_dir)
+            .map_err(|err| format!("安装新内核目录失败: {err}"));
+    }
+    if !install_dir.is_dir() {
+        return Err(format!(
+            "内核安装路径不是目录: {}",
+            path_to_string(install_dir)
+        ));
     }
 
-    if let Err(err) = fs::rename(staging_dir, install_dir) {
-        if backup_dir.exists() {
-            let _ = fs::rename(backup_dir, install_dir);
+    overlay_directory(staging_dir, install_dir)?;
+    fs::remove_dir_all(staging_dir).map_err(|err| format!("清理内核暂存目录失败: {err}"))
+}
+
+fn overlay_directory(source_dir: &Path, target_dir: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(source_dir)
+        .map_err(|err| format!("读取内核暂存目录失败 {}: {err}", path_to_string(source_dir)))?
+    {
+        let entry = entry.map_err(|err| format!("读取内核暂存条目失败: {err}"))?;
+        let source_path = entry.path();
+        let target_path = target_dir.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("读取内核暂存条目类型失败: {err}"))?;
+
+        if file_type.is_dir() {
+            if target_path.exists() && !target_path.is_dir() {
+                return Err(format!(
+                    "无法用内核目录覆盖同名文件: {}",
+                    path_to_string(&target_path)
+                ));
+            }
+            fs::create_dir_all(&target_path).map_err(|err| {
+                format!(
+                    "创建内核安装子目录失败 {}: {err}",
+                    path_to_string(&target_path)
+                )
+            })?;
+            overlay_directory(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            if target_path.exists() && !target_path.is_file() {
+                return Err(format!(
+                    "无法用内核文件覆盖同名目录: {}",
+                    path_to_string(&target_path)
+                ));
+            }
+            fs::copy(&source_path, &target_path).map_err(|err| {
+                format!("覆盖内核文件失败 {}: {err}", path_to_string(&target_path))
+            })?;
+        } else {
+            return Err(format!(
+                "内核暂存目录包含不支持的条目: {}",
+                path_to_string(&source_path)
+            ));
         }
-
-        return Err(format!("切换新内核目录失败: {err}"));
-    }
-
-    if backup_dir.exists() {
-        fs::remove_dir_all(backup_dir).map_err(|err| format!("删除旧内核备份目录失败: {err}"))?;
     }
 
     Ok(())

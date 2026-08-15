@@ -1,5 +1,13 @@
 use super::*;
 
+const AGENT_STATUS_DETECTION_CONCURRENCY: usize = 4;
+
+#[derive(Clone, Copy)]
+enum AgentStatusDetectionTarget {
+    Client(AgentClient),
+    PiProvider,
+}
+
 pub(crate) fn inspect_agent_config_statuses(
     app: &tauri::AppHandle,
     config: &GuiConfigFile,
@@ -9,20 +17,63 @@ pub(crate) fn inspect_agent_config_statuses(
         .home_dir()
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
     let api_key = effective_agent_api_key(config);
-    let mut statuses = [
-        AgentClient::ClaudeCode,
-        AgentClient::ClaudeDesktop,
-        AgentClient::Codex,
-        AgentClient::OpenCode,
-        AgentClient::OpenClaw,
-        AgentClient::Hermes,
-        AgentClient::DeepSeekHarness,
-    ]
-    .into_iter()
-    .map(|client| inspect_agent_config(client, &home, config.port, api_key))
-    .collect::<Vec<_>>();
-    statuses.push(inspect_pi_provider_status(&home, config.port, api_key));
-    Ok(statuses)
+    let targets = [
+        AgentStatusDetectionTarget::Client(AgentClient::ClaudeCode),
+        AgentStatusDetectionTarget::Client(AgentClient::ClaudeDesktop),
+        AgentStatusDetectionTarget::Client(AgentClient::Codex),
+        AgentStatusDetectionTarget::Client(AgentClient::OpenCode),
+        AgentStatusDetectionTarget::Client(AgentClient::OpenClaw),
+        AgentStatusDetectionTarget::Client(AgentClient::Hermes),
+        AgentStatusDetectionTarget::Client(AgentClient::DeepSeekHarness),
+        AgentStatusDetectionTarget::Client(AgentClient::ZCode),
+        AgentStatusDetectionTarget::Client(AgentClient::KimiCode),
+        AgentStatusDetectionTarget::Client(AgentClient::GrokBuild),
+        AgentStatusDetectionTarget::PiProvider,
+    ];
+    let queue = Mutex::new(targets.into_iter().enumerate());
+    let results = Mutex::new(vec![None; targets.len()]);
+    thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(AGENT_STATUS_DETECTION_CONCURRENCY);
+        for _ in 0..AGENT_STATUS_DETECTION_CONCURRENCY {
+            let queue = &queue;
+            let results = &results;
+            let home = &home;
+            workers.push(scope.spawn(move || -> Result<(), String> {
+                loop {
+                    let next = queue
+                        .lock()
+                        .map_err(|_| "智能体检测任务队列锁已损坏".to_string())?
+                        .next();
+                    let Some((index, target)) = next else {
+                        return Ok(());
+                    };
+                    let status = match target {
+                        AgentStatusDetectionTarget::Client(client) => {
+                            inspect_agent_config(client, home, config.port, api_key)
+                        }
+                        AgentStatusDetectionTarget::PiProvider => {
+                            inspect_pi_provider_status(home, config.port, api_key)
+                        }
+                    };
+                    results
+                        .lock()
+                        .map_err(|_| "智能体检测结果锁已损坏".to_string())?[index] = Some(status);
+                }
+            }));
+        }
+        for worker in workers {
+            worker
+                .join()
+                .map_err(|_| "智能体检测工作线程异常退出".to_string())??;
+        }
+        Ok::<(), String>(())
+    })?;
+    results
+        .into_inner()
+        .map_err(|_| "智能体检测结果锁已损坏".to_string())?
+        .into_iter()
+        .map(|status| status.ok_or_else(|| "智能体检测结果不完整".to_string()))
+        .collect()
 }
 
 pub(crate) fn refresh_agent_config_status_cache(
@@ -637,6 +688,10 @@ pub(crate) async fn fetch_prepared_agent_models(
         prepare_codex_agent_models(&runtime_models)
     } else {
         let mut models = fetch_agent_models(config.port, api_key).await?;
+        if agent_uses_cpa_runtime_context_windows(client) {
+            let runtime_models = fetch_codex_runtime_models(config.port, api_key).await?;
+            codex_catalog::merge_runtime_context_windows(&mut models, &runtime_models);
+        }
         if matches!(client, AgentClient::ClaudeCode | AgentClient::ClaudeDesktop) {
             let content = fetch_management_config_yaml(config).await?;
             mark_configured_agent_model_aliases(&mut models, &content)?;
@@ -657,6 +712,13 @@ pub(crate) async fn fetch_prepared_agent_models(
             codex_catalog: None,
         })
     }
+}
+
+pub(crate) fn agent_uses_cpa_runtime_context_windows(client: AgentClient) -> bool {
+    matches!(
+        client,
+        AgentClient::ZCode | AgentClient::KimiCode | AgentClient::GrokBuild
+    )
 }
 
 pub(crate) fn resolve_claude_desktop_model_mappings(

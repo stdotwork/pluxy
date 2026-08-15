@@ -6,6 +6,9 @@ export type AgentConfigurationClientId =
   | 'openclaw'
   | 'hermes'
   | 'deepseek-harness'
+  | 'zcode'
+  | 'kimi-code'
+  | 'grok-build'
   | 'pi';
 
 export type AgentConfigurationModificationState = 'unconfigured' | 'applied' | 'invalid';
@@ -29,6 +32,7 @@ export type AgentModelMappings = {
 type ResolveAgentConfigurationActionOptions = {
   client: AgentConfigurationClientId;
   modificationState: AgentConfigurationModificationState;
+  configurationSynchronized?: boolean;
   selectedModel: string;
   appliedModel: string;
   oauthConfiguration: boolean;
@@ -79,6 +83,7 @@ export const resolveAgentModelMappingsDraftSourceForClient = <T>(
 export function resolveAgentConfigurationAction({
   client,
   modificationState,
+  configurationSynchronized = true,
   selectedModel,
   appliedModel,
   oauthConfiguration,
@@ -88,6 +93,10 @@ export function resolveAgentConfigurationAction({
 }: ResolveAgentConfigurationActionOptions): AgentConfigurationAction {
   if (modificationState !== 'applied') return 'apply';
   if (client === 'pi') return 'close';
+  if (
+    (client === 'zcode' || client === 'kimi-code' || client === 'grok-build')
+    && !configurationSynchronized
+  ) return 'update';
 
   const modelChanged = client === 'claude-code' || client === 'claude-desktop'
     ? !sameAgentModelMappings(modelMappings, appliedModelMappings)

@@ -27,9 +27,12 @@ import claudeIcon from '../assets/icons/claude.svg';
 import codexIcon from '../assets/icons/codex.svg';
 import deepseekIcon from '../assets/icons/deepseek.svg';
 import hermesIcon from '../assets/icons/hermes.png';
+import grokIcon from '../assets/icons/grok.svg';
+import kimiIcon from '../assets/icons/kimi-light.svg';
 import openclawIcon from '../assets/icons/openclaw.svg';
 import opencodeIcon from '../assets/icons/opencode.svg';
 import piIcon from '../assets/icons/pi-logo-on-light.svg';
+import zcodeIcon from '../assets/icons/zcode.png';
 import {
   agentModelAlias,
   filterAgentModels,
@@ -56,6 +59,9 @@ type AgentClientId =
   | 'openclaw'
   | 'hermes'
   | 'deepseek-harness'
+  | 'zcode'
+  | 'kimi-code'
+  | 'grok-build'
   | 'pi';
 
 type ClaudeModelMappingClientId = 'claude-code' | 'claude-desktop';
@@ -74,6 +80,7 @@ type AgentConfigStatus = {
   pluginVersion: string | null;
   configValid: boolean;
   configured: boolean;
+  configurationSynchronized: boolean;
   currentModel: string | null;
   oauthConfiguration: boolean;
   modificationEnabled: boolean;
@@ -170,7 +177,7 @@ type AgentDefinition = {
   name: string;
   icon?: string;
   Icon?: ComponentType<{ size?: number; 'aria-hidden'?: boolean }>;
-  descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes' | 'agents.description.deepseekHarness' | 'agents.description.pi';
+  descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes' | 'agents.description.deepseekHarness' | 'agents.description.zcode' | 'agents.description.kimiCode' | 'agents.description.grokBuild' | 'agents.description.pi';
 };
 
 type AgentSubpageId = 'core' | 'sessions';
@@ -201,10 +208,40 @@ const agentDefinitions: AgentDefinition[] = [
     descriptionKey: 'agents.description.codex',
   },
   {
+    id: 'deepseek-harness',
+    name: 'DeepSeek Harness',
+    icon: deepseekIcon,
+    descriptionKey: 'agents.description.deepseekHarness',
+  },
+  {
     id: 'opencode',
     name: 'OpenCode',
     icon: opencodeIcon,
     descriptionKey: 'agents.description.opencode',
+  },
+  {
+    id: 'pi',
+    name: 'Pi',
+    icon: piIcon,
+    descriptionKey: 'agents.description.pi',
+  },
+  {
+    id: 'grok-build',
+    name: 'Grok Build',
+    icon: grokIcon,
+    descriptionKey: 'agents.description.grokBuild',
+  },
+  {
+    id: 'zcode',
+    name: 'ZCode',
+    icon: zcodeIcon,
+    descriptionKey: 'agents.description.zcode',
+  },
+  {
+    id: 'kimi-code',
+    name: 'Kimi Code',
+    icon: kimiIcon,
+    descriptionKey: 'agents.description.kimiCode',
   },
   {
     id: 'openclaw',
@@ -217,18 +254,6 @@ const agentDefinitions: AgentDefinition[] = [
     name: 'Hermes Agent',
     icon: hermesIcon,
     descriptionKey: 'agents.description.hermes',
-  },
-  {
-    id: 'deepseek-harness',
-    name: 'DeepSeek Harness',
-    icon: deepseekIcon,
-    descriptionKey: 'agents.description.deepseekHarness',
-  },
-  {
-    id: 'pi',
-    name: 'Pi',
-    icon: piIcon,
-    descriptionKey: 'agents.description.pi',
   },
 ];
 
@@ -862,6 +887,7 @@ export function AgentsPage() {
   const configurationAction = resolveAgentConfigurationAction({
     client: selected,
     modificationState: activeStatus?.modificationState ?? 'unconfigured',
+    configurationSynchronized: Boolean(activeStatus?.configurationSynchronized),
     selectedModel,
     appliedModel,
     oauthConfiguration,
@@ -888,7 +914,9 @@ export function AgentsPage() {
           : t('agents.model.firstSelection', { count: models.length }));
   const modificationDescription = activeStatus?.modificationState === 'invalid'
     ? t('agents.modify.invalid')
-    : '';
+    : selected === 'zcode'
+      ? t('agents.modify.zcodeRestart')
+      : '';
   const refreshModels = () => {
     void loadModels(selected);
   };

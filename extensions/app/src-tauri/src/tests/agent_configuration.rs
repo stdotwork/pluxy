@@ -22,6 +22,10 @@ fn claude_agent_config_preserves_existing_fields() {
     assert_eq!(value["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8317");
     assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], DEFAULT_API_KEY);
     assert_eq!(value["env"]["ANTHROPIC_MODEL"], "claude-test");
+    assert_eq!(
+        value["env"][CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV],
+        "1"
+    );
     assert_eq!(value["env"][CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV], "200000");
     assert_eq!(value["env"][CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV], "90");
     assert!(value["env"].get(DISABLE_AUTO_COMPACT_ENV).is_none());
@@ -44,6 +48,7 @@ fn claude_code_inspection_normalizes_legacy_1m_suffix() {
                 "env": {
                     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
                     "ANTHROPIC_AUTH_TOKEN": "test-key",
+                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
                     "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
                     "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
                     "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
@@ -68,6 +73,30 @@ fn claude_code_inspection_normalizes_legacy_1m_suffix() {
     assert_eq!(mappings.max_context_tokens, 1_000_000);
     assert_eq!(mappings.auto_compact_pct, 90);
     assert!(!mappings.disable_auto_compact);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn claude_code_requires_gateway_model_discovery_to_be_enabled() {
+    let directory = agent_test_home("claude-code-gateway-model-discovery");
+    let path = directory.join("settings.json");
+    fs::write(
+        &path,
+        r#"{
+                "env": {
+                    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
+                    "ANTHROPIC_AUTH_TOKEN": "test-key",
+                    "ANTHROPIC_MODEL": "gpt-test",
+                    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0"
+                }
+            }"#,
+    )
+    .unwrap();
+
+    let (configured, model) = inspect_claude_agent_config(&path, 8317, "test-key").unwrap();
+
+    assert!(!configured);
+    assert_eq!(model.as_deref(), Some("gpt-test"));
     fs::remove_dir_all(directory).unwrap();
 }
 
@@ -613,6 +642,366 @@ fn opencode_agent_config_preserves_other_providers() {
 }
 
 #[test]
+fn zcode_agent_config_preserves_other_providers_and_uses_anthropic_messages() {
+    let home = agent_test_home("zcode-agent-config");
+    let path = home.join(".zcode/v2/config.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    models[0].context_window = Some(372_000);
+    models[1].context_window = Some(272_000);
+    let rendered = build_zcode_agent_config(
+        Some(
+            r#"{"locale":"zh-CN","provider":{"other":{"kind":"openai"},"cpa-gui":{"custom":"keep","options":{"timeout":30}}}}"#,
+        ),
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    fs::write(&path, &rendered).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+    assert_eq!(value["locale"], "zh-CN");
+    assert_eq!(value["provider"]["other"]["kind"], "openai");
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["custom"],
+        "keep"
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["timeout"],
+        30
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["kind"],
+        "anthropic"
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["apiFormat"],
+        "anthropic-messages"
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["baseURL"],
+        "http://127.0.0.1:8317"
+    );
+    assert_eq!(value["model"], "cpa-gui/gpt-test");
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["models"]["gpt-test"]["limit"]["context"],
+        372_000
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["models"]["deepseek-test"]["limit"]["context"],
+        272_000
+    );
+    assert_eq!(
+        inspect_zcode_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()))
+    );
+
+    let mut normalized = value;
+    let provider = normalized["provider"][MANAGED_AGENT_PROVIDER_ID]
+        .as_object_mut()
+        .unwrap();
+    provider.remove("apiFormat");
+    provider.remove("defaultKind");
+    provider.remove("npm");
+    fs::write(&path, serde_json::to_string_pretty(&normalized).unwrap()).unwrap();
+    assert_eq!(
+        inspect_zcode_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()))
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn zcode_cli_config_sets_main_model_and_both_configs_must_match() {
+    let home = agent_test_home("zcode-cli-default-model");
+    let paths = agent_config_paths(AgentClient::ZCode, &home);
+    fs::create_dir_all(paths[0].parent().unwrap()).unwrap();
+    fs::create_dir_all(paths[1].parent().unwrap()).unwrap();
+    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let app_config = build_zcode_agent_config(
+        None,
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    let cli_config = build_zcode_cli_agent_config(
+        Some(r#"{"model":{"lite":"other/lite"},"plugins":{"keep":true}}"#),
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    let cli_value: serde_json::Value = serde_json::from_str(&cli_config).unwrap();
+
+    assert_eq!(cli_value["model"]["main"], "cpa-gui/gpt-test");
+    assert_eq!(cli_value["model"]["lite"], "other/lite");
+    assert_eq!(cli_value["plugins"]["keep"], true);
+    fs::write(&paths[0], app_config).unwrap();
+    fs::write(&paths[1], &cli_config).unwrap();
+    assert_eq!(
+        inspect_agent_managed_config(AgentClient::ZCode, &paths, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()), false)
+    );
+
+    let mut mismatched = cli_value;
+    mismatched["model"]["main"] = serde_json::json!("cpa-gui/deepseek-test");
+    fs::write(
+        &paths[1],
+        serde_json::to_string_pretty(&mismatched).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        inspect_agent_managed_config(AgentClient::ZCode, &paths, 8317, DEFAULT_API_KEY).unwrap(),
+        (false, Some("deepseek-test".to_string()), false)
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn zcode_inspection_requires_the_default_model_to_belong_to_the_managed_provider() {
+    let home = agent_test_home("zcode-default-model-inspection");
+    let path = home.join(".zcode/v2/config.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let rendered = build_zcode_agent_config(
+        None,
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &test_agent_models(&["gpt-test"]),
+    )
+    .unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    value["model"] = serde_json::json!("other/gpt-test");
+    fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+    assert_eq!(
+        inspect_zcode_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (false, None)
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn kimi_code_config_preserves_existing_tables_and_uses_openai_provider() {
+    let home = agent_test_home("kimi-code-agent-config");
+    let path = home.join(".kimi-code/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    models[0].context_window = Some(1_048_576);
+    models[1].context_window = Some(131_072);
+    let rendered = build_kimi_code_agent_config(
+        Some(
+            r#"theme = "dark"
+
+[providers.other]
+type = "openai"
+base_url = "https://example.com/v1"
+
+[models."other/model"]
+provider = "other"
+model = "model"
+"#,
+        ),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    fs::write(&path, &rendered).unwrap();
+    let value: toml::Value = toml::from_str(&rendered).unwrap();
+
+    assert_eq!(value["theme"].as_str(), Some("dark"));
+    assert_eq!(
+        value["providers"]["other"]["base_url"].as_str(),
+        Some("https://example.com/v1")
+    );
+    assert_eq!(value["default_model"].as_str(), Some("cpa-gui/gpt-test"));
+    assert_eq!(
+        value["providers"][MANAGED_AGENT_PROVIDER_ID]["type"].as_str(),
+        Some("openai")
+    );
+    assert_eq!(
+        value["providers"][MANAGED_AGENT_PROVIDER_ID]["base_url"].as_str(),
+        Some("http://127.0.0.1:8317/v1")
+    );
+    assert_eq!(
+        value["models"]["cpa-gui/gpt-test"]["capabilities"]
+            .as_array()
+            .unwrap()[0]
+            .as_str(),
+        Some("tool_use")
+    );
+    assert_eq!(
+        value["models"]["cpa-gui/gpt-test"]["max_context_size"].as_integer(),
+        Some(1_048_576)
+    );
+    assert_eq!(
+        value["models"]["cpa-gui/deepseek-test"]["max_context_size"].as_integer(),
+        Some(131_072)
+    );
+    assert_eq!(
+        inspect_kimi_code_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()))
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn grok_build_config_preserves_existing_models_and_uses_chat_completions() {
+    let home = agent_test_home("grok-build-agent-config");
+    let path = home.join(".grok/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    models[0].context_window = Some(1_048_576);
+    models[1].context_window = Some(131_072);
+    let rendered = build_grok_build_agent_config(
+        Some(
+            r#"theme = "dark"
+
+[models]
+default = "other"
+
+[model.other]
+model = "other-model"
+base_url = "https://example.com/v1"
+api_key = "other-key"
+"#,
+        ),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    fs::write(&path, &rendered).unwrap();
+    let value: toml::Value = toml::from_str(&rendered).unwrap();
+
+    assert_eq!(value["theme"].as_str(), Some("dark"));
+    assert_eq!(
+        value["model"]["other"]["model"].as_str(),
+        Some("other-model")
+    );
+    assert_eq!(
+        value["models"]["default"].as_str(),
+        Some("cpa-gui/gpt-test")
+    );
+    assert_eq!(
+        value["model"]["cpa-gui/gpt-test"]["base_url"].as_str(),
+        Some("http://127.0.0.1:8317/v1")
+    );
+    assert_eq!(
+        value["model"]["cpa-gui/gpt-test"]["api_backend"].as_str(),
+        Some("chat_completions")
+    );
+    assert_eq!(
+        value["model"]["cpa-gui/gpt-test"]["context_window"].as_integer(),
+        Some(1_048_576)
+    );
+    assert_eq!(
+        value["model"]["cpa-gui/deepseek-test"]["context_window"].as_integer(),
+        Some(131_072)
+    );
+    assert_eq!(
+        inspect_grok_build_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()))
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn kimi_and_grok_toml_restore_preserves_runtime_fields_and_original_selection() {
+    use toml_edit::{value, Document};
+
+    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let kimi_original = r#"default_model = "cpa-gui/original"
+
+[providers.cpa-gui]
+type = "openai_responses"
+base_url = "https://original.example/v1"
+api_key = "original-key"
+
+[models."cpa-gui/original"]
+provider = "cpa-gui"
+model = "original"
+"#;
+    let kimi_managed = build_kimi_code_agent_config(
+        Some(kimi_original),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    let mut kimi_runtime = kimi_managed.parse::<Document>().unwrap();
+    kimi_runtime
+        .as_table_mut()
+        .insert("runtime_added", value(true));
+    kimi_runtime["providers"][MANAGED_AGENT_PROVIDER_ID]
+        .as_table_mut()
+        .unwrap()
+        .insert("runtime_custom", value("keep"));
+    let kimi_restored =
+        build_restored_kimi_code_config(&kimi_runtime.to_string(), Some(kimi_original))
+            .unwrap()
+            .unwrap();
+    let kimi: toml::Value = toml::from_str(&kimi_restored).unwrap();
+    assert_eq!(kimi["default_model"].as_str(), Some("cpa-gui/original"));
+    assert_eq!(kimi["runtime_added"].as_bool(), Some(true));
+    assert_eq!(
+        kimi["providers"][MANAGED_AGENT_PROVIDER_ID]["type"].as_str(),
+        Some("openai_responses")
+    );
+    assert_eq!(
+        kimi["providers"][MANAGED_AGENT_PROVIDER_ID]["runtime_custom"].as_str(),
+        Some("keep")
+    );
+    assert!(kimi["models"].get("cpa-gui/gpt-test").is_none());
+    assert_eq!(
+        kimi["models"]["cpa-gui/original"]["model"].as_str(),
+        Some("original")
+    );
+
+    let grok_original = r#"[models]
+default = "cpa-gui/original"
+
+[model."cpa-gui/original"]
+model = "original"
+base_url = "https://original.example/v1"
+api_key = "original-key"
+"#;
+    let grok_managed = build_grok_build_agent_config(
+        Some(grok_original),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    let mut grok_runtime = grok_managed.parse::<Document>().unwrap();
+    grok_runtime
+        .as_table_mut()
+        .insert("runtime_added", value(true));
+    let grok_restored =
+        build_restored_grok_build_config(&grok_runtime.to_string(), Some(grok_original))
+            .unwrap()
+            .unwrap();
+    let grok: toml::Value = toml::from_str(&grok_restored).unwrap();
+    assert_eq!(grok["models"]["default"].as_str(), Some("cpa-gui/original"));
+    assert_eq!(grok["runtime_added"].as_bool(), Some(true));
+    assert!(grok["model"].get("cpa-gui/gpt-test").is_none());
+    assert_eq!(
+        grok["model"]["cpa-gui/original"]["base_url"].as_str(),
+        Some("https://original.example/v1")
+    );
+}
+
+#[test]
 fn openclaw_agent_config_accepts_json5_and_preserves_unknown_fields() {
     let models = test_agent_models(&["gpt-test", "deepseek-test"]);
     let rendered = build_openclaw_agent_config(
@@ -738,6 +1127,28 @@ fn agent_model_list_parser_exposes_aliases_as_selectable_model_ids() {
 }
 
 #[test]
+fn kimi_grok_and_zcode_use_cpa_runtime_context_windows() {
+    for client in [
+        AgentClient::KimiCode,
+        AgentClient::GrokBuild,
+        AgentClient::ZCode,
+    ] {
+        assert!(agent_uses_cpa_runtime_context_windows(client));
+    }
+    for client in [
+        AgentClient::ClaudeCode,
+        AgentClient::ClaudeDesktop,
+        AgentClient::Codex,
+        AgentClient::OpenCode,
+        AgentClient::OpenClaw,
+        AgentClient::Hermes,
+        AgentClient::DeepSeekHarness,
+    ] {
+        assert!(!agent_uses_cpa_runtime_context_windows(client));
+    }
+}
+
+#[test]
 fn claude_model_lists_mark_yaml_aliases_when_api_returns_only_model_ids() {
     let mut models = test_agent_models(&[
         "gpt-original",
@@ -782,6 +1193,9 @@ fn exit_preserves_claude_client_configurations() {
     assert!(restored.contains(&AgentClient::Codex));
     assert!(restored.contains(&AgentClient::OpenCode));
     assert!(restored.contains(&AgentClient::DeepSeekHarness));
+    assert!(restored.contains(&AgentClient::ZCode));
+    assert!(restored.contains(&AgentClient::KimiCode));
+    assert!(restored.contains(&AgentClient::GrokBuild));
 }
 
 #[test]
@@ -1287,6 +1701,62 @@ fn detected_agent_version_requires_a_real_version_value() {
     assert!(normalize_detected_agent_version("version unknown").is_none());
     assert!(normalize_detected_agent_version("1.2.3\0invalid").is_none());
     assert!(normalize_detected_agent_version(&"1".repeat(257)).is_none());
+}
+
+#[test]
+fn agent_probe_command_captures_output_before_timeout() {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new(windows_command_processor());
+        command.args(["/D", "/C", "echo agent 1.2.3"]);
+        configure_background_command(&mut command);
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 'agent 1.2.3\\n'"]);
+        command
+    };
+
+    let output = command_output_with_timeout(&mut command, Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "agent 1.2.3"
+    );
+}
+
+#[test]
+fn agent_probe_command_stops_at_timeout() {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new(windows_powershell_executable());
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 5",
+        ]);
+        configure_background_command(&mut command);
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+        command
+    };
+
+    let started = Instant::now();
+    let output = command_output_with_timeout(&mut command, Duration::from_millis(100)).unwrap();
+
+    assert!(output.is_none());
+    assert!(started.elapsed() < Duration::from_secs(3));
 }
 
 #[test]

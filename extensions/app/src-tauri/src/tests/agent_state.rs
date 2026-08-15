@@ -368,8 +368,159 @@ fn opencode_runtime_edits_survive_close_and_next_apply_owns_conflicts() {
 }
 
 #[test]
+fn zcode_runtime_edits_survive_close_and_original_provider_is_restored() {
+    let home = agent_test_home("zcode-runtime-edit-merge");
+    let path = home.join(".zcode/v2/config.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r#"{"model":"other/original","provider":{"other":{"keep":"original"},"cpa-gui":{"name":"Original CPA","custom":"original"}},"keep":"root"}"#,
+    )
+    .unwrap();
+    let models = test_agent_models(&["gpt-one", "gpt-two"]);
+    apply_agent_configuration(
+        AgentClient::ZCode,
+        &home,
+        8317,
+        DEFAULT_API_KEY,
+        "gpt-one",
+        &models,
+        None,
+    )
+    .unwrap();
+
+    let mut runtime: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    runtime["agentAdded"] = serde_json::json!({"enabled": true});
+    runtime["provider"]["other"]["runtimeAdded"] = serde_json::json!(42);
+    runtime["provider"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"] =
+        serde_json::json!("keep-me");
+    runtime["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["baseURL"] =
+        serde_json::json!("https://agent-overwrite.invalid");
+    fs::write(&path, serde_json::to_string_pretty(&runtime).unwrap()).unwrap();
+
+    restore_agent_session_configuration(AgentClient::ZCode, &home).unwrap();
+    let closed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(closed["keep"], "root");
+    assert_eq!(closed["model"], "other/original");
+    assert_eq!(closed["agentAdded"]["enabled"], true);
+    assert_eq!(closed["provider"]["other"]["runtimeAdded"], 42);
+    assert_eq!(
+        closed["provider"][MANAGED_AGENT_PROVIDER_ID]["name"],
+        "Original CPA"
+    );
+    assert_eq!(
+        closed["provider"][MANAGED_AGENT_PROVIDER_ID]["custom"],
+        "original"
+    );
+    assert_eq!(
+        closed["provider"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"],
+        "keep-me"
+    );
+    assert!(closed["provider"][MANAGED_AGENT_PROVIDER_ID]
+        .get("options")
+        .is_none());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn zcode_legacy_single_file_state_upgrades_and_restores_cli_config() {
+    let home = agent_test_home("zcode-legacy-state-upgrade");
+    let paths = agent_config_paths(AgentClient::ZCode, &home);
+    fs::create_dir_all(paths[0].parent().unwrap()).unwrap();
+    fs::create_dir_all(paths[1].parent().unwrap()).unwrap();
+    let original_app = br#"{"model":"other/original","provider":{"other":{"keep":true}}}"#;
+    let original_cli =
+        br#"{"model":{"main":"other/original","lite":"other/lite"},"plugins":{"keep":true}}"#;
+    let models = test_agent_models(&["gpt-one", "gpt-two"]);
+    let managed_app = build_zcode_agent_config(
+        Some(std::str::from_utf8(original_app).unwrap()),
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-one",
+        &models,
+    )
+    .unwrap();
+    fs::write(&paths[0], managed_app).unwrap();
+    fs::write(&paths[1], original_cli).unwrap();
+    let app_backup = dated_agent_backup_path(&paths[0]).unwrap();
+    fs::write(&app_backup, original_app).unwrap();
+    let state_path = agent_state_path(&paths).unwrap();
+    write_agent_applied_state(
+        &state_path,
+        &AgentAppliedState {
+            version: AGENT_APPLIED_STATE_VERSION,
+            client: AgentClient::ZCode.id().to_string(),
+            model: "gpt-one".to_string(),
+            configuration_revision: 0,
+            claude_desktop_model_mappings: None,
+            backup_files: vec![AgentAppliedBackupFile {
+                path: paths[0].clone(),
+                backup_path: app_backup,
+                existed_before: true,
+            }],
+            updated_at_unix: 1,
+        },
+    )
+    .unwrap();
+
+    apply_agent_configuration(
+        AgentClient::ZCode,
+        &home,
+        8317,
+        DEFAULT_API_KEY,
+        "gpt-two",
+        &models,
+        None,
+    )
+    .unwrap();
+    let upgraded = load_agent_applied_state(AgentClient::ZCode, &home)
+        .unwrap()
+        .unwrap();
+    assert_eq!(upgraded.backup_files.len(), 2);
+    let cli_value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&paths[1]).unwrap()).unwrap();
+    assert_eq!(cli_value["model"]["main"], "cpa-gui/gpt-two");
+
+    restore_agent_session_configuration(AgentClient::ZCode, &home).unwrap();
+    assert_eq!(fs::read(&paths[0]).unwrap(), original_app);
+    assert_eq!(fs::read(&paths[1]).unwrap(), original_cli);
+    assert!(!state_path.exists());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn kimi_and_grok_legacy_states_require_context_catalog_resynchronization() {
+    for client in [AgentClient::KimiCode, AgentClient::GrokBuild] {
+        let home = agent_test_home(&format!("{}-context-revision", client.id()));
+        let paths = agent_config_paths(client, &home);
+        let state_path = agent_state_path(&paths).unwrap();
+        fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        let mut state = AgentAppliedState {
+            version: AGENT_APPLIED_STATE_VERSION,
+            client: client.id().to_string(),
+            model: "gpt-test".to_string(),
+            configuration_revision: 0,
+            claude_desktop_model_mappings: None,
+            backup_files: Vec::new(),
+            updated_at_unix: 1,
+        };
+        write_agent_applied_state(&state_path, &state).unwrap();
+
+        assert!(!agent_configuration_is_synchronized(client, &home, true));
+
+        state.configuration_revision = AGENT_CONFIGURATION_REVISION;
+        write_agent_applied_state(&state_path, &state).unwrap();
+        assert!(agent_configuration_is_synchronized(client, &home, true));
+        assert!(!agent_configuration_is_synchronized(client, &home, false));
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[test]
 fn session_merge_preserves_runtime_fields_for_other_agent_formats() {
-    let claude_original = r#"{"env":{"KEEP_ENV":"original"},"keep":"claude"}"#;
+    let claude_original = r#"{"env":{"KEEP_ENV":"original","CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY":"0"},"keep":"claude"}"#;
     let claude_managed = build_claude_agent_config(
         Some(claude_original),
         "http://127.0.0.1:8317",
@@ -394,6 +545,10 @@ fn session_merge_preserves_runtime_fields_for_other_agent_formats() {
     assert_eq!(claude["runtimeAdded"], true);
     assert_eq!(claude["env"]["RUNTIME_ENV"], "keep");
     assert_eq!(claude["env"]["KEEP_ENV"], "original");
+    assert_eq!(
+        claude["env"][CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV],
+        "0"
+    );
     assert!(claude["env"].get("ANTHROPIC_BASE_URL").is_none());
     assert!(claude.get("model").is_none());
 
@@ -613,6 +768,7 @@ fn legacy_codex_single_file_state_remains_restorable() {
         version: AGENT_APPLIED_STATE_VERSION,
         client: AgentClient::Codex.id().to_string(),
         model: "gpt-test".to_string(),
+        configuration_revision: AGENT_CONFIGURATION_REVISION,
         claude_desktop_model_mappings: None,
         backup_files: vec![AgentAppliedBackupFile {
             path: path.clone(),
@@ -677,6 +833,7 @@ fn claude_desktop_version_three_state_can_be_closed_safely() {
         version: 3,
         client: AgentClient::ClaudeDesktop.id().to_string(),
         model: "gpt-test".to_string(),
+        configuration_revision: 0,
         claude_desktop_model_mappings: None,
         backup_files: Vec::new(),
         updated_at_unix: 1,
@@ -808,6 +965,7 @@ fn applied_state_rejects_backup_paths_outside_the_managed_config_set() {
             version: AGENT_APPLIED_STATE_VERSION,
             client: AgentClient::OpenCode.id().to_string(),
             model: "gpt-test".to_string(),
+            configuration_revision: AGENT_CONFIGURATION_REVISION,
             claude_desktop_model_mappings: None,
             backup_files: vec![AgentAppliedBackupFile {
                 path: path.clone(),
@@ -844,6 +1002,7 @@ fn missing_session_backup_is_detected_before_any_file_is_restored() {
         version: AGENT_APPLIED_STATE_VERSION,
         client: AgentClient::Codex.id().to_string(),
         model: "gpt-test".to_string(),
+        configuration_revision: AGENT_CONFIGURATION_REVISION,
         claude_desktop_model_mappings: None,
         backup_files: vec![
             AgentAppliedBackupFile {
@@ -881,6 +1040,7 @@ fn version_three_cleanup_covers_every_non_desktop_agent_format() {
         version: 3,
         client: client.id().to_string(),
         model: "gpt-test".to_string(),
+        configuration_revision: 0,
         claude_desktop_model_mappings: None,
         backup_files: Vec::new(),
         updated_at_unix: 1,
@@ -895,6 +1055,7 @@ fn version_three_cleanup_covers_every_non_desktop_agent_format() {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8317",
     "ANTHROPIC_API_KEY": "secret",
     "ANTHROPIC_AUTH_TOKEN": "secret",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
     "ANTHROPIC_MODEL": "gpt-test",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-test",
     "KEEP_ENV": "yes"
@@ -917,6 +1078,9 @@ fn version_three_cleanup_covers_every_non_desktop_agent_format() {
         serde_json::from_str(&fs::read_to_string(&claude_path).unwrap()).unwrap();
     assert!(claude.get("model").is_none());
     assert!(claude["env"].get("ANTHROPIC_BASE_URL").is_none());
+    assert!(claude["env"]
+        .get(CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV)
+        .is_none());
     assert_eq!(claude["env"]["KEEP_ENV"], "yes");
     assert_eq!(claude["keep"], "claude");
 

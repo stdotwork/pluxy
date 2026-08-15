@@ -1,5 +1,8 @@
 use super::*;
 
+const AGENT_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const AGENT_VERSION_PROBE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 pub(crate) fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBuf> {
     match client {
         AgentClient::ClaudeCode => {
@@ -32,7 +35,27 @@ pub(crate) fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBu
                 directory.join(DEEPSEEK_HARNESS_CREDENTIALS_FILE),
             ]
         }
+        AgentClient::ZCode => vec![
+            home.join(".zcode/v2").join(ZCODE_CONFIG_FILE),
+            home.join(".zcode/cli").join(ZCODE_CONFIG_FILE),
+        ],
+        AgentClient::KimiCode => vec![kimi_code_home(home).join(KIMI_CODE_CONFIG_FILE)],
+        AgentClient::GrokBuild => vec![grok_build_home(home).join(GROK_BUILD_CONFIG_FILE)],
     }
+}
+
+pub(crate) fn kimi_code_home(home: &Path) -> PathBuf {
+    env::var_os("KIMI_CODE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| home.join(".kimi-code"))
+}
+
+pub(crate) fn grok_build_home(home: &Path) -> PathBuf {
+    env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| home.join(".grok"))
 }
 
 pub(crate) fn deepseek_harness_home(home: &Path) -> PathBuf {
@@ -345,6 +368,7 @@ pub(crate) fn inspect_pi_provider_status(
         config_exists,
         config_valid,
         configured,
+        configuration_synchronized: configured,
         current_model: current_model.clone(),
         oauth_configuration: false,
         modification_enabled: configured,
@@ -796,15 +820,26 @@ pub(crate) fn inspect_agent_config(
         Err(error) => (false, None, false, false, Some(error)),
     };
     let executable = find_agent_executable(client, home);
-    let cli_version = executable.as_deref().and_then(read_agent_version);
+    // ZCode's desktop executable is an Electron app, not a CLI. Invoking it
+    // with --version can start the GUI and block discovery, so only probe a
+    // separately installed command-line entry point here.
+    let cli_version = if client == AgentClient::ZCode {
+        find_named_agent_executable(home, &["zcode"])
+            .filter(|path| executable.as_ref() != Some(path))
+            .as_deref()
+            .and_then(read_agent_version)
+    } else {
+        executable.as_deref().and_then(read_agent_version)
+    };
     let app_version = match client {
         AgentClient::ClaudeDesktop => read_claude_desktop_version(home),
         AgentClient::Codex => read_codex_app_version(home),
         AgentClient::DeepSeekHarness => read_deepseek_harness_profile_version(home),
+        AgentClient::ZCode => read_zcode_app_version(home),
         _ => None,
     };
     let version = cli_version.clone().or_else(|| app_version.clone());
-    let installed = version.is_some();
+    let installed = version.is_some() || (client == AgentClient::ZCode && executable.is_some());
     let mut warnings = Vec::new();
     if !client.supported_platform() {
         warnings.push("当前平台不支持 Claude Desktop 3P 配置".to_string());
@@ -815,6 +850,7 @@ pub(crate) fn inspect_agent_config(
         warnings.push(message.clone());
     }
     let modification = inspect_agent_application(client, home);
+    let configuration_synchronized = agent_configuration_is_synchronized(client, home, configured);
     warnings.extend(modification.warnings.iter().cloned());
 
     AgentConfigStatus {
@@ -831,6 +867,7 @@ pub(crate) fn inspect_agent_config(
         config_exists,
         config_valid,
         configured,
+        configuration_synchronized,
         current_model,
         oauth_configuration,
         modification_enabled: modification.enabled,
@@ -844,6 +881,23 @@ pub(crate) fn inspect_agent_config(
         warnings,
         error,
     }
+}
+
+pub(crate) fn agent_configuration_is_synchronized(
+    client: AgentClient,
+    home: &Path,
+    configured: bool,
+) -> bool {
+    if !configured {
+        return false;
+    }
+    if !matches!(client, AgentClient::KimiCode | AgentClient::GrokBuild) {
+        return true;
+    }
+    load_agent_applied_state(client, home)
+        .ok()
+        .flatten()
+        .is_some_and(|state| state.configuration_revision >= AGENT_CONFIGURATION_REVISION)
 }
 
 pub(crate) fn inspect_agent_application(
@@ -939,6 +993,23 @@ pub(crate) fn inspect_agent_managed_config(
         AgentClient::Hermes => inspect_hermes_agent_config(&paths[0], port, api_key)
             .map(|(configured, model)| (configured, model, false)),
         AgentClient::DeepSeekHarness => inspect_deepseek_harness_config(paths, port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
+        AgentClient::ZCode => {
+            if paths.len() != 2 {
+                return Err("ZCode 配置路径数量无效".to_string());
+            }
+            let (app_configured, app_model) = inspect_zcode_agent_config(&paths[0], port, api_key)?;
+            let (cli_configured, cli_model) = inspect_zcode_agent_config(&paths[1], port, api_key)?;
+            let models_match = app_model.is_some() && app_model == cli_model;
+            Ok((
+                app_configured && cli_configured && models_match,
+                cli_model.or(app_model),
+                false,
+            ))
+        }
+        AgentClient::KimiCode => inspect_kimi_code_agent_config(&paths[0], port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
+        AgentClient::GrokBuild => inspect_grok_build_agent_config(&paths[0], port, api_key)
             .map(|(configured, model)| (configured, model, false)),
     }
 }
@@ -1059,12 +1130,91 @@ pub(crate) fn agent_has_managed_marker(
             Ok(provider_exists && model_selected)
         }
         AgentClient::DeepSeekHarness => deepseek_harness_has_managed_marker(paths),
+        AgentClient::ZCode => {
+            let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+            for path in paths {
+                if !path.is_file() {
+                    continue;
+                }
+                let root = read_agent_json_or_empty(path, "ZCode 配置")?;
+                let provider_exists = root
+                    .get("provider")
+                    .and_then(|value| value.get(MANAGED_AGENT_PROVIDER_ID))
+                    .is_some();
+                let model_selected = root
+                    .get("model")
+                    .and_then(|model| {
+                        model
+                            .as_str()
+                            .or_else(|| model.get("main").and_then(serde_json::Value::as_str))
+                    })
+                    .is_some_and(|model| model.starts_with(&prefix));
+                if provider_exists && model_selected {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        AgentClient::KimiCode => inspect_managed_toml_model_marker(
+            &paths[0],
+            "Kimi Code 配置",
+            Some("providers"),
+            "models",
+            None,
+            "default_model",
+        ),
+        AgentClient::GrokBuild => inspect_managed_toml_model_marker(
+            &paths[0],
+            "Grok Build 配置",
+            None,
+            "model",
+            Some("models"),
+            "default",
+        ),
     }
 }
 
 pub(crate) fn is_managed_agent_base_url(value: &str) -> bool {
     let value = value.trim().to_ascii_lowercase();
     value.starts_with("http://127.0.0.1:") || value.starts_with("http://localhost:")
+}
+
+pub(crate) fn inspect_managed_toml_model_marker(
+    path: &Path,
+    label: &str,
+    provider_section: Option<&str>,
+    model_entry_section: &str,
+    default_section: Option<&str>,
+    default_key: &str,
+) -> Result<bool, String> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let root: toml::Value = toml::from_str(
+        &fs::read_to_string(path).map_err(|error| format!("读取 {label} 失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析 {label} 失败: {error}"))?;
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let selected = (if let Some(section) = default_section {
+        root.get(section)
+            .and_then(toml::Value::as_table)
+            .and_then(|section| section.get(default_key))
+    } else {
+        root.get(default_key)
+    })
+    .and_then(toml::Value::as_str)
+    .filter(|model| model.starts_with(&prefix));
+    let catalog_has_selected = selected.is_some_and(|model| {
+        root.get(model_entry_section)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|catalog| catalog.contains_key(model))
+    });
+    let provider_exists = provider_section.is_none_or(|section| {
+        root.get(section)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|providers| providers.contains_key(MANAGED_AGENT_PROVIDER_ID))
+    });
+    Ok(provider_exists && catalog_has_selected)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1135,15 +1285,95 @@ pub(crate) fn read_codex_app_version(home: &Path) -> Option<String> {
     }
 }
 
+pub(crate) fn read_zcode_app_version(home: &Path) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        find_zcode_desktop_executable(home).and_then(|path| {
+            read_windows_executable_version(&path).or_else(|| read_agent_version(&path))
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        [
+            PathBuf::from("/Applications/ZCode.app"),
+            home.join("Applications/ZCode.app"),
+        ]
+        .into_iter()
+        .find(|path| path.is_dir())
+        .and_then(|path| read_macos_app_version(&path))
+        .or_else(|| {
+            find_named_agent_executable(home, &["zcode"]).and_then(|path| read_agent_version(&path))
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = home;
+        None
+    }
+}
+
+pub(crate) fn find_zcode_desktop_executable(home: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let local = env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData/Local"));
+        let mut candidates = vec![
+            local.join("Programs/ZCode/ZCode.exe"),
+            local.join("ZCode/ZCode.exe"),
+        ];
+        for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = env::var_os(variable)
+                .map(PathBuf::from)
+                .filter(|path| !path.as_os_str().is_empty())
+            {
+                candidates.push(root.join("ZCode/ZCode.exe"));
+            }
+        }
+        candidates
+            .into_iter()
+            .find(|path| path.is_file())
+            .or_else(|| find_named_agent_executable(home, &["zcode"]))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        [
+            PathBuf::from("/Applications/ZCode.app/Contents/MacOS/ZCode"),
+            home.join("Applications/ZCode.app/Contents/MacOS/ZCode"),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| find_named_agent_executable(home, &["zcode"]))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut candidates = agent_executable_directories(home)
+            .into_iter()
+            .flat_map(|directory| [directory.join("zcode"), directory.join("ZCode")])
+            .collect::<Vec<_>>();
+        candidates.extend([
+            PathBuf::from("/opt/ZCode/zcode"),
+            PathBuf::from("/opt/ZCode/ZCode"),
+            PathBuf::from("/opt/zcode/zcode"),
+        ]);
+        candidates.into_iter().find(|path| path.is_file())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        find_named_agent_executable(home, &["zcode"])
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn read_macos_app_version(application: &Path) -> Option<String> {
     let info_plist = application.join("Contents/Info.plist");
     for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
-        let output = Command::new("/usr/bin/plutil")
+        let mut command = Command::new("/usr/bin/plutil");
+        command
             .args(["-extract", key, "raw", "-o", "-"])
-            .arg(&info_plist)
-            .output()
-            .ok()?;
+            .arg(&info_plist);
+        let output =
+            command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
         if !output.status.success() {
             continue;
         }
@@ -1237,7 +1467,7 @@ if ($package -and $package.Version) {
         &encoded_command,
     ]);
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1273,7 +1503,7 @@ if ($package -and $package.Version) {
         &encoded_command,
     ]);
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1360,7 +1590,7 @@ foreach ($shortcutFile in (Get-ChildItem -LiteralPath $shortcutRoots -Filter '*.
         &encoded_command,
     ]);
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1413,7 +1643,7 @@ if ($version) {{
         &encoded_command,
     ]);
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1459,7 +1689,9 @@ pub(crate) fn find_windows_codex_app_id_via_registry() -> Option<String> {
         let mut command = Command::new(windows_registry_executable());
         command.args(["query", PACKAGES_KEY, "/f", package_name, "/k", "/s"]);
         configure_background_command(&mut command);
-        let Ok(output) = command.output() else {
+        let Ok(Some(output)) =
+            command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT)
+        else {
             continue;
         };
         if !output.status.success() {
@@ -1540,7 +1772,40 @@ pub(crate) fn find_agent_executable(client: AgentClient, home: &Path) -> Option<
     if client == AgentClient::ClaudeDesktop {
         return find_claude_desktop_executable(home);
     }
+    if client == AgentClient::ZCode {
+        return find_zcode_desktop_executable(home);
+    }
+    if client == AgentClient::KimiCode {
+        return find_kimi_code_executable(home);
+    }
+    if client == AgentClient::GrokBuild {
+        return find_grok_build_executable(home);
+    }
     find_named_agent_executable(home, client.executable_names())
+}
+
+pub(crate) fn find_kimi_code_executable(home: &Path) -> Option<PathBuf> {
+    let directory = kimi_code_home(home).join("bin");
+    #[cfg(target_os = "windows")]
+    let managed = [directory.join("kimi.exe"), directory.join("kimi.cmd")];
+    #[cfg(not(target_os = "windows"))]
+    let managed = [directory.join("kimi")];
+    managed
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| find_named_agent_executable(home, &["kimi"]))
+}
+
+pub(crate) fn find_grok_build_executable(home: &Path) -> Option<PathBuf> {
+    let directory = grok_build_home(home).join("bin");
+    #[cfg(target_os = "windows")]
+    let managed = [directory.join("grok.exe"), directory.join("grok.cmd")];
+    #[cfg(not(target_os = "windows"))]
+    let managed = [directory.join("grok")];
+    managed
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| find_named_agent_executable(home, &["grok"]))
 }
 
 pub(crate) fn find_pi_executable(home: &Path) -> Option<PathBuf> {
@@ -1698,6 +1963,74 @@ pub(crate) fn windows_batch_executable_argument(executable: &Path) -> String {
     format!("\"{}\"", path_to_string(executable))
 }
 
+pub(crate) fn command_output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> io::Result<Option<std::process::Output>> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "无法读取智能体探测标准输出"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "无法读取智能体探测错误输出"))?;
+    thread::scope(|scope| {
+        let stdout_reader = scope.spawn(move || {
+            let mut output = Vec::new();
+            stdout.read_to_end(&mut output).map(|_| output)
+        });
+        let stderr_reader = scope.spawn(move || {
+            let mut output = Vec::new();
+            stderr.read_to_end(&mut output).map(|_| output)
+        });
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                terminate_agent_probe_process(&mut child);
+                break None;
+            }
+            thread::sleep(AGENT_VERSION_PROBE_POLL_INTERVAL);
+        };
+        let stdout = stdout_reader
+            .join()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "智能体探测输出线程异常退出"))??;
+        let stderr = stderr_reader
+            .join()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "智能体探测错误线程异常退出"))??;
+        Ok(status.map(|status| std::process::Output {
+            status,
+            stdout,
+            stderr,
+        }))
+    })
+}
+
+fn terminate_agent_probe_process(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    {
+        let process_id = child.id().to_string();
+        let mut command = Command::new("taskkill");
+        command
+            .args(["/PID", &process_id, "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_background_command(&mut command);
+        let _ = command.status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub(crate) fn read_agent_version(path: &Path) -> Option<String> {
     #[cfg(target_os = "windows")]
     let mut command = windows_command_for_executable(path, false);
@@ -1707,7 +2040,7 @@ pub(crate) fn read_agent_version(path: &Path) -> Option<String> {
 
     command.arg("--version");
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1750,7 +2083,11 @@ pub(crate) fn inspect_claude_agent_config(
         && env
             .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
             .and_then(serde_json::Value::as_str)
-            == Some(api_key);
+            == Some(api_key)
+        && env
+            .and_then(|env| env.get(CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV))
+            .and_then(serde_json::Value::as_str)
+            == Some("1");
     let model = env
         .and_then(|env| env.get("ANTHROPIC_MODEL"))
         .and_then(serde_json::Value::as_str)
@@ -2229,6 +2566,178 @@ pub(crate) fn inspect_opencode_agent_config(
         .filter(|value| !value.is_empty())
         .map(|value| value.strip_prefix(&prefix).unwrap_or(value))
         .map(str::to_string);
+    Ok((configured, model))
+}
+
+pub(crate) fn inspect_zcode_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
+    if !path.is_file() {
+        return Ok((false, None));
+    }
+    let root: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(path).map_err(|error| format!("读取 ZCode 配置失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析 ZCode 配置失败: {error}"))?;
+    let provider = root
+        .get("provider")
+        .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
+    let expected_base = format!("http://127.0.0.1:{port}");
+    let api_format_matches = provider
+        .and_then(|provider| provider.get("apiFormat"))
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|api_format| api_format == "anthropic-messages");
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let model = root
+        .get("model")
+        .and_then(|model| {
+            model
+                .as_str()
+                .or_else(|| model.get("main").and_then(serde_json::Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.strip_prefix(&prefix))
+        .map(str::to_string);
+    let selected_model_exists = model.as_deref().is_some_and(|selected_model| {
+        provider
+            .and_then(|provider| provider.get("models"))
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|models| {
+                models
+                    .keys()
+                    .any(|model| model.eq_ignore_ascii_case(selected_model))
+            })
+    });
+    let configured = selected_model_exists
+        && api_format_matches
+        && provider
+            .and_then(|provider| provider.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        && provider
+            .and_then(|provider| provider.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("anthropic")
+        && provider
+            .and_then(|provider| provider.get("options"))
+            .and_then(|options| options.get("baseURL"))
+            .and_then(serde_json::Value::as_str)
+            == Some(expected_base.as_str())
+        && provider
+            .and_then(|provider| provider.get("options"))
+            .and_then(|options| options.get("apiKey"))
+            .and_then(serde_json::Value::as_str)
+            == Some(api_key);
+    Ok((configured, model))
+}
+
+pub(crate) fn inspect_kimi_code_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
+    if !path.is_file() {
+        return Ok((false, None));
+    }
+    let root: toml::Value = toml::from_str(
+        &fs::read_to_string(path).map_err(|error| format!("读取 Kimi Code 配置失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析 Kimi Code 配置失败: {error}"))?;
+    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let provider = root
+        .get("providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+        .and_then(toml::Value::as_table);
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let selected = root
+        .get("default_model")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| value.starts_with(&prefix));
+    let model_entry = selected.and_then(|alias| {
+        root.get("models")
+            .and_then(toml::Value::as_table)
+            .and_then(|models| models.get(alias))
+            .and_then(toml::Value::as_table)
+    });
+    let model = model_entry
+        .and_then(|entry| entry.get("model"))
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let configured = selected.is_some()
+        && model.is_some()
+        && provider
+            .and_then(|provider| provider.get("type"))
+            .and_then(toml::Value::as_str)
+            == Some("openai")
+        && provider
+            .and_then(|provider| provider.get("base_url"))
+            .and_then(toml::Value::as_str)
+            == Some(expected_base.as_str())
+        && provider
+            .and_then(|provider| provider.get("api_key"))
+            .and_then(toml::Value::as_str)
+            == Some(api_key)
+        && model_entry
+            .and_then(|entry| entry.get("provider"))
+            .and_then(toml::Value::as_str)
+            == Some(MANAGED_AGENT_PROVIDER_ID);
+    Ok((configured, model))
+}
+
+pub(crate) fn inspect_grok_build_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
+    if !path.is_file() {
+        return Ok((false, None));
+    }
+    let root: toml::Value = toml::from_str(
+        &fs::read_to_string(path).map_err(|error| format!("读取 Grok Build 配置失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析 Grok Build 配置失败: {error}"))?;
+    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let selected = root
+        .get("models")
+        .and_then(toml::Value::as_table)
+        .and_then(|models| models.get("default"))
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| value.starts_with(&prefix));
+    let model_entry = selected.and_then(|alias| {
+        root.get("model")
+            .and_then(toml::Value::as_table)
+            .and_then(|models| models.get(alias))
+            .and_then(toml::Value::as_table)
+    });
+    let model = model_entry
+        .and_then(|entry| entry.get("model"))
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let configured = selected.is_some()
+        && model.is_some()
+        && model_entry
+            .and_then(|entry| entry.get("base_url"))
+            .and_then(toml::Value::as_str)
+            == Some(expected_base.as_str())
+        && model_entry
+            .and_then(|entry| entry.get("api_key"))
+            .and_then(toml::Value::as_str)
+            == Some(api_key)
+        && model_entry
+            .and_then(|entry| entry.get("api_backend"))
+            .and_then(toml::Value::as_str)
+            == Some("chat_completions");
     Ok((configured, model))
 }
 

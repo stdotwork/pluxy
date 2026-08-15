@@ -130,6 +130,9 @@ const DEFAULT_MAX_RETRY_INTERVAL: u32 = 30;
 const DEFAULT_STREAMING_BOOTSTRAP_RETRIES: u32 = 0;
 const LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
 const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
+const ZCODE_CONFIG_FILE: &str = "config.json";
+const KIMI_CODE_CONFIG_FILE: &str = "config.toml";
+const GROK_BUILD_CONFIG_FILE: &str = "config.toml";
 const DEEPSEEK_HARNESS_PROVIDER_ID: &str = "easy-cliproxyapi";
 const DEEPSEEK_HARNESS_CREDENTIAL: &str = "EASYCLIPROXYAPI_API_KEY";
 const DEEPSEEK_HARNESS_SETTINGS_FILE: &str = "settings.yaml";
@@ -156,6 +159,8 @@ const MANAGED_CLAUDE_HAIKU_ALIAS_DISPLAY_NAME: &str =
 const DEFAULT_CLAUDE_CONTEXT_WINDOW: u64 = 200_000;
 const CLAUDE_DESKTOP_EXTENDED_CONTEXT_WINDOW: u64 = 1_000_000;
 const CLAUDE_CODE_MAX_CONTEXT_TOKENS_ENV: &str = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
+const CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY_ENV: &str =
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY";
 const CLAUDE_AUTOCOMPACT_PCT_OVERRIDE_ENV: &str = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
 const DISABLE_AUTO_COMPACT_ENV: &str = "DISABLE_AUTO_COMPACT";
 const DEFAULT_CLAUDE_AUTO_COMPACT_PCT: u8 = 90;
@@ -168,6 +173,7 @@ const MODEL_ALIAS_CONFIG_SECTIONS: &[&str] = &[
 const LEGACY_AGENT_MODIFICATION_STATE_VERSION: u8 = 1;
 const AGENT_MODIFICATION_STATE_VERSION: u8 = 2;
 const AGENT_APPLIED_STATE_VERSION: u8 = 4;
+const AGENT_CONFIGURATION_REVISION: u8 = 1;
 const AGENT_PHASE_APPLYING: &str = "applying";
 const AGENT_PHASE_ACTIVE: &str = "active";
 const AGENT_PHASE_RESTORING: &str = "restoring";
@@ -765,6 +771,7 @@ struct AgentConfigStatus {
     config_exists: bool,
     config_valid: bool,
     configured: bool,
+    configuration_synchronized: bool,
     current_model: Option<String>,
     oauth_configuration: bool,
     modification_enabled: bool,
@@ -948,6 +955,8 @@ struct AgentAppliedState {
     version: u8,
     client: String,
     model: String,
+    #[serde(default)]
+    configuration_revision: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -972,6 +981,9 @@ enum AgentClient {
     OpenClaw,
     Hermes,
     DeepSeekHarness,
+    ZCode,
+    KimiCode,
+    GrokBuild,
 }
 
 #[derive(Clone, Debug)]
@@ -992,6 +1004,9 @@ impl AgentClient {
             "openclaw" => Ok(Self::OpenClaw),
             "hermes" => Ok(Self::Hermes),
             "deepseek-harness" => Ok(Self::DeepSeekHarness),
+            "zcode" => Ok(Self::ZCode),
+            "kimi-code" => Ok(Self::KimiCode),
+            "grok-build" => Ok(Self::GrokBuild),
             _ => Err(format!("不支持的智能体客户端: {value}")),
         }
     }
@@ -1005,6 +1020,9 @@ impl AgentClient {
             Self::OpenClaw => "openclaw",
             Self::Hermes => "hermes",
             Self::DeepSeekHarness => "deepseek-harness",
+            Self::ZCode => "zcode",
+            Self::KimiCode => "kimi-code",
+            Self::GrokBuild => "grok-build",
         }
     }
 
@@ -1017,6 +1035,9 @@ impl AgentClient {
             Self::OpenClaw => "OpenClaw",
             Self::Hermes => "Hermes Agent",
             Self::DeepSeekHarness => "DeepSeek Harness",
+            Self::ZCode => "ZCode",
+            Self::KimiCode => "Kimi Code",
+            Self::GrokBuild => "Grok Build",
         }
     }
 
@@ -1038,6 +1059,9 @@ impl AgentClient {
             Self::OpenClaw => &["openclaw"],
             Self::Hermes => &["hermes"],
             Self::DeepSeekHarness => &["dsh"],
+            Self::ZCode => &["zcode"],
+            Self::KimiCode => &["kimi"],
+            Self::GrokBuild => &["grok"],
         }
     }
 }

@@ -76,6 +76,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Cache Bun packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-1.3.14-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-${{ runner.arch }}-1.3.14-
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          cache-on-failure: true
       - name: Apply release version
         run: node scripts/set-version.mjs "${{ needs.version.outputs.version }}"
       - name: Install Linux dependencies
@@ -102,9 +114,8 @@ jobs:
 
   build:
     name: Build ${{ matrix.os }}-${{ matrix.arch }}
-    needs:
-      - version
-      - validate
+    needs: version
+    if: github.event_name != 'release' || github.event.release.prerelease == true
     strategy:
       fail-fast: false
       matrix:
@@ -141,6 +152,8 @@ jobs:
             suffix: zip
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    env:
+      RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v7
         with:
@@ -149,6 +162,24 @@ jobs:
         with:
           bun-version: 1.3.14
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Bun packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-1.3.14-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-${{ runner.arch }}-1.3.14-
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          cache-workspace-crates: true
+          cache-on-failure: true
+      - name: Cache bundled core archive
+        uses: actions/cache@v5
+        with:
+          path: cpa-core
+          key: core-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('core-version.txt') }}
       - name: Apply release version
         run: node scripts/set-version.mjs "${{ needs.version.outputs.version }}"
       - name: Resolve release package name
@@ -168,7 +199,6 @@ jobs:
         env:
           GITCODE_GUI_REPOSITORY: ${{ vars.GITCODE_GUI_REPOSITORY }}
           GITCODE_CORE_REPOSITORY: ${{ vars.GITCODE_CORE_REPOSITORY }}
-          RUSTFLAGS: -D warnings
         run: |
           bun install --frozen-lockfile
           bun tauri build --no-bundle
@@ -425,6 +455,7 @@ jobs:
       || inputs.release_tag != ''
     needs:
       - version
+      - validate
       - build
     runs-on: ubuntu-24.04
     timeout-minutes: 15

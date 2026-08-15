@@ -154,6 +154,26 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
     Ok(models)
 }
 
+pub(crate) fn merge_runtime_context_windows(
+    models: &mut [AgentModelOption],
+    runtime_models: &[CodexRuntimeModel],
+) {
+    for model in models {
+        let Some(runtime_model) = runtime_models
+            .iter()
+            .find(|runtime_model| runtime_model.slug.eq_ignore_ascii_case(&model.name))
+        else {
+            continue;
+        };
+        if let Some(context_window) = runtime_model
+            .context_window
+            .or(runtime_model.max_context_window)
+        {
+            model.context_window = Some(context_window);
+        }
+    }
+}
+
 pub(crate) fn prepare_catalog(
     runtime_models: &[CodexRuntimeModel],
 ) -> Result<PreparedCodexCatalog, String> {
@@ -871,6 +891,40 @@ mod tests {
             vec!["gpt-5.5", "gpt-5.5-xhigh", "visible-alias"]
         );
         assert_eq!(catalog.models[1].alias.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn runtime_context_windows_override_generic_model_metadata() {
+        let mut models = vec![
+            AgentModelOption {
+                name: "GPT-Test".to_string(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(200_000),
+            },
+            AgentModelOption {
+                name: "unmatched".to_string(),
+                alias: None,
+                is_alias: false,
+                context_window: Some(128_000),
+            },
+            AgentModelOption {
+                name: "max-only".to_string(),
+                alias: None,
+                is_alias: false,
+                context_window: None,
+            },
+        ];
+        let runtime_models = runtime(serde_json::json!({"models":[
+            {"id":"gpt-test","context_window":372000},
+            {"id":"max-only","max_context_window":272000}
+        ]}));
+
+        merge_runtime_context_windows(&mut models, &runtime_models);
+
+        assert_eq!(models[0].context_window, Some(372_000));
+        assert_eq!(models[1].context_window, Some(128_000));
+        assert_eq!(models[2].context_window, Some(272_000));
     }
 
     #[test]
