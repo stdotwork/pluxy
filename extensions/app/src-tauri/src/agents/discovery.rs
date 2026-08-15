@@ -1298,7 +1298,6 @@ pub(crate) fn inspect_managed_toml_model_marker(
     Ok(provider_exists && catalog_has_selected)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn find_codex_app_installation(home: &Path) -> Option<CodexAppTarget> {
     #[cfg(target_os = "macos")]
     {
