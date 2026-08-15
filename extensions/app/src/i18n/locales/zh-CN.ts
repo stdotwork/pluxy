@@ -618,7 +618,7 @@ export const zhCN = {
   'agents.modify.default': '默认配置',
   'agents.modify.clear': '清空配置',
   'agents.modify.invalid': '当前配置无法解析。点击“应用配置修改”会重建最小合法配置；“默认配置”会重置整个文件。',
-  'agents.modify.zcodeRestart': '应用或关闭配置后，请完全退出并重新启动 ZCode 以加载模型供应商。',
+  'agents.modify.zcodeRestart': '应用或关闭配置后，请完全退出并重新启动 ZCode；默认模型和上下文长度会在新会话中生效。',
   'agents.pi.installTitle': 'Pi CLIProxyAPI provider',
   'agents.pi.installDescription': '安装或更新插件，并修复 CPA 凭据、默认 provider 与默认模型',
   'agents.pi.install': '安装 Pi 插件',

@@ -2464,18 +2464,38 @@ pub(crate) fn inspect_zcode_agent_config(
         .get("provider")
         .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
     let expected_base = format!("http://127.0.0.1:{port}");
-    let configured = provider
-        .and_then(|provider| provider.get("enabled"))
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
+    let api_format_matches = provider
+        .and_then(|provider| provider.get("apiFormat"))
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|api_format| api_format == "anthropic-messages");
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let model = root
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.strip_prefix(&prefix))
+        .map(str::to_string);
+    let selected_model_exists = model.as_deref().is_some_and(|selected_model| {
+        provider
+            .and_then(|provider| provider.get("models"))
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|models| {
+                models
+                    .keys()
+                    .any(|model| model.eq_ignore_ascii_case(selected_model))
+            })
+    });
+    let configured = selected_model_exists
+        && api_format_matches
+        && provider
+            .and_then(|provider| provider.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
         && provider
             .and_then(|provider| provider.get("kind"))
             .and_then(serde_json::Value::as_str)
             == Some("anthropic")
-        && provider
-            .and_then(|provider| provider.get("apiFormat"))
-            .and_then(serde_json::Value::as_str)
-            == Some("anthropic-messages")
         && provider
             .and_then(|provider| provider.get("options"))
             .and_then(|options| options.get("baseURL"))
@@ -2486,14 +2506,6 @@ pub(crate) fn inspect_zcode_agent_config(
             .and_then(|options| options.get("apiKey"))
             .and_then(serde_json::Value::as_str)
             == Some(api_key);
-    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
-    let model = root
-        .get("model")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.strip_prefix(&prefix).unwrap_or(value))
-        .map(str::to_string);
     Ok((configured, model))
 }
 

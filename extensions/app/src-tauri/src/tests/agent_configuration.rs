@@ -617,7 +617,9 @@ fn zcode_agent_config_preserves_other_providers_and_uses_anthropic_messages() {
     let home = agent_test_home("zcode-agent-config");
     let path = home.join(".zcode/v2/config.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let mut models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    models[0].context_window = Some(372_000);
+    models[1].context_window = Some(272_000);
     let rendered = build_zcode_agent_config(
         Some(
             r#"{"locale":"zh-CN","provider":{"other":{"kind":"openai"},"cpa-gui":{"custom":"keep","options":{"timeout":30}}}}"#,
@@ -655,8 +657,53 @@ fn zcode_agent_config_preserves_other_providers_and_uses_anthropic_messages() {
     );
     assert_eq!(value["model"], "cpa-gui/gpt-test");
     assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["models"]["gpt-test"]["limit"]["context"],
+        372_000
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["models"]["deepseek-test"]["limit"]["context"],
+        272_000
+    );
+    assert_eq!(
         inspect_zcode_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
         (true, Some("gpt-test".to_string()))
+    );
+
+    let mut normalized = value;
+    let provider = normalized["provider"][MANAGED_AGENT_PROVIDER_ID]
+        .as_object_mut()
+        .unwrap();
+    provider.remove("apiFormat");
+    provider.remove("defaultKind");
+    provider.remove("npm");
+    fs::write(&path, serde_json::to_string_pretty(&normalized).unwrap()).unwrap();
+    assert_eq!(
+        inspect_zcode_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()))
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn zcode_inspection_requires_the_default_model_to_belong_to_the_managed_provider() {
+    let home = agent_test_home("zcode-default-model-inspection");
+    let path = home.join(".zcode/v2/config.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let rendered = build_zcode_agent_config(
+        None,
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &test_agent_models(&["gpt-test"]),
+    )
+    .unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    value["model"] = serde_json::json!("other/gpt-test");
+    fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+    assert_eq!(
+        inspect_zcode_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (false, None)
     );
     fs::remove_dir_all(home).unwrap();
 }

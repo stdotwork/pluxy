@@ -2713,14 +2713,15 @@ pub(crate) fn build_zcode_agent_config(
         .into_iter()
         .map(|model| {
             let display_name = model.alias.as_deref().unwrap_or(&model.name).to_string();
-            (
-                model.name,
-                serde_json::json!({
-                    "name": display_name,
-                    "kinds": ["anthropic"],
-                    "defaultKind": "anthropic"
-                }),
-            )
+            let mut entry = serde_json::Map::new();
+            entry.insert("name".to_string(), serde_json::json!(display_name));
+            if let Some(context_window) = model.context_window {
+                entry.insert(
+                    "limit".to_string(),
+                    serde_json::json!({ "context": context_window }),
+                );
+            }
+            (model.name, serde_json::Value::Object(entry))
         })
         .collect::<serde_json::Map<_, _>>();
     let managed_provider = ensure_json_object_entry(providers, MANAGED_AGENT_PROVIDER_ID);

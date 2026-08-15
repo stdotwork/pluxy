@@ -620,7 +620,7 @@ export const en: Record<MessageKey, string> = {
   'agents.modify.default': 'Default Configuration',
   'agents.modify.clear': 'Clear Configuration',
   'agents.modify.invalid': 'The current configuration cannot be parsed. Apply Configuration Changes rebuilds a minimal valid configuration; Default Configuration resets the whole file.',
-  'agents.modify.zcodeRestart': 'Fully quit and restart ZCode after applying or closing the configuration so it reloads model providers.',
+  'agents.modify.zcodeRestart': 'Fully quit and restart ZCode after applying or closing the configuration; the default model and context length take effect in new sessions.',
   'agents.pi.installTitle': 'Pi CLIProxyAPI provider',
   'agents.pi.installDescription': 'Install or update the plugin and repair CPA credentials, the default provider, and the default model.',
   'agents.pi.install': 'Install Pi Plugin',

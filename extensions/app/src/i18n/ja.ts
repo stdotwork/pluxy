@@ -620,7 +620,7 @@ export const jaOverrides = {
   'agents.modify.default': 'デフォルト設定',
   'agents.modify.clear': '設定を消去',
   'agents.modify.invalid': '現在の設定を解析できません。「設定変更を適用」は最小の有効な設定を再構築し、「デフォルト設定」はファイル全体をリセットします。',
-  'agents.modify.zcodeRestart': '設定の適用または終了後、モデルプロバイダーを再読み込みするため ZCode を完全終了して再起動してください。',
+  'agents.modify.zcodeRestart': '設定の適用または終了後、ZCode を完全終了して再起動してください。デフォルトモデルとコンテキスト長は新しいセッションで有効になります。',
   'agents.pi.installTitle': 'Pi CLIProxyAPI プロバイダー',
   'agents.pi.installDescription': 'プラグインをインストールまたは更新し、CPA 認証情報、既定のプロバイダー、既定のモデルを修復します',
   'agents.pi.install': 'Pi プラグインをインストール',

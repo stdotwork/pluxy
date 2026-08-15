@@ -640,6 +640,10 @@ pub(crate) async fn fetch_prepared_agent_models(
         prepare_codex_agent_models(&runtime_models)
     } else {
         let mut models = fetch_agent_models(config.port, api_key).await?;
+        if client == AgentClient::ZCode {
+            let runtime_models = fetch_codex_runtime_models(config.port, api_key).await?;
+            codex_catalog::merge_runtime_context_windows(&mut models, &runtime_models);
+        }
         if matches!(client, AgentClient::ClaudeCode | AgentClient::ClaudeDesktop) {
             let content = fetch_management_config_yaml(config).await?;
             mark_configured_agent_model_aliases(&mut models, &content)?;
