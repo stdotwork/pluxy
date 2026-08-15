@@ -121,7 +121,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: cpa-core
-          key: core-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('core-version.txt') }}
+          key: core-v2-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('core-version.txt') }}
       - name: Apply release version
         run: node scripts/set-version.mjs "${{ needs.version.outputs.version }}"
       - name: Resolve release package name
@@ -179,6 +179,8 @@ jobs:
           keychain_path="$RUNNER_TEMP/apple-signing.keychain-db"
           keychain_password="$(uuidgen)"
           signed_core_dir="$RUNNER_TEMP/signed-core"
+          unsigned_core_archive="$RUNNER_TEMP/unsigned-core-${{ matrix.arch }}.tar.gz"
+          core_archive=""
           staging_dir="$RUNNER_TEMP/easycli-dmg-staging"
           bundle_dir="src-tauri/target/release/bundle"
           output_dmg="${{ steps.package.outputs.stem }}.dmg"
@@ -194,7 +196,11 @@ jobs:
 
           cleanup() {
             set +e
+            if [ -n "$core_archive" ] && [ -f "$unsigned_core_archive" ]; then
+              cp "$unsigned_core_archive" "$core_archive"
+            fi
             rm -f "$certificate_path"
+            rm -f "$unsigned_core_archive"
             rm -rf "$signed_core_dir" "$staging_dir"
             security delete-keychain "$keychain_path"
           }
@@ -213,6 +219,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
 
           core_archive="$(find cpa-core -maxdepth 1 -type f -name 'CLIProxyAPI_*_darwin_${{ matrix.arch }}.tar.gz' -print -quit)"
+          cp "$core_archive" "$unsigned_core_archive"
           mkdir -p "$signed_core_dir"
           tar -xzf "$core_archive" -C "$signed_core_dir"
           core_binary="$(find "$signed_core_dir" -type f -name 'cli-proxy-api' -print -quit)"
