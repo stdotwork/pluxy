@@ -189,7 +189,11 @@ pub(crate) fn validate_agent_applied_state(
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let valid_paths = state_paths == expected_paths
-        || (client == AgentClient::Codex && state_paths.as_slice() == paths);
+        || (client == AgentClient::Codex && state_paths.as_slice() == paths)
+        || (client == AgentClient::ZCode
+            && paths
+                .first()
+                .is_some_and(|path| state_paths == [path.clone()]));
     if !valid_paths {
         return Err("智能体应用状态文件数量或路径不匹配".to_string());
     }
@@ -385,7 +389,11 @@ pub(crate) fn validate_agent_record(
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let valid_paths = record_paths.as_slice() == paths
-        || (client == AgentClient::Codex && record_paths == expected_paths);
+        || (client == AgentClient::Codex && record_paths == expected_paths)
+        || (client == AgentClient::ZCode
+            && paths
+                .first()
+                .is_some_and(|path| record_paths == [path.clone()]));
     if !valid_paths {
         return Err("智能体备份状态文件数量或路径不匹配".to_string());
     }
@@ -728,9 +736,10 @@ pub(crate) fn fresh_agent_contents_with_oauth(
             build_deepseek_harness_settings(None, &openai_base, model, models)?,
             build_deepseek_harness_credentials(None, api_key)?,
         ]),
-        AgentClient::ZCode => Ok(vec![build_zcode_agent_config(
-            None, &root_base, api_key, model, models,
-        )?]),
+        AgentClient::ZCode => Ok(vec![
+            build_zcode_agent_config(None, &root_base, api_key, model, models)?,
+            build_zcode_cli_agent_config(None, &root_base, api_key, model, models)?,
+        ]),
         AgentClient::KimiCode => Ok(vec![build_kimi_code_agent_config(
             None,
             &openai_base,
@@ -1430,14 +1439,36 @@ pub(crate) fn commit_agent_configuration(
         .collect::<Result<Vec<_>, String>>()?;
     snapshots.push((state_path.clone(), previous_state));
 
-    let created_session_backups = existing_state
-        .as_ref()
-        .is_none_or(|state| state.backup_files.is_empty());
+    let mut created_backup_paths = Vec::new();
     let backup_files =
         if let Some(state) = existing_state.filter(|state| !state.backup_files.is_empty()) {
-            state.backup_files
+            let mut backup_files = state.backup_files;
+            let missing_updates = updates
+                .iter()
+                .filter(|update| !backup_files.iter().any(|file| file.path == update.path))
+                .map(|update| AgentFileUpdate {
+                    path: update.path.clone(),
+                    after: update.after.clone(),
+                })
+                .collect::<Vec<_>>();
+            let added_backups = prepare_agent_session_backups(client, &missing_updates)?;
+            created_backup_paths.extend(
+                added_backups
+                    .iter()
+                    .filter(|file| file.existed_before)
+                    .map(|file| file.backup_path.clone()),
+            );
+            backup_files.extend(added_backups);
+            backup_files
         } else {
-            prepare_agent_session_backups(client, updates)?
+            let backup_files = prepare_agent_session_backups(client, updates)?;
+            created_backup_paths.extend(
+                backup_files
+                    .iter()
+                    .filter(|file| file.existed_before)
+                    .map(|file| file.backup_path.clone()),
+            );
+            backup_files
         };
 
     let transaction = (|| -> Result<Vec<String>, String> {
@@ -1484,11 +1515,9 @@ pub(crate) fn commit_agent_configuration(
         }
         Err(error) => {
             let rollback = restore_agent_snapshots_direct(&snapshots);
-            if created_session_backups {
-                for backup in &backup_files {
-                    if backup.existed_before && backup.backup_path.is_file() {
-                        let _ = fs::remove_file(&backup.backup_path);
-                    }
+            for backup_path in created_backup_paths {
+                if backup_path.is_file() {
+                    let _ = fs::remove_file(backup_path);
                 }
             }
             match rollback {

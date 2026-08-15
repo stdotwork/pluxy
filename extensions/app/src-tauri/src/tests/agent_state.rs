@@ -425,6 +425,71 @@ fn zcode_runtime_edits_survive_close_and_original_provider_is_restored() {
 }
 
 #[test]
+fn zcode_legacy_single_file_state_upgrades_and_restores_cli_config() {
+    let home = agent_test_home("zcode-legacy-state-upgrade");
+    let paths = agent_config_paths(AgentClient::ZCode, &home);
+    fs::create_dir_all(paths[0].parent().unwrap()).unwrap();
+    fs::create_dir_all(paths[1].parent().unwrap()).unwrap();
+    let original_app = br#"{"model":"other/original","provider":{"other":{"keep":true}}}"#;
+    let original_cli =
+        br#"{"model":{"main":"other/original","lite":"other/lite"},"plugins":{"keep":true}}"#;
+    let models = test_agent_models(&["gpt-one", "gpt-two"]);
+    let managed_app = build_zcode_agent_config(
+        Some(std::str::from_utf8(original_app).unwrap()),
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-one",
+        &models,
+    )
+    .unwrap();
+    fs::write(&paths[0], managed_app).unwrap();
+    fs::write(&paths[1], original_cli).unwrap();
+    let app_backup = dated_agent_backup_path(&paths[0]).unwrap();
+    fs::write(&app_backup, original_app).unwrap();
+    let state_path = agent_state_path(&paths).unwrap();
+    write_agent_applied_state(
+        &state_path,
+        &AgentAppliedState {
+            version: AGENT_APPLIED_STATE_VERSION,
+            client: AgentClient::ZCode.id().to_string(),
+            model: "gpt-one".to_string(),
+            claude_desktop_model_mappings: None,
+            backup_files: vec![AgentAppliedBackupFile {
+                path: paths[0].clone(),
+                backup_path: app_backup,
+                existed_before: true,
+            }],
+            updated_at_unix: 1,
+        },
+    )
+    .unwrap();
+
+    apply_agent_configuration(
+        AgentClient::ZCode,
+        &home,
+        8317,
+        DEFAULT_API_KEY,
+        "gpt-two",
+        &models,
+        None,
+    )
+    .unwrap();
+    let upgraded = load_agent_applied_state(AgentClient::ZCode, &home)
+        .unwrap()
+        .unwrap();
+    assert_eq!(upgraded.backup_files.len(), 2);
+    let cli_value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&paths[1]).unwrap()).unwrap();
+    assert_eq!(cli_value["model"]["main"], "cpa-gui/gpt-two");
+
+    restore_agent_session_configuration(AgentClient::ZCode, &home).unwrap();
+    assert_eq!(fs::read(&paths[0]).unwrap(), original_app);
+    assert_eq!(fs::read(&paths[1]).unwrap(), original_cli);
+    assert!(!state_path.exists());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn session_merge_preserves_runtime_fields_for_other_agent_formats() {
     let claude_original = r#"{"env":{"KEEP_ENV":"original"},"keep":"claude"}"#;
     let claude_managed = build_claude_agent_config(

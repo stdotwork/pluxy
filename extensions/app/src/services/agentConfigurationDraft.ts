@@ -32,6 +32,7 @@ export type AgentModelMappings = {
 type ResolveAgentConfigurationActionOptions = {
   client: AgentConfigurationClientId;
   modificationState: AgentConfigurationModificationState;
+  configurationSynchronized?: boolean;
   selectedModel: string;
   appliedModel: string;
   oauthConfiguration: boolean;
@@ -82,6 +83,7 @@ export const resolveAgentModelMappingsDraftSourceForClient = <T>(
 export function resolveAgentConfigurationAction({
   client,
   modificationState,
+  configurationSynchronized = true,
   selectedModel,
   appliedModel,
   oauthConfiguration,
@@ -91,6 +93,7 @@ export function resolveAgentConfigurationAction({
 }: ResolveAgentConfigurationActionOptions): AgentConfigurationAction {
   if (modificationState !== 'applied') return 'apply';
   if (client === 'pi') return 'close';
+  if (client === 'zcode' && !configurationSynchronized) return 'update';
 
   const modelChanged = client === 'claude-code' || client === 'claude-desktop'
     ? !sameAgentModelMappings(modelMappings, appliedModelMappings)

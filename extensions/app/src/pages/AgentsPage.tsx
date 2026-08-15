@@ -885,6 +885,7 @@ export function AgentsPage() {
   const configurationAction = resolveAgentConfigurationAction({
     client: selected,
     modificationState: activeStatus?.modificationState ?? 'unconfigured',
+    configurationSynchronized: Boolean(activeStatus?.configured),
     selectedModel,
     appliedModel,
     oauthConfiguration,

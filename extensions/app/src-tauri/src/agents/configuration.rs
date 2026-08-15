@@ -215,16 +215,31 @@ pub(crate) fn build_agent_updates_with_oauth(
             ])
         }
         AgentClient::ZCode => {
-            let before = read_optional_text(&paths[0])?;
-            let after =
-                build_zcode_agent_config(before.as_deref(), &root_base, api_key, model, models)
+            let app_before = read_optional_text(&paths[0])?;
+            let cli_before = read_optional_text(&paths[1])?;
+            let app_after =
+                build_zcode_agent_config(app_before.as_deref(), &root_base, api_key, model, models)
                     .or_else(|_| {
                         build_zcode_agent_config(None, &root_base, api_key, model, models)
                     })?;
-            Ok(vec![AgentFileUpdate {
-                path: paths[0].clone(),
-                after,
-            }])
+            let cli_after = build_zcode_cli_agent_config(
+                cli_before.as_deref(),
+                &root_base,
+                api_key,
+                model,
+                models,
+            )
+            .or_else(|_| build_zcode_cli_agent_config(None, &root_base, api_key, model, models))?;
+            Ok(vec![
+                AgentFileUpdate {
+                    path: paths[0].clone(),
+                    after: app_after,
+                },
+                AgentFileUpdate {
+                    path: paths[1].clone(),
+                    after: cli_after,
+                },
+            ])
         }
         AgentClient::KimiCode => {
             let before = read_optional_text(&paths[0])?;
@@ -1031,35 +1046,59 @@ pub(crate) fn remove_opencode_managed_configuration(
 }
 
 pub(crate) fn remove_zcode_managed_configuration(paths: &[PathBuf]) -> Result<Vec<String>, String> {
-    let Some(path) = paths.first() else {
+    if paths.is_empty() {
         return Err("ZCode 当前平台配置路径不可用".to_string());
-    };
+    }
     let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
-    let updated = update_agent_json_file(path, "ZCode 配置", |root| {
-        let mut changed = false;
-        if root
-            .get("model")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|model| model.starts_with(&prefix))
-        {
-            root.remove("model");
-            changed = true;
+    let mut changed_paths = Vec::new();
+    for path in paths {
+        let updated = update_agent_json_file(path, "ZCode 配置", |root| {
+            let mut changed = false;
+            let remove_model = if root
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|model| model.starts_with(&prefix))
+            {
+                true
+            } else if let Some(model) = root
+                .get_mut("model")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                if model
+                    .get("main")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|model| model.starts_with(&prefix))
+                {
+                    model.remove("main");
+                    changed = true;
+                }
+                model.is_empty()
+            } else {
+                false
+            };
+            if remove_model {
+                root.remove("model");
+                changed = true;
+            }
+            let providers_empty = if let Some(providers) = root
+                .get_mut("provider")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                changed |= providers.remove(MANAGED_AGENT_PROVIDER_ID).is_some();
+                providers.is_empty()
+            } else {
+                false
+            };
+            if providers_empty {
+                root.remove("provider");
+            }
+            changed
+        })?;
+        if updated {
+            changed_paths.push(path_to_string(path));
         }
-        let providers_empty = if let Some(providers) = root
-            .get_mut("provider")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            changed |= providers.remove(MANAGED_AGENT_PROVIDER_ID).is_some();
-            providers.is_empty()
-        } else {
-            false
-        };
-        if providers_empty {
-            root.remove("provider");
-        }
-        changed
-    })?;
-    Ok(updated.then(|| path_to_string(path)).into_iter().collect())
+    }
+    Ok(changed_paths)
 }
 
 pub(crate) fn remove_kimi_code_managed_configuration(
@@ -2707,6 +2746,27 @@ pub(crate) fn build_zcode_agent_config(
     model: &str,
     available_models: &[AgentModelOption],
 ) -> Result<String, String> {
+    build_zcode_config(existing, base_url, api_key, model, available_models, false)
+}
+
+pub(crate) fn build_zcode_cli_agent_config(
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    available_models: &[AgentModelOption],
+) -> Result<String, String> {
+    build_zcode_config(existing, base_url, api_key, model, available_models, true)
+}
+
+fn build_zcode_config(
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    available_models: &[AgentModelOption],
+    cli_config: bool,
+) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "ZCode config.json")?;
     let providers = ensure_json_object_entry(&mut root, "provider");
     let models = ordered_agent_models(available_models, model)
@@ -2739,10 +2799,13 @@ pub(crate) fn build_zcode_agent_config(
     options.insert("baseURL".to_string(), serde_json::json!(base_url));
     options.insert("apiKey".to_string(), serde_json::json!(api_key));
     managed_provider.insert("models".to_string(), serde_json::Value::Object(models));
-    root.insert(
-        "model".to_string(),
-        serde_json::json!(format!("{MANAGED_AGENT_PROVIDER_ID}/{model}")),
-    );
+    let model = format!("{MANAGED_AGENT_PROVIDER_ID}/{model}");
+    if cli_config {
+        ensure_json_object_entry(&mut root, "model")
+            .insert("main".to_string(), serde_json::json!(model));
+    } else {
+        root.insert("model".to_string(), serde_json::json!(model));
+    }
     render_agent_json(root, "ZCode 配置")
 }
 

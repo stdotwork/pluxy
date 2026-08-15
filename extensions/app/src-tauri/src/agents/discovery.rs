@@ -1,5 +1,8 @@
 use super::*;
 
+const AGENT_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const AGENT_VERSION_PROBE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 pub(crate) fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBuf> {
     match client {
         AgentClient::ClaudeCode => {
@@ -32,7 +35,10 @@ pub(crate) fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBu
                 directory.join(DEEPSEEK_HARNESS_CREDENTIALS_FILE),
             ]
         }
-        AgentClient::ZCode => vec![home.join(".zcode/v2").join(ZCODE_CONFIG_FILE)],
+        AgentClient::ZCode => vec![
+            home.join(".zcode/v2").join(ZCODE_CONFIG_FILE),
+            home.join(".zcode/cli").join(ZCODE_CONFIG_FILE),
+        ],
         AgentClient::KimiCode => vec![kimi_code_home(home).join(KIMI_CODE_CONFIG_FILE)],
         AgentClient::GrokBuild => vec![grok_build_home(home).join(GROK_BUILD_CONFIG_FILE)],
     }
@@ -968,8 +974,19 @@ pub(crate) fn inspect_agent_managed_config(
             .map(|(configured, model)| (configured, model, false)),
         AgentClient::DeepSeekHarness => inspect_deepseek_harness_config(paths, port, api_key)
             .map(|(configured, model)| (configured, model, false)),
-        AgentClient::ZCode => inspect_zcode_agent_config(&paths[0], port, api_key)
-            .map(|(configured, model)| (configured, model, false)),
+        AgentClient::ZCode => {
+            if paths.len() != 2 {
+                return Err("ZCode 配置路径数量无效".to_string());
+            }
+            let (app_configured, app_model) = inspect_zcode_agent_config(&paths[0], port, api_key)?;
+            let (cli_configured, cli_model) = inspect_zcode_agent_config(&paths[1], port, api_key)?;
+            let models_match = app_model.is_some() && app_model == cli_model;
+            Ok((
+                app_configured && cli_configured && models_match,
+                cli_model.or(app_model),
+                false,
+            ))
+        }
         AgentClient::KimiCode => inspect_kimi_code_agent_config(&paths[0], port, api_key)
             .map(|(configured, model)| (configured, model, false)),
         AgentClient::GrokBuild => inspect_grok_build_agent_config(&paths[0], port, api_key)
@@ -1094,20 +1111,29 @@ pub(crate) fn agent_has_managed_marker(
         }
         AgentClient::DeepSeekHarness => deepseek_harness_has_managed_marker(paths),
         AgentClient::ZCode => {
-            if !paths[0].is_file() {
-                return Ok(false);
-            }
-            let root = read_agent_json_or_empty(&paths[0], "ZCode 配置")?;
             let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
-            let provider_exists = root
-                .get("provider")
-                .and_then(|value| value.get(MANAGED_AGENT_PROVIDER_ID))
-                .is_some();
-            let model_selected = root
-                .get("model")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|model| model.starts_with(&prefix));
-            Ok(provider_exists && model_selected)
+            for path in paths {
+                if !path.is_file() {
+                    continue;
+                }
+                let root = read_agent_json_or_empty(path, "ZCode 配置")?;
+                let provider_exists = root
+                    .get("provider")
+                    .and_then(|value| value.get(MANAGED_AGENT_PROVIDER_ID))
+                    .is_some();
+                let model_selected = root
+                    .get("model")
+                    .and_then(|model| {
+                        model
+                            .as_str()
+                            .or_else(|| model.get("main").and_then(serde_json::Value::as_str))
+                    })
+                    .is_some_and(|model| model.starts_with(&prefix));
+                if provider_exists && model_selected {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
         AgentClient::KimiCode => inspect_managed_toml_model_marker(
             &paths[0],
@@ -1322,11 +1348,12 @@ pub(crate) fn find_zcode_desktop_executable(home: &Path) -> Option<PathBuf> {
 pub(crate) fn read_macos_app_version(application: &Path) -> Option<String> {
     let info_plist = application.join("Contents/Info.plist");
     for key in ["CFBundleShortVersionString", "CFBundleVersion"] {
-        let output = Command::new("/usr/bin/plutil")
+        let mut command = Command::new("/usr/bin/plutil");
+        command
             .args(["-extract", key, "raw", "-o", "-"])
-            .arg(&info_plist)
-            .output()
-            .ok()?;
+            .arg(&info_plist);
+        let output =
+            command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
         if !output.status.success() {
             continue;
         }
@@ -1420,7 +1447,7 @@ if ($package -and $package.Version) {
         &encoded_command,
     ]);
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1456,7 +1483,7 @@ if ($package -and $package.Version) {
         &encoded_command,
     ]);
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1543,7 +1570,7 @@ foreach ($shortcutFile in (Get-ChildItem -LiteralPath $shortcutRoots -Filter '*.
         &encoded_command,
     ]);
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1596,7 +1623,7 @@ if ($version) {{
         &encoded_command,
     ]);
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -1642,7 +1669,9 @@ pub(crate) fn find_windows_codex_app_id_via_registry() -> Option<String> {
         let mut command = Command::new(windows_registry_executable());
         command.args(["query", PACKAGES_KEY, "/f", package_name, "/k", "/s"]);
         configure_background_command(&mut command);
-        let Ok(output) = command.output() else {
+        let Ok(Some(output)) =
+            command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT)
+        else {
             continue;
         };
         if !output.status.success() {
@@ -1914,6 +1943,74 @@ pub(crate) fn windows_batch_executable_argument(executable: &Path) -> String {
     format!("\"{}\"", path_to_string(executable))
 }
 
+pub(crate) fn command_output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> io::Result<Option<std::process::Output>> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "无法读取智能体探测标准输出"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "无法读取智能体探测错误输出"))?;
+    thread::scope(|scope| {
+        let stdout_reader = scope.spawn(move || {
+            let mut output = Vec::new();
+            stdout.read_to_end(&mut output).map(|_| output)
+        });
+        let stderr_reader = scope.spawn(move || {
+            let mut output = Vec::new();
+            stderr.read_to_end(&mut output).map(|_| output)
+        });
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                terminate_agent_probe_process(&mut child);
+                break None;
+            }
+            thread::sleep(AGENT_VERSION_PROBE_POLL_INTERVAL);
+        };
+        let stdout = stdout_reader
+            .join()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "智能体探测输出线程异常退出"))??;
+        let stderr = stderr_reader
+            .join()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "智能体探测错误线程异常退出"))??;
+        Ok(status.map(|status| std::process::Output {
+            status,
+            stdout,
+            stderr,
+        }))
+    })
+}
+
+fn terminate_agent_probe_process(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    {
+        let process_id = child.id().to_string();
+        let mut command = Command::new("taskkill");
+        command
+            .args(["/PID", &process_id, "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_background_command(&mut command);
+        let _ = command.status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub(crate) fn read_agent_version(path: &Path) -> Option<String> {
     #[cfg(target_os = "windows")]
     let mut command = windows_command_for_executable(path, false);
@@ -1923,7 +2020,7 @@ pub(crate) fn read_agent_version(path: &Path) -> Option<String> {
 
     command.arg("--version");
     configure_background_command(&mut command);
-    let output = command.output().ok()?;
+    let output = command_output_with_timeout(&mut command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
     if !output.status.success() {
         return None;
     }
@@ -2471,7 +2568,11 @@ pub(crate) fn inspect_zcode_agent_config(
     let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
     let model = root
         .get("model")
-        .and_then(serde_json::Value::as_str)
+        .and_then(|model| {
+            model
+                .as_str()
+                .or_else(|| model.get("main").and_then(serde_json::Value::as_str))
+        })
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .and_then(|value| value.strip_prefix(&prefix))

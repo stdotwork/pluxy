@@ -685,6 +685,55 @@ fn zcode_agent_config_preserves_other_providers_and_uses_anthropic_messages() {
 }
 
 #[test]
+fn zcode_cli_config_sets_main_model_and_both_configs_must_match() {
+    let home = agent_test_home("zcode-cli-default-model");
+    let paths = agent_config_paths(AgentClient::ZCode, &home);
+    fs::create_dir_all(paths[0].parent().unwrap()).unwrap();
+    fs::create_dir_all(paths[1].parent().unwrap()).unwrap();
+    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let app_config = build_zcode_agent_config(
+        None,
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    let cli_config = build_zcode_cli_agent_config(
+        Some(r#"{"model":{"lite":"other/lite"},"plugins":{"keep":true}}"#),
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    let cli_value: serde_json::Value = serde_json::from_str(&cli_config).unwrap();
+
+    assert_eq!(cli_value["model"]["main"], "cpa-gui/gpt-test");
+    assert_eq!(cli_value["model"]["lite"], "other/lite");
+    assert_eq!(cli_value["plugins"]["keep"], true);
+    fs::write(&paths[0], app_config).unwrap();
+    fs::write(&paths[1], &cli_config).unwrap();
+    assert_eq!(
+        inspect_agent_managed_config(AgentClient::ZCode, &paths, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()), false)
+    );
+
+    let mut mismatched = cli_value;
+    mismatched["model"]["main"] = serde_json::json!("cpa-gui/deepseek-test");
+    fs::write(
+        &paths[1],
+        serde_json::to_string_pretty(&mismatched).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        inspect_agent_managed_config(AgentClient::ZCode, &paths, 8317, DEFAULT_API_KEY).unwrap(),
+        (false, Some("deepseek-test".to_string()), false)
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn zcode_inspection_requires_the_default_model_to_belong_to_the_managed_provider() {
     let home = agent_test_home("zcode-default-model-inspection");
     let path = home.join(".zcode/v2/config.json");
@@ -1581,6 +1630,62 @@ fn detected_agent_version_requires_a_real_version_value() {
     assert!(normalize_detected_agent_version("version unknown").is_none());
     assert!(normalize_detected_agent_version("1.2.3\0invalid").is_none());
     assert!(normalize_detected_agent_version(&"1".repeat(257)).is_none());
+}
+
+#[test]
+fn agent_probe_command_captures_output_before_timeout() {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new(windows_command_processor());
+        command.args(["/D", "/C", "echo agent 1.2.3"]);
+        configure_background_command(&mut command);
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 'agent 1.2.3\\n'"]);
+        command
+    };
+
+    let output = command_output_with_timeout(&mut command, Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "agent 1.2.3"
+    );
+}
+
+#[test]
+fn agent_probe_command_stops_at_timeout() {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new(windows_powershell_executable());
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 5",
+        ]);
+        configure_background_command(&mut command);
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+        command
+    };
+
+    let started = Instant::now();
+    let output = command_output_with_timeout(&mut command, Duration::from_millis(100)).unwrap();
+
+    assert!(output.is_none());
+    assert!(started.elapsed() < Duration::from_secs(3));
 }
 
 #[test]
