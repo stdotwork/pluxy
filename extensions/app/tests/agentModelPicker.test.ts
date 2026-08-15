@@ -154,6 +154,8 @@ describe('agent configuration update action', () => {
     'openclaw',
     'hermes',
     'zcode',
+    'kimi-code',
+    'grok-build',
   ])('%s updates only while its model draft differs', (client) => {
     expect(appliedConfiguration(client, 'model-b')).toBe('update');
     expect(appliedConfiguration(client, ' MODEL-A ')).toBe('close');

@@ -467,6 +467,8 @@ export const en: Record<MessageKey, string> = {
   'agents.description.hermes': 'Uses the CPA custom provider',
   'agents.description.deepseekHarness': 'Uses CPA through an isolated, OpenAI-compatible Harness route',
   'agents.description.zcode': 'Uses the CPA Anthropic Messages API and dynamic model catalog',
+  'agents.description.kimiCode': 'Uses the CPA OpenAI Chat Completions API and dynamic model catalog',
+  'agents.description.grokBuild': 'Uses the CPA OpenAI Chat Completions API and custom model catalog',
   'agents.description.pi': 'Loads models dynamically in Pi through the CLIProxyAPI provider',
   'agents.list.detecting': 'Detecting',
   'agents.list.unsupported': 'Unsupported on this platform',

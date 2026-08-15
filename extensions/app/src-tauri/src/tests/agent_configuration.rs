@@ -662,6 +662,201 @@ fn zcode_agent_config_preserves_other_providers_and_uses_anthropic_messages() {
 }
 
 #[test]
+fn kimi_code_config_preserves_existing_tables_and_uses_openai_provider() {
+    let home = agent_test_home("kimi-code-agent-config");
+    let path = home.join(".kimi-code/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let rendered = build_kimi_code_agent_config(
+        Some(
+            r#"theme = "dark"
+
+[providers.other]
+type = "openai"
+base_url = "https://example.com/v1"
+
+[models."other/model"]
+provider = "other"
+model = "model"
+"#,
+        ),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    fs::write(&path, &rendered).unwrap();
+    let value: toml::Value = toml::from_str(&rendered).unwrap();
+
+    assert_eq!(value["theme"].as_str(), Some("dark"));
+    assert_eq!(
+        value["providers"]["other"]["base_url"].as_str(),
+        Some("https://example.com/v1")
+    );
+    assert_eq!(value["default_model"].as_str(), Some("cpa-gui/gpt-test"));
+    assert_eq!(
+        value["providers"][MANAGED_AGENT_PROVIDER_ID]["type"].as_str(),
+        Some("openai")
+    );
+    assert_eq!(
+        value["providers"][MANAGED_AGENT_PROVIDER_ID]["base_url"].as_str(),
+        Some("http://127.0.0.1:8317/v1")
+    );
+    assert_eq!(
+        value["models"]["cpa-gui/gpt-test"]["capabilities"]
+            .as_array()
+            .unwrap()[0]
+            .as_str(),
+        Some("tool_use")
+    );
+    assert_eq!(
+        inspect_kimi_code_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()))
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn grok_build_config_preserves_existing_models_and_uses_chat_completions() {
+    let home = agent_test_home("grok-build-agent-config");
+    let path = home.join(".grok/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let rendered = build_grok_build_agent_config(
+        Some(
+            r#"theme = "dark"
+
+[models]
+default = "other"
+
+[model.other]
+model = "other-model"
+base_url = "https://example.com/v1"
+api_key = "other-key"
+"#,
+        ),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    fs::write(&path, &rendered).unwrap();
+    let value: toml::Value = toml::from_str(&rendered).unwrap();
+
+    assert_eq!(value["theme"].as_str(), Some("dark"));
+    assert_eq!(
+        value["model"]["other"]["model"].as_str(),
+        Some("other-model")
+    );
+    assert_eq!(
+        value["models"]["default"].as_str(),
+        Some("cpa-gui/gpt-test")
+    );
+    assert_eq!(
+        value["model"]["cpa-gui/gpt-test"]["base_url"].as_str(),
+        Some("http://127.0.0.1:8317/v1")
+    );
+    assert_eq!(
+        value["model"]["cpa-gui/gpt-test"]["api_backend"].as_str(),
+        Some("chat_completions")
+    );
+    assert_eq!(
+        inspect_grok_build_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()))
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn kimi_and_grok_toml_restore_preserves_runtime_fields_and_original_selection() {
+    use toml_edit::{value, Document};
+
+    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let kimi_original = r#"default_model = "cpa-gui/original"
+
+[providers.cpa-gui]
+type = "openai_responses"
+base_url = "https://original.example/v1"
+api_key = "original-key"
+
+[models."cpa-gui/original"]
+provider = "cpa-gui"
+model = "original"
+"#;
+    let kimi_managed = build_kimi_code_agent_config(
+        Some(kimi_original),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    let mut kimi_runtime = kimi_managed.parse::<Document>().unwrap();
+    kimi_runtime
+        .as_table_mut()
+        .insert("runtime_added", value(true));
+    kimi_runtime["providers"][MANAGED_AGENT_PROVIDER_ID]
+        .as_table_mut()
+        .unwrap()
+        .insert("runtime_custom", value("keep"));
+    let kimi_restored =
+        build_restored_kimi_code_config(&kimi_runtime.to_string(), Some(kimi_original))
+            .unwrap()
+            .unwrap();
+    let kimi: toml::Value = toml::from_str(&kimi_restored).unwrap();
+    assert_eq!(kimi["default_model"].as_str(), Some("cpa-gui/original"));
+    assert_eq!(kimi["runtime_added"].as_bool(), Some(true));
+    assert_eq!(
+        kimi["providers"][MANAGED_AGENT_PROVIDER_ID]["type"].as_str(),
+        Some("openai_responses")
+    );
+    assert_eq!(
+        kimi["providers"][MANAGED_AGENT_PROVIDER_ID]["runtime_custom"].as_str(),
+        Some("keep")
+    );
+    assert!(kimi["models"].get("cpa-gui/gpt-test").is_none());
+    assert_eq!(
+        kimi["models"]["cpa-gui/original"]["model"].as_str(),
+        Some("original")
+    );
+
+    let grok_original = r#"[models]
+default = "cpa-gui/original"
+
+[model."cpa-gui/original"]
+model = "original"
+base_url = "https://original.example/v1"
+api_key = "original-key"
+"#;
+    let grok_managed = build_grok_build_agent_config(
+        Some(grok_original),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    let mut grok_runtime = grok_managed.parse::<Document>().unwrap();
+    grok_runtime
+        .as_table_mut()
+        .insert("runtime_added", value(true));
+    let grok_restored =
+        build_restored_grok_build_config(&grok_runtime.to_string(), Some(grok_original))
+            .unwrap()
+            .unwrap();
+    let grok: toml::Value = toml::from_str(&grok_restored).unwrap();
+    assert_eq!(grok["models"]["default"].as_str(), Some("cpa-gui/original"));
+    assert_eq!(grok["runtime_added"].as_bool(), Some(true));
+    assert!(grok["model"].get("cpa-gui/gpt-test").is_none());
+    assert_eq!(
+        grok["model"]["cpa-gui/original"]["base_url"].as_str(),
+        Some("https://original.example/v1")
+    );
+}
+
+#[test]
 fn openclaw_agent_config_accepts_json5_and_preserves_unknown_fields() {
     let models = test_agent_models(&["gpt-test", "deepseek-test"]);
     let rendered = build_openclaw_agent_config(
@@ -831,6 +1026,9 @@ fn exit_preserves_claude_client_configurations() {
     assert!(restored.contains(&AgentClient::Codex));
     assert!(restored.contains(&AgentClient::OpenCode));
     assert!(restored.contains(&AgentClient::DeepSeekHarness));
+    assert!(restored.contains(&AgentClient::ZCode));
+    assert!(restored.contains(&AgentClient::KimiCode));
+    assert!(restored.contains(&AgentClient::GrokBuild));
 }
 
 #[test]

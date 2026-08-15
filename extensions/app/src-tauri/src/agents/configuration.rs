@@ -226,6 +226,40 @@ pub(crate) fn build_agent_updates_with_oauth(
                 after,
             }])
         }
+        AgentClient::KimiCode => {
+            let before = read_optional_text(&paths[0])?;
+            let after = build_kimi_code_agent_config(
+                before.as_deref(),
+                &openai_base,
+                api_key,
+                model,
+                models,
+            )
+            .or_else(|_| {
+                build_kimi_code_agent_config(None, &openai_base, api_key, model, models)
+            })?;
+            Ok(vec![AgentFileUpdate {
+                path: paths[0].clone(),
+                after,
+            }])
+        }
+        AgentClient::GrokBuild => {
+            let before = read_optional_text(&paths[0])?;
+            let after = build_grok_build_agent_config(
+                before.as_deref(),
+                &openai_base,
+                api_key,
+                model,
+                models,
+            )
+            .or_else(|_| {
+                build_grok_build_agent_config(None, &openai_base, api_key, model, models)
+            })?;
+            Ok(vec![AgentFileUpdate {
+                path: paths[0].clone(),
+                after,
+            }])
+        }
     }
 }
 
@@ -1028,6 +1062,138 @@ pub(crate) fn remove_zcode_managed_configuration(paths: &[PathBuf]) -> Result<Ve
     Ok(updated.then(|| path_to_string(path)).into_iter().collect())
 }
 
+pub(crate) fn remove_kimi_code_managed_configuration(
+    paths: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    remove_managed_toml_client_configuration(
+        paths,
+        "Kimi Code",
+        Some("providers"),
+        "models",
+        None,
+        "default_model",
+    )
+}
+
+pub(crate) fn remove_grok_build_managed_configuration(
+    paths: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    remove_managed_toml_client_configuration(
+        paths,
+        "Grok Build",
+        None,
+        "model",
+        Some("models"),
+        "default",
+    )
+}
+
+pub(crate) fn remove_managed_toml_client_configuration(
+    paths: &[PathBuf],
+    label: &str,
+    provider_section: Option<&str>,
+    model_entry_section: &str,
+    default_section: Option<&str>,
+    default_key: &str,
+) -> Result<Vec<String>, String> {
+    use toml_edit::{Document, Item};
+
+    let Some(path) = paths.first() else {
+        return Err(format!("{label} 当前平台配置路径不可用"));
+    };
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 {label} 配置失败 {}: {error}", path_to_string(path)))?;
+    let mut document = content
+        .parse::<Document>()
+        .map_err(|error| format!("解析 {label} 配置失败: {error}"))?;
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let mut changed = false;
+
+    let default_table = if let Some(section) = default_section {
+        document
+            .as_table_mut()
+            .get_mut(section)
+            .and_then(Item::as_table_mut)
+    } else {
+        Some(document.as_table_mut())
+    };
+    if let Some(table) = default_table {
+        if table
+            .get(default_key)
+            .and_then(Item::as_str)
+            .is_some_and(|model| model.starts_with(&prefix))
+        {
+            table.remove(default_key);
+            changed = true;
+        }
+    }
+
+    if let Some(section) = provider_section {
+        if let Some(providers) = document
+            .as_table_mut()
+            .get_mut(section)
+            .and_then(Item::as_table_mut)
+        {
+            changed |= providers.remove(MANAGED_AGENT_PROVIDER_ID).is_some();
+        }
+    }
+    if let Some(models) = document
+        .as_table_mut()
+        .get_mut(model_entry_section)
+        .and_then(Item::as_table_mut)
+    {
+        let managed = models
+            .iter()
+            .map(|(key, _)| key.to_string())
+            .filter(|key| key.starts_with(&prefix))
+            .collect::<Vec<_>>();
+        changed |= !managed.is_empty();
+        for key in managed {
+            models.remove(&key);
+        }
+    }
+    for section in provider_section.into_iter().chain([model_entry_section]) {
+        let empty = document
+            .as_table()
+            .get(section)
+            .and_then(Item::as_table)
+            .is_some_and(toml_edit::Table::is_empty);
+        if empty {
+            document.as_table_mut().remove(section);
+        }
+    }
+    if let Some(section) = default_section {
+        let empty = document
+            .as_table()
+            .get(section)
+            .and_then(Item::as_table)
+            .is_some_and(toml_edit::Table::is_empty);
+        if empty {
+            document.as_table_mut().remove(section);
+        }
+    }
+    if !changed {
+        return Ok(Vec::new());
+    }
+    let rendered = document.to_string();
+    toml::from_str::<toml::Value>(&rendered)
+        .map_err(|error| format!("验证恢复后的 {label} 配置失败: {error}"))?;
+    if rendered.trim().is_empty() {
+        fs::remove_file(path).map_err(|error| {
+            format!(
+                "删除空的 {label} 配置失败 {}: {error}",
+                path_to_string(path)
+            )
+        })?;
+    } else {
+        write_bytes_directly(path, rendered.as_bytes())?;
+    }
+    Ok(vec![path_to_string(path)])
+}
+
 pub(crate) fn update_agent_json5_file<F>(
     path: &Path,
     label: &str,
@@ -1219,6 +1385,8 @@ pub(crate) fn remove_agent_managed_configuration(
         AgentClient::Hermes => remove_hermes_managed_configuration(paths),
         AgentClient::DeepSeekHarness => remove_deepseek_harness_managed_configuration(paths),
         AgentClient::ZCode => remove_zcode_managed_configuration(paths),
+        AgentClient::KimiCode => remove_kimi_code_managed_configuration(paths),
+        AgentClient::GrokBuild => remove_grok_build_managed_configuration(paths),
     }
 }
 
@@ -1601,6 +1769,168 @@ pub(crate) fn build_restored_zcode_config(
     render_restored_json(root, original.is_some(), "恢复后的 ZCode 配置")
 }
 
+pub(crate) fn build_restored_kimi_code_config(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    build_restored_managed_toml_client_config(
+        current,
+        original,
+        "Kimi Code",
+        Some(("providers", &["type", "base_url", "api_key"])),
+        "models",
+        None,
+        "default_model",
+    )
+}
+
+pub(crate) fn build_restored_grok_build_config(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    build_restored_managed_toml_client_config(
+        current,
+        original,
+        "Grok Build",
+        None,
+        "model",
+        Some("models"),
+        "default",
+    )
+}
+
+pub(crate) fn build_restored_managed_toml_client_config(
+    current: &str,
+    original: Option<&str>,
+    label: &str,
+    provider: Option<(&str, &[&str])>,
+    model_entry_section: &str,
+    default_section: Option<&str>,
+    default_key: &str,
+) -> Result<Option<String>, String> {
+    use toml_edit::Item;
+
+    let mut current_document = parse_codex_document(Some(current), &format!("当前 {label} 配置"))?;
+    let original_document = original
+        .map(|content| parse_codex_document(Some(content), &format!("原始 {label} 配置")))
+        .transpose()?;
+    if let Some(original_document) = original_document.as_ref() {
+        merge_missing_codex_table_items(
+            current_document.as_table_mut(),
+            original_document.as_table(),
+        );
+    }
+
+    if let Some(section) = default_section {
+        let original_table = original_document
+            .as_ref()
+            .and_then(|document| document.as_table().get(section))
+            .and_then(Item::as_table);
+        if let Some(current_table) = current_document
+            .as_table_mut()
+            .get_mut(section)
+            .and_then(Item::as_table_mut)
+        {
+            restore_codex_table_item(current_table, original_table, default_key);
+        }
+    } else {
+        restore_codex_table_item(
+            current_document.as_table_mut(),
+            original_document
+                .as_ref()
+                .map(|document| document.as_table()),
+            default_key,
+        );
+    }
+
+    if let Some((section, managed_keys)) = provider {
+        let original_provider = original_document
+            .as_ref()
+            .and_then(|document| document.as_table().get(section))
+            .and_then(Item::as_table)
+            .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+            .and_then(Item::as_table)
+            .cloned();
+        if let Some(providers) = current_document
+            .as_table_mut()
+            .get_mut(section)
+            .and_then(Item::as_table_mut)
+        {
+            if let Some(current_provider) = providers
+                .get_mut(MANAGED_AGENT_PROVIDER_ID)
+                .and_then(Item::as_table_mut)
+            {
+                for key in managed_keys {
+                    restore_codex_table_item(current_provider, original_provider.as_ref(), key);
+                }
+                if current_provider.is_empty() {
+                    providers.remove(MANAGED_AGENT_PROVIDER_ID);
+                }
+            }
+        }
+    }
+
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let original_models = original_document
+        .as_ref()
+        .and_then(|document| document.as_table().get(model_entry_section))
+        .and_then(Item::as_table)
+        .map(|models| {
+            models
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(key, item)| (key.to_string(), item.clone()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(models) = current_document
+        .as_table_mut()
+        .get_mut(model_entry_section)
+        .and_then(Item::as_table_mut)
+    {
+        let managed = models
+            .iter()
+            .map(|(key, _)| key.to_string())
+            .filter(|key| key.starts_with(&prefix))
+            .collect::<Vec<_>>();
+        for key in managed {
+            models.remove(&key);
+        }
+        for (key, item) in &original_models {
+            models.insert(key, item.clone());
+        }
+    } else if !original_models.is_empty() {
+        let models = ensure_toml_child_table(current_document.as_table_mut(), model_entry_section);
+        for (key, item) in &original_models {
+            models.insert(key, item.clone());
+        }
+    }
+
+    for section in provider
+        .map(|(section, _)| section)
+        .into_iter()
+        .chain([model_entry_section])
+        .chain(default_section)
+    {
+        let empty = current_document
+            .as_table()
+            .get(section)
+            .and_then(Item::as_table)
+            .is_some_and(toml_edit::Table::is_empty);
+        if empty {
+            current_document.as_table_mut().remove(section);
+        }
+    }
+    let rendered = current_document.to_string();
+    toml::from_str::<toml::Value>(&rendered)
+        .map_err(|error| format!("验证恢复后的 {label} 配置失败: {error}"))?;
+    if original.is_none() && rendered.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(rendered))
+    }
+}
+
 pub(crate) fn build_restored_openclaw_config(
     current: &str,
     original: Option<&str>,
@@ -1962,7 +2292,7 @@ pub(crate) fn agent_config_semantically_equal(
     expected: &str,
 ) -> bool {
     match client {
-        AgentClient::Codex => {
+        AgentClient::Codex | AgentClient::KimiCode | AgentClient::GrokBuild => {
             toml::from_str::<toml::Value>(actual).ok()
                 == toml::from_str::<toml::Value>(expected).ok()
         }
@@ -2032,6 +2362,8 @@ pub(crate) fn build_agent_session_restored_bytes(
             }
         }
         AgentClient::ZCode => build_restored_zcode_config(current, original)?,
+        AgentClient::KimiCode => build_restored_kimi_code_config(current, original)?,
+        AgentClient::GrokBuild => build_restored_grok_build_config(current, original)?,
     };
     if let (Some(restored), Some(original), Some(original_bytes)) =
         (restored.as_deref(), original, original_bytes)
@@ -2411,6 +2743,128 @@ pub(crate) fn build_zcode_agent_config(
         serde_json::json!(format!("{MANAGED_AGENT_PROVIDER_ID}/{model}")),
     );
     render_agent_json(root, "ZCode 配置")
+}
+
+pub(crate) fn ensure_toml_child_table<'a>(
+    parent: &'a mut toml_edit::Table,
+    key: &str,
+) -> &'a mut toml_edit::Table {
+    use toml_edit::{Item, Table};
+
+    if !parent.get(key).is_some_and(Item::is_table) {
+        parent.remove(key);
+        parent.insert(key, Item::Table(Table::new()));
+    }
+    parent
+        .get_mut(key)
+        .and_then(Item::as_table_mut)
+        .expect("inserted TOML table must remain a table")
+}
+
+pub(crate) fn managed_model_alias(model: &str) -> String {
+    format!("{MANAGED_AGENT_PROVIDER_ID}/{model}")
+}
+
+pub(crate) fn build_kimi_code_agent_config(
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    available_models: &[AgentModelOption],
+) -> Result<String, String> {
+    use toml_edit::{value, Array, Item, Table};
+
+    let mut document = parse_codex_document(existing, "Kimi Code config.toml")?;
+    set_codex_table_item(
+        document.as_table_mut(),
+        "default_model",
+        value(managed_model_alias(model)),
+    );
+
+    let providers = ensure_toml_child_table(document.as_table_mut(), "providers");
+    let provider = ensure_toml_child_table(providers, MANAGED_AGENT_PROVIDER_ID);
+    set_codex_table_item(provider, "type", value("openai"));
+    set_codex_table_item(provider, "base_url", value(base_url));
+    set_codex_table_item(provider, "api_key", value(api_key));
+
+    let models = ensure_toml_child_table(document.as_table_mut(), "models");
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let stale = models
+        .iter()
+        .map(|(key, _)| key.to_string())
+        .filter(|key| key.starts_with(&prefix))
+        .collect::<Vec<_>>();
+    for key in stale {
+        models.remove(&key);
+    }
+    for option in ordered_agent_models(available_models, model) {
+        let mut entry = Table::new();
+        entry.insert("provider", value(MANAGED_AGENT_PROVIDER_ID));
+        entry.insert("model", value(option.name.clone()));
+        entry.insert(
+            "display_name",
+            value(option.alias.as_deref().unwrap_or(&option.name)),
+        );
+        let context = option
+            .context_window
+            .unwrap_or(200_000)
+            .min(i64::MAX as u64) as i64;
+        entry.insert("max_context_size", value(context));
+        let mut capabilities = Array::new();
+        capabilities.push("tool_use");
+        entry.insert("capabilities", value(capabilities));
+        models.insert(&managed_model_alias(&option.name), Item::Table(entry));
+    }
+    let rendered = document.to_string();
+    toml::from_str::<toml::Value>(&rendered)
+        .map_err(|error| format!("验证 Kimi Code 配置失败: {error}"))?;
+    Ok(rendered)
+}
+
+pub(crate) fn build_grok_build_agent_config(
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    available_models: &[AgentModelOption],
+) -> Result<String, String> {
+    use toml_edit::{value, Item, Table};
+
+    let mut document = parse_codex_document(existing, "Grok Build config.toml")?;
+    let defaults = ensure_toml_child_table(document.as_table_mut(), "models");
+    set_codex_table_item(defaults, "default", value(managed_model_alias(model)));
+
+    let models = ensure_toml_child_table(document.as_table_mut(), "model");
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let stale = models
+        .iter()
+        .map(|(key, _)| key.to_string())
+        .filter(|key| key.starts_with(&prefix))
+        .collect::<Vec<_>>();
+    for key in stale {
+        models.remove(&key);
+    }
+    for option in ordered_agent_models(available_models, model) {
+        let mut entry = Table::new();
+        entry.insert("model", value(option.name.clone()));
+        entry.insert("base_url", value(base_url));
+        entry.insert(
+            "name",
+            value(option.alias.as_deref().unwrap_or(&option.name)),
+        );
+        entry.insert("api_key", value(api_key));
+        entry.insert("api_backend", value("chat_completions"));
+        let context = option
+            .context_window
+            .unwrap_or(200_000)
+            .min(i64::MAX as u64) as i64;
+        entry.insert("context_window", value(context));
+        models.insert(&managed_model_alias(&option.name), Item::Table(entry));
+    }
+    let rendered = document.to_string();
+    toml::from_str::<toml::Value>(&rendered)
+        .map_err(|error| format!("验证 Grok Build 配置失败: {error}"))?;
+    Ok(rendered)
 }
 
 pub(crate) fn build_openclaw_agent_config(

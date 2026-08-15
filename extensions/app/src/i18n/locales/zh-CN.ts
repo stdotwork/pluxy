@@ -465,6 +465,8 @@ export const zhCN = {
   'agents.description.hermes': '使用 CPA custom provider',
   'agents.description.deepseekHarness': '通过通用 OpenAI 兼容路由使用 CPA，并与 Harness 原生 DeepSeek 配置隔离',
   'agents.description.zcode': '使用 CPA 的 Anthropic Messages 接口和动态模型目录',
+  'agents.description.kimiCode': '使用 CPA 的 OpenAI Chat Completions 接口和动态模型目录',
+  'agents.description.grokBuild': '使用 CPA 的 OpenAI Chat Completions 接口和自定义模型目录',
   'agents.description.pi': '使用 Pi CLI 和 CLIProxyAPI provider 动态加载模型',
   'agents.list.detecting': '正在检测',
   'agents.list.unsupported': '当前平台不支持',

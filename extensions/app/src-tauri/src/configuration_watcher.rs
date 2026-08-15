@@ -70,6 +70,10 @@ fn tracked_configuration_paths(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, S
         AgentClient::OpenCode,
         AgentClient::OpenClaw,
         AgentClient::Hermes,
+        AgentClient::DeepSeekHarness,
+        AgentClient::ZCode,
+        AgentClient::KimiCode,
+        AgentClient::GrokBuild,
     ] {
         paths.extend(agent_managed_paths(client, &home));
     }

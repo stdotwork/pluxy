@@ -131,6 +131,8 @@ const DEFAULT_STREAMING_BOOTSTRAP_RETRIES: u32 = 0;
 const LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
 const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
 const ZCODE_CONFIG_FILE: &str = "config.json";
+const KIMI_CODE_CONFIG_FILE: &str = "config.toml";
+const GROK_BUILD_CONFIG_FILE: &str = "config.toml";
 const DEEPSEEK_HARNESS_PROVIDER_ID: &str = "easy-cliproxyapi";
 const DEEPSEEK_HARNESS_CREDENTIAL: &str = "EASYCLIPROXYAPI_API_KEY";
 const DEEPSEEK_HARNESS_SETTINGS_FILE: &str = "settings.yaml";
@@ -974,6 +976,8 @@ enum AgentClient {
     Hermes,
     DeepSeekHarness,
     ZCode,
+    KimiCode,
+    GrokBuild,
 }
 
 #[derive(Clone, Debug)]
@@ -995,6 +999,8 @@ impl AgentClient {
             "hermes" => Ok(Self::Hermes),
             "deepseek-harness" => Ok(Self::DeepSeekHarness),
             "zcode" => Ok(Self::ZCode),
+            "kimi-code" => Ok(Self::KimiCode),
+            "grok-build" => Ok(Self::GrokBuild),
             _ => Err(format!("不支持的智能体客户端: {value}")),
         }
     }
@@ -1009,6 +1015,8 @@ impl AgentClient {
             Self::Hermes => "hermes",
             Self::DeepSeekHarness => "deepseek-harness",
             Self::ZCode => "zcode",
+            Self::KimiCode => "kimi-code",
+            Self::GrokBuild => "grok-build",
         }
     }
 
@@ -1022,6 +1030,8 @@ impl AgentClient {
             Self::Hermes => "Hermes Agent",
             Self::DeepSeekHarness => "DeepSeek Harness",
             Self::ZCode => "ZCode",
+            Self::KimiCode => "Kimi Code",
+            Self::GrokBuild => "Grok Build",
         }
     }
 
@@ -1044,6 +1054,8 @@ impl AgentClient {
             Self::Hermes => &["hermes"],
             Self::DeepSeekHarness => &["dsh"],
             Self::ZCode => &["zcode"],
+            Self::KimiCode => &["kimi"],
+            Self::GrokBuild => &["grok"],
         }
     }
 }

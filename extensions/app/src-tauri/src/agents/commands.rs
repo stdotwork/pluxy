@@ -18,6 +18,8 @@ pub(crate) fn inspect_agent_config_statuses(
         AgentClient::Hermes,
         AgentClient::DeepSeekHarness,
         AgentClient::ZCode,
+        AgentClient::KimiCode,
+        AgentClient::GrokBuild,
     ]
     .into_iter()
     .map(|client| inspect_agent_config(client, &home, config.port, api_key))

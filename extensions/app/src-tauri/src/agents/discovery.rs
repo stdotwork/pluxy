@@ -33,7 +33,23 @@ pub(crate) fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBu
             ]
         }
         AgentClient::ZCode => vec![home.join(".zcode/v2").join(ZCODE_CONFIG_FILE)],
+        AgentClient::KimiCode => vec![kimi_code_home(home).join(KIMI_CODE_CONFIG_FILE)],
+        AgentClient::GrokBuild => vec![grok_build_home(home).join(GROK_BUILD_CONFIG_FILE)],
     }
+}
+
+pub(crate) fn kimi_code_home(home: &Path) -> PathBuf {
+    env::var_os("KIMI_CODE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| home.join(".kimi-code"))
+}
+
+pub(crate) fn grok_build_home(home: &Path) -> PathBuf {
+    env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| home.join(".grok"))
 }
 
 pub(crate) fn deepseek_harness_home(home: &Path) -> PathBuf {
@@ -954,6 +970,10 @@ pub(crate) fn inspect_agent_managed_config(
             .map(|(configured, model)| (configured, model, false)),
         AgentClient::ZCode => inspect_zcode_agent_config(&paths[0], port, api_key)
             .map(|(configured, model)| (configured, model, false)),
+        AgentClient::KimiCode => inspect_kimi_code_agent_config(&paths[0], port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
+        AgentClient::GrokBuild => inspect_grok_build_agent_config(&paths[0], port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
     }
 }
 
@@ -1089,12 +1109,66 @@ pub(crate) fn agent_has_managed_marker(
                 .is_some_and(|model| model.starts_with(&prefix));
             Ok(provider_exists && model_selected)
         }
+        AgentClient::KimiCode => inspect_managed_toml_model_marker(
+            &paths[0],
+            "Kimi Code 配置",
+            Some("providers"),
+            "models",
+            None,
+            "default_model",
+        ),
+        AgentClient::GrokBuild => inspect_managed_toml_model_marker(
+            &paths[0],
+            "Grok Build 配置",
+            None,
+            "model",
+            Some("models"),
+            "default",
+        ),
     }
 }
 
 pub(crate) fn is_managed_agent_base_url(value: &str) -> bool {
     let value = value.trim().to_ascii_lowercase();
     value.starts_with("http://127.0.0.1:") || value.starts_with("http://localhost:")
+}
+
+pub(crate) fn inspect_managed_toml_model_marker(
+    path: &Path,
+    label: &str,
+    provider_section: Option<&str>,
+    model_entry_section: &str,
+    default_section: Option<&str>,
+    default_key: &str,
+) -> Result<bool, String> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let root: toml::Value = toml::from_str(
+        &fs::read_to_string(path).map_err(|error| format!("读取 {label} 失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析 {label} 失败: {error}"))?;
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let selected = (if let Some(section) = default_section {
+        root.get(section)
+            .and_then(toml::Value::as_table)
+            .and_then(|section| section.get(default_key))
+    } else {
+        root.get(default_key)
+    })
+    .and_then(toml::Value::as_str)
+    .filter(|model| model.starts_with(&prefix));
+    let catalog_has_selected = selected.is_some_and(|model| {
+        root.get(model_entry_section)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|catalog| catalog.contains_key(model))
+    });
+    let provider_exists = provider_section.is_none_or(|section| {
+        root.get(section)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|providers| providers.contains_key(MANAGED_AGENT_PROVIDER_ID))
+    });
+    Ok(provider_exists && catalog_has_selected)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1652,7 +1726,37 @@ pub(crate) fn find_agent_executable(client: AgentClient, home: &Path) -> Option<
     if client == AgentClient::ZCode {
         return find_zcode_desktop_executable(home);
     }
+    if client == AgentClient::KimiCode {
+        return find_kimi_code_executable(home);
+    }
+    if client == AgentClient::GrokBuild {
+        return find_grok_build_executable(home);
+    }
     find_named_agent_executable(home, client.executable_names())
+}
+
+pub(crate) fn find_kimi_code_executable(home: &Path) -> Option<PathBuf> {
+    let directory = kimi_code_home(home).join("bin");
+    #[cfg(target_os = "windows")]
+    let managed = [directory.join("kimi.exe"), directory.join("kimi.cmd")];
+    #[cfg(not(target_os = "windows"))]
+    let managed = [directory.join("kimi")];
+    managed
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| find_named_agent_executable(home, &["kimi"]))
+}
+
+pub(crate) fn find_grok_build_executable(home: &Path) -> Option<PathBuf> {
+    let directory = grok_build_home(home).join("bin");
+    #[cfg(target_os = "windows")]
+    let managed = [directory.join("grok.exe"), directory.join("grok.cmd")];
+    #[cfg(not(target_os = "windows"))]
+    let managed = [directory.join("grok")];
+    managed
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| find_named_agent_executable(home, &["grok"]))
 }
 
 pub(crate) fn find_pi_executable(home: &Path) -> Option<PathBuf> {
@@ -2390,6 +2494,113 @@ pub(crate) fn inspect_zcode_agent_config(
         .filter(|value| !value.is_empty())
         .map(|value| value.strip_prefix(&prefix).unwrap_or(value))
         .map(str::to_string);
+    Ok((configured, model))
+}
+
+pub(crate) fn inspect_kimi_code_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
+    if !path.is_file() {
+        return Ok((false, None));
+    }
+    let root: toml::Value = toml::from_str(
+        &fs::read_to_string(path).map_err(|error| format!("读取 Kimi Code 配置失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析 Kimi Code 配置失败: {error}"))?;
+    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let provider = root
+        .get("providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+        .and_then(toml::Value::as_table);
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let selected = root
+        .get("default_model")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| value.starts_with(&prefix));
+    let model_entry = selected.and_then(|alias| {
+        root.get("models")
+            .and_then(toml::Value::as_table)
+            .and_then(|models| models.get(alias))
+            .and_then(toml::Value::as_table)
+    });
+    let model = model_entry
+        .and_then(|entry| entry.get("model"))
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let configured = selected.is_some()
+        && model.is_some()
+        && provider
+            .and_then(|provider| provider.get("type"))
+            .and_then(toml::Value::as_str)
+            == Some("openai")
+        && provider
+            .and_then(|provider| provider.get("base_url"))
+            .and_then(toml::Value::as_str)
+            == Some(expected_base.as_str())
+        && provider
+            .and_then(|provider| provider.get("api_key"))
+            .and_then(toml::Value::as_str)
+            == Some(api_key)
+        && model_entry
+            .and_then(|entry| entry.get("provider"))
+            .and_then(toml::Value::as_str)
+            == Some(MANAGED_AGENT_PROVIDER_ID);
+    Ok((configured, model))
+}
+
+pub(crate) fn inspect_grok_build_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
+    if !path.is_file() {
+        return Ok((false, None));
+    }
+    let root: toml::Value = toml::from_str(
+        &fs::read_to_string(path).map_err(|error| format!("读取 Grok Build 配置失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析 Grok Build 配置失败: {error}"))?;
+    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let selected = root
+        .get("models")
+        .and_then(toml::Value::as_table)
+        .and_then(|models| models.get("default"))
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| value.starts_with(&prefix));
+    let model_entry = selected.and_then(|alias| {
+        root.get("model")
+            .and_then(toml::Value::as_table)
+            .and_then(|models| models.get(alias))
+            .and_then(toml::Value::as_table)
+    });
+    let model = model_entry
+        .and_then(|entry| entry.get("model"))
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let configured = selected.is_some()
+        && model.is_some()
+        && model_entry
+            .and_then(|entry| entry.get("base_url"))
+            .and_then(toml::Value::as_str)
+            == Some(expected_base.as_str())
+        && model_entry
+            .and_then(|entry| entry.get("api_key"))
+            .and_then(toml::Value::as_str)
+            == Some(api_key)
+        && model_entry
+            .and_then(|entry| entry.get("api_backend"))
+            .and_then(toml::Value::as_str)
+            == Some("chat_completions");
     Ok((configured, model))
 }
 

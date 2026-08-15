@@ -731,6 +731,20 @@ pub(crate) fn fresh_agent_contents_with_oauth(
         AgentClient::ZCode => Ok(vec![build_zcode_agent_config(
             None, &root_base, api_key, model, models,
         )?]),
+        AgentClient::KimiCode => Ok(vec![build_kimi_code_agent_config(
+            None,
+            &openai_base,
+            api_key,
+            model,
+            models,
+        )?]),
+        AgentClient::GrokBuild => Ok(vec![build_grok_build_agent_config(
+            None,
+            &openai_base,
+            api_key,
+            model,
+            models,
+        )?]),
     }
 }
 
@@ -740,6 +754,10 @@ pub(crate) fn agent_contents_equal(client: AgentClient, actual: &str, expected: 
         AgentClient::Codex => {
             normalize_codex_config_for_legacy_compare(actual)
                 == normalize_codex_config_for_legacy_compare(expected)
+        }
+        AgentClient::KimiCode | AgentClient::GrokBuild => {
+            toml::from_str::<toml::Value>(actual).ok()
+                == toml::from_str::<toml::Value>(expected).ok()
         }
         AgentClient::OpenClaw => {
             json5::from_str::<serde_json::Value>(actual).ok()
@@ -1360,13 +1378,16 @@ pub(crate) fn restore_agent_applied_state_configuration(
     Ok(())
 }
 
-pub(crate) fn agent_clients_restored_on_exit() -> [AgentClient; 5] {
+pub(crate) fn agent_clients_restored_on_exit() -> [AgentClient; 8] {
     [
         AgentClient::Codex,
         AgentClient::OpenCode,
         AgentClient::OpenClaw,
         AgentClient::Hermes,
         AgentClient::DeepSeekHarness,
+        AgentClient::ZCode,
+        AgentClient::KimiCode,
+        AgentClient::GrokBuild,
     ]
 }
 

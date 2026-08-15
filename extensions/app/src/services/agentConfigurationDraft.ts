@@ -7,6 +7,8 @@ export type AgentConfigurationClientId =
   | 'hermes'
   | 'deepseek-harness'
   | 'zcode'
+  | 'kimi-code'
+  | 'grok-build'
   | 'pi';
 
 export type AgentConfigurationModificationState = 'unconfigured' | 'applied' | 'invalid';
