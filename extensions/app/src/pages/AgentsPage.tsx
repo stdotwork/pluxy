@@ -10,16 +10,20 @@ import {
 } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   AlertTriangle,
+  AppWindow,
   BadgeCheck,
   Bot,
   Check,
   ChevronDown,
   LoaderCircle,
+  Play,
   RefreshCw,
   Search,
   Trash2,
+  Terminal,
   Wrench,
   X,
 } from 'lucide-react';
@@ -47,6 +51,11 @@ import {
   sameAgentModel,
   sameAgentModelMappings,
 } from '../services/agentConfigurationDraft';
+import {
+  parseAgentLaunchDirectoryHistory,
+  rememberAgentLaunchDirectory,
+  type AgentLaunchDirectoryHistory,
+} from '../services/agentLaunchDirectoryHistory';
 import type { ModelOption } from '../services/modelService';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import { CodexSessionsPanel } from './CodexSessionsPanel';
@@ -74,6 +83,7 @@ type AgentConfigStatus = {
   supportedPlatform: boolean;
   installed: boolean;
   pluginInstalled: boolean;
+  launchTargets: AgentLaunchTarget[];
   version: string | null;
   cliVersion: string | null;
   appVersion: string | null;
@@ -93,6 +103,12 @@ type AgentConfigStatus = {
   error: string | null;
 };
 
+type AgentLaunchTarget = {
+  id: 'app' | 'cli';
+  label: string;
+  detail: string;
+};
+
 type AgentConfigActionResult = {
   outcome: 'applied' | 'default';
   enabled: boolean;
@@ -107,7 +123,7 @@ type PiProviderUpdateStatus = {
   updateAvailable: boolean;
 };
 
-type OAuthLoginRequiredAction = 'enable' | 'apply';
+type OAuthLoginRequiredAction = 'enable' | 'apply' | 'launch';
 
 type ClaudeModelMappings = {
   opus: string;
@@ -273,6 +289,7 @@ const DEFAULT_AGENT_SUBPAGE: AgentSubpageId = 'core';
 
 const AGENT_MODEL_SELECTIONS_KEY = 'cpa-gui.agent-model-selections.v1';
 const AGENT_SELECTED_CLIENT_KEY = 'cpa-gui.agent-selected-client.v1';
+const AGENT_LAUNCH_DIRECTORY_HISTORY_KEY = 'cpa-gui.agent-launch-directory-history.v1';
 
 const readSelectedAgentClient = (): AgentClientId => {
   const fallback = agentDefinitions[0].id;
@@ -320,6 +337,27 @@ const writeAgentModelSelections = (
     window.localStorage.setItem(AGENT_MODEL_SELECTIONS_KEY, JSON.stringify(selections));
   } catch {
     // Local storage can be unavailable in hardened webviews; the in-memory selection still works.
+  }
+};
+
+const readAgentLaunchDirectoryHistory = (): AgentLaunchDirectoryHistory => {
+  if (typeof window === 'undefined') return {};
+  try {
+    return parseAgentLaunchDirectoryHistory(
+      window.localStorage.getItem(AGENT_LAUNCH_DIRECTORY_HISTORY_KEY),
+      agentDefinitions.map((agent) => agent.id),
+    );
+  } catch {
+    return {};
+  }
+};
+
+const writeAgentLaunchDirectoryHistory = (history: AgentLaunchDirectoryHistory) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(AGENT_LAUNCH_DIRECTORY_HISTORY_KEY, JSON.stringify(history));
+  } catch {
+    // Keep the current in-memory history when persistent storage is unavailable.
   }
 };
 
@@ -612,7 +650,7 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'oauth-check' | null
+    'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'oauth-check' | 'directory' | 'launch' | 'launch-cli' | 'launch-app' | 'restart-app' | null
   >(null);
   const busy = busyAction !== null;
   const [detectionError, setDetectionError] = useState('');
@@ -624,6 +662,14 @@ export function AgentsPage() {
   const [clearError, setClearError] = useState('');
   const [clearNotice, setClearNotice] = useState('');
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [launchError, setLaunchError] = useState('');
+  const [launchDirectoryDialogOpen, setLaunchDirectoryDialogOpen] = useState(false);
+  const [launchDirectory, setLaunchDirectory] = useState('');
+  const [launchDirectoryTarget, setLaunchDirectoryTarget] = useState<AgentLaunchTarget | null>(null);
+  const [launchDirectoryError, setLaunchDirectoryError] = useState('');
+  const [launchDirectoryHistory, setLaunchDirectoryHistory] = useState(
+    readAgentLaunchDirectoryHistory,
+  );
   const [oauthLoginRequiredAction, setOauthLoginRequiredAction] = useState<OAuthLoginRequiredAction | null>(null);
   const [oauthConfigurationDraft, setOauthConfigurationDraft] = useState<boolean | null>(null);
   const [piProviderUpdateStatus, setPiProviderUpdateStatus] = useState<PiProviderUpdateStatus | null>(null);
@@ -747,6 +793,10 @@ export function AgentsPage() {
     setClearError('');
     setClearNotice('');
     setClearConfirmOpen(false);
+    setLaunchError('');
+    setLaunchDirectoryDialogOpen(false);
+    setLaunchDirectoryTarget(null);
+    setLaunchDirectoryError('');
     setOauthLoginRequiredAction(null);
     setOauthConfigurationDraft(null);
     // Preserve each Claude client's unsaved draft while navigating between clients.
@@ -903,6 +953,20 @@ export function AgentsPage() {
         ? claudeMappingsReady && claudeCodeRuntimeSettingsReady
         : selectedModelOption),
   );
+  const activeLaunchTargets = activeStatus?.launchTargets ?? [];
+  const defaultLaunchTarget = activeLaunchTargets[0] ?? null;
+  const cliLaunchTarget = activeLaunchTargets.find((target) => target.id === 'cli') ?? null;
+  const appLaunchTarget = activeLaunchTargets.find((target) => target.id === 'app') ?? null;
+  const launchEnabled = Boolean(
+    activeStatus?.supportedPlatform
+      && activeStatus.installed
+      && (selected === 'codex'
+        || (selected === 'pi'
+          ? activeStatus.configured
+          : activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
+  );
+  const canLaunchTarget = (target: AgentLaunchTarget | null) => launchEnabled && Boolean(target);
+  const activeLaunchDirectoryHistory = launchDirectoryHistory[selected] ?? [];
   const modelHint = modelSelectionError
     || modelError
     || (modelLoading
@@ -1247,6 +1311,106 @@ export function AgentsPage() {
     } finally {
       setBusyAction(null);
     }
+  };
+
+  const openLaunchDirectoryDialog = (target: AgentLaunchTarget) => {
+    setLaunchDirectory(activeLaunchDirectoryHistory[0] ?? '');
+    setLaunchDirectoryTarget(target);
+    setLaunchDirectoryError('');
+    setLaunchDirectoryDialogOpen(true);
+  };
+
+  const chooseLaunchDirectory = async () => {
+    setBusyAction('directory');
+    setLaunchDirectoryError('');
+    try {
+      const selectedDirectory = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: launchDirectory || undefined,
+        title: t('agents.launchDirectory.dialogTitle', { client: activeDefinition.name }),
+      });
+      if (typeof selectedDirectory === 'string') setLaunchDirectory(selectedDirectory);
+    } catch (requestError) {
+      setLaunchDirectoryError(String(requestError));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const rememberLaunchDirectory = (client: AgentClientId, directory: string) => {
+    setLaunchDirectoryHistory((current) => {
+      const next = rememberAgentLaunchDirectory(current, client, directory);
+      writeAgentLaunchDirectoryHistory(next);
+      return next;
+    });
+  };
+
+  const invokeAgentLaunch = async (
+    target: AgentLaunchTarget,
+    workingDirectory: string | null = null,
+  ) => {
+    const action = selected === 'codex'
+      ? target.id === 'cli' ? 'launch-cli' : 'launch-app'
+      : 'launch';
+    setBusyAction(action);
+    setLaunchError('');
+    try {
+      if (draftChanged) throw new Error(t('agents.error.applyFirst'));
+      await invoke('launch_agent', {
+        client: selected,
+        target: target.id,
+        workingDirectory,
+      });
+      if (workingDirectory) {
+        rememberLaunchDirectory(selected, workingDirectory);
+        setLaunchDirectoryDialogOpen(false);
+        setLaunchDirectoryTarget(null);
+      }
+    } catch (requestError) {
+      if (workingDirectory) {
+        setLaunchDirectoryError(String(requestError));
+      } else if (!handleOAuthLoginError(requestError, 'launch')) {
+        setLaunchError(String(requestError));
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const launchAgent = async (target: AgentLaunchTarget | null) => {
+    if (!target) return;
+    if (target.id === 'cli') {
+      openLaunchDirectoryDialog(target);
+      return;
+    }
+    await invokeAgentLaunch(target);
+  };
+
+  const restartCodexApp = async () => {
+    setBusyAction('restart-app');
+    setLaunchError('');
+    try {
+      if (draftChanged) throw new Error(t('agents.error.applyFirst'));
+      await invoke('restart_codex_app');
+    } catch (requestError) {
+      if (!handleOAuthLoginError(requestError, 'launch')) {
+        setLaunchError(String(requestError));
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const launchFromDirectoryDialog = async () => {
+    if (!launchDirectoryTarget) return;
+    const workingDirectory = launchDirectory.trim();
+    if (!workingDirectory) {
+      setLaunchDirectoryError(t('agents.launchDirectory.directoryRequired'));
+      return;
+    }
+    setLaunchDirectoryError('');
+    await invokeAgentLaunch(launchDirectoryTarget, workingDirectory);
   };
 
   const openDefaultConfirmation = () => {
@@ -1714,6 +1878,93 @@ export function AgentsPage() {
               </section>
               )}
 
+              <div className="agent-config-footer">
+                <div className="agent-launch-control">
+                  <div className="agent-launch-actions">
+                    {selected === 'codex' ? (
+                      <>
+                        <button
+                          type="button"
+                          className="secondary-button agent-launch-button"
+                          onClick={() => void launchAgent(cliLaunchTarget)}
+                          disabled={busy || !canLaunchTarget(cliLaunchTarget) || draftChanged}
+                          title={draftChanged
+                            ? t('agents.launch.applyFirst')
+                            : cliLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                        >
+                          {busyAction === 'launch-cli'
+                            ? <LoaderCircle size={16} className="spin" />
+                            : <Terminal size={16} />}
+                          {busyAction === 'launch-cli'
+                            ? t('agents.launch.starting')
+                            : t('agents.launch.startCli')}
+                        </button>
+                        <button
+                          type="button"
+                          className="primary-button agent-launch-button"
+                          onClick={() => void launchAgent(appLaunchTarget)}
+                          disabled={busy || !canLaunchTarget(appLaunchTarget) || draftChanged}
+                          title={draftChanged
+                            ? t('agents.launch.applyFirst')
+                            : appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                        >
+                          {busyAction === 'launch-app'
+                            ? <LoaderCircle size={16} className="spin" />
+                            : <AppWindow size={16} />}
+                          {busyAction === 'launch-app'
+                            ? t('agents.launch.starting')
+                            : t('agents.launch.startApp')}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button agent-launch-button"
+                          onClick={() => void restartCodexApp()}
+                          disabled={busy || !canLaunchTarget(appLaunchTarget) || draftChanged}
+                          title={draftChanged
+                            ? t('agents.launch.applyFirst')
+                            : appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                        >
+                          {busyAction === 'restart-app'
+                            ? <LoaderCircle size={16} className="spin" />
+                            : <RefreshCw size={16} />}
+                          {busyAction === 'restart-app'
+                            ? t('agents.launch.restartingApp')
+                            : t('agents.launch.restartApp')}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="primary-button agent-launch-button"
+                        onClick={() => void launchAgent(defaultLaunchTarget)}
+                        disabled={busy || !canLaunchTarget(defaultLaunchTarget) || draftChanged}
+                        title={draftChanged
+                          ? t('agents.launch.applyFirst')
+                          : defaultLaunchTarget?.detail ?? (launchEnabled
+                            ? t('agents.launch.unavailable')
+                            : t('agents.launch.enableFirst'))}
+                      >
+                        {busyAction === 'launch'
+                          ? <LoaderCircle size={16} className="spin" />
+                          : defaultLaunchTarget?.id === 'cli'
+                            ? <Terminal size={16} />
+                            : <Play size={16} />}
+                        {busyAction === 'launch'
+                          ? t('agents.launch.starting')
+                          : defaultLaunchTarget
+                            ? t('agents.launch.start', { target: defaultLaunchTarget.label })
+                            : t('agents.launch.unavailable')}
+                      </button>
+                    )}
+                  </div>
+                  {launchError ? (
+                    <span className="agent-inline-message error" role="alert" aria-live="polite">
+                      {launchError}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
             </div>
           ) : null}
 
@@ -1729,6 +1980,118 @@ export function AgentsPage() {
           ) : null}
         </section>
       </div>
+
+      {launchDirectoryDialogOpen ? (
+        <div className="config-dialog-backdrop" onMouseDown={(event) => {
+          if (event.currentTarget === event.target && !busy) {
+            setLaunchDirectoryDialogOpen(false);
+            setLaunchDirectoryTarget(null);
+          }
+        }}>
+          <section
+            className="config-dialog agent-launch-directory-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-launch-directory-title"
+          >
+            <div className="config-dialog-heading">
+              <div>
+                <h2 id="agent-launch-directory-title">
+                  {t('agents.launchDirectory.dialogTitle', { client: activeDefinition.name })}
+                </h2>
+              </div>
+            </div>
+            <p>{t('agents.launchDirectory.dialogDescription', { client: activeDefinition.name })}</p>
+            <div className="config-dialog-field">
+              <span>{t('agents.launchDirectory.workingDirectory')}</span>
+              <button
+                type="button"
+                className="agent-launch-directory-picker"
+                onClick={() => void chooseLaunchDirectory()}
+                disabled={busy}
+                autoFocus
+              >
+                <span>
+                  <small>{launchDirectory
+                    ? t('agents.launchDirectory.selectedDirectory')
+                    : t('agents.launchDirectory.noDirectory')}</small>
+                  <strong title={launchDirectory || undefined}>
+                    {launchDirectory || t('agents.launchDirectory.chooseDirectory')}
+                  </strong>
+                </span>
+                <b>{busyAction === 'directory'
+                  ? t('agents.launchDirectory.choosing')
+                  : t('agents.launchDirectory.browse')}</b>
+              </button>
+            </div>
+            {activeLaunchDirectoryHistory.length ? (
+              <div className="agent-launch-directory-history">
+                <strong>{t('agents.launchDirectory.historyTitle')}</strong>
+                <div className="agent-launch-directory-history-list">
+                  {activeLaunchDirectoryHistory.map((directory, index) => {
+                    const active = directory === launchDirectory;
+                    return (
+                      <button
+                        type="button"
+                        className={active ? 'active' : ''}
+                        key={directory}
+                        onClick={() => {
+                          setLaunchDirectory(directory);
+                          setLaunchDirectoryError('');
+                        }}
+                        disabled={busy}
+                        title={directory}
+                      >
+                        <span>
+                          <strong>{directory}</strong>
+                          <small>{index === 0
+                            ? t('agents.launchDirectory.lastUsed')
+                            : t('agents.launchDirectory.recentItem')}</small>
+                        </span>
+                        <b>
+                          {active ? <Check size={15} aria-hidden /> : null}
+                          {active
+                            ? t('agents.launchDirectory.historySelected')
+                            : t('agents.launchDirectory.historyUse')}
+                        </b>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {launchDirectoryError ? (
+              <span className="agent-inline-message error" role="alert" aria-live="polite">
+                {launchDirectoryError}
+              </span>
+            ) : null}
+            <div className="config-dialog-actions two-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setLaunchDirectoryDialogOpen(false);
+                  setLaunchDirectoryTarget(null);
+                }}
+                disabled={busy}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void launchFromDirectoryDialog()}
+                disabled={busy || !launchDirectory.trim() || !launchDirectoryTarget}
+              >
+                {busyAction === 'launch' || busyAction === 'launch-cli'
+                  ? <LoaderCircle size={16} className="spin" />
+                  : null}
+                {t('agents.launchDirectory.launch', { client: activeDefinition.name })}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {defaultConfirmOpen ? (
         <div className="config-dialog-backdrop">

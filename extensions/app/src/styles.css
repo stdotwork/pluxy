@@ -5523,8 +5523,191 @@ textarea:focus-visible {
 }
 
 .agent-config-footer {
+  display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 14px;
+  min-height: 48px;
+  padding-top: 14px;
+  border-top: 1px solid var(--theme-e3e1db);
+}
+
+.agent-launch-control {
+  display: grid;
+  min-width: 0;
+  justify-items: end;
+  gap: 5px;
+}
+
+.agent-launch-actions {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-launch-actions > button {
+  min-width: 120px;
+}
+
+.agent-launch-control > .agent-inline-message {
+  max-width: 420px;
+  text-align: right;
+}
+
+.agent-launch-directory-dialog {
+  grid-template-rows: auto;
+  align-content: start;
+  width: min(620px, 100%);
+  max-height: calc(100vh - 40px);
+  height: auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.agent-launch-directory-dialog > p {
+  margin: 0;
+  color: var(--theme-5f5a53);
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-relaxed);
+}
+
+.agent-launch-directory-dialog .config-dialog-field {
+  grid-template-rows: auto auto;
+  min-height: 0;
+}
+
+.agent-launch-directory-picker {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 13px;
+  border: 1px solid var(--theme-d8d2c8);
+  border-radius: 9px;
+  background: var(--theme-fff);
+  color: var(--theme-2d2a26);
+  text-align: left;
+}
+
+.agent-launch-directory-picker:hover:not(:disabled) {
+  border-color: var(--theme-bdb5a9);
+  background: var(--theme-faf8f4);
+}
+
+.agent-launch-directory-picker:focus-visible {
+  border-color: var(--theme-8d8377);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(45, 42, 38, 0.1);
+}
+
+.agent-launch-directory-picker > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.agent-launch-directory-picker small {
+  color: var(--theme-8a847c);
+  font-size: var(--font-size-meta);
+}
+
+.agent-launch-directory-picker strong {
+  overflow: hidden;
+  font-size: var(--font-size-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-launch-directory-picker > b {
+  flex: none;
+  color: var(--theme-8069ad);
+  font-size: var(--font-size-label);
+}
+
+.agent-launch-directory-history {
+  display: grid;
+  min-height: 0;
+  gap: 7px;
+}
+
+.agent-launch-directory-history > strong {
+  color: var(--theme-5f5a53);
+  font-size: var(--font-size-body);
+}
+
+.agent-launch-directory-history-list {
+  display: grid;
+  min-height: 64px;
+  max-height: 176px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--theme-d8d2c8);
+  border-radius: 9px;
+  background: var(--theme-fff);
+}
+
+.agent-launch-directory-history-list > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 8px 11px;
+  border: 0;
+  border-bottom: 1px solid var(--theme-eeeae2);
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-2d2a26);
+  text-align: left;
+}
+
+.agent-launch-directory-history-list > button:last-child {
+  border-bottom: 0;
+}
+
+.agent-launch-directory-history-list > button:hover:not(:disabled) {
+  background: var(--theme-faf8f4);
+}
+
+.agent-launch-directory-history-list > button.active {
+  background: var(--theme-f1ecfb);
+  box-shadow: inset 3px 0 0 var(--theme-8069ad);
+}
+
+.agent-launch-directory-history-list > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-launch-directory-history-list > button strong {
+  overflow: hidden;
+  font-size: var(--font-size-label);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-launch-directory-history-list > button small {
+  color: var(--theme-8a847c);
+  font-size: var(--font-size-meta);
+}
+
+.agent-launch-directory-history-list > button > b {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--theme-8069ad);
+  font-size: var(--font-size-label);
 }
 
 .agent-status-grid {
@@ -7423,7 +7606,8 @@ textarea:focus-visible {
   }
 
   .agent-status-grid,
-  .agent-status-messages {
+  .agent-status-messages,
+  .agent-config-footer {
     grid-column: 1 / -1;
   }
 
@@ -8048,6 +8232,30 @@ textarea:focus-visible {
   }
 
   .agent-modification-control > .agent-inline-message {
+    max-width: none;
+    text-align: left;
+  }
+
+  .agent-config-footer,
+  .agent-launch-actions {
+    width: 100%;
+  }
+
+  .agent-launch-control {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .agent-launch-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .agent-launch-actions > button {
+    width: 100%;
+  }
+
+  .agent-launch-control > .agent-inline-message {
     max-width: none;
     text-align: left;
   }
