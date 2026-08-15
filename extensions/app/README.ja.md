@@ -98,6 +98,7 @@ OpenAI、Claude、Gemini、およびその他の互換形式の間で変換で�
 - OpenClaw
 - Hermes Agent
 - Pi（CLIProxyAPI provider 拡張機能）
+- ZCode
 
 対応クライアントでは、利用可能なモデルカタログの同期、デフォルトモデルの選択、管理設定を適用する前の
 元設定のバックアップ、以前の設定への復元、利用可能なデスクトップまたは CLI エントリーポイントの起動ができます。

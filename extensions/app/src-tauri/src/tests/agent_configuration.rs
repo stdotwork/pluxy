@@ -613,6 +613,55 @@ fn opencode_agent_config_preserves_other_providers() {
 }
 
 #[test]
+fn zcode_agent_config_preserves_other_providers_and_uses_anthropic_messages() {
+    let home = agent_test_home("zcode-agent-config");
+    let path = home.join(".zcode/v2/config.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let models = test_agent_models(&["gpt-test", "deepseek-test"]);
+    let rendered = build_zcode_agent_config(
+        Some(
+            r#"{"locale":"zh-CN","provider":{"other":{"kind":"openai"},"cpa-gui":{"custom":"keep","options":{"timeout":30}}}}"#,
+        ),
+        "http://127.0.0.1:8317",
+        DEFAULT_API_KEY,
+        "gpt-test",
+        &models,
+    )
+    .unwrap();
+    fs::write(&path, &rendered).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+
+    assert_eq!(value["locale"], "zh-CN");
+    assert_eq!(value["provider"]["other"]["kind"], "openai");
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["custom"],
+        "keep"
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["timeout"],
+        30
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["kind"],
+        "anthropic"
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["apiFormat"],
+        "anthropic-messages"
+    );
+    assert_eq!(
+        value["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["baseURL"],
+        "http://127.0.0.1:8317"
+    );
+    assert_eq!(value["model"], "cpa-gui/gpt-test");
+    assert_eq!(
+        inspect_zcode_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap(),
+        (true, Some("gpt-test".to_string()))
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn openclaw_agent_config_accepts_json5_and_preserves_unknown_fields() {
     let models = test_agent_models(&["gpt-test", "deepseek-test"]);
     let rendered = build_openclaw_agent_config(

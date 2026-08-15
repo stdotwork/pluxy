@@ -214,6 +214,18 @@ pub(crate) fn build_agent_updates_with_oauth(
                 },
             ])
         }
+        AgentClient::ZCode => {
+            let before = read_optional_text(&paths[0])?;
+            let after =
+                build_zcode_agent_config(before.as_deref(), &root_base, api_key, model, models)
+                    .or_else(|_| {
+                        build_zcode_agent_config(None, &root_base, api_key, model, models)
+                    })?;
+            Ok(vec![AgentFileUpdate {
+                path: paths[0].clone(),
+                after,
+            }])
+        }
     }
 }
 
@@ -984,6 +996,38 @@ pub(crate) fn remove_opencode_managed_configuration(
     Ok(updated.then(|| path_to_string(path)).into_iter().collect())
 }
 
+pub(crate) fn remove_zcode_managed_configuration(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    let Some(path) = paths.first() else {
+        return Err("ZCode 当前平台配置路径不可用".to_string());
+    };
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let updated = update_agent_json_file(path, "ZCode 配置", |root| {
+        let mut changed = false;
+        if root
+            .get("model")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|model| model.starts_with(&prefix))
+        {
+            root.remove("model");
+            changed = true;
+        }
+        let providers_empty = if let Some(providers) = root
+            .get_mut("provider")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            changed |= providers.remove(MANAGED_AGENT_PROVIDER_ID).is_some();
+            providers.is_empty()
+        } else {
+            false
+        };
+        if providers_empty {
+            root.remove("provider");
+        }
+        changed
+    })?;
+    Ok(updated.then(|| path_to_string(path)).into_iter().collect())
+}
+
 pub(crate) fn update_agent_json5_file<F>(
     path: &Path,
     label: &str,
@@ -1174,6 +1218,7 @@ pub(crate) fn remove_agent_managed_configuration(
         AgentClient::OpenClaw => remove_openclaw_managed_configuration(paths),
         AgentClient::Hermes => remove_hermes_managed_configuration(paths),
         AgentClient::DeepSeekHarness => remove_deepseek_harness_managed_configuration(paths),
+        AgentClient::ZCode => remove_zcode_managed_configuration(paths),
     }
 }
 
@@ -1474,6 +1519,86 @@ pub(crate) fn build_restored_opencode_config(
         restore_json_key(&mut root, original_root.as_ref(), "provider");
     }
     render_restored_json(root, original.is_some(), "恢复后的 OpenCode 配置")
+}
+
+pub(crate) fn build_restored_zcode_config(
+    current: &str,
+    original: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut root = parse_agent_json_object(Some(current), "当前 ZCode 配置")?;
+    let original_root = parse_restored_json_object(original, "原始 ZCode 配置")?;
+    restore_json_key(&mut root, original_root.as_ref(), "model");
+    let original_provider = original_root
+        .as_ref()
+        .and_then(|root| root.get("provider"))
+        .and_then(serde_json::Value::as_object);
+    let original_managed = original_provider
+        .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+        .and_then(serde_json::Value::as_object);
+    if root
+        .get("provider")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        let providers = root
+            .get_mut("provider")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("ZCode provider was checked as an object");
+        if providers
+            .get(MANAGED_AGENT_PROVIDER_ID)
+            .is_some_and(serde_json::Value::is_object)
+        {
+            let managed = providers
+                .get_mut(MANAGED_AGENT_PROVIDER_ID)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("ZCode managed provider was checked as an object");
+            for key in [
+                "enabled",
+                "name",
+                "source",
+                "kind",
+                "defaultKind",
+                "apiFormat",
+                "npm",
+                "models",
+            ] {
+                restore_json_key(managed, original_managed, key);
+            }
+            let original_options = original_managed
+                .and_then(|managed| managed.get("options"))
+                .and_then(serde_json::Value::as_object);
+            if managed
+                .get("options")
+                .is_some_and(serde_json::Value::is_object)
+            {
+                let options = managed
+                    .get_mut("options")
+                    .and_then(serde_json::Value::as_object_mut)
+                    .expect("ZCode options were checked as an object");
+                for key in ["baseURL", "apiKey"] {
+                    restore_json_key(options, original_options, key);
+                }
+                if options.is_empty() && original_options.is_none() {
+                    managed.remove("options");
+                }
+            } else {
+                restore_json_key(managed, original_managed, "options");
+            }
+            if managed.is_empty() && original_managed.is_none() {
+                providers.remove(MANAGED_AGENT_PROVIDER_ID);
+            }
+        } else if let Some(original_managed) = original_provider
+            .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID))
+            .cloned()
+        {
+            providers.insert(MANAGED_AGENT_PROVIDER_ID.to_string(), original_managed);
+        }
+        if providers.is_empty() && original_provider.is_none() {
+            root.remove("provider");
+        }
+    } else {
+        restore_json_key(&mut root, original_root.as_ref(), "provider");
+    }
+    render_restored_json(root, original.is_some(), "恢复后的 ZCode 配置")
 }
 
 pub(crate) fn build_restored_openclaw_config(
@@ -1906,6 +2031,7 @@ pub(crate) fn build_agent_session_restored_bytes(
                 _ => return Err("DeepSeek Harness 恢复路径索引无效".to_string()),
             }
         }
+        AgentClient::ZCode => build_restored_zcode_config(current, original)?,
     };
     if let (Some(restored), Some(original), Some(original_bytes)) =
         (restored.as_deref(), original, original_bytes)
@@ -2240,6 +2366,51 @@ pub(crate) fn build_opencode_agent_config(
         serde_json::json!(format!("{MANAGED_AGENT_PROVIDER_ID}/{model}")),
     );
     render_agent_json(root, "OpenCode 配置")
+}
+
+pub(crate) fn build_zcode_agent_config(
+    existing: Option<&str>,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    available_models: &[AgentModelOption],
+) -> Result<String, String> {
+    let mut root = parse_agent_json_object(existing, "ZCode config.json")?;
+    let providers = ensure_json_object_entry(&mut root, "provider");
+    let models = ordered_agent_models(available_models, model)
+        .into_iter()
+        .map(|model| {
+            let display_name = model.alias.as_deref().unwrap_or(&model.name).to_string();
+            (
+                model.name,
+                serde_json::json!({
+                    "name": display_name,
+                    "kinds": ["anthropic"],
+                    "defaultKind": "anthropic"
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let managed_provider = ensure_json_object_entry(providers, MANAGED_AGENT_PROVIDER_ID);
+    managed_provider.insert("enabled".to_string(), serde_json::json!(true));
+    managed_provider.insert("name".to_string(), serde_json::json!("EasyCLIProxyAPI"));
+    managed_provider.insert("source".to_string(), serde_json::json!("custom"));
+    managed_provider.insert("kind".to_string(), serde_json::json!("anthropic"));
+    managed_provider.insert("defaultKind".to_string(), serde_json::json!("anthropic"));
+    managed_provider.insert(
+        "apiFormat".to_string(),
+        serde_json::json!("anthropic-messages"),
+    );
+    managed_provider.insert("npm".to_string(), serde_json::json!("@ai-sdk/anthropic"));
+    let options = ensure_json_object_entry(managed_provider, "options");
+    options.insert("baseURL".to_string(), serde_json::json!(base_url));
+    options.insert("apiKey".to_string(), serde_json::json!(api_key));
+    managed_provider.insert("models".to_string(), serde_json::Value::Object(models));
+    root.insert(
+        "model".to_string(),
+        serde_json::json!(format!("{MANAGED_AGENT_PROVIDER_ID}/{model}")),
+    );
+    render_agent_json(root, "ZCode 配置")
 }
 
 pub(crate) fn build_openclaw_agent_config(

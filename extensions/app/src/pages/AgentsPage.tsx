@@ -56,6 +56,7 @@ type AgentClientId =
   | 'openclaw'
   | 'hermes'
   | 'deepseek-harness'
+  | 'zcode'
   | 'pi';
 
 type ClaudeModelMappingClientId = 'claude-code' | 'claude-desktop';
@@ -170,7 +171,7 @@ type AgentDefinition = {
   name: string;
   icon?: string;
   Icon?: ComponentType<{ size?: number; 'aria-hidden'?: boolean }>;
-  descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes' | 'agents.description.deepseekHarness' | 'agents.description.pi';
+  descriptionKey: 'agents.description.claudeCode' | 'agents.description.claudeDesktop' | 'agents.description.codex' | 'agents.description.opencode' | 'agents.description.openclaw' | 'agents.description.hermes' | 'agents.description.deepseekHarness' | 'agents.description.zcode' | 'agents.description.pi';
 };
 
 type AgentSubpageId = 'core' | 'sessions';
@@ -223,6 +224,12 @@ const agentDefinitions: AgentDefinition[] = [
     name: 'DeepSeek Harness',
     icon: deepseekIcon,
     descriptionKey: 'agents.description.deepseekHarness',
+  },
+  {
+    id: 'zcode',
+    name: 'ZCode',
+    Icon: Bot,
+    descriptionKey: 'agents.description.zcode',
   },
   {
     id: 'pi',
@@ -888,7 +895,9 @@ export function AgentsPage() {
           : t('agents.model.firstSelection', { count: models.length }));
   const modificationDescription = activeStatus?.modificationState === 'invalid'
     ? t('agents.modify.invalid')
-    : '';
+    : selected === 'zcode'
+      ? t('agents.modify.zcodeRestart')
+      : '';
   const refreshModels = () => {
     void loadModels(selected);
   };

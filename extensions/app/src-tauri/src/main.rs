@@ -130,6 +130,7 @@ const DEFAULT_MAX_RETRY_INTERVAL: u32 = 30;
 const DEFAULT_STREAMING_BOOTSTRAP_RETRIES: u32 = 0;
 const LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY: &str = "123456";
 const MANAGED_AGENT_PROVIDER_ID: &str = "cpa-gui";
+const ZCODE_CONFIG_FILE: &str = "config.json";
 const DEEPSEEK_HARNESS_PROVIDER_ID: &str = "easy-cliproxyapi";
 const DEEPSEEK_HARNESS_CREDENTIAL: &str = "EASYCLIPROXYAPI_API_KEY";
 const DEEPSEEK_HARNESS_SETTINGS_FILE: &str = "settings.yaml";
@@ -972,6 +973,7 @@ enum AgentClient {
     OpenClaw,
     Hermes,
     DeepSeekHarness,
+    ZCode,
 }
 
 #[derive(Clone, Debug)]
@@ -992,6 +994,7 @@ impl AgentClient {
             "openclaw" => Ok(Self::OpenClaw),
             "hermes" => Ok(Self::Hermes),
             "deepseek-harness" => Ok(Self::DeepSeekHarness),
+            "zcode" => Ok(Self::ZCode),
             _ => Err(format!("不支持的智能体客户端: {value}")),
         }
     }
@@ -1005,6 +1008,7 @@ impl AgentClient {
             Self::OpenClaw => "openclaw",
             Self::Hermes => "hermes",
             Self::DeepSeekHarness => "deepseek-harness",
+            Self::ZCode => "zcode",
         }
     }
 
@@ -1017,6 +1021,7 @@ impl AgentClient {
             Self::OpenClaw => "OpenClaw",
             Self::Hermes => "Hermes Agent",
             Self::DeepSeekHarness => "DeepSeek Harness",
+            Self::ZCode => "ZCode",
         }
     }
 
@@ -1038,6 +1043,7 @@ impl AgentClient {
             Self::OpenClaw => &["openclaw"],
             Self::Hermes => &["hermes"],
             Self::DeepSeekHarness => &["dsh"],
+            Self::ZCode => &["zcode"],
         }
     }
 }

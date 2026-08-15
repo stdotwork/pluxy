@@ -728,6 +728,9 @@ pub(crate) fn fresh_agent_contents_with_oauth(
             build_deepseek_harness_settings(None, &openai_base, model, models)?,
             build_deepseek_harness_credentials(None, api_key)?,
         ]),
+        AgentClient::ZCode => Ok(vec![build_zcode_agent_config(
+            None, &root_base, api_key, model, models,
+        )?]),
     }
 }
 

@@ -32,6 +32,7 @@ pub(crate) fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBu
                 directory.join(DEEPSEEK_HARNESS_CREDENTIALS_FILE),
             ]
         }
+        AgentClient::ZCode => vec![home.join(".zcode/v2").join(ZCODE_CONFIG_FILE)],
     }
 }
 
@@ -796,15 +797,26 @@ pub(crate) fn inspect_agent_config(
         Err(error) => (false, None, false, false, Some(error)),
     };
     let executable = find_agent_executable(client, home);
-    let cli_version = executable.as_deref().and_then(read_agent_version);
+    // ZCode's desktop executable is an Electron app, not a CLI. Invoking it
+    // with --version can start the GUI and block discovery, so only probe a
+    // separately installed command-line entry point here.
+    let cli_version = if client == AgentClient::ZCode {
+        find_named_agent_executable(home, &["zcode"])
+            .filter(|path| executable.as_ref() != Some(path))
+            .as_deref()
+            .and_then(read_agent_version)
+    } else {
+        executable.as_deref().and_then(read_agent_version)
+    };
     let app_version = match client {
         AgentClient::ClaudeDesktop => read_claude_desktop_version(home),
         AgentClient::Codex => read_codex_app_version(home),
         AgentClient::DeepSeekHarness => read_deepseek_harness_profile_version(home),
+        AgentClient::ZCode => read_zcode_app_version(home),
         _ => None,
     };
     let version = cli_version.clone().or_else(|| app_version.clone());
-    let installed = version.is_some();
+    let installed = version.is_some() || (client == AgentClient::ZCode && executable.is_some());
     let mut warnings = Vec::new();
     if !client.supported_platform() {
         warnings.push("当前平台不支持 Claude Desktop 3P 配置".to_string());
@@ -940,6 +952,8 @@ pub(crate) fn inspect_agent_managed_config(
             .map(|(configured, model)| (configured, model, false)),
         AgentClient::DeepSeekHarness => inspect_deepseek_harness_config(paths, port, api_key)
             .map(|(configured, model)| (configured, model, false)),
+        AgentClient::ZCode => inspect_zcode_agent_config(&paths[0], port, api_key)
+            .map(|(configured, model)| (configured, model, false)),
     }
 }
 
@@ -1059,6 +1073,22 @@ pub(crate) fn agent_has_managed_marker(
             Ok(provider_exists && model_selected)
         }
         AgentClient::DeepSeekHarness => deepseek_harness_has_managed_marker(paths),
+        AgentClient::ZCode => {
+            if !paths[0].is_file() {
+                return Ok(false);
+            }
+            let root = read_agent_json_or_empty(&paths[0], "ZCode 配置")?;
+            let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+            let provider_exists = root
+                .get("provider")
+                .and_then(|value| value.get(MANAGED_AGENT_PROVIDER_ID))
+                .is_some();
+            let model_selected = root
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|model| model.starts_with(&prefix));
+            Ok(provider_exists && model_selected)
+        }
     }
 }
 
@@ -1132,6 +1162,85 @@ pub(crate) fn read_codex_app_version(home: &Path) -> Option<String> {
     {
         let _ = home;
         None
+    }
+}
+
+pub(crate) fn read_zcode_app_version(home: &Path) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        find_zcode_desktop_executable(home).and_then(|path| {
+            read_windows_executable_version(&path).or_else(|| read_agent_version(&path))
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        [
+            PathBuf::from("/Applications/ZCode.app"),
+            home.join("Applications/ZCode.app"),
+        ]
+        .into_iter()
+        .find(|path| path.is_dir())
+        .and_then(|path| read_macos_app_version(&path))
+        .or_else(|| {
+            find_named_agent_executable(home, &["zcode"]).and_then(|path| read_agent_version(&path))
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = home;
+        None
+    }
+}
+
+pub(crate) fn find_zcode_desktop_executable(home: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let local = env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("AppData/Local"));
+        let mut candidates = vec![
+            local.join("Programs/ZCode/ZCode.exe"),
+            local.join("ZCode/ZCode.exe"),
+        ];
+        for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = env::var_os(variable)
+                .map(PathBuf::from)
+                .filter(|path| !path.as_os_str().is_empty())
+            {
+                candidates.push(root.join("ZCode/ZCode.exe"));
+            }
+        }
+        candidates
+            .into_iter()
+            .find(|path| path.is_file())
+            .or_else(|| find_named_agent_executable(home, &["zcode"]))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        [
+            PathBuf::from("/Applications/ZCode.app/Contents/MacOS/ZCode"),
+            home.join("Applications/ZCode.app/Contents/MacOS/ZCode"),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| find_named_agent_executable(home, &["zcode"]))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut candidates = agent_executable_directories(home)
+            .into_iter()
+            .flat_map(|directory| [directory.join("zcode"), directory.join("ZCode")])
+            .collect::<Vec<_>>();
+        candidates.extend([
+            PathBuf::from("/opt/ZCode/zcode"),
+            PathBuf::from("/opt/ZCode/ZCode"),
+            PathBuf::from("/opt/zcode/zcode"),
+        ]);
+        candidates.into_iter().find(|path| path.is_file())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        find_named_agent_executable(home, &["zcode"])
     }
 }
 
@@ -1539,6 +1648,9 @@ pub(crate) fn find_windows_codex_app_executable(home: &Path) -> Option<PathBuf> 
 pub(crate) fn find_agent_executable(client: AgentClient, home: &Path) -> Option<PathBuf> {
     if client == AgentClient::ClaudeDesktop {
         return find_claude_desktop_executable(home);
+    }
+    if client == AgentClient::ZCode {
+        return find_zcode_desktop_executable(home);
     }
     find_named_agent_executable(home, client.executable_names())
 }
@@ -2216,6 +2328,55 @@ pub(crate) fn inspect_opencode_agent_config(
         .and_then(|options| options.get("baseURL"))
         .and_then(serde_json::Value::as_str)
         == Some(expected_base.as_str())
+        && provider
+            .and_then(|provider| provider.get("options"))
+            .and_then(|options| options.get("apiKey"))
+            .and_then(serde_json::Value::as_str)
+            == Some(api_key);
+    let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let model = root
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.strip_prefix(&prefix).unwrap_or(value))
+        .map(str::to_string);
+    Ok((configured, model))
+}
+
+pub(crate) fn inspect_zcode_agent_config(
+    path: &Path,
+    port: u16,
+    api_key: &str,
+) -> Result<(bool, Option<String>), String> {
+    if !path.is_file() {
+        return Ok((false, None));
+    }
+    let root: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(path).map_err(|error| format!("读取 ZCode 配置失败: {error}"))?,
+    )
+    .map_err(|error| format!("解析 ZCode 配置失败: {error}"))?;
+    let provider = root
+        .get("provider")
+        .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
+    let expected_base = format!("http://127.0.0.1:{port}");
+    let configured = provider
+        .and_then(|provider| provider.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && provider
+            .and_then(|provider| provider.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("anthropic")
+        && provider
+            .and_then(|provider| provider.get("apiFormat"))
+            .and_then(serde_json::Value::as_str)
+            == Some("anthropic-messages")
+        && provider
+            .and_then(|provider| provider.get("options"))
+            .and_then(|options| options.get("baseURL"))
+            .and_then(serde_json::Value::as_str)
+            == Some(expected_base.as_str())
         && provider
             .and_then(|provider| provider.get("options"))
             .and_then(|options| options.get("apiKey"))

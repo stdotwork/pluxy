@@ -368,6 +368,63 @@ fn opencode_runtime_edits_survive_close_and_next_apply_owns_conflicts() {
 }
 
 #[test]
+fn zcode_runtime_edits_survive_close_and_original_provider_is_restored() {
+    let home = agent_test_home("zcode-runtime-edit-merge");
+    let path = home.join(".zcode/v2/config.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r#"{"model":"other/original","provider":{"other":{"keep":"original"},"cpa-gui":{"name":"Original CPA","custom":"original"}},"keep":"root"}"#,
+    )
+    .unwrap();
+    let models = test_agent_models(&["gpt-one", "gpt-two"]);
+    apply_agent_configuration(
+        AgentClient::ZCode,
+        &home,
+        8317,
+        DEFAULT_API_KEY,
+        "gpt-one",
+        &models,
+        None,
+    )
+    .unwrap();
+
+    let mut runtime: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    runtime["agentAdded"] = serde_json::json!({"enabled": true});
+    runtime["provider"]["other"]["runtimeAdded"] = serde_json::json!(42);
+    runtime["provider"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"] =
+        serde_json::json!("keep-me");
+    runtime["provider"][MANAGED_AGENT_PROVIDER_ID]["options"]["baseURL"] =
+        serde_json::json!("https://agent-overwrite.invalid");
+    fs::write(&path, serde_json::to_string_pretty(&runtime).unwrap()).unwrap();
+
+    restore_agent_session_configuration(AgentClient::ZCode, &home).unwrap();
+    let closed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(closed["keep"], "root");
+    assert_eq!(closed["model"], "other/original");
+    assert_eq!(closed["agentAdded"]["enabled"], true);
+    assert_eq!(closed["provider"]["other"]["runtimeAdded"], 42);
+    assert_eq!(
+        closed["provider"][MANAGED_AGENT_PROVIDER_ID]["name"],
+        "Original CPA"
+    );
+    assert_eq!(
+        closed["provider"][MANAGED_AGENT_PROVIDER_ID]["custom"],
+        "original"
+    );
+    assert_eq!(
+        closed["provider"][MANAGED_AGENT_PROVIDER_ID]["customAfterApply"],
+        "keep-me"
+    );
+    assert!(closed["provider"][MANAGED_AGENT_PROVIDER_ID]
+        .get("options")
+        .is_none());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn session_merge_preserves_runtime_fields_for_other_agent_formats() {
     let claude_original = r#"{"env":{"KEEP_ENV":"original"},"keep":"claude"}"#;
     let claude_managed = build_claude_agent_config(

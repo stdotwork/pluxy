@@ -6,6 +6,7 @@ export type AgentConfigurationClientId =
   | 'openclaw'
   | 'hermes'
   | 'deepseek-harness'
+  | 'zcode'
   | 'pi';
 
 export type AgentConfigurationModificationState = 'unconfigured' | 'applied' | 'invalid';
