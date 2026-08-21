@@ -83,8 +83,10 @@ const RELEASE_DOWNLOAD_PREFIX: &str =
 const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-windows.json";
 #[cfg(target_os = "linux")]
 const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-linux.json";
+// Legacy macOS clients contain an updater that cannot launch outside its signed app bundle.
+// A separate channel makes those clients fall back to a one-time manual installation.
 #[cfg(target_os = "macos")]
-const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-darwin.json";
+const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-darwin-v2.json";
 const APP_RELEASE_DOWNLOAD_PREFIX: &str =
     "https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/";
 #[cfg(windows)]
@@ -92,7 +94,7 @@ const APP_UPDATE_MANIFEST_NAME: &str = "portable-update-windows.json";
 #[cfg(target_os = "linux")]
 const APP_UPDATE_MANIFEST_NAME: &str = "portable-update-linux.json";
 #[cfg(target_os = "macos")]
-const APP_UPDATE_MANIFEST_NAME: &str = "portable-update-darwin.json";
+const APP_UPDATE_MANIFEST_NAME: &str = "portable-update-darwin-v2.json";
 const CODEX_MODEL_CATALOG_URL: &str = "https://raw.githubusercontent.com/router-for-me/EasyCLIProxyAPI/main/src-tauri/resources/codex_models/model-catalog.json";
 const CODEX_MODEL_CATALOG_OVERRIDE_DIR: &str = "codex_models";
 const CODEX_MODEL_CATALOG_SOURCE_FILE: &str = "model-catalog.json";

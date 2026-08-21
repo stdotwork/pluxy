@@ -1,5 +1,8 @@
 use super::*;
 
+pub(crate) const PORTABLE_UPDATE_HELPER_ACK_FILE: &str = "update-helper-started.ack";
+const PORTABLE_UPDATE_HELPER_START_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[tauri::command]
 pub(crate) fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     open_external_url_inner(&app, &url)
@@ -581,34 +584,7 @@ pub(crate) async fn download_and_stage_portable_app_update(
                 work_dir: work_dir.clone(),
                 target_version: pending.version.clone(),
             };
-            let descriptor_path = work_dir.join("update-descriptor.json");
-            fs::write(
-                &descriptor_path,
-                serde_json::to_vec_pretty(&descriptor)
-                    .map_err(|error| format!("序列化应用更新描述失败: {error}"))?,
-            )
-            .map_err(|error| format!("写入应用更新描述失败: {error}"))?;
-
-            let mut command = Command::new(&helper_path);
-            command
-                .arg("--portable-update-helper")
-                .arg(&descriptor_path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            configure_background_command(&mut command);
-            command
-                .spawn()
-                .map_err(|error| format!("启动应用更新助手失败: {error}"))?;
-
-            update_app_task(app, |task| {
-                task.cancellable = false;
-                task.phase = "restarting".to_string();
-                task.message = Some("更新已准备完成，应用即将重启".to_string());
-            });
-            tokio::time::sleep(Duration::from_millis(350)).await;
-            app.exit(0);
-            Ok(())
+            launch_portable_update_helper(app, &helper_path, &work_dir, &descriptor).await
         }
         .await;
 
@@ -709,9 +685,6 @@ pub(crate) async fn download_and_stage_portable_app_update(
                 .strip_prefix(&current_app)
                 .map_err(|_| "macOS 应用程序路径无效".to_string())?
                 .to_path_buf();
-            let helper_path = work_dir.join("EasyCLIProxyAPI-updater");
-            fs::copy(&current_exe, &helper_path)
-                .map_err(|error| format!("准备应用更新助手失败: {error}"))?;
             let backup_app = current_app
                 .parent()
                 .ok_or_else(|| "macOS 应用程序路径没有父目录".to_string())?
@@ -726,6 +699,10 @@ pub(crate) async fn download_and_stage_portable_app_update(
                 work_dir: work_dir.clone(),
                 target_version: pending.version.clone(),
             };
+            // Keep the updater inside its signed application bundle. Copying the Mach-O
+            // executable into a temporary directory strips the bundle context Gatekeeper
+            // uses to validate it and can cause macOS to terminate it before it starts.
+            let helper_path = macos_update_helper_path(&current_exe);
             launch_portable_update_helper(app, &helper_path, &work_dir, &descriptor).await
         }
         .await;
@@ -765,7 +742,12 @@ fn ensure_portable_update_download(
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn macos_update_helper_path(current_exe: &Path) -> PathBuf {
+    current_exe.to_path_buf()
+}
+
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 async fn launch_portable_update_helper<T: Serialize>(
     app: &tauri::AppHandle,
     helper_path: &Path,
@@ -779,6 +761,8 @@ async fn launch_portable_update_helper<T: Serialize>(
             .map_err(|error| format!("序列化应用更新描述失败: {error}"))?,
     )
     .map_err(|error| format!("写入应用更新描述失败: {error}"))?;
+    let helper_ack_path = portable_update_helper_ack_path(work_dir);
+    let _ = fs::remove_file(&helper_ack_path);
     let mut command = Command::new(helper_path);
     command
         .arg("--portable-update-helper")
@@ -786,17 +770,66 @@ async fn launch_portable_update_helper<T: Serialize>(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    command
+    configure_background_command(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("启动应用更新助手失败: {error}"))?;
+    wait_for_portable_update_helper_start(
+        &mut child,
+        &helper_ack_path,
+        PORTABLE_UPDATE_HELPER_START_TIMEOUT,
+    )
+    .await?;
     update_app_task(app, |task| {
         task.cancellable = false;
         task.phase = "restarting".to_string();
         task.message = Some("更新已准备完成，应用即将重启".to_string());
     });
-    tokio::time::sleep(Duration::from_millis(350)).await;
     app.exit(0);
     Ok(())
+}
+
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+pub(crate) fn portable_update_helper_ack_path(work_dir: &Path) -> PathBuf {
+    work_dir.join(PORTABLE_UPDATE_HELPER_ACK_FILE)
+}
+
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+pub(crate) fn acknowledge_portable_update_helper_start(work_dir: &Path) -> Result<(), String> {
+    fs::write(
+        portable_update_helper_ack_path(work_dir),
+        std::process::id().to_string(),
+    )
+    .map_err(|error| format!("写入应用更新助手启动确认失败: {error}"))
+}
+
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+async fn wait_for_portable_update_helper_start(
+    child: &mut Child,
+    ack_path: &Path,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if ack_path.is_file() {
+            return Ok(());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("检查应用更新助手状态失败: {error}"))?
+        {
+            return Err(format!("应用更新助手未能启动，退出状态: {status}"));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "应用更新助手未能在 {} 秒内完成启动确认",
+                timeout.as_secs()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
@@ -1667,6 +1700,7 @@ pub(crate) fn cleanup_portable_update_payload(
     }));
     let _ = fs::remove_dir_all(descriptor.work_dir.join("staging"));
     let _ = fs::remove_file(&descriptor.ack_path);
+    let _ = fs::remove_file(portable_update_helper_ack_path(&descriptor.work_dir));
     let _ = fs::remove_file(descriptor_path);
 }
 
@@ -1677,7 +1711,13 @@ pub(crate) fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), S
     )
     .map_err(|error| format!("解析应用更新描述失败: {error}"))?;
     validate_portable_update_descriptor(descriptor_path, &descriptor)?;
-    wait_for_portable_parent_exit(descriptor.parent_pid, Duration::from_secs(120))?;
+    acknowledge_portable_update_helper_start(&descriptor.work_dir)?;
+    if let Err(error) =
+        wait_for_portable_parent_exit(descriptor.parent_pid, Duration::from_secs(120))
+    {
+        cleanup_portable_update_payload(descriptor_path, &descriptor);
+        return Err(error);
+    }
 
     if let Err(error) = replace_portable_update_files(&descriptor) {
         let mut rollback = Command::new(&descriptor.current_exe);
@@ -1792,7 +1832,12 @@ pub(crate) fn stage_macos_application_from_dmg(
         codesign
             .args(["--verify", "--deep", "--strict"])
             .arg(staged_app);
-        run_macos_update_command(&mut codesign, "校验新版 macOS 应用签名")
+        run_macos_update_command(&mut codesign, "校验新版 macOS 应用签名")?;
+        let mut gatekeeper = Command::new("spctl");
+        gatekeeper
+            .args(["--assess", "--type", "execute", "--verbose=2"])
+            .arg(staged_app);
+        run_macos_update_command(&mut gatekeeper, "校验新版 macOS 应用系统信任状态")
     })();
 
     let mut detach = Command::new("hdiutil");
@@ -1964,7 +2009,12 @@ pub(crate) fn replace_macos_application(descriptor: &MacosUpdateDescriptor) -> R
         .current_app
         .parent()
         .ok_or_else(|| "macOS 应用更新目标路径无效".to_string())?;
-    let replacement_app = app_parent.join(".EasyCLIProxyAPI.app.update-new");
+    let replacement_app = app_parent.join(".EasyCLIProxyAPI-update-new.app");
+    let legacy_replacement_app = app_parent.join(".EasyCLIProxyAPI.app.update-new");
+    if legacy_replacement_app.exists() {
+        fs::remove_dir_all(&legacy_replacement_app)
+            .map_err(|error| format!("清理旧格式的 macOS 更新暂存失败: {error}"))?;
+    }
     if replacement_app.exists() {
         fs::remove_dir_all(&replacement_app)
             .map_err(|error| format!("清理旧的 macOS 更新暂存失败: {error}"))?;
@@ -1977,6 +2027,16 @@ pub(crate) fn replace_macos_application(descriptor: &MacosUpdateDescriptor) -> R
         .args(["--verify", "--deep", "--strict"])
         .arg(&replacement_app);
     if let Err(error) = run_macos_update_command(&mut codesign, "校验待替换 macOS 应用签名")
+    {
+        let _ = fs::remove_dir_all(&replacement_app);
+        return Err(error);
+    }
+    let mut gatekeeper = Command::new("spctl");
+    gatekeeper
+        .args(["--assess", "--type", "execute", "--verbose=2"])
+        .arg(&replacement_app);
+    if let Err(error) =
+        run_macos_update_command(&mut gatekeeper, "校验待替换 macOS 应用系统信任状态")
     {
         let _ = fs::remove_dir_all(&replacement_app);
         return Err(error);
@@ -2001,6 +2061,7 @@ fn cleanup_macos_update_payload(descriptor_path: &Path, descriptor: &MacosUpdate
     let _ = fs::remove_dir_all(descriptor.work_dir.join("staging"));
     let _ = fs::remove_dir_all(descriptor.work_dir.join("mount"));
     let _ = fs::remove_file(&descriptor.ack_path);
+    let _ = fs::remove_file(portable_update_helper_ack_path(&descriptor.work_dir));
     let _ = fs::remove_file(descriptor_path);
 }
 
@@ -2011,7 +2072,13 @@ pub(crate) fn run_portable_update_helper(descriptor_path: &Path) -> Result<(), S
     )
     .map_err(|error| format!("解析应用更新描述失败: {error}"))?;
     validate_macos_update_descriptor(descriptor_path, &descriptor)?;
-    wait_for_portable_parent_exit(descriptor.parent_pid, Duration::from_secs(120))?;
+    acknowledge_portable_update_helper_start(&descriptor.work_dir)?;
+    if let Err(error) =
+        wait_for_portable_parent_exit(descriptor.parent_pid, Duration::from_secs(120))
+    {
+        cleanup_macos_update_payload(descriptor_path, &descriptor);
+        return Err(error);
+    }
     if let Err(error) = replace_macos_application(&descriptor) {
         let rollback_exe = descriptor
             .current_app

@@ -5,7 +5,14 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
   generatePortableUpdateManifest,
+  portableUpdateManifestName,
 } from '../scripts/manifest.mjs';
+
+test('macOS uses a new update manifest channel', () => {
+  expect(portableUpdateManifestName('windows')).toBe('portable-update-windows.json');
+  expect(portableUpdateManifestName('linux')).toBe('portable-update-linux.json');
+  expect(portableUpdateManifestName('darwin')).toBe('portable-update-darwin-v2.json');
+});
 
 describe('Windows 便携更新清单', () => {
   test('URL、大小和哈希与实际上传资产一致', async () => {
@@ -131,10 +138,9 @@ describe('跨平台便携更新清单', () => {
           `${platform} ${arch} full package`,
         );
       }
-      const output = join(root, `portable-update-${platform}.json`);
+      const output = join(root, portableUpdateManifestName(platform));
       const manifest = await generatePortableUpdateManifest({
         directory: root,
-        output,
         platform,
         repository: 'router-for-me/EasyCLIProxyAPI',
         tag: 'v1.2.3',

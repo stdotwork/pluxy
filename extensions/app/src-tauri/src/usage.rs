@@ -1,8 +1,10 @@
 mod resp;
 
+#[cfg(target_os = "macos")]
+use super::executable_dir;
 use super::{
-    apply_configured_proxy, current_core_status, management_authorization, management_endpoint,
-    management_http_client, CoreProcessState, GuiConfigFile, GuiConfigState,
+    apply_configured_proxy, core_base_dir, current_core_status, management_authorization,
+    management_endpoint, management_http_client, CoreProcessState, GuiConfigFile, GuiConfigState,
 };
 use chrono::{DateTime, Local};
 use rusqlite::{
@@ -436,7 +438,73 @@ impl UsageCollectorState {
 }
 
 pub(crate) fn initialize_usage_storage() -> Result<(), String> {
-    initialize_usage_storage_at(&usage_root_dir()?)
+    let root = usage_root_dir()?;
+    migrate_legacy_usage_storage(&root)?;
+    initialize_usage_storage_at(&root)
+}
+
+#[cfg(target_os = "macos")]
+fn migrate_legacy_usage_storage(target: &Path) -> Result<(), String> {
+    let legacy = executable_dir()?.join(USAGE_DIR_NAME);
+    migrate_usage_storage_directory(&legacy, target)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn migrate_legacy_usage_storage(target: &Path) -> Result<(), String> {
+    let _ = target;
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn migrate_usage_storage_directory(source: &Path, target: &Path) -> Result<(), String> {
+    if source == target || !source.is_dir() || target.exists() {
+        return Ok(());
+    }
+    let target_parent = target
+        .parent()
+        .ok_or_else(|| "使用记录目标目录没有父目录".to_string())?;
+    fs::create_dir_all(target_parent)
+        .map_err(|error| format!("创建使用记录迁移目标目录失败: {error}"))?;
+    if fs::rename(source, target).is_ok() {
+        return Ok(());
+    }
+
+    if let Err(error) = copy_usage_storage_directory(source, target) {
+        let _ = fs::remove_dir_all(target);
+        return Err(format!("迁移旧版使用记录失败: {error}"));
+    }
+    if let Err(error) = fs::remove_dir_all(source) {
+        eprintln!(
+            "旧版使用记录已复制，但无法清理原目录 {}: {error}",
+            source.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn copy_usage_storage_directory(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| format!("创建使用记录目录失败: {error}"))?;
+    let entries = fs::read_dir(source).map_err(|error| format!("读取旧版使用记录失败: {error}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取旧版使用记录项目失败: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("读取旧版使用记录项目类型失败: {error}"))?;
+        let destination = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_usage_storage_directory(&entry.path(), &destination)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &destination)
+                .map_err(|error| format!("复制旧版使用记录失败: {error}"))?;
+        } else {
+            return Err(format!(
+                "旧版使用记录包含不支持的文件类型: {}",
+                entry.path().display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn initialize_usage_storage_at(root: &Path) -> Result<(), String> {
@@ -2729,12 +2797,7 @@ fn query_window_minutes(query: &UsageQuery, first: Option<i64>, last: Option<i64
 }
 
 fn usage_root_dir() -> Result<PathBuf, String> {
-    let executable =
-        std::env::current_exe().map_err(|error| format!("读取程序路径失败: {error}"))?;
-    let directory = executable
-        .parent()
-        .ok_or_else(|| "程序路径没有父目录".to_string())?;
-    Ok(directory.join(USAGE_DIR_NAME))
+    Ok(core_base_dir()?.join(USAGE_DIR_NAME))
 }
 
 fn record_local_hour(record: &UsageRecord) -> String {
@@ -2886,6 +2949,33 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn legacy_usage_storage_is_moved_with_nested_files() {
+        let root = test_root("storage-location-migration");
+        let source = root.join("legacy").join(USAGE_DIR_NAME);
+        let target = root.join("application-support").join(USAGE_DIR_NAME);
+        fs::create_dir_all(source.join(USAGE_BACKUP_DIR_NAME)).unwrap();
+        fs::write(source.join(USAGE_DATABASE_FILE), b"database").unwrap();
+        fs::write(
+            source.join(USAGE_BACKUP_DIR_NAME).join("usage.db.backup"),
+            b"backup",
+        )
+        .unwrap();
+
+        migrate_usage_storage_directory(&source, &target).unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(
+            fs::read(target.join(USAGE_DATABASE_FILE)).unwrap(),
+            b"database"
+        );
+        assert_eq!(
+            fs::read(target.join(USAGE_BACKUP_DIR_NAME).join("usage.db.backup")).unwrap(),
+            b"backup"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn open_test_database(root: &Path) -> Connection {

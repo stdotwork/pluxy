@@ -830,16 +830,18 @@ pub(crate) fn inspect_agent_config(
         Err(error) => (false, None, false, false, Some(error)),
     };
     let executable = find_agent_executable(client, home);
-    // ZCode's desktop executable is an Electron app, not a CLI. Invoking it
-    // with --version can start the GUI and block discovery, so only probe a
-    // separately installed command-line entry point here.
+    // Desktop application executables are not CLIs. Invoking them with
+    // --version can start their GUI and block discovery, so never probe them
+    // directly. ZCode may still expose a separate command-line entry point.
     let cli_version = if client == AgentClient::ZCode {
         find_named_agent_executable(home, &["zcode"])
             .filter(|path| executable.as_ref() != Some(path))
             .as_deref()
             .and_then(read_agent_version)
-    } else {
+    } else if should_probe_primary_agent_executable_version(client) {
         executable.as_deref().and_then(read_agent_version)
+    } else {
+        None
     };
     let codex_app_installation = (client == AgentClient::Codex)
         .then(|| find_codex_app_installation(home))
@@ -855,7 +857,8 @@ pub(crate) fn inspect_agent_config(
     };
     let version = cli_version.clone().or_else(|| app_version.clone());
     let installed = version.is_some()
-        || (client == AgentClient::ZCode && executable.is_some())
+        || (matches!(client, AgentClient::ClaudeDesktop | AgentClient::ZCode)
+            && executable.is_some())
         || codex_app_installation.is_some();
     let launch_targets = agent_launch_targets(
         client,
@@ -905,6 +908,10 @@ pub(crate) fn inspect_agent_config(
         warnings,
         error,
     }
+}
+
+pub(crate) fn should_probe_primary_agent_executable_version(client: AgentClient) -> bool {
+    !matches!(client, AgentClient::ClaudeDesktop | AgentClient::ZCode)
 }
 
 pub(crate) fn agent_launch_targets(
@@ -1333,11 +1340,24 @@ pub(crate) fn read_claude_desktop_version(home: &Path) -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         read_windows_claude_desktop_store_version().or_else(|| {
-            find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path))
+            find_claude_desktop_executable(home)
+                .and_then(|path| read_windows_executable_version(&path))
         })
     }
-    #[cfg(not(target_os = "windows"))]
-    find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path))
+    #[cfg(target_os = "macos")]
+    {
+        find_claude_desktop_executable(home).and_then(|path| {
+            let application = path.ancestors().find(|candidate| {
+                candidate.extension().and_then(|value| value.to_str()) == Some("app")
+            })?;
+            read_macos_app_version(application)
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = home;
+        None
+    }
 }
 
 pub(crate) fn read_codex_app_installation_version(installation: &CodexAppTarget) -> Option<String> {
