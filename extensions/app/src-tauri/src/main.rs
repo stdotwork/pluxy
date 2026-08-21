@@ -1525,6 +1525,7 @@ impl GuiConfigState {
             .map_err(|_| "GUI 配置状态锁已损坏".to_string())?;
         let mut config = current.clone();
         apply_core_settings_to_gui_config(&mut config, settings);
+        sanitize_gui_config(&mut config)?;
         validate_gui_config(&config)?;
         *current = config.clone();
         Ok(config)
@@ -1659,6 +1660,7 @@ impl GuiConfigState {
             .map_err(|_| "GUI 配置状态锁已损坏".to_string())?;
         let mut config = current.clone();
         update(&mut config)?;
+        sanitize_gui_config(&mut config)?;
         write_gui_config(&config)?;
         *current = config.clone();
         Ok(config)
@@ -2043,6 +2045,11 @@ fn main() {
         .expect("failed to build app");
 
     app.run(|app_handle, event| match event {
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } => show_main_window(app_handle),
         tauri::RunEvent::ExitRequested { .. } => {
             if let Err(error) = persist_main_window_size(app_handle) {
                 eprintln!("保存主窗口尺寸失败: {error}");
