@@ -4,6 +4,17 @@ import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateAppVersion } from './version.mjs';
 
+export function portableUpdateManifestName(platform) {
+  const normalizedPlatform = String(platform).trim().toLowerCase();
+  if (!['windows', 'linux', 'darwin'].includes(normalizedPlatform)) {
+    throw new Error(`Unsupported update platform: ${platform}`);
+  }
+  // Keep the broken legacy macOS updater on a manifest URL that is no longer published.
+  return normalizedPlatform === 'darwin'
+    ? 'portable-update-darwin-v2.json'
+    : `portable-update-${normalizedPlatform}.json`;
+}
+
 export async function generatePortableUpdateManifest({
   directory,
   output,
@@ -22,7 +33,10 @@ export async function generatePortableUpdateManifest({
   const normalizedPlatform = String(platform).trim().toLowerCase();
   const platformSpec = platformSpecs[normalizedPlatform];
   if (!platformSpec) throw new Error(`Unsupported update platform: ${platform}`);
-  const resolvedOutput = resolve(output ?? join(resolvedDirectory, `portable-update-${normalizedPlatform}.json`));
+  const resolvedOutput = resolve(output ?? join(
+    resolvedDirectory,
+    portableUpdateManifestName(normalizedPlatform),
+  ));
   const resolvedRepository = repository ?? 'router-for-me/EasyCLIProxyAPI';
   const resolvedGitcodeRepository = String(gitcodeRepository ?? '').trim();
   const normalizedRawTag = String(rawTag ?? '').trim();
@@ -99,7 +113,9 @@ async function main() {
   }
   const directory = resolve(args.get('--directory') ?? 'artifacts');
   const platform = args.get('--platform') ?? 'windows';
-  const output = resolve(args.get('--output') ?? join(directory, `portable-update-${platform}.json`));
+  const output = resolve(
+    args.get('--output') ?? join(directory, portableUpdateManifestName(platform)),
+  );
   const manifest = await generatePortableUpdateManifest({
     directory,
     output,

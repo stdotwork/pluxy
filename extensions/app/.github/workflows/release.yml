@@ -306,7 +306,6 @@ jobs:
           for platform in windows linux darwin; do
             node scripts/manifest.mjs \
               --directory artifacts \
-              --output "artifacts/portable-update-${platform}.json" \
               --platform "$platform" \
               --repository "${{ github.repository }}" \
               --gitcode-repository "${{ vars.GITCODE_GUI_REPOSITORY }}" \

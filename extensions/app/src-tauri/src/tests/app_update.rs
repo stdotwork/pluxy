@@ -24,6 +24,33 @@ fn app_update_comparison_uses_semantic_versions() {
     assert!(!is_app_update_available("v0.2.0", "v0.1.9").unwrap());
 }
 
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+#[test]
+fn portable_update_helper_writes_a_distinct_startup_ack() {
+    let work_dir = agent_test_home("portable-update-helper-ack");
+    acknowledge_portable_update_helper_start(&work_dir).unwrap();
+
+    let ack_path = portable_update_helper_ack_path(&work_dir);
+    assert_eq!(
+        ack_path.file_name().and_then(|value| value.to_str()),
+        Some(PORTABLE_UPDATE_HELPER_ACK_FILE)
+    );
+    assert_eq!(
+        fs::read_to_string(&ack_path).unwrap(),
+        std::process::id().to_string()
+    );
+    assert_ne!(ack_path.file_name().unwrap(), "update-started.ack");
+    fs::remove_dir_all(work_dir).unwrap();
+}
+
+#[test]
+fn macos_update_helper_stays_inside_the_signed_app_bundle() {
+    let current_exe =
+        PathBuf::from("/Applications/EasyCLIProxyAPI.app/Contents/MacOS/EasyCLIProxyAPI");
+
+    assert_eq!(macos_update_helper_path(&current_exe), current_exe);
+}
+
 fn portable_update_test_asset(version: &str, arch: &str) -> PortableUpdateAsset {
     let (_, display, suffix) = portable_update_asset_platform().unwrap();
     let name = format!("EasyCLIProxyAPI-v{version}-{display}-{arch}.{suffix}");
