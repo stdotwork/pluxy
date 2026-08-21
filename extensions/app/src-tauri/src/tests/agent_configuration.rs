@@ -1149,6 +1149,22 @@ fn kimi_grok_and_zcode_use_cpa_runtime_context_windows() {
 }
 
 #[test]
+fn desktop_application_binaries_are_not_used_for_cli_version_probes() {
+    assert!(!should_probe_primary_agent_executable_version(
+        AgentClient::ClaudeDesktop
+    ));
+    assert!(!should_probe_primary_agent_executable_version(
+        AgentClient::ZCode
+    ));
+    assert!(should_probe_primary_agent_executable_version(
+        AgentClient::ClaudeCode
+    ));
+    assert!(should_probe_primary_agent_executable_version(
+        AgentClient::Codex
+    ));
+}
+
+#[test]
 fn claude_model_lists_mark_yaml_aliases_when_api_returns_only_model_ids() {
     let mut models = test_agent_models(&[
         "gpt-original",
