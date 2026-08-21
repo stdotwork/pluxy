@@ -959,11 +959,7 @@ export function AgentsPage() {
   const appLaunchTarget = activeLaunchTargets.find((target) => target.id === 'app') ?? null;
   const launchEnabled = Boolean(
     activeStatus?.supportedPlatform
-      && activeStatus.installed
-      && (selected === 'codex'
-        || (selected === 'pi'
-          ? activeStatus.configured
-          : activeStatus.modificationEnabled && activeStatus.modificationState === 'applied')),
+      && activeStatus.installed,
   );
   const canLaunchTarget = (target: AgentLaunchTarget | null) => launchEnabled && Boolean(target);
   const activeLaunchDirectoryHistory = launchDirectoryHistory[selected] ?? [];
@@ -1356,7 +1352,6 @@ export function AgentsPage() {
     setBusyAction(action);
     setLaunchError('');
     try {
-      if (draftChanged) throw new Error(t('agents.error.applyFirst'));
       await invoke('launch_agent', {
         client: selected,
         target: target.id,
@@ -1391,7 +1386,6 @@ export function AgentsPage() {
     setBusyAction('restart-app');
     setLaunchError('');
     try {
-      if (draftChanged) throw new Error(t('agents.error.applyFirst'));
       await invoke('restart_codex_app');
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'launch')) {
@@ -1887,10 +1881,8 @@ export function AgentsPage() {
                           type="button"
                           className="secondary-button agent-launch-button"
                           onClick={() => void launchAgent(cliLaunchTarget)}
-                          disabled={busy || !canLaunchTarget(cliLaunchTarget) || draftChanged}
-                          title={draftChanged
-                            ? t('agents.launch.applyFirst')
-                            : cliLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                          disabled={busy || !canLaunchTarget(cliLaunchTarget)}
+                          title={cliLaunchTarget?.detail ?? t('agents.launch.unavailable')}
                         >
                           {busyAction === 'launch-cli'
                             ? <LoaderCircle size={16} className="spin" />
@@ -1903,10 +1895,8 @@ export function AgentsPage() {
                           type="button"
                           className="primary-button agent-launch-button"
                           onClick={() => void launchAgent(appLaunchTarget)}
-                          disabled={busy || !canLaunchTarget(appLaunchTarget) || draftChanged}
-                          title={draftChanged
-                            ? t('agents.launch.applyFirst')
-                            : appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                          disabled={busy || !canLaunchTarget(appLaunchTarget)}
+                          title={appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
                         >
                           {busyAction === 'launch-app'
                             ? <LoaderCircle size={16} className="spin" />
@@ -1919,10 +1909,8 @@ export function AgentsPage() {
                           type="button"
                           className="secondary-button agent-launch-button"
                           onClick={() => void restartCodexApp()}
-                          disabled={busy || !canLaunchTarget(appLaunchTarget) || draftChanged}
-                          title={draftChanged
-                            ? t('agents.launch.applyFirst')
-                            : appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
+                          disabled={busy || !canLaunchTarget(appLaunchTarget)}
+                          title={appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
                         >
                           {busyAction === 'restart-app'
                             ? <LoaderCircle size={16} className="spin" />
@@ -1937,12 +1925,8 @@ export function AgentsPage() {
                         type="button"
                         className="primary-button agent-launch-button"
                         onClick={() => void launchAgent(defaultLaunchTarget)}
-                        disabled={busy || !canLaunchTarget(defaultLaunchTarget) || draftChanged}
-                        title={draftChanged
-                          ? t('agents.launch.applyFirst')
-                          : defaultLaunchTarget?.detail ?? (launchEnabled
-                            ? t('agents.launch.unavailable')
-                            : t('agents.launch.enableFirst'))}
+                        disabled={busy || !canLaunchTarget(defaultLaunchTarget)}
+                        title={defaultLaunchTarget?.detail ?? t('agents.launch.unavailable')}
                       >
                         {busyAction === 'launch'
                           ? <LoaderCircle size={16} className="spin" />

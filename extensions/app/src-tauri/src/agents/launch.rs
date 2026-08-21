@@ -27,9 +27,6 @@ pub(crate) fn launch_agent(
         if !status.installed {
             return Err("未检测到 Pi CLI，请先安装 Pi 并重新检测".to_string());
         }
-        if !status.configured {
-            return Err("请先安装并配置 Pi CLIProxyAPI provider 插件".to_string());
-        }
         let executable =
             find_pi_executable(&home).ok_or_else(|| "未找到 Pi CLI 可执行文件".to_string())?;
         let launch_directory = resolve_launch_directory(working_directory.as_deref(), &home)?;
@@ -44,11 +41,6 @@ pub(crate) fn launch_agent(
     if !status.installed {
         return Err(format!("未检测到 {}，请先安装并重新检测", client.name()));
     }
-    validate_agent_launch_configuration(client, &status)?;
-    if client == AgentClient::Codex && status.oauth_configuration {
-        validate_codex_oauth_login(&home)?;
-    }
-
     let default_target = match client {
         AgentClient::ClaudeDesktop | AgentClient::ZCode => "app",
         AgentClient::Codex if find_codex_app_installation(&home).is_some() => "app",
@@ -88,27 +80,11 @@ pub(crate) fn launch_agent(
 }
 
 #[tauri::command]
-pub(crate) async fn restart_codex_app(
-    app: tauri::AppHandle,
-    gui_config_state: tauri::State<'_, GuiConfigState>,
-) -> Result<(), String> {
+pub(crate) async fn restart_codex_app(app: tauri::AppHandle) -> Result<(), String> {
     let home = app
         .path()
         .home_dir()
         .map_err(|error| format!("无法获取用户目录: {error}"))?;
-    let config = gui_config_state.snapshot()?;
-    let status = inspect_agent_config(
-        AgentClient::Codex,
-        &home,
-        config.port,
-        effective_agent_api_key(&config),
-    );
-    if !status.installed {
-        return Err("未检测到 Codex，请先安装并重新检测".to_string());
-    }
-    if status.oauth_configuration {
-        validate_codex_oauth_login(&home)?;
-    }
     let target = find_codex_app_installation(&home)
         .ok_or_else(|| "未检测到 Codex 桌面应用，请重新检测或改用 Codex CLI".to_string())?;
 
@@ -118,21 +94,6 @@ pub(crate) async fn restart_codex_app(
     })
     .await
     .map_err(|error| format!("重启 Codex App 任务失败: {error}"))?
-}
-
-fn validate_agent_launch_configuration(
-    client: AgentClient,
-    status: &AgentConfigStatus,
-) -> Result<(), String> {
-    if client == AgentClient::Codex
-        || (status.modification_enabled && status.modification_state == "applied")
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "请先为 {} 应用配置修改，确保 CPA 配置生效后再启动",
-        client.name()
-    ))
 }
 
 fn resolve_launch_directory(value: Option<&str>, fallback: &Path) -> Result<PathBuf, String> {
