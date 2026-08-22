@@ -668,6 +668,124 @@ fn opencode_config_path_supports_jsonc_and_custom_config() {
 }
 
 #[test]
+fn opencode_cli_or_desktop_is_detected_as_installed() {
+    assert!(agent_installation_detected(
+        AgentClient::OpenCode,
+        None,
+        true,
+        false,
+    ));
+    assert!(agent_installation_detected(
+        AgentClient::OpenCode,
+        None,
+        false,
+        true,
+    ));
+    assert!(!agent_installation_detected(
+        AgentClient::OpenCode,
+        None,
+        false,
+        false,
+    ));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn opencode_windows_desktop_is_found_in_the_electron_installer_directory() {
+    let home = agent_test_home("opencode-windows-desktop");
+    let local_app_data = home.join("AppData/Local");
+    let application = local_app_data.join("Programs/@opencode-aidesktop/OpenCode.exe");
+    fs::create_dir_all(application.parent().unwrap()).unwrap();
+    fs::write(&application, []).unwrap();
+
+    assert_eq!(
+        find_windows_opencode_desktop_application_in_roots(&local_app_data, &[]),
+        Some(application)
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn opencode_linux_desktop_finds_the_current_package_binary() {
+    let home = agent_test_home("opencode-linux-package");
+    let executable_directory = home.join("opt/OpenCode");
+    let application = executable_directory.join("ai.opencode.desktop");
+    fs::create_dir_all(&executable_directory).unwrap();
+    fs::write(&application, []).unwrap();
+
+    assert_eq!(
+        find_linux_opencode_desktop_application_in_roots(&home, &[executable_directory], &[], &[],),
+        Some(application)
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn opencode_linux_desktop_resolves_an_appimage_desktop_entry() {
+    let home = agent_test_home("opencode-linux-appimage-entry");
+    let data_directory = home.join("share");
+    let applications = data_directory.join("applications");
+    let application = home.join("Applications/opencode-desktop-linux-amd64.AppImage");
+    fs::create_dir_all(&applications).unwrap();
+    fs::create_dir_all(application.parent().unwrap()).unwrap();
+    fs::write(&application, []).unwrap();
+    let application = PathBuf::from(path_to_string(&application).replace('\\', "/"));
+    fs::write(
+        applications.join("ai.opencode.desktop.desktop"),
+        format!(
+            "[Desktop Entry]\nName=OpenCode\nExec=\"{}\" %U\nType=Application\n",
+            path_to_string(&application)
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        find_linux_opencode_desktop_application_in_roots(&home, &[], &[data_directory], &[],),
+        Some(application)
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn opencode_linux_desktop_finds_an_unregistered_appimage() {
+    let home = agent_test_home("opencode-linux-appimage-directory");
+    let applications = home.join("Applications");
+    let application = applications.join("opencode-desktop-linux-aarch64.AppImage");
+    fs::create_dir_all(&applications).unwrap();
+    fs::write(&application, []).unwrap();
+
+    assert_eq!(
+        find_linux_opencode_desktop_application_in_roots(&home, &[], &[], &[applications],),
+        Some(application)
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn opencode_linux_desktop_reads_versions_from_appimage_and_nix_paths() {
+    assert_eq!(
+        linux_opencode_desktop_version_from_path(Path::new(
+            "/home/tester/Applications/opencode-desktop-1.18.16-linux-amd64.AppImage"
+        ))
+        .as_deref(),
+        Some("1.18.16")
+    );
+    assert_eq!(
+        linux_opencode_desktop_version_from_path(Path::new(
+            "/nix/store/hash-opencode-desktop-1.18.16/bin/opencode-desktop"
+        ))
+        .as_deref(),
+        Some("1.18.16")
+    );
+    assert_eq!(
+        linux_opencode_desktop_version_from_path(Path::new(
+            "/home/tester.2026/Downloads/opencode-desktop-linux-amd64.AppImage"
+        )),
+        None
+    );
+}
+
+#[test]
 fn opencode_agent_config_accepts_jsonc_and_preserves_comments() {
     let home = agent_test_home("opencode-jsonc");
     let path = home.join(".config/opencode/opencode.jsonc");

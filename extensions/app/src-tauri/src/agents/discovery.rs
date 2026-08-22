@@ -890,25 +890,34 @@ pub(crate) fn inspect_agent_config(
     let codex_app_installation = (client == AgentClient::Codex)
         .then(|| find_codex_app_installation(home))
         .flatten();
+    let opencode_desktop_application = (client == AgentClient::OpenCode)
+        .then(|| find_opencode_desktop_application(home))
+        .flatten();
     let app_version = match client {
         AgentClient::ClaudeDesktop => read_claude_desktop_version(home),
         AgentClient::Codex => codex_app_installation
             .as_ref()
             .and_then(read_codex_app_installation_version),
+        AgentClient::OpenCode => opencode_desktop_application
+            .as_deref()
+            .and_then(read_opencode_desktop_version),
         AgentClient::DeepSeekHarness => read_deepseek_harness_profile_version(home),
         AgentClient::ZCode => read_zcode_app_version(home),
         _ => None,
     };
     let version = cli_version.clone().or_else(|| app_version.clone());
-    let installed = version.is_some()
-        || (matches!(client, AgentClient::ClaudeDesktop | AgentClient::ZCode)
-            && executable.is_some())
-        || codex_app_installation.is_some();
+    let app_installed = codex_app_installation.is_some() || opencode_desktop_application.is_some();
+    let installed = agent_installation_detected(
+        client,
+        version.as_deref(),
+        executable.is_some(),
+        app_installed,
+    );
     let launch_targets = agent_launch_targets(
         client,
         executable.as_deref(),
         app_version.as_deref(),
-        codex_app_installation.is_some(),
+        app_installed,
     );
     let mut warnings = Vec::new();
     if !client.supported_platform() {
@@ -954,6 +963,20 @@ pub(crate) fn inspect_agent_config(
     }
 }
 
+pub(crate) fn agent_installation_detected(
+    client: AgentClient,
+    version: Option<&str>,
+    executable_found: bool,
+    app_installed: bool,
+) -> bool {
+    version.is_some()
+        || (matches!(
+            client,
+            AgentClient::ClaudeDesktop | AgentClient::OpenCode | AgentClient::ZCode
+        ) && executable_found)
+        || app_installed
+}
+
 pub(crate) fn should_probe_primary_agent_executable_version(client: AgentClient) -> bool {
     !matches!(client, AgentClient::ClaudeDesktop | AgentClient::ZCode)
 }
@@ -990,6 +1013,22 @@ pub(crate) fn agent_launch_targets(
                     id: "cli".to_string(),
                     label: "Codex CLI".to_string(),
                     detail: path_to_string(executable),
+                });
+            }
+        }
+        AgentClient::OpenCode => {
+            if let Some(executable) = executable {
+                targets.push(AgentLaunchTarget {
+                    id: "cli".to_string(),
+                    label: "OpenCode CLI".to_string(),
+                    detail: path_to_string(executable),
+                });
+            }
+            if app_installed {
+                targets.push(AgentLaunchTarget {
+                    id: "app".to_string(),
+                    label: "OpenCode Desktop".to_string(),
+                    detail: "OpenCode Desktop".to_string(),
                 });
             }
         }
@@ -1378,6 +1417,471 @@ pub(crate) fn find_codex_app_installation(home: &Path) -> Option<CodexAppTarget>
         let _ = home;
         None
     }
+}
+
+pub(crate) fn find_opencode_desktop_application(home: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        [
+            PathBuf::from("/Applications/OpenCode.app"),
+            home.join("Applications/OpenCode.app"),
+        ]
+        .into_iter()
+        .find(|path| path.is_dir())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let local = env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| home.join("AppData/Local"));
+        let program_files_roots = ["ProgramFiles", "ProgramFiles(x86)"]
+            .into_iter()
+            .filter_map(env::var_os)
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect::<Vec<_>>();
+        find_windows_opencode_desktop_application_in_roots(&local, &program_files_roots)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut executable_directories = agent_executable_directories(home);
+        for directory in ["/opt/OpenCode", "/opt/opencode-desktop"] {
+            let directory = PathBuf::from(directory);
+            if !executable_directories.contains(&directory) {
+                executable_directories.push(directory);
+            }
+        }
+
+        let data_home = env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| home.join(".local/share"));
+        let mut data_directories = vec![data_home];
+        let system_data_directories = env::var_os("XDG_DATA_DIRS")
+            .map(|value| env::split_paths(&value).collect::<Vec<_>>())
+            .filter(|directories| !directories.is_empty())
+            .unwrap_or_else(|| {
+                vec![
+                    PathBuf::from("/usr/local/share"),
+                    PathBuf::from("/usr/share"),
+                ]
+            });
+        for directory in system_data_directories {
+            if directory.is_absolute() && !data_directories.contains(&directory) {
+                data_directories.push(directory);
+            }
+        }
+
+        let appimage_directories = [
+            home.join("Applications"),
+            home.join(".local/Applications"),
+            home.join("Downloads"),
+            home.join("Desktop"),
+        ];
+        find_linux_opencode_desktop_application_in_roots(
+            home,
+            &executable_directories,
+            &data_directories,
+            &appimage_directories,
+        )
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = home;
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn find_windows_opencode_desktop_application_in_roots(
+    local_app_data: &Path,
+    program_files_roots: &[PathBuf],
+) -> Option<PathBuf> {
+    let mut candidates = vec![
+        local_app_data.join("Programs/@opencode-aidesktop/OpenCode.exe"),
+        local_app_data.join("Programs/OpenCode/OpenCode.exe"),
+        local_app_data.join("Programs/opencode/OpenCode.exe"),
+        local_app_data.join("OpenCode/OpenCode.exe"),
+        local_app_data.join("opencode/OpenCode.exe"),
+    ];
+    for root in program_files_roots {
+        candidates.extend([
+            root.join("@opencode-aidesktop/OpenCode.exe"),
+            root.join("OpenCode/OpenCode.exe"),
+            root.join("opencode/OpenCode.exe"),
+        ]);
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn find_linux_opencode_desktop_application_in_roots(
+    home: &Path,
+    executable_directories: &[PathBuf],
+    data_directories: &[PathBuf],
+    appimage_directories: &[PathBuf],
+) -> Option<PathBuf> {
+    const EXECUTABLE_NAMES: &[&str] = &[
+        "ai.opencode.desktop",
+        "ai.opencode.desktop.beta",
+        "ai.opencode.desktop.dev",
+        "opencode-desktop",
+        "@opencode-aidesktop",
+        "OpenCode",
+        "OpenCode Desktop",
+    ];
+
+    for directory in executable_directories {
+        for name in EXECUTABLE_NAMES {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    find_linux_opencode_application_from_desktop_entries(
+        home,
+        executable_directories,
+        data_directories,
+    )
+    .or_else(|| {
+        appimage_directories.iter().find_map(|directory| {
+            let mut candidates = fs::read_dir(directory)
+                .ok()?
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file() && is_opencode_desktop_appimage(path))
+                .collect::<Vec<_>>();
+            candidates.sort();
+            candidates.into_iter().next()
+        })
+    })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn find_linux_opencode_application_from_desktop_entries(
+    home: &Path,
+    executable_directories: &[PathBuf],
+    data_directories: &[PathBuf],
+) -> Option<PathBuf> {
+    for data_directory in data_directories {
+        let applications = data_directory.join("applications");
+        let mut entries = fs::read_dir(applications)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("desktop"))
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
+
+        for entry in entries {
+            let Ok(content) = fs::read_to_string(&entry) else {
+                continue;
+            };
+            if !is_opencode_desktop_entry(&entry, &content) {
+                continue;
+            }
+            let Some(command) = linux_desktop_entry_command(&content) else {
+                continue;
+            };
+            if let Some(application) =
+                resolve_linux_desktop_command(home, executable_directories, command.as_str())
+            {
+                return Some(application);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_opencode_desktop_entry(path: &Path, content: &str) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if file_name.contains("opencode") {
+        return true;
+    }
+
+    let mut in_desktop_entry = false;
+    content.lines().any(|line| {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_desktop_entry = line.eq_ignore_ascii_case("[Desktop Entry]");
+            return false;
+        }
+        if !in_desktop_entry {
+            return false;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        let value = value.trim().to_ascii_lowercase();
+        match key.trim() {
+            "Name" => {
+                value == "opencode"
+                    || value.starts_with("opencode beta")
+                    || value.starts_with("opencode dev")
+            }
+            "Icon" | "StartupWMClass" => {
+                value.starts_with("ai.opencode.desktop")
+                    || value == "@opencode-aidesktop"
+                    || value == "opencode"
+            }
+            _ => false,
+        }
+    })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_desktop_entry_command(content: &str) -> Option<String> {
+    let mut in_desktop_entry = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_desktop_entry = line.eq_ignore_ascii_case("[Desktop Entry]");
+            continue;
+        }
+        if !in_desktop_entry {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case("Exec") {
+            continue;
+        }
+        let tokens = tokenize_linux_desktop_exec(value.trim());
+        let mut index = 0;
+        if tokens.first().is_some_and(|token| {
+            Path::new(token)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "env")
+        }) {
+            index += 1;
+            while tokens.get(index).is_some_and(|token| token.contains('=')) {
+                index += 1;
+            }
+        }
+        let command = tokens.get(index)?.trim();
+        if command.is_empty()
+            || command.starts_with('%')
+            || ["flatpak", "snap", "gtk-launch", "sh", "bash"]
+                .iter()
+                .any(|wrapper| {
+                    Path::new(command)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name == *wrapper)
+                })
+        {
+            return None;
+        }
+        return Some(command.to_string());
+    }
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn tokenize_linux_desktop_exec(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+
+    for character in value.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if character == delimiter {
+                quote = None;
+            } else {
+                current.push(character);
+            }
+            continue;
+        }
+        if character == '"' || character == '\'' {
+            quote = Some(character);
+        } else if character.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(character);
+        }
+    }
+    if escaped {
+        current.push('\\');
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn resolve_linux_desktop_command(
+    home: &Path,
+    executable_directories: &[PathBuf],
+    command: &str,
+) -> Option<PathBuf> {
+    let candidate = if let Some(relative) = command.strip_prefix("~/") {
+        home.join(relative)
+    } else {
+        PathBuf::from(command)
+    };
+    if candidate.is_absolute() || command.contains('/') {
+        return candidate.is_file().then_some(candidate);
+    }
+    executable_directories
+        .iter()
+        .map(|directory| directory.join(&candidate))
+        .find(|path| path.is_file())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_opencode_desktop_appimage(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+    file_name.ends_with(".appimage")
+        && (file_name.starts_with("opencode-desktop") || file_name.starts_with("opencode_"))
+}
+
+pub(crate) fn read_opencode_desktop_version(application: &Path) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        read_windows_executable_version(application)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        read_macos_app_version(application)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        read_linux_opencode_desktop_version(application)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = application;
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_opencode_desktop_version(application: &Path) -> Option<String> {
+    let path_version = linux_opencode_desktop_version_from_path(application);
+    if application
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("appimage"))
+    {
+        path_version
+    } else {
+        path_version.or_else(read_linux_opencode_package_version)
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn linux_opencode_desktop_version_from_path(application: &Path) -> Option<String> {
+    application
+        .components()
+        .rev()
+        .filter_map(|component| component.as_os_str().to_str())
+        .find_map(|component| {
+            let lower = component.to_ascii_lowercase();
+            if !lower.contains("opencode") {
+                return None;
+            }
+            let component = lower
+                .strip_suffix(".appimage")
+                .map(|_| &component[..component.len() - ".appimage".len()])
+                .unwrap_or(component);
+            component.split(['-', '_']).find_map(|token| {
+                let version = token.strip_prefix('v').unwrap_or(token);
+                (version.starts_with(|character: char| character.is_ascii_digit())
+                    && version.contains('.')
+                    && version.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '.' | '+' | '~')
+                    }))
+                .then(|| version.to_string())
+            })
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_opencode_package_version() -> Option<String> {
+    const PACKAGE_NAMES: &[&str] = &[
+        "opencode",
+        "opencode-desktop",
+        "opencode-ai-desktop",
+        "opencode-aidesktop",
+    ];
+
+    let mut dpkg = Command::new("dpkg-query");
+    dpkg.args(["--show", "--showformat=${Package}\\t${Version}\\n"])
+        .args(PACKAGE_NAMES);
+    if let Some(version) = linux_package_version_from_output(&mut dpkg, '\t') {
+        return Some(version);
+    }
+
+    let mut rpm = Command::new("rpm");
+    rpm.args(["--query", "--queryformat", "%{NAME}\\t%{VERSION}\\n"])
+        .args(PACKAGE_NAMES);
+    if let Some(version) = linux_package_version_from_output(&mut rpm, '\t') {
+        return Some(version);
+    }
+
+    let mut pacman = Command::new("pacman");
+    pacman.arg("--query").args(PACKAGE_NAMES);
+    linux_package_version_from_output(&mut pacman, ' ')
+}
+
+#[cfg(target_os = "linux")]
+fn linux_package_version_from_output(command: &mut Command, separator: char) -> Option<String> {
+    configure_background_command(command);
+    let output = command_output_with_timeout(command, AGENT_VERSION_PROBE_TIMEOUT).ok()??;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            let (package, version) = line.trim().split_once(separator)?;
+            let package = package.trim();
+            let version = version.trim();
+            ([
+                "opencode",
+                "opencode-desktop",
+                "opencode-ai-desktop",
+                "opencode-aidesktop",
+            ]
+            .contains(&package))
+            .then(|| normalize_detected_agent_version(version))
+            .flatten()
+        })
 }
 
 pub(crate) fn read_claude_desktop_version(home: &Path) -> Option<String> {

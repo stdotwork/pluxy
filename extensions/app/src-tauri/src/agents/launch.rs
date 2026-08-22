@@ -41,11 +41,11 @@ pub(crate) fn launch_agent(
     if !status.installed {
         return Err(format!("未检测到 {}，请先安装并重新检测", client.name()));
     }
-    let default_target = match client {
-        AgentClient::ClaudeDesktop | AgentClient::ZCode => "app",
-        AgentClient::Codex if find_codex_app_installation(&home).is_some() => "app",
-        _ => "cli",
-    };
+    let default_target = status
+        .launch_targets
+        .first()
+        .map(|target| target.id.as_str())
+        .unwrap_or("cli");
     let requested_target = requested_target.unwrap_or(default_target);
     match (client, requested_target) {
         (AgentClient::ClaudeDesktop, "app") => launch_claude_desktop(&home),
@@ -55,6 +55,7 @@ pub(crate) fn launch_agent(
             launch_desktop_agent(&executable, client.name())
         }
         (AgentClient::Codex, "app") => launch_codex_desktop(&home),
+        (AgentClient::OpenCode, "app") => launch_opencode_desktop(&home),
         (AgentClient::ClaudeDesktop | AgentClient::ZCode, "cli") => {
             Err(format!("{} 不支持 CLI 启动方式", client.name()))
         }
@@ -96,6 +97,24 @@ pub(crate) async fn restart_codex_app(app: tauri::AppHandle) -> Result<(), Strin
     .map_err(|error| format!("重启 Codex App 任务失败: {error}"))?
 }
 
+#[tauri::command]
+pub(crate) async fn restart_opencode_app(app: tauri::AppHandle) -> Result<(), String> {
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|error| format!("无法获取用户目录: {error}"))?;
+    let application = find_opencode_desktop_application(&home).ok_or_else(|| {
+        "未检测到 OpenCode Desktop 应用，请重新检测或改用 OpenCode CLI".to_string()
+    })?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        stop_opencode_desktop(&application)?;
+        launch_desktop_agent(&application, "OpenCode Desktop")
+    })
+    .await
+    .map_err(|error| format!("重启 OpenCode Desktop 任务失败: {error}"))?
+}
+
 fn resolve_launch_directory(value: Option<&str>, fallback: &Path) -> Result<PathBuf, String> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(fallback.to_path_buf());
@@ -130,7 +149,18 @@ fn launch_codex_target(target: &CodexAppTarget) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn stop_codex_desktop(target: &CodexAppTarget) -> Result<(), String> {
     let script = windows_codex_stop_script(target);
-    let encoded = windows_powershell_encoded_command(&script);
+    run_windows_desktop_stop_script(&script, "Codex App")
+}
+
+#[cfg(target_os = "windows")]
+fn stop_opencode_desktop(application: &Path) -> Result<(), String> {
+    let script = windows_opencode_stop_script(application);
+    run_windows_desktop_stop_script(&script, "OpenCode Desktop")
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_desktop_stop_script(script: &str, label: &str) -> Result<(), String> {
+    let encoded = windows_powershell_encoded_command(script);
     let mut command = Command::new(windows_powershell_executable());
     command.args([
         "-NoLogo",
@@ -144,7 +174,7 @@ fn stop_codex_desktop(target: &CodexAppTarget) -> Result<(), String> {
     configure_background_command(&mut command);
     let output = command
         .output()
-        .map_err(|error| format!("关闭 Codex App 失败: {error}"))?;
+        .map_err(|error| format!("关闭 {label} 失败: {error}"))?;
     if output.status.success() {
         return Ok(());
     }
@@ -156,9 +186,9 @@ fn stop_codex_desktop(target: &CodexAppTarget) -> Result<(), String> {
     .trim()
     .to_string();
     Err(if detail.is_empty() {
-        "Codex App 未能完全关闭".to_string()
+        format!("{label} 未能完全关闭")
     } else {
-        format!("关闭 Codex App 失败: {detail}")
+        format!("关闭 {label} 失败: {detail}")
     })
 }
 
@@ -209,18 +239,58 @@ throw "Codex App did not exit; remaining process IDs: $($remaining.ProcessId -jo
     )
 }
 
+#[cfg(target_os = "windows")]
+fn windows_opencode_stop_script(application: &Path) -> String {
+    let target_executable = windows_powershell_single_quoted_literal(&path_to_string(application));
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+$targetExecutable = {target_executable}
+function Get-OpenCodeDesktopProcesses {{
+    @(Get-CimInstance Win32_Process | Where-Object {{
+        $_.Name -eq 'OpenCode.exe' -and
+        $_.ExecutablePath -and
+        [string]::Equals($_.ExecutablePath, $targetExecutable, [System.StringComparison]::OrdinalIgnoreCase)
+    }})
+}}
+$processes = @(Get-OpenCodeDesktopProcesses)
+foreach ($process in $processes) {{
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+}}
+$deadline = [DateTime]::UtcNow.AddSeconds(5)
+do {{
+    $remaining = @(Get-OpenCodeDesktopProcesses)
+    if ($remaining.Count -eq 0) {{ exit 0 }}
+    Start-Sleep -Milliseconds 100
+}} while ([DateTime]::UtcNow -lt $deadline)
+throw "OpenCode Desktop did not exit; remaining process IDs: $($remaining.ProcessId -join ', ')"
+"#
+    )
+}
+
 #[cfg(target_os = "macos")]
 fn stop_codex_desktop(target: &CodexAppTarget) -> Result<(), String> {
-    let CodexAppTarget::Application(executable) = target;
-    let process_name = executable
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| "无法识别 Codex App 进程名称".to_string())?;
-    let application_name = executable
+    let CodexAppTarget::Application(application) = target;
+    stop_macos_desktop_application(application, "Codex App")
+}
+
+#[cfg(target_os = "macos")]
+fn stop_opencode_desktop(application: &Path) -> Result<(), String> {
+    stop_macos_desktop_application(application, "OpenCode Desktop")
+}
+
+#[cfg(target_os = "macos")]
+fn stop_macos_desktop_application(application: &Path, label: &str) -> Result<(), String> {
+    let application_bundle = application
         .ancestors()
         .find(|path| path.extension().and_then(|value| value.to_str()) == Some("app"))
-        .and_then(Path::file_stem)
+        .unwrap_or(application);
+    let process_name = application_bundle
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("无法识别 {label} 进程名称"))?;
+    let application_name = application_bundle
+        .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or(process_name);
     let escaped_name = application_name.replace('\\', "\\\\").replace('"', "\\\"");
@@ -230,11 +300,11 @@ fn stop_codex_desktop(target: &CodexAppTarget) -> Result<(), String> {
             &format!("tell application \"{escaped_name}\" to quit"),
         ])
         .status();
-    wait_for_unix_process_exit(process_name)
+    wait_for_unix_process_exit(process_name, label)
 }
 
 #[cfg(target_os = "macos")]
-fn wait_for_unix_process_exit(process_name: &str) -> Result<(), String> {
+fn wait_for_unix_process_exit(process_name: &str, label: &str) -> Result<(), String> {
     for _ in 0..50 {
         let status = Command::new("pgrep").args(["-x", process_name]).status();
         if status.is_ok_and(|status| !status.success()) {
@@ -249,17 +319,168 @@ fn wait_for_unix_process_exit(process_name: &str) -> Result<(), String> {
     let status = Command::new("pgrep")
         .args(["-x", process_name])
         .status()
-        .map_err(|error| format!("检查 Codex App 进程失败: {error}"))?;
+        .map_err(|error| format!("检查 {label} 进程失败: {error}"))?;
     if status.success() {
-        Err("Codex App 未能完全关闭".to_string())
+        Err(format!("{label} 未能完全关闭"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn stop_opencode_desktop(application: &Path) -> Result<(), String> {
+    let application = fs::canonicalize(application).unwrap_or_else(|_| application.to_path_buf());
+    let processes = linux_processes_for_application(&application);
+    let mut signal_error = None;
+    for process_id in processes {
+        if let Err(error) = signal_linux_process(process_id, libc::SIGTERM) {
+            signal_error.get_or_insert(error);
+        }
+    }
+
+    for _ in 0..50 {
+        if linux_processes_for_application(&application).is_empty() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let remaining = linux_processes_for_application(&application);
+    for process_id in &remaining {
+        if let Err(error) = signal_linux_process(*process_id, libc::SIGKILL) {
+            signal_error.get_or_insert(error);
+        }
+    }
+    for _ in 0..10 {
+        if linux_processes_for_application(&application).is_empty() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let remaining = linux_processes_for_application(&application);
+    if remaining.is_empty() {
+        Ok(())
+    } else if let Some(error) = signal_error {
+        Err(error)
+    } else {
+        Err(format!(
+            "OpenCode Desktop 未能完全关闭；剩余进程 ID: {}",
+            remaining
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_processes_for_application(application: &Path) -> Vec<i32> {
+    let current_process = std::process::id() as i32;
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut process_ids = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|process_id| *process_id != current_process)
+        .filter(|process_id| linux_process_matches_application(*process_id, application))
+        .collect::<Vec<_>>();
+    process_ids.sort_unstable();
+    process_ids
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_matches_application(process_id: i32, application: &Path) -> bool {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let process_directory = PathBuf::from(format!("/proc/{process_id}"));
+    if fs::read_link(process_directory.join("exe"))
+        .ok()
+        .is_some_and(|path| linux_process_path_matches(&path, application))
+    {
+        return true;
+    }
+
+    if let Ok(command_line) = fs::read(process_directory.join("cmdline")) {
+        let installation_root = linux_opencode_nix_installation_root(application);
+        if command_line
+            .split(|byte| *byte == 0)
+            .filter(|argument| !argument.is_empty())
+            .map(|argument| Path::new(OsStr::from_bytes(argument)))
+            .any(|argument| {
+                linux_process_path_matches(argument, application)
+                    || installation_root.is_some_and(|root| {
+                        fs::canonicalize(argument)
+                            .ok()
+                            .is_some_and(|argument| argument.starts_with(root))
+                    })
+            })
+        {
+            return true;
+        }
+    }
+
+    fs::read(process_directory.join("environ"))
+        .ok()
+        .is_some_and(|environment| {
+            environment
+                .split(|byte| *byte == 0)
+                .filter_map(|entry| entry.strip_prefix(b"APPIMAGE="))
+                .any(|path| {
+                    !path.is_empty()
+                        && linux_process_path_matches(
+                            Path::new(OsStr::from_bytes(path)),
+                            application,
+                        )
+                })
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_path_matches(candidate: &Path, application: &Path) -> bool {
+    candidate == application
+        || fs::canonicalize(candidate)
+            .ok()
+            .is_some_and(|candidate| candidate == application)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_opencode_nix_installation_root(application: &Path) -> Option<&Path> {
+    application.ancestors().find(|ancestor| {
+        ancestor.parent() == Some(Path::new("/nix/store"))
+            && ancestor
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.to_ascii_lowercase().contains("opencode"))
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn signal_linux_process(process_id: i32, signal: i32) -> Result<(), String> {
+    if unsafe { libc::kill(process_id, signal) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(format!(
+            "关闭 OpenCode Desktop 进程 {process_id} 失败: {error}"
+        ))
     }
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn stop_codex_desktop(_target: &CodexAppTarget) -> Result<(), String> {
     Err("当前平台不支持重启 Codex App".to_string())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn stop_opencode_desktop(_application: &Path) -> Result<(), String> {
+    Err("当前平台不支持重启 OpenCode Desktop".to_string())
 }
 
 fn launch_claude_desktop(home: &Path) -> Result<(), String> {
@@ -272,6 +493,12 @@ fn launch_claude_desktop(home: &Path) -> Result<(), String> {
     }
     #[cfg(not(target_os = "windows"))]
     Err("未检测到 Claude Desktop 应用，请先安装或重新检测".to_string())
+}
+
+fn launch_opencode_desktop(home: &Path) -> Result<(), String> {
+    let application = find_opencode_desktop_application(home)
+        .ok_or_else(|| "未检测到 OpenCode Desktop 应用，请先安装或重新检测".to_string())?;
+    launch_desktop_agent(&application, "OpenCode Desktop")
 }
 
 fn launch_desktop_agent(executable: &Path, label: &str) -> Result<(), String> {
@@ -519,6 +746,59 @@ mod tests {
     }
 
     #[test]
+    fn opencode_desktop_is_available_without_a_cli() {
+        let targets = agent_launch_targets(AgentClient::OpenCode, None, None, true);
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.id.as_str())
+                .collect::<Vec<_>>(),
+            ["app"]
+        );
+        assert_eq!(targets[0].label, "OpenCode Desktop");
+    }
+
+    #[test]
+    fn opencode_keeps_the_cli_as_the_default_when_both_are_installed() {
+        let executable = Path::new("opencode");
+        let targets = agent_launch_targets(AgentClient::OpenCode, Some(executable), None, true);
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.id.as_str())
+                .collect::<Vec<_>>(),
+            ["cli", "app"]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opencode_linux_restart_matches_the_exact_appimage_environment() {
+        let directory = env::temp_dir().join(format!(
+            "cpa-opencode-linux-restart-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let application = directory.join("opencode-desktop-linux-amd64.AppImage");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(&application, []).unwrap();
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .env("APPIMAGE", &application)
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+
+        stop_opencode_desktop(&application).unwrap();
+        child.wait().unwrap();
+        assert!(child.try_wait().unwrap().is_some());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn desktop_and_cli_clients_get_the_correct_target_kind() {
         let executable = Path::new("agent");
         let zcode =
@@ -541,5 +821,18 @@ mod tests {
         let store_script = windows_codex_stop_script(&store);
         assert!(store_script.contains("OpenAI.Codex_123"));
         assert!(store_script.contains("PackageFamilyName"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn opencode_restart_script_is_scoped_to_the_detected_installation() {
+        let application = PathBuf::from(
+            r"C:\Users\tester\AppData\Local\Programs\@opencode-aidesktop\OpenCode.exe",
+        );
+        let script = windows_opencode_stop_script(&application);
+        assert!(script.contains(application.to_string_lossy().as_ref()));
+        assert!(script.contains("$_.Name -eq 'OpenCode.exe'"));
+        assert!(script.contains("Get-CimInstance Win32_Process"));
+        assert!(!script.contains("taskkill"));
     }
 }

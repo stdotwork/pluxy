@@ -813,6 +813,7 @@ export function AgentsPage() {
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
   const isPiClient = selected === 'pi';
+  const hasIndependentCliAndApp = selected === 'codex' || selected === 'opencode';
   const isClaudeModelMappingClient = selected === 'claude-code' || selected === 'claude-desktop';
   const claudeModelMappingsDraft = isClaudeModelMappingClient
     ? claudeModelMappingsDraftByClient[selected]
@@ -1346,7 +1347,7 @@ export function AgentsPage() {
     target: AgentLaunchTarget,
     workingDirectory: string | null = null,
   ) => {
-    const action = selected === 'codex'
+    const action = hasIndependentCliAndApp
       ? target.id === 'cli' ? 'launch-cli' : 'launch-app'
       : 'launch';
     setBusyAction(action);
@@ -1382,11 +1383,12 @@ export function AgentsPage() {
     await invokeAgentLaunch(target);
   };
 
-  const restartCodexApp = async () => {
+  const restartDesktopApp = async () => {
+    if (!hasIndependentCliAndApp) return;
     setBusyAction('restart-app');
     setLaunchError('');
     try {
-      await invoke('restart_codex_app');
+      await invoke(selected === 'codex' ? 'restart_codex_app' : 'restart_opencode_app');
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'launch')) {
         setLaunchError(String(requestError));
@@ -1518,12 +1520,12 @@ export function AgentsPage() {
               role="tabpanel"
               aria-labelledby="agent-subpage-tab-core"
             >
-              <div className={`agent-status-grid ${selected === 'codex' ? 'codex-status-grid' : isPiClient ? 'pi-status-grid' : ''}`}>
+              <div className={`agent-status-grid ${hasIndependentCliAndApp ? 'dual-install-status-grid' : isPiClient ? 'pi-status-grid' : ''}`}>
                 <div>
                   <span><BadgeCheck size={14} />{t('agents.installStatus')}</span>
                   <strong>{activeStatus?.installed ? t('agents.clientDetected') : t('agents.clientNotDetected')}</strong>
                 </div>
-                {selected === 'codex' ? (
+                {hasIndependentCliAndApp ? (
                   <>
                     <div>
                       <span>{t('agents.cliVersion')}</span>
@@ -1908,7 +1910,7 @@ export function AgentsPage() {
                         <button
                           type="button"
                           className="secondary-button agent-launch-button"
-                          onClick={() => void restartCodexApp()}
+                          onClick={() => void restartDesktopApp()}
                           disabled={busy || !canLaunchTarget(appLaunchTarget)}
                           title={appLaunchTarget?.detail ?? t('agents.launch.unavailable')}
                         >

@@ -5717,7 +5717,7 @@ textarea:focus-visible {
   min-height: 76px;
 }
 
-.agent-status-grid.codex-status-grid {
+.agent-status-grid.dual-install-status-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -7668,7 +7668,7 @@ textarea:focus-visible {
     min-height: 0;
   }
 
-  .agent-status-grid.codex-status-grid {
+  .agent-status-grid.dual-install-status-grid {
     grid-template-columns: 1fr;
   }
 
