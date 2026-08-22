@@ -34,9 +34,9 @@ export async function generatePortableUpdateManifest({
 }) {
   const resolvedDirectory = resolve(directory ?? 'artifacts');
   const platformSpecs = {
-    windows: { display: 'Windows', suffix: 'zip', legacy: true },
-    linux: { display: 'Linux', suffix: 'tar.gz', legacy: false },
-    darwin: { display: 'Darwin', suffix: 'dmg', legacy: false },
+    windows: { display: 'Windows', suffix: 'zip' },
+    linux: { display: 'Linux', suffix: 'tar.gz' },
+    darwin: { display: 'Darwin', suffix: 'dmg' },
   };
   const normalizedPlatform = String(platform).trim().toLowerCase();
   const platformSpec = platformSpecs[normalizedPlatform];
@@ -64,35 +64,26 @@ export async function generatePortableUpdateManifest({
   }
 
   const assets = {};
-  const fullAssets = {};
   for (const arch of ['amd64', 'aarch64']) {
-    const fullFilename = `EasyCLIProxyAPI-${tag}-${platformSpec.display}-${arch}.${platformSpec.suffix}`;
-    const candidates = platformSpec.legacy
-      ? [
-        [assets, `EasyCLIProxyAPI-update-${tag}-Windows-${arch}.zip`],
-        [fullAssets, fullFilename],
-      ]
-      : [[assets, fullFilename]];
-    for (const [collection, filename] of candidates) {
-      const path = join(resolvedDirectory, filename);
-      const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
-      if (!metadata.isFile() || metadata.size === 0) {
-        throw new Error(`Portable release asset is empty or not a file: ${filename}`);
-      }
-      const asset = {
-        url: `https://github.com/${resolvedRepository}/releases/download/${tag}/${filename}`,
-        sha256: createHash('sha256').update(contents).digest('hex'),
-        sizeBytes: metadata.size,
-      };
-      if (resolvedGitcodeRepository) {
-        asset.fallbackUrls = [gitcodeReleaseAttachmentUrl(
-          resolvedGitcodeRepository,
-          tag,
-          filename,
-        )];
-      }
-      collection[`${normalizedPlatform}-${arch}`] = asset;
+    const filename = `EasyCLIProxyAPI-${tag}-${platformSpec.display}-${arch}.${platformSpec.suffix}`;
+    const path = join(resolvedDirectory, filename);
+    const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
+    if (!metadata.isFile() || metadata.size === 0) {
+      throw new Error(`Portable release asset is empty or not a file: ${filename}`);
     }
+    const asset = {
+      url: `https://github.com/${resolvedRepository}/releases/download/${tag}/${filename}`,
+      sha256: createHash('sha256').update(contents).digest('hex'),
+      sizeBytes: metadata.size,
+    };
+    if (resolvedGitcodeRepository) {
+      asset.fallbackUrls = [gitcodeReleaseAttachmentUrl(
+        resolvedGitcodeRepository,
+        tag,
+        filename,
+      )];
+    }
+    assets[`${normalizedPlatform}-${arch}`] = asset;
   }
 
   const manifest = {
@@ -101,7 +92,6 @@ export async function generatePortableUpdateManifest({
     publishedAt,
     releaseUrl: `https://github.com/${resolvedRepository}/releases/tag/${tag}`,
     assets,
-    ...(platformSpec.legacy ? { fullAssets } : {}),
   };
 
   await writeFile(resolvedOutput, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -125,6 +115,7 @@ async function main() {
   const outputs = requestedOutput
     ? [resolve(requestedOutput)]
     : portableUpdateManifestNames(platform).map((name) => join(directory, name));
+  const publishedAt = new Date().toISOString();
   let manifest;
   for (const output of outputs) {
     manifest = await generatePortableUpdateManifest({
@@ -134,9 +125,12 @@ async function main() {
       repository: args.get('--repository'),
       gitcodeRepository: args.get('--gitcode-repository'),
       tag: args.get('--tag'),
+      publishedAt,
     });
   }
-  console.log(`Generated ${outputs.map(basename).join(', ')} for v${manifest.version}`);
+  console.log(
+    `Generated ${outputs.map((output) => basename(output)).join(', ')} for v${manifest.version}`,
+  );
 }
 
 const entryPoint = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : '';

@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'bun:test';
 import {
   generatePortableUpdateManifest,
@@ -20,6 +22,42 @@ test('macOS uses a new primary channel and keeps the legacy manifest alias', () 
   expect(portableUpdateManifestNames('linux')).toEqual(['portable-update-linux.json']);
 });
 
+test('macOS manifest CLI publishes both update channels', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'easycli-darwin-manifest-cli-'));
+  try {
+    for (const arch of ['amd64', 'aarch64']) {
+      await writeFile(
+        join(root, `EasyCLIProxyAPI-v1.2.3-Darwin-${arch}.dmg`),
+        `darwin ${arch} release`,
+      );
+    }
+    const script = fileURLToPath(new URL('../scripts/manifest.mjs', import.meta.url));
+    const result = spawnSync('node', [
+      script,
+      '--directory',
+      root,
+      '--platform',
+      'darwin',
+      '--repository',
+      'router-for-me/EasyCLIProxyAPI',
+      '--tag',
+      'v1.2.3',
+    ], { encoding: 'utf8' });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    const primary = JSON.parse(
+      await readFile(join(root, 'portable-update-darwin-v2.json'), 'utf8'),
+    );
+    const legacy = JSON.parse(
+      await readFile(join(root, 'portable-update-darwin.json'), 'utf8'),
+    );
+    expect(legacy).toEqual(primary);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe('Windows 便携更新清单', () => {
   test('URL、大小和哈希与实际上传资产一致', async () => {
     const root = await mkdtemp(join(tmpdir(), 'easycli-manifest-test-'));
@@ -29,10 +67,6 @@ describe('Windows 便携更新清单', () => {
         aarch64: Buffer.from('aarch64 full portable package'),
       };
       for (const [arch, contents] of Object.entries(payloads)) {
-        await writeFile(
-          join(root, `EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip`),
-          Buffer.from(`${arch} legacy update package`),
-        );
         await writeFile(
           join(root, `EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip`),
           contents,
@@ -54,21 +88,15 @@ describe('Windows 便携更新清单', () => {
       for (const arch of ['amd64', 'aarch64'] as const) {
         const asset = manifest.assets[`windows-${arch}`];
         expect(asset.url).toBe(
-          `https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/v1.2.3/EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip`,
-        );
-        expect(asset.fallbackUrls).toEqual([
-          `https://api.gitcode.com/api/v5/repos/mirror-owner/EasyCLIProxyAPI/releases/v1.2.3/attach_files/EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip/download`,
-        ]);
-        const fullAsset = manifest.fullAssets[`windows-${arch}`];
-        expect(fullAsset.url).toBe(
           `https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/v1.2.3/EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip`,
         );
-        expect(fullAsset.fallbackUrls).toEqual([
+        expect(asset.fallbackUrls).toEqual([
           `https://api.gitcode.com/api/v5/repos/mirror-owner/EasyCLIProxyAPI/releases/v1.2.3/attach_files/EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip/download`,
         ]);
-        expect(fullAsset.sizeBytes).toBe(payloads[arch].byteLength);
-        expect(fullAsset.sha256).toBe(createHash('sha256').update(payloads[arch]).digest('hex'));
+        expect(asset.sizeBytes).toBe(payloads[arch].byteLength);
+        expect(asset.sha256).toBe(createHash('sha256').update(payloads[arch]).digest('hex'));
       }
+      expect(manifest.fullAssets).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -78,7 +106,7 @@ describe('Windows 便携更新清单', () => {
     const root = await mkdtemp(join(tmpdir(), 'easycli-manifest-missing-'));
     try {
       await writeFile(
-        join(root, 'EasyCLIProxyAPI-update-v1.2.3-Windows-amd64.zip'),
+        join(root, 'EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip'),
         'amd64',
       );
       await expect(generatePortableUpdateManifest({
@@ -92,43 +120,6 @@ describe('Windows 便携更新清单', () => {
     }
   });
 
-  test('所有版本同时保留旧版更新包和完整包', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'easycli-manifest-dual-'));
-    try {
-      for (const arch of ['amd64', 'aarch64']) {
-        await writeFile(
-          join(root, `EasyCLIProxyAPI-update-v1.2.3-Windows-${arch}.zip`),
-          `legacy update ${arch}`,
-        );
-        await writeFile(
-          join(root, `EasyCLIProxyAPI-v1.2.3-Windows-${arch}.zip`),
-          `full package ${arch}`,
-        );
-      }
-      const manifest = await generatePortableUpdateManifest({
-        directory: root,
-        output: join(root, 'portable-update-windows.json'),
-        repository: 'router-for-me/EasyCLIProxyAPI',
-        tag: 'v1.2.3',
-        publishedAt: '2026-08-02T00:00:00.000Z',
-      });
-
-      expect(manifest.assets['windows-amd64'].url).toEndWith(
-        '/EasyCLIProxyAPI-update-v1.2.3-Windows-amd64.zip',
-      );
-      expect(manifest.assets['windows-aarch64'].url).toEndWith(
-        '/EasyCLIProxyAPI-update-v1.2.3-Windows-aarch64.zip',
-      );
-      expect(manifest.fullAssets['windows-amd64'].url).toEndWith(
-        '/EasyCLIProxyAPI-v1.2.3-Windows-amd64.zip',
-      );
-      expect(manifest.fullAssets['windows-aarch64'].url).toEndWith(
-        '/EasyCLIProxyAPI-v1.2.3-Windows-aarch64.zip',
-      );
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
 });
 
 describe('跨平台便携更新清单', () => {

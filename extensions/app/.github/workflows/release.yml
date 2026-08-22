@@ -154,14 +154,6 @@ jobs:
           --arch "${{ matrix.arch }}"
           --download true
         shell: bash
-      - name: Prepare Windows legacy updater payload
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          $updateDir = "release/update-${{ matrix.arch }}"
-          New-Item -ItemType Directory -Force -Path $updateDir | Out-Null
-          Copy-Item -LiteralPath "release/${{ steps.package.outputs.stem }}/EasyCLIProxyAPI.exe" -Destination $updateDir
-          Copy-Item -LiteralPath "release/${{ steps.package.outputs.stem }}/portable-app.json" -Destination $updateDir
       - name: Build signed macOS DMG
         if: matrix.os == 'darwin'
         shell: bash
@@ -267,19 +259,10 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive -Path "release/${{ steps.package.outputs.stem }}" -DestinationPath "${{ steps.package.outputs.stem }}.zip"
-          $updateArchive = "EasyCLIProxyAPI-update-v${{ steps.package.outputs.version }}-Windows-${{ matrix.arch }}.zip"
-          Compress-Archive -Path "release/update-${{ matrix.arch }}/*" -DestinationPath $updateArchive
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.stem }}
           path: ${{ steps.package.outputs.stem }}.${{ matrix.suffix }}
-          if-no-files-found: error
-          retention-days: 14
-      - uses: actions/upload-artifact@v7
-        if: matrix.os == 'windows'
-        with:
-          name: portable-updater-windows-${{ matrix.arch }}
-          path: EasyCLIProxyAPI-update-v${{ steps.package.outputs.version }}-Windows-${{ matrix.arch }}.zip
           if-no-files-found: error
           retention-days: 14
   publish:
