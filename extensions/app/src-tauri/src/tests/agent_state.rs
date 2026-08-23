@@ -167,7 +167,7 @@ fn codex_oauth_requires_auth_json_with_tokens() {
 }
 
 #[test]
-fn agent_configuration_is_restored_from_the_dated_session_backup_on_exit() {
+fn agent_configuration_is_restored_from_the_dated_session_backup_when_closed() {
     let home = agent_test_home("session-backup");
     let path = home.join(".config/opencode/opencode.json");
     let original = b"{\"provider\":\"original\"}";
@@ -1268,6 +1268,45 @@ fn codex_session_restore_does_not_create_a_state_json_file() {
     assert!(!catalog_path.exists());
     assert!(!backup.exists());
     assert!(!state_path.exists());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn codex_applied_configuration_remains_detectable_after_process_restart() {
+    let home = agent_test_home("codex-applied-across-restart");
+    let config_path = home.join(".codex/config.toml");
+    let catalog_path = codex_model_catalog_path(&home);
+    let state_path = agent_state_path(std::slice::from_ref(&config_path)).unwrap();
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    fs::write(&config_path, "approval_policy = \"never\"\n").unwrap();
+
+    commit_agent_configuration(
+        AgentClient::Codex,
+        &home,
+        "gpt-test",
+        &[
+            AgentFileUpdate {
+                path: config_path.clone(),
+                after: "model = \"gpt-test\"\n".to_string(),
+            },
+            AgentFileUpdate {
+                path: catalog_path,
+                after: "{\"models\":[]}".to_string(),
+            },
+        ],
+        "applied",
+        None,
+    )
+    .unwrap();
+
+    clear_codex_applied_state(&state_path).unwrap();
+
+    let inspection = inspect_agent_application(AgentClient::Codex, &home);
+    assert_eq!(inspection.state, "applied");
+    assert_eq!(inspection.applied_model.as_deref(), Some("gpt-test"));
+    assert!(dated_agent_backup_path(&config_path).unwrap().is_file());
+
+    restore_agent_session_configuration(AgentClient::Codex, &home).unwrap();
     fs::remove_dir_all(home).unwrap();
 }
 

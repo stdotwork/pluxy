@@ -2128,22 +2128,6 @@ fn main() {
         tauri::RunEvent::Exit => {
             usage::stop_usage_collector(app_handle);
             let gui_config_state = app_handle.state::<GuiConfigState>();
-            match gui_config_state.snapshot() {
-                Ok(config) => {
-                    if let Err(error) =
-                        tauri::async_runtime::block_on(remove_managed_claude_model_aliases(&config))
-                    {
-                        eprintln!("退出时清理 EasyCLIProxyAPI 托管的 Claude 模型别名失败: {error}");
-                    }
-                }
-                Err(error) => {
-                    eprintln!("退出时读取 GUI 配置失败，无法清理 Claude 模型别名: {error}");
-                }
-            }
-            if let Ok(home) = app_handle.path().home_dir() {
-                let _guard = AGENT_CONFIG_FILE_LOCK.lock();
-                restore_all_agent_session_configurations(&home);
-            }
             let process_state = app_handle.state::<CoreProcessState>();
             shutdown_managed_core(process_state.inner(), gui_config_state.inner());
         }

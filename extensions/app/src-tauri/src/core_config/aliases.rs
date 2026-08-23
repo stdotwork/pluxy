@@ -160,14 +160,6 @@ pub(crate) async fn ensure_claude_desktop_model_aliases(
     put_management_alias_config_changes(config, &content, &updated).await
 }
 
-pub(crate) async fn remove_managed_claude_model_aliases(
-    config: &GuiConfigFile,
-) -> Result<(), String> {
-    let content = fetch_management_config_yaml(config).await?;
-    let updated = remove_managed_claude_model_aliases_in_yaml(&content)?;
-    put_management_alias_config_changes(config, &content, &updated).await
-}
-
 pub(crate) fn ensure_claude_desktop_model_aliases_in_yaml(
     content: &str,
     mappings: &ClaudeDesktopModelMappings,

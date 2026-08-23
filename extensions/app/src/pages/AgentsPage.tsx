@@ -1878,7 +1878,7 @@ export function AgentsPage() {
               <div className="agent-config-footer">
                 <div className="agent-launch-control">
                   <div className="agent-launch-actions">
-                    {selected === 'codex' ? (
+                    {hasIndependentCliAndApp ? (
                       <>
                         <button
                           type="button"

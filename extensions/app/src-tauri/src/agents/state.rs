@@ -1396,27 +1396,6 @@ pub(crate) fn restore_agent_applied_state_configuration(
     Ok(())
 }
 
-pub(crate) fn agent_clients_restored_on_exit() -> [AgentClient; 8] {
-    [
-        AgentClient::Codex,
-        AgentClient::OpenCode,
-        AgentClient::OpenClaw,
-        AgentClient::Hermes,
-        AgentClient::DeepSeekHarness,
-        AgentClient::ZCode,
-        AgentClient::KimiCode,
-        AgentClient::GrokBuild,
-    ]
-}
-
-pub(crate) fn restore_all_agent_session_configurations(home: &Path) {
-    for client in agent_clients_restored_on_exit() {
-        if let Err(error) = restore_agent_session_configuration(client, home) {
-            eprintln!("关闭时恢复 {} 配置失败: {error}", client.name());
-        }
-    }
-}
-
 pub(crate) fn commit_agent_configuration(
     client: AgentClient,
     home: &Path,

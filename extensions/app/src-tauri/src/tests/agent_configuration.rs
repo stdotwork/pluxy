@@ -1415,19 +1415,6 @@ oauth-model-alias:
 }
 
 #[test]
-fn exit_preserves_claude_client_configurations() {
-    let restored = agent_clients_restored_on_exit();
-    assert!(!restored.contains(&AgentClient::ClaudeCode));
-    assert!(!restored.contains(&AgentClient::ClaudeDesktop));
-    assert!(restored.contains(&AgentClient::Codex));
-    assert!(restored.contains(&AgentClient::OpenCode));
-    assert!(restored.contains(&AgentClient::DeepSeekHarness));
-    assert!(restored.contains(&AgentClient::ZCode));
-    assert!(restored.contains(&AgentClient::KimiCode));
-    assert!(restored.contains(&AgentClient::GrokBuild));
-}
-
-#[test]
 fn deepseek_harness_settings_preserve_unrelated_sections_and_publish_models() {
     let existing = r#"# keep this comment
 ui-onboarding:

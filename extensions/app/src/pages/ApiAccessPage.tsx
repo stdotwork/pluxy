@@ -1076,6 +1076,7 @@ export function ApiAccessPage() {
   const toggleProvider = async (row: ProviderRow) => {
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       const latestConfig = await managementApi.get('/config');
       const latestRows = sectionRecordsFromConfig(latestConfig, row.section);
@@ -1105,7 +1106,7 @@ export function ApiAccessPage() {
         );
         await managementApi.put(`/${row.section}`, nextRows);
       }
-      setNotice(currentlyDisabled ? t('apiAccess.notice.enabled') : t('apiAccess.notice.disabled'));
+      if (!currentlyDisabled) setNotice(t('apiAccess.notice.disabled'));
       await loadProviders();
     } catch (requestError) {
       setError(String(requestError));

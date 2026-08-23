@@ -33,9 +33,11 @@ const LEGACY_USAGE_EVENTS_DIR: &str = "events";
 const LEGACY_USAGE_INBOX_DIR: &str = "inbox";
 const LEGACY_JSON_MIGRATION_KEY: &str = "legacy_json_v1";
 const USAGE_DATABASE_MIGRATION_KEY: &str = "keeper_v3";
+const USAGE_FAILURE_MIGRATION_KEY: &str = "failure_details_v4";
 const USAGE_UPDATED_EVENT: &str = "usage-records-updated";
 const USAGE_SCHEMA_VERSION: u8 = 1;
-const USAGE_DATABASE_SCHEMA_VERSION: i64 = 3;
+const USAGE_DATABASE_SCHEMA_VERSION: i64 = 4;
+const MAX_USAGE_FAILURE_BODY_CHARS: usize = 2_000;
 const USAGE_QUEUE_BATCH_SIZE: usize = 500;
 const USAGE_INBOX_PROCESS_LIMIT: usize = 500;
 const USAGE_INBOX_MAX_ATTEMPTS: i64 = 5;
@@ -150,6 +152,12 @@ pub(crate) struct UsageRecord {
     #[serde(default)]
     failed: bool,
     #[serde(default)]
+    canceled: bool,
+    #[serde(default)]
+    failure_status: u16,
+    #[serde(default)]
+    failure_body: String,
+    #[serde(default)]
     provider: String,
     #[serde(default, skip_serializing)]
     api_group_key: String,
@@ -224,6 +232,8 @@ pub(crate) struct UsageQuery {
     #[serde(default)]
     failed: Option<bool>,
     #[serde(default)]
+    canceled: Option<bool>,
+    #[serde(default)]
     page: Option<usize>,
     #[serde(default)]
     page_size: Option<usize>,
@@ -235,6 +245,7 @@ pub(crate) struct UsageOverview {
     total_requests: u64,
     success_count: u64,
     failure_count: u64,
+    canceled_count: u64,
     success_rate: f64,
     input_tokens: u64,
     output_tokens: u64,
@@ -355,6 +366,7 @@ struct UsageTimelinePoint {
     requests: u64,
     success: u64,
     failure: u64,
+    canceled: u64,
     tokens: u64,
 }
 
@@ -736,6 +748,9 @@ fn initialize_usage_schema(connection: &Connection) -> Result<(), String> {
                 source TEXT NOT NULL DEFAULT '',
                 auth_index TEXT NOT NULL DEFAULT '',
                 failed INTEGER NOT NULL DEFAULT 0,
+                canceled INTEGER NOT NULL DEFAULT 0,
+                failure_status INTEGER NOT NULL DEFAULT 0,
+                failure_body TEXT NOT NULL DEFAULT '',
                 provider TEXT NOT NULL DEFAULT '',
                 model TEXT NOT NULL DEFAULT '',
                 alias TEXT NOT NULL DEFAULT '',
@@ -824,9 +839,109 @@ fn initialize_usage_schema(connection: &Connection) -> Result<(), String> {
             "#,
         )
         .map_err(|error| format!("初始化 SQLite 使用记录结构失败: {error}"))?;
+    ensure_usage_failure_columns(connection)?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_events_canceled_timestamp ON usage_events(canceled, timestamp_ms DESC)",
+            [],
+        )
+        .map_err(|error| format!("创建 SQLite 取消记录索引失败: {error}"))?;
     connection
         .pragma_update(None, "user_version", USAGE_DATABASE_SCHEMA_VERSION)
         .map_err(|error| format!("更新 SQLite 使用记录版本失败: {error}"))
+}
+
+fn ensure_usage_failure_columns(connection: &Connection) -> Result<(), String> {
+    let mut columns = usage_table_columns(connection, "usage_events")?;
+    for (column, definition) in [
+        ("canceled", "INTEGER NOT NULL DEFAULT 0"),
+        ("failure_status", "INTEGER NOT NULL DEFAULT 0"),
+        ("failure_body", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        if columns.contains(column) {
+            continue;
+        }
+        connection
+            .execute(
+                &format!("ALTER TABLE usage_events ADD COLUMN {column} {definition}"),
+                [],
+            )
+            .map_err(|error| format!("添加 SQLite 使用记录字段 {column} 失败: {error}"))?;
+        columns.insert(column.to_string());
+    }
+    backfill_usage_failure_details(connection)?;
+    Ok(())
+}
+
+fn backfill_usage_failure_details(connection: &Connection) -> Result<(), String> {
+    let migrated = connection
+        .query_row(
+            "SELECT value FROM usage_metadata WHERE key = ?1",
+            params![USAGE_FAILURE_MIGRATION_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("读取使用记录失败详情迁移状态失败: {error}"))?;
+    if migrated.is_some() {
+        return Ok(());
+    }
+
+    if usage_table_exists(connection, "usage_inbox")? {
+        let rows = {
+            let mut statement = connection
+                .prepare(
+                    r#"
+                    SELECT usage_event_key, raw_message
+                    FROM usage_inbox
+                    WHERE status = 'processed' AND usage_event_key != ''
+                    "#,
+                )
+                .map_err(|error| format!("准备回填使用记录失败详情失败: {error}"))?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|error| format!("查询使用记录失败详情失败: {error}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("读取使用记录失败详情失败: {error}"))?;
+            rows
+        };
+        for (event_key, raw_message) in rows {
+            let Some(object) = serde_json::from_str::<Value>(&raw_message)
+                .ok()
+                .and_then(|value| value.as_object().cloned())
+            else {
+                continue;
+            };
+            if !object
+                .get("failed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let (failure_status, failure_body) = usage_failure_details(&object);
+            let canceled = usage_failure_is_canceled(failure_status, &failure_body);
+            connection
+                .execute(
+                    r#"
+                    UPDATE usage_events
+                    SET canceled = ?1, failure_status = ?2, failure_body = ?3
+                    WHERE event_key = ?4
+                    "#,
+                    params![canceled, i64::from(failure_status), failure_body, event_key],
+                )
+                .map_err(|error| format!("回填使用记录失败详情失败: {error}"))?;
+        }
+    }
+
+    connection
+        .execute(
+            "INSERT INTO usage_metadata (key, value) VALUES (?1, ?2)",
+            params![USAGE_FAILURE_MIGRATION_KEY, Local::now().to_rfc3339()],
+        )
+        .map_err(|error| format!("记录使用记录失败详情迁移状态失败: {error}"))?;
+    Ok(())
 }
 
 fn open_usage_database() -> Result<Connection, String> {
@@ -1542,12 +1657,13 @@ fn insert_usage_records_in_transaction(
                 api_group_key, model_alias, client_ip, x_forwarded_for, user_agent,
                 generate, cached_tokens, collector_source,
                 input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,
-                cache_creation_tokens, total_tokens, created_at
+                cache_creation_tokens, total_tokens, canceled, failure_status,
+                failure_body, created_at
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
                 ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-                ?31, ?32, ?33, ?34, ?35, ?36, ?37
+                ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40
             )
             "#,
         )
@@ -1620,6 +1736,9 @@ fn insert_usage_records_in_transaction(
                     to_sql_i64(record.tokens.cache_read_tokens),
                     to_sql_i64(record.tokens.cache_creation_tokens),
                     to_sql_i64(record.tokens.total_tokens),
+                    record.canceled,
+                    i64::from(record.failure_status),
+                    record.failure_body,
                     created_at,
                 ])
                 .map_err(|error| format!("写入 SQLite 使用记录失败: {error}"))?,
@@ -1673,15 +1792,18 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
     let provider = string_field(object, "provider").unwrap_or_default();
     let endpoint = string_field(object, "endpoint").unwrap_or_default();
     let executor_type = string_field(object, "executor_type").unwrap_or_default();
+    let failed = object
+        .get("failed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let (failure_status, failure_body) = usage_failure_details(object);
+    let canceled = failed && usage_failure_is_canceled(failure_status, &failure_body);
     let generate = object
         .get("generate")
         .and_then(Value::as_bool)
         .unwrap_or_else(|| {
             !(executor_type == "CodexWebsocketsExecutor"
-                && !object
-                    .get("failed")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
+                && !failed
                 && tokens.input_tokens == 0
                 && tokens.output_tokens == 0
                 && tokens.reasoning_tokens == 0
@@ -1708,10 +1830,10 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
         source: string_field(object, "source").unwrap_or_default(),
         source_display: String::new(),
         auth_index: string_field(object, "auth_index").unwrap_or_default(),
-        failed: object
-            .get("failed")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        failed,
+        canceled,
+        failure_status,
+        failure_body,
         provider,
         api_group_key,
         model: string_field(object, "model").unwrap_or_else(|| "unknown".to_string()),
@@ -1738,6 +1860,46 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
         collector_source: "http_pull".to_string(),
         tokens,
     })
+}
+
+fn usage_failure_body(value: &Value) -> String {
+    let body = match value {
+        Value::String(value) => value.trim().to_string(),
+        Value::Null => String::new(),
+        value => serde_json::to_string(value).unwrap_or_default(),
+    };
+    if body.chars().count() <= MAX_USAGE_FAILURE_BODY_CHARS {
+        body
+    } else {
+        let mut bounded = body
+            .chars()
+            .take(MAX_USAGE_FAILURE_BODY_CHARS)
+            .collect::<String>();
+        bounded.push('…');
+        bounded
+    }
+}
+
+fn usage_failure_details(object: &serde_json::Map<String, Value>) -> (u16, String) {
+    let failure = object.get("fail").and_then(Value::as_object);
+    let status = failure
+        .and_then(|value| value.get("status_code").or_else(|| value.get("statusCode")))
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+        .min(u16::MAX as u64) as u16;
+    let body = failure
+        .and_then(|value| value.get("body"))
+        .map(usage_failure_body)
+        .unwrap_or_default();
+    (status, body)
+}
+
+fn usage_failure_is_canceled(status: u16, body: &str) -> bool {
+    if status == 499 {
+        return true;
+    }
+    let body = body.to_ascii_lowercase();
+    body.contains("context canceled") || body.contains("client closed request")
 }
 
 fn default_usage_generate() -> bool {
@@ -1769,9 +1931,16 @@ fn build_usage_filter(query: &UsageQuery) -> UsageSqlFilter {
         "api_key_hash",
         query.api_key_hash.as_deref(),
     );
+    if let Some(canceled) = query.canceled {
+        clauses.push("canceled = ?".to_string());
+        params.push(SqlValue::Integer(i64::from(canceled)));
+    }
     if let Some(failed) = query.failed {
-        clauses.push("failed = ?".to_string());
-        params.push(SqlValue::Integer(i64::from(failed)));
+        if failed {
+            clauses.push("failed != 0 AND canceled = 0".to_string());
+        } else {
+            clauses.push("failed = 0".to_string());
+        }
     }
     UsageSqlFilter {
         clause: if clauses.is_empty() {
@@ -1818,7 +1987,8 @@ fn load_usage_overview(
         SELECT
             COUNT(*),
             COALESCE(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN failed != 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN failed != 0 AND canceled = 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN canceled != 0 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(input_tokens), 0),
             COALESCE(SUM(output_tokens), 0),
             COALESCE(SUM(reasoning_tokens), 0),
@@ -1852,9 +2022,10 @@ fn load_usage_overview(
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
                     row.get::<_, i64>(9)?,
-                    row.get::<_, f64>(10)?,
-                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, f64>(11)?,
                     row.get::<_, Option<i64>>(12)?,
+                    row.get::<_, Option<i64>>(13)?,
                 ))
             },
         )
@@ -1868,7 +2039,8 @@ fn load_usage_overview(
             local_hour,
             COUNT(*),
             COALESCE(SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN failed != 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN failed != 0 AND canceled = 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN canceled != 0 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(total_tokens), 0)
         FROM usage_events{}
         GROUP BY local_hour
@@ -1886,7 +2058,8 @@ fn load_usage_overview(
                 requests: from_sql_i64(row.get(1)?),
                 success: from_sql_i64(row.get(2)?),
                 failure: from_sql_i64(row.get(3)?),
-                tokens: from_sql_i64(row.get(4)?),
+                canceled: from_sql_i64(row.get(4)?),
+                tokens: from_sql_i64(row.get(5)?),
             })
         })
         .map_err(|error| format!("查询 SQLite 使用趋势失败: {error}"))?
@@ -1897,28 +2070,34 @@ fn load_usage_overview(
         total_requests: from_sql_i64(summary.0),
         success_count: from_sql_i64(summary.1),
         failure_count: from_sql_i64(summary.2),
-        input_tokens: from_sql_i64(summary.3),
-        output_tokens: from_sql_i64(summary.4),
-        reasoning_tokens: from_sql_i64(summary.5),
-        cache_read_tokens: from_sql_i64(summary.6),
-        cache_creation_tokens: from_sql_i64(summary.7),
-        total_tokens: from_sql_i64(summary.8),
+        canceled_count: from_sql_i64(summary.3),
+        input_tokens: from_sql_i64(summary.4),
+        output_tokens: from_sql_i64(summary.5),
+        reasoning_tokens: from_sql_i64(summary.6),
+        cache_read_tokens: from_sql_i64(summary.7),
+        cache_creation_tokens: from_sql_i64(summary.8),
+        total_tokens: from_sql_i64(summary.9),
         estimated_cost,
         priced_requests,
         timeline,
         ..UsageOverview::default()
     };
     if overview.total_requests > 0 {
-        overview.success_rate =
-            overview.success_count as f64 * 100.0 / overview.total_requests as f64;
+        let completed_requests = overview
+            .success_count
+            .saturating_add(overview.failure_count);
+        if completed_requests > 0 {
+            overview.success_rate =
+                overview.success_count as f64 * 100.0 / completed_requests as f64;
+        }
         overview.average_latency_ms =
-            from_sql_i64(summary.9) as f64 / overview.total_requests as f64;
-        overview.tps = summary.10;
+            from_sql_i64(summary.10) as f64 / overview.total_requests as f64;
+        overview.tps = summary.11;
         if overview.input_tokens > 0 {
             overview.cache_hit_rate =
                 (overview.cache_read_tokens as f64 / overview.input_tokens as f64).min(1.0);
         }
-        let minutes = query_window_minutes(query, summary.11, summary.12);
+        let minutes = query_window_minutes(query, summary.12, summary.13);
         overview.rpm = overview.total_requests as f64 / minutes;
         overview.tpm = overview.total_tokens as f64 / minutes;
     }
@@ -2586,7 +2765,7 @@ fn load_simple_categories(
         SELECT
             COALESCE(NULLIF(TRIM({column}), ''), ?),
             COUNT(*),
-            COALESCE(SUM(CASE WHEN failed != 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN failed != 0 AND canceled = 0 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(total_tokens), 0)
         FROM usage_events{}
         GROUP BY 1
@@ -2629,7 +2808,7 @@ fn load_api_key_categories(
             MAX(TRIM(api_key_remark)),
             MAX(TRIM(api_key_display)),
             COUNT(*),
-            COALESCE(SUM(CASE WHEN failed != 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN failed != 0 AND canceled = 0 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(total_tokens), 0)
         FROM usage_events{}
         GROUP BY 1
@@ -2699,7 +2878,8 @@ fn load_usage_events(
             api_group_key, client_ip, x_forwarded_for, user_agent, generate,
             cached_tokens, collector_source,
             input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,
-            cache_creation_tokens, total_tokens
+            cache_creation_tokens, total_tokens, canceled, failure_status,
+            failure_body
         FROM usage_events{}
         ORDER BY timestamp_ms DESC, id DESC
         LIMIT ? OFFSET ?
@@ -2739,6 +2919,9 @@ fn usage_record_from_row(row: &Row<'_>) -> rusqlite::Result<UsageRecord> {
         source_display: String::new(),
         auth_index: row.get(5)?,
         failed: row.get::<_, i64>(6)? != 0,
+        canceled: row.get::<_, i64>(33)? != 0,
+        failure_status: row.get::<_, i64>(34)?.clamp(0, u16::MAX as i64) as u16,
+        failure_body: row.get(35)?,
         provider: row.get(7)?,
         api_group_key: row.get(20)?,
         model: row.get(8)?,
@@ -3042,6 +3225,9 @@ mod tests {
             source_display: String::new(),
             auth_index: "auth".to_string(),
             failed: false,
+            canceled: false,
+            failure_status: 0,
+            failure_body: String::new(),
             provider: "openai".to_string(),
             api_group_key: "hash".to_string(),
             model: model.to_string(),
@@ -3239,6 +3425,85 @@ mod tests {
     }
 
     #[test]
+    fn persists_failure_details_and_excludes_client_cancellations_from_failures() {
+        let root = test_root("usage-failure-details");
+        initialize_usage_storage_at(&root).unwrap();
+        let config = GuiConfigFile::default();
+        persist_queue_items(
+            &root,
+            vec![
+                serde_json::json!({
+                    "timestamp": "2026-07-29T10:00:00+08:00",
+                    "request_id": "success",
+                    "failed": false,
+                    "provider": "antigravity",
+                    "model": "gemini-test"
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-07-29T10:00:01+08:00",
+                    "request_id": "upstream-failure",
+                    "failed": true,
+                    "provider": "antigravity",
+                    "model": "gemini-test",
+                    "fail": {
+                        "status_code": 429,
+                        "body": { "error": { "message": "quota exhausted" } }
+                    }
+                }),
+                serde_json::json!({
+                    "timestamp": "2026-07-29T10:00:02+08:00",
+                    "request_id": "client-canceled",
+                    "failed": true,
+                    "provider": "antigravity",
+                    "model": "gemini-test",
+                    "fail": {
+                        "status_code": 499,
+                        "body": "context canceled"
+                    }
+                }),
+            ],
+            &config,
+        )
+        .unwrap();
+
+        let connection = open_usage_database_at(&root).unwrap();
+        let overview = load_usage_overview(&connection, &UsageQuery::default()).unwrap();
+        let failures = load_usage_events(
+            &connection,
+            &UsageQuery {
+                failed: Some(true),
+                ..UsageQuery::default()
+            },
+            &config,
+        )
+        .unwrap();
+        let cancellations = load_usage_events(
+            &connection,
+            &UsageQuery {
+                canceled: Some(true),
+                ..UsageQuery::default()
+            },
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(overview.total_requests, 3);
+        assert_eq!(overview.success_count, 1);
+        assert_eq!(overview.failure_count, 1);
+        assert_eq!(overview.canceled_count, 1);
+        assert_eq!(overview.success_rate, 50.0);
+        assert_eq!(failures.total, 1);
+        assert_eq!(failures.items[0].request_id, "upstream-failure");
+        assert_eq!(failures.items[0].failure_status, 429);
+        assert!(failures.items[0].failure_body.contains("quota exhausted"));
+        assert_eq!(cancellations.total, 1);
+        assert_eq!(cancellations.items[0].request_id, "client-canceled");
+        assert!(cancellations.items[0].canceled);
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn sqlite_storage_uses_wal_and_reference_busy_timeout() {
         let root = test_root("sqlite-pragmas");
         let connection = open_test_database(&root);
@@ -3335,6 +3600,86 @@ mod tests {
         assert_eq!(migrated.5, "legacy_migration");
         assert!(!marker.is_empty());
         assert_eq!(backups.len(), 1);
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failure_detail_migration_backfills_processed_inbox_rows_once() {
+        let root = test_root("failure-detail-v4-migration");
+        let mut connection = open_test_database(&root);
+        let mut record = sample_record(
+            "legacy-canceled",
+            "2026-07-17T20:30:00+08:00",
+            "gemini-test",
+        );
+        record.failed = true;
+        insert_usage_records(&mut connection, &[record]).unwrap();
+        connection
+            .execute(
+                r#"
+                INSERT INTO usage_inbox (
+                    source, message_hash, raw_message, status, attempt_count,
+                    usage_event_key, received_at, processed_at, created_at, updated_at
+                ) VALUES (
+                    'test', 'legacy-canceled-hash', ?1, 'processed', 1,
+                    'legacy-canceled', ?2, ?2, ?2, ?2
+                )
+                "#,
+                params![
+                    serde_json::json!({
+                        "request_id": "legacy-canceled",
+                        "failed": true,
+                        "fail": {
+                            "status_code": 499,
+                            "body": "client closed request"
+                        }
+                    })
+                    .to_string(),
+                    Local::now().to_rfc3339(),
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "DELETE FROM usage_metadata WHERE key = ?1",
+                params![USAGE_FAILURE_MIGRATION_KEY],
+            )
+            .unwrap();
+        drop(connection);
+
+        initialize_usage_storage_at(&root).unwrap();
+        initialize_usage_storage_at(&root).unwrap();
+        let connection = open_usage_database_at(&root).unwrap();
+        let migrated = connection
+            .query_row(
+                r#"
+                SELECT canceled, failure_status, failure_body
+                FROM usage_events
+                WHERE event_key = 'legacy-canceled'
+                "#,
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let markers = connection
+            .query_row(
+                "SELECT COUNT(*) FROM usage_metadata WHERE key = ?1",
+                params![USAGE_FAILURE_MIGRATION_KEY],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+
+        assert_eq!(migrated.0, 1);
+        assert_eq!(migrated.1, 499);
+        assert_eq!(migrated.2, "client closed request");
+        assert_eq!(markers, 1);
         drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
