@@ -287,7 +287,7 @@ export function CodexSessionsPanel() {
         </div>
 
         <div className="codex-session-metrics">
-          <div><span>{t('agents.sessions.currentPage')}</span><strong>{sessions.length}</strong></div>
+          <div><span>{t('agents.sessions.total')}</span><strong>{page?.totalCount ?? sessions.length}</strong></div>
           <div><span>{t('agents.sessions.active')}</span><strong>{pageCounts.active}</strong></div>
           <div><span>{t('agents.sessions.archived')}</span><strong>{pageCounts.archived}</strong></div>
           <div

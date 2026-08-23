@@ -541,7 +541,7 @@ export const jaOverrides = {
   'agents.sessions.title': 'Codex セッション管理',
   'agents.sessions.description': 'ローカルの Codex セッションをスキャンし、過去のセッションの復元、バックアップ、削除を安全に行います。',
   'agents.sessions.refresh': '更新',
-  'agents.sessions.currentPage': '現在のページ',
+  'agents.sessions.total': 'セッション総数',
   'agents.sessions.active': '未アーカイブ',
   'agents.sessions.archived': 'アーカイブ済み',
   'agents.sessions.database': 'データベース',

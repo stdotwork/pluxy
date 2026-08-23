@@ -1324,6 +1324,11 @@ fn direct_agent_apply_preserves_unrelated_fields_and_default_reset_removes_them(
     assert!(applied.contains("[model_providers.other]"));
     assert!(applied.contains("model = \"gpt-test\""));
     assert!(applied.contains("experimental_bearer_token = \"custom-agent-key\""));
+    let auth_path = home.join(".codex/auth.json");
+    let auth = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&auth_path).unwrap())
+        .unwrap();
+    assert_eq!(auth["OPENAI_API_KEY"], api_key);
+    assert_eq!(auth["auth_mode"], "apikey");
     assert!(!agent_backup_path(&path).unwrap().exists());
     assert!(!agent_backup_path(&codex_model_catalog_path(&home))
         .unwrap()
@@ -1400,6 +1405,24 @@ fn clear_codex_config_removes_only_requested_config_files_and_application_state(
     assert!(!state_path.exists());
     assert_eq!(fs::read_to_string(&preserved_path).unwrap(), "keep");
     assert!(clear_codex_config_files(&home).unwrap().is_empty());
+
+    let models = test_agent_models(&["gpt-test"]);
+    let catalog = test_codex_models(&["gpt-test"]);
+    apply_agent_configuration(
+        AgentClient::Codex,
+        &home,
+        8317,
+        "reapplied-api-key",
+        "gpt-test",
+        &models,
+        Some(&catalog),
+    )
+    .unwrap();
+    assert!(config_path.is_file());
+    let auth = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&auth_path).unwrap())
+        .unwrap();
+    assert_eq!(auth["OPENAI_API_KEY"], "reapplied-api-key");
+    assert_eq!(auth["auth_mode"], "apikey");
     fs::remove_dir_all(home).unwrap();
 }
 

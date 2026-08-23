@@ -384,7 +384,7 @@ fn updating_legacy_codex_state_adds_catalog_without_replacing_original_backup() 
         .unwrap()
         .unwrap();
     assert_eq!(upgraded.version, AGENT_MODIFICATION_STATE_VERSION);
-    assert_eq!(upgraded.files.len(), 2);
+    assert_eq!(upgraded.files.len(), 3);
     assert_eq!(
         fs::read(agent_backup_path(&path).unwrap()).unwrap(),
         original_config
@@ -394,10 +394,13 @@ fn updating_legacy_codex_state_adds_catalog_without_replacing_original_backup() 
         original_catalog
     );
     fs::write(&catalog_path, b"{\"models\":[]}\n").unwrap();
+    let auth_path = path.with_file_name("auth.json");
+    assert!(auth_path.is_file());
 
     disable_agent_modification(AgentClient::Codex, &home, 8317, false).unwrap();
     assert_eq!(fs::read(&path).unwrap(), original_config);
     assert_eq!(fs::read(&catalog_path).unwrap(), original_catalog);
+    assert!(!auth_path.exists());
     fs::remove_dir_all(home).unwrap();
 }
 

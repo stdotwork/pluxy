@@ -189,7 +189,14 @@ pub(crate) fn validate_agent_applied_state(
         .iter()
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
+    let codex_paths_without_auth = (client == AgentClient::Codex
+        && expected_paths
+            .last()
+            .and_then(|path| path.file_name())
+            .is_some_and(|name| name == "auth.json"))
+    .then(|| &expected_paths[..expected_paths.len().saturating_sub(1)]);
     let valid_paths = state_paths == expected_paths
+        || codex_paths_without_auth.is_some_and(|expected| state_paths == expected)
         || (client == AgentClient::Codex && state_paths.as_slice() == paths)
         || (client == AgentClient::ZCode
             && paths
@@ -1686,6 +1693,7 @@ pub(crate) fn reset_agent_configuration_to_default_with_oauth(
             path: codex_model_catalog_path(home),
             after: catalog.to_string(),
         });
+        updates.push(build_codex_auth_update(home, api_key, oauth_configuration)?);
     }
     commit_agent_configuration(
         client,

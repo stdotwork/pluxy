@@ -12,6 +12,7 @@ export type CodexSessionPage = {
   codexHome: string;
   databasePaths: string[];
   sessions: CodexSessionSummary[];
+  totalCount: number;
   offset: number;
   limit: number;
   hasMore: boolean;

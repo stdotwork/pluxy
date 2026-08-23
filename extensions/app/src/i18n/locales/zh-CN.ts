@@ -539,7 +539,7 @@ export const zhCN = {
   'agents.sessions.title': 'Codex 会话管理',
   'agents.sessions.description': '扫描本地 Codex 会话，并安全地恢复历史会话、备份或删除。',
   'agents.sessions.refresh': '刷新',
-  'agents.sessions.currentPage': '当前页',
+  'agents.sessions.total': '会话总数',
   'agents.sessions.active': '未归档',
   'agents.sessions.archived': '已归档',
   'agents.sessions.database': '数据库来源',

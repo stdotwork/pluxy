@@ -145,7 +145,7 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
                 models.push(make_runtime_model(slug, display_name));
             }
             if seen.insert(normalize_id(&model_alias)) {
-                models.push(make_runtime_model(&model_alias, Some(slug.to_string())));
+                models.push(make_runtime_model(&model_alias, None));
             }
         } else if seen.insert(normalize_id(slug)) {
             models.push(make_runtime_model(slug, display_name));
@@ -345,6 +345,15 @@ fn prepare_catalog_with_sources(
         if let Some(template) = sources.templates.get(&key) {
             let mut value = template.value.clone();
             value.insert("slug".to_string(), Value::String(runtime.slug.clone()));
+            value.insert(
+                "display_name".to_string(),
+                Value::String(
+                    runtime
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| runtime.slug.clone()),
+                ),
+            );
             enable_fast_mode(&mut value);
             entries.push(CatalogEntry {
                 value,
@@ -877,9 +886,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["gpt-5.5", "gpt-5.5-xhigh", "visible-alias"]
         );
-        assert_eq!(models[1].display_name.as_deref(), Some("gpt-5.5"));
+        assert_eq!(models[1].display_name, None);
         assert_eq!(models[1].context_window, Some(200_000));
-        assert_eq!(models[2].display_name.as_deref(), Some("hidden-source"));
+        assert_eq!(models[2].display_name, None);
 
         let catalog = prepare_catalog_with_sources(&models, &test_sources()).unwrap();
         assert_eq!(
@@ -890,7 +899,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["gpt-5.5", "gpt-5.5-xhigh", "visible-alias"]
         );
-        assert_eq!(catalog.models[1].alias.as_deref(), Some("gpt-5.5"));
+        assert_eq!(catalog.models[1].alias, None);
     }
 
     #[test]
@@ -975,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn known_template_is_preserved_except_for_runtime_slug() {
+    fn known_template_is_preserved_except_for_runtime_identity() {
         let sources = test_sources();
         let runtime = runtime(serde_json::json!({"data":[{
             "id":"a",
@@ -989,12 +998,13 @@ mod tests {
         for (key, expected) in template {
             if !matches!(
                 key.as_str(),
-                "slug" | "service_tiers" | "additional_speed_tiers"
+                "slug" | "display_name" | "service_tiers" | "additional_speed_tiers"
             ) {
                 assert_eq!(model.get(key), Some(expected), "changed field {key}");
             }
         }
         assert_eq!(model["slug"], "a");
+        assert_eq!(model["display_name"], "Overwrite");
         assert_eq!(model["nested"]["unknown"], true);
         assert_eq!(
             model["service_tiers"],
@@ -1005,6 +1015,16 @@ mod tests {
             }])
         );
         assert_eq!(model["additional_speed_tiers"], serde_json::json!(["fast"]));
+    }
+
+    #[test]
+    fn known_template_uses_runtime_slug_when_display_name_is_missing() {
+        let runtime = runtime(serde_json::json!({"models":[{"id":"A"}]}));
+        let catalog = prepare_catalog_with_sources(&runtime, &test_sources()).unwrap();
+        let model = &output_models(&catalog)[0];
+
+        assert_eq!(model["slug"], "A");
+        assert_eq!(model["display_name"], "A");
     }
 
     #[test]

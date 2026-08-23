@@ -145,6 +145,7 @@ pub(crate) fn build_agent_updates_with_oauth(
                 path: codex_model_catalog_path(home),
                 after: catalog.to_string(),
             });
+            updates.push(build_codex_auth_update(home, api_key, oauth_configuration)?);
             Ok(updates)
         }
         AgentClient::OpenCode => {
@@ -2522,6 +2523,32 @@ pub(crate) fn build_codex_agent_config_with_oauth(
     toml::from_str::<toml::Value>(&rendered)
         .map_err(|error| format!("验证 Codex 配置失败: {error}"))?;
     Ok(rendered)
+}
+
+pub(crate) fn build_codex_api_auth(api_key: &str) -> Result<String, String> {
+    let mut rendered = serde_json::to_string_pretty(&serde_json::json!({
+        "auth_mode": "apikey",
+        "OPENAI_API_KEY": api_key,
+    }))
+    .map_err(|error| format!("生成 Codex auth.json 失败: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
+pub(crate) fn build_codex_auth_update(
+    home: &Path,
+    api_key: &str,
+    oauth_configuration: bool,
+) -> Result<AgentFileUpdate, String> {
+    let path = codex_configuration_directory(home).join("auth.json");
+    let after = if oauth_configuration {
+        validate_codex_oauth_login_at(&path)?;
+        read_optional_text(&path)?
+            .ok_or_else(|| "Codex OAuth 登录凭据在应用配置前已被删除，请重新登录".to_string())?
+    } else {
+        build_codex_api_auth(api_key)?
+    };
+    Ok(AgentFileUpdate { path, after })
 }
 
 const CODEX_MANAGED_ROOT_KEYS: [&str; 3] = ["model_provider", "model", "model_catalog_json"];

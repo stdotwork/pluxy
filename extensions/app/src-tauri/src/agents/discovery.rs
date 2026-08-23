@@ -686,6 +686,23 @@ pub(crate) fn codex_auth_file_has_oauth_tokens(path: &Path) -> bool {
         })
 }
 
+pub(crate) fn codex_auth_file_has_api_key(path: &Path, api_key: &str) -> bool {
+    let Ok(content) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let api_key_matches = root
+        .get("OPENAI_API_KEY")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value == api_key);
+    let mode_matches = root
+        .get("auth_mode")
+        .is_none_or(|value| value.as_str() == Some("apikey"));
+    api_key_matches && mode_matches
+}
+
 pub(crate) fn validate_codex_oauth_login(home: &Path) -> Result<(), String> {
     validate_codex_oauth_login_at(&codex_configuration_directory(home).join("auth.json"))
 }
@@ -738,6 +755,7 @@ pub(crate) fn expected_agent_record_paths(client: AgentClient, paths: &[PathBuf]
     if client == AgentClient::Codex && paths.len() == 1 {
         let mut expected = paths.to_vec();
         expected.push(paths[0].with_file_name(CODEX_MODEL_CATALOG_FILE));
+        expected.push(paths[0].with_file_name("auth.json"));
         expected
     } else {
         paths.to_vec()
@@ -3187,7 +3205,13 @@ pub(crate) fn inspect_codex_agent_config(
         .and_then(|provider| provider.get("requires_openai_auth"))
         .and_then(toml::Value::as_bool)
         == Some(true);
-    let configured = root.get("model_provider").and_then(toml::Value::as_str)
+    let auth_path = path.with_file_name("auth.json");
+    let auth_configured = if oauth_configuration {
+        codex_auth_file_has_oauth_tokens(&auth_path)
+    } else {
+        codex_auth_file_has_api_key(&auth_path, api_key)
+    };
+    let configured_without_auth = root.get("model_provider").and_then(toml::Value::as_str)
         == Some(MANAGED_AGENT_PROVIDER_ID)
         && root.get("model_catalog_json").and_then(toml::Value::as_str)
             == Some(CODEX_MODEL_CATALOG_FILE)
@@ -3204,6 +3228,7 @@ pub(crate) fn inspect_codex_agent_config(
             .and_then(|provider| provider.get("wire_api"))
             .and_then(toml::Value::as_str)
             == Some("responses");
+    let configured = configured_without_auth && auth_configured;
     let model = root
         .get("model")
         .and_then(toml::Value::as_str)

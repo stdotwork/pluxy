@@ -541,7 +541,7 @@ export const en: Record<MessageKey, string> = {
   'agents.sessions.title': 'Codex Session Management',
   'agents.sessions.description': 'Scan local Codex sessions and safely restore historical sessions, back them up, or delete them.',
   'agents.sessions.refresh': 'Refresh',
-  'agents.sessions.currentPage': 'Current page',
+  'agents.sessions.total': 'Total sessions',
   'agents.sessions.active': 'Active',
   'agents.sessions.archived': 'Archived',
   'agents.sessions.database': 'Database source',

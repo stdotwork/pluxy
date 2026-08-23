@@ -332,6 +332,11 @@ fn codex_oauth_configuration_uses_openai_auth_with_bearer_token() {
 
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, rendered).unwrap();
+    fs::write(
+        path.with_file_name("auth.json"),
+        r#"{"tokens":{"access_token":"oauth-access-token"}}"#,
+    )
+    .unwrap();
     let (configured, model, oauth_configuration) =
         inspect_codex_agent_config(&path, 8317, DEFAULT_API_KEY).unwrap();
     assert!(configured);
@@ -343,6 +348,12 @@ fn codex_oauth_configuration_uses_openai_auth_with_bearer_token() {
 #[test]
 fn codex_api_and_oauth_modes_write_the_same_catalog() {
     let home = agent_test_home("codex-auth-mode-catalog");
+    fs::create_dir_all(home.join(".codex")).unwrap();
+    fs::write(
+        home.join(".codex/auth.json"),
+        r#"{"tokens":{"access_token":"oauth-access-token"}}"#,
+    )
+    .unwrap();
     let models = test_agent_models(&["gpt-5.5", "third-party-model"]);
     let catalog = test_codex_models(&["gpt-5.5", "third-party-model"]);
     let build = |oauth_configuration| {
@@ -366,6 +377,19 @@ fn codex_api_and_oauth_modes_write_the_same_catalog() {
     let oauth_updates = build(true);
 
     assert_eq!(api_updates[1].after, oauth_updates[1].after);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&api_updates[2].after).unwrap()["OPENAI_API_KEY"],
+        DEFAULT_API_KEY
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&api_updates[2].after).unwrap()["auth_mode"],
+        "apikey"
+    );
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&oauth_updates[2].after).unwrap()["tokens"]
+            ["access_token"]
+            .is_string()
+    );
     assert!(api_updates[0].after.contains("model_catalog_json"));
     assert!(oauth_updates[0].after.contains("model_catalog_json"));
     assert!(!api_updates[0].after.contains("service_tier"));
@@ -392,6 +416,11 @@ fn codex_status_requires_a_valid_catalog_containing_the_default_model() {
             "gpt-test",
         )
         .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        config_path.with_file_name("auth.json"),
+        build_codex_api_auth(DEFAULT_API_KEY).unwrap(),
     )
     .unwrap();
 

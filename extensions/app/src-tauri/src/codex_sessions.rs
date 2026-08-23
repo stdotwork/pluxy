@@ -71,6 +71,7 @@ pub(crate) struct CodexSessionPage {
     codex_home: String,
     database_paths: Vec<String>,
     sessions: Vec<CodexSessionSummary>,
+    total_count: usize,
     offset: usize,
     limit: usize,
     has_more: bool,
@@ -446,15 +447,26 @@ fn list_codex_sessions_from_home(
     let fetch_limit = offset.saturating_add(limit).saturating_add(1);
     let (database_paths, mut warnings) = discover_database_paths(codex_home, false);
     let mut sessions = Vec::new();
+    let mut total_session_ids = HashSet::new();
     for path in &database_paths {
         match list_sessions_from_database(path, fetch_limit) {
             Ok(mut items) => sessions.append(&mut items),
+            Err(error) => warnings.push(error),
+        }
+        match list_session_ids_from_database(path) {
+            Ok(ids) => total_session_ids.extend(ids),
             Err(error) => warnings.push(error),
         }
     }
     let (mut rollout_sessions, rollout_warnings) = list_sessions_from_rollouts(codex_home);
     sessions.append(&mut rollout_sessions);
     warnings.extend(rollout_warnings);
+    total_session_ids.extend(
+        sessions
+            .iter()
+            .map(|session| session_identity_key(&session.id))
+            .filter(|id| !id.is_empty()),
+    );
     let mut sessions = merge_session_summaries(sessions);
     sessions.sort_by(|left, right| {
         right
@@ -472,6 +484,7 @@ fn list_codex_sessions_from_home(
             .map(|path| path.to_string_lossy().to_string())
             .collect(),
         sessions,
+        total_count: total_session_ids.len(),
         offset,
         limit,
         has_more,
@@ -483,12 +496,7 @@ fn merge_session_summaries(sessions: Vec<CodexSessionSummary>) -> Vec<CodexSessi
     let mut merged = Vec::<CodexSessionSummary>::new();
     let mut positions = HashMap::<String, usize>::new();
     for session in sessions {
-        let key = normalize_thread_id(&session.id);
-        let key = if key.is_empty() {
-            session.id.clone()
-        } else {
-            key
-        };
+        let key = session_identity_key(&session.id);
         let Some(index) = positions.get(&key).copied() else {
             positions.insert(key, merged.len());
             merged.push(session);
@@ -719,6 +727,36 @@ fn list_sessions_from_database(
     Ok(sessions)
 }
 
+fn list_session_ids_from_database(path: &Path) -> Result<HashSet<String>, String> {
+    let connection = open_read_only(path)?;
+    let mut ids = HashSet::new();
+    for (table, column) in [("threads", "id"), ("automation_runs", "thread_id")] {
+        let columns = table_columns(&connection, table)?;
+        if !columns.contains(column) {
+            continue;
+        }
+        let sql = format!(
+            "SELECT DISTINCT \"{column}\" FROM \"{table}\" WHERE COALESCE(\"{column}\", '') <> ''"
+        );
+        let mut statement = connection
+            .prepare(&sql)
+            .map_err(|error| format!("统计会话总数失败 {}: {error}", path.display()))?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("统计会话总数失败 {}: {error}", path.display()))?;
+        for id in rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("统计会话总数失败 {}: {error}", path.display()))?
+        {
+            let id = session_identity_key(&id);
+            if !id.is_empty() {
+                ids.insert(id);
+            }
+        }
+    }
+    Ok(ids)
+}
+
 fn list_thread_rows(
     connection: &Connection,
     path: &Path,
@@ -820,6 +858,15 @@ fn normalize_thread_id(value: &str) -> String {
         .unwrap_or(value.trim())
         .trim()
         .to_string()
+}
+
+fn session_identity_key(value: &str) -> String {
+    let normalized = normalize_thread_id(value);
+    if normalized.is_empty() {
+        value.trim().to_string()
+    } else {
+        normalized
+    }
 }
 
 fn delete_codex_sessions_from_home(
@@ -2421,6 +2468,7 @@ mod tests {
 
         let page = list_codex_sessions_from_home(&root, 0, 50).unwrap();
         assert_eq!(page.sessions.len(), 2);
+        assert_eq!(page.total_count, 2);
         assert_eq!(page.sessions[0].id, "thread-1");
         assert_eq!(page.sessions[0].title, "First new");
         assert_eq!(page.sessions[0].updated_at_ms, Some(4000));
@@ -2428,6 +2476,7 @@ mod tests {
         assert!(page.sessions[1].archived);
         let second_page = list_codex_sessions_from_home(&root, 1, 1).unwrap();
         assert_eq!(second_page.sessions.len(), 1);
+        assert_eq!(second_page.total_count, 2);
         assert_eq!(second_page.sessions[0].id, "thread-2");
         assert!(!second_page.has_more);
         fs::remove_dir_all(root).unwrap();
