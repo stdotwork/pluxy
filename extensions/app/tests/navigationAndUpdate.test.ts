@@ -8,9 +8,11 @@ describe('首页、配置与版本管理导航', () => {
     expect(isAlwaysAvailablePage('home')).toBe(true);
     expect(isAlwaysAvailablePage('versions')).toBe(true);
     expect(isAlwaysAvailablePage('config')).toBe(true);
+    expect(isAlwaysAvailablePage('usage-records')).toBe(true);
     expect(canOpenAppPage('home', false)).toBe(true);
     expect(canOpenAppPage('versions', false)).toBe(true);
     expect(canOpenAppPage('config', false)).toBe(true);
+    expect(canOpenAppPage('usage-records', false)).toBe(true);
     expect(canOpenAppPage('quota', false)).toBe(false);
   });
 

@@ -42,7 +42,7 @@ pub(crate) fn build_agent_updates_with_oauth(
         claude_desktop_model_mappings,
     } = options;
     let paths = agent_config_paths(client, home);
-    let root_base = format!("http://127.0.0.1:{port}");
+    let root_base = managed_core_loopback_origin(port);
     let openai_base = format!("{root_base}/v1");
     match client {
         AgentClient::ClaudeCode => {

@@ -56,13 +56,19 @@ type MessageType = 'info' | 'success' | 'error';
 type CoreProcessCommand = 'start_core_process' | 'stop_core_process' | 'restart_core_process';
 
 type GuiSettings = {
+  host: string;
   port: number;
-  allowLan: boolean;
   runOnStartup: boolean;
 };
 
 type CoreConfigSummary = {
   apiKeys: Array<{ apiKey: string }>;
+};
+
+type CoreTlsSettings = {
+  enabled: boolean;
+  cert: string;
+  key: string;
 };
 
 const APP_RELEASE_URL = 'https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest';
@@ -126,7 +132,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
   const [bundledCore, setBundledCore] = useState<BundledCoreInfo | null>(null);
   const [bundledCoreError, setBundledCoreError] = useState('');
   const [checkingLatest, setCheckingLatest] = useState(Boolean(latestCheckPromise));
-  const [allowLanAccess, setAllowLanAccess] = useState(false);
+  const [listenHost, setListenHost] = useState('127.0.0.1');
   const [customPort, setCustomPort] = useState('8317');
   const [installing, setInstalling] = useState(false);
   const [processBusy, setProcessBusy] = useState(false);
@@ -146,8 +152,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
   const [homeApiKey, setHomeApiKey] = useState<string | null | undefined>(undefined);
   const [homeApiKeyError, setHomeApiKeyError] = useState(false);
   const [showHomeApiKey, setShowHomeApiKey] = useState(false);
-  const [lanIpv4, setLanIpv4] = useState<string | null>(null);
-  const [lanIpChecked, setLanIpChecked] = useState(false);
+  const [tlsEnabled, setTlsEnabled] = useState(false);
   const installDialogRef = useRef<HTMLDivElement>(null);
   const savedPortRef = useRef(8317);
   const processNoticeTimerRef = useRef<number | null>(null);
@@ -223,6 +228,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     void listen('config-files-changed', () => {
       if (disposed) return;
       void loadGuiSettings();
+      void loadTlsSettings();
       void refreshStatus();
       if (view === 'home') void loadHomeApiKey();
     }).then((stop) => {
@@ -234,6 +240,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     loadBundledCore();
     loadInstallTask();
     loadGuiSettings();
+    void loadTlsSettings();
     void getVersion()
       .then((version) => {
         if (!disposed) setInstalledAppVersion(version);
@@ -286,37 +293,6 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     };
   }, [installDialogOpen]);
 
-  useEffect(() => {
-    let disposed = false;
-    if (!allowLanAccess) {
-      setLanIpv4(null);
-      setLanIpChecked(false);
-      return;
-    }
-
-    setLanIpChecked(false);
-    invoke<string | null>('get_lan_ipv4')
-      .then((address) => {
-        if (!disposed) {
-          setLanIpv4(address || null);
-        }
-      })
-      .catch(() => {
-        if (!disposed) {
-          setLanIpv4(null);
-        }
-      })
-      .finally(() => {
-        if (!disposed) {
-          setLanIpChecked(true);
-        }
-      });
-
-    return () => {
-      disposed = true;
-    };
-  }, [allowLanAccess]);
-
   const runCoreProcessCommand = async (
     command: CoreProcessCommand,
     messages?: { success?: string; failure?: string },
@@ -352,7 +328,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
   const loadGuiSettings = async () => {
     try {
       const settings = await invoke<GuiSettings>('get_gui_settings');
-      setAllowLanAccess(settings.allowLan);
+      setListenHost(settings.host);
       setCustomPort(String(settings.port));
       savedPortRef.current = settings.port;
     } catch {}
@@ -366,6 +342,15 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     } catch {
       setHomeApiKey(undefined);
       setHomeApiKeyError(true);
+    }
+  };
+
+  const loadTlsSettings = async () => {
+    try {
+      const settings = await invoke<CoreTlsSettings>('get_core_tls_settings');
+      setTlsEnabled(settings.enabled);
+    } catch {
+      setTlsEnabled(false);
     }
   };
 
@@ -699,7 +684,8 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     Number.isInteger(apiPort) && apiPort >= 1 && apiPort <= 65535
       ? apiPort
       : savedPortRef.current,
-    allowLanAccess ? lanIpv4 : null,
+    tlsEnabled,
+    listenHost,
   );
   const apiProfileIcons = {
     openai: openaiIcon,
@@ -1030,7 +1016,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
 
               <div className="client-api-values">
                 <div className="client-api-value-row">
-                  <span>{t('kernel.access.localUrl')}</span>
+                  <span>{t('kernel.access.apiUrl')}</span>
                   <code title={profile.baseUrl}>{profile.baseUrl}</code>
                   <button
                     type="button"
@@ -1039,11 +1025,11 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
                       void copyApiValue(
                         profile.baseUrl,
                         `${profile.id}:base`,
-                        t('kernel.access.localCopied', { name: profile.name }),
+                        t('kernel.access.apiCopied', { name: profile.name }),
                       )
                     }
-                    title={t('kernel.access.copyLocal', { name: profile.name })}
-                    aria-label={t('kernel.access.copyLocal', { name: profile.name })}
+                    title={t('kernel.access.copyApi', { name: profile.name })}
+                    aria-label={t('kernel.access.copyApi', { name: profile.name })}
                   >
                     {copiedApiField === `${profile.id}:base` ? (
                       <Check size={15} aria-hidden="true" />
@@ -1052,39 +1038,6 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
                     )}
                   </button>
                 </div>
-                {allowLanAccess ? (
-                  <div className="client-api-value-row">
-                    <span>{t('kernel.access.lanUrl')}</span>
-                    <code title={profile.lanUrl || undefined}>
-                      {!lanIpChecked
-                        ? t('kernel.access.detectingIp')
-                        : profile.lanUrl || t('kernel.access.noIp')}
-                    </code>
-                    {profile.lanUrl ? (
-                      <button
-                        type="button"
-                        className="icon-button quiet"
-                        onClick={() =>
-                          void copyApiValue(
-                            profile.lanUrl!,
-                            `${profile.id}:lan`,
-                            t('kernel.access.lanCopied', { name: profile.name }),
-                          )
-                        }
-                        title={t('kernel.access.copyLan', { name: profile.name })}
-                        aria-label={t('kernel.access.copyLan', { name: profile.name })}
-                      >
-                        {copiedApiField === `${profile.id}:lan` ? (
-                          <Check size={15} aria-hidden="true" />
-                        ) : (
-                          <Copy size={15} aria-hidden="true" />
-                        )}
-                      </button>
-                    ) : (
-                      <span className="client-api-copy-placeholder" aria-hidden="true" />
-                    )}
-                  </div>
-                ) : null}
               </div>
             </article>
           ))}

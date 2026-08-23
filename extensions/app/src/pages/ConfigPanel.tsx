@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-dialog';
 import {
   AlertCircle,
   Check,
@@ -8,8 +9,10 @@ import {
   Clock3,
   Eye,
   EyeOff,
+  FolderOpen,
   KeyRound,
   Link2,
+  LockKeyhole,
   Network,
   Pencil,
   Plus,
@@ -30,6 +33,7 @@ import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 type CoreConfigSettings = {
   apiKeys: CoreApiKey[];
   managementSecretConfigured: boolean;
+  host: string;
   port: number;
   allowLan: boolean;
   routingStrategy: string;
@@ -54,14 +58,16 @@ type ConfigAction =
   | 'management-secret'
   | 'routing'
   | 'network'
+  | 'retry'
+  | 'tls'
   | 'software'
   | null;
 type NoticeTone = 'success' | 'error';
-type ConfigSubpage = 'general' | 'network' | 'software' | 'aliases';
+type ConfigSubpage = 'general' | 'network' | 'routing' | 'software' | 'aliases';
 type CloseBehavior = 'ask' | 'exit' | 'minimize-to-tray';
 type NetworkDraftField =
   | 'port'
-  | 'allowLan'
+  | 'host'
   | 'proxyUrl'
   | 'sessionAffinity'
   | 'sessionTtl'
@@ -80,9 +86,15 @@ type SoftwareSettings = {
   silentStartEnabled: boolean;
 };
 
+type CoreTlsSettings = {
+  enabled: boolean;
+  cert: string;
+  key: string;
+};
+
 const cleanNetworkDraft = (): NetworkDraftDirty => ({
   port: false,
-  allowLan: false,
+  host: false,
   proxyUrl: false,
   sessionAffinity: false,
   sessionTtl: false,
@@ -108,6 +120,14 @@ export function ConfigPanelPage() {
   const [softwareStartCoreDraft, setSoftwareStartCoreDraft] = useState(true);
   const [softwareSilentStartDraft, setSoftwareSilentStartDraft] = useState(false);
   const [softwareSavedStatusVisible, setSoftwareSavedStatusVisible] = useState(false);
+  const [tlsSettings, setTlsSettings] = useState<CoreTlsSettings | null>(null);
+  const [tlsSettingsLoading, setTlsSettingsLoading] = useState(true);
+  const [tlsEnabledDraft, setTlsEnabledDraft] = useState(false);
+  const [tlsCertDraft, setTlsCertDraft] = useState('');
+  const [tlsKeyDraft, setTlsKeyDraft] = useState('');
+  const [tlsError, setTlsError] = useState('');
+  const [tlsFileSelecting, setTlsFileSelecting] = useState<'cert' | 'key' | null>(null);
+  const [tlsSavedStatusVisible, setTlsSavedStatusVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [busyAction, setBusyAction] = useState<ConfigAction>(null);
@@ -126,7 +146,7 @@ export function ConfigPanelPage() {
   const [notice, setNotice] = useState<{ message: string; tone: NoticeTone } | null>(null);
   const [activeSubpage, setActiveSubpage] = useState<ConfigSubpage>('general');
   const [portDraft, setPortDraft] = useState('8317');
-  const [allowLanDraft, setAllowLanDraft] = useState(false);
+  const [hostDraft, setHostDraft] = useState('127.0.0.1');
   const [proxyUrlDraft, setProxyUrlDraft] = useState('');
   const [sessionAffinityDraft, setSessionAffinityDraft] = useState(false);
   const [sessionTtlDraft, setSessionTtlDraft] = useState('');
@@ -135,8 +155,8 @@ export function ConfigPanelPage() {
   const [maxRetryIntervalDraft, setMaxRetryIntervalDraft] = useState('30');
   const [streamingBootstrapRetriesDraft, setStreamingBootstrapRetriesDraft] = useState('0');
   const [portError, setPortError] = useState('');
+  const [hostError, setHostError] = useState('');
   const [retryError, setRetryError] = useState('');
-  const [savedStatusVisible, setSavedStatusVisible] = useState(false);
   const networkDraftDirtyRef = useRef<NetworkDraftDirty>(cleanNetworkDraft());
   const noticeTimerRef = useRef<number | null>(null);
   const copyTimerRef = useRef<number | null>(null);
@@ -146,10 +166,12 @@ export function ConfigPanelPage() {
     let stop: (() => void) | null = null;
     void loadSettings();
     void loadSoftwareSettings();
+    void loadTlsSettings();
     void listen('config-files-changed', () => {
       if (!disposed) {
         void loadSettings('preserve');
         void loadSoftwareSettings();
+        void loadTlsSettings();
       }
     }).then((unlisten) => {
       if (disposed) unlisten();
@@ -183,7 +205,7 @@ export function ConfigPanelPage() {
     if (mode === 'preserve') {
       const dirty = networkDraftDirtyRef.current;
       if (!dirty.port) setPortDraft(String(result.port));
-      if (!dirty.allowLan) setAllowLanDraft(result.allowLan);
+      if (!dirty.host) setHostDraft(result.host);
       if (!dirty.proxyUrl) setProxyUrlDraft(result.proxyUrl);
       if (!dirty.sessionAffinity) setSessionAffinityDraft(result.routingSessionAffinity);
       if (!dirty.sessionTtl) setSessionTtlDraft(result.routingSessionAffinityTtl);
@@ -197,7 +219,7 @@ export function ConfigPanelPage() {
     }
     networkDraftDirtyRef.current = cleanNetworkDraft();
     setPortDraft(String(result.port));
-    setAllowLanDraft(result.allowLan);
+    setHostDraft(result.host);
     setProxyUrlDraft(result.proxyUrl);
     setSessionAffinityDraft(result.routingSessionAffinity);
     setSessionTtlDraft(result.routingSessionAffinityTtl);
@@ -206,12 +228,12 @@ export function ConfigPanelPage() {
     setMaxRetryIntervalDraft(String(result.maxRetryInterval));
     setStreamingBootstrapRetriesDraft(String(result.streamingBootstrapRetries));
     setPortError('');
+    setHostError('');
     setRetryError('');
   };
 
   const markDraftDirty = (field: NetworkDraftField) => {
     networkDraftDirtyRef.current[field] = true;
-    setSavedStatusVisible(false);
   };
 
   const clearDraftDirty = (field: NetworkDraftField) => {
@@ -247,6 +269,23 @@ export function ConfigPanelPage() {
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
     } finally {
       setSoftwareSettingsLoading(false);
+    }
+  }
+
+  async function loadTlsSettings() {
+    setTlsSettingsLoading(true);
+    try {
+      const result = await invoke<CoreTlsSettings>('get_core_tls_settings');
+      setTlsSettings(result);
+      setTlsEnabledDraft(result.enabled);
+      setTlsCertDraft(result.cert);
+      setTlsKeyDraft(result.key);
+      setTlsError('');
+    } catch (error) {
+      setTlsSettings(null);
+      setTlsError(String(error));
+    } finally {
+      setTlsSettingsLoading(false);
     }
   }
 
@@ -428,13 +467,87 @@ export function ConfigPanelPage() {
 
   const openWebUi = async () => {
     try {
-      const latestSettings = await invoke<CoreConfigSettings>('get_core_config_settings');
+      const [latestSettings, latestTlsSettings] = await Promise.all([
+        invoke<CoreConfigSettings>('get_core_config_settings'),
+        invoke<CoreTlsSettings>('get_core_tls_settings'),
+      ]);
       applySettings(latestSettings, 'preserve');
+      setTlsSettings(latestTlsSettings);
+      setTlsEnabledDraft(latestTlsSettings.enabled);
+      setTlsCertDraft(latestTlsSettings.cert);
+      setTlsKeyDraft(latestTlsSettings.key);
       await invoke('open_external_url', {
-        url: webUiManagementUrl(latestSettings.port),
+        url: webUiManagementUrl(latestSettings.port, latestTlsSettings.enabled, latestSettings.host),
       });
     } catch (error) {
       showNotice(t('config.webuiKey.error.openFailed', { error: String(error) }), 'error');
+    }
+  };
+
+  const saveTlsSettings = async () => {
+    if (tlsSettings === null || busyAction !== null) return;
+    const cert = tlsCertDraft.trim();
+    const key = tlsKeyDraft.trim();
+    if (tlsEnabledDraft && (!cert || !key)) {
+      setTlsError(t('config.tls.error.pathsRequired'));
+      return;
+    }
+
+    setBusyAction('tls');
+    setTlsError('');
+    setTlsSavedStatusVisible(false);
+    try {
+      const result = await invoke<CoreTlsSettings>('save_core_tls_settings', {
+        settings: { enabled: tlsEnabledDraft, cert, key },
+      });
+      setTlsSettings(result);
+      setTlsEnabledDraft(result.enabled);
+      setTlsCertDraft(result.cert);
+      setTlsKeyDraft(result.key);
+      if (coreStatus?.running) {
+        const status = await invoke<CoreStatus>('restart_core_process');
+        publishStatus(status);
+        showNotice(t('config.tls.notice.savedAndRestarted'), 'success');
+      } else {
+        showNotice(t('config.tls.notice.saved'), 'success');
+      }
+      setTlsSavedStatusVisible(true);
+    } catch (error) {
+      setTlsError(String(error));
+      showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
+      void refreshStatus();
+      void loadTlsSettings();
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const selectTlsFile = async (target: 'cert' | 'key') => {
+    if (tlsSettings === null || busyAction !== null || tlsFileSelecting !== null) return;
+    setTlsFileSelecting(target);
+    setTlsError('');
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        title: target === 'cert'
+          ? t('config.tls.selectCertTitle')
+          : t('config.tls.selectKeyTitle'),
+        filters: [{
+          name: target === 'cert' ? t('config.tls.certFile') : t('config.tls.keyFile'),
+          extensions: target === 'cert' ? ['pem', 'crt', 'cer'] : ['pem', 'key'],
+        }],
+      });
+      if (typeof selected !== 'string') return;
+      setTlsSavedStatusVisible(false);
+      if (target === 'cert') setTlsCertDraft(selected);
+      else setTlsKeyDraft(selected);
+    } catch (error) {
+      const message = t('config.tls.error.selectFileFailed', { error: String(error) });
+      setTlsError(message);
+      showNotice(message, 'error');
+    } finally {
+      setTlsFileSelecting(null);
     }
   };
 
@@ -442,18 +555,22 @@ export function ConfigPanelPage() {
     if (strategy === settings?.routingStrategy) {
       return;
     }
-    setSavedStatusVisible(false);
-    const saved = await runMutation(
+    await runMutation(
       'routing',
       'set_core_routing_strategy',
       { strategy },
       t('config.notice.routingUpdated'),
     );
-    if (saved) setSavedStatusVisible(true);
   };
 
-  const saveNetworkRoutingSettings = async () => {
+  const saveNetworkEndpointSettings = async () => {
     if (!settings || busyAction !== null) return;
+    const host = hostDraft.trim();
+    if (!host) {
+      setHostError(t('config.error.hostRequired'));
+      showNotice(t('config.error.hostRequired'), 'error');
+      return;
+    }
     const port = Number(portDraft);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       setPortError(t('config.error.portRange'));
@@ -462,45 +579,19 @@ export function ConfigPanelPage() {
     }
 
     const proxyUrl = proxyUrlDraft.trim();
-    const routingSessionAffinityTtl = sessionTtlDraft.trim();
-    const retryDrafts = [
-      requestRetryDraft,
-      maxRetryCredentialsDraft,
-      maxRetryIntervalDraft,
-      streamingBootstrapRetriesDraft,
-    ];
-    const retryValues = retryDrafts.map(Number);
-    if (
-      retryDrafts.some((value) => value.length === 0)
-      || retryValues.some((value) => !Number.isInteger(value) || value < 0 || value > 4294967295)
-    ) {
-      setRetryError(t('config.error.retryRange'));
-      showNotice(t('config.error.retryRange'), 'error');
-      return;
-    }
-    const [requestRetry, maxRetryCredentials, maxRetryInterval, streamingBootstrapRetries] = retryValues;
-    const networkChanged = port !== settings.port || allowLanDraft !== settings.allowLan;
+    const networkChanged = port !== settings.port || host !== settings.host;
+    setHostError('');
     setPortError('');
-    setRetryError('');
-    setSavedStatusVisible(false);
     setBusyAction('network');
     try {
-      const result = await invoke<CoreConfigSettings>('save_network_routing_settings', {
-        settings: {
-          port,
-          allowLan: allowLanDraft,
-          proxyUrl,
-          routingSessionAffinity: sessionAffinityDraft,
-          routingSessionAffinityTtl,
-          requestRetry,
-          maxRetryCredentials,
-          maxRetryInterval,
-          streamingBootstrapRetries,
-        },
+      const result = await invoke<CoreConfigSettings>('save_network_endpoint_settings', {
+        settings: { host, port, proxyUrl },
       });
-      applySettings(result);
+      clearDraftDirty('host');
+      clearDraftDirty('port');
+      clearDraftDirty('proxyUrl');
+      applySettings(result, 'preserve');
       setLoadError('');
-      setSavedStatusVisible(true);
 
       if (networkChanged && coreStatus?.running) {
         try {
@@ -517,9 +608,76 @@ export function ConfigPanelPage() {
         showNotice(t('config.notice.networkUpdated'), 'success');
       }
     } catch (error) {
-      applySettings(settings);
       showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
-      void loadSettings();
+      void loadSettings('preserve');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const saveRetrySettings = async () => {
+    if (!settings || busyAction !== null) return;
+    const retryDrafts = [
+      requestRetryDraft,
+      maxRetryCredentialsDraft,
+      maxRetryIntervalDraft,
+      streamingBootstrapRetriesDraft,
+    ];
+    const retryValues = retryDrafts.map(Number);
+    if (
+      retryDrafts.some((value) => value.length === 0)
+      || retryValues.some((value) => !Number.isInteger(value) || value < 0 || value > 4294967295)
+    ) {
+      setRetryError(t('config.error.retryRange'));
+      showNotice(t('config.error.retryRange'), 'error');
+      return;
+    }
+    const [requestRetry, maxRetryCredentials, maxRetryInterval, streamingBootstrapRetries] = retryValues;
+    setRetryError('');
+    setBusyAction('retry');
+    try {
+      const result = await invoke<CoreConfigSettings>('save_retry_settings', {
+        settings: {
+          requestRetry,
+          maxRetryCredentials,
+          maxRetryInterval,
+          streamingBootstrapRetries,
+        },
+      });
+      clearDraftDirty('requestRetry');
+      clearDraftDirty('maxRetryCredentials');
+      clearDraftDirty('maxRetryInterval');
+      clearDraftDirty('streamingBootstrapRetries');
+      applySettings(result, 'preserve');
+      setLoadError('');
+      showNotice(t('config.notice.retryUpdated'), 'success');
+    } catch (error) {
+      showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
+      void loadSettings('preserve');
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const saveSessionRoutingSettings = async () => {
+    if (!settings || busyAction !== null) return;
+    const routingSessionAffinityTtl = sessionTtlDraft.trim();
+    setBusyAction('routing');
+    try {
+      const result = await invoke<CoreConfigSettings>('save_session_routing_settings', {
+        settings: {
+          routingSessionAffinity: sessionAffinityDraft,
+          routingSessionAffinityTtl,
+        },
+      });
+      clearDraftDirty('sessionAffinity');
+      clearDraftDirty('sessionTtl');
+      applySettings(result, 'preserve');
+      setLoadError('');
+      showNotice(t('config.notice.sessionRoutingUpdated'), 'success');
+    } catch (error) {
+      showNotice(t('config.error.saveFailed', { error: String(error) }), 'error');
+      void loadSettings('preserve');
     } finally {
       setBusyAction(null);
     }
@@ -565,28 +723,21 @@ export function ConfigPanelPage() {
   };
 
   const controlsDisabled = loading || settings === null || busyAction !== null;
-  const networkRoutingDirty = Boolean(settings) && (
-    portDraft !== String(settings?.port)
-    || allowLanDraft !== settings?.allowLan
+  const networkSettingsDirty = Boolean(settings) && (
+    hostDraft.trim() !== settings?.host
+    || portDraft !== String(settings?.port)
     || proxyUrlDraft.trim() !== settings?.proxyUrl
-    || sessionAffinityDraft !== settings?.routingSessionAffinity
+  );
+  const sessionRoutingDirty = Boolean(settings) && (
+    sessionAffinityDraft !== settings?.routingSessionAffinity
     || sessionTtlDraft.trim() !== settings?.routingSessionAffinityTtl
-    || requestRetryDraft !== String(settings?.requestRetry)
+  );
+  const retrySettingsDirty = Boolean(settings) && (
+    requestRetryDraft !== String(settings?.requestRetry)
     || maxRetryCredentialsDraft !== String(settings?.maxRetryCredentials)
     || maxRetryIntervalDraft !== String(settings?.maxRetryInterval)
     || streamingBootstrapRetriesDraft !== String(settings?.streamingBootstrapRetries)
   );
-  const networkStatusLabel = loading
-    ? t('common.loading')
-    : settings === null
-      ? t('common.unavailable')
-      : busyAction === 'network' || busyAction === 'routing'
-        ? t('config.network.saving')
-        : networkRoutingDirty
-          ? t('config.network.unsaved')
-          : savedStatusVisible
-            ? t('config.network.saved')
-            : '';
   const softwareCloseBehaviorDirty = softwareSettings !== null
     && softwareCloseBehaviorDraft !== softwareSettings.closeBehavior;
   const softwareAutostartDirty = softwareSettings !== null
@@ -612,11 +763,24 @@ export function ConfigPanelPage() {
     && softwareSettings !== null
     && !softwareSettingsDirty
     && softwareSavedStatusVisible;
-  const networkStatusIsSaved = !loading
-    && settings !== null
-    && busyAction === null
-    && !networkRoutingDirty
-    && savedStatusVisible;
+  const tlsSettingsDirty = tlsSettings !== null && (
+    tlsEnabledDraft !== tlsSettings.enabled
+    || tlsCertDraft.trim() !== tlsSettings.cert
+    || tlsKeyDraft.trim() !== tlsSettings.key
+  );
+  const tlsStatusLabel = tlsSettingsLoading
+    ? t('common.loading')
+    : tlsSettings === null
+      ? t('common.unavailable')
+      : tlsSettingsDirty
+        ? t('config.network.unsaved')
+        : tlsSavedStatusVisible
+          ? t('config.network.saved')
+          : '';
+  const tlsStatusIsSaved = !tlsSettingsLoading
+    && tlsSettings !== null
+    && !tlsSettingsDirty
+    && tlsSavedStatusVisible;
   const selectedDeleteKey =
     deleteIndex === null ? '' : settings?.apiKeys[deleteIndex]?.apiKey || '';
   const deletingLastKey = deleteIndex !== null && settings?.apiKeys.length === 1;
@@ -649,6 +813,18 @@ export function ConfigPanelPage() {
           onClick={() => setActiveSubpage('network')}
         >
           {t('config.tabs.network')}
+        </button>
+        <button
+          type="button"
+          id="config-subpage-tab-routing"
+          role="tab"
+          className={activeSubpage === 'routing' ? 'active' : ''}
+          aria-selected={activeSubpage === 'routing'}
+          aria-controls="config-subpage-panel-routing"
+          tabIndex={activeSubpage === 'routing' ? 0 : -1}
+          onClick={() => setActiveSubpage('routing')}
+        >
+          {t('config.tabs.routing')}
         </button>
         <button
           type="button"
@@ -805,7 +981,7 @@ export function ConfigPanelPage() {
                 className="secondary-button compact-button"
                 disabled={loading || settings === null}
                 onClick={() => void openWebUi()}
-                title={settings ? webUiManagementUrl(settings.port) : undefined}
+                title={settings ? webUiManagementUrl(settings.port, tlsSettings?.enabled, settings.host) : undefined}
               >
                 {t('config.webuiKey.open')}
               </button>
@@ -904,44 +1080,34 @@ export function ConfigPanelPage() {
           </div>
         </section>
         </div>
-      ) : activeSubpage === 'network' ? (
+      ) : activeSubpage === 'network' || activeSubpage === 'routing' ? (
         <div
           className="config-subpage-panel config-network-subpage"
-          id="config-subpage-panel-network"
+          id={`config-subpage-panel-${activeSubpage}`}
           role="tabpanel"
-          aria-labelledby="config-subpage-tab-network"
+          aria-labelledby={`config-subpage-tab-${activeSubpage}`}
         >
-      <section className="panel config-network-panel">
-        <div className="config-panel-heading">
-          <div className="config-heading-title">
-            <Network size={18} aria-hidden="true" />
-            <h2>{t('config.network.title')}</h2>
-          </div>
-          <div className="config-heading-actions">
-            {networkStatusLabel ? (
-              <span className={`state-pill ${networkStatusIsSaved ? 'success' : ''}`}>
-                {networkStatusLabel}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              className="primary-button compact-button"
-              disabled={controlsDisabled || !networkRoutingDirty}
-              onClick={() => void saveNetworkRoutingSettings()}
-            >
-              <Check size={16} aria-hidden="true" />
-              {busyAction === 'network'
-                ? t('config.network.saving')
-                : t('config.network.confirmSave')}
-            </button>
-          </div>
-        </div>
-
+      <div className="config-network-panel">
         <div className="config-network-sections">
-          <section className="config-network-section" aria-labelledby="config-network-section-title">
-            <div className="config-network-section-heading">
-              <Network size={16} aria-hidden="true" />
-              <h3 id="config-network-section-title">{t('config.network.networkSection')}</h3>
+          <section
+            className="config-network-section"
+            aria-labelledby="config-network-section-title"
+            hidden={activeSubpage !== 'network'}
+          >
+            <div className="config-network-section-heading config-section-heading-with-actions">
+              <div className="config-network-section-title">
+                <Network size={16} aria-hidden="true" />
+                <h3 id="config-network-section-title">{t('config.network.networkSection')}</h3>
+              </div>
+              <button
+                type="button"
+                className="primary-button compact-button"
+                disabled={controlsDisabled || !networkSettingsDirty}
+                onClick={() => void saveNetworkEndpointSettings()}
+              >
+                <Check size={16} aria-hidden="true" />
+                {busyAction === 'network' ? t('common.saving') : t('config.network.confirmSave')}
+              </button>
             </div>
             <div className="config-network-grid">
               <label className="config-network-field config-network-port-field">
@@ -973,25 +1139,32 @@ export function ConfigPanelPage() {
             <small>{t('config.network.portHint')}</small>
               </label>
 
-              <div className="config-network-field config-network-toggle">
-                <div>
-                  <span>{t('config.network.allowLan')}</span>
-                  <small>{t('config.network.allowLanHint')}</small>
-                </div>
-                <label className="switch-control" title={t('config.network.allowLan')}>
-                  <input
-                    type="checkbox"
-                    aria-label={t('config.network.allowLan')}
-                    checked={allowLanDraft}
-                    disabled={controlsDisabled}
-                    onChange={(event) => {
-                      markDraftDirty('allowLan');
-                      setAllowLanDraft(event.currentTarget.checked);
-                    }}
-                  />
-                  <span className="switch-track" />
-                </label>
-              </div>
+              <label className="config-network-field">
+                <span>{t('config.network.listenHost')}</span>
+                <input
+                  className={`config-network-input ${hostError ? 'error' : ''}`}
+                  type="text"
+                  value={hostDraft}
+                  disabled={controlsDisabled}
+                  placeholder="127.0.0.1"
+                  aria-invalid={Boolean(hostError)}
+                  title={hostError || t('config.network.listenHostHint')}
+                  onChange={(event) => {
+                    markDraftDirty('host');
+                    setHostDraft(event.currentTarget.value);
+                    setHostError('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && settings) {
+                      clearDraftDirty('host');
+                      setHostDraft(settings.host);
+                      setHostError('');
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <small>{t('config.network.listenHostHint')}</small>
+              </label>
 
               <label className="config-network-field">
                 <span className="config-network-label">
@@ -1021,10 +1194,25 @@ export function ConfigPanelPage() {
             </div>
           </section>
 
-          <section className="config-network-section" aria-labelledby="config-routing-section-title">
-            <div className="config-network-section-heading">
-              <Route size={16} aria-hidden="true" />
-              <h3 id="config-routing-section-title">{t('config.network.routingSection')}</h3>
+          <section
+            className="config-network-section"
+            aria-labelledby="config-routing-section-title"
+            hidden={activeSubpage !== 'routing'}
+          >
+            <div className="config-network-section-heading config-section-heading-with-actions">
+              <div className="config-network-section-title">
+                <Route size={16} aria-hidden="true" />
+                <h3 id="config-routing-section-title">{t('config.network.routingSection')}</h3>
+              </div>
+              <button
+                type="button"
+                className="primary-button compact-button"
+                disabled={controlsDisabled || !sessionRoutingDirty}
+                onClick={() => void saveSessionRoutingSettings()}
+              >
+                <Check size={16} aria-hidden="true" />
+                {busyAction === 'routing' ? t('common.saving') : t('config.network.confirmSave')}
+              </button>
             </div>
             <div className="config-network-grid">
               <div className="config-network-field config-network-toggle">
@@ -1104,10 +1292,25 @@ export function ConfigPanelPage() {
             </div>
           </section>
 
-          <section className="config-network-section" aria-labelledby="config-retry-section-title">
-            <div className="config-network-section-heading">
-              <RefreshCw size={16} aria-hidden="true" />
-              <h3 id="config-retry-section-title">{t('config.network.retrySection')}</h3>
+          <section
+            className="config-network-section"
+            aria-labelledby="config-retry-section-title"
+            hidden={activeSubpage !== 'network'}
+          >
+            <div className="config-network-section-heading config-section-heading-with-actions">
+              <div className="config-network-section-title">
+                <RefreshCw size={16} aria-hidden="true" />
+                <h3 id="config-retry-section-title">{t('config.network.retrySection')}</h3>
+              </div>
+              <button
+                type="button"
+                className="primary-button compact-button"
+                disabled={controlsDisabled || !retrySettingsDirty}
+                onClick={() => void saveRetrySettings()}
+              >
+                <Check size={16} aria-hidden="true" />
+                {busyAction === 'retry' ? t('common.saving') : t('config.network.confirmSave')}
+              </button>
             </div>
             <div className="config-network-grid">
               <label className="config-network-field">
@@ -1223,8 +1426,132 @@ export function ConfigPanelPage() {
               </label>
             </div>
           </section>
+          <section
+            className="config-network-section"
+            aria-labelledby="config-tls-section-title"
+            hidden={activeSubpage !== 'network'}
+          >
+          <div className="config-network-section-heading config-tls-section-heading">
+            <div className="config-tls-section-title">
+              <LockKeyhole size={18} aria-hidden="true" />
+              <h3 id="config-tls-section-title">{t('config.tls.enable')}</h3>
+            </div>
+            <div className="config-heading-actions">
+              {tlsStatusLabel ? (
+                <span className={`state-pill ${tlsStatusIsSaved ? 'success' : ''}`}>
+                  {tlsStatusLabel}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="primary-button compact-button"
+                disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null || !tlsSettingsDirty}
+                onClick={() => void saveTlsSettings()}
+              >
+                <Check size={16} aria-hidden="true" />
+                {busyAction === 'tls' ? t('common.saving') : t('config.network.confirmSave')}
+              </button>
+            </div>
+          </div>
+
+          <div className="config-tls-content">
+            <div className="config-software-setting-row config-tls-toggle-row">
+              <div className="config-software-setting-copy">
+                <span className="config-software-setting-icon" aria-hidden="true">
+                  <ShieldCheck size={18} />
+                </span>
+                <div>
+                  <strong>{t('config.tls.enable')}</strong>
+                  <small>{t('config.tls.enableDescription')}</small>
+                </div>
+              </div>
+              <label className="switch-control" title={t('config.tls.enable')}>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  aria-label={t('config.tls.enable')}
+                  checked={tlsEnabledDraft}
+                  disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null}
+                  onChange={(event) => {
+                    setTlsSavedStatusVisible(false);
+                    setTlsError('');
+                    setTlsEnabledDraft(event.currentTarget.checked);
+                  }}
+                />
+                <span className="switch-track" />
+              </label>
+            </div>
+
+            {tlsEnabledDraft ? (
+              <div className="config-tls-fields">
+                <div className="config-network-field">
+                  <span>{t('config.tls.cert')}</span>
+                  <div className="config-tls-path-control">
+                    <input
+                      className={`config-network-input ${tlsError && !tlsCertDraft.trim() ? 'error' : ''}`}
+                      type="text"
+                      value={tlsCertDraft}
+                      aria-label={t('config.tls.cert')}
+                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
+                      placeholder={t('config.tls.certPlaceholder')}
+                      onChange={(event) => {
+                        setTlsSavedStatusVisible(false);
+                        setTlsError('');
+                        setTlsCertDraft(event.currentTarget.value);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button compact-button config-tls-browse-button"
+                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
+                      title={t('config.tls.selectCertTitle')}
+                      onClick={() => void selectTlsFile('cert')}
+                    >
+                      <FolderOpen size={16} aria-hidden="true" />
+                      {tlsFileSelecting === 'cert' ? t('common.processing') : t('config.tls.browse')}
+                    </button>
+                  </div>
+                  <small>{t('config.tls.certHint')}</small>
+                </div>
+                <div className="config-network-field">
+                  <span>{t('config.tls.key')}</span>
+                  <div className="config-tls-path-control">
+                    <input
+                      className={`config-network-input ${tlsError && !tlsKeyDraft.trim() ? 'error' : ''}`}
+                      type="text"
+                      value={tlsKeyDraft}
+                      aria-label={t('config.tls.key')}
+                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
+                      placeholder={t('config.tls.keyPlaceholder')}
+                      onChange={(event) => {
+                        setTlsSavedStatusVisible(false);
+                        setTlsError('');
+                        setTlsKeyDraft(event.currentTarget.value);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button compact-button config-tls-browse-button"
+                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
+                      title={t('config.tls.selectKeyTitle')}
+                      onClick={() => void selectTlsFile('key')}
+                    >
+                      <FolderOpen size={16} aria-hidden="true" />
+                      {tlsFileSelecting === 'key' ? t('common.processing') : t('config.tls.browse')}
+                    </button>
+                  </div>
+                  <small>{t('config.tls.keyHint')}</small>
+                </div>
+              </div>
+            ) : null}
+
+            <div className={`config-tls-message ${tlsError ? 'error' : ''}`} role={tlsError ? 'alert' : undefined}>
+              {tlsError || t('config.tls.restartHint')}
+            </div>
+          </div>
+        </section>
         </div>
-      </section>
+      </div>
         </div>
       ) : activeSubpage === 'software' ? (
         <div

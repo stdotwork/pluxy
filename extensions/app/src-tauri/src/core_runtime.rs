@@ -837,8 +837,21 @@ pub(crate) fn current_core_status(
 }
 
 pub(crate) fn is_management_port_open(port: u16) -> bool {
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let listen_host = read_installed_core_config_settings()
+        .map(|settings| settings.host)
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let Ok(address) = core_management_address(&listen_host, port) else {
+        return false;
+    };
     TcpStream::connect_timeout(&address, Duration::from_millis(150)).is_ok()
+}
+
+fn core_management_address(listen_host: &str, port: u16) -> Result<SocketAddr, String> {
+    let host = core_connect_host(listen_host);
+    let ip = host
+        .parse::<IpAddr>()
+        .map_err(|_| format!("Invalid core listen IP: {listen_host}"))?;
+    Ok(SocketAddr::new(ip, port))
 }
 
 pub(crate) fn start_core_process_inner(
@@ -857,7 +870,7 @@ pub(crate) fn start_core_process_inner(
     if process_state.managed_pid().is_some() || is_core_running(&binary_path) {
         return Err("CPA 内核已经在运行".to_string());
     }
-    let management_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), gui_config.port);
+    let management_address = core_management_address(&gui_config.host, gui_config.port)?;
     if TcpStream::connect_timeout(&management_address, Duration::from_millis(250)).is_ok() {
         return Err(format!(
             "端口 {} 已被其他程序占用，请更换端口后重试",

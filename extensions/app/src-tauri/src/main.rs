@@ -733,6 +733,7 @@ struct GuiConfigPresence {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GuiSettings {
+    host: String,
     port: u16,
     allow_lan: bool,
     run_on_startup: bool,
@@ -1120,6 +1121,38 @@ struct GuiNetworkRoutingSettings {
     streaming_bootstrap_retries: u32,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiNetworkEndpointSettings {
+    host: String,
+    port: u16,
+    proxy_url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiRetrySettings {
+    request_retry: u32,
+    max_retry_credentials: u32,
+    max_retry_interval: u32,
+    streaming_bootstrap_retries: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiSessionRoutingSettings {
+    routing_session_affinity: bool,
+    routing_session_affinity_ttl: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreTlsSettings {
+    enabled: bool,
+    cert: String,
+    key: String,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CoreConfigSettings {
@@ -1158,6 +1191,7 @@ struct CoreApiKeyView {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CoreConfigView {
+    host: String,
     api_keys: Vec<CoreApiKeyView>,
     management_secret_configured: bool,
     port: u16,
@@ -1556,6 +1590,34 @@ impl GuiConfigState {
         })
     }
 
+    fn update_network_endpoint(&self, settings: &GuiConfigFile) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.host = settings.host.clone();
+            config.allow_lan = settings.allow_lan;
+            config.port = settings.port;
+            config.proxy_url = settings.proxy_url.clone();
+            Ok(())
+        })
+    }
+
+    fn update_retry_settings(&self, settings: &GuiConfigFile) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.request_retry = settings.request_retry;
+            config.max_retry_credentials = settings.max_retry_credentials;
+            config.max_retry_interval = settings.max_retry_interval;
+            config.streaming_bootstrap_retries = settings.streaming_bootstrap_retries;
+            Ok(())
+        })
+    }
+
+    fn update_session_routing(&self, settings: &GuiConfigFile) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.routing_session_affinity = settings.routing_session_affinity;
+            config.routing_session_affinity_ttl = settings.routing_session_affinity_ttl.clone();
+            Ok(())
+        })
+    }
+
     fn set_run_on_startup(&self, run_on_startup: bool) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.run_on_startup = run_on_startup;
@@ -1670,6 +1732,7 @@ impl GuiConfigState {
 impl From<&GuiConfigFile> for GuiSettings {
     fn from(config: &GuiConfigFile) -> Self {
         Self {
+            host: config.host.clone(),
             port: config.port,
             allow_lan: config.allow_lan,
             run_on_startup: config.run_on_startup,
@@ -1704,6 +1767,7 @@ impl From<&GuiConfigFile> for CoreConfigSettings {
 impl From<&GuiConfigFile> for CoreConfigView {
     fn from(config: &GuiConfigFile) -> Self {
         Self {
+            host: config.host.clone(),
             api_keys: config
                 .api_keys
                 .iter()
@@ -1994,6 +2058,11 @@ fn main() {
             get_lan_ipv4,
             save_gui_settings,
             save_network_routing_settings,
+            save_network_endpoint_settings,
+            save_retry_settings,
+            save_session_routing_settings,
+            get_core_tls_settings,
+            save_core_tls_settings,
             get_core_config_settings,
             add_core_api_key,
             update_core_api_key,

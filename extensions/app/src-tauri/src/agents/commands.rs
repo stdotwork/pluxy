@@ -582,12 +582,14 @@ pub(crate) async fn fetch_agent_models(
     if port == 0 {
         return Err("内核端口无效".to_string());
     }
+    let tls_enabled = managed_core_tls_enabled();
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(15))
+        .danger_accept_invalid_certs(tls_enabled)
         .build()
         .map_err(|error| format!("创建模型列表客户端失败: {error}"))?;
-    let base_url = format!("http://127.0.0.1:{port}");
+    let base_url = managed_core_loopback_origin(port);
     let endpoints = [
         format!("{base_url}/v1/models"),
         format!("{base_url}/models"),
@@ -633,12 +635,14 @@ pub(crate) async fn fetch_codex_runtime_models(
     if port == 0 {
         return Err("内核端口无效".to_string());
     }
+    let tls_enabled = managed_core_tls_enabled();
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(15))
+        .danger_accept_invalid_certs(tls_enabled)
         .build()
         .map_err(|error| format!("创建 Codex 模型列表客户端失败: {error}"))?;
-    let base_url = format!("http://127.0.0.1:{port}");
+    let base_url = managed_core_loopback_origin(port);
     let endpoints = [
         format!("{base_url}/v1/models"),
         format!("{base_url}/models"),

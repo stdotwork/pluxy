@@ -163,6 +163,80 @@ pub(crate) fn normalize_optional_config_string(
     Ok(value)
 }
 
+pub(crate) fn normalize_core_tls_settings(
+    settings: CoreTlsSettings,
+) -> Result<CoreTlsSettings, String> {
+    let cert = normalize_optional_config_string(settings.cert, "TLS certificate path")?;
+    let key = normalize_optional_config_string(settings.key, "TLS private key path")?;
+    if settings.enabled && (cert.is_empty() || key.is_empty()) {
+        return Err(
+            "TLS is enabled, so both the certificate and private key paths are required"
+                .to_string(),
+        );
+    }
+    Ok(CoreTlsSettings {
+        enabled: settings.enabled,
+        cert,
+        key,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn core_loopback_origin(port: u16, tls_enabled: bool) -> String {
+    core_origin("127.0.0.1", port, tls_enabled)
+}
+
+pub(crate) fn core_connect_host(listen_host: &str) -> String {
+    let host = listen_host
+        .trim()
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or_else(|| listen_host.trim());
+    match host {
+        "" | "0.0.0.0" => "127.0.0.1".to_string(),
+        "::" => "::1".to_string(),
+        _ => host.to_string(),
+    }
+}
+
+pub(crate) fn core_origin(listen_host: &str, port: u16, tls_enabled: bool) -> String {
+    let scheme = if tls_enabled { "https" } else { "http" };
+    let host = core_connect_host(listen_host);
+    let url_host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host
+    };
+    format!("{scheme}://{url_host}:{port}")
+}
+
+pub(crate) fn managed_core_tls_enabled() -> bool {
+    #[cfg(test)]
+    {
+        false
+    }
+    #[cfg(not(test))]
+    {
+        current_core_tls_settings()
+            .map(|settings| settings.enabled)
+            .unwrap_or(false)
+    }
+}
+
+pub(crate) fn managed_core_loopback_origin(port: u16) -> String {
+    #[cfg(test)]
+    {
+        core_loopback_origin(port, false)
+    }
+    #[cfg(not(test))]
+    {
+        let host = read_installed_core_config_settings()
+            .map(|settings| settings.host)
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        core_origin(&host, port, managed_core_tls_enabled())
+    }
+}
+
 pub(crate) fn config_update_error_with_rollback(
     error: String,
     rollback_error: Option<String>,
@@ -365,6 +439,76 @@ pub(crate) fn patch_core_network_routing_yaml(
             "bootstrap-retries",
             serde_norway::to_value(config.streaming_bootstrap_retries)
                 .map_err(|err| format!("序列化流式启动重试次数失败: {err}"))?,
+        )?;
+        Ok(*document != original)
+    })
+}
+
+pub(crate) fn patch_core_network_endpoint_yaml(
+    content: &str,
+    config: &GuiConfigFile,
+) -> Result<Option<String>, String> {
+    patch_core_yaml_document(content, |document| {
+        let original = document.clone();
+        apply_network_settings(document, config)?;
+        set_core_yaml_top_level_value(
+            document,
+            "proxy-url",
+            serde_norway::Value::String(config.proxy_url.clone()),
+        )?;
+        Ok(*document != original)
+    })
+}
+
+pub(crate) fn patch_core_retry_yaml(
+    content: &str,
+    config: &GuiConfigFile,
+) -> Result<Option<String>, String> {
+    patch_core_yaml_document(content, |document| {
+        let original = document.clone();
+        set_core_yaml_top_level_value(
+            document,
+            "request-retry",
+            serde_norway::to_value(config.request_retry).map_err(|err| err.to_string())?,
+        )?;
+        set_core_yaml_top_level_value(
+            document,
+            "max-retry-credentials",
+            serde_norway::to_value(config.max_retry_credentials).map_err(|err| err.to_string())?,
+        )?;
+        set_core_yaml_top_level_value(
+            document,
+            "max-retry-interval",
+            serde_norway::to_value(config.max_retry_interval).map_err(|err| err.to_string())?,
+        )?;
+        set_core_yaml_nested_value(
+            document,
+            "streaming",
+            "bootstrap-retries",
+            serde_norway::to_value(config.streaming_bootstrap_retries)
+                .map_err(|err| err.to_string())?,
+        )?;
+        Ok(*document != original)
+    })
+}
+
+pub(crate) fn patch_core_session_routing_yaml(
+    content: &str,
+    config: &GuiConfigFile,
+) -> Result<Option<String>, String> {
+    patch_core_yaml_document(content, |document| {
+        let original = document.clone();
+        set_core_yaml_nested_value(
+            document,
+            "routing",
+            "session-affinity",
+            serde_norway::Value::Bool(config.routing_session_affinity),
+        )?;
+        set_core_yaml_nested_value(
+            document,
+            "routing",
+            "session-affinity-ttl",
+            serde_norway::Value::String(config.routing_session_affinity_ttl.clone()),
         )?;
         Ok(*document != original)
     })
@@ -1316,7 +1460,13 @@ pub(crate) fn persist_main_window_size(app: &tauri::AppHandle) -> Result<(), Str
 }
 
 pub(crate) fn is_loopback_host(host: &str) -> bool {
-    matches!(host.trim(), "127.0.0.1" | "localhost" | "::1")
+    let host = host.trim();
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 pub(crate) fn sanitize_gui_config(config: &mut GuiConfigFile) -> Result<bool, String> {

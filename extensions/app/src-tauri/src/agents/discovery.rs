@@ -356,7 +356,7 @@ pub(crate) fn inspect_pi_provider_status(
                 let object = root
                     .as_object()
                     .ok_or_else(|| "Pi CLIProxyAPI 配置根节点必须是 JSON 对象".to_string())?;
-                let expected_base_url = format!("http://127.0.0.1:{port}");
+                let expected_base_url = managed_core_loopback_origin(port);
                 credentials_match = object
                     .get("baseUrl")
                     .and_then(serde_json::Value::as_str)
@@ -491,7 +491,7 @@ pub(crate) fn repair_pi_provider_inner(
     } else {
         None
     };
-    let base_url = format!("http://127.0.0.1:{port}");
+    let base_url = managed_core_loopback_origin(port);
     let rendered = build_pi_provider_config(existing.as_deref(), &base_url, api_key)?;
     if existing.as_deref() != Some(rendered.as_str()) {
         write_bytes_atomically(&config_path, rendered.as_bytes())?;
@@ -1365,7 +1365,31 @@ pub(crate) fn agent_has_managed_marker(
 
 pub(crate) fn is_managed_agent_base_url(value: &str) -> bool {
     let value = value.trim().to_ascii_lowercase();
-    value.starts_with("http://127.0.0.1:") || value.starts_with("http://localhost:")
+    if value.starts_with("http://127.0.0.1:")
+        || value.starts_with("http://localhost:")
+        || value.starts_with("https://127.0.0.1:")
+        || value.starts_with("https://localhost:")
+    {
+        return true;
+    }
+    #[cfg(not(test))]
+    {
+        let Ok(settings) = read_installed_core_config_settings() else {
+            return false;
+        };
+        let host = core_connect_host(&settings.host);
+        let host = if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host
+        };
+        value.starts_with(&format!("http://{host}:"))
+            || value.starts_with(&format!("https://{host}:"))
+    }
+    #[cfg(test)]
+    {
+        false
+    }
 }
 
 pub(crate) fn inspect_managed_toml_model_marker(
@@ -2767,7 +2791,7 @@ pub(crate) fn inspect_claude_agent_config(
     )
     .map_err(|error| format!("解析 Claude Code 配置失败: {error}"))?;
     let env = root.get("env").and_then(serde_json::Value::as_object);
-    let expected_base = format!("http://127.0.0.1:{port}");
+    let expected_base = managed_core_loopback_origin(port);
     let configured = env
         .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
         .and_then(serde_json::Value::as_str)
@@ -3100,7 +3124,7 @@ pub(crate) fn inspect_claude_desktop_agent_config(
     let threep = read_agent_json_or_empty(&paths[1], "Claude Desktop 3P 配置")?;
     let profile = read_agent_json_or_empty(&paths[2], "Claude Desktop 网关配置")?;
     let meta = read_agent_json_or_empty(&paths[3], "Claude Desktop 配置索引")?;
-    let expected_base = format!("http://127.0.0.1:{port}");
+    let expected_base = managed_core_loopback_origin(port);
     let configured = normal
         .get("deploymentMode")
         .and_then(serde_json::Value::as_str)
@@ -3191,7 +3215,7 @@ pub(crate) fn inspect_codex_agent_config(
         &fs::read_to_string(path).map_err(|error| format!("读取 Codex 配置失败: {error}"))?,
     )
     .map_err(|error| format!("解析 Codex 配置失败: {error}"))?;
-    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let expected_base = format!("{}/v1", managed_core_loopback_origin(port));
     let provider = root
         .get("model_providers")
         .and_then(toml::Value::as_table)
@@ -3264,7 +3288,7 @@ pub(crate) fn inspect_opencode_agent_config(
     let provider = root
         .get("provider")
         .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
-    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let expected_base = format!("{}/v1", managed_core_loopback_origin(port));
     let configured = provider
         .and_then(|provider| provider.get("options"))
         .and_then(|options| options.get("baseURL"))
@@ -3301,7 +3325,7 @@ pub(crate) fn inspect_zcode_agent_config(
     let provider = root
         .get("provider")
         .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
-    let expected_base = format!("http://127.0.0.1:{port}");
+    let expected_base = managed_core_loopback_origin(port);
     let api_format_matches = provider
         .and_then(|provider| provider.get("apiFormat"))
         .and_then(serde_json::Value::as_str)
@@ -3363,7 +3387,7 @@ pub(crate) fn inspect_kimi_code_agent_config(
         &fs::read_to_string(path).map_err(|error| format!("读取 Kimi Code 配置失败: {error}"))?,
     )
     .map_err(|error| format!("解析 Kimi Code 配置失败: {error}"))?;
-    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let expected_base = format!("{}/v1", managed_core_loopback_origin(port));
     let provider = root
         .get("providers")
         .and_then(toml::Value::as_table)
@@ -3420,7 +3444,7 @@ pub(crate) fn inspect_grok_build_agent_config(
         &fs::read_to_string(path).map_err(|error| format!("读取 Grok Build 配置失败: {error}"))?,
     )
     .map_err(|error| format!("解析 Grok Build 配置失败: {error}"))?;
-    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let expected_base = format!("{}/v1", managed_core_loopback_origin(port));
     let prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
     let selected = root
         .get("models")
@@ -3474,7 +3498,7 @@ pub(crate) fn inspect_openclaw_agent_config(
         .get("models")
         .and_then(|models| models.get("providers"))
         .and_then(|providers| providers.get(MANAGED_AGENT_PROVIDER_ID));
-    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let expected_base = format!("{}/v1", managed_core_loopback_origin(port));
     let configured = provider
         .and_then(|provider| provider.get("baseUrl"))
         .and_then(serde_json::Value::as_str)
@@ -3518,7 +3542,7 @@ pub(crate) fn inspect_hermes_agent_config(
                     == Some(MANAGED_AGENT_PROVIDER_ID)
             })
         });
-    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let expected_base = format!("{}/v1", managed_core_loopback_origin(port));
     let configured = provider
         .and_then(|provider| provider.get("base_url"))
         .and_then(serde_yaml::Value::as_str)
@@ -3574,7 +3598,7 @@ pub(crate) fn inspect_deepseek_harness_config(
                 .map(str::to_string)
         })
         .flatten();
-    let expected_base = format!("http://127.0.0.1:{port}/v1");
+    let expected_base = format!("{}/v1", managed_core_loopback_origin(port));
     let credential = yaml_mapping_value(&credentials, DEEPSEEK_HARNESS_CREDENTIAL)
         .and_then(serde_norway::Value::as_str);
     let model_is_published = model.as_deref().is_some_and(|selected| {

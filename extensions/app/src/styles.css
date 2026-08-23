@@ -1769,6 +1769,70 @@ textarea:focus-visible {
   gap: 18px;
 }
 
+.config-tls-content {
+  display: grid;
+  gap: 16px;
+}
+
+.config-tls-toggle-row {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+}
+
+.config-tls-section-heading,
+.config-section-heading-with-actions {
+  justify-content: space-between;
+}
+
+.config-tls-section-title,
+.config-network-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.config-tls-section-title h3,
+.config-network-section-title h3 {
+  margin: 0;
+  font-size: var(--font-size-section);
+  line-height: var(--line-height-body);
+}
+
+.config-tls-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.config-tls-fields .config-network-field {
+  min-height: 142px;
+  height: auto;
+}
+
+.config-tls-path-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.config-tls-browse-button {
+  min-width: max-content;
+  white-space: nowrap;
+}
+
+.config-tls-message {
+  min-height: 20px;
+  color: var(--theme-6d6760);
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-body);
+}
+
+.config-tls-message.error {
+  color: var(--theme-9f2d20);
+}
+
 .config-network-sections {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1784,6 +1848,10 @@ textarea:focus-visible {
   border: 1px solid var(--theme-d5d2cb);
   border-radius: 8px;
   background: var(--theme-fffdf8);
+}
+
+.config-network-section[hidden] {
+  display: none;
 }
 
 .config-network-section-heading {
@@ -7843,6 +7911,10 @@ textarea:focus-visible {
   .config-network-grid {
     grid-template-columns: 1fr;
     grid-auto-rows: auto;
+  }
+
+  .config-tls-fields {
+    grid-template-columns: 1fr;
   }
 
   .config-management-form {
