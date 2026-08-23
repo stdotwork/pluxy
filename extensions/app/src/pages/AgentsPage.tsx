@@ -1245,6 +1245,7 @@ export function AgentsPage() {
   };
 
   const closeConfigurationChanges = async () => {
+    const retainedOauthConfiguration = selected === 'codex' ? oauthConfiguration : null;
     setConfigurationError('');
     setBusyAction('close-config');
     try {
@@ -1253,7 +1254,7 @@ export function AgentsPage() {
         claudeModelMappingsDirtyRef.current[selected] = false;
       }
       await reloadStatusesAfterAction();
-      setOauthConfigurationDraft(null);
+      setOauthConfigurationDraft(retainedOauthConfiguration);
     } catch (requestError) {
       setConfigurationError(String(requestError));
     } finally {
