@@ -1,5 +1,179 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OAuthAliasChannel {
+    pub(crate) key: &'static str,
+    pub(crate) provider: &'static str,
+    pub(crate) kind: &'static str,
+    pub(crate) protocol: &'static str,
+    pub(crate) supports_reasoning: bool,
+    pub(crate) supports_fast: bool,
+    pub(crate) force_mapping: bool,
+}
+
+pub(crate) const OAUTH_ALIAS_CHANNELS: [OAuthAliasChannel; 7] = [
+    OAuthAliasChannel {
+        key: "vertex",
+        provider: "Vertex OAuth",
+        kind: "vertex-oauth",
+        protocol: "gemini",
+        supports_reasoning: false,
+        supports_fast: false,
+        force_mapping: false,
+    },
+    OAuthAliasChannel {
+        key: "aistudio",
+        provider: "AI Studio OAuth",
+        kind: "aistudio-oauth",
+        protocol: "gemini",
+        supports_reasoning: false,
+        supports_fast: false,
+        force_mapping: false,
+    },
+    OAuthAliasChannel {
+        key: "antigravity",
+        provider: "Antigravity OAuth",
+        kind: "antigravity-oauth",
+        protocol: "antigravity",
+        supports_reasoning: false,
+        supports_fast: false,
+        force_mapping: true,
+    },
+    OAuthAliasChannel {
+        key: "claude",
+        provider: "Claude OAuth",
+        kind: "claude-oauth",
+        protocol: "claude",
+        supports_reasoning: false,
+        supports_fast: false,
+        force_mapping: false,
+    },
+    OAuthAliasChannel {
+        key: "codex",
+        provider: "Codex OAuth",
+        kind: "codex-oauth",
+        protocol: "codex",
+        supports_reasoning: true,
+        supports_fast: true,
+        force_mapping: false,
+    },
+    OAuthAliasChannel {
+        key: "kimi",
+        provider: "Kimi OAuth",
+        kind: "kimi-oauth",
+        protocol: "openai",
+        supports_reasoning: false,
+        supports_fast: false,
+        force_mapping: false,
+    },
+    OAuthAliasChannel {
+        key: "xai",
+        provider: "xAI OAuth",
+        kind: "xai-oauth",
+        protocol: "openai",
+        supports_reasoning: false,
+        supports_fast: false,
+        force_mapping: false,
+    },
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OAuthModelDefinitions {
+    pub(crate) channel: OAuthAliasChannel,
+    pub(crate) models: Vec<CodexModelDefinition>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AliasSourceCapability {
+    Base,
+    Reasoning,
+    Fast,
+}
+
+pub(crate) fn oauth_alias_channel(channel: &str) -> Option<OAuthAliasChannel> {
+    OAUTH_ALIAS_CHANNELS
+        .iter()
+        .copied()
+        .find(|candidate| candidate.key.eq_ignore_ascii_case(channel))
+}
+
+pub(crate) fn oauth_alias_channel_details(channel: &str) -> (String, String, String) {
+    oauth_alias_channel(channel)
+        .map(|details| {
+            (
+                details.provider.to_string(),
+                details.kind.to_string(),
+                details.protocol.to_string(),
+            )
+        })
+        .unwrap_or_else(|| {
+            let channel = channel.trim().to_ascii_lowercase();
+            (
+                format!("{channel} OAuth"),
+                format!("{channel}-oauth"),
+                channel,
+            )
+        })
+}
+
+pub(crate) fn normalize_oauth_alias_channel(value: &str) -> Option<&'static str> {
+    let value = value.trim().to_ascii_lowercase().replace('_', "-");
+    match value.as_str() {
+        "vertex" | "vertex-ai" => Some("vertex"),
+        "aistudio" | "ai-studio" | "gemini" | "gemini-cli" => Some("aistudio"),
+        "antigravity" | "anti-gravity" => Some("antigravity"),
+        "claude" | "anthropic" => Some("claude"),
+        "codex" => Some("codex"),
+        "kimi" | "moonshot" => Some("kimi"),
+        "xai" | "x-ai" | "grok" => Some("xai"),
+        _ => None,
+    }
+}
+
+pub(crate) async fn fetch_active_oauth_alias_channels(
+    config: &GuiConfigFile,
+) -> Result<std::collections::HashSet<String>, String> {
+    let client = management_http_client()?;
+    let response = client
+        .get(management_endpoint(config, "auth-files")?)
+        .header("Authorization", management_authorization(config)?)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|error| format!("读取 OAuth 凭据来源失败: {error}"))?;
+    let payload = read_management_value(response).await?;
+    let files = payload
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| payload.as_array())
+        .ok_or_else(|| "OAuth 凭据来源响应缺少 files 数组".to_string())?;
+    Ok(files
+        .iter()
+        .filter(|file| {
+            !file
+                .get("disabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                && !file
+                    .get("unavailable")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .filter_map(|file| {
+            ["provider", "type"]
+                .into_iter()
+                .find_map(|key| {
+                    file.get(key)
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                })
+                .and_then(normalize_oauth_alias_channel)
+        })
+        .map(str::to_string)
+        .collect())
+}
+
 pub(crate) fn validate_thinking_alias_model_id(value: &str, label: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() {
@@ -558,16 +732,45 @@ pub(crate) fn append_managed_codex_oauth_model_alias(
 pub(crate) async fn fetch_codex_model_definitions(
     config: &GuiConfigFile,
 ) -> Result<Vec<CodexModelDefinition>, String> {
+    fetch_oauth_channel_model_definitions(config, "codex").await
+}
+
+pub(crate) async fn fetch_oauth_channel_model_definitions(
+    config: &GuiConfigFile,
+    channel: &str,
+) -> Result<Vec<CodexModelDefinition>, String> {
     let client = management_http_client()?;
     let response = client
-        .get(management_endpoint(config, "model-definitions/codex")?)
+        .get(management_endpoint(
+            config,
+            &format!("model-definitions/{channel}"),
+        )?)
         .header("Authorization", management_authorization(config)?)
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|error| format!("读取 Codex OAuth 模型定义失败: {error}"))?;
+        .map_err(|error| format!("读取 {channel} OAuth 模型定义失败: {error}"))?;
     let payload = read_management_value(response).await?;
     parse_codex_model_definitions(&payload)
+}
+
+pub(crate) async fn fetch_oauth_model_definitions(
+    config: &GuiConfigFile,
+) -> Vec<OAuthModelDefinitions> {
+    let active_channels = fetch_active_oauth_alias_channels(config).await.ok();
+    let mut definitions = Vec::new();
+    for channel in OAUTH_ALIAS_CHANNELS {
+        if active_channels
+            .as_ref()
+            .is_some_and(|active| !active.contains(channel.key))
+        {
+            continue;
+        }
+        if let Ok(models) = fetch_oauth_channel_model_definitions(config, channel.key).await {
+            definitions.push(OAuthModelDefinitions { channel, models });
+        }
+    }
+    definitions
 }
 
 pub(crate) fn resolved_thinking_alias_sources(
@@ -575,7 +778,13 @@ pub(crate) fn resolved_thinking_alias_sources(
     definitions: &[CodexModelDefinition],
     available_models: &[AgentModelOption],
 ) -> Result<Vec<ResolvedThinkingAliasSource>, String> {
-    resolved_alias_sources(content, definitions, available_models, true)
+    let definitions = codex_oauth_definition_set(definitions);
+    resolved_oauth_alias_sources(
+        content,
+        &definitions,
+        available_models,
+        AliasSourceCapability::Reasoning,
+    )
 }
 
 pub(crate) fn resolved_speed_alias_sources(
@@ -583,7 +792,13 @@ pub(crate) fn resolved_speed_alias_sources(
     definitions: &[CodexModelDefinition],
     available_models: &[AgentModelOption],
 ) -> Result<Vec<ResolvedThinkingAliasSource>, String> {
-    resolved_alias_sources(content, definitions, available_models, false)
+    let definitions = codex_oauth_definition_set(definitions);
+    resolved_oauth_alias_sources(
+        content,
+        &definitions,
+        available_models,
+        AliasSourceCapability::Fast,
+    )
 }
 
 pub(crate) fn resolved_alias_sources(
@@ -591,6 +806,38 @@ pub(crate) fn resolved_alias_sources(
     definitions: &[CodexModelDefinition],
     available_models: &[AgentModelOption],
     require_reasoning_levels: bool,
+) -> Result<Vec<ResolvedThinkingAliasSource>, String> {
+    let definitions = codex_oauth_definition_set(definitions);
+    resolved_oauth_alias_sources(
+        content,
+        &definitions,
+        available_models,
+        if require_reasoning_levels {
+            AliasSourceCapability::Reasoning
+        } else {
+            AliasSourceCapability::Base
+        },
+    )
+}
+
+pub(crate) fn codex_oauth_definition_set(
+    definitions: &[CodexModelDefinition],
+) -> Vec<OAuthModelDefinitions> {
+    vec![OAuthModelDefinitions {
+        channel: OAUTH_ALIAS_CHANNELS
+            .iter()
+            .copied()
+            .find(|channel| channel.key == "codex")
+            .expect("codex OAuth alias channel must exist"),
+        models: definitions.to_vec(),
+    }]
+}
+
+pub(crate) fn resolved_oauth_alias_sources(
+    content: &str,
+    definition_sets: &[OAuthModelDefinitions],
+    available_models: &[AgentModelOption],
+    capability: AliasSourceCapability,
 ) -> Result<Vec<ResolvedThinkingAliasSource>, String> {
     let document = serde_norway::from_str::<serde_norway::Value>(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
@@ -621,31 +868,54 @@ pub(crate) fn resolved_alias_sources(
         available_models,
         &mut sources,
     )?;
+    if capability == AliasSourceCapability::Fast {
+        sources.retain(|source| model_supports_fast(&source.source.model));
+    }
     let configured_codex_api_models = sources
         .iter()
         .filter(|source| source.source.kind == "codex-api")
         .map(|source| source.source.model.to_ascii_lowercase())
         .collect::<std::collections::HashSet<_>>();
-    sources.extend(
-        definitions
-            .iter()
-            .filter(|definition| {
-                (!require_reasoning_levels || !definition.reasoning_levels.is_empty())
-                    && thinking_alias_model_is_available(available_models, &definition.id)
-                    && !configured_codex_api_models.contains(&definition.id.to_ascii_lowercase())
-            })
-            .map(|definition| ResolvedThinkingAliasSource {
-                source: ThinkingAliasSource {
-                    id: format!("codex-oauth:{}", definition.id),
-                    model: definition.id.clone(),
-                    display_name: definition.display_name.clone(),
-                    provider: "Codex OAuth".to_string(),
-                    kind: "codex-oauth".to_string(),
-                    protocol: "codex".to_string(),
-                },
-                location: ThinkingAliasSourceLocation::CodexOauth,
-            }),
-    );
+    for definition_set in definition_sets {
+        let channel = definition_set.channel;
+        let supports_capability = match capability {
+            AliasSourceCapability::Base => true,
+            AliasSourceCapability::Reasoning => channel.supports_reasoning,
+            AliasSourceCapability::Fast => channel.supports_fast,
+        };
+        if !supports_capability {
+            continue;
+        }
+        sources.extend(
+            definition_set
+                .models
+                .iter()
+                .filter(|definition| {
+                    (capability != AliasSourceCapability::Reasoning
+                        || !definition.reasoning_levels.is_empty())
+                        && (capability != AliasSourceCapability::Fast
+                            || model_supports_fast(&definition.id))
+                        && thinking_alias_model_is_available(available_models, &definition.id)
+                        && (channel.key != "codex"
+                            || !configured_codex_api_models
+                                .contains(&definition.id.to_ascii_lowercase()))
+                })
+                .map(|definition| ResolvedThinkingAliasSource {
+                    source: ThinkingAliasSource {
+                        id: format!("{}:{}", channel.kind, definition.id),
+                        model: definition.id.clone(),
+                        display_name: definition.display_name.clone(),
+                        provider: channel.provider.to_string(),
+                        kind: channel.kind.to_string(),
+                        protocol: channel.protocol.to_string(),
+                    },
+                    location: ThinkingAliasSourceLocation::Oauth {
+                        channel: channel.key,
+                        force_mapping: channel.force_mapping,
+                    },
+                }),
+        );
+    }
     Ok(sources)
 }
 
@@ -656,6 +926,21 @@ pub(crate) fn thinking_alias_model_is_available(
     available_models
         .iter()
         .any(|available| available.name.eq_ignore_ascii_case(model))
+}
+
+pub(crate) fn model_supports_fast(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model == "gpt" || model.starts_with("gpt-")
+}
+
+pub(crate) fn alias_source_supports_fast(source: &ResolvedThinkingAliasSource) -> bool {
+    model_supports_fast(&source.source.model)
+        && match &source.location {
+            ThinkingAliasSourceLocation::Oauth { channel, .. } => *channel == "codex",
+            ThinkingAliasSourceLocation::ConfigModel { section, .. } => {
+                matches!(*section, "codex-api-key" | "openai-compatibility")
+            }
+        }
 }
 
 pub(crate) fn collect_config_thinking_alias_sources(
@@ -788,20 +1073,16 @@ pub(crate) fn thinking_aliases_from_value(
         let oauth_aliases = oauth_aliases
             .as_mapping()
             .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
-        if let Some(codex_aliases) = yaml_mapping_value(oauth_aliases, "codex") {
-            let codex_aliases = codex_aliases
+        for (channel, channel_aliases) in oauth_aliases {
+            let channel = channel.as_str().unwrap_or("unknown");
+            let channel_aliases = channel_aliases
                 .as_sequence()
-                .ok_or_else(|| "oauth-model-alias.codex 必须是数组".to_string())?;
-            for entry in codex_aliases {
+                .ok_or_else(|| format!("oauth-model-alias.{channel} 必须是数组"))?;
+            let (provider, kind, protocol) = oauth_alias_channel_details(channel);
+            for entry in channel_aliases {
                 let Some(mapping) = entry.as_mapping() else {
                     continue;
                 };
-                if !matches!(
-                    yaml_mapping_value(mapping, "fork"),
-                    Some(serde_norway::Value::Bool(true))
-                ) {
-                    continue;
-                }
                 let Some(source_model) = yaml_mapping_value(mapping, "name")
                     .and_then(serde_norway::Value::as_str)
                     .map(str::trim)
@@ -819,9 +1100,10 @@ pub(crate) fn thinking_aliases_from_value(
                 entries.push(ThinkingAliasEntry {
                     source_model: source_model.to_string(),
                     alias: alias.to_string(),
-                    effort: find_thinking_alias_effort(root, alias, "codex"),
-                    provider: "Codex OAuth".to_string(),
-                    kind: "codex-oauth".to_string(),
+                    effort: find_thinking_alias_effort(root, alias, &protocol),
+                    provider: provider.clone(),
+                    kind: kind.clone(),
+                    oauth_channel: Some(channel.to_string()),
                 });
             }
         }
@@ -872,20 +1154,16 @@ pub(crate) fn speed_aliases_from_value(
         let oauth_aliases = oauth_aliases
             .as_mapping()
             .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
-        if let Some(codex_aliases) = yaml_mapping_value(oauth_aliases, "codex") {
-            let codex_aliases = codex_aliases
+        for (channel, channel_aliases) in oauth_aliases {
+            let channel = channel.as_str().unwrap_or("unknown");
+            let channel_aliases = channel_aliases
                 .as_sequence()
-                .ok_or_else(|| "oauth-model-alias.codex 必须是数组".to_string())?;
-            for entry in codex_aliases {
+                .ok_or_else(|| format!("oauth-model-alias.{channel} 必须是数组"))?;
+            let (provider, kind, protocol) = oauth_alias_channel_details(channel);
+            for entry in channel_aliases {
                 let Some(mapping) = entry.as_mapping() else {
                     continue;
                 };
-                if !matches!(
-                    yaml_mapping_value(mapping, "fork"),
-                    Some(serde_norway::Value::Bool(true))
-                ) {
-                    continue;
-                }
                 let Some(source_model) = yaml_mapping_value(mapping, "name")
                     .and_then(serde_norway::Value::as_str)
                     .map(str::trim)
@@ -900,15 +1178,17 @@ pub(crate) fn speed_aliases_from_value(
                 else {
                     continue;
                 };
-                let Some(service_tier) = find_speed_alias_service_tier(root, alias, "codex") else {
+                let Some(service_tier) = find_speed_alias_service_tier(root, alias, &protocol)
+                else {
                     continue;
                 };
                 entries.push(SpeedAliasEntry {
                     source_model: source_model.to_string(),
                     alias: alias.to_string(),
                     service_tier,
-                    provider: "Codex OAuth".to_string(),
-                    kind: "codex-oauth".to_string(),
+                    provider: provider.clone(),
+                    kind: kind.clone(),
+                    oauth_channel: Some(channel.to_string()),
                 });
             }
         }
@@ -985,6 +1265,7 @@ pub(crate) fn collect_config_thinking_alias_entries(
                 effort,
                 provider: provider_name.clone(),
                 kind: kind.to_string(),
+                oauth_channel: None,
             });
         }
     }
@@ -1033,6 +1314,7 @@ pub(crate) fn collect_config_speed_alias_entries(
                 service_tier,
                 provider: provider_name.clone(),
                 kind: kind.to_string(),
+                oauth_channel: None,
             });
         }
     }
@@ -1138,6 +1420,11 @@ pub(crate) fn add_model_alias_to_yaml(
     effort: &str,
     fast: bool,
 ) -> Result<String, String> {
+    if fast && !alias_source_supports_fast(source) {
+        return Err(
+            "Fast 仅支持 OpenAI 兼容 API、Codex API 或 Codex OAuth 的 GPT 系列模型".to_string(),
+        );
+    }
     let mut document = yaml_serde_edit::YamlValue::parse(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
     let mut updated = document.get().clone();
@@ -1150,9 +1437,10 @@ pub(crate) fn add_model_alias_to_yaml(
     }
 
     match &source.location {
-        ThinkingAliasSourceLocation::CodexOauth => {
-            append_codex_oauth_model_alias(root, &source.source.model, alias)?;
-        }
+        ThinkingAliasSourceLocation::Oauth {
+            channel,
+            force_mapping,
+        } => append_oauth_model_alias(root, channel, &source.source.model, alias, *force_mapping)?,
         ThinkingAliasSourceLocation::ConfigModel {
             section,
             provider_index,
@@ -1241,6 +1529,11 @@ pub(crate) fn add_speed_alias_to_yaml(
     source: &ResolvedThinkingAliasSource,
     alias: &str,
 ) -> Result<String, String> {
+    if !alias_source_supports_fast(source) {
+        return Err(
+            "Fast 仅支持 OpenAI 兼容 API、Codex API 或 Codex OAuth 的 GPT 系列模型".to_string(),
+        );
+    }
     let mut document = yaml_serde_edit::YamlValue::parse(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
     let mut updated = document.get().clone();
@@ -1253,9 +1546,10 @@ pub(crate) fn add_speed_alias_to_yaml(
     }
 
     match &source.location {
-        ThinkingAliasSourceLocation::CodexOauth => {
-            append_codex_oauth_model_alias(root, &source.source.model, alias)?;
-        }
+        ThinkingAliasSourceLocation::Oauth {
+            channel,
+            force_mapping,
+        } => append_oauth_model_alias(root, channel, &source.source.model, alias, *force_mapping)?,
         ThinkingAliasSourceLocation::ConfigModel {
             section,
             provider_index,
@@ -1310,21 +1604,23 @@ pub(crate) fn add_speed_alias_to_yaml(
     render_updated_core_yaml(&mut document, updated)
 }
 
-pub(crate) fn append_codex_oauth_model_alias(
+pub(crate) fn append_oauth_model_alias(
     root: &mut serde_norway::Mapping,
+    channel: &str,
     source_model: &str,
     alias: &str,
+    force_mapping: bool,
 ) -> Result<(), String> {
     let oauth_aliases = root
         .entry(yaml_key("oauth-model-alias"))
         .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
         .as_mapping_mut()
         .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
-    let codex_aliases = oauth_aliases
-        .entry(yaml_key("codex"))
+    let channel_aliases = oauth_aliases
+        .entry(yaml_key(channel))
         .or_insert_with(|| serde_norway::Value::Sequence(Vec::new()))
         .as_sequence_mut()
-        .ok_or_else(|| "oauth-model-alias.codex 必须是数组".to_string())?;
+        .ok_or_else(|| format!("oauth-model-alias.{channel} 必须是数组"))?;
     let mut alias_mapping = serde_norway::Mapping::new();
     alias_mapping.insert(
         yaml_key("name"),
@@ -1335,7 +1631,10 @@ pub(crate) fn append_codex_oauth_model_alias(
         serde_norway::Value::String(alias.to_string()),
     );
     alias_mapping.insert(yaml_key("fork"), serde_norway::Value::Bool(true));
-    codex_aliases.push(serde_norway::Value::Mapping(alias_mapping));
+    if force_mapping {
+        alias_mapping.insert(yaml_key("force-mapping"), serde_norway::Value::Bool(true));
+    }
+    channel_aliases.push(serde_norway::Value::Mapping(alias_mapping));
     Ok(())
 }
 
@@ -1463,46 +1762,27 @@ pub(crate) fn remove_thinking_alias_from_yaml(
     content: &str,
     alias: &str,
 ) -> Result<String, String> {
+    remove_thinking_alias_from_yaml_for_channel(content, alias, None)
+}
+
+pub(crate) fn remove_thinking_alias_from_yaml_for_channel(
+    content: &str,
+    alias: &str,
+    oauth_channel: Option<&str>,
+) -> Result<String, String> {
     let mut document = yaml_serde_edit::YamlValue::parse(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
     let mut updated = document.get().clone();
     let root = updated
         .as_mapping_mut()
         .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
-    let mut removed = false;
-    let mut remove_oauth_section = false;
-    if let Some(oauth_aliases) = yaml_mapping_value_mut(root, "oauth-model-alias") {
-        let oauth_aliases = oauth_aliases
-            .as_mapping_mut()
-            .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
-        if let Some(codex_aliases) = yaml_mapping_value_mut(oauth_aliases, "codex") {
-            let codex_aliases = codex_aliases
-                .as_sequence_mut()
-                .ok_or_else(|| "oauth-model-alias.codex 必须是数组".to_string())?;
-            codex_aliases.retain(|entry| {
-                let matches = entry
-                    .as_mapping()
-                    .and_then(|mapping| yaml_mapping_value(mapping, "alias"))
-                    .and_then(serde_norway::Value::as_str)
-                    .is_some_and(|value| value.trim().eq_ignore_ascii_case(alias));
-                if matches {
-                    removed = true;
-                }
-                !matches
-            });
-            if codex_aliases.is_empty() {
-                oauth_aliases.remove(yaml_key("codex"));
-            }
-        }
-        remove_oauth_section = oauth_aliases.is_empty();
+    let mut removed = remove_oauth_model_alias(root, alias, oauth_channel)?;
+    if oauth_channel.is_none() {
+        removed |= remove_config_thinking_alias(root, "codex-api-key", "codex", alias)?;
+        removed |= remove_config_thinking_alias(root, "openai-compatibility", "openai", alias)?;
     }
-    removed |= remove_config_thinking_alias(root, "codex-api-key", "codex", alias)?;
-    removed |= remove_config_thinking_alias(root, "openai-compatibility", "openai", alias)?;
     if !removed {
         return Err(format!("别名模型 {alias} 不存在，请刷新后重试"));
-    }
-    if remove_oauth_section {
-        root.remove(yaml_key("oauth-model-alias"));
     }
     remove_thinking_payload_model(root, alias)?;
     remove_speed_payload_model(root, alias)?;
@@ -1510,49 +1790,74 @@ pub(crate) fn remove_thinking_alias_from_yaml(
 }
 
 pub(crate) fn remove_speed_alias_from_yaml(content: &str, alias: &str) -> Result<String, String> {
+    remove_speed_alias_from_yaml_for_channel(content, alias, None)
+}
+
+pub(crate) fn remove_speed_alias_from_yaml_for_channel(
+    content: &str,
+    alias: &str,
+    oauth_channel: Option<&str>,
+) -> Result<String, String> {
     let mut document = yaml_serde_edit::YamlValue::parse(content)
         .map_err(|error| format!("解析内核 YAML 配置失败: {error}"))?;
     let mut updated = document.get().clone();
     let root = updated
         .as_mapping_mut()
         .ok_or_else(|| "内核配置顶层必须是 YAML 映射".to_string())?;
-    let mut removed = false;
-    let mut remove_oauth_section = false;
-    if let Some(oauth_aliases) = yaml_mapping_value_mut(root, "oauth-model-alias") {
-        let oauth_aliases = oauth_aliases
-            .as_mapping_mut()
-            .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
-        if let Some(codex_aliases) = yaml_mapping_value_mut(oauth_aliases, "codex") {
-            let codex_aliases = codex_aliases
-                .as_sequence_mut()
-                .ok_or_else(|| "oauth-model-alias.codex 必须是数组".to_string())?;
-            codex_aliases.retain(|entry| {
-                let matches = entry
-                    .as_mapping()
-                    .and_then(|mapping| yaml_mapping_value(mapping, "alias"))
-                    .and_then(serde_norway::Value::as_str)
-                    .is_some_and(|value| value.trim().eq_ignore_ascii_case(alias));
-                if matches {
-                    removed = true;
-                }
-                !matches
-            });
-            if codex_aliases.is_empty() {
-                oauth_aliases.remove(yaml_key("codex"));
-            }
-        }
-        remove_oauth_section = oauth_aliases.is_empty();
+    let mut removed = remove_oauth_model_alias(root, alias, oauth_channel)?;
+    if oauth_channel.is_none() {
+        removed |= remove_config_speed_alias(root, "codex-api-key", "codex", alias)?;
+        removed |= remove_config_speed_alias(root, "openai-compatibility", "openai", alias)?;
     }
-    removed |= remove_config_speed_alias(root, "codex-api-key", "codex", alias)?;
-    removed |= remove_config_speed_alias(root, "openai-compatibility", "openai", alias)?;
     if !removed {
         return Err(format!("别名模型 {alias} 不存在，请刷新后重试"));
     }
-    if remove_oauth_section {
-        root.remove(yaml_key("oauth-model-alias"));
-    }
     remove_speed_payload_model(root, alias)?;
     render_updated_core_yaml(&mut document, updated)
+}
+
+pub(crate) fn remove_oauth_model_alias(
+    root: &mut serde_norway::Mapping,
+    alias: &str,
+    target_channel: Option<&str>,
+) -> Result<bool, String> {
+    let Some(oauth_aliases) = yaml_mapping_value_mut(root, "oauth-model-alias") else {
+        return Ok(false);
+    };
+    let oauth_aliases = oauth_aliases
+        .as_mapping_mut()
+        .ok_or_else(|| "oauth-model-alias 必须是 YAML 映射".to_string())?;
+    let mut removed = false;
+    let mut empty_channels = Vec::new();
+    for (channel, entries) in oauth_aliases.iter_mut() {
+        let channel_name = channel.as_str().unwrap_or("unknown");
+        if target_channel.is_some_and(|target| !target.eq_ignore_ascii_case(channel_name)) {
+            continue;
+        }
+        let entries = entries
+            .as_sequence_mut()
+            .ok_or_else(|| format!("oauth-model-alias.{channel_name} 必须是数组"))?;
+        entries.retain(|entry| {
+            let matches = entry
+                .as_mapping()
+                .and_then(|mapping| yaml_mapping_value(mapping, "alias"))
+                .and_then(serde_norway::Value::as_str)
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case(alias));
+            removed |= matches;
+            !matches
+        });
+        if entries.is_empty() {
+            empty_channels.push(channel.clone());
+        }
+    }
+    for channel in empty_channels {
+        oauth_aliases.remove(&channel);
+    }
+    let remove_section = oauth_aliases.is_empty();
+    if remove_section {
+        root.remove(yaml_key("oauth-model-alias"));
+    }
+    Ok(removed)
 }
 
 pub(crate) fn configured_model_alias_exists(root: &serde_norway::Mapping, alias: &str) -> bool {

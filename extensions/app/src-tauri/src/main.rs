@@ -893,6 +893,7 @@ struct ThinkingAliasEntry {
     effort: Option<String>,
     provider: String,
     kind: String,
+    oauth_channel: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -903,6 +904,7 @@ struct SpeedAliasEntry {
     service_tier: String,
     provider: String,
     kind: String,
+    oauth_channel: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -918,7 +920,10 @@ struct ThinkingAliasSource {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ThinkingAliasSourceLocation {
-    CodexOauth,
+    Oauth {
+        channel: &'static str,
+        force_mapping: bool,
+    },
     ConfigModel {
         section: &'static str,
         provider_index: usize,
@@ -2039,6 +2044,7 @@ fn main() {
             check_codex_oauth_login,
             update_codex_model_catalog,
             get_thinking_aliases,
+            get_model_alias_sources,
             get_thinking_alias_sources,
             create_thinking_alias,
             delete_thinking_alias,

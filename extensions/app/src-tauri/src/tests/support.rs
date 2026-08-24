@@ -43,6 +43,9 @@ pub(super) fn test_codex_oauth_thinking_source(model: &str) -> ResolvedThinkingA
             kind: "codex-oauth".to_string(),
             protocol: "codex".to_string(),
         },
-        location: ThinkingAliasSourceLocation::CodexOauth,
+        location: ThinkingAliasSourceLocation::Oauth {
+            channel: "codex",
+            force_mapping: false,
+        },
     }
 }

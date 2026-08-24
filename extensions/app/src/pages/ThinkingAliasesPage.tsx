@@ -28,6 +28,7 @@ type ThinkingAliasEntry = {
   effort: string | null;
   provider: string;
   kind: string;
+  oauthChannel?: string | null;
 };
 
 type SpeedAliasEntry = {
@@ -36,6 +37,7 @@ type SpeedAliasEntry = {
   serviceTier: string;
   provider: string;
   kind: string;
+  oauthChannel?: string | null;
 };
 
 type AliasListEntry = ThinkingAliasEntry & {
@@ -69,8 +71,8 @@ export const combineModelAliasEntries = (
   speedEntries: SpeedAliasEntry[],
 ): AliasListEntry[] => {
   const entries = new Map<string, AliasListEntry>();
-  const entryKey = (entry: Pick<ThinkingAliasEntry, 'kind' | 'provider' | 'sourceModel' | 'alias'>) => (
-    [entry.kind, entry.provider, entry.sourceModel, entry.alias]
+  const entryKey = (entry: Pick<ThinkingAliasEntry, 'kind' | 'provider' | 'sourceModel' | 'alias' | 'oauthChannel'>) => (
+    [entry.oauthChannel ?? '', entry.kind, entry.provider, entry.sourceModel, entry.alias]
       .map((value) => value.toLocaleLowerCase())
       .join('\u0000')
   );
@@ -93,13 +95,14 @@ export const combineModelAliasEntries = (
 };
 
 export const combineModelAliasSources = (
+  baseSources: ThinkingAliasSource[],
   thinkingSources: ThinkingAliasSource[],
   speedSources: ThinkingAliasSource[],
 ): ModelAliasSource[] => {
   const reasoningSourceIds = new Set(thinkingSources.map((source) => source.id));
   const speedSourceIds = new Set(speedSources.map((source) => source.id));
   const sources = new Map<string, ModelAliasSource>();
-  [...speedSources, ...thinkingSources].forEach((source) => {
+  [...baseSources, ...speedSources, ...thinkingSources].forEach((source) => {
     sources.set(source.id, {
       ...source,
       supportsReasoning: reasoningSourceIds.has(source.id),
@@ -145,6 +148,12 @@ export const uniqueModelAlias = (
 
 export const thinkingAliasSourceKindLabel = (kind: string) => {
   if (kind === 'codex-oauth') return 'Codex OAuth';
+  if (kind === 'antigravity-oauth') return 'Antigravity OAuth';
+  if (kind === 'claude-oauth') return 'Claude OAuth';
+  if (kind === 'aistudio-oauth') return 'AI Studio OAuth';
+  if (kind === 'vertex-oauth') return 'Vertex OAuth';
+  if (kind === 'kimi-oauth') return 'Kimi OAuth';
+  if (kind === 'xai-oauth') return 'xAI OAuth';
   if (kind === 'codex-api') return 'Codex API';
   if (kind === 'openai-compatible') return translate(getCurrentLocale(), 'aliases.source.openAiCompatible');
   return translate(getCurrentLocale(), 'aliases.source.other');
@@ -164,6 +173,7 @@ export function ThinkingAliasesPage() {
   const { t } = useI18n();
   const [thinkingEntries, setThinkingEntries] = useState<ThinkingAliasEntry[]>([]);
   const [speedEntries, setSpeedEntries] = useState<SpeedAliasEntry[]>([]);
+  const [baseSources, setBaseSources] = useState<ThinkingAliasSource[]>([]);
   const [thinkingSources, setThinkingSources] = useState<ThinkingAliasSource[]>([]);
   const [speedSources, setSpeedSources] = useState<ThinkingAliasSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState('');
@@ -186,18 +196,20 @@ export function ThinkingAliasesPage() {
     setLoading(true);
     setError('');
     try {
-      const [nextThinkingEntries, nextThinkingSources, nextSpeedEntries, nextSpeedSources] = await Promise.all([
+      const [nextThinkingEntries, nextBaseSources, nextThinkingSources, nextSpeedEntries, nextSpeedSources] = await Promise.all([
         invoke<ThinkingAliasEntry[]>('get_thinking_aliases'),
+        invoke<ThinkingAliasSource[]>('get_model_alias_sources'),
         invoke<ThinkingAliasSource[]>('get_thinking_alias_sources'),
         invoke<SpeedAliasEntry[]>('get_speed_aliases'),
         invoke<ThinkingAliasSource[]>('get_speed_alias_sources'),
       ]);
       setThinkingEntries(nextThinkingEntries);
+      setBaseSources(nextBaseSources);
       setThinkingSources(nextThinkingSources);
       setSpeedEntries(nextSpeedEntries);
       setSpeedSources(nextSpeedSources);
       setSelectedSourceId((current) => (
-        [...nextThinkingSources, ...nextSpeedSources].some((source) => source.id === current)
+        nextBaseSources.some((source) => source.id === current)
           ? current
           : ''
       ));
@@ -225,8 +237,8 @@ export function ThinkingAliasesPage() {
   }, [modelPickerOpen]);
 
   const sources = useMemo(
-    () => combineModelAliasSources(thinkingSources, speedSources),
-    [speedSources, thinkingSources],
+    () => combineModelAliasSources(baseSources, thinkingSources, speedSources),
+    [baseSources, speedSources, thinkingSources],
   );
   const entries = useMemo(
     () => combineModelAliasEntries(thinkingEntries, speedEntries),
@@ -408,10 +420,12 @@ export function ThinkingAliasesPage() {
       if (entry.effort || !entry.serviceTier) {
         await invoke<ThinkingAliasEntry[]>('delete_thinking_alias', {
           alias: entry.alias,
+          oauthChannel: entry.oauthChannel,
         });
       } else {
         await invoke<SpeedAliasEntry[]>('delete_speed_alias', {
           alias: entry.alias,
+          oauthChannel: entry.oauthChannel,
         });
       }
       setNotice(t('aliases.deleted', { alias: entry.alias }));

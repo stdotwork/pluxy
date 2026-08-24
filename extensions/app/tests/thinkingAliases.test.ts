@@ -85,6 +85,18 @@ describe('统一模型别名列表', () => {
       protocol: 'codex',
     };
     const sources = combineModelAliasSources(
+      [
+        { ...baseSource, id: 'reasoning-and-fast' },
+        { ...baseSource, id: 'fast-only', model: 'gpt-speed-only' },
+        {
+          ...baseSource,
+          id: 'plain-only',
+          model: 'gemini-pro-agent',
+          provider: 'Antigravity OAuth',
+          kind: 'antigravity-oauth',
+          protocol: 'antigravity',
+        },
+      ],
       [{ ...baseSource, id: 'reasoning-and-fast' }],
       [
         { ...baseSource, id: 'reasoning-and-fast' },
@@ -92,10 +104,12 @@ describe('统一模型别名列表', () => {
       ],
     );
 
-    expect(sources).toHaveLength(2);
+    expect(sources).toHaveLength(3);
     expect(sources.find((source) => source.id === 'reasoning-and-fast')?.supportsReasoning).toBe(true);
     expect(sources.find((source) => source.id === 'reasoning-and-fast')?.supportsFast).toBe(true);
     expect(sources.find((source) => source.id === 'fast-only')?.supportsReasoning).toBe(false);
     expect(sources.find((source) => source.id === 'fast-only')?.supportsFast).toBe(true);
+    expect(sources.find((source) => source.id === 'plain-only')?.supportsReasoning).toBe(false);
+    expect(sources.find((source) => source.id === 'plain-only')?.supportsFast).toBe(false);
   });
 });
