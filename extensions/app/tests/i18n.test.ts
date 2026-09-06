@@ -4,6 +4,18 @@ import { en, ja, zhCN, zhTW, type MessageKey } from '../src/i18n/resources';
 import { jaOverrides } from '../src/i18n/ja';
 
 describe('i18n', () => {
+  it('uses credential-file terminology throughout both Chinese locales', () => {
+    for (const key of ['app.nav.authFiles', 'authFiles.title'] as const) {
+      expect(translate('zh-CN', key)).toBe('凭证文件');
+      expect(translate('zh-TW', key)).toBe('憑證檔案');
+    }
+    expect(translate('zh-CN', 'authFiles.uploaded', { count: 2 })).toBe('已上传 2 个凭证文件');
+    expect(translate('zh-TW', 'authFiles.uploaded', { count: 2 })).toBe('已上傳 2 個憑證檔案');
+    expect(translate('zh-CN', 'quota.fileDisabled')).toBe('凭证文件已停用');
+    expect(Object.values(zhCN).filter((message) => message.includes('认证文件'))).toEqual([]);
+    expect(Object.values(zhTW).filter((message) => /認證(?:檔案|文件)/.test(message))).toEqual([]);
+  });
+
   it('normalizes English variants and keeps Chinese as the fallback', () => {
     expect(normalizeLocale('en-US')).toBe('en');
     expect(normalizeLocale('en')).toBe('en');

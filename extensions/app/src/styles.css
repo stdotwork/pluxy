@@ -8768,7 +8768,7 @@ body.table-col-resizing * {
   text-overflow: ellipsis;
 }
 
-.real-auth-file-row.disabled {
+.real-auth-file-row.disabled > :not(.auth-file-actions) {
   opacity: 0.68;
 }
 
@@ -8801,6 +8801,7 @@ body.table-col-resizing * {
   gap: 10px;
 }
 
+.real-auth-file-row .primary-button,
 .real-auth-file-row .secondary-button {
   min-width: 52px;
 }
