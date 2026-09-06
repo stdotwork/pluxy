@@ -1,5 +1,6 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { confirm } from '@tauri-apps/plugin-dialog';
+import { InlineNotice, useAppNotice } from '../appNotice';
 import {
   Check,
   Copy,
@@ -161,7 +162,8 @@ export function AuthFileManagementPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const feedback = useAppNotice();
+  const { showNotice } = feedback;
   const [copied, setCopied] = useState('');
   const [priorityEditor, setPriorityEditor] = useState<PriorityEditor | null>(null);
   const [oauthModelProvider, setOauthModelProvider] = useState('');
@@ -176,19 +178,9 @@ export function AuthFileManagementPage() {
   const quotas = useQuotaCache();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const oauthModelRequestRef = useRef(0);
-  const noticeTimerRef = useRef<number | null>(null);
 
-  const showNotice = useCallback((message: string) => {
-    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
-    setNotice(message);
-    noticeTimerRef.current = window.setTimeout(() => {
-      setNotice('');
-      noticeTimerRef.current = null;
-    }, 3600);
-  }, []);
-
-  const loadFiles = useCallback(async () => {
-    setLoading(true);
+  const loadFiles = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     setError('');
     try {
       const payload = await managementApi.get('/auth-files');
@@ -207,7 +199,7 @@ export function AuthFileManagementPage() {
     } catch (requestError) {
       setError(String(requestError));
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, []);
 
@@ -278,7 +270,7 @@ export function AuthFileManagementPage() {
           models: excludedModels,
         });
       }
-      showNotice(t('authFiles.models.updated', { provider: oauthModelProviderLabel }));
+      showNotice({ key: 'authFiles.models.updated', variables: { provider: oauthModelProviderLabel } });
       closeOauthModels();
     } catch (requestError) {
       setOauthModelError(String(requestError));
@@ -324,10 +316,6 @@ export function AuthFileManagementPage() {
     void loadFiles();
   }, [loadFiles]);
 
-  useEffect(() => () => {
-    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
-  }, []);
-
   const providers = useMemo(
     () => Array.from(new Set(files.map(providerName))).sort((left, right) => left.localeCompare(right)),
     [files],
@@ -371,7 +359,7 @@ export function AuthFileManagementPage() {
     }
     try {
       await loadFiles();
-      if (uploaded > 0) showNotice(t('authFiles.uploaded', { count: uploaded }));
+      if (uploaded > 0) showNotice({ key: 'authFiles.uploaded', variables: { count: uploaded } });
       if (failures.length > 0) setError(t('authFiles.uploadFailed', { count: failures.length, errors: failures.join('; ') }));
     } catch (requestError) {
       setError(String(requestError));
@@ -382,6 +370,7 @@ export function AuthFileManagementPage() {
 
   const toggleStatus = async (file: AuthFile) => {
     const name = fileName(file);
+    feedback.clearNotice();
     setBusy(true);
     setError('');
     try {
@@ -389,8 +378,7 @@ export function AuthFileManagementPage() {
         name,
         disabled: !readBoolean(file, 'disabled'),
       });
-      showNotice(readBoolean(file, 'disabled') ? t('authFiles.notice.enabled') : t('authFiles.notice.disabled'));
-      await loadFiles();
+      await loadFiles(false);
     } catch (requestError) {
       setError(String(requestError));
     } finally {
@@ -432,7 +420,7 @@ export function AuthFileManagementPage() {
     try {
       await managementApi.patch('/auth-files/fields', { name, priority });
       setPriorityEditor(null);
-      showNotice(t('authFiles.priority.updated', { name }));
+      showNotice({ key: 'authFiles.priority.updated', variables: { name } });
       await loadFiles();
     } catch (requestError) {
       setPriorityEditor((current) => current
@@ -454,7 +442,7 @@ export function AuthFileManagementPage() {
     setError('');
     try {
       await managementApi.delete('/auth-files', { query: { name } });
-      showNotice(t('authFiles.deleted'));
+      showNotice({ key: 'authFiles.deleted' });
       await loadFiles();
     } catch (requestError) {
       setError(String(requestError));
@@ -492,7 +480,6 @@ export function AuthFileManagementPage() {
     <section className="page management-page auth-files-page">
       <header className="management-header">
         <div>
-          <span>Auth Files</span>
           <h1>{t('authFiles.title')}</h1>
         </div>
         <div className="management-heading-actions">
@@ -511,12 +498,7 @@ export function AuthFileManagementPage() {
       </header>
 
       {error ? <div className="management-alert error">{error}</div> : null}
-      {notice ? (
-        <div className="config-toast success" role="status" title={notice}>
-          <Check size={17} aria-hidden="true" />
-          <span>{notice}</span>
-        </div>
-      ) : null}
+      <InlineNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />
 
       <section className="panel auth-files-panel real-auth-files-panel">
         <div className="management-toolbar auth-files-toolbar">

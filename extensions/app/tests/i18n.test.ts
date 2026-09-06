@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { languageOptions, normalizeLocale, translate } from '../src/i18n';
-import { en, ja, zhCN, zhTW } from '../src/i18n/resources';
+import { languageOptions, normalizeLocale, supportedLocales, translate } from '../src/i18n';
+import { en, ja, zhCN, zhTW, type MessageKey } from '../src/i18n/resources';
 import { jaOverrides } from '../src/i18n/ja';
 
 describe('i18n', () => {
@@ -41,10 +41,67 @@ describe('i18n', () => {
     ]);
   });
 
-  it('keeps both locale dictionaries structurally aligned', () => {
+  it('requires complete dictionaries without a Japanese-to-English fallback', () => {
     expect(Object.keys(en).sort()).toEqual(Object.keys(zhCN).sort());
     expect(Object.keys(zhTW).sort()).toEqual(Object.keys(zhCN).sort());
     expect(Object.keys(ja).sort()).toEqual(Object.keys(zhCN).sort());
     expect(Object.keys(jaOverrides).sort()).toEqual(Object.keys(zhCN).sort());
+    expect(ja).toBe(jaOverrides);
+  });
+
+  it('preserves interpolation variables and nonempty messages in every locale', () => {
+    const variables = (message: string) => [...new Set(
+      [...message.matchAll(/\{(\w+)\}/g)].map((match) => match[1]),
+    )].sort();
+    for (const [locale, messages] of Object.entries({ en, ja, zhTW })) {
+      const mismatches = (Object.keys(zhCN) as MessageKey[]).filter((key) =>
+        !messages[key].trim()
+        || JSON.stringify(variables(messages[key])) !== JSON.stringify(variables(zhCN[key])),
+      );
+      expect({ locale, mismatches }).toEqual({ locale, mismatches: [] });
+    }
+  });
+
+  it('does not include untranslated Chinese prose in English messages', () => {
+    expect(Object.entries(en).filter(([, message]) => /\p{Script=Han}/u.test(message))).toEqual([]);
+  });
+
+  it('localizes API controls and usage labels in Chinese, English, and Japanese', () => {
+    for (const [key, chinese, english, japanese] of [
+      ['apiAccess.cloak.auto', '自动', 'Automatic', '自動'],
+      ['apiAccess.cloak.always', '始终启用', 'Always enabled', '常に有効'],
+      ['apiAccess.cloak.never', '从不启用', 'Never enabled', '常に無効'],
+      ['usage.column.provider', '提供商', 'Provider', 'プロバイダー'],
+      ['usage.unit.requests', '次请求', 'requests', 'リクエスト'],
+    ] as const) {
+      expect(translate('zh-CN', key)).toBe(chinese);
+      expect(translate('en', key)).toBe(english);
+      expect(translate('ja', key)).toBe(japanese);
+    }
+  });
+
+  it('preserves technical field names and units in every interface language', () => {
+    for (const locale of supportedLocales) {
+      for (const [key, term] of [
+        ['easyMode.api.baseUrl', 'API Base URL'],
+        ['easyMode.api.apiKey', 'API Key'],
+        ['apiAccess.field.baseUrl', 'Base URL'],
+        ['apiAccess.field.key', 'API Key'],
+        ['kernel.access.apiUrl', 'API URL'],
+        ['usage.unit.tokens', 'Token'],
+      ] as const) {
+        expect(translate(locale, key)).toBe(term);
+      }
+      for (const key of [
+        'easyMode.api.description',
+        'easyMode.guide.cardStep1ApiDesc',
+        'easyMode.guide.cardStep2ApiFillTip',
+        'apiAccess.error.baseRequired',
+        'model.error.invalidBaseUrl',
+      ] as const) {
+        expect(translate(locale, key)).toContain('Base URL');
+      }
+      expect(translate(locale, 'usage.stat.tokens')).toMatch(/tokens?/i);
+    }
   });
 });
