@@ -20,10 +20,12 @@ describe('quota card rendering', () => {
     expect(html).toContain('订阅到期');
   });
 
-  it('付费 API 健康状态不画成 0% 或 100% 的额度条', () => {
-    const html = render({ status: 'success', rows: [{ label: '付费 API 可用', remainingPercent: null, detail: '上游未提供剩余额度' }] }, 'xai');
+  it('xAI 付费账号保留额度说明和刷新入口，不显示可用性测试', () => {
+    const html = render({ status: 'success', rows: [{ label: '付费 API 账号', remainingPercent: null, detail: '上游未提供剩余额度' }] }, 'xai');
     expect(html).toContain('上游未提供剩余额度');
     expect(html).not.toContain('real-quota-track');
+    expect(html).not.toContain('测试可用性');
+    expect(html).toContain('获取/刷新额度');
   });
 
   it('缓存中的原始重置时间提供动态提示，过期额度不伪造为已恢复', () => {

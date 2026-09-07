@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
-import { canResetCodexQuota, probeXaiWithConfirmation, resetCodexQuotaWithConfirmation } from '../src/services/quotaActions';
+import { canResetCodexQuota, resetCodexQuotaWithConfirmation } from '../src/services/quotaActions';
 import { getQuotaCacheSnapshot, pruneQuotaCache, updateQuotaCache } from '../src/services/quotaCache';
 import { quotaKey, type QuotaState } from '../src/services/quotaService';
 
@@ -137,15 +137,6 @@ describe('quota action confirmation with fully mocked IPC', () => {
     });
     await resetCodexQuotaWithConfirmation(file, async () => true);
     expect(upstreamCalls.filter((request) => request.url.endsWith('/consume'))).toHaveLength(1);
-  });
-
-  it('only runs a paid availability test after separate explicit confirmation', async () => {
-    const xai = { name: 'xai-test.json', provider: 'xai', auth_index: 'test-xai' };
-    await probeXaiWithConfirmation(xai, async () => false);
-    expect(upstreamCalls).toHaveLength(0);
-    expect(await probeXaiWithConfirmation(xai, async () => true)).toBe('success');
-    expect(upstreamCalls.filter((request) => request.url.endsWith('/chat/completions'))).toHaveLength(1);
-    expect(upstreamCalls.some((request) => request.url.endsWith('/consume'))).toBe(false);
   });
 
   it('keeps application confirmations out of native and browser dialog APIs', async () => {

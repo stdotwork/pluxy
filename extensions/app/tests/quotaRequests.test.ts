@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { managementApi } from '../src/services/managementApi';
-import { consumeCodexResetCredit, loadQuota, probeXaiAvailability } from '../src/services/quotaService';
+import { consumeCodexResetCredit, loadQuota } from '../src/services/quotaService';
 
 const success = (body: unknown) => ({ status_code: 200, body });
 const codexUsage = {
@@ -122,7 +122,7 @@ describe('quota API compatibility', () => {
   });
 });
 
-describe('xAI quota queries and explicit availability tests', () => {
+describe('xAI quota queries without paid probes', () => {
   const file = { name: 'xai.json', provider: 'x-ai', auth_index: 'x' };
 
   it('单个账单接口失败仍展示另一接口的数据，不触发收费探测', async () => {
@@ -140,20 +140,8 @@ describe('xAI quota queries and explicit availability tests', () => {
     const result = await loadQuota({ ...file, using_api: true, prefix: 'paid' });
     expect(result.status).toBe('success');
     expect(result.rows[0].remainingPercent).toBeNull();
-    expect(result.rows[0].detail).toContain('不提供剩余额度');
+    expect(result.rows[0].detail).toBe('此账号不提供剩余额度。');
     expect(post).not.toHaveBeenCalled();
-  });
-
-  it('确认后执行极短对话探测，profile 失败不影响结果，也不伪造剩余额度', async () => {
-    handler = (request) => request.url.endsWith('/me') ? { status_code: 403 } : success({ choices: [] });
-    const result = await probeXaiAvailability({ ...file, using_api: true, prefix: 'paid' });
-    expect(result).toMatchObject({ status: 'success', plan: 'Paid', rows: [{ remainingPercent: null }] });
-    expect(calls).toHaveLength(2);
-    expect(calls.every((request) => request.url.startsWith('https://api.x.ai/'))).toBe(true);
-    expect(JSON.parse(calls.find((request) => request.method === 'POST')!.data!)).toEqual({
-      model: 'grok-4.5', messages: [{ role: 'user', content: 'ping' }], max_tokens: 1, stream: false,
-    });
-    post.mock.calls.forEach((call: unknown[]) => expect(call[2]).toEqual({ timeoutMs: 15000 }));
   });
 
   it('两个账单均无数据时返回查询错误，不自动发起付费测试', async () => {
@@ -163,12 +151,6 @@ describe('xAI quota queries and explicit availability tests', () => {
     expect(result).toMatchObject({ status: 'error', error: 'billing denied' });
     expect(calls).toHaveLength(2);
     expect(calls.every((request) => request.method === 'GET')).toBe(true);
-  });
-
-  it('不允许仅凭 profile 成功把对话失败的付费账户标记为可用', async () => {
-    handler = (request) => request.url.endsWith('/me') ? success({ user_id: 'u' }) : { status_code: 429, body: 'chat denied' };
-    await expect(probeXaiAvailability({ ...file, using_api: true, prefix: 'paid' }))
-      .rejects.toThrow('chat denied');
   });
 });
 

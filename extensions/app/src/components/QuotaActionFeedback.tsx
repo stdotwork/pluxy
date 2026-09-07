@@ -7,9 +7,7 @@ export function QuotaActionFeedback({ quota }: { quota: QuotaState }) {
   const result = quota.actionResult;
   if (!result) return null;
   const successful = result.status === 'success';
-  const message = result.action === 'probe'
-    ? t(successful ? 'quota.probe.success' : 'quota.probe.failed', { error: result.error ?? '' })
-    : t(successful ? 'quota.resetResult.submitted' : result.status === 'refresh-error'
+  const message = t(successful ? 'quota.resetResult.submitted' : result.status === 'refresh-error'
       ? 'quota.resetResult.refreshFailed' : 'quota.resetResult.failed', { error: result.error ?? '' });
   return (
     <div className={successful ? 'quota-action-feedback success' : 'quota-action-feedback error'} role={successful ? 'status' : 'alert'}>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { QuotaActionFeedback } from '../components/QuotaActionFeedback';
-import { canResetCodexQuota, probeXaiWithConfirmation, resetCodexQuotaWithConfirmation } from '../services/quotaActions';
+import { canResetCodexQuota, resetCodexQuotaWithConfirmation } from '../services/quotaActions';
 import antigravityIcon from '../assets/icons/antigravity.svg';
 import claudeIcon from '../assets/icons/claude.svg';
 import codexIcon from '../assets/icons/codex.svg';
@@ -112,20 +112,6 @@ export function QuotaPage() {
     }
   }, [askConfirmation, locale, t]);
 
-  const probeXai = useCallback(async (file: AuthFile) => {
-    setError('');
-    try {
-      await probeXaiWithConfirmation(file, () => askConfirmation({
-        title: t('quota.probe.title'),
-        message: t('quota.probe.confirm', { name: fileName(file) }),
-        warning: t('quota.xaiProbeConfirm'),
-        confirmText: t('quota.probe.confirmButton'),
-      }));
-    } catch (requestError) {
-      setError(String(requestError));
-    }
-  }, [askConfirmation, t]);
-
   const refreshAll = useCallback(async () => {
     if (Object.values(getQuotaCacheSnapshot()).some((quota) => quota.status === 'loading')) return;
     setRefreshing(true);
@@ -192,7 +178,7 @@ export function QuotaPage() {
           {grouped.map(([provider, items]) => (
             <section className="quota-provider-group" key={provider}>
               <div className="quota-group-heading"><div><img src={providerMeta[provider].icon} alt="" className="provider-logo" /><h2>{providerMeta[provider].label}</h2></div><span>{t(items.length === 1 ? 'quota.credentials.one' : 'quota.credentials.other', { count: items.length })}</span></div>
-              <div className="real-quota-grid">{items.map(({ file, quota }) => <QuotaCard key={quotaKey(file)} file={file} quota={quota} onRefresh={() => void refreshOne(file)} onReset={provider === 'codex' ? () => void resetCodexQuota(file, quota) : undefined} onProbe={provider === 'xai' ? () => void probeXai(file) : undefined} />)}</div>
+              <div className="real-quota-grid">{items.map(({ file, quota }) => <QuotaCard key={quotaKey(file)} file={file} quota={quota} onRefresh={() => void refreshOne(file)} onReset={provider === 'codex' ? () => void resetCodexQuota(file, quota) : undefined} />)}</div>
             </section>
           ))}
         </div>
@@ -201,7 +187,7 @@ export function QuotaPage() {
   );
 }
 
-export function QuotaCard({ file, quota, onRefresh, onReset, onProbe }: { file: AuthFile; quota: QuotaState; onRefresh: () => void; onReset?: () => void; onProbe?: () => void }) {
+export function QuotaCard({ file, quota, onRefresh, onReset }: { file: AuthFile; quota: QuotaState; onRefresh: () => void; onReset?: () => void }) {
   const { locale, t } = useI18n();
   const now = useQuotaClock() + (quota.serverTimeOffsetMs ?? 0);
   const provider = providerForFile(file);
@@ -213,13 +199,12 @@ export function QuotaCard({ file, quota, onRefresh, onReset, onProbe }: { file: 
         <div><strong title={name}>{name}</strong><span>{provider ? providerMeta[provider].label : t('quota.unknownProvider')}{quota.plan ? ' · ' + quota.plan : ''}</span></div>
         <div className="quota-card-actions">
           {onReset && (quota.resetCredits ?? 0) > 0 ? <button type="button" className="secondary-button compact-button" onClick={onReset} disabled={!canResetCodexQuota(file, quota)} title={quota.resetCreditsApplicable === 0 ? t('quota.resetNotApplicable') : quota.actionResult?.action === 'reset' && quota.actionResult.status !== 'success' ? t('quota.resetCheckFirst') : t('quota.reset')}>{t('quota.reset')}</button> : null}
-          {onProbe ? <button type="button" className="secondary-button compact-button" onClick={onProbe} disabled={disabled || quota.status === 'loading'}>{t('quota.probe.button')}</button> : null}
           <button type="button" className="icon-button quiet" onClick={onRefresh} disabled={disabled || quota.status === 'loading'} title={disabled ? t('quota.fileDisabled') : t('quota.refresh')}><RefreshCw size={16} className={quota.status === 'loading' ? 'spin' : ''} /></button>
         </div>
       </div>
       <QuotaActionFeedback quota={quota} />
       {quota.status === 'idle' ? <div className="quota-card-message"><span>{disabled ? t('quota.fileDisabled') : t('quota.notFetched')}</span><button type="button" className="secondary-button compact-button" onClick={onRefresh} disabled={disabled}>{disabled ? t('quota.disabled') : t('quota.fetch')}</button></div> : null}
-      {quota.status === 'loading' ? <div className="quota-card-message"><LoaderCircle size={18} className="spin" />{t(quota.pendingAction === 'reset' ? 'quota.resetting' : quota.pendingAction === 'probe' ? 'quota.probe.running' : 'quota.querying')}</div> : null}
+      {quota.status === 'loading' ? <div className="quota-card-message"><LoaderCircle size={18} className="spin" />{t(quota.pendingAction === 'reset' ? 'quota.resetting' : 'quota.querying')}</div> : null}
       {quota.status === 'error' ? <div className="quota-card-error"><AlertCircle size={18} />{quota.error}</div> : null}
       {quota.status === 'success' && provider === 'codex' ? <div className="quota-reset-credit-summary">
         <span>{t('quota.resetCredits')} <strong>{quota.resetCredits ?? '—'}</strong></span>

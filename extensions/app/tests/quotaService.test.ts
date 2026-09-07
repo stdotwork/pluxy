@@ -262,11 +262,11 @@ describe('quotaRowsFor', () => {
     ]);
   });
 
-  it('xAI 仅返回产品用量时仍能解析，付费探测不伪造百分比', () => {
+  it('xAI 仅返回产品用量时仍能解析，付费账号不伪造剩余额度', () => {
     expect(quotaRowsFor('xai', { config: { productUsage: [{ product: 'grok', usagePercent: 20 }] } })[1])
       .toMatchObject({ label: 'grok', remainingPercent: 80 });
-    expect(quotaRowsFor('xai', { mode: 'paid-health' })[0])
-      .toMatchObject({ label: '付费 API 可用', remainingPercent: null });
+    expect(quotaRowsFor('xai', { mode: 'paid-info' })[0])
+      .toMatchObject({ label: '付费 API 账号', remainingPercent: null });
   });
 
   it('xAI 不从月账单借用周窗口的重置时间', () => {
