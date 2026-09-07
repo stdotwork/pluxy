@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
   cloneCodexModelConfiguration,
+  codexContextSourceHint,
   sameCodexModelConfiguration,
   toggleCodexReasoningLevel,
   validateCodexModelConfiguration,
   type CodexModelConfiguration,
+  type CodexCatalogEditorModel,
 } from '../src/services/codexModelCatalog';
 
 const configuration = (): CodexModelConfiguration => ({
@@ -26,6 +28,20 @@ const configuration = (): CodexModelConfiguration => ({
 });
 
 describe('Codex 模型列表编辑', () => {
+  test("区分内核模型定义与兼容目录的后备上下文", () => {
+    const model: CodexCatalogEditorModel = {
+      slug: "model-a", hasOfficialTemplate: true, customized: false,
+      contextSource: "definition", configuration: configuration(), defaults: configuration(),
+    };
+    expect(codexContextSourceHint(model)).toBe("agents.catalog.contextSource.definition");
+    expect(codexContextSourceHint({ ...model, contextSource: "compatibility" }))
+      .toBe("agents.catalog.contextSource.compatibility");
+    model.configuration.context_window = 64_000;
+    expect(codexContextSourceHint(model)).toBe("agents.catalog.contextSource.customized");
+    model.configuration = cloneCodexModelConfiguration(model.defaults);
+    expect(codexContextSourceHint(model)).toBe("agents.catalog.contextSource.definition");
+  });
+
   test('克隆配置时隔离数组字段', () => {
     const original = configuration();
     const cloned = cloneCodexModelConfiguration(original);

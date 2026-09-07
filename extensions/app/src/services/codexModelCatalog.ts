@@ -25,6 +25,7 @@ export type CodexModelConfiguration = {
 export type CodexCatalogEditorModel = {
   slug: string;
   hasOfficialTemplate: boolean;
+  contextSource: "definition" | "configuration" | "compatibility" | "template";
   customized: boolean;
   configuration: CodexModelConfiguration;
   defaults: CodexModelConfiguration;
@@ -34,6 +35,14 @@ export type CodexCatalogEditorSnapshot = {
   revision: string;
   models: CodexCatalogEditorModel[];
 };
+
+export function codexContextSourceHint(model: CodexCatalogEditorModel): MessageKey {
+  if (model.configuration.context_window !== model.defaults.context_window
+    || model.configuration.max_context_window !== model.defaults.max_context_window) {
+    return "agents.catalog.contextSource.customized";
+  }
+  return `agents.catalog.contextSource.${model.contextSource ?? "template"}`;
+}
 
 export type CodexCatalogEditorSaveResult = {
   snapshot: CodexCatalogEditorSnapshot;

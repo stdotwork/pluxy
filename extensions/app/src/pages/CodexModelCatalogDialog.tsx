@@ -4,6 +4,7 @@ import { Check, LoaderCircle, RefreshCw, RotateCcw, Search, X } from 'lucide-rea
 import { useI18n } from '../i18n';
 import {
   cloneCodexModelConfiguration,
+  codexContextSourceHint,
   codexReasoningEfforts,
   sameCodexModelConfiguration,
   toggleCodexReasoningLevel,
@@ -36,23 +37,29 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [defaultsRestored, setDefaultsRestored] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (restoreDefaults = false) => {
     setLoading(true);
     setError('');
     setNotice('');
     try {
       const next = await invoke<CodexCatalogEditorSnapshot>('get_codex_model_catalog_editor');
       setSnapshot(next);
-      setModels(cloneModels(next));
+      setModels(cloneModels(next).map((model) => restoreDefaults
+        ? { ...model, configuration: cloneCodexModelConfiguration(model.defaults) }
+        : model));
+      setDefaultsRestored(restoreDefaults);
       setSelectedSlug((current) => next.models.some((model) => model.slug === current)
         ? current
         : next.models[0]?.slug ?? '');
+      return true;
     } catch (requestError) {
       setError(String(requestError));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -63,12 +70,13 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
   }, [load]);
 
   const dirty = useMemo(() => {
+    if (defaultsRestored) return true;
     if (!snapshot || snapshot.models.length !== models.length) return false;
     return models.some((model) => {
       const saved = snapshot.models.find((candidate) => candidate.slug === model.slug);
       return !saved || !sameCodexModelConfiguration(model.configuration, saved.configuration);
     });
-  }, [models, snapshot]);
+  }, [defaultsRestored, models, snapshot]);
 
   const filteredModels = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -130,17 +138,13 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
     setNotice(t('agents.catalog.restored'));
   };
 
-  const restoreAll = () => {
-    setModels((current) => current.map((model) => ({
-      ...model,
-      configuration: cloneCodexModelConfiguration(model.defaults),
-    })));
-    setError('');
-    setNotice(t('agents.catalog.restored'));
+  const restoreAll = async () => {
+    if (loading || saving) return;
+    if (await load(true)) setNotice(t('agents.catalog.restored'));
   };
 
   const save = async () => {
-    if (!snapshot || saving) return;
+    if (!snapshot || loading || saving) return;
     for (const model of models) {
       const validationKey = validateCodexModelConfiguration(model.configuration);
       if (validationKey) {
@@ -165,6 +169,7 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
       });
       setSnapshot(result.snapshot);
       setModels(cloneModels(result.snapshot));
+      setDefaultsRestored(false);
       setNotice(result.synchronizationError
         ? t('agents.catalog.syncFailed', { error: result.synchronizationError })
         : t('agents.catalog.saved'));
@@ -231,7 +236,7 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
           </aside>
 
           <main className="codex-catalog-editor">
-            {activeModel ? (
+            {activeModel && !loading ? (
               <>
                 <div className="codex-catalog-model-heading">
                   <div>
@@ -276,6 +281,7 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
                   <label className="codex-catalog-switch"><input type="checkbox" checked={activeModel.configuration.visibility === 'list'} onChange={(event) => updateField('visibility', event.currentTarget.checked ? 'list' : 'hide')} /><span>{t('agents.catalog.visible')}</span></label>
                   <label className="codex-catalog-switch"><input type="checkbox" checked={activeModel.configuration.supports_parallel_tool_calls} onChange={(event) => updateField('supports_parallel_tool_calls', event.currentTarget.checked)} /><span>{t('agents.catalog.parallel')}</span></label>
                 </div>
+                <p className="codex-catalog-hint" role="note">{t(codexContextSourceHint(activeModel))}</p>
                 <p className="codex-catalog-hint">{t('agents.catalog.capabilityHint')}</p>
               </>
             ) : !loading ? <div className="codex-catalog-state">{t('agents.catalog.empty')}</div> : null}
@@ -289,11 +295,11 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
             {!error && !notice ? <span>{dirty ? t('agents.catalog.unsaved') : t('agents.catalog.saveHint')}</span> : null}
           </div>
           <div>
-            <button type="button" className="secondary-button" onClick={restoreAll} disabled={!models.some((model) => !sameCodexModelConfiguration(model.configuration, model.defaults)) || saving}>
-              <RotateCcw size={15} />{t('agents.catalog.resetAll')}
+            <button type="button" className="secondary-button" onClick={() => void restoreAll()} disabled={loading || saving}>
+              {t('agents.catalog.resetAll')}
             </button>
             <button type="button" className="secondary-button" onClick={requestClose} disabled={saving}>{t('common.cancel')}</button>
-            <button type="button" className="primary-button" onClick={() => void save()} disabled={!snapshot || !dirty || saving}>
+            <button type="button" className="primary-button" onClick={() => void save()} disabled={!snapshot || !dirty || loading || saving}>
               {saving ? <LoaderCircle size={16} className="spin" /> : null}{saving ? t('common.saving') : t('common.save')}
             </button>
           </div>

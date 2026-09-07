@@ -414,8 +414,7 @@ pub(crate) async fn get_codex_model_catalog_editor(
 ) -> Result<codex_catalog::CatalogEditorSnapshot, String> {
     let _sync_guard = CODEX_CATALOG_SYNC_LOCK.lock().await;
     let config = gui_config_state.snapshot()?;
-    let runtime_models =
-        fetch_codex_runtime_models(config.port, effective_agent_api_key(&config)).await?;
+    let runtime_models = fetch_codex_catalog_runtime_models(&config).await?;
     codex_catalog::editor_snapshot(&runtime_models)
 }
 
@@ -434,8 +433,7 @@ pub(crate) async fn save_codex_model_catalog_editor(
 ) -> Result<CodexCatalogEditorSaveResult, String> {
     let _sync_guard = CODEX_CATALOG_SYNC_LOCK.lock().await;
     let config = gui_config_state.snapshot()?;
-    let runtime_models =
-        fetch_codex_runtime_models(config.port, effective_agent_api_key(&config)).await?;
+    let runtime_models = fetch_codex_catalog_runtime_models(&config).await?;
     let snapshot = codex_catalog::save_customizations(
         &codex_model_customizations_path(&app)?,
         &runtime_models,
@@ -796,13 +794,60 @@ pub(crate) async fn fetch_codex_runtime_models(
     Err("本地内核不支持 Codex 模型列表接口".to_string())
 }
 
+// The client_version response contains synthesized Codex templates; its context
+// fields are not the raw core model definitions. Resolve defaults through the
+// management APIs before generating or editing the Codex catalog.
+pub(crate) async fn fetch_codex_catalog_runtime_models(
+    config: &GuiConfigFile,
+) -> Result<Vec<codex_catalog::CodexRuntimeModel>, String> {
+    let (runtime, definitions, content) = tokio::join!(
+        fetch_codex_runtime_models(config.port, effective_agent_api_key(config)),
+        fetch_codex_context_definitions(config),
+        fetch_management_config_yaml(config),
+    );
+    let mut runtime = runtime?;
+    let definitions = definitions?;
+    let content = content?;
+    let mut aliases = runtime.iter().map(|model| AgentModelOption {
+        name: model.slug.clone(), alias: None, is_alias: false, context_window: None,
+    }).collect::<Vec<_>>();
+    mark_configured_agent_model_aliases(&mut aliases, &content)?;
+    codex_catalog::merge_context_definitions(&mut runtime, &definitions, &aliases);
+    codex_catalog::apply_configured_context_limits(&mut runtime, &content)?;
+    Ok(runtime)
+}
+
+async fn fetch_codex_context_definitions(
+    config: &GuiConfigFile,
+) -> Result<Vec<CodexModelDefinition>, String> {
+    // API-key sources may expose models from other channels, so do not filter by
+    // active OAuth credentials. Model IDs still come only from the available list.
+    let channels = ["gemini", "vertex", "aistudio", "antigravity", "claude", "codex", "kimi", "xai"];
+    let results = futures_util::future::join_all(channels.iter().map(|channel|
+        fetch_oauth_channel_model_definitions(config, channel)
+    )).await;
+    let mut definitions = Vec::new();
+    let mut successes = 0;
+    let mut first_error = None;
+    for result in results {
+        match result {
+            Ok(models) => { successes += 1; definitions.extend(models); }
+            Err(error) => { first_error.get_or_insert(error); }
+        }
+    }
+    if successes == 0 {
+        return Err(format!("读取 CPA 模型上下文定义失败: {}", first_error.unwrap_or_default()));
+    }
+    Ok(definitions)
+}
+
 pub(crate) async fn fetch_prepared_agent_models(
     client: AgentClient,
     config: &GuiConfigFile,
 ) -> Result<PreparedAgentModels, String> {
     let api_key = effective_agent_api_key(config);
     if client == AgentClient::Codex {
-        let runtime_models = fetch_codex_runtime_models(config.port, api_key).await?;
+        let runtime_models = fetch_codex_catalog_runtime_models(config).await?;
         prepare_codex_agent_models(&runtime_models)
     } else {
         let mut models = fetch_agent_models(config.port, api_key).await?;
@@ -872,8 +917,7 @@ pub(crate) async fn refresh_applied_codex_model_catalog(
     config: &GuiConfigFile,
 ) -> Result<bool, String> {
     let _sync_guard = CODEX_CATALOG_SYNC_LOCK.lock().await;
-    let runtime_models =
-        fetch_codex_runtime_models(config.port, effective_agent_api_key(config)).await?;
+    let runtime_models = fetch_codex_catalog_runtime_models(config).await?;
     let prepared = prepare_codex_agent_models(&runtime_models)?;
     sync_prepared_codex_model_catalog(app, config, &prepared)
 }

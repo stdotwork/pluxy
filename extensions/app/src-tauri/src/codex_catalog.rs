@@ -4,10 +4,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
 
 mod customizations;
+mod runtime_context;
 pub(crate) use customizations::{
     editor_snapshot, load_customizations, save_customizations, CatalogEditorRequest,
     CatalogEditorSnapshot,
 };
+pub(crate) use runtime_context::{apply_configured_context_limits, merge_context_definitions};
 
 const MODEL_CATALOG_JSON: &str = include_str!("../resources/codex_models/model-catalog.json");
 const FALLBACK_MODEL_JSON: &str = include_str!("../resources/codex_models/fallback-model.json");
@@ -21,6 +23,7 @@ pub(crate) struct CodexRuntimeModel {
     description: Option<String>,
     context_window: Option<u64>,
     max_context_window: Option<u64>,
+    context_source: &'static str,
     input_modalities: Option<Vec<String>>,
     default_reasoning_level: Option<String>,
     hidden: bool,
@@ -138,8 +141,15 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
                 "contextLength",
             ],
         );
-        let max_context_window =
-            positive_u64_field(value, &["max_context_window", "maxContextWindow"]);
+        let max_context_window = positive_u64_field(
+            value,
+            &[
+                "max_context_window",
+                "maxContextWindow",
+                "max_context_length",
+                "maxContextLength",
+            ],
+        );
         let input_modalities = parse_modalities(value);
         let default_reasoning_level =
             optional_string(value, &["default_reasoning_level", "defaultReasoningLevel"])
@@ -154,6 +164,11 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
             description: description.clone(),
             context_window,
             max_context_window,
+            context_source: if context_window.or(max_context_window).is_some() {
+                "compatibility"
+            } else {
+                "template"
+            },
             input_modalities: input_modalities.clone(),
             default_reasoning_level: default_reasoning_level.clone(),
             hidden,
@@ -414,6 +429,7 @@ fn prepare_catalog_with_customizations(
                 "display_name".to_string(),
                 Value::String(runtime.slug.clone()),
             );
+            apply_runtime_context_windows(&mut value, runtime);
             enable_fast_mode(&mut value);
             entries.push(CatalogEntry {
                 value,
@@ -565,6 +581,25 @@ fn normalize_fallback_model(model: &mut Map<String, Value>) {
     }
 }
 
+// Both official and fallback templates take context defaults from the CPA API.
+// Template values are used only when the API provides no valid context metadata.
+fn apply_runtime_context_windows(model: &mut Map<String, Value>, runtime: &CodexRuntimeModel) {
+    if let Some(context_window) = runtime.context_window.or(runtime.max_context_window) {
+        let max_context_window = runtime
+            .max_context_window
+            .unwrap_or(context_window)
+            .max(context_window);
+        model.insert(
+            "context_window".to_string(),
+            Value::Number(context_window.into()),
+        );
+        model.insert(
+            "max_context_window".to_string(),
+            Value::Number(max_context_window.into()),
+        );
+    }
+}
+
 fn apply_runtime_metadata(model: &mut Map<String, Value>, runtime: &CodexRuntimeModel) {
     model.insert("slug".to_string(), Value::String(runtime.slug.clone()));
     model.insert(
@@ -579,26 +614,7 @@ fn apply_runtime_metadata(model: &mut Map<String, Value>, runtime: &CodexRuntime
         );
     }
 
-    if let Some(context_window) = runtime.context_window {
-        let max_context_window = runtime
-            .max_context_window
-            .unwrap_or(context_window)
-            .max(context_window);
-        model.insert(
-            "context_window".to_string(),
-            Value::Number(context_window.into()),
-        );
-        model.insert(
-            "max_context_window".to_string(),
-            Value::Number(max_context_window.into()),
-        );
-    } else if let Some(max_context_window) = runtime.max_context_window {
-        let context_window = positive_u64_value(model.get("context_window")).unwrap_or(128_000);
-        model.insert(
-            "max_context_window".to_string(),
-            Value::Number(max_context_window.max(context_window).into()),
-        );
-    }
+    apply_runtime_context_windows(model, runtime);
 
     if let Some(modalities) = runtime.input_modalities.as_ref() {
         model.insert(
@@ -1096,7 +1112,8 @@ mod tests {
             ["b", "C"]
         );
         assert_eq!(models[0]["base_instructions"], "Known B");
-        assert_eq!(models[0]["context_window"], 300_000);
+        assert_eq!(models[0]["context_window"], 1);
+        assert_eq!(models[0]["max_context_window"], 1);
         assert_eq!(
             models[1]["base_instructions"],
             "You are Codex, a model-neutral coding agent."
@@ -1104,6 +1121,54 @@ mod tests {
         assert_eq!(models[1]["context_window"], 200_000);
         assert_eq!(models[1]["max_context_window"], 200_000);
         assert!(models[1]["priority"].as_i64().unwrap() > 20);
+    }
+
+    #[test]
+    fn api_context_defaults_apply_to_official_and_fallback_models() {
+        let sources = parse_sources(MODEL_CATALOG_JSON).unwrap();
+        let runtime = runtime(serde_json::json!({"models":[
+            {"slug":"gpt-6-astra","context_window":372000,"max_context_window":872000},
+            {"slug":"gpt-5.6-sol","context_window":921000,"max_context_window":1000000},
+            {"slug":"deepseek-v4-flash","context_length":1000000,"max_context_length":1048576},
+            {"slug":"other-model","context_window":128000}
+        ]}));
+        let catalog = prepare_catalog_with_sources(&runtime, &sources).unwrap();
+        let output = output_models(&catalog);
+        for (slug, context, maximum) in [
+            ("gpt-6-astra", 372_000, 872_000),
+            ("gpt-5.6-sol", 921_000, 1_000_000),
+            ("deepseek-v4-flash", 1_000_000, 1_048_576),
+            ("other-model", 128_000, 128_000),
+        ] {
+            let model = output.iter().find(|model| model["slug"] == slug).unwrap();
+            assert_eq!(model["context_window"], context, "{slug}");
+            assert_eq!(model["max_context_window"], maximum, "{slug}");
+            let option = catalog
+                .models
+                .iter()
+                .find(|model| model.name == slug)
+                .unwrap();
+            assert_eq!(option.context_window, Some(context));
+        }
+    }
+
+    #[test]
+    fn max_only_runtime_context_does_not_inherit_an_unrelated_default() {
+        let sources = parse_sources(MODEL_CATALOG_JSON).unwrap();
+        for (slug, maximum) in [
+            ("gpt-6-astra", 64_000),
+            ("gpt-6-astra", 1_000_000),
+            ("max-only", 64_000),
+            ("max-only", 1_000_000),
+        ] {
+            let runtime = runtime(serde_json::json!({"models":[{
+                "slug": slug, "max_context_window": maximum
+            }]}));
+            let catalog = prepare_catalog_with_sources(&runtime, &sources).unwrap();
+            let model = &output_models(&catalog)[0];
+            assert_eq!(model["context_window"], maximum);
+            assert_eq!(model["max_context_window"], maximum);
+        }
     }
 
     #[test]
@@ -1121,7 +1186,12 @@ mod tests {
         for (key, expected) in template {
             if !matches!(
                 key.as_str(),
-                "slug" | "display_name" | "service_tiers" | "additional_speed_tiers"
+                "slug"
+                    | "display_name"
+                    | "context_window"
+                    | "max_context_window"
+                    | "service_tiers"
+                    | "additional_speed_tiers"
             ) {
                 assert_eq!(model.get(key), Some(expected), "changed field {key}");
             }
@@ -1129,6 +1199,8 @@ mod tests {
         assert_eq!(model["slug"], "a");
         assert_eq!(model["display_name"], "a");
         assert_eq!(model["nested"]["unknown"], true);
+        assert_eq!(model["context_window"], 1);
+        assert_eq!(model["max_context_window"], 1);
         assert_eq!(
             model["service_tiers"],
             serde_json::json!([{
@@ -1182,7 +1254,7 @@ mod tests {
     }
 
     #[test]
-    fn gpt_6_astra_generation_uses_official_template_and_optional_fast_mode() {
+    fn gpt_6_astra_uses_api_context_with_official_capabilities_and_fast_mode() {
         let sources = parse_sources(MODEL_CATALOG_JSON).unwrap();
         let runtime = runtime(serde_json::json!({"models":[{
             "id":"gpt-6-astra",
@@ -1193,8 +1265,8 @@ mod tests {
         let catalog = prepare_catalog_with_sources(&runtime, &sources).unwrap();
         let model = &output_models(&catalog)[0];
 
-        assert_eq!(model["context_window"], 272_000);
-        assert_eq!(model["max_context_window"], 872_000);
+        assert_eq!(model["context_window"], 1_048_576);
+        assert_eq!(model["max_context_window"], 1_048_576);
         assert_eq!(model["default_reasoning_level"], "low");
         assert_eq!(
             reasoning_efforts(model),

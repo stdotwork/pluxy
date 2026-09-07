@@ -39,6 +39,7 @@ pub(crate) struct CatalogEditorSnapshot {
 struct CatalogEditorModel {
     slug: String,
     has_official_template: bool,
+    context_source: &'static str,
     customized: bool,
     configuration: Map<String, Value>,
     defaults: Map<String, Value>,
@@ -64,7 +65,15 @@ fn editable_configuration(model: &Map<String, Value>) -> Map<String, Value> {
         .map(|field| {
             (
                 field.to_string(),
-                model.get(*field).cloned().unwrap_or(Value::Null),
+                model.get(*field).cloned().unwrap_or_else(|| {
+                    // Codex defaults this optional field to 95 when it is omitted.
+                    // The editor needs the same value to validate and save context changes.
+                    if *field == "effective_context_window_percent" {
+                        Value::from(95)
+                    } else {
+                        Value::Null
+                    }
+                }),
             )
         })
         .collect()
@@ -198,7 +207,7 @@ pub(super) fn apply_customizations(
     Ok(())
 }
 
-fn snapshot_for_state(
+pub(super) fn snapshot_for_state(
     runtime_models: &[CodexRuntimeModel],
     state: &CatalogState,
 ) -> Result<CatalogEditorSnapshot, String> {
@@ -222,6 +231,10 @@ fn snapshot_for_state(
         models.push(CatalogEditorModel {
             slug,
             has_official_template: state.sources.templates.contains_key(&key),
+            context_source: runtime_models
+                .iter()
+                .find(|runtime| normalize_id(&runtime.slug) == key)
+                .map_or("template", |runtime| runtime.context_source),
             customized: state.customizations.contains_key(&key),
             configuration: editable_configuration(&model),
             defaults,
@@ -379,6 +392,7 @@ mod tests {
             description: None,
             context_window: None,
             max_context_window: None,
+            context_source: "template",
             input_modalities: None,
             default_reasoning_level: None,
             hidden: false,
@@ -458,6 +472,70 @@ mod tests {
         assert_eq!(persisted["models"], serde_json::json!({}));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn editor_context_defaults_follow_api_updates_and_preserve_explicit_overrides() {
+        let mut state = CatalogState {
+            sources: parse_sources(MODEL_CATALOG_JSON).unwrap(),
+            json: MODEL_CATALOG_JSON.to_string(),
+            customizations: Default::default(),
+        };
+        let mut runtime = runtime_model("gpt-6-astra");
+        runtime.context_window = Some(128_000);
+        runtime.max_context_window = Some(256_000);
+        let snapshot = snapshot_for_state(&[runtime.clone()], &state).unwrap();
+        assert_eq!(snapshot.models[0].configuration["context_window"], 128_000);
+        assert_eq!(snapshot.models[0].defaults["max_context_window"], 256_000);
+        assert_eq!(
+            snapshot.models[0].defaults["effective_context_window_percent"],
+            95
+        );
+        let mut configuration = snapshot.models[0].configuration.clone();
+        configuration.insert("context_window".to_string(), serde_json::json!(192_000));
+        state.customizations = customizations_from_request(
+            &snapshot,
+            CatalogEditorRequest {
+                revision: snapshot.revision.clone(),
+                models: vec![CatalogEditorModelRequest {
+                    slug: runtime.slug.clone(),
+                    configuration,
+                }],
+            },
+        )
+        .unwrap();
+
+        runtime.context_window = Some(512_000);
+        runtime.max_context_window = Some(1_000_000);
+        let updated = snapshot_for_state(&[runtime.clone()], &state).unwrap();
+        assert_ne!(updated.revision, snapshot.revision);
+        assert_eq!(updated.models[0].defaults["context_window"], 512_000);
+        assert_eq!(updated.models[0].defaults["max_context_window"], 1_000_000);
+        assert_eq!(updated.models[0].configuration["context_window"], 192_000);
+        assert_eq!(
+            updated.models[0].configuration["max_context_window"],
+            256_000
+        );
+
+        // Restoring defaults drops the saved override and follows the current API response.
+        state.customizations = customizations_from_request(
+            &updated,
+            CatalogEditorRequest {
+                revision: updated.revision.clone(),
+                models: vec![CatalogEditorModelRequest {
+                    slug: runtime.slug.clone(),
+                    configuration: updated.models[0].defaults.clone(),
+                }],
+            },
+        )
+        .unwrap();
+        assert!(state.customizations.is_empty());
+        let generated =
+            prepare_catalog_with_customizations(&[runtime], &state.sources, &state.customizations)
+                .unwrap();
+        let model: Value = serde_json::from_str(&generated.json).unwrap();
+        assert_eq!(model["models"][0]["context_window"], 512_000);
+        assert_eq!(model["models"][0]["max_context_window"], 1_000_000);
     }
 
     #[test]
