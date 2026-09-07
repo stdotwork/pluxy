@@ -1,3 +1,4 @@
+import { useConfirmation } from '../components/ConfirmationDialog';
 import {
   type CSSProperties,
   FormEvent,
@@ -794,6 +795,7 @@ export const providerRecordWithDisabledState = (
 };
 
 export function ApiAccessPage() {
+  const { askConfirmation, confirmationDialog } = useConfirmation();
   const { t } = useI18n();
   const [records, setRecords] = useState(emptyRecords);
   const [activeCategory, setActiveCategory] = useState<ProviderCategory>('codex-api-key');
@@ -1054,7 +1056,7 @@ export function ApiAccessPage() {
   };
 
   const deleteRow = async (row: ProviderRow) => {
-    if (!window.confirm(t('apiAccess.deleteConfirm', { remark: row.remark || row.name }))) return;
+    if (!await askConfirmation({ title: t('common.delete'), message: t('apiAccess.deleteConfirm', { remark: row.remark || row.name }), confirmText: t('common.delete'), variant: 'danger' })) return;
     setFeedbackRow(providerDragId(row));
     feedback.clearNotice();
     setBusy(true);
@@ -1176,6 +1178,7 @@ export function ApiAccessPage() {
 
   return (
     <section className="page management-page api-access-page">
+      {confirmationDialog}
       <header className="management-header">
         <div>
           <h1>{t('apiAccess.title')}</h1>

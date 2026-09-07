@@ -9064,6 +9064,79 @@ body.table-col-resizing * {
   gap: 13px;
 }
 
+.app-confirm-backdrop {
+  z-index: 160;
+  padding: 20px;
+}
+
+.config-dialog.app-confirm-dialog {
+  width: min(460px, 100%);
+  height: auto;
+  grid-template-rows: none;
+  gap: 18px;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+}
+
+.app-confirm-dialog > p {
+  margin: 0;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.app-confirm-details {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 7px;
+  background: var(--theme-f4f2ec);
+}
+
+.app-confirm-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.app-confirm-details dt {
+  color: var(--theme-7a746c);
+}
+
+.app-confirm-details dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.app-confirm-warning {
+  color: var(--theme-7a746c);
+  font-size: var(--font-size-label);
+}
+
+.quota-action-feedback {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  padding: 9px 11px;
+  border-radius: 6px;
+  background: var(--theme-f4f2ec);
+  font-size: var(--font-size-label);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.quota-action-feedback svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.quota-action-feedback.error {
+  color: var(--theme-9f2d20);
+  background: var(--theme-fff1ee);
+}
+
 .quota-reset-credit-summary {
   display: flex;
   align-items: center;

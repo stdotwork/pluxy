@@ -1,3 +1,4 @@
+import { useConfirmation } from '../components/ConfirmationDialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -724,13 +725,14 @@ export function UsageRecordsPage() {
 }
 
 function UsageDataManagementView() {
+  const { askConfirmation, confirmationDialog } = useConfirmation();
   const { t } = useI18n();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<UsageRepairResult | null>(null);
   const [error, setError] = useState('');
 
   const repair = async () => {
-    if (!window.confirm(t('usage.dataManagement.confirm'))) return;
+    if (!await askConfirmation({ title: t('usage.dataManagement.title'), message: t('usage.dataManagement.confirm') })) return;
     setRunning(true);
     setError('');
     setResult(null);
@@ -746,6 +748,7 @@ function UsageDataManagementView() {
 
   return (
     <section className="panel usage-data-management-panel">
+      {confirmationDialog}
       <div className="usage-data-management-heading">
         <div>
           <Wrench size={20} aria-hidden="true" />
@@ -1850,6 +1853,7 @@ function PricingView({
   query: UsageQuery;
   onChanged: () => void | Promise<void>;
 }) {
+  const { askConfirmation, confirmationDialog } = useConfirmation();
   const { t } = useI18n();
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState<PriceDraft | null>(null);
@@ -1898,7 +1902,7 @@ function PricingView({
   };
 
   const deletePrice = async (model: string) => {
-    if (!window.confirm(t('usage.pricing.deleteConfirm', { model }))) return;
+    if (!await askConfirmation({ title: t('common.delete'), message: t('usage.pricing.deleteConfirm', { model }), confirmText: t('common.delete'), variant: 'danger' })) return;
     try {
       await invoke('delete_usage_model_price', { model });
       setMessage(t('usage.pricing.deleted'));
@@ -1930,6 +1934,7 @@ function PricingView({
 
   return (
     <section className="panel usage-pricing-panel">
+      {confirmationDialog}
       <div className="usage-pricing-toolbar">
         <div className="usage-pricing-summary">
           <strong>{formatUsd(pricing.totalCost)}</strong>

@@ -9,7 +9,6 @@
     "core:window:allow-set-theme",
     "core:window:allow-set-background-color",
     "core:webview:allow-set-webview-background-color",
-    "dialog:allow-open",
-    "dialog:allow-message"
+    "dialog:allow-open"
   ]
 }

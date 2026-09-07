@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { managementApi } from '../src/services/managementApi';
-import { consumeCodexResetCredit, loadQuota } from '../src/services/quotaService';
+import { consumeCodexResetCredit, loadQuota, probeXaiAvailability } from '../src/services/quotaService';
 
 const success = (body: unknown) => ({ status_code: 200, body });
 const codexUsage = {
@@ -122,7 +122,7 @@ describe('quota API compatibility', () => {
   });
 });
 
-describe('xAI billing and paid API fallback', () => {
+describe('xAI quota queries and explicit availability tests', () => {
   const file = { name: 'xai.json', provider: 'x-ai', auth_index: 'x' };
 
   it('单个账单接口失败仍展示另一接口的数据，不触发收费探测', async () => {
@@ -136,16 +136,17 @@ describe('xAI billing and paid API fallback', () => {
     calls.forEach((request) => expect(request.header['x-userid']).toBe('u'));
   });
 
-  it('识别付费账户后先确认，默认不发送计费请求', async () => {
+  it('查询付费账号只说明额度不可用，不要求确认也不发送计费请求', async () => {
     const result = await loadQuota({ ...file, using_api: true, prefix: 'paid' });
-    expect(result.status).toBe('error');
-    expect(result.error).toContain('需要确认');
+    expect(result.status).toBe('success');
+    expect(result.rows[0].remainingPercent).toBeNull();
+    expect(result.rows[0].detail).toContain('不提供剩余额度');
     expect(post).not.toHaveBeenCalled();
   });
 
   it('确认后执行极短对话探测，profile 失败不影响结果，也不伪造剩余额度', async () => {
     handler = (request) => request.url.endsWith('/me') ? { status_code: 403 } : success({ choices: [] });
-    const result = await loadQuota({ ...file, using_api: true, prefix: 'paid' }, { confirmXaiPaidProbe: () => true });
+    const result = await probeXaiAvailability({ ...file, using_api: true, prefix: 'paid' });
     expect(result).toMatchObject({ status: 'success', plan: 'Paid', rows: [{ remainingPercent: null }] });
     expect(calls).toHaveLength(2);
     expect(calls.every((request) => request.url.startsWith('https://api.x.ai/'))).toBe(true);
@@ -155,18 +156,19 @@ describe('xAI billing and paid API fallback', () => {
     post.mock.calls.forEach((call: unknown[]) => expect(call[2]).toEqual({ timeoutMs: 15000 }));
   });
 
-  it('两个账单均无数据时可以确认回退；两种模式均失败时保留原账单错误', async () => {
+  it('两个账单均无数据时返回查询错误，不自动发起付费测试', async () => {
     handler = (request) => request.url.includes('cli-chat-proxy') ? { status_code: 403, body: 'billing denied' }
       : { status_code: 429, body: 'paid denied' };
-    const result = await loadQuota(file, { confirmXaiPaidProbe: () => true });
+    const result = await loadQuota(file);
     expect(result).toMatchObject({ status: 'error', error: 'billing denied' });
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(2);
+    expect(calls.every((request) => request.method === 'GET')).toBe(true);
   });
 
   it('不允许仅凭 profile 成功把对话失败的付费账户标记为可用', async () => {
     handler = (request) => request.url.endsWith('/me') ? success({ user_id: 'u' }) : { status_code: 429, body: 'chat denied' };
-    expect(await loadQuota({ ...file, using_api: true, prefix: 'paid' }, { confirmXaiPaidProbe: () => true }))
-      .toMatchObject({ status: 'error', error: 'chat denied' });
+    await expect(probeXaiAvailability({ ...file, using_api: true, prefix: 'paid' }))
+      .rejects.toThrow('chat denied');
   });
 });
 

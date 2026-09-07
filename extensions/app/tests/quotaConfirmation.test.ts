@@ -1,50 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { confirm } from '@tauri-apps/plugin-dialog';
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
-import { resetCodexQuotaWithConfirmation } from '../src/services/quotaActions';
+import { canResetCodexQuota, probeXaiWithConfirmation, resetCodexQuotaWithConfirmation } from '../src/services/quotaActions';
 import { getQuotaCacheSnapshot, pruneQuotaCache, updateQuotaCache } from '../src/services/quotaCache';
 import { quotaKey, type QuotaState } from '../src/services/quotaService';
 
 const file = { name: 'confirm-test.json', provider: 'codex', auth_index: 'confirm-test' };
 const key = quotaKey(file);
 const previous: QuotaState = {
-  status: 'success', rows: [{ label: '5h', remainingPercent: 0 }], resetCredits: 2,
+  status: 'success', rows: [{ label: '5h', remainingPercent: 0 }], resetCredits: 2, resetCreditsApplicable: 1,
 };
-const ask = () => confirm('Consume one Codex reset credit?', { title: 'Reset quota', kind: 'warning' });
 let originalWindow: PropertyDescriptor | undefined;
 let originalCache: ReturnType<typeof getQuotaCacheSnapshot>;
-let answer: () => Promise<unknown>;
-let dialogCalls: unknown[];
 let upstreamCalls: { url: string; method: string }[];
 let consumeError: boolean;
+let refreshError: boolean;
 
 beforeEach(() => {
   originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { value: {}, writable: true, configurable: true });
   originalCache = getQuotaCacheSnapshot();
   updateQuotaCache({ [key]: previous });
-  answer = async () => 'Cancel';
-  dialogCalls = [];
   upstreamCalls = [];
   consumeError = false;
+  refreshError = false;
   mockIPC((command, payload) => {
-    if (command === 'plugin:dialog|message') {
-      dialogCalls.push(payload);
-      return answer();
-    }
-    if (command === 'management_request') {
-      const request = (payload as { request: { path: string; body: { url: string; method: string } } }).request;
-      expect(request.path).toBe('/api-call');
-      upstreamCalls.push(request.body);
-      if (request.body.url.endsWith('/consume') && consumeError) return { status_code: 409, body: 'reset denied' };
-      return {
-        status_code: 200,
-        body: request.body.url.endsWith('/usage')
-          ? { rate_limit: { primary_window: { used_percent: 0 } } }
-          : { available_count: 1 },
-      };
-    }
-    throw new Error(`Unexpected command: ${command}`);
+    if (command !== 'management_request') throw new Error('Unexpected IPC command: ' + command);
+    const request = (payload as { request: { path: string; body: { url: string; method: string } } }).request;
+    expect(request.path).toBe('/api-call');
+    upstreamCalls.push(request.body);
+    if (request.body.url.endsWith('/consume') && consumeError) return { status_code: 409, body: 'reset denied' };
+    if (request.body.url.endsWith('/usage') && refreshError) return { status_code: 503, body: 'usage unavailable' };
+    return {
+      status_code: 200,
+      body: request.body.url.endsWith('/usage')
+        ? { rate_limit: { primary_window: { used_percent: 0 } } }
+        : { available_count: 1 },
+    };
   });
 });
 
@@ -55,92 +46,113 @@ afterEach(() => {
   updateQuotaCache(originalCache);
 });
 
-describe('native quota reset confirmation', () => {
-  it('uses the native dialog IPC and has its required Tauri capability', async () => {
-    const capabilities = await Bun.file(new URL('../src-tauri/capabilities/default.json', import.meta.url)).json();
-    expect(capabilities.permissions).toContain('dialog:allow-message');
-    await resetCodexQuotaWithConfirmation(file, ask);
-    expect(dialogCalls).toEqual([{
-      message: 'Consume one Codex reset credit?', title: 'Reset quota', kind: 'warning', buttons: 'OkCancel',
-    }]);
+describe('quota action confirmation with fully mocked IPC', () => {
+  it('preserves displayed quota and sends nothing until explicit confirmation', async () => {
+    let decide!: (confirmed: boolean) => void;
+    const resetting = resetCodexQuotaWithConfirmation(file, () => new Promise((resolve) => { decide = resolve; }));
+    expect(getQuotaCacheSnapshot()[key]).toBe(previous);
     expect(upstreamCalls).toHaveLength(0);
-  });
-
-  it('waits for explicit confirmation before sending any request', async () => {
-    let resolve!: (value: string) => void;
-    answer = () => new Promise((done) => { resolve = done; });
-    const resetting = resetCodexQuotaWithConfirmation(file, ask);
-    expect(getQuotaCacheSnapshot()[key].status).toBe('loading');
-    expect(upstreamCalls).toHaveLength(0);
-    resolve('Ok');
-    await resetting;
+    decide(true);
+    expect(await resetting).toBe('success');
     expect(upstreamCalls.filter((request) => request.url.endsWith('/consume'))).toHaveLength(1);
     expect(upstreamCalls[0].method).toBe('POST');
-    expect(getQuotaCacheSnapshot()[key]).toMatchObject({ status: 'success', resetCredits: 1 });
+    expect(getQuotaCacheSnapshot()[key]).toMatchObject({ status: 'success', resetCredits: 1, actionResult: { action: 'reset', status: 'success' } });
   });
 
-  it.each(['Cancel', null, undefined, 'unexpected'])('does not consume a credit when dismissed with %s', async (result) => {
-    answer = async () => result;
-    await resetCodexQuotaWithConfirmation(file, ask);
+  it.each([false, null, undefined, 'unexpected', 'true'])('never consumes on cancellation or an invalid answer: %s', async (answer) => {
+    expect(await resetCodexQuotaWithConfirmation(file, async () => answer as boolean)).toBe('cancelled');
     expect(upstreamCalls).toHaveLength(0);
     expect(getQuotaCacheSnapshot()[key]).toBe(previous);
   });
 
-  it('restores the previous quota when opening the dialog fails, and allows retry', async () => {
-    answer = async () => { throw new Error('dialog permission denied'); };
-    await expect(resetCodexQuotaWithConfirmation(file, ask)).rejects.toThrow('dialog permission denied');
+  it('releases the reservation if opening the confirmation fails', async () => {
+    await expect(resetCodexQuotaWithConfirmation(file, async () => { throw new Error('confirmation unavailable'); }))
+      .rejects.toThrow('confirmation unavailable');
     expect(getQuotaCacheSnapshot()[key]).toBe(previous);
     expect(upstreamCalls).toHaveLength(0);
-    answer = async () => 'Ok';
-    await resetCodexQuotaWithConfirmation(file, ask);
+    await resetCodexQuotaWithConfirmation(file, async () => true);
     expect(upstreamCalls.filter((request) => request.url.endsWith('/consume'))).toHaveLength(1);
   });
 
-  it('does not open another dialog or consume twice on repeated clicks', async () => {
-    let resolve!: (value: string) => void;
-    answer = () => new Promise((done) => { resolve = done; });
+  it('reserves the account while awaiting a decision and prevents duplicate confirmations', async () => {
+    let decide!: (confirmed: boolean) => void;
+    let confirmations = 0;
+    const ask = () => { confirmations++; return new Promise<boolean>((resolve) => { decide = resolve; }); };
     const first = resetCodexQuotaWithConfirmation(file, ask);
-    await resetCodexQuotaWithConfirmation(file, ask);
-    expect(dialogCalls).toHaveLength(1);
+    expect(await resetCodexQuotaWithConfirmation(file, ask)).toBe('cancelled');
+    expect(confirmations).toBe(1);
     expect(upstreamCalls).toHaveLength(0);
-    resolve('Ok');
+    decide(true);
     await first;
     expect(upstreamCalls.filter((request) => request.url.endsWith('/consume'))).toHaveLength(1);
   });
 
-  it('ignores confirmation if the credential was removed while the dialog was open', async () => {
-    let resolve!: (value: string) => void;
-    answer = () => new Promise((done) => { resolve = done; });
-    const resetting = resetCodexQuotaWithConfirmation(file, ask);
+  it('ignores approval after the credential is removed', async () => {
+    let decide!: (confirmed: boolean) => void;
+    const resetting = resetCodexQuotaWithConfirmation(file, () => new Promise((resolve) => { decide = resolve; }));
     pruneQuotaCache(new Set());
-    resolve('Ok');
-    await resetting;
+    decide(true);
+    expect(await resetting).toBe('cancelled');
     expect(upstreamCalls).toHaveLength(0);
     expect(getQuotaCacheSnapshot()[key]).toBeUndefined();
   });
 
-  it('does not overwrite newer quota state after a pending dialog is cancelled', async () => {
-    let resolve!: (value: string) => void;
-    answer = () => new Promise((done) => { resolve = done; });
-    const resetting = resetCodexQuotaWithConfirmation(file, ask);
+  it('does not act on a stale quota snapshot or overwrite newer data', async () => {
+    let decide!: (confirmed: boolean) => void;
+    const resetting = resetCodexQuotaWithConfirmation(file, () => new Promise((resolve) => { decide = resolve; }));
     const newer: QuotaState = { status: 'success', rows: [], resetCredits: 3 };
     updateQuotaCache({ [key]: newer });
-    resolve('Cancel');
+    decide(true);
     await resetting;
     expect(getQuotaCacheSnapshot()[key]).toBe(newer);
     expect(upstreamCalls).toHaveLength(0);
   });
 
-  it('reports reset failures and releases the pending state', async () => {
-    answer = async () => 'Ok';
-    consumeError = true;
-    await expect(resetCodexQuotaWithConfirmation(file, ask)).rejects.toThrow('reset denied');
-    expect(getQuotaCacheSnapshot()[key]).toMatchObject({ status: 'error', error: 'reset denied' });
+  it('does not offer or execute a reset when no credits currently apply', async () => {
+    updateQuotaCache({ [key]: { ...previous, resetCreditsApplicable: 0 } });
+    let asked = false;
+    await resetCodexQuotaWithConfirmation(file, async () => { asked = true; return true; });
+    expect(asked).toBe(false);
+    expect(upstreamCalls).toHaveLength(0);
+    expect(canResetCodexQuota(file, getQuotaCacheSnapshot()[key])).toBe(false);
+    expect(canResetCodexQuota({ ...file, disabled: true }, previous)).toBe(false);
   });
 
-  it('does not reintroduce browser confirmation in quota actions', async () => {
-    const page = await Bun.file(new URL('../src/pages/QuotaPage.tsx', import.meta.url)).text();
-    expect(page).not.toContain('window.confirm');
-    expect(page).toContain('await resetCodexQuotaWithConfirmation(file, () => confirm(');
+  it('retains quota and reports a failed reset on the account, requiring refresh before retry', async () => {
+    consumeError = true;
+    expect(await resetCodexQuotaWithConfirmation(file, async () => true)).toBe('error');
+    expect(getQuotaCacheSnapshot()[key]).toMatchObject({
+      rows: previous.rows, actionResult: { action: 'reset', status: 'error', error: 'reset denied' },
+    });
+    expect(canResetCodexQuota(file, getQuotaCacheSnapshot()[key])).toBe(false);
+    expect(await resetCodexQuotaWithConfirmation(file, async () => true)).toBe('cancelled');
+    expect(upstreamCalls).toHaveLength(1);
+  });
+
+  it('distinguishes an accepted reset from a failed refresh and prevents a second consume', async () => {
+    refreshError = true;
+    expect(await resetCodexQuotaWithConfirmation(file, async () => true)).toBe('refresh-error');
+    expect(getQuotaCacheSnapshot()[key]).toMatchObject({
+      rows: previous.rows, actionResult: { action: 'reset', status: 'refresh-error', error: 'usage unavailable' },
+    });
+    await resetCodexQuotaWithConfirmation(file, async () => true);
+    expect(upstreamCalls.filter((request) => request.url.endsWith('/consume'))).toHaveLength(1);
+  });
+
+  it('only runs a paid availability test after separate explicit confirmation', async () => {
+    const xai = { name: 'xai-test.json', provider: 'xai', auth_index: 'test-xai' };
+    await probeXaiWithConfirmation(xai, async () => false);
+    expect(upstreamCalls).toHaveLength(0);
+    expect(await probeXaiWithConfirmation(xai, async () => true)).toBe('success');
+    expect(upstreamCalls.filter((request) => request.url.endsWith('/chat/completions'))).toHaveLength(1);
+    expect(upstreamCalls.some((request) => request.url.endsWith('/consume'))).toBe(false);
+  });
+
+  it('keeps application confirmations out of native and browser dialog APIs', async () => {
+    for (const name of ['QuotaPage', 'AuthFileManagementPage', 'ApiAccessPage', 'ThinkingAliasesPage', 'UsageRecordsPage']) {
+      const source = await Bun.file(new URL('../src/pages/' + name + '.tsx', import.meta.url)).text();
+      expect(source).not.toContain('window.confirm');
+      expect(source).not.toContain('@tauri-apps/plugin-dialog');
+    }
   });
 });

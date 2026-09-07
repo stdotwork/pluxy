@@ -9,12 +9,12 @@ const render = (quota: QuotaState, provider = 'codex') => renderToStaticMarkup(
 );
 
 describe('quota card rendering', () => {
-  it('即使当前适用次数为零，仍显示可用重置按钮、详情错误和订阅时间', () => {
+  it('当前适用次数为零时禁用重置按钮，并保留额度详情', () => {
     const html = render({
       status: 'success', rows: [], resetCredits: 2, resetCreditsApplicable: 0,
       resetCreditsError: 'temporary failure', subscriptionActiveUntil: '2030-01-01T00:00:00Z',
     });
-    expect(html).toContain('重置额度');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>重置额度<\/button>/);
     expect(html).toContain('当前适用：0 次');
     expect(html).toContain('temporary failure');
     expect(html).toContain('订阅到期');

@@ -4,41 +4,69 @@ import {
   getQuotaCacheSnapshot,
   updateQuotaCache,
 } from './quotaCache';
-import { consumeCodexResetCredit, idleQuota, quotaKey, type AuthFile, type QuotaState } from './quotaService';
+import { readBoolean } from './managementApi';
+import {
+  consumeCodexResetCredit, idleQuota, probeXaiAvailability, providerForFile, quotaKey,
+  type AuthFile, type QuotaState,
+} from './quotaService';
 
-/** Reserve the credential before opening the asynchronous native confirmation dialog. */
-export async function resetCodexQuotaWithConfirmation(
+const pendingActions = new Set<string>();
+type QuotaActionOutcome = 'cancelled' | 'success' | 'refresh-error' | 'error';
+
+export const canResetCodexQuota = (file: AuthFile, quota: QuotaState): boolean =>
+  providerForFile(file) === 'codex'
+  && !readBoolean(file, 'disabled')
+  && quota.status === 'success'
+  && (quota.resetCredits ?? 0) > 0
+  && quota.resetCreditsApplicable !== 0
+  && !(quota.actionResult?.action === 'reset' && quota.actionResult.status !== 'success');
+
+async function runConfirmedQuotaAction(
   file: AuthFile,
-  confirmReset: () => Promise<boolean>,
-): Promise<void> {
+  action: 'reset' | 'probe',
+  confirmAction: () => Promise<boolean>,
+  execute: (file: AuthFile) => Promise<QuotaState>,
+): Promise<QuotaActionOutcome> {
   const key = quotaKey(file);
-  const previous = getQuotaCacheSnapshot()[key] ?? idleQuota();
-  if (previous.status === 'loading') return;
+  const original = getQuotaCacheSnapshot()[key];
+  const previous = original ?? idleQuota();
+  if (pendingActions.has(key) || previous.status === 'loading' || readBoolean(file, 'disabled')) return 'cancelled';
   const generation = captureQuotaCacheGeneration();
-  const pending: QuotaState = { ...previous, status: 'loading' };
-  updateQuotaCache((current) => ({ ...current, [key]: pending }));
-
-  const isCurrent = () => captureQuotaCacheGeneration() === generation
-    && getQuotaCacheSnapshot()[key] === pending;
+  pendingActions.add(key);
+  let pending: QuotaState | undefined;
   const commit = (quota: QuotaState) => {
     commitQuotaCacheIfCurrent(generation, () => {
       updateQuotaCache((current) => current[key] === pending ? { ...current, [key]: quota } : current);
     });
   };
-
-  let started = false;
   try {
-    // Never treat a pending promise, dismissal, or unexpected result as consent.
-    if (await confirmReset() !== true || !isCurrent()) return;
-    started = true;
-    commit(await consumeCodexResetCredit(file));
+    if (await confirmAction() !== true || captureQuotaCacheGeneration() !== generation
+      || getQuotaCacheSnapshot()[key] !== original) return 'cancelled';
+    pending = { ...previous, status: 'loading', pendingAction: action, actionResult: undefined };
+    updateQuotaCache((current) => ({ ...current, [key]: pending! }));
+    const result = await execute(file);
+    if (result.status === 'error') {
+      const status = action === 'reset' ? 'refresh-error' : 'error';
+      commit({ ...previous, actionResult: { action, status, error: result.error } });
+      return status;
+    }
+    commit({ ...result, actionResult: { action, status: 'success' } });
+    return 'success';
   } catch (error) {
-    if (started) commit({
-      status: 'error', rows: [], error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
+    if (!pending) throw error;
+    commit({ ...previous, actionResult: { action, status: 'error', error: error instanceof Error ? error.message : String(error) } });
+    return 'error';
   } finally {
-    // Cancellation and dialog failures preserve the displayed quota and release the lock.
-    if (!started) commit(previous);
+    pendingActions.delete(key);
   }
+}
+
+export function resetCodexQuotaWithConfirmation(file: AuthFile, confirmReset: () => Promise<boolean>): Promise<QuotaActionOutcome> {
+  if (!canResetCodexQuota(file, getQuotaCacheSnapshot()[quotaKey(file)] ?? idleQuota())) return Promise.resolve('cancelled');
+  return runConfirmedQuotaAction(file, 'reset', confirmReset, consumeCodexResetCredit);
+}
+
+export function probeXaiWithConfirmation(file: AuthFile, confirmProbe: () => Promise<boolean>): Promise<QuotaActionOutcome> {
+  if (providerForFile(file) !== 'xai') return Promise.resolve('cancelled');
+  return runConfirmedQuotaAction(file, 'probe', confirmProbe, probeXaiAvailability);
 }

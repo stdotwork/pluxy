@@ -1,5 +1,7 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { useConfirmation } from '../components/ConfirmationDialog';
+import { QuotaActionFeedback } from '../components/QuotaActionFeedback';
+import { probeXaiWithConfirmation } from '../services/quotaActions';
 import { InlineNotice, useAppNotice } from '../appNotice';
 import { AuthFileModelsDialog } from '../components/AuthFileModelsDialog';
 import {
@@ -119,7 +121,7 @@ function AuthFileQuotaSummary({ quota }: { quota: QuotaState }) {
     return (
       <div className="auth-file-quota loading">
         <LoaderCircle size={13} className="spin" />
-        <span>{t('authFiles.quota.loading')}</span>
+        <span>{t(quota.pendingAction === 'probe' ? 'quota.probe.running' : 'authFiles.quota.loading')}</span>
       </div>
     );
   }
@@ -163,6 +165,7 @@ function AuthFileQuotaSummary({ quota }: { quota: QuotaState }) {
 
 export function AuthFileManagementPage() {
   const { t } = useI18n();
+  const { askConfirmation, confirmationDialog } = useConfirmation();
   const [files, setFiles] = useState<AuthFile[]>([]);
   const [filter, setFilter] = useState('');
   const [providerFilter, setProviderFilter] = useState('all');
@@ -226,12 +229,24 @@ export function AuthFileManagementPage() {
     if (getQuotaCacheSnapshot()[key]?.status === 'loading') return;
     const cacheGeneration = captureQuotaCacheGeneration();
     updateQuotaCache((current) => ({ ...current, [key]: { status: 'loading', rows: [] } }));
-    const result = await loadQuota(file, {
-      confirmXaiPaidProbe: () => confirm(t('quota.xaiProbeConfirm'), { title: t('quota.title'), kind: 'warning' }),
-    });
+    const result = await loadQuota(file);
     commitQuotaCacheIfCurrent(cacheGeneration, () => {
       updateQuotaCache((current) => ({ ...current, [key]: result }));
     });
+  };
+
+  const probeXai = async (file: AuthFile) => {
+    setError('');
+    try {
+      await probeXaiWithConfirmation(file, () => askConfirmation({
+        title: t('quota.probe.title'),
+        message: t('quota.probe.confirm', { name: fileName(file) }),
+        warning: t('quota.xaiProbeConfirm'),
+        confirmText: t('quota.probe.confirmButton'),
+      }));
+    } catch (requestError) {
+      setError(String(requestError));
+    }
   };
 
   const closeOauthModels = () => {
@@ -432,7 +447,7 @@ export function AuthFileManagementPage() {
       setError(t('authFiles.runtimeDeleteError'));
       return;
     }
-    if (!window.confirm(t('authFiles.deleteConfirm', { name }))) return;
+    if (!await askConfirmation({ title: t('common.delete'), message: t('authFiles.deleteConfirm', { name }), confirmText: t('common.delete'), variant: 'danger' })) return;
     setBusy(true);
     setError('');
     try {
@@ -473,6 +488,7 @@ export function AuthFileManagementPage() {
 
   return (
     <section className="page management-page auth-files-page">
+      {confirmationDialog}
       <header className="management-header">
         <div>
           <h1>{t('authFiles.title')}</h1>
@@ -542,6 +558,7 @@ export function AuthFileManagementPage() {
                   </div>
                   <div className="auth-file-actions">
                     {quotaProviderForFile(file) ? <button type="button" className="secondary-button compact-button" onClick={() => void refreshQuota(file)} disabled={busy || disabled || quotas[quotaKey(file)]?.status === 'loading'}>{disabled ? t('authFiles.status.disabled') : quotas[quotaKey(file)]?.status === 'loading' ? t('authFiles.quota.querying') : quotas[quotaKey(file)]?.status === 'success' ? t('authFiles.quota.refresh') : t('authFiles.quota.fetch')}</button> : null}
+                    {quotaProviderForFile(file) === 'xai' ? <button type="button" className="secondary-button compact-button" onClick={() => void probeXai(file)} disabled={busy || disabled || quotas[quotaKey(file)]?.status === 'loading'}>{t('quota.probe.button')}</button> : null}
                     {providerKey(file) ? <button type="button" className="secondary-button compact-button" onClick={() => setModelViewName(name)} disabled={busy} title={t('authFiles.models.viewTitle')}>{t('authFiles.models.button')}</button> : null}
                     {providerKey(file) ? <button type="button" className="secondary-button compact-button" onClick={() => void openOauthModels(file)} disabled={busy || oauthModelSaving || isRuntimeOnly(file) || !readString(file, 'name')} title={t(isRuntimeOnly(file) ? 'authFiles.models.runtimeUnsupported' : 'authFiles.models.settings')}>{t('authFiles.models.excludeButton')}</button> : null}
                     <button type="button" className="secondary-button compact-button auth-file-priority-button" onClick={() => openPriorityEditor(file)} disabled={busy} title={t('authFiles.priority.hint')}><Pencil size={14} />{t('authFiles.priority.button', { priority })}</button>
@@ -550,6 +567,7 @@ export function AuthFileManagementPage() {
                     <button type="button" className="icon-button danger" onClick={() => void deleteFile(file)} disabled={busy || isRuntimeOnly(file)} title={t('common.delete')}><Trash2 size={16} /></button>
                   </div>
                   {quotaProviderForFile(file) && quotas[quotaKey(file)]?.status !== 'idle' ? <AuthFileQuotaSummary quota={quotas[quotaKey(file)] ?? idleQuota()} /> : null}
+                  <QuotaActionFeedback quota={quotas[quotaKey(file)] ?? idleQuota()} />
                 </article>
               );
             })}

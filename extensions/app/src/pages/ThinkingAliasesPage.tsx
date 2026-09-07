@@ -1,3 +1,4 @@
+import { useConfirmation } from '../components/ConfirmationDialog';
 import {
   type KeyboardEvent,
   useCallback,
@@ -174,6 +175,7 @@ const thinkingAliasSourceDetail = (source: ThinkingAliasSource) => (
 );
 
 export function ThinkingAliasesPage() {
+  const { askConfirmation, confirmationDialog } = useConfirmation();
   const { t } = useI18n();
   const [thinkingEntries, setThinkingEntries] = useState<ThinkingAliasEntry[]>([]);
   const [speedEntries, setSpeedEntries] = useState<SpeedAliasEntry[]>([]);
@@ -419,9 +421,7 @@ export function ThinkingAliasesPage() {
   };
 
   const deleteAlias = async (entry: AliasListEntry) => {
-    if (!window.confirm(
-      t('aliases.deleteConfirm', { alias: entry.alias }),
-    )) return;
+    if (!await askConfirmation({ title: t('common.delete'), message: t('aliases.deleteConfirm', { alias: entry.alias }), confirmText: t('common.delete'), variant: 'danger' })) return;
     setBusyAlias(entry.alias);
     setBusyAction('delete');
     setError('');
@@ -450,6 +450,7 @@ export function ThinkingAliasesPage() {
 
   return (
     <section className="page management-page thinking-alias-page">
+      {confirmationDialog}
       <div className="thinking-alias-feedback" aria-live="polite">
         {error ? <div className="management-alert error">{error}</div> : null}
         {!error && notice ? <div className="management-alert success">{notice}</div> : null}
