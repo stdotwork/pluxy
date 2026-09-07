@@ -69,7 +69,7 @@ export function AuthFileModelsDialog({ name, onClose }: AuthFileModelsDialogProp
                 <div className="model-discovery-list">
                   {visibleModels.map((model) => (
                     <button type="button" className="model-discovery-row auth-model-view-row" key={model.id} onClick={() => void copyModel(model.id)} title={t('authFiles.models.copyModel')}>
-                      <span><strong>{model.id}</strong>{model.displayName ? <small>{model.displayName}</small> : null}</span>
+                      <span><strong title={model.id}>{model.id}</strong>{model.displayName ? <small title={model.displayName}>{model.displayName}</small> : null}</span>
                       {copied === model.id ? <Check size={16} /> : <Copy size={16} />}
                     </button>
                   ))}

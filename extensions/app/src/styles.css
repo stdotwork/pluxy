@@ -3843,6 +3843,7 @@ textarea:focus-visible {
 }
 
 .auth-model-view-row {
+  grid-template-columns: minmax(0, 1fr) 18px;
   width: 100%;
   text-align: left;
   border: 0;
@@ -8804,6 +8805,11 @@ body.table-col-resizing * {
   border-bottom: 1px solid var(--theme-eeece6);
 }
 
+.real-auth-file-row > .quota-action-feedback {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
 .auth-file-quota {
   display: flex;
   grid-column: 2 / -1;
@@ -9833,7 +9839,23 @@ body.table-col-resizing * {
   }
 
   .real-auth-file-row {
-    grid-template-columns: 34px minmax(0, 1fr) auto;
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .auth-file-actions {
+    grid-column: 2;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .auth-files-page .management-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .auth-files-page .management-heading-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .provider-row-meta,
@@ -13494,7 +13516,23 @@ body.table-col-resizing * {
   }
 
   .real-auth-file-row {
-    grid-template-columns: 34px minmax(0, 1fr) auto;
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .auth-file-actions {
+    grid-column: 2;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .auth-files-page .management-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .auth-files-page .management-heading-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 
   .provider-row-meta,
