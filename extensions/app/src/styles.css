@@ -3765,6 +3765,105 @@ textarea:focus-visible {
   min-width: 112px;
 }
 
+.model-discovery-dialog.auth-model-dialog {
+  grid-template-rows: auto 38px auto minmax(0, 1fr) auto auto;
+  height: min(720px, calc(100vh - 32px));
+  min-height: 0;
+}
+
+.auth-model-dialog .model-discovery-header {
+  align-items: flex-start;
+}
+
+.auth-model-dialog .model-discovery-header > div {
+  display: grid;
+  gap: 5px;
+  flex: 1;
+}
+
+.auth-model-dialog .model-discovery-header span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.auth-model-dialog .auth-model-target {
+  color: var(--theme-2d2a26);
+  font-weight: 600;
+}
+
+.auth-model-provider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-model-provider select {
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--theme-d5d2cb);
+  border-radius: 5px;
+  background: var(--theme-ffffff);
+  color: var(--theme-2d2a26);
+}
+
+.auth-model-rules {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  font-size: var(--font-size-meta);
+}
+
+.auth-model-rules textarea {
+  width: 100%;
+  min-height: 64px;
+  max-height: 150px;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--theme-d5d2cb);
+  border-radius: 5px;
+  background: var(--theme-ffffff);
+  color: var(--theme-2d2a26);
+  font: inherit;
+}
+
+.auth-model-rules small {
+  color: var(--theme-7a746c);
+  line-height: 1.5;
+}
+
+.auth-model-dialog .model-discovery-row.rule-blocked {
+  background: var(--theme-f4f2ec);
+  cursor: not-allowed;
+}
+
+.model-discovery-dialog.auth-model-view-dialog {
+  grid-template-rows: auto 38px minmax(0, 1fr) auto;
+  height: min(620px, calc(100vh - 32px));
+}
+
+.auth-model-view-row {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+}
+
+@media (max-height: 650px) {
+  .model-discovery-dialog.auth-model-dialog {
+    height: auto;
+    max-height: calc(100vh - 32px);
+    overflow: auto;
+    grid-template-rows: auto 38px auto minmax(140px, 1fr) auto auto;
+  }
+
+  .model-discovery-dialog.auth-model-view-dialog {
+    grid-template-rows: auto 38px minmax(140px, 1fr) auto;
+  }
+}
+
 .provider-health-dialog {
   width: min(780px, 100%);
   height: min(660px, calc(100vh - 32px));
