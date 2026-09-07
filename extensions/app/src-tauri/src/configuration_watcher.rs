@@ -300,11 +300,21 @@ impl PendingConfigurationChanges {
             }
             return true;
         }
+        let allow_ancestor_match = match event.kind {
+            notify::EventKind::Modify(notify::event::ModifyKind::Metadata(_)) => false,
+            #[cfg(target_os = "windows")]
+            notify::EventKind::Modify(notify::event::ModifyKind::Any) => false,
+            _ => true,
+        };
         let mut relevant = false;
         for path in &event.paths {
             let normalized = configuration_watch_path(path);
             for (tracked, canonical) in tracked_paths {
-                if tracked.starts_with(path) || canonical.starts_with(&normalized) {
+                let exact_match = path == tracked || normalized == *canonical;
+                if exact_match
+                    || (allow_ancestor_match
+                        && (tracked.starts_with(path) || canonical.starts_with(&normalized)))
+                {
                     self.insert(tracked.clone());
                     relevant = true;
                 }
@@ -396,6 +406,199 @@ pub(crate) fn start_configuration_file_watcher(app: tauri::AppHandle) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::{
+        event::{CreateKind, DataChange, Flag, MetadataKind, ModifyKind, RemoveKind, RenameMode},
+        Event, EventKind,
+    };
+
+    #[test]
+    fn ancestor_metadata_events_do_not_mark_tracked_files() {
+        let directory = std::env::temp_dir().join("cpa-watch-directory-metadata");
+        let canonical = configuration_watch_path(&directory).join("agent/config.yaml");
+        for tracked in [
+            directory.join("agent/config.yaml"),
+            std::env::temp_dir().join("cpa-watch-directory-alias/agent/config.yaml"),
+        ] {
+            for kind in [
+                MetadataKind::Ownership,
+                MetadataKind::Any,
+                MetadataKind::Permissions,
+                MetadataKind::Extended,
+            ] {
+                let mut pending = PendingConfigurationChanges::default();
+                let event = Event::new(EventKind::Modify(ModifyKind::Metadata(kind)))
+                    .add_path(directory.clone());
+                assert!(!pending.record(event, &[(tracked.clone(), canonical.clone())]));
+                assert!(pending.paths.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn tracked_file_events_still_mark_exact_and_canonical_paths() {
+        let tracked = std::env::temp_dir().join("cpa-watch-file-events/config.yaml");
+        let canonical = configuration_watch_path(&tracked);
+        for path in [tracked.clone(), canonical.clone()] {
+            for kind in [
+                EventKind::Modify(ModifyKind::Metadata(MetadataKind::Ownership)),
+                EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+                EventKind::Modify(ModifyKind::Any),
+                EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+                EventKind::Create(CreateKind::File),
+                EventKind::Remove(RemoveKind::File),
+                EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            ] {
+                let mut pending = PendingConfigurationChanges::default();
+                assert!(pending.record(
+                    Event::new(kind).add_path(path.clone()),
+                    &[(tracked.clone(), canonical.clone())],
+                ));
+                assert_eq!(pending.paths, vec![tracked.clone()]);
+            }
+        }
+    }
+
+    #[test]
+    fn ancestor_structural_and_unknown_events_still_mark_tracked_files() {
+        let directory = std::env::temp_dir().join("cpa-watch-structural-events");
+        let tracked = directory.join("agent/config.yaml");
+        for kind in [
+            EventKind::Create(CreateKind::Folder),
+            EventKind::Remove(RemoveKind::Folder),
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            EventKind::Any,
+            EventKind::Other,
+        ] {
+            let mut pending = PendingConfigurationChanges::default();
+            assert!(pending.record(
+                Event::new(kind).add_path(directory.clone()),
+                &[(tracked.clone(), configuration_watch_path(&tracked))],
+            ));
+            assert_eq!(pending.paths, vec![tracked.clone()]);
+        }
+    }
+
+    #[test]
+    fn ancestor_generic_modifications_follow_the_platform_backend() {
+        let directory = std::env::temp_dir().join("cpa-watch-generic-modification");
+        let canonical = configuration_watch_path(&directory).join("config.yaml");
+        for tracked in [
+            directory.join("config.yaml"),
+            std::env::temp_dir().join("cpa-watch-generic-alias/config.yaml"),
+        ] {
+            let mut pending = PendingConfigurationChanges::default();
+            let event = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(directory.clone());
+            let relevant = pending.record(event, &[(tracked.clone(), canonical.clone())]);
+            assert_eq!(relevant, !cfg!(target_os = "windows"));
+            if cfg!(target_os = "windows") {
+                assert!(pending.paths.is_empty());
+            } else {
+                assert_eq!(pending.paths, vec![tracked]);
+            }
+        }
+    }
+
+    #[test]
+    fn rescan_takes_priority_over_directory_event_filters() {
+        let directory = std::env::temp_dir().join("cpa-watch-metadata-rescan");
+        let tracked = directory.join("agent/config.yaml");
+        let unrelated = std::env::temp_dir().join("cpa-watch-other-rescan/config.toml");
+        let paths = [
+            (tracked.clone(), configuration_watch_path(&tracked)),
+            (unrelated.clone(), configuration_watch_path(&unrelated)),
+        ];
+        for kind in [
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+            EventKind::Modify(ModifyKind::Any),
+        ] {
+            let mut pending = PendingConfigurationChanges::default();
+            let event = Event::new(kind)
+                .add_path(directory.clone())
+                .set_flag(Flag::Rescan);
+            assert!(pending.record(event, &paths));
+            assert_eq!(pending.paths, vec![tracked.clone(), unrelated.clone()]);
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn native_directory_metadata_events_are_ignored_but_file_edits_are_detected() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("cpa-watch-native-{}-{stamp}", std::process::id()));
+        let directory = root.join("agent");
+        let tracked = directory.join("config.yaml");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::write(&tracked, "model: original\n").unwrap();
+        let before = fs::metadata(&tracked).unwrap();
+        let tracked_paths = [(tracked.clone(), configuration_watch_path(&tracked))];
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |event| {
+            let _ = sender.send(event);
+        })
+        .unwrap();
+        watcher.watch(&root, RecursiveMode::NonRecursive).unwrap();
+        watcher
+            .watch(&directory, RecursiveMode::NonRecursive)
+            .unwrap();
+        let receive_modification = |path: &Path| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let event = receiver
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    .expect("expected a native filesystem event")
+                    .unwrap();
+                if event.kind.is_modify()
+                    && event
+                        .paths
+                        .iter()
+                        .any(|item| paths_refer_to_same_file(item, path))
+                {
+                    return event;
+                }
+            }
+        };
+
+        let original_permissions = fs::metadata(&directory).unwrap().permissions();
+        let mut permissions = original_permissions.clone();
+        #[cfg(target_os = "windows")]
+        permissions.set_readonly(!permissions.readonly());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(permissions.mode() ^ 0o020);
+        }
+        fs::set_permissions(&directory, permissions).unwrap();
+        let directory_event = receive_modification(&directory);
+        fs::set_permissions(&directory, original_permissions).unwrap();
+        let after = fs::metadata(&tracked).unwrap();
+        let content_after_attributes = fs::read_to_string(&tracked).unwrap();
+        let mut pending = PendingConfigurationChanges::default();
+        let directory_relevant = pending.record(directory_event, &tracked_paths);
+        let directory_changes = std::mem::take(&mut pending.paths);
+
+        fs::write(&tracked, "model: updated\n").unwrap();
+        let file_event = receive_modification(&tracked);
+        let file_relevant = pending.record(file_event, &tracked_paths);
+        drop(watcher);
+        fs::remove_file(&tracked).unwrap();
+        fs::remove_dir(&directory).unwrap();
+        fs::remove_dir(&root).unwrap();
+
+        assert_eq!(content_after_attributes, "model: original\n");
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert!(!directory_relevant);
+        assert!(directory_changes.is_empty());
+        assert!(file_relevant);
+        assert_eq!(pending.paths, vec![tracked]);
+    }
 
     #[test]
     fn missing_paths_match_canonical_events_after_the_directory_is_created() {
