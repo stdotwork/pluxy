@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card } from '@/components/ui/Card';
@@ -27,7 +27,7 @@ import {
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
-import { logsApi, type LogsQuery } from '@/services/api/logs';
+import { logsApi, type ErrorLogFile, type LogsQuery } from '@/services/api/logs';
 import { copyToClipboard } from '@/utils/clipboard';
 import { getErrorMessage } from '@/utils/helpers';
 import { downloadBlob } from '@/utils/download';
@@ -36,15 +36,10 @@ import { formatUnixTimestamp } from '@/utils/format';
 import { HTTP_METHODS, STATUS_GROUPS, resolveStatusGroup, type LogState } from './hooks/logTypes';
 import { parseLogLine } from './hooks/logParsing';
 import { createLogRequestGuard, createLogRequestQueue } from './hooks/logRequests';
+import { errorLogViewerReducer } from './hooks/errorLogViewer';
 import { useLogFilters } from './hooks/useLogFilters';
 import { isNearBottom, useLogScroller } from './hooks/useLogScroller';
 import styles from './LogsPage.module.scss';
-
-interface ErrorLogItem {
-  name: string;
-  size?: number;
-  modified?: number;
-}
 
 // 初始只渲染最近 100 行，滚动到顶部再逐步加载更多（避免一次性渲染过多导致卡顿）
 const INITIAL_DISPLAY_LINES = 100;
@@ -169,13 +164,13 @@ export function LogsPage() {
     'logsPage.structuredFiltersExpanded',
     true
   );
-  const [errorLogs, setErrorLogs] = useState<ErrorLogItem[]>([]);
+  const [errorLogs, setErrorLogs] = useState<ErrorLogFile[]>([]);
   const [loadingErrors, setLoadingErrors] = useState(false);
   const [errorLogsError, setErrorLogsError] = useState('');
-  const [selectedErrorLog, setSelectedErrorLog] = useState<ErrorLogItem | null>(null);
-  const [selectedErrorLogText, setSelectedErrorLogText] = useState('');
-  const [selectedErrorLogError, setSelectedErrorLogError] = useState('');
-  const [selectedErrorLogLoading, setSelectedErrorLogLoading] = useState(false);
+  const [errorLogViewer, dispatchErrorLogViewer] = useReducer(errorLogViewerReducer, {
+    status: 'closed',
+  });
+  const selectedErrorLog = errorLogViewer.status === 'closed' ? null : errorLogViewer.item;
   const [requestLogId, setRequestLogId] = useState<string | null>(null);
   const [requestLogDownloading, setRequestLogDownloading] = useState(false);
   const [fullscreenLogs, setFullscreenLogs] = useState(false);
@@ -414,42 +409,36 @@ export function LogsPage() {
     }
   };
 
-  const openErrorLog = async (item: ErrorLogItem) => {
+  const openErrorLog = async (item: ErrorLogFile) => {
     const requestId = requests.viewer.invalidate();
-    setSelectedErrorLog(item);
-    setSelectedErrorLogText('');
-    setSelectedErrorLogError('');
-    setSelectedErrorLogLoading(true);
+    dispatchErrorLogViewer({ type: 'open', item });
 
     try {
       const response = await logsApi.downloadErrorLog(item.name);
       const text = await responseDataToText(response.data);
       if (!requests.viewer.isCurrent(requestId)) return;
-      setSelectedErrorLogText(text);
+      dispatchErrorLogViewer({ type: 'ready', text });
     } catch (err: unknown) {
       if (!requests.viewer.isCurrent(requestId)) return;
       const message = getErrorMessage(err);
-      setSelectedErrorLogError(
-        message ? `${t('logs.error_log_open_failed')}: ${message}` : t('logs.error_log_open_failed')
-      );
-    } finally {
-      if (requests.viewer.isCurrent(requestId)) {
-        setSelectedErrorLogLoading(false);
-      }
+      dispatchErrorLogViewer({
+        type: 'error',
+        message: message
+          ? `${t('logs.error_log_open_failed')}: ${message}`
+          : t('logs.error_log_open_failed'),
+      });
     }
   };
 
   const closeErrorLogViewer = () => {
     requests.viewer.invalidate();
-    setSelectedErrorLog(null);
-    setSelectedErrorLogText('');
-    setSelectedErrorLogError('');
-    setSelectedErrorLogLoading(false);
+    dispatchErrorLogViewer({ type: 'close' });
   };
 
   const copySelectedErrorLog = async () => {
+    if (errorLogViewer.status !== 'ready' || !errorLogViewer.text) return;
     const session = requests.session.capture();
-    const ok = await copyToClipboard(selectedErrorLogText);
+    const ok = await copyToClipboard(errorLogViewer.text);
     if (!requests.session.isCurrent(session)) return;
     showNotification(
       ok
@@ -496,10 +485,7 @@ export function LogsPage() {
       invalidateSession();
       resetLogs();
       resetErrors();
-      setSelectedErrorLog(null);
-      setSelectedErrorLogText('');
-      setSelectedErrorLogError('');
-      setSelectedErrorLogLoading(false);
+      dispatchErrorLogViewer({ type: 'close' });
       setRequestLogId(null);
       setRequestLogDownloading(false);
     });
@@ -1244,7 +1230,7 @@ export function LogsPage() {
       </div>
 
       <Modal
-        open={Boolean(selectedErrorLog)}
+        open={errorLogViewer.status !== 'closed'}
         onClose={closeErrorLogViewer}
         title={selectedErrorLog?.name ?? t('logs.error_log_view_title')}
         width={960}
@@ -1258,7 +1244,7 @@ export function LogsPage() {
               onClick={() => {
                 void copySelectedErrorLog();
               }}
-              disabled={!selectedErrorLogText || selectedErrorLogLoading}
+              disabled={errorLogViewer.status !== 'ready' || !errorLogViewer.text}
             >
               {t('common.copy')}
             </Button>
@@ -1268,7 +1254,7 @@ export function LogsPage() {
                   void downloadErrorLog(selectedErrorLog.name);
                 }
               }}
-              disabled={!selectedErrorLog || selectedErrorLogLoading}
+              disabled={errorLogViewer.status === 'closed' || errorLogViewer.status === 'loading'}
             >
               {t('logs.error_logs_download')}
             </Button>
@@ -1288,16 +1274,18 @@ export function LogsPage() {
               </span>
             </div>
           )}
-          {selectedErrorLogError && <div className="error-box">{selectedErrorLogError}</div>}
-          {selectedErrorLogLoading ? (
-            <div className="hint">{t('common.loading')}</div>
-          ) : selectedErrorLogText ? (
-            <pre className={styles.errorLogContent} spellCheck={false}>
-              {selectedErrorLogText}
-            </pre>
-          ) : !selectedErrorLogError ? (
-            <div className="hint">{t('logs.error_log_empty_content')}</div>
-          ) : null}
+          {errorLogViewer.status === 'error' && (
+            <div className="error-box">{errorLogViewer.message}</div>
+          )}
+          {errorLogViewer.status === 'loading' && <div className="hint">{t('common.loading')}</div>}
+          {errorLogViewer.status === 'ready' &&
+            (errorLogViewer.text ? (
+              <pre className={styles.errorLogContent} spellCheck={false}>
+                {errorLogViewer.text}
+              </pre>
+            ) : (
+              <div className="hint">{t('logs.error_log_empty_content')}</div>
+            ))}
         </div>
       </Modal>
 
