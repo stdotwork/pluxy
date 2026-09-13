@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { useConfirmation } from '../components/ConfirmationDialog';
+import { ModelSelectionPanel } from '../components/ModelSelectionPanel';
 import {
   type CSSProperties,
   FormEvent,
@@ -28,7 +29,6 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS as DndCss } from '@dnd-kit/utilities';
 import {
-  Check,
   Edit3,
   Filter,
   GripVertical,
@@ -1595,7 +1595,7 @@ type ApiProviderDialogProps = {
   onSave: (draft: ProviderDraft, modelDiscoveryReady: boolean) => Promise<ProviderSaveResult>;
 };
 
-function ApiProviderDialog({
+export function ApiProviderDialog({
   activeCategory,
   editingRow,
   initialDraft,
@@ -1616,13 +1616,52 @@ function ApiProviderDialog({
     () => activeCategory !== 'deepseek'
       || Boolean(editingRow && initialDraft.models.some((model) => model.name.trim())),
   );
-  const [modelSearch, setModelSearch] = useState('');
   const [thinkingLevelInput, setThinkingLevelInput] = useState('');
   const [selectedModelNames, setSelectedModelNames] = useState<Set<string>>(
-    () => new Set(initialDraft.models.map((model) => model.name.toLowerCase())),
+    () => new Set(mergeModelOptions(initialDraft.models).map((model) => model.name.toLowerCase())),
   );
   const modelCardRef = useRef<HTMLDivElement>(null);
+  const modelDialogRef = useRef<HTMLElement>(null);
   const discoverySelectionInitializedRef = useRef(false);
+  const discoveryRequestRef = useRef(0);
+
+  const closeModelDiscovery = useCallback(() => {
+    discoveryRequestRef.current += 1;
+    setModelLoading(false);
+    setModelDiscoveryOpen(false);
+  }, []);
+
+  useEffect(() => () => { discoveryRequestRef.current += 1; }, []);
+
+  useEffect(() => {
+    if (!modelDiscoveryOpen) return;
+    const previousFocus = document.activeElement;
+    const dialog = modelDialogRef.current;
+    dialog?.querySelector<HTMLInputElement>('input')?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeModelDiscovery();
+      } else if (event.key === 'Tab') {
+        const controls = Array.from(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? []);
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !dialog?.contains(document.activeElement))) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !dialog?.contains(document.activeElement))) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    };
+  }, [modelDiscoveryOpen, closeModelDiscovery]);
 
   const modelOptions = useMemo(
     () => mergeModelOptions(discoveredModels, draft.models),
@@ -1634,16 +1673,12 @@ function ApiProviderDialog({
     [draft.models],
   );
 
-  const visibleModelOptions = useMemo(() => {
-    const query = modelSearch.trim().toLowerCase();
-    if (!query) return modelOptions;
-    return modelOptions.filter((model) =>
-      `${model.name} ${model.alias ?? ''}`.toLowerCase().includes(query),
-    );
-  }, [modelOptions, modelSearch]);
-
-  const allVisibleModelsSelected = visibleModelOptions.length > 0
-    && visibleModelOptions.every((model) => selectedModelNames.has(model.name.toLowerCase()));
+  const selectedModels = useMemo(() => modelOptions.filter((model) =>
+    selectedModelNames.has(model.name.toLowerCase()),
+  ), [modelOptions, selectedModelNames]);
+  const unselectedModels = useMemo(() => modelOptions.filter((model) =>
+    !selectedModelNames.has(model.name.toLowerCase()),
+  ), [modelOptions, selectedModelNames]);
 
   const updateTextField = (
     field: 'apiKey' | 'remark' | 'baseUrl' | 'priority' | 'prefix' | 'headersText' | 'excludedModelsText' | 'testModel' | 'cloakMode' | 'cloakSensitiveWordsText',
@@ -1651,6 +1686,8 @@ function ApiProviderDialog({
   ) => {
     setFormError('');
     if (field === 'apiKey' || field === 'baseUrl' || field === 'headersText') {
+      discoveryRequestRef.current += 1;
+      setModelLoading(false);
       setModelError('');
       if (activeCategory === 'deepseek') setModelDiscoveryReady(false);
     }
@@ -1716,6 +1753,7 @@ function ApiProviderDialog({
       setModelError(t('apiAccess.error.enterBaseUrl'));
       return;
     }
+    const requestId = ++discoveryRequestRef.current;
     setModelLoading(true);
     setModelError('');
     try {
@@ -1736,21 +1774,24 @@ function ApiProviderDialog({
         editingRow?.authIndex,
         parseProviderHeaders(draft.headersText ?? ''),
       );
+      if (requestId !== discoveryRequestRef.current) return;
       const models = applyProviderPreset(
         activeCategory,
         { ...draft, models: fetchedModels },
       ).models;
-      const selectionMode = discoverySelectionInitializedRef.current ? 'refresh' : 'initial';
+      const initialized = discoverySelectionInitializedRef.current;
       setDiscoveredModels(models);
       setSelectedModelNames((current) =>
-        reconcileModelSelection(models, draft.models, current, selectionMode));
+        initialized
+          ? reconcileModelSelection(models, draft.models, current, 'refresh')
+          : modelSelectionForDiscovery(activeSection, draft.models, models, draft.excludedModelsText ?? ''));
       discoverySelectionInitializedRef.current = true;
       if (activeCategory === 'deepseek') setModelDiscoveryReady(true);
       if (!models.length) setModelError(t('apiAccess.error.noAvailableModels'));
     } catch (requestError) {
-      setModelError(requestErrorMessage(requestError));
+      if (requestId === discoveryRequestRef.current) setModelError(requestErrorMessage(requestError));
     } finally {
-      setModelLoading(false);
+      if (requestId === discoveryRequestRef.current) setModelLoading(false);
     }
   };
 
@@ -1761,42 +1802,30 @@ function ApiProviderDialog({
       setModelError(t('apiAccess.error.baseBeforeModels'));
       return;
     }
-    setModelSearch('');
     discoverySelectionInitializedRef.current = false;
-    setSelectedModelNames(new Set(draft.models.map((model) => model.name.toLowerCase())));
+    setSelectedModelNames(modelSelectionForDiscovery(activeSection, draft.models, discoveredModels, draft.excludedModelsText ?? ''));
     setModelDiscoveryOpen(true);
     void discoverModels();
   };
 
-  const toggleModelSelection = (model: ModelOption) => {
-    const key = model.name.toLowerCase();
+  const moveModels = (models: ModelOption[], selected: boolean) => {
+    discoverySelectionInitializedRef.current = true;
     setSelectedModelNames((current) => {
       const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const toggleAllVisibleModels = () => {
-    setSelectedModelNames((current) => {
-      const next = new Set(current);
-      visibleModelOptions.forEach((model) => {
+      models.forEach((model) => {
         const key = model.name.toLowerCase();
-        if (allVisibleModelsSelected) next.delete(key);
-        else next.add(key);
+        if (selected) next.add(key);
+        else next.delete(key);
       });
       return next;
     });
   };
 
   const applyModelSelection = () => {
-    const models = modelOptions.filter((model) =>
-      selectedModelNames.has(model.name.toLowerCase()),
-    );
+    if (modelLoading || selectedModels.length === 0) return;
     setDraft((current) => ({
       ...current,
-      models,
+      models: selectedModels,
       excludedModelsText: activeSection === 'openai-compatibility'
         ? current.excludedModelsText
         : exclusionsForModelSelection(
@@ -1805,7 +1834,7 @@ function ApiProviderDialog({
             selectedModelNames,
           ),
     }));
-    setModelDiscoveryOpen(false);
+    closeModelDiscovery();
   };
 
   const submit = async (event: FormEvent) => {
@@ -2025,63 +2054,36 @@ function ApiProviderDialog({
       </div>
 
       {modelDiscoveryOpen ? (
-        <div className="model-discovery-backdrop" onMouseDown={(event) => event.currentTarget === event.target && setModelDiscoveryOpen(false)}>
-          <section className="model-discovery-dialog" role="dialog" aria-modal="true" aria-labelledby="model-discovery-title">
+        <div className="model-discovery-backdrop" onMouseDown={(event) => event.currentTarget === event.target && closeModelDiscovery()}>
+          <section ref={modelDialogRef} className="model-discovery-dialog model-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="model-discovery-title">
             <div className="model-discovery-header">
               <div><h2 id="model-discovery-title">{t('apiAccess.modelDialog.title')}</h2><span>{t(definition.labelKey)}</span></div>
-              <button type="button" className="icon-button quiet" onClick={() => setModelDiscoveryOpen(false)} title={t('common.close')}><X size={18} /></button>
+              <button type="button" className="icon-button quiet" onClick={closeModelDiscovery} title={t('common.close')}><X size={18} /></button>
             </div>
 
-            <div className="model-discovery-search">
-              <Search size={16} aria-hidden="true" />
-              <input value={modelSearch} onChange={(event) => setModelSearch(event.currentTarget.value)} placeholder={t('agents.model.search')} />
+            <div className="model-transfer-summary">
+              <span role="status">{t('apiAccess.modelDialog.summary', { found: modelOptions.length, selected: selectedModels.length })}</span>
               <button type="button" className="secondary-button compact-button" onClick={() => void discoverModels()} disabled={modelLoading}>
                 <RefreshCw size={15} className={modelLoading ? 'spin' : ''} />{t('common.refresh')}
               </button>
             </div>
 
-            <div className="model-discovery-toolbar">
-              <span>{t('apiAccess.modelDialog.summary', { found: modelOptions.length, selected: selectedModelNames.size })}</span>
-              <div>
-                <button type="button" className="secondary-button compact-button" onClick={toggleAllVisibleModels} disabled={modelLoading || visibleModelOptions.length === 0}>{allVisibleModelsSelected ? t('apiAccess.modelDialog.deselectAll') : t('apiAccess.modelDialog.selectVisible')}</button>
-                <button type="button" className="secondary-button compact-button" onClick={() => setSelectedModelNames(new Set())} disabled={modelLoading || selectedModelNames.size === 0}>{t('common.clear')}</button>
+            {modelError ? (
+              <div className="model-discovery-inline-error" role="alert">
+                <strong>{t('apiAccess.modelDialog.fetchFailed')}</strong>
+                <span title={modelError}>{modelError}</span>
               </div>
+            ) : null}
+
+            <div className="model-transfer-panels">
+              <ModelSelectionPanel models={unselectedModels} selected={false} loading={modelLoading} onMove={moveModels} />
+              <ModelSelectionPanel models={selectedModels} selected loading={modelLoading} onMove={moveModels} />
             </div>
 
-            <div className="model-discovery-content">
-              {modelLoading ? (
-                <div className="model-discovery-message"><LoaderCircle size={20} className="spin" />{t('apiAccess.modelDialog.fetching')}</div>
-              ) : modelError && modelOptions.length === 0 ? (
-                <div className="model-discovery-message error"><strong>{t('apiAccess.modelDialog.fetchFailed')}</strong><span>{modelError}</span></div>
-              ) : visibleModelOptions.length === 0 ? (
-                <div className="model-discovery-message"><strong>{modelOptions.length ? t('apiAccess.modelDialog.noMatch') : t('apiAccess.modelDialog.none')}</strong><span>{modelOptions.length ? t('apiAccess.modelDialog.tryKeyword') : t('apiAccess.modelDialog.checkCredentials')}</span></div>
-              ) : (
-                <div className="model-discovery-results">
-                  {modelError ? (
-                    <div className="model-discovery-inline-error" role="alert">
-                      <strong>{t('apiAccess.modelDialog.fetchFailed')}</strong>
-                      <span title={modelError}>{modelError}</span>
-                    </div>
-                  ) : null}
-                  <div className="model-discovery-list">
-                    {visibleModelOptions.map((model) => {
-                      const checked = selectedModelNames.has(model.name.toLowerCase());
-                      return (
-                        <label className={`model-discovery-row ${checked ? 'selected' : ''}`} key={model.name}>
-                          <input type="checkbox" checked={checked} onChange={() => toggleModelSelection(model)} />
-                          <span><strong title={model.name}>{model.name}</strong>{model.alias ? <small title={model.alias}>{model.alias}</small> : null}</span>
-                          {checked ? <Check size={16} aria-hidden="true" /> : null}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="model-discovery-actions">
-              <button type="button" className="secondary-button" onClick={() => setModelDiscoveryOpen(false)}>{t('common.cancel')}</button>
-              <button type="button" className="primary-button" onClick={applyModelSelection} disabled={modelLoading}>{t('apiAccess.modelDialog.apply', { count: selectedModelNames.size })}</button>
+            <div className="model-discovery-actions model-transfer-actions">
+              {selectedModels.length === 0 ? <span>{t('apiAccess.modelDialog.chooseOne')}</span> : null}
+              <button type="button" className="secondary-button" onClick={closeModelDiscovery}>{t('common.cancel')}</button>
+              <button type="button" className="primary-button" onClick={applyModelSelection} disabled={modelLoading || selectedModels.length === 0}>{t('apiAccess.modelDialog.apply', { count: selectedModels.length })}</button>
             </div>
           </section>
         </div>

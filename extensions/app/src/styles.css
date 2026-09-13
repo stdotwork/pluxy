@@ -3643,7 +3643,9 @@ textarea:focus-visible {
 
 .model-discovery-toolbar > div {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
+  justify-content: flex-end;
 }
 
 .model-discovery-content {
@@ -3767,6 +3769,197 @@ textarea:focus-visible {
 
 .model-discovery-actions button {
   min-width: 112px;
+}
+
+.model-discovery-dialog.model-transfer-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(960px, 100%);
+  height: min(640px, calc(100dvh - 48px));
+  min-height: 0;
+}
+
+.model-transfer-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--theme-7a746c);
+  font-size: var(--font-size-label);
+}
+
+.model-transfer-summary > button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.model-transfer-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.model-transfer-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--theme-e2ddd3);
+  border-radius: 8px;
+  background: var(--theme-ffffff);
+}
+
+.model-transfer-panel-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+}
+
+.model-transfer-panel-heading h3 {
+  margin: 0;
+  color: var(--theme-2d2a26);
+  font-size: var(--font-size-label);
+}
+
+.model-transfer-panel-heading button {
+  width: auto;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.model-transfer-count {
+  border-radius: 5px;
+  padding: 2px 6px;
+  background: var(--theme-f4f2ec);
+  color: var(--theme-6d6760);
+  font-size: var(--font-size-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.model-transfer-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px 10px;
+  padding: 0 8px;
+  border: 1px solid var(--theme-d5d2cb);
+  border-radius: 6px;
+  color: var(--theme-8a847c);
+}
+
+.model-transfer-search:focus-within {
+  outline: 2px solid var(--theme-9ca9df);
+  outline-offset: 1px;
+}
+
+.model-transfer-search input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--theme-2d2a26);
+}
+
+.model-transfer-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-top: 1px solid var(--theme-eeece6);
+}
+
+.model-transfer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--theme-eeece6);
+  background: transparent;
+  color: var(--theme-6d6760);
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-transfer-row:hover:not(:disabled) {
+  background: var(--theme-f4f2ec);
+}
+
+.model-transfer-row:focus-visible {
+  outline: 2px solid var(--theme-9ca9df);
+  outline-offset: -2px;
+}
+
+.model-transfer-row > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.model-transfer-row strong,
+.model-transfer-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-transfer-row strong {
+  color: var(--theme-2d2a26);
+  font-size: var(--font-size-label);
+}
+
+.model-transfer-row small {
+  color: var(--theme-8a847c);
+  font-size: var(--font-size-meta);
+}
+
+.model-transfer-empty {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  padding: 16px;
+  color: var(--theme-7a746c);
+  font-size: var(--font-size-label);
+  text-align: center;
+}
+
+.model-transfer-actions {
+  flex-wrap: wrap;
+}
+
+.model-transfer-actions > span {
+  margin-right: auto;
+  color: var(--theme-7a746c);
+  font-size: var(--font-size-label);
+}
+
+@media (max-width: 600px) {
+  .model-discovery-dialog.model-transfer-dialog {
+    height: calc(100dvh - 24px);
+    padding: 12px;
+  }
+
+  .model-transfer-panels {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .model-transfer-actions > span {
+    width: 100%;
+  }
 }
 
 .model-discovery-dialog.auth-model-dialog {
