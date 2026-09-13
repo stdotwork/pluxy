@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  allModelSelectionForDiscovery,
   applyProviderRemarkIdentity,
   applyProviderPreset,
   buildProviderRecord,
@@ -51,7 +50,7 @@ describe('API 接入配置合并', () => {
     ]);
   });
 
-  it('DeepSeek 新增预设默认发现全部模型并应用内置思考等级', () => {
+  it('DeepSeek 对选定模型应用内置思考等级', () => {
     expect(DEEPSEEK_THINKING_LEVELS).toEqual(['low', 'high', 'max']);
     const draft = createProviderDraft('deepseek');
     const discovered = [
@@ -386,19 +385,5 @@ describe('API 接入配置合并', () => {
     );
 
     expect(Array.from(selected)).toEqual(['model-a', 'model-b']);
-  });
-
-  it('模型选择窗口每次打开都以接口返回的全部模型作为默认选择', () => {
-    const selected = allModelSelectionForDiscovery([
-      { name: 'deepseek-chat' },
-      { name: 'deepseek-reasoner' },
-      { name: 'deepseek-new-model' },
-    ]);
-
-    expect(Array.from(selected)).toEqual([
-      'deepseek-chat',
-      'deepseek-reasoner',
-      'deepseek-new-model',
-    ]);
   });
 });

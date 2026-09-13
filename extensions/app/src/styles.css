@@ -4284,6 +4284,16 @@ textarea:focus-visible {
   color: var(--theme-2f6b3f);
 }
 
+.action-feedback.inline-notice.api-access-page-notice {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 80;
+  width: min(360px, calc(100vw - 32px));
+  margin: 0;
+  box-shadow: 0 14px 34px rgba(45, 42, 38, 0.18);
+}
+
 .real-provider-workbench {
   grid-template-columns: 240px minmax(0, 1fr);
 }

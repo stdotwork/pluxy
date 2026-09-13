@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import {
   type CSSProperties,
@@ -53,9 +54,14 @@ import {
   responseList,
 } from '../services/managementApi';
 import {
+  applyDeepSeekModelPreset,
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_THINKING_LEVELS,
   fetchModels,
+  mergeModelOptions,
   modelsFromRecord,
   normalizeBaseUrl,
+  reconcileModelSelection,
   type ModelOption,
   type ModelProvider,
 } from '../services/modelService';
@@ -80,9 +86,8 @@ export type ProviderSection =
 
 export type ProviderCategory = ProviderSection | 'deepseek';
 
-export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 export const OPENAI_THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
-export const DEEPSEEK_THINKING_LEVELS = ['low', 'high', 'max'] as const;
+export { DEEPSEEK_BASE_URL, DEEPSEEK_THINKING_LEVELS };
 
 type ProviderDefinition = {
   id: ProviderCategory;
@@ -430,9 +435,6 @@ export const modelSelectionForDiscovery = (
   );
 };
 
-export const allModelSelectionForDiscovery = (models: ModelOption[]) =>
-  new Set(models.map((model) => model.name.trim().toLowerCase()).filter(Boolean));
-
 export const parseProviderApiKeys = (value: string) => value
   .split(/\r?\n/)
   .map((item) => item.trim())
@@ -556,10 +558,15 @@ export const applyProviderPreset = (
   category: ProviderCategory,
   draft: ProviderDraft,
 ): ProviderDraft => {
+  if (category === 'deepseek') {
+    return {
+      ...draft,
+      thinkingLevels: [...DEEPSEEK_THINKING_LEVELS],
+      models: applyDeepSeekModelPreset(draft.models),
+    };
+  }
   if (!definitionFor(category).openAi || draft.thinkingLevels === undefined) return draft;
-  const levels = category === 'deepseek'
-    ? [...DEEPSEEK_THINKING_LEVELS]
-    : draft.thinkingLevels;
+  const levels = draft.thinkingLevels;
   return {
     ...draft,
     models: draft.models.map((model) => {
@@ -805,7 +812,6 @@ export function ApiAccessPage() {
   const [error, setError] = useState('');
   const feedback = useAppNotice();
   const { showNotice: setNotice } = feedback;
-  const [feedbackRow, setFeedbackRow] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<ProviderRow | null>(null);
   const [dialogDraft, setDialogDraft] = useState<ProviderDraft>(emptyProviderDraft);
@@ -908,7 +914,6 @@ export function ApiAccessPage() {
 
   const openCreate = () => {
     feedback.clearNotice();
-    setFeedbackRow(null);
     setError('');
     setEditingRow(null);
     setDialogDraft(createProviderDraft(activeCategory));
@@ -917,7 +922,6 @@ export function ApiAccessPage() {
 
   const openEdit = (row: ProviderRow) => {
     feedback.clearNotice();
-    setFeedbackRow(null);
     setError('');
     setEditingRow(row);
     const draft = draftFromRow(row);
@@ -927,8 +931,10 @@ export function ApiAccessPage() {
     setDialogOpen(true);
   };
 
-  const saveProvider = async (nextDraft: ProviderDraft): Promise<ProviderSaveResult> => {
-    setFeedbackRow(null);
+  const saveProvider = async (
+    nextDraft: ProviderDraft,
+    modelDiscoveryReady: boolean,
+  ): Promise<ProviderSaveResult> => {
     const definition = activeDefinition;
     const preparedDraft = applyProviderRemarkIdentity(
       activeCategory,
@@ -956,6 +962,16 @@ export function ApiAccessPage() {
             : t('apiAccess.error.requiredKey'),
       };
     }
+    if (
+      activeCategory === 'deepseek'
+      && (!modelDiscoveryReady || preparedDraftForSave.models.length === 0)
+    ) {
+      return {
+        saved: false,
+        target: 'models',
+        error: t('apiAccess.error.fetchModelsBeforeSave'),
+      };
+    }
     if (Array.from(preparedDraft.remark.trim()).length > 80 || /[\u0000-\u001f\u007f]/.test(preparedDraft.remark)) {
       return { saved: false, target: 'form', error: t('apiAccess.error.remarkInvalid') };
     }
@@ -972,7 +988,11 @@ export function ApiAccessPage() {
     setError('');
     try {
       let draftToSave = { ...preparedDraftForSave, baseUrl };
-      if (definition.openAi && draftToSave.models.length === 0) {
+      if (
+        definition.openAi
+        && activeCategory !== 'deepseek'
+        && draftToSave.models.length === 0
+      ) {
         let fetchedModels: ModelOption[];
         try {
           fetchedModels = await fetchModels(
@@ -1057,7 +1077,6 @@ export function ApiAccessPage() {
 
   const deleteRow = async (row: ProviderRow) => {
     if (!await askConfirmation({ title: t('common.delete'), message: t('apiAccess.deleteConfirm', { remark: row.remark || row.name }), confirmText: t('common.delete'), variant: 'danger' })) return;
-    setFeedbackRow(providerDragId(row));
     feedback.clearNotice();
     setBusy(true);
     setError('');
@@ -1077,7 +1096,6 @@ export function ApiAccessPage() {
           remark: '',
         },
       });
-      setFeedbackRow(null);
       setNotice({ key: 'apiAccess.notice.deleted' });
       await loadProviders();
     } catch (requestError) {
@@ -1088,7 +1106,6 @@ export function ApiAccessPage() {
   };
 
   const toggleProvider = async (row: ProviderRow) => {
-    setFeedbackRow(providerDragId(row));
     setBusy(true);
     setError('');
     setNotice('');
@@ -1131,7 +1148,6 @@ export function ApiAccessPage() {
 
   const reorderProviders = async (source: ProviderRow, target: ProviderRow) => {
     if (source.section !== target.section || source.index === target.index) return;
-    setFeedbackRow(providerDragId(source));
     setBusy(true);
     setError('');
     setNotice('');
@@ -1197,7 +1213,6 @@ export function ApiAccessPage() {
       </header>
 
       {error ? <div className="management-alert error">{error}</div> : null}
-
       <div className="provider-workbench real-provider-workbench">
         <aside className="panel provider-category-panel">
           {providerDefinitions.map((definition) => (
@@ -1208,7 +1223,6 @@ export function ApiAccessPage() {
               onClick={() => {
                 setActiveCategory(definition.id);
                 feedback.clearNotice();
-                setFeedbackRow(null);
               }}
               disabled={busy}
             >
@@ -1231,7 +1245,6 @@ export function ApiAccessPage() {
             </div>
           </div>
 
-          {feedbackRow === null ? <InlineNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} /> : null}
           {loading ? (
             <div className="management-loading"><LoaderCircle size={20} className="spin" />{t('apiAccess.loading')}</div>
           ) : rows.length === 0 ? (
@@ -1273,7 +1286,6 @@ export function ApiAccessPage() {
                     </code>
                     <span className="provider-row-url" title={row.baseUrl || undefined}>{row.baseUrl || t('apiAccess.defaultUrl')}</span>
                     {row.models.length > 0 ? <span className="provider-row-models">{t('apiAccess.models.summary', { count: row.models.length })}</span> : null}
-                    {feedbackRow === providerDragId(row) ? <InlineNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} /> : null}
                   </div>
                   {row.priority === null ? null : (
                     <div className="provider-row-meta">
@@ -1335,6 +1347,17 @@ export function ApiAccessPage() {
           onClose={() => setHealthDialogRow(null)}
         />
       ) : null}
+      {typeof document === 'undefined'
+        ? null
+        : createPortal(
+            <InlineNotice
+              key={feedback.revision}
+              notice={feedback.notice}
+              onDismiss={feedback.clearNotice}
+              className="api-access-page-notice"
+            />,
+            document.body,
+          )}
     </section>
   );
 }
@@ -1563,7 +1586,7 @@ type ApiProviderDialogProps = {
   initialDraft: ProviderDraft;
   busy: boolean;
   onClose: () => void;
-  onSave: (draft: ProviderDraft) => Promise<ProviderSaveResult>;
+  onSave: (draft: ProviderDraft, modelDiscoveryReady: boolean) => Promise<ProviderSaveResult>;
 };
 
 function ApiProviderDialog({
@@ -1583,21 +1606,22 @@ function ApiProviderDialog({
   const [formError, setFormError] = useState('');
   const [discoveredModels, setDiscoveredModels] = useState<ModelOption[]>([]);
   const [modelDiscoveryOpen, setModelDiscoveryOpen] = useState(false);
+  const [modelDiscoveryReady, setModelDiscoveryReady] = useState(
+    () => activeCategory !== 'deepseek'
+      || Boolean(editingRow && initialDraft.models.some((model) => model.name.trim())),
+  );
   const [modelSearch, setModelSearch] = useState('');
   const [thinkingLevelInput, setThinkingLevelInput] = useState('');
   const [selectedModelNames, setSelectedModelNames] = useState<Set<string>>(
     () => new Set(initialDraft.models.map((model) => model.name.toLowerCase())),
   );
   const modelCardRef = useRef<HTMLDivElement>(null);
+  const discoverySelectionInitializedRef = useRef(false);
 
-  const modelOptions = useMemo(() => {
-    const options = new Map<string, ModelOption>();
-    [...discoveredModels, ...draft.models].forEach((model) => {
-      const name = model.name.trim();
-      if (name) options.set(name.toLowerCase(), { ...model, name });
-    });
-    return Array.from(options.values());
-  }, [discoveredModels, draft.models]);
+  const modelOptions = useMemo(
+    () => mergeModelOptions(discoveredModels, draft.models),
+    [discoveredModels, draft.models],
+  );
 
   const configuredModels = useMemo(
     () => draft.models.filter((model) => model.name.trim()),
@@ -1622,6 +1646,7 @@ function ApiProviderDialog({
     setFormError('');
     if (field === 'apiKey' || field === 'baseUrl' || field === 'headersText') {
       setModelError('');
+      if (activeCategory === 'deepseek') setModelDiscoveryReady(false);
     }
     setDraft((current) => ({ ...current, [field]: value }));
   };
@@ -1707,12 +1732,12 @@ function ApiProviderDialog({
         activeCategory,
         { ...draft, models: fetchedModels },
       ).models;
+      const selectionMode = discoverySelectionInitializedRef.current ? 'refresh' : 'initial';
       setDiscoveredModels(models);
-      setSelectedModelNames(new Set(
-        [...models, ...draft.models]
-          .map((model) => model.name.trim().toLowerCase())
-          .filter(Boolean),
-      ));
+      setSelectedModelNames((current) =>
+        reconcileModelSelection(models, draft.models, current, selectionMode));
+      discoverySelectionInitializedRef.current = true;
+      if (activeCategory === 'deepseek') setModelDiscoveryReady(true);
       if (!models.length) setModelError(t('apiAccess.error.noAvailableModels'));
     } catch (requestError) {
       setModelError(requestErrorMessage(requestError));
@@ -1729,6 +1754,7 @@ function ApiProviderDialog({
       return;
     }
     setModelSearch('');
+    discoverySelectionInitializedRef.current = false;
     setSelectedModelNames(new Set(draft.models.map((model) => model.name.toLowerCase())));
     setModelDiscoveryOpen(true);
     void discoverModels();
@@ -1777,7 +1803,7 @@ function ApiProviderDialog({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setFormError('');
-    const result = await onSave(draft);
+    const result = await onSave(draft, modelDiscoveryReady);
     if (result.saved) {
       onClose();
       return;
@@ -1794,15 +1820,22 @@ function ApiProviderDialog({
 
   const hasModelExclusions = activeSection !== 'openai-compatibility'
     && Boolean(draft.excludedModelsText?.trim());
+  const deepSeekModelsStale = activeCategory === 'deepseek' && !modelDiscoveryReady;
   const modelSummaryTitle = configuredModels.length > 0
     ? t('apiAccess.models.selected', { count: configuredModels.length })
+    : activeCategory === 'deepseek'
+      ? t('apiAccess.models.selectionRequired')
     : hasModelExclusions
       ? t('apiAccess.models.restricted')
       : activeSection === 'openai-compatibility'
         ? t('apiAccess.models.autoAll')
         : t('apiAccess.models.upstreamDefault');
   const modelSummaryDetail = configuredModels.length > 0
-    ? configuredModels.slice(0, 3).map((model) => model.name).join('、')
+    ? deepSeekModelsStale
+      ? t('apiAccess.models.staleHint')
+      : configuredModels.slice(0, 3).map((model) => model.name).join('、')
+    : activeCategory === 'deepseek'
+      ? t('apiAccess.models.selectionRequiredHint')
     : hasModelExclusions
       ? t('apiAccess.models.hiddenHint')
       : activeSection === 'openai-compatibility'

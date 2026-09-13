@@ -13,8 +13,58 @@ export type ModelOption = {
 };
 export type ModelProvider = 'gemini' | 'codex' | 'claude' | 'openai';
 
+export type ModelSelectionMode = 'initial' | 'refresh';
+
 const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
 const DEFAULT_CLAUDE_BASE_URL = 'https://api.anthropic.com';
+export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+export const DEEPSEEK_THINKING_LEVELS = ['low', 'high', 'max'] as const;
+
+const modelKey = (name: string) => name.trim().toLowerCase();
+
+export function mergeModelOptions(...groups: ModelOption[][]): ModelOption[] {
+  const merged = new Map<string, ModelOption>();
+  groups.flat().forEach((model) => {
+    const name = model.name.trim();
+    if (!name) return;
+    merged.set(modelKey(name), { ...model, name });
+  });
+  return Array.from(merged.values());
+}
+
+export function reconcileModelSelection(
+  discoveredModels: ModelOption[],
+  configuredModels: ModelOption[],
+  selectedModelNames: Iterable<string>,
+  mode: ModelSelectionMode,
+): Set<string> {
+  const availableNames = new Set(
+    mergeModelOptions(discoveredModels, configuredModels).map((model) => modelKey(model.name)),
+  );
+  const configuredNames = new Set(
+    configuredModels.map((model) => modelKey(model.name)).filter(Boolean),
+  );
+  const previousSelection = new Set(
+    Array.from(selectedModelNames, modelKey).filter(Boolean),
+  );
+  const requestedSelection = mode === 'refresh'
+    ? previousSelection
+    : configuredNames.size > 0
+      ? configuredNames
+      : new Set(discoveredModels.map((model) => modelKey(model.name)).filter(Boolean));
+
+  return new Set(Array.from(requestedSelection).filter((name) => availableNames.has(name)));
+}
+
+export function applyDeepSeekModelPreset(models: ModelOption[]): ModelOption[] {
+  return models.map((model) => ({
+    ...model,
+    thinking: {
+      ...model.thinking,
+      levels: [...DEEPSEEK_THINKING_LEVELS],
+    },
+  }));
+}
 
 export function normalizeBaseUrl(value: string): string {
   let raw = value.trim();
