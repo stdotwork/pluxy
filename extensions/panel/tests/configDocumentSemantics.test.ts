@@ -1,9 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { parse as parseYaml } from 'yaml';
-import i18n from '../src/i18n';
-import { ConfigHeader } from '../src/features/config/components/ConfigHeader';
 import { buildConfigSaveDraft } from '../src/features/config/hooks/useConfigDocument';
 import { DEFAULT_VISUAL_VALUES } from '../src/types/visualConfig';
 import { runVisualConfig } from './helpers/visualConfig';
@@ -108,22 +104,5 @@ plugins:
         throw new Error('A source draft must not be rebuilt from visual or runtime values');
       })
     ).toBe(source);
-  });
-
-  test('explains file editing and numeric resets in the header and all four locales', async () => {
-    const markup = renderToStaticMarkup(
-      createElement(ConfigHeader, {
-        meta: [],
-        reloadDisabled: false,
-        reloading: false,
-        onReload: () => {},
-      })
-    );
-    expect(markup).toContain(i18n.t('config_management.document_hint'));
-    for (const locale of ['en', 'zh-CN', 'zh-TW', 'ru']) {
-      const json = await Bun.file(`src/i18n/locales/${locale}.json`).json();
-      expect(json.config_management.document_hint).toBeString();
-      expect(json.config_management.document_hint).toContain('YAML');
-    }
   });
 });

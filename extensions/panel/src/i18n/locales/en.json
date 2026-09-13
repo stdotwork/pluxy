@@ -838,7 +838,6 @@
   },
   "config_management": {
     "title": "Config Panel",
-    "document_hint": "This editor changes the YAML file, not a runtime snapshot. In visual mode, clearing a numeric field removes its YAML key on save; the backend determines the effective value. Placeholders are examples, not defaults.",
     "meta_fields": "{{count}} settings",
     "meta_dirty": "{{count}} unsaved",
     "meta_dirty_source": "Unsaved source edits",
