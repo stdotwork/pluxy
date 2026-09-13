@@ -92,11 +92,9 @@ function deleteIfMapEmpty(doc: YamlDocument, path: YamlPath): void {
 }
 
 function setBooleanInDoc(doc: YamlDocument, path: YamlPath, value: boolean): void {
-  if (value) {
-    doc.setIn(path, true);
-    return;
-  }
-  if (docHas(doc, path)) doc.setIn(path, false);
+  // Callers only write dirty fields. Explicit false must override backend defaults
+  // even when the original document omitted the key (for example, ws-auth).
+  doc.setIn(path, value);
 }
 
 function setStringInDoc(doc: YamlDocument, path: YamlPath, value: unknown): void {
@@ -1334,7 +1332,7 @@ export function useVisualConfig() {
             ? parsed['gpt-image-2-base-model']
             : '',
         authAutoRefreshWorkers: String(parsed['auth-auto-refresh-workers'] ?? ''),
-        wsAuth: Boolean(parsed['ws-auth']),
+        wsAuth: Boolean(parsed['ws-auth'] ?? DEFAULT_VISUAL_VALUES.wsAuth),
         antigravitySensitiveWords: parseStringList(antigravity?.['sensitive-words']),
         antigravitySignatureCacheEnabled: Boolean(
           parsed['antigravity-signature-cache-enabled'] ?? true
@@ -1370,8 +1368,12 @@ export function useVisualConfig() {
             ? codexHeaderDefaults['beta-features']
             : '',
 
-        quotaSwitchProject: Boolean(quotaExceeded?.['switch-project'] ?? true),
-        quotaSwitchPreviewModel: Boolean(quotaExceeded?.['switch-preview-model'] ?? true),
+        quotaSwitchProject: Boolean(
+          quotaExceeded?.['switch-project'] ?? DEFAULT_VISUAL_VALUES.quotaSwitchProject
+        ),
+        quotaSwitchPreviewModel: Boolean(
+          quotaExceeded?.['switch-preview-model'] ?? DEFAULT_VISUAL_VALUES.quotaSwitchPreviewModel
+        ),
         quotaAntigravityCredits: Boolean(quotaExceeded?.['antigravity-credits'] ?? false),
 
         routingStrategy: parseRoutingStrategy(routing?.strategy),
