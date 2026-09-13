@@ -54,9 +54,7 @@ import {
   responseList,
 } from '../services/managementApi';
 import {
-  applyDeepSeekModelPreset,
   DEEPSEEK_BASE_URL,
-  DEEPSEEK_THINKING_LEVELS,
   fetchModels,
   mergeModelOptions,
   modelsFromRecord,
@@ -87,7 +85,7 @@ export type ProviderSection =
 export type ProviderCategory = ProviderSection | 'deepseek';
 
 export const OPENAI_THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
-export { DEEPSEEK_BASE_URL, DEEPSEEK_THINKING_LEVELS };
+export { DEEPSEEK_BASE_URL };
 
 type ProviderDefinition = {
   id: ProviderCategory;
@@ -229,11 +227,11 @@ const providerDefinitions: ProviderDefinition[] = [
   },
   {
     id: 'deepseek',
-    section: 'openai-compatibility',
-    responseKey: 'openai-compatibility',
+    section: 'codex-api-key',
+    responseKey: 'codex-api-key',
     labelKey: 'apiAccess.provider.deepseek',
     icon: deepseekIcon,
-    openAi: true,
+    openAi: false,
   },
   { id: 'claude-api-key', section: 'claude-api-key', responseKey: 'claude-api-key', labelKey: 'apiAccess.provider.claude', icon: claudeIcon, openAi: false },
   { id: 'gemini-api-key', section: 'gemini-api-key', responseKey: 'gemini-api-key', labelKey: 'apiAccess.provider.gemini', icon: geminiIcon, openAi: false },
@@ -265,9 +263,17 @@ const isDeepSeekRecord = (record: Record<string, unknown>) => {
 export const providerCategoryMatchesRecord = (
   category: ProviderCategory,
   record: Record<string, unknown>,
+  section: ProviderSection = definitionFor(category).section,
 ) => {
-  if (category === 'deepseek') return isDeepSeekRecord(record);
-  if (category === 'openai-compatibility') return !isDeepSeekRecord(record);
+  if (category === 'deepseek') {
+    return section === 'codex-api-key' && isDeepSeekRecord(record);
+  }
+  if (category === 'codex-api-key') {
+    return section === 'codex-api-key' && !isDeepSeekRecord(record);
+  }
+  if (category === 'openai-compatibility') {
+    return section === 'openai-compatibility';
+  }
   return true;
 };
 
@@ -328,9 +334,13 @@ const providerHealthIdentity = (row: ProviderRow) => [
   row.models.map((model) => model.name).join('\u0000'),
 ].join('\u0001');
 
-const providerModelType = (section: ProviderSection): ModelProvider => {
+const providerModelType = (
+  section: ProviderSection,
+  record?: Record<string, unknown>,
+): ModelProvider => {
   if (section === 'gemini-api-key') return 'gemini';
   if (section === 'claude-api-key') return 'claude';
+  if (section === 'codex-api-key' && record && isDeepSeekRecord(record)) return 'deepseek';
   if (section === 'codex-api-key') return 'codex';
   return 'openai';
 };
@@ -474,9 +484,9 @@ const thinkingLevelsFromModels = (models: ModelOption[]): string[] => {
 
 const draftFromRow = (row: ProviderRow): ProviderDraft => {
   const definition = definitionFor(row.section);
-  const isDeepSeek = row.section === 'openai-compatibility' && isDeepSeekRecord(row.record);
+  const isDeepSeek = row.section === 'codex-api-key' && isDeepSeekRecord(row.record);
   return {
-    name: row.name,
+    name: isDeepSeek ? 'DeepSeek' : row.name,
     apiKey: definition.openAi ? row.apiKeys.join('\n') : row.apiKey,
     remark: row.remark || (definition.openAi && !isDeepSeek ? row.name : ''),
     baseUrl: row.baseUrl,
@@ -541,7 +551,6 @@ export const createProviderDraft = (category: ProviderCategory): ProviderDraft =
     name: 'DeepSeek',
     remark: '',
     baseUrl: DEEPSEEK_BASE_URL,
-    thinkingLevels: [...DEEPSEEK_THINKING_LEVELS],
   };
 };
 
@@ -558,13 +567,6 @@ export const applyProviderPreset = (
   category: ProviderCategory,
   draft: ProviderDraft,
 ): ProviderDraft => {
-  if (category === 'deepseek') {
-    return {
-      ...draft,
-      thinkingLevels: [...DEEPSEEK_THINKING_LEVELS],
-      models: applyDeepSeekModelPreset(draft.models),
-    };
-  }
   if (!definitionFor(category).openAi || draft.thinkingLevels === undefined) return draft;
   const levels = draft.thinkingLevels;
   return {
@@ -702,6 +704,9 @@ export const buildProviderRecord = (
     'api-key': draft.apiKey.trim(),
     models,
   };
+  if (section === 'codex-api-key' && draft.name.trim().toLowerCase() === 'deepseek') {
+    next.name = 'DeepSeek';
+  }
   if (draft.baseUrl.trim()) next['base-url'] = draft.baseUrl.trim();
   else delete next['base-url'];
   if (priority !== null && Number.isFinite(priority)) next.priority = priority;
@@ -898,9 +903,12 @@ export function ApiAccessPage() {
         .map((record, index) => rowFromRecord(activeSection, record, index))
         .map((row) => ({
           ...row,
+          name: activeCategory === 'deepseek'
+            ? t('apiAccess.provider.deepseek')
+            : row.name,
           remark: apiAccessRemarks[providerRemarkIdentity(row.section, row.apiKeys)] ?? '',
         }))
-        .filter((row) => providerCategoryMatchesRecord(activeCategory, row.record))
+        .filter((row) => providerCategoryMatchesRecord(activeCategory, row.record, activeSection))
         .filter((row) => {
           const query = filter.trim().toLowerCase();
           if (!query) return true;
@@ -909,7 +917,7 @@ export function ApiAccessPage() {
             .toLowerCase()
             .includes(query);
         }),
-    [activeCategory, activeSection, apiAccessRemarks, filter, records],
+    [activeCategory, activeSection, apiAccessRemarks, filter, records, t],
   );
 
   const openCreate = () => {
@@ -925,9 +933,7 @@ export function ApiAccessPage() {
     setError('');
     setEditingRow(row);
     const draft = draftFromRow(row);
-    setDialogDraft(activeCategory === 'deepseek'
-      ? { ...draft, thinkingLevels: [...DEEPSEEK_THINKING_LEVELS] }
-      : draft);
+    setDialogDraft(draft);
     setDialogOpen(true);
   };
 
@@ -1189,7 +1195,7 @@ export function ApiAccessPage() {
 
   const countForDefinition = (definition: ProviderDefinition) =>
     records[definition.section].filter((record) =>
-      providerCategoryMatchesRecord(definition.id, record)
+      providerCategoryMatchesRecord(definition.id, record, definition.section)
     ).length;
 
   return (
@@ -1390,7 +1396,7 @@ function ProviderHealthDialog({ row, onClose }: ProviderHealthDialogProps) {
   }, []);
 
   const healthOptions = useMemo<ProviderHealthCheckOptions>(() => ({
-    provider: providerModelType(row.section),
+    provider: providerModelType(row.section, row.record),
     baseUrl: row.baseUrl,
     apiKeys: row.apiKeys,
     authIndex: row.authIndex,
@@ -1713,13 +1719,15 @@ function ApiProviderDialog({
     setModelLoading(true);
     setModelError('');
     try {
-      const provider: ModelProvider = definition.section === 'gemini-api-key'
-        ? 'gemini'
-        : definition.section === 'claude-api-key'
-          ? 'claude'
-          : definition.section === 'codex-api-key'
-            ? 'codex'
-            : 'openai';
+      const provider: ModelProvider = activeCategory === 'deepseek'
+        ? 'deepseek'
+        : definition.section === 'gemini-api-key'
+          ? 'gemini'
+          : definition.section === 'claude-api-key'
+            ? 'claude'
+            : definition.section === 'codex-api-key'
+              ? 'codex'
+              : 'openai';
       const modelApiKey = draft.apiKey.split(/\r?\n/).map((value) => value.trim()).find(Boolean) ?? '';
       const fetchedModels = await fetchModels(
         provider,
@@ -1867,26 +1875,7 @@ function ApiProviderDialog({
           />
         </label>
         <label><span>{t('apiAccess.field.baseUrl')}</span><input value={draft.baseUrl} onChange={(event) => updateTextField('baseUrl', event.currentTarget.value)} placeholder={activeSection === 'codex-api-key' || activeSection === 'openai-compatibility' ? t('apiAccess.baseRequiredPlaceholder') : t('apiAccess.baseOptionalPlaceholder')} /></label>
-        {activeCategory === 'deepseek' ? (
-          <div className="provider-preset-summary">
-            <img src={deepseekIcon} alt="" className="provider-logo" />
-            <div>
-              <strong>{t('apiAccess.preset.title')}</strong>
-              <span>{t('apiAccess.preset.description')}</span>
-            </div>
-          </div>
-        ) : null}
-        {activeCategory === 'deepseek' ? (
-          <div className="thinking-level-config">
-            <div className="thinking-level-heading">
-              <strong>{t('apiAccess.thinking.builtIn')}</strong>
-              <span>{t('apiAccess.thinking.builtInDescription')}</span>
-            </div>
-            <div className="thinking-level-tags readonly">
-              {DEEPSEEK_THINKING_LEVELS.map((level) => <span key={level}>{level}</span>)}
-            </div>
-          </div>
-        ) : activeCategory === 'openai-compatibility' ? (
+        {activeCategory === 'openai-compatibility' ? (
           <div className="thinking-level-config">
             <div className="thinking-level-heading">
               <strong>{t('apiAccess.thinking.title')}</strong>

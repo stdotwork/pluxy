@@ -31,7 +31,6 @@ import {
   responseList,
 } from "../services/managementApi";
 import {
-  applyDeepSeekModelPreset,
   DEEPSEEK_BASE_URL,
   fetchModels,
   mergeModelOptions,
@@ -89,7 +88,7 @@ const apiSectionOptions: ApiSectionOption[] = [
   { id: "claude", managementSection: "claude-api-key", nameKey: "easyMode.api.platformName.claude", provider: "claude", defaultBaseUrl: "", icon: claudeIcon },
   { id: "codex", managementSection: "codex-api-key", nameKey: "easyMode.api.platformName.codex", provider: "codex", defaultBaseUrl: "", icon: codexIcon },
   { id: "gemini", managementSection: "gemini-api-key", nameKey: "easyMode.api.platformName.gemini", provider: "gemini", defaultBaseUrl: "", icon: geminiIcon },
-  { id: "deepseek", managementSection: "openai-compatibility", nameKey: "easyMode.api.platformName.deepseek", provider: "openai", defaultBaseUrl: DEEPSEEK_BASE_URL, icon: deepseekIcon },
+  { id: "deepseek", managementSection: "codex-api-key", nameKey: "easyMode.api.platformName.deepseek", provider: "deepseek", defaultBaseUrl: DEEPSEEK_BASE_URL, icon: deepseekIcon },
 ];
 
 const isDeepSeekRecord = (record: Record<string, unknown>) => {
@@ -196,7 +195,7 @@ export function EasyModePage({
         const sourceList = recordsBySection[section.managementSection];
         const list = section.id === "deepseek"
           ? sourceList.filter(isDeepSeekRecord)
-          : section.id === "openai-compatibility"
+          : section.id === "codex"
             ? sourceList.filter((record) => !isDeepSeekRecord(record))
             : sourceList;
         counts[section.id] = list.length;
@@ -427,9 +426,7 @@ export function EasyModePage({
       const configPayload = await managementApi.get("/config");
       const list = responseList(configPayload, managementSection);
       const selectedModels = apiSelectedModels.map((model) => ({ name: model.name.trim() }));
-      const models = selectedApiSection === "deepseek"
-        ? applyDeepSeekModelPreset(selectedModels)
-        : selectedModels;
+      const models = selectedModels;
       const newEntry = managementSection === "openai-compatibility"
         ? {
           name: apiRemark.trim() || `${selectedApiSection} (${list.length + 1})`,
@@ -440,6 +437,7 @@ export function EasyModePage({
           models,
         }
         : {
+          ...(selectedApiSection === "deepseek" ? { name: "DeepSeek" } : {}),
           "api-key": apiKey.trim(),
           "base-url": normalizeBaseUrl(apiBaseUrl.trim()),
           models,

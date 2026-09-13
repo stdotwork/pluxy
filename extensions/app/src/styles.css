@@ -4557,40 +4557,6 @@ textarea:focus-visible {
   min-height: 42px;
 }
 
-.provider-preset-summary {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  padding: 9px 11px;
-  border: 1px solid var(--theme-dce2fb);
-  border-radius: 7px;
-  background: var(--theme-f5f7ff);
-}
-
-.provider-preset-summary .provider-logo {
-  width: 30px;
-  height: 30px;
-}
-
-.provider-preset-summary > div {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.provider-preset-summary strong {
-  color: var(--theme-344ca1);
-  font-size: var(--font-size-label);
-}
-
-.provider-preset-summary span {
-  color: var(--theme-66709a);
-  font-size: var(--font-size-meta);
-  overflow-wrap: anywhere;
-}
-
 .thinking-level-config {
   display: grid;
   gap: 9px;

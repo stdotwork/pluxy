@@ -11,14 +11,13 @@ export type ModelOption = {
   inputModalities?: Array<'text' | 'image'>;
   thinking?: Record<string, unknown>;
 };
-export type ModelProvider = 'gemini' | 'codex' | 'claude' | 'openai';
+export type ModelProvider = 'gemini' | 'codex' | 'deepseek' | 'claude' | 'openai';
 
 export type ModelSelectionMode = 'initial' | 'refresh';
 
 const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
 const DEFAULT_CLAUDE_BASE_URL = 'https://api.anthropic.com';
 export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
-export const DEEPSEEK_THINKING_LEVELS = ['low', 'high', 'max'] as const;
 
 const modelKey = (name: string) => name.trim().toLowerCase();
 
@@ -56,16 +55,6 @@ export function reconcileModelSelection(
   return new Set(Array.from(requestedSelection).filter((name) => availableNames.has(name)));
 }
 
-export function applyDeepSeekModelPreset(models: ModelOption[]): ModelOption[] {
-  return models.map((model) => ({
-    ...model,
-    thinking: {
-      ...model.thinking,
-      levels: [...DEEPSEEK_THINKING_LEVELS],
-    },
-  }));
-}
-
 export function normalizeBaseUrl(value: string): string {
   let raw = value.trim();
   if (!raw) return '';
@@ -97,6 +86,8 @@ export const modelEndpointCandidates = (provider: ModelProvider, baseUrl: string
       ? DEFAULT_GEMINI_BASE_URL
       : provider === 'claude'
         ? DEFAULT_CLAUDE_BASE_URL
+        : provider === 'deepseek'
+          ? DEEPSEEK_BASE_URL
         : '');
   const normalized = normalizeBaseUrl(resolvedBaseUrl);
   if (!normalized) return [];
@@ -107,6 +98,7 @@ export const modelEndpointCandidates = (provider: ModelProvider, baseUrl: string
   const withoutVersion = base.replace(/\/(?:v1beta|v1)$/i, '');
   if (provider === 'gemini') return [`${withoutVersion}/v1beta/models`];
   if (provider === 'claude') return [`${withoutVersion}/v1/models`];
+  if (provider === 'deepseek') return [`${base}/models`];
   return [/\/v1$/i.test(base) ? `${base}/models` : `${base}/v1/models`];
 };
 

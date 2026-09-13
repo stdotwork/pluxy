@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  applyDeepSeekModelPreset,
-  DEEPSEEK_THINKING_LEVELS,
   mergeModelOptions,
   reconcileModelSelection,
 } from '../src/services/modelService';
@@ -44,17 +42,5 @@ describe('model discovery selection', () => {
       [{ name: 'deepseek-chat' }],
       [{ name: ' DEEPSEEK-CHAT ', alias: 'Chat' }],
     )).toEqual([{ name: 'DEEPSEEK-CHAT', alias: 'Chat' }]);
-  });
-});
-
-describe('DeepSeek model preset', () => {
-  it('adds built-in thinking levels while preserving existing metadata', () => {
-    expect(applyDeepSeekModelPreset([{
-      name: 'deepseek-reasoner',
-      thinking: { custom: true, levels: ['legacy'] },
-    }])).toEqual([{
-      name: 'deepseek-reasoner',
-      thinking: { custom: true, levels: [...DEEPSEEK_THINKING_LEVELS] },
-    }]);
   });
 });
