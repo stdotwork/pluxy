@@ -1486,6 +1486,7 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
 
     let mut retry_seconds = 1_u64;
     let mut subscription: Option<UsageSubscription> = None;
+    let mut subscription_config: Option<(u16, String)> = None;
     let mut redis_queue = RedisUsageQueueSource::default();
     let mut subscribe_retry_at = tokio::time::Instant::now();
     let mut next_inbox_cleanup_at = tokio::time::Instant::now() + Duration::from_secs(60 * 60);
@@ -1505,6 +1506,14 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
                 continue;
             }
         };
+        if subscription_config.as_ref().is_some_and(|(port, secret)| {
+            *port != config.port || secret != &config.management_secret_key
+        }) {
+            subscription = None;
+            subscription_config = None;
+            redis_queue = RedisUsageQueueSource::default();
+            subscribe_retry_at = tokio::time::Instant::now();
+        }
         if tokio::time::Instant::now() >= next_inbox_cleanup_at {
             if let Err(error) = open_usage_database_at(&root)
                 .and_then(|connection| cleanup_usage_inbox(&connection, Local::now()))
@@ -1551,6 +1560,7 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
         }
         if !core_running {
             subscription = None;
+            subscription_config = None;
             redis_queue = RedisUsageQueueSource::default();
             subscribe_retry_at = tokio::time::Instant::now();
             set_collector_status(&app, "waiting-core", "等待内核启动", None);
@@ -1563,6 +1573,7 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
             match UsageSubscription::connect(config.port, &config.management_secret_key).await {
                 Ok(next_subscription) => {
                     subscription = Some(next_subscription);
+                    subscription_config = Some((config.port, config.management_secret_key.clone()));
                     set_collector_status(&app, "collecting", "已连接 CPA usage 实时订阅", None);
                     match backfill_usage_queue(&root, &config, &mut redis_queue).await {
                         Ok(saved) => {
@@ -1636,6 +1647,7 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
                 }
                 Ok(Err(error)) => {
                     subscription = None;
+                    subscription_config = None;
                     subscribe_retry_at = tokio::time::Instant::now()
                         + Duration::from_secs(USAGE_SUBSCRIBE_RETRY_SECONDS);
                     set_collector_status(
