@@ -838,6 +838,7 @@
   },
   "config_management": {
     "title": "配置面板",
+    "document_hint": "此处编辑的是 YAML 文件，而非运行状态快照。可视化模式下清空数字字段，会在保存时移除对应 YAML 配置项，实际生效值由后端决定；占位文字仅为示例，并非默认值。",
     "meta_fields": "{{count}} 项配置",
     "meta_dirty": "{{count}} 项待保存",
     "meta_dirty_source": "源码有未保存修改",

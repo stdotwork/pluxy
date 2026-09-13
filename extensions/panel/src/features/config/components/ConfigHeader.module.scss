@@ -26,6 +26,14 @@
   color: var(--text-primary);
 }
 
+.description {
+  margin: 0;
+  max-width: 76ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
 .meta {
   margin: 0;
   display: flex;

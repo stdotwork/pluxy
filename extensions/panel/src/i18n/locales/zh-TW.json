@@ -864,6 +864,7 @@
   },
   "config_management": {
     "title": "設定面板",
+    "document_hint": "此處編輯的是 YAML 檔案，而非執行狀態快照。視覺化模式下清空數字欄位，會在儲存時移除對應 YAML 設定項目，實際生效值由後端決定；預留文字僅為範例，並非預設值。",
     "meta_fields": "{{count}} 項設定",
     "meta_dirty": "{{count}} 項待儲存",
     "meta_dirty_source": "原始碼有未儲存修改",
