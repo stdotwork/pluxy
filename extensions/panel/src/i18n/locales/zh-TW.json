@@ -1434,6 +1434,11 @@
     "clear_login_confirm": "確認清理本地登入資訊並登出？"
   },
   "notification": {
+    "region_label": "通知",
+    "type_success": "成功",
+    "type_info": "提示",
+    "type_warning": "警告",
+    "type_error": "錯誤",
     "request_log_updated": "請求記錄設定已更新",
     "login_storage_cleared": "本地登入資訊已清理",
     "data_refreshed": "資料重新整理成功",

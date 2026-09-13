@@ -1408,6 +1408,11 @@
     "clear_login_confirm": "确认清理本地登录信息并退出登录？"
   },
   "notification": {
+    "region_label": "通知",
+    "type_success": "成功",
+    "type_info": "提示",
+    "type_warning": "警告",
+    "type_error": "错误",
     "request_log_updated": "请求日志设置已更新",
     "login_storage_cleared": "本地登录信息已清理",
     "data_refreshed": "数据刷新成功",

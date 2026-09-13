@@ -1408,6 +1408,11 @@
     "clear_login_confirm": "Clear local login data and sign out now?"
   },
   "notification": {
+    "region_label": "Notifications",
+    "type_success": "Success",
+    "type_info": "Information",
+    "type_warning": "Warning",
+    "type_error": "Error",
     "request_log_updated": "Request logging setting updated",
     "login_storage_cleared": "Local login data cleared",
     "data_refreshed": "Data refreshed successfully",
