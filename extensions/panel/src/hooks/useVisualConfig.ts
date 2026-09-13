@@ -169,11 +169,15 @@ function hasPayloadDirtyFields(dirtyFields: Set<string>): boolean {
   return PAYLOAD_DIRTY_FIELDS.some((field) => dirtyFields.has(field));
 }
 
-function getNonNegativeIntegerError(value: string): 'non_negative_integer' | undefined {
+function getIntegerError(value: string): 'integer' | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  if (!/^-?\d+$/.test(trimmed)) return 'non_negative_integer';
-  return Number(trimmed) >= 0 ? undefined : 'non_negative_integer';
+  return /^-?\d+$/.test(trimmed) && Number.isFinite(Number(trimmed)) ? undefined : 'integer';
+}
+
+function getNonNegativeIntegerError(value: string): 'non_negative_integer' | undefined {
+  if (getIntegerError(value)) return 'non_negative_integer';
+  return Number(value.trim()) >= 0 ? undefined : 'non_negative_integer';
 }
 
 function getPortError(value: string): 'port_range' | undefined {
@@ -201,12 +205,12 @@ export function getVisualConfigValidationErrors(
     logsMaxTotalSizeMb: getNonNegativeIntegerError(values.logsMaxTotalSizeMb),
     redisUsageQueueRetentionSeconds: getRedisRetentionError(values.redisUsageQueueRetentionSeconds),
     requestRetry: getNonNegativeIntegerError(values.requestRetry),
-    maxRetryCredentials: getNonNegativeIntegerError(values.maxRetryCredentials),
-    maxRetryInterval: getNonNegativeIntegerError(values.maxRetryInterval),
-    authAutoRefreshWorkers: getNonNegativeIntegerError(values.authAutoRefreshWorkers),
-    'streaming.keepaliveSeconds': getNonNegativeIntegerError(values.streaming.keepaliveSeconds),
-    'streaming.bootstrapRetries': getNonNegativeIntegerError(values.streaming.bootstrapRetries),
-    'streaming.nonstreamKeepaliveInterval': getNonNegativeIntegerError(
+    maxRetryCredentials: getIntegerError(values.maxRetryCredentials),
+    maxRetryInterval: getIntegerError(values.maxRetryInterval),
+    authAutoRefreshWorkers: getIntegerError(values.authAutoRefreshWorkers),
+    'streaming.keepaliveSeconds': getIntegerError(values.streaming.keepaliveSeconds),
+    'streaming.bootstrapRetries': getIntegerError(values.streaming.bootstrapRetries),
+    'streaming.nonstreamKeepaliveInterval': getIntegerError(
       values.streaming.nonstreamKeepaliveInterval
     ),
   };
