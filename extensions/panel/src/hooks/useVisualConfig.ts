@@ -133,7 +133,7 @@ function setIntFromStringInDoc(doc: YamlDocument, path: YamlPath, value: unknown
   }
 
   const parsed = Number(trimmed);
-  if (Number.isFinite(parsed)) {
+  if (Number.isSafeInteger(parsed)) {
     doc.setIn(path, parsed);
     return;
   }
@@ -172,7 +172,7 @@ function hasPayloadDirtyFields(dirtyFields: Set<string>): boolean {
 function getIntegerError(value: string): 'integer' | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  return /^-?\d+$/.test(trimmed) && Number.isFinite(Number(trimmed)) ? undefined : 'integer';
+  return /^-?\d+$/.test(trimmed) && Number.isSafeInteger(Number(trimmed)) ? undefined : 'integer';
 }
 
 function getNonNegativeIntegerError(value: string): 'non_negative_integer' | undefined {

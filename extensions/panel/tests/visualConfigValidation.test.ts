@@ -32,14 +32,36 @@ function withSignedValues(value: string) {
 }
 
 describe('visual config validation', () => {
-  for (const value of ['', '  ', '-1', ' -16 ', '0', '16']) {
+  for (const value of [
+    '',
+    '  ',
+    '-1',
+    ' -16 ',
+    '0',
+    '16',
+    String(Number.MIN_SAFE_INTEGER),
+    String(Number.MAX_SAFE_INTEGER),
+  ]) {
     test(`accepts backend-supported integer sentinel values: ${JSON.stringify(value)}`, () => {
       const errors = getVisualConfigValidationErrors(withSignedValues(value));
       for (const field of signedFields) expect(errors[field]).toBeUndefined();
     });
   }
 
-  for (const value of ['-1.5', '1.5', 'abc', '1e3', 'Infinity', '9'.repeat(400)]) {
+  for (const value of [
+    '-1.5',
+    '1.5',
+    'abc',
+    '1e3',
+    'Infinity',
+    '9'.repeat(400),
+    '-9007199254740992',
+    '9007199254740992',
+    '-9007199254740993',
+    '9007199254740993',
+    '-9999999999999999999',
+    '9999999999999999999',
+  ]) {
     test(`rejects invalid integer input: ${value.slice(0, 20)}`, () => {
       const errors = getVisualConfigValidationErrors(withSignedValues(value));
       for (const field of signedFields) expect(errors[field]).toBe('integer');
@@ -58,6 +80,43 @@ describe('visual config validation', () => {
     expect(errors.logsMaxTotalSizeMb).toBe('non_negative_integer');
     expect(errors.errorLogsMaxFiles).toBe('non_negative_integer');
     expect(errors.port).toBe('port_range');
+  });
+
+  test.each(['-9007199254740993', '9007199254740993', '-9999999999999999999'])(
+    'does not serialize unsafe integers even if validation is bypassed: %s',
+    (value) => {
+      const yaml = 'max-retry-interval: 10\n';
+      const config = runVisualConfig(yaml, [withSignedValues(value)]);
+      for (const field of signedFields) {
+        expect(config.visualValidationErrors[field]).toBe('integer');
+      }
+      expect(parseYaml(config.applyVisualChangesToYaml(yaml))).toEqual({
+        'max-retry-interval': 10,
+      });
+    }
+  );
+
+  test.each([Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER])(
+    'serializes safe integer boundaries exactly: %s',
+    (value) => {
+      const config = runVisualConfig('{}', [{ maxRetryInterval: String(value) }]);
+      expect(config.visualValidationErrors.maxRetryInterval).toBeUndefined();
+      expect(parseYaml(config.applyVisualChangesToYaml('{}'))).toEqual({
+        'max-retry-interval': value,
+      });
+    }
+  );
+
+  test('rejects unsafe integers in non-negative fields', () => {
+    const errors = getVisualConfigValidationErrors({
+      ...structuredClone(DEFAULT_VISUAL_VALUES),
+      requestRetry: '9007199254740993',
+      logsMaxTotalSizeMb: '9007199254740993',
+      errorLogsMaxFiles: '9007199254740993',
+    });
+    expect(errors.requestRetry).toBe('non_negative_integer');
+    expect(errors.logsMaxTotalSizeMb).toBe('non_negative_integer');
+    expect(errors.errorLogsMaxFiles).toBe('non_negative_integer');
   });
 
   test('loading negative sentinels does not block an unrelated visual edit', () => {
