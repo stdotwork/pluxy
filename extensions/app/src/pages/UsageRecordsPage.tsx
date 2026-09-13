@@ -400,9 +400,9 @@ export function UsageRecordsPage() {
   );
 
   const loadData = useCallback(
-    (quiet = false) => {
+    (quiet = false, immediate = !quiet) => {
       if (!quiet) setLoading(true);
-      return schedulerRef.current!.schedule(() => executeLoadData(quiet), !quiet);
+      return schedulerRef.current!.schedule(() => executeLoadData(quiet), immediate);
     },
     [executeLoadData],
   );
@@ -419,7 +419,7 @@ export function UsageRecordsPage() {
     let disposed = false;
     let unlisten: (() => void) | null = null;
     const refresh = () => {
-      if (!disposed && !document.hidden) void loadData(true);
+      if (!disposed && !document.hidden) void loadData(true, true);
     };
     listen('usage-records-updated', refresh)
       .then((stop) => {
@@ -1440,7 +1440,6 @@ function UsageEventCell({
       const value = formatGenerationSpeed({
         outputTokens: record.tokens.output_tokens,
         latencyMs: record.latency_ms,
-        ttftMs: record.ttft_ms,
       });
       return <td className="usage-td-speed align-center" title={value === '—' ? undefined : value}>{value}</td>;
     }

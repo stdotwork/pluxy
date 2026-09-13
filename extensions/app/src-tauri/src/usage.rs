@@ -1,4 +1,5 @@
 mod resp;
+mod token;
 
 #[cfg(target_os = "macos")]
 use super::executable_dir;
@@ -27,7 +28,12 @@ use std::{
 use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
-use self::resp::UsageSubscription;
+use self::{
+    resp::{pull_usage_queue, UsageSubscription},
+    token::{
+        normalize as normalize_keeper_tokens, ClampedTokenFields, TokenValues as KeeperTokenValues,
+    },
+};
 
 const USAGE_DIR_NAME: &str = "usage-records";
 const USAGE_DATABASE_FILE: &str = "usage.db";
@@ -42,10 +48,13 @@ const USAGE_UPDATED_EVENT: &str = "usage-records-updated";
 const USAGE_SCHEMA_VERSION: u8 = 1;
 const USAGE_DATABASE_SCHEMA_VERSION: i64 = 5;
 const MAX_USAGE_FAILURE_BODY_CHARS: usize = 2_000;
-const USAGE_QUEUE_BATCH_SIZE: usize = 500;
+const USAGE_QUEUE_BATCH_SIZE: usize = 10_000;
 const USAGE_INBOX_PROCESS_LIMIT: usize = 500;
 const USAGE_INBOX_MAX_ATTEMPTS: i64 = 5;
 const USAGE_SUBSCRIBE_RETRY_SECONDS: u64 = 30;
+const USAGE_QUEUE_KEY: &str = "usage";
+const LEGACY_USAGE_QUEUE_KEY: &str = "queue";
+const HTTP_USAGE_QUEUE_SOURCE: &str = "http_pull:usage_queue";
 const SQLITE_BUSY_TIMEOUT_SECONDS: u64 = 5;
 const TOKENS_PER_PRICE_UNIT: f64 = 1_000_000.0;
 const LONG_CONTEXT_INPUT_TOKEN_THRESHOLD: u64 = 272_000;
@@ -1390,6 +1399,65 @@ fn validate_legacy_schema(version: u8, path: &Path) -> Result<(), String> {
     }
 }
 
+#[derive(Default)]
+struct RedisUsageQueueSource {
+    selected_key: Option<&'static str>,
+}
+
+struct RawUsageQueueBatch {
+    source: String,
+    messages: Vec<String>,
+}
+
+impl RedisUsageQueueSource {
+    async fn pull(&mut self, config: &GuiConfigFile) -> Result<RawUsageQueueBatch, String> {
+        if let Some(queue_key) = self.selected_key {
+            return Self::pull_key(config, queue_key).await;
+        }
+
+        match Self::pull_key(config, USAGE_QUEUE_KEY).await {
+            Ok(batch) => {
+                self.selected_key = Some(USAGE_QUEUE_KEY);
+                Ok(batch)
+            }
+            Err(usage_error) if redis_pull_can_try_legacy_queue(&usage_error) => {
+                match Self::pull_key(config, LEGACY_USAGE_QUEUE_KEY).await {
+                    Ok(batch) => {
+                        self.selected_key = Some(LEGACY_USAGE_QUEUE_KEY);
+                        Ok(batch)
+                    }
+                    Err(legacy_error) => Err(format!(
+                        "Redis usage 队列拉取失败（usage: {usage_error}; queue: {legacy_error}）"
+                    )),
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn pull_key(
+        config: &GuiConfigFile,
+        queue_key: &'static str,
+    ) -> Result<RawUsageQueueBatch, String> {
+        let messages = pull_usage_queue(
+            config.port,
+            &config.management_secret_key,
+            queue_key,
+            USAGE_QUEUE_BATCH_SIZE,
+        )
+        .await?;
+        Ok(RawUsageQueueBatch {
+            source: format!("redis_pull:{queue_key}"),
+            messages,
+        })
+    }
+}
+
+fn redis_pull_can_try_legacy_queue(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("unsupported channel") || error.contains("unsupported queue")
+}
+
 pub(crate) fn start_usage_collector(app: tauri::AppHandle) {
     let state = app.state::<UsageCollectorState>();
     if let Ok(total_records) = total_usage_records() {
@@ -1418,6 +1486,7 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
 
     let mut retry_seconds = 1_u64;
     let mut subscription: Option<UsageSubscription> = None;
+    let mut redis_queue = RedisUsageQueueSource::default();
     let mut subscribe_retry_at = tokio::time::Instant::now();
     let mut next_inbox_cleanup_at = tokio::time::Instant::now() + Duration::from_secs(60 * 60);
     let mut next_inbox_recovery_at = tokio::time::Instant::now();
@@ -1482,6 +1551,8 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
         }
         if !core_running {
             subscription = None;
+            redis_queue = RedisUsageQueueSource::default();
+            subscribe_retry_at = tokio::time::Instant::now();
             set_collector_status(&app, "waiting-core", "等待内核启动", None);
             retry_seconds = 1;
             wait_or_cancel(&token, 1).await;
@@ -1493,7 +1564,7 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
                 Ok(next_subscription) => {
                     subscription = Some(next_subscription);
                     set_collector_status(&app, "collecting", "已连接 CPA usage 实时订阅", None);
-                    match backfill_usage_queue(&root, &config).await {
+                    match backfill_usage_queue(&root, &config, &mut redis_queue).await {
                         Ok(saved) => {
                             publish_collected_records(
                                 &app,
@@ -1577,27 +1648,43 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
             }
         }
 
-        match fetch_usage_queue(&config).await {
-            Ok(items) if items.is_empty() => {
-                set_collector_status(&app, "collecting", "使用记录采集中", None);
+        match pull_usage_queue_with_fallback(&mut redis_queue, &config).await {
+            Ok(batch) if batch.messages.is_empty() => {
+                set_collector_status(
+                    &app,
+                    "collecting",
+                    &format!(
+                        "使用记录采集中（{}）",
+                        collector_source_label(&batch.source)
+                    ),
+                    None,
+                );
                 retry_seconds = 1;
                 wait_or_cancel(&token, 1).await;
             }
-            Ok(items) => match persist_queue_items(&root, items, &config) {
-                Ok(saved) => {
-                    publish_collected_records(
-                        &app,
-                        saved,
-                        &format!("HTTP 兼容模式已保存 {saved} 条新记录"),
-                    );
-                    retry_seconds = 1;
+            Ok(batch) => {
+                let source_label = collector_source_label(&batch.source);
+                match persist_raw_usage_messages_from_source(
+                    &root,
+                    &batch.source,
+                    batch.messages,
+                    &config,
+                ) {
+                    Ok(saved) => {
+                        publish_collected_records(
+                            &app,
+                            saved,
+                            &format!("{source_label}已保存 {saved} 条新记录"),
+                        );
+                        retry_seconds = 1;
+                    }
+                    Err(error) => {
+                        set_collector_error(&app, error);
+                        wait_or_cancel(&token, retry_seconds).await;
+                        retry_seconds = (retry_seconds * 2).min(10);
+                    }
                 }
-                Err(error) => {
-                    set_collector_error(&app, error);
-                    wait_or_cancel(&token, retry_seconds).await;
-                    retry_seconds = (retry_seconds * 2).min(10);
-                }
-            },
+            }
             Err(error) => {
                 set_collector_error(&app, error);
                 wait_or_cancel(&token, retry_seconds).await;
@@ -1607,18 +1694,55 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
     }
 }
 
-async fn backfill_usage_queue(root: &Path, config: &GuiConfigFile) -> Result<usize, String> {
+async fn backfill_usage_queue(
+    root: &Path,
+    config: &GuiConfigFile,
+    redis_queue: &mut RedisUsageQueueSource,
+) -> Result<usize, String> {
     let mut saved_total = 0_usize;
     loop {
-        let items = fetch_usage_queue(config).await?;
-        let fetched = items.len();
+        match redis_queue.pull(config).await {
+            Ok(batch) => {
+                let fetched = batch.messages.len();
+                if fetched == 0 {
+                    return Ok(saved_total);
+                }
+                saved_total = saved_total.saturating_add(persist_raw_usage_messages_from_source(
+                    root,
+                    &batch.source,
+                    batch.messages,
+                    config,
+                )?);
+                if fetched < USAGE_QUEUE_BATCH_SIZE {
+                    return Ok(saved_total);
+                }
+            }
+            Err(redis_error) => {
+                return backfill_http_usage_queue(root, config, saved_total)
+                    .await
+                    .map_err(|http_error| {
+                        format!("补录队列失败（Redis: {redis_error}; HTTP: {http_error}）")
+                    });
+            }
+        }
+    }
+}
+
+async fn backfill_http_usage_queue(
+    root: &Path,
+    config: &GuiConfigFile,
+    mut saved_total: usize,
+) -> Result<usize, String> {
+    loop {
+        let messages = fetch_usage_queue_raw(config).await?;
+        let fetched = messages.len();
         if fetched == 0 {
             return Ok(saved_total);
         }
-        saved_total = saved_total.saturating_add(persist_queue_items_from_source(
+        saved_total = saved_total.saturating_add(persist_raw_usage_messages_from_source(
             root,
-            "http_backfill",
-            items,
+            HTTP_USAGE_QUEUE_SOURCE,
+            messages,
             config,
         )?);
         if fetched < USAGE_QUEUE_BATCH_SIZE {
@@ -1696,6 +1820,43 @@ async fn fetch_usage_queue(config: &GuiConfigFile) -> Result<Vec<Value>, String>
         .map_err(|error| format!("解析 CPA 使用记录失败: {error}"))
 }
 
+async fn fetch_usage_queue_raw(config: &GuiConfigFile) -> Result<Vec<String>, String> {
+    fetch_usage_queue(config)
+        .await?
+        .into_iter()
+        .map(|item| {
+            serde_json::to_string(&item)
+                .map_err(|error| format!("序列化 CPA 使用记录失败: {error}"))
+        })
+        .collect()
+}
+
+async fn pull_usage_queue_with_fallback(
+    redis_queue: &mut RedisUsageQueueSource,
+    config: &GuiConfigFile,
+) -> Result<RawUsageQueueBatch, String> {
+    match redis_queue.pull(config).await {
+        Ok(batch) => Ok(batch),
+        Err(redis_error) => fetch_usage_queue_raw(config)
+            .await
+            .map(|messages| RawUsageQueueBatch {
+                source: HTTP_USAGE_QUEUE_SOURCE.to_string(),
+                messages,
+            })
+            .map_err(|http_error| {
+                format!("读取 CPA 使用记录失败（Redis: {redis_error}; HTTP: {http_error}）")
+            }),
+    }
+}
+
+fn collector_source_label(source: &str) -> &'static str {
+    if source.starts_with("redis_pull:") {
+        "Redis 队列"
+    } else {
+        "HTTP 兼容模式"
+    }
+}
+
 fn set_collector_error(app: &tauri::AppHandle, error: String) {
     set_collector_status(app, "error", &error, None);
 }
@@ -1726,7 +1887,7 @@ fn persist_queue_items(
     items: Vec<Value>,
     config: &GuiConfigFile,
 ) -> Result<usize, String> {
-    persist_queue_items_from_source(root, "http_pull", items, config)
+    persist_queue_items_from_source(root, HTTP_USAGE_QUEUE_SOURCE, items, config)
 }
 
 fn persist_queue_items_from_source(
@@ -1835,8 +1996,17 @@ fn persist_raw_usage_message_from_source(
     raw_message: String,
     config: &GuiConfigFile,
 ) -> Result<usize, String> {
+    persist_raw_usage_messages_from_source(root, source, vec![raw_message], config)
+}
+
+fn persist_raw_usage_messages_from_source(
+    root: &Path,
+    source: &str,
+    raw_messages: Vec<String>,
+    config: &GuiConfigFile,
+) -> Result<usize, String> {
     let mut connection = open_usage_database_at(root)?;
-    enqueue_usage_raw_messages(&mut connection, source, vec![raw_message])?;
+    enqueue_usage_raw_messages(&mut connection, source, raw_messages)?;
     process_usage_inbox(&mut connection, config)
 }
 
@@ -2077,25 +2247,6 @@ fn insert_usage_records_in_transaction(
         } else {
             "unknown"
         };
-        let cache_components = record
-            .tokens
-            .cache_read_tokens
-            .saturating_add(record.tokens.cache_creation_tokens);
-        let input_before_invariant = record.tokens.input_tokens;
-        let input_tokens = if cache_components > input_before_invariant {
-            input_before_invariant.saturating_add(cache_components)
-        } else {
-            input_before_invariant
-        };
-        let total_tokens = if record.tokens.total_tokens == 0
-            || record.tokens.total_tokens
-                == input_before_invariant.saturating_add(record.tokens.output_tokens)
-        {
-            input_tokens.saturating_add(record.tokens.output_tokens)
-        } else {
-            record.tokens.total_tokens
-        };
-        let cached_tokens = record.cached_tokens.max(cache_components);
         let collector_source = if record.collector_source.trim().is_empty() {
             "legacy_json"
         } else {
@@ -2136,14 +2287,14 @@ fn insert_usage_records_in_transaction(
                     record.x_forwarded_for,
                     record.user_agent,
                     record.generate,
-                    to_sql_i64(cached_tokens),
+                    to_sql_i64(record.cached_tokens),
                     collector_source,
-                    to_sql_i64(input_tokens),
+                    to_sql_i64(record.tokens.input_tokens),
                     to_sql_i64(record.tokens.output_tokens),
                     to_sql_i64(record.tokens.reasoning_tokens),
                     to_sql_i64(record.tokens.cache_read_tokens),
                     to_sql_i64(record.tokens.cache_creation_tokens),
-                    to_sql_i64(total_tokens),
+                    to_sql_i64(record.tokens.total_tokens),
                     record.canceled,
                     i64::from(record.failure_status),
                     record.failure_body,
@@ -2174,6 +2325,7 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
         .unwrap_or_default();
     let provider = string_field(object, "provider").unwrap_or_default();
     let executor_type = string_field(object, "executor_type").unwrap_or_default();
+    let auth_type = string_field(object, "auth_type").unwrap_or_default();
     let tokens_object = object.get("tokens").and_then(Value::as_object);
     let cache_read_present = tokens_object
         .and_then(|tokens| tokens.get("cache_read_tokens"))
@@ -2182,52 +2334,39 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
     let cache_creation_tokens = token_u64(tokens_object, "cache_creation_tokens");
     let raw_cached_tokens =
         token_u64(tokens_object, "cached_tokens").max(token_u64(tokens_object, "cache_tokens"));
-    let normalized_cache_read_tokens = if cache_read_present {
-        raw_cache_read_tokens
-    } else {
-        raw_cached_tokens
+    let normalized_tokens = normalize_keeper_tokens(
+        &executor_type,
+        &provider,
+        &auth_type,
+        KeeperTokenValues {
+            input: token_u64(tokens_object, "input_tokens"),
+            output: token_u64(tokens_object, "output_tokens"),
+            reasoning: token_u64(tokens_object, "reasoning_tokens"),
+            cached: raw_cached_tokens,
+            cache_read: raw_cache_read_tokens,
+            cache_read_present,
+            cache_creation: cache_creation_tokens,
+            total: token_u64(tokens_object, "total_tokens"),
+            clamped: ClampedTokenFields {
+                input: token_was_negative(tokens_object, "input_tokens"),
+                output: token_was_negative(tokens_object, "output_tokens"),
+                reasoning: token_was_negative(tokens_object, "reasoning_tokens"),
+                cached: token_was_negative(tokens_object, "cached_tokens")
+                    || token_was_negative(tokens_object, "cache_tokens"),
+                cache_read: token_was_negative(tokens_object, "cache_read_tokens"),
+                cache_creation: token_was_negative(tokens_object, "cache_creation_tokens"),
+                total: token_was_negative(tokens_object, "total_tokens"),
+            },
+        },
+    );
+    let tokens = UsageTokenStats {
+        input_tokens: normalized_tokens.input,
+        output_tokens: normalized_tokens.output,
+        reasoning_tokens: normalized_tokens.reasoning,
+        cache_read_tokens: normalized_tokens.cache_read,
+        cache_creation_tokens: normalized_tokens.cache_creation,
+        total_tokens: normalized_tokens.total,
     };
-    let raw_input_tokens = token_u64(tokens_object, "input_tokens");
-    let mut tokens = UsageTokenStats {
-        input_tokens: raw_input_tokens,
-        output_tokens: token_u64(tokens_object, "output_tokens"),
-        reasoning_tokens: token_u64(tokens_object, "reasoning_tokens"),
-        cache_read_tokens: normalized_cache_read_tokens,
-        cache_creation_tokens,
-        total_tokens: token_u64(tokens_object, "total_tokens"),
-    };
-
-    let provider_lower = provider.to_ascii_lowercase();
-    let is_claude_executor = executor_type.eq_ignore_ascii_case("ClaudeExecutor")
-        || provider_lower == "claude"
-        || provider_lower.contains("anthropic");
-    let cache_components = tokens
-        .cache_read_tokens
-        .saturating_add(tokens.cache_creation_tokens);
-    let raw_total_without_cache = raw_input_tokens.saturating_add(tokens.output_tokens);
-    let raw_total_with_cache = raw_total_without_cache.saturating_add(cache_components);
-    let claude_excludes_cache = is_claude_executor
-        && cache_components > 0
-        && (raw_input_tokens < cache_components || tokens.total_tokens == raw_total_with_cache);
-    if claude_excludes_cache {
-        tokens.input_tokens = raw_input_tokens
-            .saturating_add(tokens.cache_read_tokens)
-            .saturating_add(tokens.cache_creation_tokens);
-    }
-    let input_before_invariant = tokens.input_tokens;
-    if cache_components > input_before_invariant {
-        tokens.input_tokens = input_before_invariant.saturating_add(cache_components);
-        if tokens.total_tokens == 0
-            || tokens.total_tokens == input_before_invariant.saturating_add(tokens.output_tokens)
-        {
-            tokens.total_tokens = tokens.input_tokens.saturating_add(tokens.output_tokens);
-        }
-    }
-    if tokens.total_tokens == 0
-        || (claude_excludes_cache && tokens.total_tokens == raw_total_without_cache)
-    {
-        tokens.total_tokens = tokens.input_tokens.saturating_add(tokens.output_tokens);
-    }
     let id = request_id.clone();
     let endpoint = string_field(object, "endpoint").unwrap_or_default();
     let failed = object
@@ -2284,18 +2423,14 @@ fn normalize_usage_record(value: Value, config: &GuiConfigFile) -> Result<UsageR
         response_service_tier: string_field(object, "response_service_tier").unwrap_or_default(),
         executor_type,
         endpoint,
-        auth_type: string_field(object, "auth_type").unwrap_or_default(),
+        auth_type,
         api_key_hash,
         api_key_display: mask_api_key(&api_key),
         api_key_remark,
         request_id,
         generate,
-        cached_tokens: raw_cached_tokens.max(
-            tokens
-                .cache_read_tokens
-                .saturating_add(tokens.cache_creation_tokens),
-        ),
-        collector_source: "http_pull".to_string(),
+        cached_tokens: normalized_tokens.cached,
+        collector_source: HTTP_USAGE_QUEUE_SOURCE.to_string(),
         tokens,
     })
 }
@@ -2439,9 +2574,7 @@ fn load_usage_overview(
                      AND failed = 0
                      AND canceled = 0
                      AND output_tokens > 0
-                     AND ttft_ms IS NOT NULL
-                     AND ttft_ms > 0
-                     AND latency_ms > ttft_ms
+                     AND latency_ms > 0
                     THEN output_tokens
                     ELSE 0
                 END) * 1000.0
@@ -2450,10 +2583,8 @@ fn load_usage_overview(
                      AND failed = 0
                      AND canceled = 0
                      AND output_tokens > 0
-                     AND ttft_ms IS NOT NULL
-                     AND ttft_ms > 0
-                     AND latency_ms > ttft_ms
-                    THEN latency_ms - ttft_ms
+                     AND latency_ms > 0
+                    THEN latency_ms
                     ELSE 0
                 END), 0),
                 0.0
@@ -2463,9 +2594,7 @@ fn load_usage_overview(
                  AND failed = 0
                  AND canceled = 0
                  AND output_tokens > 0
-                 AND ttft_ms IS NOT NULL
-                 AND ttft_ms > 0
-                 AND latency_ms > ttft_ms
+                 AND latency_ms > 0
                 THEN 1
                 ELSE 0
             END), 0),
@@ -3617,6 +3746,17 @@ fn token_u64(object: Option<&serde_json::Map<String, Value>>, key: &str) -> u64 
     object.map(|object| u64_field(object, key)).unwrap_or(0)
 }
 
+fn token_was_negative(object: Option<&serde_json::Map<String, Value>>, key: &str) -> bool {
+    object
+        .and_then(|object| object.get(key))
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
+        })
+        .is_some_and(|value| value < 0)
+}
+
 fn hash_text(value: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -3679,6 +3819,76 @@ fn usage_source_display(config: &GuiConfigFile, provider: &str, source: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn redis_usage_queue_falls_back_to_legacy_key_and_reuses_selection() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let legacy_message = r#"{"request_id":"legacy"}"#;
+        let expectations = vec![
+            (
+                USAGE_QUEUE_KEY.to_string(),
+                "-ERR unsupported channel 'usage'\r\n".to_string(),
+            ),
+            (LEGACY_USAGE_QUEUE_KEY.to_string(), "*0\r\n".to_string()),
+            (
+                LEGACY_USAGE_QUEUE_KEY.to_string(),
+                format!("*1\r\n${}\r\n{legacy_message}\r\n", legacy_message.len()),
+            ),
+        ];
+        let server = tokio::spawn(async move {
+            for (queue_key, response) in expectations {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let expected_auth = b"*2\r\n$4\r\nAUTH\r\n$6\r\nsecret\r\n";
+                let mut auth = vec![0_u8; expected_auth.len()];
+                stream.read_exact(&mut auth).await.unwrap();
+                assert_eq!(auth, expected_auth);
+                stream.write_all(b"+OK\r\n").await.unwrap();
+
+                let batch_size = USAGE_QUEUE_BATCH_SIZE.to_string();
+                let expected_pop = format!(
+                    "*3\r\n$4\r\nLPOP\r\n${}\r\n{queue_key}\r\n${}\r\n{batch_size}\r\n",
+                    queue_key.len(),
+                    batch_size.len()
+                );
+                let mut pop = vec![0_u8; expected_pop.len()];
+                stream.read_exact(&mut pop).await.unwrap();
+                assert_eq!(pop, expected_pop.as_bytes());
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let mut config = GuiConfigFile::default();
+        config.port = port;
+        config.management_secret_key = "secret".to_string();
+        let mut source = RedisUsageQueueSource::default();
+
+        let first = source.pull(&config).await.unwrap();
+        assert_eq!(first.source, "redis_pull:queue");
+        assert!(first.messages.is_empty());
+
+        let second = source.pull(&config).await.unwrap();
+        assert_eq!(second.source, "redis_pull:queue");
+        assert_eq!(second.messages, vec![legacy_message]);
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn redis_usage_queue_only_falls_back_for_unsupported_key_errors() {
+        assert!(redis_pull_can_try_legacy_queue(
+            "ERR unsupported channel 'usage'"
+        ));
+        assert!(redis_pull_can_try_legacy_queue(
+            "ERR unsupported queue 'usage'"
+        ));
+        assert!(!redis_pull_can_try_legacy_queue("CPA usage 订阅认证失败"));
+        assert!(!redis_pull_can_try_legacy_queue("connection refused"));
+    }
 
     #[tokio::test]
     async fn background_usage_jobs_limit_database_concurrency() {
@@ -4206,10 +4416,11 @@ mod tests {
     }
 
     #[test]
-    fn keeps_already_inclusive_claude_input_unchanged() {
+    fn legacy_claude_identity_uses_keeper_missing_cache_contract() {
         let record = normalize_usage_record(
             serde_json::json!({
                 "provider": "anthropic",
+                "auth_type": "oauth",
                 "request_id": "claude-inclusive",
                 "tokens": {
                     "input_tokens": 720,
@@ -4222,12 +4433,246 @@ mod tests {
             &GuiConfigFile::default(),
         )
         .unwrap();
-        assert_eq!(record.tokens.input_tokens, 720);
-        assert_eq!(record.tokens.total_tokens, 740);
+        assert_eq!(record.tokens.input_tokens, 1_340);
+        assert_eq!(record.tokens.total_tokens, 1_360);
     }
 
     #[test]
-    fn enforces_cache_input_invariant_for_unknown_producers() {
+    fn unresolved_executors_only_use_provider_for_oauth() {
+        for executor in ["", "unknown", "FutureExecutor"] {
+            for auth_type in ["", "apikey", "api_key", "unknown", " OAUTH "] {
+                let record = normalize_usage_record(
+                    serde_json::json!({
+                        "request_id": "unresolved-executor",
+                        "executor_type": executor,
+                        "provider": "anthropic",
+                        "auth_type": auth_type,
+                        "auth_index": "missing-identity",
+                        "tokens": {
+                            "input_tokens": 100,
+                            "output_tokens": 20,
+                            "cache_read_tokens": 30,
+                            "total_tokens": 120
+                        }
+                    }),
+                    &GuiConfigFile::default(),
+                )
+                .unwrap();
+                let expected_input = if auth_type.trim().eq_ignore_ascii_case("oauth") {
+                    130
+                } else {
+                    100
+                };
+                assert_eq!(
+                    record.tokens.input_tokens, expected_input,
+                    "{executor}/{auth_type}"
+                );
+                assert_eq!(
+                    record.tokens.total_tokens,
+                    expected_input + 20,
+                    "{executor}/{auth_type}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn codex_cached_only_records_preserve_total_with_missing_or_zero_read() {
+        for explicit_read in [false, true] {
+            let mut tokens = serde_json::json!({
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "cached_tokens": 30,
+                "cache_creation_tokens": 0,
+                "total_tokens": 30
+            });
+            if explicit_read {
+                tokens["cache_read_tokens"] = serde_json::json!(0);
+            }
+            let record = normalize_usage_record(
+                serde_json::json!({
+                    "request_id": "codex-cached-only",
+                    "executor_type": "CodexExecutor",
+                    "tokens": tokens
+                }),
+                &GuiConfigFile::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                record.tokens.total_tokens, 30,
+                "explicit_read={explicit_read}"
+            );
+            assert_eq!(record.tokens.input_tokens, 0);
+            assert_eq!(record.tokens.output_tokens, 0);
+            assert_eq!(
+                record.tokens.cache_read_tokens,
+                if explicit_read { 0 } else { 30 }
+            );
+        }
+    }
+
+    #[test]
+    fn clamped_contract_fields_do_not_rewrite_nonzero_total() {
+        for executor in ["ClaudeExecutor", "GeminiExecutor", "CodexExecutor"] {
+            for field in [
+                "input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+            ] {
+                let mut tokens = serde_json::json!({
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 99
+                });
+                tokens[field] = serde_json::json!(-1);
+                let record = normalize_usage_record(
+                    serde_json::json!({
+                        "request_id": "clamped-contract",
+                        "executor_type": executor,
+                        "tokens": tokens
+                    }),
+                    &GuiConfigFile::default(),
+                )
+                .unwrap();
+                assert_eq!(record.tokens.total_tokens, 99, "{executor}/{field}");
+            }
+        }
+    }
+
+    #[test]
+    fn zero_total_reconciliation_respects_keeper_clamped_field_dependencies() {
+        for executor in [
+            "ClaudeExecutor",
+            "GeminiExecutor",
+            "CodexExecutor",
+            "OpenAICompatExecutor",
+            "KimiExecutor",
+            "unknown",
+        ] {
+            for field in [
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "reasoning_tokens",
+                "cache_read_tokens",
+                "cache_creation_tokens",
+                "cached_tokens",
+            ] {
+                let mut tokens = serde_json::json!({
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 0
+                });
+                tokens[field] = serde_json::json!(-1);
+                let record = normalize_usage_record(
+                    serde_json::json!({
+                        "request_id": "clamped-zero-fallback",
+                        "executor_type": executor,
+                        "tokens": tokens
+                    }),
+                    &GuiConfigFile::default(),
+                )
+                .unwrap();
+                let expected = if matches!(field, "input_tokens" | "output_tokens" | "total_tokens")
+                    || (executor == "ClaudeExecutor" && field == "reasoning_tokens")
+                {
+                    0
+                } else {
+                    15
+                };
+                assert_eq!(record.tokens.total_tokens, expected, "{executor}/{field}");
+            }
+        }
+    }
+
+    #[test]
+    fn clamped_fields_cannot_trigger_dependent_token_folds() {
+        let cases = [
+            (
+                "ClaudeExecutor",
+                "anthropic",
+                serde_json::json!({
+                    "input_tokens": 10, "output_tokens": 5, "cache_read_tokens": -1,
+                    "cache_creation_tokens": 30, "total_tokens": 99
+                }),
+                10,
+                5,
+            ),
+            (
+                "GeminiExecutor",
+                "gemini",
+                serde_json::json!({
+                    "input_tokens": 10, "output_tokens": -1, "reasoning_tokens": 5,
+                    "total_tokens": 99
+                }),
+                10,
+                0,
+            ),
+            (
+                "",
+                "gemini",
+                serde_json::json!({
+                    "input_tokens": -1, "output_tokens": 5, "reasoning_tokens": 10,
+                    "total_tokens": 15
+                }),
+                0,
+                5,
+            ),
+            (
+                "OpenAICompatExecutor",
+                "openai",
+                serde_json::json!({
+                    "input_tokens": -1, "output_tokens": 5, "reasoning_tokens": 10,
+                    "total_tokens": 15
+                }),
+                0,
+                5,
+            ),
+        ];
+        for (executor, provider, tokens, input, output) in cases {
+            let record = normalize_usage_record(
+                serde_json::json!({
+                    "request_id": "clamped-fold",
+                    "executor_type": executor,
+                    "provider": provider,
+                    "auth_type": "oauth",
+                    "tokens": tokens
+                }),
+                &GuiConfigFile::default(),
+            )
+            .unwrap();
+            assert_eq!(record.tokens.input_tokens, input, "{executor}/{provider}");
+            assert_eq!(record.tokens.output_tokens, output, "{executor}/{provider}");
+        }
+    }
+
+    #[test]
+    fn clamped_cache_read_is_not_backfilled_from_cached_alias() {
+        for executor in ["CodexExecutor", "KimiExecutor", "unknown"] {
+            let record = normalize_usage_record(
+                serde_json::json!({
+                    "request_id": "clamped-cache-alias",
+                    "executor_type": executor,
+                    "tokens": {
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cache_read_tokens": -1,
+                        "cached_tokens": 30,
+                        "total_tokens": 120
+                    }
+                }),
+                &GuiConfigFile::default(),
+            )
+            .unwrap();
+            assert_eq!(record.tokens.cache_read_tokens, 0, "{executor}");
+        }
+    }
+
+    #[test]
+    fn unknown_producers_preserve_nonzero_parent_token_fields() {
         let record = normalize_usage_record(
             serde_json::json!({
                 "provider": "custom",
@@ -4242,9 +4687,9 @@ mod tests {
             &GuiConfigFile::default(),
         )
         .unwrap();
-        assert_eq!(record.tokens.input_tokens, 700);
-        assert_eq!(record.tokens.total_tokens, 720);
-        assert!(record.tokens.cache_read_tokens <= record.tokens.input_tokens);
+        assert_eq!(record.tokens.input_tokens, 100);
+        assert_eq!(record.tokens.total_tokens, 120);
+        assert_eq!(record.tokens.cache_read_tokens, 600);
     }
 
     #[test]
@@ -5039,7 +5484,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_tps_uses_weighted_generation_time_and_ignores_invalid_records() {
+    fn overview_tps_uses_weighted_total_latency_without_requiring_ttft() {
         let root = test_root("tps-overview");
         let mut connection = open_test_database(&root);
 
@@ -5075,6 +5520,13 @@ mod tests {
         non_generation.generate = false;
         non_generation.tokens.output_tokens = 100;
 
+        let mut zero_latency = sample_record("tps-8", "2026-07-17T20:37:00+08:00", "gpt-a");
+        zero_latency.latency_ms = 0;
+        zero_latency.tokens.output_tokens = 100;
+
+        let mut no_output = sample_record("tps-9", "2026-07-17T20:38:00+08:00", "gpt-a");
+        no_output.tokens.output_tokens = 0;
+
         insert_usage_records(
             &mut connection,
             &[
@@ -5085,14 +5537,16 @@ mod tests {
                 failed,
                 canceled,
                 non_generation,
+                zero_latency,
+                no_output,
             ],
         )
         .unwrap();
 
         let overview = load_usage_overview(&connection, &UsageQuery::default()).unwrap();
 
-        assert!((overview.tps - (100.0 * 1_000.0 / 1_800.0)).abs() < f64::EPSILON);
-        assert_eq!(overview.tps_sample_count, 2);
+        assert!((overview.tps - (300.0 * 1_000.0 / 4_000.0)).abs() < f64::EPSILON);
+        assert_eq!(overview.tps_sample_count, 4);
         drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
