@@ -1,5 +1,5 @@
 import { MessageNotice } from './appNotice';
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -242,12 +242,23 @@ function AppContent() {
     options[next]?.focus();
   };
 
-  const select = (pageId: PageId) => {
+  const select = useCallback((pageId: PageId) => {
     if (!canOpenAppPage(pageId, coreReady)) {
       return;
     }
     setActive(pageId);
-  };
+  }, [coreReady]);
+
+  useEffect(() => {
+    const handleNavigate = (event: Event) => {
+      const customEvent = event as CustomEvent<PageId>;
+      if (customEvent.detail) {
+        select(customEvent.detail);
+      }
+    };
+    window.addEventListener('app:navigate', handleNavigate);
+    return () => window.removeEventListener('app:navigate', handleNavigate);
+  }, [select]);
 
   const openContact = async () => {
     try {

@@ -106,7 +106,7 @@
   --theme-f8f6f1: #f8f6f1;
   --theme-faf8f2: #faf8f2;
   --theme-faf8f4: #faf8f4;
-  --theme-faf9f5: #faf9f5;
+  --theme-faf9f5: #ffffff;
   --theme-fdf1ee: #fdf1ee;
   --theme-fff: #fff;
   --theme-fff1ee: #fff1ee;
@@ -115,24 +115,24 @@
   --theme-fffdf8: #fffdf8;
   --theme-ffffff: #ffffff;
 
-  --bg-secondary: #f6f7f5;
+  --bg-secondary: #ffffff;
   --bg-primary: #ffffff;
-  --bg-tertiary: #eff3f0;
-  --bg-hover: #f6f8f6;
-  --bg-quinary: #f9faf9;
+  --bg-tertiary: #f8fafc;
+  --bg-hover: #f1f5f9;
+  --bg-quinary: #f8fafc;
   --bg-card: #ffffff;
   --bg-error-light: #fff1ee;
-  --text-primary: #202521;
-  --text-secondary: #46524a;
-  --text-tertiary: #566259;
-  --text-quaternary: #5f6a62;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #64748b;
+  --text-quaternary: #94a3b8;
   --text-muted: var(--text-tertiary);
   --text-placeholder: var(--text-quaternary);
   --text-disabled: #7d877f;
-  --border-color: #e2e8e3;
-  --border-secondary: #edf1ee;
-  --border-primary: #cfd7d0;
-  --border-hover: #c0c8c1;
+  --border-color: #e2e8f0;
+  --border-secondary: #f1f5f9;
+  --border-primary: #cbd5e1;
+  --border-hover: #94a3b8;
   --primary-color: #0f766e;
   --primary-hover: #0b5d57;
   --primary-active: #094c47;
@@ -154,7 +154,7 @@
   --count-badge-text: var(--text-primary);
   --ui-accent: #0f766e;
   --ui-accent-strong: #0b5d57;
-  --ui-accent-soft: #d9f0ec;
+  --ui-accent-soft: #f0fdfa;
   --ui-focus-ring: rgba(15, 118, 110, 0.28);
   --ui-accent-shadow: rgba(15, 118, 110, 0.18);
   --ui-panel-shadow: 0 8px 24px rgba(32, 42, 36, 0.07);
@@ -332,7 +332,7 @@
 :root {
   --ui-accent: #0f766e;
   --ui-accent-strong: #0b5d57;
-  --ui-accent-soft: #d9f0ec;
+  --ui-accent-soft: #f0fdfa;
   --ui-focus-ring: rgba(15, 118, 110, 0.28);
   --ui-accent-shadow: rgba(15, 118, 110, 0.18);
   --ui-panel-shadow: 0 8px 24px rgba(32, 42, 36, 0.07);
@@ -372,7 +372,7 @@
   --theme-f8f6f1: #f9faf9;
   --theme-faf8f2: #fbfcfb;
   --theme-faf8f4: #fbfcfb;
-  --theme-faf9f5: #f6f7f5;
+  --theme-faf9f5: #ffffff;
   --theme-fff: #ffffff;
   --theme-fffdf8: #ffffff;
   --theme-ffffff: #ffffff;
@@ -8618,7 +8618,13 @@ textarea:focus-visible {
 }
 
 .usage-stat-card-meta {
-  display: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  color: var(--theme-8a847c);
+  font-size: var(--font-size-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
 }
 
 /* Trend Panel */

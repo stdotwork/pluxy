@@ -3,20 +3,24 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 (async () => {
-  const { createServer } = await import('vite');
-  const react = (await import('@vitejs/plugin-react')).default;
-  const root = path.resolve(__dirname, '..');
-  const server = await createServer({ configFile: false, root, plugins: [react()], logLevel: 'error', server: { host: '127.0.0.1', port: 1421, strictPort: false } });
-  let browser;
+  let server;
+  let base = 'http://127.0.0.1:1420/';
   try {
+    const response = await fetch(base);
+    if (!response.ok) throw new Error(String(response.status));
+  } catch {
+    const { createServer } = await import('vite');
+    const react = (await import('@vitejs/plugin-react')).default;
+    const root = path.resolve(__dirname, '..');
+    server = await createServer({ configFile: false, root, plugins: [react()], logLevel: 'error', server: { host: '127.0.0.1', port: 1421, strictPort: false } });
     await server.listen();
     const address = server.httpServer.address();
-    const base = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 1421}/`;
-    const response = await fetch(base);
-    assert.equal(response.ok, true, `Vite server failed at ${base}`);
-    await response.text();
+    base = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 1421}/`;
+  }
+  let browser;
+  try {
     const channel = process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'win32' ? 'msedge' : undefined);
-    browser = await chromium.launch(channel ? { channel, headless: true } : { headless: true });
+    browser = await chromium.launch(channel ? { channel, headless: true, args: ['--no-proxy-server'] } : { headless: true, args: ['--no-proxy-server'] });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await page.goto(`${base}?mock=running`, { waitUntil: 'commit' });
     await page.locator('.app-shell').waitFor();
@@ -68,7 +72,7 @@ const path = require('node:path');
     console.log('PASS: page hierarchy, tabs, contextual filters, modal focus and compact shell.');
   } finally {
     if (browser) await browser.close();
-    await server.close();
+    if (server) await server.close();
   }
 })().catch((error) => {
   console.error(error);

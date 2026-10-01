@@ -24,7 +24,7 @@ import { getCurrentLocale, useI18n } from '../i18n';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
 import type { MessageKey } from '../i18n/resources';
 import { formatCacheReadRate, formatGenerationSpeed } from '../services/usageMetrics';
-import { formatUsageNumber } from '../services/usageNumber';
+import { formatDuration, formatUsageNumber } from '../services/usageNumber';
 import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
 import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 import {
@@ -266,6 +266,7 @@ const rangeQuery = (range: UsageRange, customStart: string, customEnd: string): 
 };
 
 const compactNumber = (value: number) => formatUsageNumber(value, getCurrentLocale());
+const compactDuration = (value: number) => formatDuration(value, getCurrentLocale());
 
 const formatStorageBytes = (value: number) => {
   const bytes = Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -1056,6 +1057,8 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
   const { t } = useI18n();
   const cards = [
     {
+      key: 'requests',
+      tone: 'requests',
       label: t('usage.stat.requests'),
       value: compactNumber(overview.totalRequests),
       meta: t('usage.stat.requestMeta', {
@@ -1069,8 +1072,15 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
         failed: compactNumber(overview.failureCount),
         canceled: compactNumber(overview.canceledCount),
       }),
+      chips: [
+        { text: `${t('usage.result.success')} ${compactNumber(overview.successCount)}`, tone: 'ok' },
+        { text: `${t('usage.result.failed')} ${compactNumber(overview.failureCount)}`, tone: 'bad' },
+        { text: `${t('usage.result.canceled')} ${compactNumber(overview.canceledCount)}`, tone: 'warn' },
+      ],
     },
     {
+      key: 'speed',
+      tone: 'speed',
       label: t('usage.stat.tps'),
       value: overview.tpsSampleCount > 0 ? overview.tps.toFixed(1) : '—',
       meta: t('usage.stat.performanceMeta', {
@@ -1084,8 +1094,14 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
         rpm: overview.rpm.toFixed(2),
         latency: Math.round(overview.averageLatencyMs),
       }),
+      chips: [
+        { text: `RPM ${overview.rpm.toFixed(2)}`, tone: 'neutral' },
+        { text: compactDuration(overview.averageLatencyMs), tone: 'neutral' },
+      ],
     },
     {
+      key: 'tokens',
+      tone: 'tokens',
       label: t('usage.stat.tokens'),
       value: compactNumber(overview.totalTokens),
       meta: t('usage.stat.tokenMeta', {
@@ -1098,10 +1114,17 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
         reasoning: compactNumber(overview.reasoningTokens),
         cache: compactNumber(overview.cacheReadTokens),
       }),
+      chips: [
+        { text: `${t('usage.token.input')} ${compactNumber(overview.inputTokens)}`, tone: 'neutral' },
+        { text: `${t('usage.token.output')} ${compactNumber(overview.outputTokens)}`, tone: 'ok' },
+      ],
     },
     {
+      key: 'success',
+      tone: 'success',
       label: t('usage.stat.successRate'),
       value: `${overview.successRate.toFixed(1)}%`,
+      meter: overview.successRate,
       meta: t('usage.stat.successMeta', {
         success: compactNumber(overview.successCount),
         failed: compactNumber(overview.failureCount),
@@ -1111,10 +1134,17 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
         failed: compactNumber(overview.failureCount),
         canceled: compactNumber(overview.canceledCount),
       }),
+      chips: [
+        { text: `${t('usage.result.success')} ${compactNumber(overview.successCount)}`, tone: 'ok' },
+        { text: `${t('usage.result.failed')} ${compactNumber(overview.failureCount)}`, tone: 'bad' },
+      ],
     },
     {
+      key: 'cache',
+      tone: 'cache',
       label: t('usage.stat.cacheHitRate'),
       value: `${(overview.cacheHitRate * 100).toFixed(1)}%`,
+      meter: overview.cacheHitRate * 100,
       meta: t('usage.stat.cacheHitMeta', {
         hit: compactNumber(overview.cacheReadTokens),
         input: compactNumber(overview.inputTokens),
@@ -1124,8 +1154,14 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
         hit: compactNumber(overview.cacheReadTokens),
         input: compactNumber(overview.inputTokens),
       }),
+      chips: [
+        { text: `${t('usage.token.cacheRead')} ${compactNumber(overview.cacheReadTokens)}`, tone: 'warn' },
+        { text: `${t('usage.token.input')} ${compactNumber(overview.inputTokens)}`, tone: 'neutral' },
+      ],
     },
     {
+      key: 'cost',
+      tone: 'cost',
       label: t('usage.stat.estimatedCost'),
       value: formatUsd(overview.estimatedCost),
       meta: t('usage.stat.costMeta', {
@@ -1137,16 +1173,43 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
         total: compactNumber(overview.totalRequests),
         unpriced: compactNumber(Math.max(overview.totalRequests - overview.pricedRequests, 0)),
       }),
+      chips: [
+        { text: t('usage.stat.costNote'), tone: 'note' },
+        {
+          text: t('usage.stat.costIncluded', {
+            count: compactNumber(overview.pricedRequests),
+          }),
+          tone: 'ok',
+        },
+        ...(overview.totalRequests > overview.pricedRequests
+          ? [{
+              text: t('usage.stat.costExcluded', {
+                count: compactNumber(Math.max(overview.totalRequests - overview.pricedRequests, 0)),
+              }),
+              tone: 'warn',
+            }]
+          : []),
+      ],
     },
   ];
 
   return (
     <div className="usage-overview-layout">
       <div className="usage-stat-grid">
-        {cards.map(({ label, value, meta, metaTitle }) => (
-          <article className="panel usage-stat-card" key={label} title={metaTitle ?? meta}>
+        {cards.map(({ key, tone, label, value, meter, meta, metaTitle, chips }) => (
+          <article className={`panel usage-stat-card tone-${tone}`} key={key} title={metaTitle ?? meta}>
             <span className="usage-stat-card-label">{label}</span>
             <strong className="usage-stat-card-value">{value}</strong>
+            {typeof meter === 'number' ? (
+              <span className="usage-stat-meter" aria-hidden="true">
+                <span style={{ width: `${Math.max(0, Math.min(meter, 100))}%` }} />
+              </span>
+            ) : null}
+            <span className="usage-stat-card-meta">
+              {chips.map((chip) => (
+                <span className={`usage-stat-chip tone-${chip.tone}`} key={chip.text}>{chip.text}</span>
+              ))}
+            </span>
           </article>
         ))}
       </div>
@@ -1954,13 +2017,13 @@ function UsageEventCell({
     case 'latency':
       return (
         <td className="usage-td-latency align-center" title={`${record.latency_ms} ms`}>
-          {compactNumber(record.latency_ms)} ms
+          {compactDuration(record.latency_ms)}
         </td>
       );
     case 'ttft':
       return (
         <td className="usage-td-ttft align-center" title={record.ttft_ms == null ? undefined : `${record.ttft_ms} ms`}>
-          {record.ttft_ms == null ? '—' : `${compactNumber(record.ttft_ms)} ms`}
+          {record.ttft_ms == null ? '—' : compactDuration(record.ttft_ms)}
         </td>
       );
     case 'speed': {

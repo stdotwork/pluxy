@@ -26,7 +26,7 @@ const base = 'http://127.0.0.1:1421';
 
     assert.equal(statInfo1213.cardCount, 6, 'There are 6 stat cards');
     assert.equal(statInfo1213.cardRows, 1, 'At 1213px width, all 6 cards fit into a single row');
-    assert.equal(statInfo1213.metaCount, 0, 'Stat cards have no meta subtext displayed');
+    assert.equal(statInfo1213.metaCount, 6, 'Each stat card shows its supporting detail');
     assert.ok(!statInfo1213.tpsValue.includes('TPS'), `TPS value should not contain TPS unit: ${statInfo1213.tpsValue}`);
     assert.ok(/^\d+(\.\d+)?$/.test(statInfo1213.tpsValue), `TPS value should be numeric: ${statInfo1213.tpsValue}`);
 

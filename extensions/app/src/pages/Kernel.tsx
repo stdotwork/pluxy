@@ -3,10 +3,14 @@ import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
+  Bot,
   Check,
   Copy,
   Eye,
   EyeOff,
+  History,
+  LogIn,
+  Network,
 } from 'lucide-react';
 import { type CoreStatus, useCoreRuntime } from '../coreRuntime';
 import openaiIcon from '../assets/icons/openai-light.svg';
@@ -240,18 +244,20 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
             </div>
             <div className="panel-detail-row">
               <dt>{t('kernel.control.pid')}</dt>
-              <dd>{coreStatus?.processId || t('kernel.control.noPid')}</dd>
+              <dd><span className="mono-tag">{coreStatus?.processId || t('kernel.control.noPid')}</span></dd>
             </div>
             <div className="panel-detail-row">
               <dt>{t('kernel.overview.coreVersion')}</dt>
               <dd>
-                {currentVersion
-                  || (coreInstalled ? t('common.unavailable') : t('kernel.status.notInstalled'))}
+                <span className="mono-tag">
+                  {currentVersion
+                    || (coreInstalled ? t('common.unavailable') : t('kernel.status.notInstalled'))}
+                </span>
               </dd>
             </div>
             <div className="panel-detail-row">
               <dt>{t('kernel.overview.appVersion')}</dt>
-              <dd>{currentAppVersion}</dd>
+              <dd><span className="mono-tag">{currentAppVersion}</span></dd>
             </div>
           </dl>
 
@@ -380,6 +386,61 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
         </div>
       </section>
 
+      <div className="home-quick-actions" role="region" aria-label={t('app.navigation')}>
+        <button
+          type="button"
+          className="home-quick-card"
+          onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'agents' }))}
+        >
+          <span className="home-quick-icon">
+            <Bot size={20} aria-hidden="true" />
+          </span>
+          <div className="home-quick-info">
+            <strong>{t('app.nav.agents')}</strong>
+            <p>{t('kernel.quick.agentsDesc')}</p>
+          </div>
+        </button>
+        <button
+          type="button"
+          className="home-quick-card"
+          onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'api' }))}
+        >
+          <span className="home-quick-icon">
+            <Network size={20} aria-hidden="true" />
+          </span>
+          <div className="home-quick-info">
+            <strong>{t('app.nav.api')}</strong>
+            <p>{t('kernel.quick.apiDesc')}</p>
+          </div>
+        </button>
+        <button
+          type="button"
+          className="home-quick-card"
+          onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'oauth' }))}
+        >
+          <span className="home-quick-icon">
+            <LogIn size={20} aria-hidden="true" />
+          </span>
+          <div className="home-quick-info">
+            <strong>{t('app.nav.oauth')}</strong>
+            <p>{t('kernel.quick.oauthDesc')}</p>
+          </div>
+        </button>
+        <button
+          type="button"
+          className="home-quick-card"
+          aria-label="Token 统计与请求日志"
+          onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'usage-records' }))}
+        >
+          <span className="home-quick-icon">
+            <History size={20} aria-hidden="true" />
+          </span>
+          <div className="home-quick-info">
+            <strong>{t('app.nav.usageRecords')}</strong>
+            <p>{t('kernel.quick.usageDesc')}</p>
+          </div>
+        </button>
+      </div>
     </section>
   );
 }
