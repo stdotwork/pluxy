@@ -18,7 +18,7 @@ const assert = require('node:assert/strict');
       assert.equal(await page.locator('[role=tab][aria-selected=true]').count(), 1);
     };
     const ready = () => page.waitForFunction(() => {
-      const refresh = document.querySelector('.agent-header-actions button');
+      const refresh = document.querySelector('.agent-client-list-heading button');
       return refresh && !refresh.disabled && window.fixtureCalls.some(call => call.cmd === 'get_agent_models');
     });
     const open = async query => {

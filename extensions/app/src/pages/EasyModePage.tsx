@@ -844,11 +844,11 @@ export function EasyModePage({
                 <div className="simple-mode-choice-title">
                   <strong>{t("easyMode.oauth.title")}</strong>
                   {totalLoggedInOAuth > 0 ? (
-                    <span className="state-pill success" style={{ fontSize: "12px" }}>
+                    <span className="state-pill success">
                       {t("easyMode.oauth.accountsLoggedIn", { count: totalLoggedInOAuth })}
                     </span>
                   ) : (
-                    <span className="state-pill neutral" style={{ fontSize: "12px" }}>{t("easyMode.oauth.recommended")}</span>
+                    <span className="state-pill neutral">{t("easyMode.oauth.recommended")}</span>
                   )}
                 </div>
               </div>
@@ -867,7 +867,7 @@ export function EasyModePage({
                 <div className="simple-mode-choice-title">
                   <strong>{t("easyMode.api.title")}</strong>
                   {totalApiProviders > 0 ? (
-                    <span className="state-pill success" style={{ fontSize: "12px" }}>
+                    <span className="state-pill success">
                       {t("easyMode.api.platformsConnected", { count: totalApiProviders })}
                     </span>
                   ) : null}
@@ -906,12 +906,12 @@ export function EasyModePage({
 
                       <div className="simple-mode-provider-card-foot">
                         {loggedIn ? (
-                          <span className="state-pill success" style={{ fontSize: "12px" }}>
+                          <span className="state-pill success">
                             <Check size={12} style={{ marginRight: 4 }} />
                             {t("easyMode.oauth.loggedIn")}
                           </span>
                         ) : (
-                          <span className="state-pill neutral" style={{ fontSize: "12px" }}>{t("easyMode.status.notLoggedIn")}</span>
+                          <span className="state-pill neutral">{t("easyMode.status.notLoggedIn")}</span>
                         )}
 
                         <button
@@ -1126,7 +1126,7 @@ export function EasyModePage({
             <button
               type="button"
               className="primary-button"
-              style={{ minHeight: 42, padding: "0 22px", fontSize: "15px" }}
+              style={{ minHeight: 42, padding: "0 22px" }}
               disabled={!hasConnectedSource}
               onClick={() => {
                 setActiveStep(2);

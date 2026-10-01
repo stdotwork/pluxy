@@ -124,7 +124,7 @@ body, html, #root {
 
 .sidebar-theme-selector button {
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-weight: 500;
   color: var(--text-tertiary);
   transition: all 0.15s ease;
@@ -188,13 +188,13 @@ body, html, #root {
 
 .control-panel .panel-detail-row dt {
   color: var(--text-secondary);
-  font-size: 13.5px;
+  font-size: var(--font-size-label);
 }
 
 .control-panel .panel-detail-row dd {
   color: var(--text-primary);
   font-weight: 500;
-  font-size: 13.5px;
+  font-size: var(--font-size-label);
 }
 
 .control-panel .panel-detail-row dd code,
@@ -204,7 +204,7 @@ body, html, #root {
   border-radius: 6px;
   padding: 2px 8px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--font-size-meta);
 }
 
 /* Home Page API Access Panel */
@@ -314,44 +314,60 @@ body, html, #root {
 
 .home-quick-info strong {
   color: var(--text-primary);
-  font-size: 14.5px;
+  font-size: var(--font-size-label);
   font-weight: 600;
 }
 
 .home-quick-info p {
   margin: 0;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   line-height: 1.45;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-/* 6. Tabs & Segmented Controls (Unified Modern Style) */
+/* 6. Subpage navigation */
 .agent-subpage-tabs,
 .oauth-subpage-tabs,
 .config-subpage-tabs,
 .usage-tabs {
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-hover);
-  padding: 3px;
   display: inline-flex;
-  gap: 2px;
+  align-items: stretch;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .agent-subpage-tabs button,
 .oauth-subpage-tabs button,
 .config-subpage-tabs button,
-.usage-tabs button {
-  border-radius: 6px;
-  border: none;
+.usage-tabs button,
+.agent-subpage-tabs button:hover,
+.oauth-subpage-tabs button:hover,
+.config-subpage-tabs button:hover,
+.usage-tabs button:hover,
+.agent-subpage-tabs button.active,
+.oauth-subpage-tabs button.active,
+.config-subpage-tabs button.active,
+.usage-tabs button.active {
+  min-width: 0;
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
+  box-shadow: none;
   color: var(--text-tertiary);
-  font-weight: 500;
-  font-size: 13.5px;
-  padding: 6px 14px;
-  transition: all 0.15s ease;
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-medium);
 }
 
 .agent-subpage-tabs button:hover,
@@ -365,10 +381,10 @@ body, html, #root {
 .oauth-subpage-tabs button.active,
 .config-subpage-tabs button.active,
 .usage-tabs button.active {
-  background: var(--bg-primary);
+  margin-bottom: -1px;
+  border-bottom-color: var(--ui-accent);
   color: var(--text-primary);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 /* API access toolbar */
@@ -500,7 +516,7 @@ body, html, #root {
 
 .oauth-hint {
   color: var(--text-tertiary);
-  font-size: 12.5px;
+  font-size: var(--font-size-meta);
   line-height: 1.5;
 }
 
@@ -596,32 +612,80 @@ body, html, #root {
   box-shadow: none;
 }
 
+.usage-records-page .usage-filter-row,
+.usage-records-page .usage-filter-group {
+  align-items: center;
+  gap: 8px;
+}
+
 .usage-records-page .usage-filter-item {
-  min-width: 0;
+  flex: 1 1 150px;
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  min-width: 132px;
+  max-width: 210px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
 }
 
 .usage-records-page .usage-filter-label {
-  padding-left: 12px;
+  flex: none;
+  padding: 0 8px 0 0;
+  border-right: 1px solid var(--border-color);
+  margin-right: 2px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-caption);
+  line-height: 20px;
 }
 
 .usage-records-page .usage-filter-item select,
 .usage-records-page .usage-filter-item input {
+  width: 100%;
+  min-width: 0;
   height: 34px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-primary);
+  padding: 0 18px 0 4px;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  box-shadow: none;
   color: var(--text-primary);
 }
 
-.usage-records-page .usage-filter-item select:hover,
-.usage-records-page .usage-filter-item input:hover {
+.usage-records-page .usage-filter-item:hover {
   border-color: var(--border-hover);
 }
 
-.usage-records-page .usage-filter-item select:focus,
-.usage-records-page .usage-filter-item input:focus {
+.usage-records-page .usage-filter-item:focus-within {
   border-color: var(--ui-accent);
   box-shadow: 0 0 0 3px var(--ui-focus-ring);
+}
+
+.usage-records-page .usage-filter-item select:hover,
+.usage-records-page .usage-filter-item input:hover,
+.usage-records-page .usage-filter-item select:focus,
+.usage-records-page .usage-filter-item input:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.usage-records-page .usage-filter-reset-btn {
+  align-self: center;
+  height: 36px;
+  border-style: solid;
+  border-color: var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+.usage-records-page .usage-filter-reset-btn:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .usage-records-page .usage-section-heading strong {
@@ -670,14 +734,14 @@ body, html, #root {
 
 .usage-stat-card-label {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-caption);
   font-weight: 590;
   letter-spacing: -0.01em;
 }
 
 .usage-stat-card-value {
   color: var(--usage-tone);
-  font-size: 30px;
+  font-size: var(--font-size-display);
   font-weight: 650;
   letter-spacing: -0.045em;
   line-height: 1.02;
@@ -718,7 +782,7 @@ body, html, #root {
   border-radius: 999px;
   background: #f2f2f7;
   color: #3a3a3c;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 590;
   line-height: 1.45;
 }
@@ -757,7 +821,7 @@ body, html, #root {
 
 .metric-card strong {
   color: var(--text-primary);
-  font-size: 26px;
+  font-size: var(--font-size-display);
   font-weight: 700;
 }
 
@@ -1160,4 +1224,16 @@ body, html, #root {
 :root[data-theme='dark'] .home-quick-icon {
   background: rgba(15, 118, 110, 0.2);
   color: #2dd4bf;
+}
+
+:root[data-theme='dark'] .usage-records-page .usage-filter-item {
+  background: var(--bg-primary);
+  border-color: var(--border-color);
+}
+
+:root[data-theme='dark'] .usage-records-page .usage-filter-item select,
+:root[data-theme='dark'] .usage-records-page .usage-filter-item input {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-primary);
 }

@@ -662,7 +662,7 @@ export function UsageRecordsPage() {
         <div className="usage-filter-row">
           <div className="usage-filter-group">
             <label className="usage-filter-item">
-              <span className="usage-filter-label">{t('usage.filter.timeRange')}</span>
+              <span className="sr-only">{t('usage.filter.timeRange')}</span>
               <select
                 value={range}
                 onChange={(event) => {
@@ -682,7 +682,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className="usage-filter-label">{t('usage.filter.model')}</span>
+              <span className="sr-only">{t('usage.filter.model')}</span>
               <select
                 value={model}
                 onChange={(event) => changeFilter(setModel, event.currentTarget.value)}
@@ -698,7 +698,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className="usage-filter-label">{t('usage.column.provider')}</span>
+              <span className="sr-only">{t('usage.column.provider')}</span>
               <select
                 value={provider}
                 onChange={(event) => changeFilter(setProvider, event.currentTarget.value)}
@@ -714,7 +714,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className="usage-filter-label">{t('usage.filter.source')}</span>
+              <span className="sr-only">{t('usage.filter.source')}</span>
               <select
                 value={source}
                 onChange={(event) => changeFilter(setSource, event.currentTarget.value)}
@@ -730,7 +730,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className="usage-filter-label">{t('apiAccess.field.key')}</span>
+              <span className="sr-only">{t('apiAccess.field.key')}</span>
               <select
                 value={apiKeyHash}
                 onChange={(event) => changeFilter(setApiKeyHash, event.currentTarget.value)}
@@ -746,7 +746,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className="usage-filter-label">{t('usage.filter.result')}</span>
+              <span className="sr-only">{t('usage.filter.result')}</span>
               <select
                 value={result}
                 onChange={(event) => changeFilter(setResult, event.currentTarget.value)}
@@ -2204,6 +2204,7 @@ function EventsView({
         </div>
 
         <div className="usage-events-summary-right">
+          <div className="usage-pagination-controls">
           <select
             className="usage-page-size-select"
             value={pageSize}
@@ -2238,6 +2239,7 @@ function EventsView({
               <span>{t('usage.next')}</span>
               <ChevronRight size={14} />
             </button>
+          </div>
           </div>
 
           <button

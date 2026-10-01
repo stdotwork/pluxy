@@ -1728,7 +1728,7 @@ textarea:focus-visible {
 
 .client-api-card-heading strong {
   color: var(--theme-2d2a26);
-  font-size: 13.5px;
+  font-size: var(--font-size-label);
   font-weight: var(--font-weight-semibold);
   line-height: 1.2;
 }
@@ -1736,7 +1736,7 @@ textarea:focus-visible {
 .client-api-card-heading .client-api-format-tag,
 .client-api-card-heading span {
   color: var(--theme-7a746c);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -1778,7 +1778,7 @@ textarea:focus-visible {
   border-radius: 6px;
   background: var(--bg-secondary);
   color: var(--theme-2d2a26);
-  font-size: 12.5px;
+  font-size: var(--font-size-meta);
   font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6051,29 +6051,16 @@ textarea:focus-visible {
 }
 
 .agents-page {
-  grid-template-rows: minmax(54px, auto) auto;
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
+}
+
+.agents-page-embedded {
+  grid-template-rows: minmax(48px, auto) minmax(0, 1fr);
 }
 
 .agents-page-embedded .agent-client-list {
   min-height: 0;
-}
-
-.agent-header-actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.agent-header-actions .agent-inline-message {
-  max-width: 360px;
-  text-align: right;
-}
-
-.agent-header-actions .compact-button {
-  flex: none;
 }
 
 .agent-inline-message {
@@ -6096,9 +6083,35 @@ textarea:focus-visible {
 
 .agent-client-list {
   position: relative;
-  display: block;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+  gap: 10px;
   padding: 14px;
+}
+
+.agent-client-list-heading {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.agent-client-list-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--theme-2d2a26);
+  font-size: var(--font-size-section);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-client-list-heading .icon-button {
+  width: 30px;
+  height: 30px;
 }
 
 .agent-list-items button > span {
@@ -6128,8 +6141,8 @@ textarea:focus-visible {
 }
 
 .agent-list-items {
-  position: absolute;
-  inset: 14px;
+  position: relative;
+  flex: 1 1 auto;
   display: grid;
   align-content: start;
   grid-auto-rows: max-content;
@@ -8413,8 +8426,6 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 96px;
-  height: 32px;
   padding: 0 14px;
   border: 0;
   border-radius: 6px;
@@ -8467,8 +8478,8 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 120px;
-  flex: 1 1 130px;
+  min-width: 0;
+  flex: 1 1 0;
 }
 
 .usage-filter-label {
@@ -8504,6 +8515,7 @@ textarea:focus-visible {
 .usage-filter-reset-btn {
   display: inline-flex;
   align-items: center;
+  align-self: flex-end;
   gap: 5px;
   height: 34px;
   padding: 0 12px;
@@ -8613,7 +8625,7 @@ textarea:focus-visible {
 
 .usage-stat-card-value {
   color: var(--theme-2d2a26);
-  font-size: 20px;
+  font-size: var(--font-size-dialog-title);
   font-weight: var(--font-weight-semibold);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
@@ -9128,7 +9140,7 @@ textarea:focus-visible {
   background: var(--theme-fffdf8);
   color: var(--theme-8a847c);
   font-size: var(--font-size-caption);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .usage-events-summary-left {
@@ -9165,7 +9177,15 @@ textarea:focus-visible {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  justify-content: flex-end;
   min-width: 0;
+}
+
+.usage-pagination-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
 }
 
 .usage-col-hint {
@@ -9728,6 +9748,7 @@ body.table-col-resizing * {
   .usage-events-summary {
     gap: 8px;
     padding: 8px 12px;
+    flex-wrap: wrap;
   }
 
   .usage-events-summary-left,
@@ -11448,17 +11469,6 @@ body.table-col-resizing * {
     flex-direction: column;
   }
 
-  .agent-header-actions {
-    width: 100%;
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .agent-header-actions .agent-inline-message {
-    max-width: none;
-    text-align: left;
-  }
-
   .agent-subpage-tabs {
     width: 100%;
     grid-auto-columns: minmax(104px, 1fr);
@@ -11534,14 +11544,17 @@ body.table-col-resizing * {
 
   .usage-tabs {
     width: 100%;
+    max-width: 100%;
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
   .usage-tabs button {
-    flex: 1 1 45%;
-    min-width: 0;
-    padding: 0 7px;
+    flex: 0 0 auto;
+    min-width: max-content;
+    padding: 0 12px;
   }
 
   .usage-topbar-actions {

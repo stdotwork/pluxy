@@ -2019,28 +2019,33 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
 
   return (
     <section className={`page management-page agents-page${embedded ? ' agents-page-embedded' : ''}`}>
-      <header className="management-header">
-        <div className={embedded ? 'agent-embedded-header-copy' : undefined}>
-          {embedded ? (
-            <>
-              <h1>{t('agents.embedded.title')}</h1>
-              <p>{t('agents.embedded.subtitle')}</p>
-            </>
-          ) : null}
-        </div>
-        <div className="agent-header-actions">
-          {detectionError ? (
-            <MessageNotice message={detectionError} onDismiss={() => setDetectionError('')} />
-          ) : null}
-          <button type="button" className="secondary-button compact-button" onClick={() => void refresh()} disabled={loading || busy}>
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-            {t('agents.redetect')}
-          </button>
-        </div>
-      </header>
+      {embedded ? (
+        <header className="management-header">
+          <div className="agent-embedded-header-copy">
+            <h1>{t('agents.embedded.title')}</h1>
+            <p>{t('agents.embedded.subtitle')}</p>
+          </div>
+        </header>
+      ) : null}
 
       <div className="agent-workbench">
         <aside className="panel agent-client-list" aria-label={t('agents.localClients')}>
+          <div className="agent-client-list-heading">
+            <strong>{t('agents.localClients')}</strong>
+            <button
+              type="button"
+              className="icon-button quiet"
+              onClick={() => void refresh()}
+              disabled={loading || busy}
+              title={t('agents.redetect')}
+              aria-label={t('agents.redetect')}
+            >
+              <RefreshCw size={15} className={loading ? 'spin' : ''} aria-hidden="true" />
+            </button>
+          </div>
+          {detectionError ? (
+            <MessageNotice message={detectionError} onDismiss={() => setDetectionError('')} />
+          ) : null}
           <div className="agent-list-items">
             {agentDefinitions.map((agent) => {
               const status = statuses.find((item) => item.id === agent.id);

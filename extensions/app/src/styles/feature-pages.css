@@ -2191,7 +2191,6 @@
 }
 
 .agents-page-embedded .agent-list-items {
-  inset: 16px;
   min-height: 0;
   max-height: none;
   overflow-y: auto;
@@ -2985,13 +2984,16 @@
   .usage-tabs {
     display: flex;
     width: 100%;
-    flex-wrap: wrap;
+    max-width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
   .usage-tabs button {
-    flex: 1 1 45%;
-    min-width: 0;
-    padding-inline: 7px;
+    flex: 0 0 auto;
+    min-width: max-content;
+    padding-inline: 12px;
   }
 
   .usage-topbar-actions {
@@ -3453,7 +3455,7 @@
 .app-shell:has(.agents-page:not(.agents-page-embedded)) .agents-page:not(.agents-page-embedded) {
   min-height: 0;
   flex: 1 1 auto;
-  grid-template-rows: minmax(54px, auto) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -3522,7 +3524,7 @@
 
   .app-shell:has(.agents-page:not(.agents-page-embedded)) .agents-page:not(.agents-page-embedded) {
     flex: none;
-    grid-template-rows: auto auto;
+    grid-template-rows: auto;
     overflow: visible;
   }
 

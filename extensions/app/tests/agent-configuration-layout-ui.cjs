@@ -32,7 +32,7 @@ const desktopViewports = [
       });
       await page.waitForFunction(() => window.fixtureCalls.some(call => call.cmd === 'get_agent_config_statuses')
         && document.querySelector('.agent-config-panel')?.getBoundingClientRect().height > 0
-        && !document.querySelector('.agent-header-actions button')?.disabled);
+        && !document.querySelector('.agent-client-list-heading button')?.disabled);
       await page.evaluate(() => document.fonts.ready);
     };
 
