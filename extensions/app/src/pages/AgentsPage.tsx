@@ -2026,11 +2026,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               <h1>{t('agents.embedded.title')}</h1>
               <p>{t('agents.embedded.subtitle')}</p>
             </>
-          ) : (
-            <>
-              <h1>{t('agents.title')}</h1>
-            </>
-          )}
+          ) : null}
         </div>
         <div className="agent-header-actions">
           {detectionError ? (

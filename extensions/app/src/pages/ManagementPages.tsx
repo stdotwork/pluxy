@@ -501,7 +501,6 @@ export function OAuthLoginPage() {
   return (
     <section className="page management-page">
       <header className="management-header">
-        <div><h1>{t('oauth.title')}</h1></div>
         <label className="oauth-browser-picker">
           <span>{t('oauth.browser.label')}</span>
           <select

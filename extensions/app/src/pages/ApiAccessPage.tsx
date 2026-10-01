@@ -1402,8 +1402,6 @@ export function ApiAccessPage() {
     void reorderProviders(source, target);
   };
 
-  const totalCount = Object.values(records).reduce((sum, items) => sum + items.length, 0);
-
   const countForDefinition = (definition: ProviderDefinition) =>
     records[definition.section].filter((record) =>
       providerCategoryMatchesRecord(definition.id, record, definition.section)
@@ -1412,23 +1410,6 @@ export function ApiAccessPage() {
   return (
     <section className="page management-page api-access-page">
       {confirmationDialog}
-      <header className="management-header">
-        <div>
-          <h1>{t('apiAccess.title')}</h1>
-        </div>
-        <div className="management-heading-actions">
-          <span className="muted-summary">{t('apiAccess.count', { count: totalCount })}</span>
-          <button type="button" className="secondary-button compact-button" onClick={() => void loadProviders()} disabled={loading || busy}>
-            <RefreshCw size={16} aria-hidden="true" />
-            {t('common.refresh')}
-          </button>
-          <button type="button" className="primary-button compact-button" onClick={openCreate} disabled={loading || busy}>
-            <Plus size={16} aria-hidden="true" />
-            {t('apiAccess.add')}
-          </button>
-        </div>
-      </header>
-
       {error ? <MessageNotice message={error} onDismiss={() => setError('')} /> : null}
       <div className="provider-workbench real-provider-workbench">
         <aside className="panel provider-category-panel">
@@ -1456,9 +1437,19 @@ export function ApiAccessPage() {
               <h2 title={t(activeDefinition.labelKey)}>{t(activeDefinition.labelKey)}</h2>
               <span>{t('apiAccess.matches', { count: rows.length })}</span>
             </div>
-            <div className="management-toolbar compact-toolbar">
-              <Search size={16} aria-hidden="true" />
-              <input value={filter} onChange={(event) => setFilter(event.currentTarget.value)} placeholder={t('apiAccess.search')} />
+            <div className="api-access-heading-tools">
+              <button type="button" className="secondary-button compact-button" onClick={() => void loadProviders()} disabled={loading || busy}>
+                <RefreshCw size={16} aria-hidden="true" />
+                {t('common.refresh')}
+              </button>
+              <button type="button" className="primary-button compact-button" onClick={openCreate} disabled={loading || busy}>
+                <Plus size={16} aria-hidden="true" />
+                {t('apiAccess.add')}
+              </button>
+              <div className="management-toolbar compact-toolbar">
+                <Search size={16} aria-hidden="true" />
+                <input value={filter} onChange={(event) => setFilter(event.currentTarget.value)} placeholder={t('apiAccess.search')} />
+              </div>
             </div>
           </div>
 

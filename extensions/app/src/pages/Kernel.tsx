@@ -219,9 +219,6 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
 
   return (
     <section className="page kernel-page home-page">
-      <header className="management-header home-page-header">
-        <div><h1>{t('app.nav.home')}</h1></div>
-      </header>
       <div className="kernel-layout home-layout">
         <div className="panel control-panel">
           <div className="panel-heading">

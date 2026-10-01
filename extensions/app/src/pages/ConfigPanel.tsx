@@ -984,9 +984,6 @@ export function ConfigPanelPage() {
 
   return (
     <section className="page config-page">
-      <header className="management-header config-page-header">
-        <div><h1>{t('app.nav.config')}</h1></div>
-      </header>
       <div className="agent-subpage-tabs config-subpage-tabs" role="tablist" aria-label={t('config.tabs.label')}>
         <button
           type="button"

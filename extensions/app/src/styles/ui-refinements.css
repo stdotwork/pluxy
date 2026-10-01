@@ -149,18 +149,13 @@ body, html, #root {
 }
 
 @container workspace (min-width: 840px) {
-  .home-page {
-    grid-template-rows: auto auto auto;
-    grid-auto-rows: unset;
-  }
-
   .home-page > .home-layout,
   .home-page > .client-api-panel {
-    grid-row: 2;
+    grid-row: 1;
   }
 
   .home-page > .home-quick-actions {
-    grid-row: 3;
+    grid-row: 2;
     grid-column: 1 / -1;
   }
 }
@@ -358,6 +353,40 @@ body, html, #root {
   font-weight: 600;
 }
 
+/* API access toolbar */
+.api-access-page .management-panel-heading {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.api-access-heading-tools {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 420px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.api-access-heading-tools .compact-toolbar {
+  width: min(280px, 100%);
+  flex: 1 1 180px;
+}
+
+
+@container workspace (max-width: 760px) {
+  .api-access-heading-tools {
+    width: 100%;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .api-access-heading-tools .compact-toolbar {
+    flex-basis: 100%;
+  }
+}
+
 /* 7. OAuth Management Page Polish */
 .oauth-management-page .management-header h1 {
   display: none;
@@ -444,62 +473,150 @@ body, html, #root {
   outline-offset: -2px;
 }
 
-.usage-stat-card {
-  --usage-tone: var(--ui-accent);
-  position: relative;
-  gap: 7px;
+/* Usage records follow the same shell surface as the home page. */
+.usage-records-page {
+  gap: 16px;
+  color: #1d1d1f;
+}
+
+.usage-records-page .usage-topbar {
+  align-items: center;
+}
+
+.usage-records-page .usage-collector-state,
+.usage-records-page .usage-refresh-btn {
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.12);
+  box-shadow: none;
+  color: #1d1d1f;
+}
+
+.usage-records-page .usage-collector-state strong {
+  color: #1d1d1f;
+  font-weight: 600;
+}
+
+.usage-records-page .usage-collector-state span,
+.usage-records-page .usage-filter-label,
+.usage-records-page .usage-section-heading span {
+  color: #6e6e73;
+}
+
+.usage-records-page .usage-trend-panel,
+.usage-records-page .usage-health-panel,
+.usage-records-page .usage-category-panel,
+.usage-records-page .usage-events-panel {
+  border: 0;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 28px rgba(0, 0, 0, 0.045);
+}
+
+.usage-records-page .panel.usage-filter-panel {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.usage-records-page .usage-filter-item {
+  min-width: 0;
+}
+
+.usage-records-page .usage-filter-label {
+  padding-left: 12px;
+}
+
+.usage-records-page .usage-filter-item select,
+.usage-records-page .usage-filter-item input {
+  height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.usage-records-page .usage-filter-item select:hover,
+.usage-records-page .usage-filter-item input:hover {
+  border-color: var(--border-hover);
+}
+
+.usage-records-page .usage-filter-item select:focus,
+.usage-records-page .usage-filter-item input:focus {
+  border-color: var(--ui-accent);
+  box-shadow: 0 0 0 3px var(--ui-focus-ring);
+}
+
+.usage-records-page .usage-section-heading strong {
+  color: #1d1d1f;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.usage-records-page .usage-stat-grid {
+  gap: 1px;
   overflow: hidden;
-  padding: 13px 14px 12px 16px;
-  border-color: color-mix(in srgb, var(--usage-tone) 24%, var(--border-color));
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--usage-tone) 13%, #fff) 0%, #fff 68%);
-  box-shadow: var(--ui-panel-shadow);
+  padding: 0;
+  border-radius: 18px;
+  background: #d8d8de;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 28px rgba(0, 0, 0, 0.045);
+}
+
+.usage-stat-card {
+  --usage-tone: #1d1d1f;
+  position: relative;
+  gap: 8px;
+  overflow: hidden;
+  padding: 16px 16px 14px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
 }
 
 .usage-stat-card::before {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 4px;
-  background: var(--usage-tone);
-  content: "";
+  content: none;
 }
 
-.usage-stat-card.tone-requests { --usage-tone: #0f766e; }
-.usage-stat-card.tone-speed { --usage-tone: #2563eb; }
-.usage-stat-card.tone-tokens { --usage-tone: #7c3aed; }
-.usage-stat-card.tone-success { --usage-tone: #059669; }
-.usage-stat-card.tone-cache { --usage-tone: #d97706; }
-.usage-stat-card.tone-cost { --usage-tone: #0f766e; }
+.usage-stat-card.tone-requests { --usage-tone: #1d1d1f; }
+.usage-stat-card.tone-speed { --usage-tone: #007aff; }
+.usage-stat-card.tone-tokens { --usage-tone: #5856d6; }
+.usage-stat-card.tone-success { --usage-tone: #34c759; }
+.usage-stat-card.tone-cache { --usage-tone: #ff9500; }
+.usage-stat-card.tone-cost { --usage-tone: #007aff; }
 
 .usage-stat-card:hover {
-  border-color: color-mix(in srgb, var(--usage-tone) 48%, var(--border-color));
-  box-shadow: var(--ui-card-hover-shadow);
+  border-color: transparent;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05), 0 14px 32px rgba(0, 0, 0, 0.06);
+  transform: none;
 }
 
 .usage-stat-card-label {
-  color: var(--usage-tone);
+  color: #6e6e73;
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-weight: 590;
+  letter-spacing: -0.01em;
 }
 
 .usage-stat-card-value {
-  color: var(--text-primary);
-  font-size: 28px;
-  font-weight: 750;
-  letter-spacing: -0.035em;
-  line-height: 1.05;
+  color: var(--usage-tone);
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  line-height: 1.02;
 }
 
 .usage-stat-meter {
   display: block;
-  height: 6px;
+  height: 5px;
   overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--usage-tone) 16%, #e2e8f0);
+  background: #e5e5ea;
 }
 
 .usage-stat-meter > span {
@@ -513,9 +630,9 @@ body, html, #root {
   display: flex;
   min-height: 0;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 5px;
   overflow: visible;
-  color: var(--text-secondary);
+  color: #6e6e73;
   white-space: normal;
   -webkit-line-clamp: unset;
   -webkit-box-orient: unset;
@@ -525,28 +642,28 @@ body, html, #root {
   display: inline-flex;
   max-width: 100%;
   align-items: center;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 999px;
-  background: #f1f5f9;
-  color: var(--text-secondary);
+  background: #f2f2f7;
+  color: #3a3a3c;
   font-size: 11px;
-  font-weight: 700;
-  line-height: 1.4;
+  font-weight: 590;
+  line-height: 1.45;
 }
 
 .usage-stat-chip.tone-ok {
-  background: #ecfdf5;
-  color: #047857;
+  background: rgba(52, 199, 89, 0.14);
+  color: #248a3d;
 }
 
 .usage-stat-chip.tone-bad {
-  background: #fef2f2;
-  color: #b91c1c;
+  background: rgba(255, 59, 48, 0.12);
+  color: #d70015;
 }
 
 .usage-stat-chip.tone-warn {
-  background: #fffbeb;
-  color: #b45309;
+  background: rgba(255, 149, 0, 0.16);
+  color: #c93400;
 }
 
 .usage-stat-chip.tone-note {
@@ -554,63 +671,8 @@ body, html, #root {
   padding: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--text-tertiary);
-  font-weight: 600;
-}
-
-.usage-filter-panel,
-.usage-trend-panel,
-.usage-health-panel,
-.usage-category-panel,
-.usage-events-panel,
-.usage-collector-state,
-.usage-refresh-btn {
-  border-color: var(--border-color);
-  background: var(--bg-card);
-  box-shadow: var(--ui-panel-shadow);
-}
-
-.usage-filter-panel {
-  padding: 12px 14px;
-}
-
-.usage-filter-label {
-  color: var(--text-tertiary);
-}
-
-.usage-filter-item select,
-.usage-filter-item input {
-  border-color: var(--border-primary);
-  border-radius: 8px;
-  background: var(--bg-card);
-  color: var(--text-primary);
-}
-
-.usage-filter-item select:focus,
-.usage-filter-item input:focus {
-  border-color: var(--ui-accent);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
-}
-
-.usage-section-heading strong {
-  color: var(--text-primary);
-}
-
-.usage-section-heading span,
-.usage-token-count,
-.usage-token-pct,
-.usage-trend-legend-item {
-  color: var(--text-tertiary);
-}
-
-.usage-token-name,
-.usage-collector-state strong {
-  color: var(--text-primary);
-}
-
-.usage-token-bar-track {
-  height: 7px;
-  background: var(--bg-hover);
+  color: #6e6e73;
+  font-weight: 500;
 }
 
 .usage-metrics-grid .metric-card {
@@ -852,10 +914,53 @@ body, html, #root {
 }
 
 /* Dark Theme Adjustments for Refined Components */
+:root[data-theme='dark'] .usage-records-page,
+:root[data-theme='dark'] .usage-records-page .usage-section-heading strong,
+:root[data-theme='dark'] .usage-records-page .usage-collector-state,
+:root[data-theme='dark'] .usage-records-page .usage-collector-state strong {
+  color: #f5f5f7;
+}
+
+:root[data-theme='dark'] .usage-records-page .panel.usage-filter-panel {
+  background: transparent;
+  box-shadow: none;
+}
+
+:root[data-theme='dark'] .usage-records-page .usage-collector-state,
+:root[data-theme='dark'] .usage-records-page .usage-refresh-btn {
+  background: #2c2c2e;
+  color: #f5f5f7;
+}
+
+:root[data-theme='dark'] .usage-records-page .usage-filter-item select,
+:root[data-theme='dark'] .usage-records-page .usage-filter-item input {
+  background: var(--bg-primary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .usage-records-page .usage-trend-panel,
+:root[data-theme='dark'] .usage-records-page .usage-health-panel,
+:root[data-theme='dark'] .usage-records-page .usage-category-panel,
+:root[data-theme='dark'] .usage-records-page .usage-events-panel,
 :root[data-theme='dark'] .usage-stat-card {
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--usage-tone) 24%, var(--bg-card)) 0%, var(--bg-card) 72%);
-  border-color: color-mix(in srgb, var(--usage-tone) 42%, var(--border-color));
+  background: #1c1c1e;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+:root[data-theme='dark'] .usage-records-page .usage-stat-grid {
+  background: #3a3a3c;
+  box-shadow: none;
+}
+
+:root[data-theme='dark'] .usage-stat-card.tone-requests {
+  --usage-tone: #f5f5f7;
+}
+
+:root[data-theme='dark'] .usage-stat-card-label,
+:root[data-theme='dark'] .usage-stat-chip.tone-note {
+  color: #98989d;
 }
 
 :root[data-theme='dark'] .usage-stat-chip {

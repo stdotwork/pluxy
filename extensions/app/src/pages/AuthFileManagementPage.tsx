@@ -374,9 +374,6 @@ export function AuthFileManagementPage() {
     <section className="page management-page auth-files-page">
       {confirmationDialog}
       <header className="management-header">
-        <div>
-          <h1>{t('authFiles.title')}</h1>
-        </div>
         <div className="management-heading-actions">
           <span className="muted-summary">{t('authFiles.summary', { files: files.length, disabled: disabledCount })}</span>
           <button type="button" className="secondary-button compact-button" onClick={() => {

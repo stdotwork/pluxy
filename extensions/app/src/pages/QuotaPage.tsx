@@ -144,7 +144,6 @@ export function QuotaPage() {
     <section className="page management-page quota-page">
       {confirmationDialog}
       <header className="management-header">
-        <div><h1>{t('quota.title')}</h1></div>
         <div className="management-heading-actions">
           <span className="muted-summary">{t(files.length === 1 ? 'quota.queryableCredentials.one' : 'quota.queryableCredentials.other', { count: files.length })}</span>
           <button type="button" className="secondary-button compact-button" onClick={() => void loadFiles()} disabled={loading || refreshing || querying}>

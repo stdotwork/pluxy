@@ -509,9 +509,6 @@ export function VersionManagementPage() {
 
   return (
     <section className="page management-page version-management-page">
-      <header className="management-header version-page-header">
-        <div><h1>{t('app.nav.versions')}</h1></div>
-      </header>
       <MessageNotice message={versionSourceError} onDismiss={() => setVersionSourceError('')} />
       <section className="panel version-list">
         <div className="version-source-row" aria-label={t('kernel.versions.downloadSource')}>

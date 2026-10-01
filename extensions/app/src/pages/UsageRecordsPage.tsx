@@ -3,15 +3,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
-  Activity,
-  BarChart3,
   ChevronLeft,
   ChevronRight,
-  CircleDollarSign,
   Columns3Cog,
   Database,
   FilterX,
-  List,
   Pencil,
   RefreshCw,
   RotateCcw,
@@ -560,7 +556,7 @@ export function UsageRecordsPage() {
 
       <div className="usage-topbar">
         <div className="usage-page-navigation">
-          <h1>{t('usage.title')}</h1>
+          <h1 className="sr-only">{t('usage.title')}</h1>
           <div className="usage-tabs" role="tablist" aria-label={t('usage.pageLabel')}>
           <button
             type="button"
@@ -573,7 +569,6 @@ export function UsageRecordsPage() {
             onClick={() => setActiveTab('overview')}
             onKeyDown={(event) => handleTabKeyDown(event, 'overview')}
           >
-            <BarChart3 size={15} />
             <span>{t('usage.tab.overview')}</span>
           </button>
           <button
@@ -587,7 +582,6 @@ export function UsageRecordsPage() {
             onClick={() => setActiveTab('analysis')}
             onKeyDown={(event) => handleTabKeyDown(event, 'analysis')}
           >
-            <Activity size={15} />
             <span>{t('usage.tab.analysis')}</span>
           </button>
           <button
@@ -601,7 +595,6 @@ export function UsageRecordsPage() {
             onClick={() => setActiveTab('events')}
             onKeyDown={(event) => handleTabKeyDown(event, 'events')}
           >
-            <List size={15} />
             <span>{t('usage.tab.events')}</span>
           </button>
           <button
@@ -615,7 +608,6 @@ export function UsageRecordsPage() {
             onClick={() => setActiveTab('pricing')}
             onKeyDown={(event) => handleTabKeyDown(event, 'pricing')}
           >
-            <CircleDollarSign size={15} />
             <span>{t('usage.tab.pricing')}</span>
           </button>
           <button
@@ -629,7 +621,6 @@ export function UsageRecordsPage() {
             onClick={() => setActiveTab('data-management')}
             onKeyDown={(event) => handleTabKeyDown(event, 'data-management')}
           >
-            <Wrench size={15} />
             <span>{t('usage.tab.dataManagement')}</span>
           </button>
           </div>
