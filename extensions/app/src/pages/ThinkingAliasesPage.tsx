@@ -558,6 +558,11 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
       <MessageNotice tone="success" message={!error ? notice : null} onDismiss={() => setNotice('')} />
 
       <header className="management-header">
+        <div>
+          {embedded
+            ? <h2>{t('app.nav.thinkingAliases')}</h2>
+            : <h1>{t('app.nav.thinkingAliases')}</h1>}
+        </div>
         <div className="management-heading-actions">
           <span className="muted-summary">{entries.length}</span>
           <button

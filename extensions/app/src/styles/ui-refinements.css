@@ -4,12 +4,12 @@
 
 /* 1. Global Light Theme Surface & Contrast Variables */
 :root {
-  --bg-secondary: #ffffff;
+  --bg-secondary: #f6f7f5;
   --bg-primary: #ffffff;
   --bg-card: #ffffff;
-  --bg-tertiary: #f8fafc;
-  --bg-hover: #f1f5f9;
-  --bg-quinary: #f8fafc;
+  --bg-tertiary: #eff3f0;
+  --bg-hover: #f6f8f6;
+  --bg-quinary: #f9faf9;
   --border-color: #e2e8f0;
   --border-secondary: #f1f5f9;
   --border-primary: #cbd5e1;
@@ -18,7 +18,7 @@
   --text-secondary: #1e293b;
   --text-tertiary: #334155;
   --text-quaternary: #475569;
-  --theme-faf9f5: #ffffff;
+  --theme-faf9f5: #f6f7f5;
   --theme-faf8f4: #ffffff;
   --theme-faf8f2: #ffffff;
   --theme-fffdf8: #ffffff;
@@ -216,6 +216,13 @@ body, html, #root {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 6px 12px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.client-api-panel .client-api-meta {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .client-api-card {
@@ -233,8 +240,16 @@ body, html, #root {
 }
 
 .client-api-card-heading {
-  width: 144px;
-  flex-basis: 144px;
+  min-width: 144px;
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.client-api-card-heading .client-api-format-tag,
+.client-api-card-heading span {
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
+  overflow: visible;
 }
 
 .client-api-card-heading .client-api-format-tag,
@@ -450,12 +465,24 @@ body, html, #root {
 }
 
 .oauth-card {
+  display: flex;
+  flex-direction: column;
   padding: 22px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: var(--bg-card);
   box-shadow: var(--ui-panel-shadow);
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.oauth-card .oauth-card-body,
+.oauth-card .oauth-hint {
+  flex: 1;
+}
+
+.oauth-card .oauth-card-actions,
+.oauth-card > button.primary-button {
+  margin-top: auto;
 }
 
 .oauth-card:hover {
@@ -786,7 +813,7 @@ body, html, #root {
 }
 
 .secondary-button {
-  background: #ffffff;
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
   border-radius: 8px;
@@ -795,6 +822,18 @@ body, html, #root {
 }
 
 .secondary-button:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .secondary-button {
+  background: var(--bg-card);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+:root[data-theme='dark'] .secondary-button:hover:not(:disabled) {
   background: var(--bg-tertiary);
   border-color: var(--border-primary);
   color: var(--text-primary);
@@ -813,6 +852,50 @@ body, html, #root {
   background: #e11d48;
   border-color: #e11d48;
   color: #ffffff;
+}
+
+:root[data-theme='dark'] .danger-button {
+  background: rgba(225, 29, 72, 0.14);
+  border-color: rgba(225, 29, 72, 0.35);
+  color: #fb7185;
+}
+
+:root[data-theme='dark'] .danger-button:hover:not(:disabled) {
+  background: #e11d48;
+  border-color: #e11d48;
+  color: #ffffff;
+}
+
+/* Quota Progress Bar Polish */
+.real-quota-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-hover);
+}
+
+.real-quota-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ui-accent);
+}
+
+/* Agent List & Config Scrollbar Polish */
+.agent-list-items::-webkit-scrollbar,
+.agent-config-scroll-region::-webkit-scrollbar {
+  width: 6px;
+}
+
+.agent-list-items::-webkit-scrollbar-thumb,
+.agent-config-scroll-region::-webkit-scrollbar-thumb {
+  background: var(--border-primary);
+  border-radius: 4px;
+}
+
+.agent-list-items::-webkit-scrollbar-track,
+.agent-config-scroll-region::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* Responsive Shell (Preserved from existing accessibility rules) */

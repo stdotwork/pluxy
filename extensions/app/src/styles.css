@@ -106,7 +106,7 @@
   --theme-f8f6f1: #f8f6f1;
   --theme-faf8f2: #faf8f2;
   --theme-faf8f4: #faf8f4;
-  --theme-faf9f5: #ffffff;
+  --theme-faf9f5: #f6f7f5;
   --theme-fdf1ee: #fdf1ee;
   --theme-fff: #fff;
   --theme-fff1ee: #fff1ee;
@@ -115,7 +115,7 @@
   --theme-fffdf8: #fffdf8;
   --theme-ffffff: #ffffff;
 
-  --bg-secondary: #ffffff;
+  --bg-secondary: #f6f7f5;
   --bg-primary: #ffffff;
   --bg-tertiary: #f8fafc;
   --bg-hover: #f1f5f9;
@@ -8568,7 +8568,7 @@ textarea:focus-visible {
 .usage-overview-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr);
-  grid-template-rows: auto minmax(280px, 1fr);
+  grid-template-rows: max-content minmax(280px, 1fr);
   gap: 14px;
   align-items: stretch;
   overflow-x: hidden;

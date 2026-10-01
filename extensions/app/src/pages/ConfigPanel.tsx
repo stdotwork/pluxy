@@ -984,6 +984,7 @@ export function ConfigPanelPage() {
 
   return (
     <section className="page config-page">
+      <h1 className="sr-only">{t('app.nav.config')}</h1>
       <div className="agent-subpage-tabs config-subpage-tabs" role="tablist" aria-label={t('config.tabs.label')}>
         <button
           type="button"
@@ -1694,7 +1695,7 @@ export function ConfigPanelPage() {
                     </button>
                   ))}
                 </div>
-                <small title={settings?.routingStrategy || undefined}>
+                <small className="sr-only" title={settings?.routingStrategy || undefined}>
                   {loading
                     ? t('common.loading')
                     : settings === null

@@ -9,6 +9,7 @@ import {
   RefreshCw,
   RotateCcw,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useCoreRuntime } from '../coreRuntime';
 import { useCoreUpdate } from '../coreUpdate';
@@ -485,16 +486,16 @@ export function VersionManagementPage() {
     : t('common.close');
 
   const installDialogActionDisabled = (installing || progress?.running) && (cancellingInstall || !progress?.cancellable);
+  const closeCustomMirrorDialog = () => {
+    setCustomMirrorDialogOpen(false);
+    setCustomMirrorDraft('');
+    setVersionSourceError('');
+  };
+
   const customMirrorDialogRef = useDialogFocusTrap<HTMLFormElement>({
     active: customMirrorDialogOpen,
     initialFocusRef: customMirrorInputRef,
-    onEscape: versionSourceSaving
-      ? undefined
-      : () => {
-          setCustomMirrorDialogOpen(false);
-          setCustomMirrorDraft('');
-          setVersionSourceError('');
-        },
+    onEscape: versionSourceSaving ? undefined : closeCustomMirrorDialog,
     preventEscape: versionSourceSaving,
   });
   const confirmUpdateDialogRef = useDialogFocusTrap<HTMLElement>({
@@ -718,8 +719,20 @@ export function VersionManagementPage() {
             }}
           >
             <div className="install-dialog-heading">
-              <span>{t('kernel.versions.downloadSource')}</span>
-              <h2 id="custom-mirror-dialog-title">{t('kernel.versions.customMirrorDialogTitle')}</h2>
+              <div>
+                <span>{t('kernel.versions.downloadSource')}</span>
+                <h2 id="custom-mirror-dialog-title">{t('kernel.versions.customMirrorDialogTitle')}</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button quiet"
+                onClick={closeCustomMirrorDialog}
+                disabled={versionSourceSaving}
+                title={t('common.close')}
+                aria-label={t('common.close')}
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
             </div>
             <p className="custom-mirror-dialog-description">
               {t('kernel.versions.customMirrorDialogDescription')}
@@ -758,11 +771,7 @@ export function VersionManagementPage() {
                 type="button"
                 className="secondary-button"
                 disabled={versionSourceSaving}
-                onClick={() => {
-                  setCustomMirrorDialogOpen(false);
-                  setCustomMirrorDraft('');
-                  setVersionSourceError('');
-                }}
+                onClick={closeCustomMirrorDialog}
               >
                 {t('common.cancel')}
               </button>

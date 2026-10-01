@@ -219,6 +219,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
 
   return (
     <section className="page kernel-page home-page">
+      <h1 className="sr-only">{t('app.nav.home')}</h1>
       <div className="kernel-layout home-layout">
         <div className="panel control-panel">
           <div className="panel-heading">
@@ -426,7 +427,6 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
         <button
           type="button"
           className="home-quick-card"
-          aria-label="Token 统计与请求日志"
           onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'usage-records' }))}
         >
           <span className="home-quick-icon">

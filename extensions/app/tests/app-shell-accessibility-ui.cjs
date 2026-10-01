@@ -27,7 +27,7 @@ const path = require('node:path');
 
     assert.equal(await page.getByRole('heading', { level: 1, name: '首页' }).count(), 1);
 
-    await page.getByRole('button', { name: '使用记录' }).click();
+    await page.locator('.nav-section').getByRole('button', { name: '使用记录' }).click();
     const tabs = page.getByRole('tab');
     assert.equal(await tabs.count(), 5);
     assert.deepEqual(await tabs.evaluateAll((elements) => elements
@@ -39,7 +39,7 @@ const path = require('node:path');
     await page.getByRole('tab', { name: /数据管理/ }).click();
     assert.equal(await page.locator('.usage-filter-panel').count(), 0);
 
-    await page.getByRole('button', { name: '高级功能' }).click();
+    await page.locator('.nav-section').getByRole('button', { name: '高级功能' }).click();
     assert.equal(await page.locator('h1').count(), 1);
     const configTabs = page.locator('.config-subpage-tabs').getByRole('tab');
     assert.deepEqual(await configTabs.evaluateAll((elements) => elements
@@ -60,7 +60,7 @@ const path = require('node:path');
     assert.equal(await addKey.evaluate((element) => document.activeElement === element), true);
 
     await page.setViewportSize({ width: 640, height: 600 });
-    await page.getByRole('button', { name: '首页' }).click();
+    await page.locator('.nav-section').getByRole('button', { name: '首页' }).click();
     const sidebarHeight = await page.locator('.sidebar').evaluate((element) => element.getBoundingClientRect().height);
     assert.ok(sidebarHeight < 150, `compact sidebar is too tall: ${sidebarHeight}px`);
 
