@@ -109,30 +109,40 @@ fn webui_management_secret_requires_a_non_empty_plaintext_value() {
     )
     .is_err());
     assert!(normalize_management_secret_key("bad\nsecret".to_string()).is_err());
-    assert!(normalize_management_secret_key("123456".to_string()).is_err());
+    assert_eq!(
+        normalize_management_secret_key("  123456  ".to_string()).unwrap(),
+        "123456"
+    );
 }
 
 #[test]
-fn management_secret_rotation_replaces_legacy_values_and_preserves_custom_values() {
-    let mut fresh = GuiConfigFile::default();
-    assert!(ensure_strong_management_secret(&mut fresh).unwrap());
-    assert!(fresh.management_secret_key.starts_with("wui-Aa9_"));
-    assert!(fresh.management_secret_key.len() >= 50);
+fn management_secret_rotation_replaces_empty_values_and_preserves_custom_values() {
+    let fresh = GuiConfigFile::default();
+    assert_eq!(
+        fresh.management_secret_key,
+        LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY
+    );
     assert!(!management_secret_requires_rotation(
         &fresh.management_secret_key
     ));
 
-    let first_generated = fresh.management_secret_key.clone();
+    let mut empty = GuiConfigFile {
+        management_secret_key: String::new(),
+        ..GuiConfigFile::default()
+    };
+    assert!(ensure_strong_management_secret(&mut empty).unwrap());
+    assert!(empty.management_secret_key.starts_with("wui-Aa9_"));
+    assert!(empty.management_secret_key.len() >= 50);
+
     let mut legacy = GuiConfigFile {
         management_secret_key: LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY.to_string(),
         ..GuiConfigFile::default()
     };
-    assert!(ensure_strong_management_secret(&mut legacy).unwrap());
-    assert_ne!(
+    assert!(!ensure_strong_management_secret(&mut legacy).unwrap());
+    assert_eq!(
         legacy.management_secret_key,
         LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY
     );
-    assert_ne!(legacy.management_secret_key, first_generated);
 
     let mut hashed = GuiConfigFile {
         management_secret_key: "$2a$10$abcdefghijklmnopqrstuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"

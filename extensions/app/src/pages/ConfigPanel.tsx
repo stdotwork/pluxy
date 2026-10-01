@@ -438,10 +438,6 @@ export function ConfigPanelPage() {
       setManagementSecretError(t('config.webuiKey.error.empty'));
       return;
     }
-    if (secretKey === '123456') {
-      setManagementSecretError(t('config.webuiKey.error.legacyDefault'));
-      return;
-    }
     if (secretKey.length > 512) {
       setManagementSecretError(t('config.webuiKey.error.tooLong'));
       return;

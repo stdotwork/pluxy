@@ -911,7 +911,7 @@ impl Default for GuiConfigFile {
             auth_dir: DEFAULT_AUTH_DIR.to_string(),
             api_keys: vec![default_api_key_entry()],
             api_access_remarks: Vec::new(),
-            management_secret_key: String::new(),
+            management_secret_key: LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY.to_string(),
             debug: false,
             commercial_mode: false,
             logging_to_file: false,

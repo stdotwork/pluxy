@@ -760,7 +760,6 @@ export const jaOverrides = {
   'config.webuiKey.save': 'キーを保存',
   'config.webuiKey.open': 'WebUI を開く',
   'config.webuiKey.error.empty': 'WebUI キーを入力してください',
-  'config.webuiKey.error.legacyDefault': '旧版の既定キー 123456 は使用できません',
   'config.webuiKey.error.tooLong': 'WebUI キーは 512 文字以内で入力してください',
   'config.webuiKey.error.invalid': 'WebUI キーに制御文字は使用できません',
   'config.webuiKey.error.mismatch': '入力した WebUI キーが一致しません',

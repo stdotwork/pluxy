@@ -790,7 +790,6 @@ export const zhCN = {
   'config.webuiKey.save': '保存密钥',
   'config.webuiKey.open': '打开 WebUI',
   'config.webuiKey.error.empty': 'WebUI 密钥不能为空',
-  'config.webuiKey.error.legacyDefault': '不能继续使用旧版默认密钥 123456',
   'config.webuiKey.error.tooLong': 'WebUI 密钥不能超过 512 个字符',
   'config.webuiKey.error.invalid': 'WebUI 密钥不能包含控制字符',
   'config.webuiKey.error.mismatch': '两次输入的 WebUI 密钥不一致',

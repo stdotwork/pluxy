@@ -97,9 +97,6 @@ pub(crate) fn validate_strong_management_secret_key(secret_key: &str) -> Result<
     if secret_key.trim().is_empty() {
         return Err("WebUI key cannot be empty".to_string());
     }
-    if secret_key.trim() == LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY {
-        return Err("The legacy default WebUI key 123456 cannot be used".to_string());
-    }
     if is_hashed_management_secret_key(secret_key) {
         return Err("GUI configuration must save a plaintext WebUI key that can authenticate with the management interface".to_string());
     }
@@ -116,9 +113,7 @@ pub(crate) fn generate_management_secret_key() -> Result<String, String> {
 
 pub(crate) fn management_secret_requires_rotation(secret_key: &str) -> bool {
     let secret_key = secret_key.trim();
-    secret_key.is_empty()
-        || secret_key == LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY
-        || is_hashed_management_secret_key(secret_key)
+    secret_key.is_empty() || is_hashed_management_secret_key(secret_key)
 }
 
 pub(crate) fn ensure_strong_management_secret(config: &mut GuiConfigFile) -> Result<bool, String> {

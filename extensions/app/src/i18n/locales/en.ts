@@ -791,7 +791,6 @@ export const en: Record<MessageKey, string> = {
   'config.webuiKey.save': 'Save key',
   'config.webuiKey.open': 'Open WebUI',
   'config.webuiKey.error.empty': 'The WebUI key cannot be empty',
-  'config.webuiKey.error.legacyDefault': 'The legacy default key 123456 is no longer allowed',
   'config.webuiKey.error.tooLong': 'The WebUI key cannot exceed 512 characters',
   'config.webuiKey.error.invalid': 'The WebUI key cannot contain control characters',
   'config.webuiKey.error.mismatch': 'The WebUI keys do not match',
