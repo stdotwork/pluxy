@@ -18,8 +18,9 @@ const base = 'http://127.0.0.1:1421';
     const form = page.locator('.api-provider-dialog');
     const waitForSave = () => form.waitFor({ state: 'detached' });
 
-    await page.getByRole('button', { name: 'Add', exact: true }).click();
-    await form.getByLabel('API Keys (one per line)', { exact: true }).fill('shared-test-key');
+    await page.getByRole('button', { name: 'Add Group', exact: true }).click();
+    await form.getByLabel('Group Name', { exact: true }).fill('Second route');
+    await form.getByLabel('Key 1', { exact: true }).fill('shared-test-key');
     await form.getByLabel('Base URL', { exact: true }).fill('https://claude.example.test');
     await form.getByLabel('Priority', { exact: true }).fill('1');
     await form.getByLabel('Remark', { exact: true }).fill('Second route');

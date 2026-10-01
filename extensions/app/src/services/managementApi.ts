@@ -37,6 +37,17 @@ const SHARED_PROVIDER_FIELDS = new Set([
 
 const providerDefinition = (path: string) => PROVIDER_PATHS[path as ProviderPath];
 
+// Native v8 groups: callers keep keys and overrides intact through every edit.
+export const providerGroupsApi = {
+  get: async (section: string): Promise<Record<string, unknown>[]> => {
+    const value = await optionalConfigValue(`/config/api-keys/${section.replace(/-api-key$/, '')}`, [], {});
+    if (!Array.isArray(value) || !value.every(isRecord)) throw new Error('Invalid provider group response');
+    return value;
+  },
+  put: (section: string, groups: Record<string, unknown>[]) =>
+    request('PUT', `/config/api-keys/${section.replace(/-api-key$/, '')}`, { body: groups }),
+};
+
 async function optionalConfigValue(
   path: string, fallback: ManagementJson, options: ManagementRequestOptions,
 ): Promise<unknown> {

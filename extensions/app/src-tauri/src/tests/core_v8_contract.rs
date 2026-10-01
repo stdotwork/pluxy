@@ -130,6 +130,65 @@ impl TestCore {
 
 #[tokio::test]
 #[ignore = "requires CPA_V8_TEST_CORE pointing to a v8 executable"]
+async fn v8_alias_save_preserves_multi_key_groups_and_restores_inheritance_after_failure() {
+    let executable = fs::canonicalize(std::env::var_os("CPA_V8_TEST_CORE").expect("set CPA_V8_TEST_CORE")).unwrap();
+    let directory = agent_test_home("v8-contract-groups");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut core = TestCore {
+        child: None, config: directory.join("config.yaml"), directory, executable,
+        origin: format!("http://127.0.0.1:{port}"),
+        client: reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(3)).build().unwrap(),
+    };
+    let gui = GuiConfigFile {
+        host: "127.0.0.1".into(), port, auth_dir: path_to_string(&core.directory.join("auth")),
+        management_secret_key: "isolated-test-secret".into(),
+        api_keys: vec![GuiApiKeyEntry { key: "isolated-client-key".into(), remark: String::new() }],
+        ..GuiConfigFile::default()
+    };
+    let initial = r#"
+config-version: 8
+management: {disable-control-panel: true, disable-auto-update-panel: true}
+api-keys:
+  codex:
+    - name: shared-upstream
+      base-url: http://127.0.0.1:1/v1
+      models: [{name: gpt-test}]
+      keys:
+        - {api-key: test-first, weight: 2, priority: null}
+        - {api-key: test-second, weight: 5, models: null, headers: {}, excluded-models: [], disable-cooling: false}
+        - api-key: test-third
+          models: [{name: private-model}]
+"#;
+    fs::write(&core.config, apply_gui_managed_settings(initial, &gui).unwrap()).unwrap();
+    core.start().await;
+    core.validate_save(&fs::read_to_string(&core.config).unwrap()).await;
+    let original = core.config_view().await;
+    let current = fetch_management_config_yaml(&gui).await.unwrap();
+    let sources = resolved_thinking_alias_sources(&current, &[], &super::support::test_agent_models(&["gpt-test"])).unwrap();
+    let updated = add_model_alias_to_yaml(&current, &sources[0], "gpt-test-fast", "", false).unwrap();
+    let error = commit_management_alias_config_changes(&gui, &current, &updated, || Err::<(), _>("local save failed".into())).await.unwrap_err();
+    assert!(error.contains("Original configuration was restored"), "{error}");
+    assert_eq!(core.config_view().await["api-keys"], original["api-keys"]);
+
+    let current = fetch_management_config_yaml(&gui).await.unwrap();
+    let sources = resolved_thinking_alias_sources(&current, &[], &super::support::test_agent_models(&["gpt-test"])).unwrap();
+    let updated = add_model_alias_to_yaml(&current, &sources[0], "gpt-test-fast", "", false).unwrap();
+    put_management_alias_config_changes(&gui, &current, &updated).await.unwrap();
+    let saved = core.config_view().await;
+    let group = &saved["api-keys"]["codex"][0];
+    assert_eq!(saved["api-keys"]["codex"].as_array().unwrap().len(), 1);
+    assert_eq!(group["name"], "shared-upstream");
+    assert_eq!(group["keys"].as_array().unwrap().len(), 3);
+    assert_eq!(group["models"], original["api-keys"]["codex"][0]["models"]);
+    assert_eq!(group["keys"][0]["models"][1]["alias"], "gpt-test-fast");
+    assert_eq!(group["keys"][1], original["api-keys"]["codex"][0]["keys"][1]);
+    assert_eq!(group["keys"][2], original["api-keys"]["codex"][0]["keys"][2]);
+}
+
+#[tokio::test]
+#[ignore = "requires CPA_V8_TEST_CORE pointing to a v8 executable"]
 async fn v8_accepts_gui_settings_and_reloads_client_keys() {
     let executable =
         fs::canonicalize(std::env::var_os("CPA_V8_TEST_CORE").expect("set CPA_V8_TEST_CORE"))

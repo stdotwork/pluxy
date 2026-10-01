@@ -33,7 +33,7 @@ const path = require('node:path');
     });
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await page.locator('.real-provider-row').getByRole('button', { name: 'Edit', exact: true }).click();
-    const form = page.getByRole('dialog', { name: 'Edit API Connection', exact: true });
+    const form = page.getByRole('dialog', { name: 'Edit Group', exact: true });
     assert.equal(await form.locator('.model-config-entry').count(), 30);
 
     // Older WebKit makes an inline-size query container a fixed-position containing block.
@@ -72,10 +72,13 @@ const path = require('node:path');
       await assertDialogControls(form);
       await form.getByLabel('Remark', { exact: true }).fill('Small-window edit');
       await form.locator('.provider-advanced-settings summary').click();
-      const headers = form.getByLabel(/Custom Headers/);
+      const headers = form.getByRole('textbox', { name: /Custom Headers/ });
       await headers.fill('X-Layout-Test: reachable');
       await form.getByRole('combobox', { name: 'Disable Cooldown', exact: true }).selectOption('false');
-      await form.getByRole('combobox', { name: 'Cache User ID', exact: true }).selectOption('false');
+      const keySettings = form.locator('.provider-group-key').first();
+      await keySettings.locator('summary').click();
+      await keySettings.getByRole('combobox', { name: 'Cache User ID', exact: true }).selectOption('false');
+      await keySettings.locator('summary').click();
       await assertDialogControls(form);
       const scroll = await form.evaluate((element) => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
       assert.ok(scroll.top > 0 && scroll.max > 0, 'Advanced settings must be reachable by scrolling inside the dialog');
@@ -100,11 +103,12 @@ const path = require('node:path');
     assert.equal(record.headers['X-Layout-Test'], 'reachable');
     assert.equal(record.models.length, 30);
     assert.equal(record['disable-cooling'], false);
-    assert.equal(record.cloak['cache-user-id'], false);
+    assert.equal(record.keys[0].cloak['cache-user-id'], false);
     assert.equal(await page.evaluate(() => document.body.style.overflow), '');
 
     await page.locator('.real-provider-row').getByRole('button', { name: 'Edit', exact: true }).click();
     await form.locator('.provider-advanced-settings summary').click();
+    await form.locator('.provider-group-key').first().locator('summary').click();
     for (const name of ['Disable Cooldown', 'Cache User ID']) {
       const control = form.getByRole('combobox', { name, exact: true });
       assert.equal(await control.inputValue(), 'false');
@@ -114,11 +118,11 @@ const path = require('node:path');
     await form.waitFor({ state: 'detached' });
     const inherited = await page.evaluate(() => window.providerFixture.records[0]);
     assert.equal(inherited['disable-cooling'], undefined);
-    assert.equal(inherited.cloak?.['cache-user-id'], undefined);
+    assert.equal(inherited.keys[0].cloak?.['cache-user-id'], undefined);
 
     await page.locator('.provider-category-panel button').filter({ hasText: 'OpenAI' }).click();
-    await page.getByRole('button', { name: 'Add', exact: true }).click();
-    const add = page.getByRole('dialog', { name: 'Add API Connection', exact: true });
+    await page.getByRole('button', { name: 'Add Group', exact: true }).click();
+    const add = page.getByRole('dialog', { name: 'Add Group', exact: true });
     await assertViewportOverlay('.config-dialog-backdrop');
     await assertDialogControls(add);
     await add.locator('.provider-advanced-settings summary').click();

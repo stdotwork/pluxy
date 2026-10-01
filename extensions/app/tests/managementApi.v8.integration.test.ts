@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import {
-  applyProviderPreset, buildProviderRecord, createProviderDraft,
+  applyProviderPreset, buildProviderRecord, buildProviderGroupRecord, createProviderDraft, providerDraftFromRecord,
   type ProviderSection,
 } from '../src/pages/ApiAccessPage';
 import { flattenV8ProviderGroups, groupLegacyProviderRecords } from '../src/services/managementApi';
@@ -65,6 +65,31 @@ oauth: {auth-dir: ${JSON.stringify(join(work, 'auth'))}}
     expect(loaded.status).toBe(200);
     return flattenV8ProviderGroups(provider, await loaded.json());
   };
+
+  it('native group edits preserve multiple keys, shared models and explicit overrides in v8', async () => {
+    const url = `${origin}/config/api-keys/codex`;
+    const groups = [{ name: 'native-multi-key', 'base-url': 'https://gateway.example.test/v1',
+      models: [{ name: 'gpt-test' }, { name: 'gpt-test', alias: 'gpt-test-fast' }],
+      headers: { 'X-Group': 'shared' }, 'excluded-models': ['old-*'],
+      keys: [{ 'api-key': 'native-first', weight: 2 }, { 'api-key': 'native-second', priority: 0,
+        weight: 5, models: null, headers: {}, 'excluded-models': [], 'disable-cooling': false, 'request-retry': 0 }],
+    }];
+    const write = async (value: unknown) => {
+      const response = await fetch(url, { method: 'PUT', headers, body: JSON.stringify(value) });
+      const body = await response.text();
+      expect({ status: response.status, result: response.ok ? 'ok' : body }).toEqual({ status: 200, result: 'ok' });
+      return (await (await fetch(url, { headers })).json()) as Record<string, unknown>[];
+    };
+    const loaded = await write(groups);
+    const draft = providerDraftFromRecord('codex-api-key', loaded[0]);
+    draft.name = 'renamed-native'; draft.priority = '6';
+    const saved = await write([buildProviderGroupRecord('codex-api-key', draft, loaded[0])]);
+    expect(saved.length).toBe(1);
+    expect(saved[0].name).toBe('renamed-native');
+    expect(saved[0].priority).toBe(6);
+    expect(saved[0].keys).toEqual(loaded[0].keys);
+    expect(saved[0].models).toEqual(loaded[0].models);
+  });
 
   for (const category of ['codex-api-key', 'deepseek', 'claude-api-key', 'gemini-api-key', 'openai-compatibility'] as const) {
     const section: ProviderSection = category === 'deepseek' ? 'codex-api-key' : category;
