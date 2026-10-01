@@ -499,7 +499,7 @@ export function OAuthLoginPage() {
   };
 
   return (
-    <section className="page management-page">
+    <section className="page management-page oauth-login-page">
       <header className="management-header">
         <label className="oauth-browser-picker">
           <span>{t('oauth.browser.label')}</span>
@@ -517,7 +517,6 @@ export function OAuthLoginPage() {
             ))}
             <option value={NO_AUTO_OPEN_BROWSER_ID}>{t('oauth.browser.noAutoOpen')}</option>
           </select>
-          <small>{t('oauth.browser.remembered')}</small>
         </label>
       </header>
 

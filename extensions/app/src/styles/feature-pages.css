@@ -2930,8 +2930,20 @@
   }
 
   .provider-category-panel {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     height: auto;
+  }
+
+  .provider-category-panel button {
+    height: auto;
+    min-height: 48px;
+    padding-block: 8px;
+  }
+
+  .provider-category-panel span {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
   }
 
   .provider-resource-panel {

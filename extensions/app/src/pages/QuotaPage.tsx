@@ -143,8 +143,9 @@ export function QuotaPage() {
   return (
     <section className="page management-page quota-page">
       {confirmationDialog}
-      <header className="management-header">
-        <div className="management-heading-actions">
+      {error ? <MessageNotice message={error} /> : null}
+      {loading || grouped.length === 0 ? (
+        <div className="management-heading-actions quota-empty-actions">
           <span className="muted-summary">{t(files.length === 1 ? 'quota.queryableCredentials.one' : 'quota.queryableCredentials.other', { count: files.length })}</span>
           <button type="button" className="secondary-button compact-button" onClick={() => void loadFiles()} disabled={loading || refreshing || querying}>
             <RefreshCw size={16} />{t('quota.readList')}
@@ -153,8 +154,7 @@ export function QuotaPage() {
             <RefreshCw size={16} className={refreshing ? 'spin' : ''} />{t('quota.refreshAll')}
           </button>
         </div>
-      </header>
-      {error ? <MessageNotice message={error} /> : null}
+      ) : null}
       {loading ? (
         <div className="management-loading"><LoaderCircle size={20} className="spin" />{t('quota.loadingFiles')}</div>
       ) : grouped.length === 0 ? (
@@ -163,7 +163,23 @@ export function QuotaPage() {
         <div className="quota-group-list">
           {grouped.map(([provider, items]) => (
             <section className="quota-provider-group" key={provider}>
-              <div className="quota-group-heading"><div><img src={providerMeta[provider].icon} alt="" className={provider === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} /><h2>{providerMeta[provider].label}</h2></div><span>{t(items.length === 1 ? 'quota.credentials.one' : 'quota.credentials.other', { count: items.length })}</span></div>
+              <div className="quota-group-heading">
+                <div><img src={providerMeta[provider].icon} alt="" className={provider === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} /><h2>{providerMeta[provider].label}</h2></div>
+                <div className="quota-group-actions">
+                  <span>{t(items.length === 1 ? 'quota.credentials.one' : 'quota.credentials.other', { count: items.length })}</span>
+                  {provider === grouped[0]?.[0] ? (
+                    <>
+                      <span className="muted-summary">{t(files.length === 1 ? 'quota.queryableCredentials.one' : 'quota.queryableCredentials.other', { count: files.length })}</span>
+                      <button type="button" className="secondary-button compact-button" onClick={() => void loadFiles()} disabled={loading || refreshing || querying}>
+                        <RefreshCw size={16} />{t('quota.readList')}
+                      </button>
+                      <button type="button" className="secondary-button compact-button" onClick={() => void refreshAll()} disabled={refreshing || loading || querying || files.length === 0}>
+                        <RefreshCw size={16} className={refreshing ? 'spin' : ''} />{t('quota.refreshAll')}
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              </div>
               <div className="real-quota-grid">{items.map(({ file, quota }) => <QuotaCard key={quotaKey(file)} file={file} quota={quota} onRefresh={() => void refreshOne(file)} onReset={provider === 'codex' ? () => void resetCodexQuota(file, quota) : undefined} />)}</div>
             </section>
           ))}
