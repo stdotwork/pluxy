@@ -653,7 +653,7 @@ textarea:focus-visible {
 .sidebar-bottom {
   display: grid;
   gap: 10px;
-  margin-top: 18px;
+  margin-top: auto;
   padding-top: 18px;
   border-top: 1px solid var(--theme-e3e1db);
 }
