@@ -57,10 +57,6 @@
 
 /* The download source is one control group: move the group together, then let
    the select shrink while the action retains a readable label. */
-.version-management-page > .version-list {
-  padding: 0;
-}
-
 .version-source-row {
   display: flex;
   flex-wrap: wrap;
@@ -89,6 +85,16 @@
 }
 
 @container workspace (max-width: 620px) {
+  .version-list,
+  .version-card-grid {
+    gap: 16px;
+  }
+
+  .version-source-row,
+  .version-list-item {
+    padding: 16px;
+  }
+
   .app-release-notes-heading {
     flex-wrap: wrap;
     padding: 16px;
@@ -96,6 +102,10 @@
 
   .app-release-notes-body {
     padding: 0 16px 16px;
+  }
+
+  .app-release-notes-footer {
+    padding: 10px 16px;
   }
 
   .app-release-notes-markdown {

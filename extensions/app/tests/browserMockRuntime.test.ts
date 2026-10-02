@@ -19,6 +19,25 @@ describe('browser mock options', () => {
 });
 
 describe('browser mock runtime', () => {
+  for (const scenario of ['running', 'empty'] as const) {
+    test(`installs the bundled version independently of the latest release (${scenario})`, async () => {
+      const runtime = createBrowserMockRuntime(scenario);
+      const bundled = await runtime.invoke('detect_bundled_core') as { version: string; assetName: string };
+      const latest = await runtime.invoke('check_latest_core') as { version: string };
+      expect(bundled.version).not.toBe(latest.version);
+
+      if (scenario === 'running') {
+        await runtime.invoke('install_core_version', { version: latest.version });
+      }
+      expect(await runtime.invoke('install_bundled_core')).toMatchObject(bundled);
+      expect(await runtime.invoke('get_core_status')).toMatchObject({
+        installed: true,
+        currentVersion: bundled.version,
+        running: scenario === 'running',
+      });
+    });
+  }
+
   test('models the core process lifecycle and emits status events', async () => {
     const events: Array<{ event: string; payload: unknown }> = [];
     const runtime = createBrowserMockRuntime('stopped', (event, payload) => {

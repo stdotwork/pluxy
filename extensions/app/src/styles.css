@@ -1135,7 +1135,7 @@ textarea:focus-visible {
 .version-list-item,
 .app-release-notes {
   border: 1px solid var(--theme-e3e1db);
-  border-radius: 14px;
+  border-radius: 12px;
   background: var(--theme-fffdf8);
   box-shadow: var(--ui-panel-shadow);
 }
@@ -1146,7 +1146,7 @@ textarea:focus-visible {
   min-height: 84px;
   align-items: center;
   gap: 24px;
-  padding: 20px 26px;
+  padding: 20px 24px;
 }
 
 .version-source-copy {
@@ -1231,10 +1231,10 @@ textarea:focus-visible {
 .version-list-item {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
-  min-height: 280px;
+  min-height: 240px;
   align-items: stretch;
-  gap: 26px;
-  padding: 26px;
+  gap: 20px;
+  padding: 24px;
 }
 
 .version-item-content {
@@ -1401,7 +1401,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 20px 26px;
+  padding: 20px 24px;
 }
 
 .app-release-notes-heading > div {
@@ -1445,7 +1445,7 @@ textarea:focus-visible {
 }
 
 .app-release-notes-body {
-  padding: 0 26px 20px;
+  padding: 0 24px 20px;
 }
 
 .app-release-notes-meta {
@@ -1551,7 +1551,7 @@ textarea:focus-visible {
 .app-release-notes-footer {
   display: flex;
   justify-content: flex-end;
-  padding: 10px 26px;
+  padding: 10px 24px;
   border-top: 1px solid var(--theme-e8e5dc);
   background: var(--theme-faf9f5);
 }

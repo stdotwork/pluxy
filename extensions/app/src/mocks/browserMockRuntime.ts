@@ -15,6 +15,7 @@ export type BrowserMockRuntime = {
 };
 
 const SCENARIOS = new Set<BrowserMockScenario>(['running', 'stopped', 'empty', 'error']);
+const BUNDLED_CORE = { version: '7.3.15', assetName: 'CLIProxyAPI_7.3.15_windows_amd64.zip' };
 const PROVIDER_SECTIONS = [
   'gemini-api-key',
   'codex-api-key',
@@ -931,9 +932,10 @@ export function createBrowserMockRuntime(
       case 'get_core_install_task': return clone(state.coreInstallTask);
       case 'install_core_version':
       case 'install_bundled_core': {
+        const source = command === 'install_bundled_core' ? BUNDLED_CORE : state.coreLatest;
         const result = {
-          version: readString(payload.version) || state.coreLatest.version,
-          assetName: state.coreLatest.assetName,
+          version: command === 'install_bundled_core' ? source.version : readString(payload.version) || source.version,
+          assetName: source.assetName,
           installDir: state.coreStatus.installDir,
           binaryPath: 'C:\\EasyCLIProxyAPI\\cpa-core\\cli-proxy-api.exe',
         };
@@ -944,7 +946,7 @@ export function createBrowserMockRuntime(
         return clone(result);
       }
       case 'cancel_core_install': return null;
-      case 'detect_bundled_core': return { version: '7.3.15', assetName: 'CLIProxyAPI_7.3.15_windows_amd64.zip' };
+      case 'detect_bundled_core': return clone(BUNDLED_CORE);
       case 'get_version_source_settings': return clone(state.versionSource);
       case 'set_download_source': {
         state.versionSource.source = readString(payload.source) || 'github';
