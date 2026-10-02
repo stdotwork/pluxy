@@ -2976,11 +2976,6 @@
     grid-template-columns: 1fr;
   }
 
-  .usage-topbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .usage-tabs {
     display: flex;
     width: 100%;
@@ -2996,39 +2991,13 @@
     padding-inline: 12px;
   }
 
-  .usage-topbar-actions {
-    width: 100%;
-  }
-
   .usage-events-summary-left,
   .usage-events-summary-right {
     width: 100%;
     justify-content: space-between;
   }
 
-  .usage-collector-state {
-    flex: 1;
-  }
-
   .usage-analysis-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .usage-pricing-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .usage-pricing-actions {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .usage-pricing-actions input {
-    width: 100%;
-  }
-
-  .usage-price-editor {
     grid-template-columns: 1fr;
   }
 

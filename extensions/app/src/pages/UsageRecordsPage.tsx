@@ -2616,22 +2616,26 @@ function PricingView({
           </span>
         </div>
         <div className="usage-pricing-actions">
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.currentTarget.value)}
-            placeholder={t('usage.pricing.search')}
-            aria-label={t('usage.pricing.search')}
-          />
-          <button type="button" className="secondary-button" onClick={() => setDraft(emptyPriceDraft())}>
-            {t('usage.pricing.add')}
-          </button>
-          <select value={syncSource} onChange={(event) => changeSyncSource(event.currentTarget.value as 'models-dev' | 'litellm')} aria-label={t('usage.pricing.syncSource')}>
-            <option value="models-dev">Models.dev</option>
-            <option value="litellm">LiteLLM</option>
-          </select>
-          <button type="button" className="primary-button" disabled={syncing} onClick={() => void previewPrices()}>
-            {syncing ? t('usage.pricing.syncing') : t('usage.pricing.sync')}
-          </button>
+          <div className="usage-pricing-action-group">
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.currentTarget.value)}
+              placeholder={t('usage.pricing.search')}
+              aria-label={t('usage.pricing.search')}
+            />
+            <button type="button" className="secondary-button" onClick={() => setDraft(emptyPriceDraft())}>
+              {t('usage.pricing.add')}
+            </button>
+          </div>
+          <div className="usage-pricing-action-group">
+            <select value={syncSource} onChange={(event) => changeSyncSource(event.currentTarget.value as 'models-dev' | 'litellm')} aria-label={t('usage.pricing.syncSource')}>
+              <option value="models-dev">Models.dev</option>
+              <option value="litellm">LiteLLM</option>
+            </select>
+            <button type="button" className="primary-button" disabled={syncing} onClick={() => void previewPrices()}>
+              {syncing ? t('usage.pricing.syncing') : t('usage.pricing.sync')}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2749,7 +2753,7 @@ function PricingView({
       ) : null}
 
       {visibleRows.length ? (
-        <div className="usage-table-wrap usage-pricing-table-wrap">
+        <div className="usage-table-wrap usage-pricing-table-wrap" tabIndex={0} role="region" aria-label={t('usage.tab.pricing')}>
           <table className="usage-pricing-table">
             <thead>
               <tr>
@@ -2768,7 +2772,7 @@ function PricingView({
               {visibleRows.map((row) => (
                 <tr key={row.model}>
                   <td>
-                    <strong>{row.model}</strong>
+                    <strong title={row.model}>{row.model}</strong>
                   </td>
                   <td>{compactNumber(row.requests)}</td>
                   <td>{compactNumber(row.totalTokens)}</td>

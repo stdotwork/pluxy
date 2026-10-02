@@ -387,40 +387,6 @@ body, html, #root {
   font-weight: var(--font-weight-semibold);
 }
 
-/* API access toolbar */
-.api-access-page .management-panel-heading {
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.api-access-heading-tools {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 420px;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.api-access-heading-tools .compact-toolbar {
-  width: min(280px, 100%);
-  flex: 1 1 180px;
-}
-
-
-@container workspace (max-width: 760px) {
-  .api-access-heading-tools {
-    width: 100%;
-    flex-basis: 100%;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-
-  .api-access-heading-tools .compact-toolbar {
-    flex-basis: 100%;
-  }
-}
-
 /* 7. OAuth Management Page Polish */
 .oauth-management-page .management-header h1 {
   display: none;
@@ -618,13 +584,18 @@ body, html, #root {
   gap: 8px;
 }
 
+.usage-records-page .usage-filter-group {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .usage-records-page .usage-filter-item {
   flex: 1 1 150px;
   flex-direction: row;
   align-items: center;
   gap: 0;
-  min-width: 132px;
-  max-width: 210px;
+  min-width: 0;
   height: 36px;
   padding: 0 8px;
   border: 1px solid var(--border-color);
@@ -686,6 +657,18 @@ body, html, #root {
   border-color: var(--border-hover);
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+@container workspace (max-width: 880px) {
+  .usage-records-page .usage-filter-group {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container workspace (max-width: 520px) {
+  .usage-records-page .usage-filter-group {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .usage-records-page .usage-section-heading strong {

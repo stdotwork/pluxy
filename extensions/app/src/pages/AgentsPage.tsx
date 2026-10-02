@@ -2058,7 +2058,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                   disabled={busy}
                 >
                   <span className="agent-client-icon"><AgentMark definition={agent} /></span>
-                  <span><strong>{agent.name}</strong><small>{listStatusText(status)}</small></span>
+                  <span><strong title={agent.name}>{agent.name}</strong><small title={listStatusText(status)}>{listStatusText(status)}</small></span>
                   {status?.installed ? (
                     <i className="agent-installed-indicator" title={t('agents.clientDetected')} aria-hidden="true" />
                   ) : null}

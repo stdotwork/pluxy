@@ -128,27 +128,42 @@ const desktopViewports = [
     const assertClientListScroll = async (label, { requireOverflow = true } = {}) => {
       const metrics = await page.locator('.agent-list-items').evaluate(list => {
         const style = getComputedStyle(list);
-        const last = list.lastElementChild;
-        list.scrollTop = list.scrollHeight;
-        const scrollTop = list.scrollTop;
+        const overflowX = list.scrollWidth > list.clientWidth + 1;
+        const overflowY = list.scrollHeight > list.clientHeight + 1;
+        const original = {
+          left: list.scrollLeft,
+          top: list.scrollTop,
+          snap: list.style.scrollSnapType,
+          behavior: list.style.scrollBehavior,
+        };
+        list.style.scrollSnapType = 'none';
+        list.style.scrollBehavior = 'auto';
         const listRect = list.getBoundingClientRect();
-        const lastRect = last?.getBoundingClientRect();
-        const lastReachable = !!lastRect && lastRect.top >= listRect.top - 1 && lastRect.bottom <= listRect.bottom + 1;
-        list.scrollTop = 0;
+        const unreachable = Array.from(list.querySelectorAll('button')).filter(button => {
+          const before = button.getBoundingClientRect();
+          list.scrollLeft += before.left - listRect.left;
+          list.scrollTop += before.top - listRect.top;
+          const after = button.getBoundingClientRect();
+          return after.left < listRect.left - 1 || after.right > listRect.right + 1
+            || after.top < listRect.top - 1 || after.bottom > listRect.bottom + 1;
+        }).map(button => button.textContent.trim());
+        const scrollable = (!overflowX || ['auto', 'scroll'].includes(style.overflowX))
+          && (!overflowY || ['auto', 'scroll'].includes(style.overflowY));
+        list.scrollLeft = original.left;
+        list.scrollTop = original.top;
+        list.style.scrollSnapType = original.snap;
+        list.style.scrollBehavior = original.behavior;
         return {
-          clientHeight: list.clientHeight,
-          scrollHeight: list.scrollHeight,
-          overflowY: style.overflowY,
-          scrollTop,
-          lastReachable,
+          overflows: overflowX || overflowY,
+          scrollable,
+          unreachable,
         };
       });
-      assert.equal(metrics.overflowY, 'auto', `${label}: the client list must own vertical scrolling`);
+      assert.equal(metrics.scrollable, true, `${label}: overflowing client options must remain scrollable`);
       if (requireOverflow) {
-        assert.ok(metrics.scrollHeight > metrics.clientHeight + 1, `${label}: the complete client list must overflow internally`);
-        assert.ok(metrics.scrollTop > 0, `${label}: the client list must accept scrolling`);
+        assert.equal(metrics.overflows, true, `${label}: the fixture must exercise scrolling through the client list`);
       }
-      assert.equal(metrics.lastReachable, true, `${label}: scrolling must reveal the final client`);
+      assert.deepEqual(metrics.unreachable, [], `${label}: scrolling must reveal every client option`);
     };
 
     const assertDesktopLayout = async (label, { requireClientOverflow = true } = {}) => {
@@ -421,6 +436,8 @@ const desktopViewports = [
     `${shellNarrowLabel}: panels must stack at the same width after the workspace breakpoint`);
     assert.ok(shellNarrow.client.bottom <= shellNarrow.configuration.y + 1,
       `${shellNarrowLabel}: the client list must remain above the configuration panel`);
+    assert.ok(shellNarrow.configuration.height >= shellNarrow.workbench.height / 2,
+      `${shellNarrowLabel}: stacked client options must leave most of the workbench available for configuration`);
     assert.ok(Math.abs(shellNarrow.bottomGap - shellNarrow.paddingBottom) <= 1,
       `${shellNarrowLabel}: the stacked workbench must preserve the fixed window-edge gap`);
     assert.ok(shellNarrow.documentScrollHeight <= shellNarrow.documentClientHeight + 1,

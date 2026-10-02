@@ -9787,16 +9787,13 @@ body.table-col-resizing * {
   overflow: auto;
 }
 
-.usage-pricing-panel {
-  min-height: 0;
-  overflow: auto;
-}
-
 /* Pricing Tab */
 .usage-pricing-panel {
-  display: grid;
+  display: flex;
   min-width: 0;
-  align-content: start;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   gap: 14px;
   padding: 16px;
   border: 1px solid var(--theme-e3e1db);
@@ -9936,6 +9933,7 @@ body.table-col-resizing * {
 
 .usage-pricing-toolbar {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
@@ -9944,6 +9942,7 @@ body.table-col-resizing * {
 
 .usage-pricing-summary {
   display: grid;
+  flex: 1 1 240px;
   gap: 2px;
 }
 
@@ -9961,13 +9960,26 @@ body.table-col-resizing * {
 
 .usage-pricing-actions {
   display: flex;
+  min-width: 0;
+  flex: 1 1 560px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-pricing-action-group {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 250px;
   align-items: center;
   gap: 8px;
 }
 
 .usage-pricing-actions input,
 .usage-pricing-actions select {
-  min-width: 180px;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 0;
   height: 34px;
   padding: 0 10px;
   border: 1px solid var(--theme-d5d2cb);
@@ -9979,7 +9991,10 @@ body.table-col-resizing * {
 
 .usage-pricing-actions button,
 .usage-price-editor-actions button {
+  flex: none;
+  min-height: 34px;
   height: 34px;
+  white-space: nowrap;
 }
 
 .usage-price-sync-dialog {
@@ -10035,6 +10050,10 @@ body.table-col-resizing * {
 
 .usage-price-editor {
   display: grid;
+  min-height: 0;
+  flex: 0 1 auto;
+  max-height: 50%;
+  overflow: auto;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
   padding: 14px;
@@ -10073,13 +10092,26 @@ body.table-col-resizing * {
 }
 
 .usage-pricing-table-wrap {
-  min-height: 380px;
+  min-height: 120px;
+}
+
+.usage-pricing-table-wrap::-webkit-scrollbar,
+.usage-pricing-table-wrap::-webkit-scrollbar:horizontal {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.usage-pricing-table-wrap::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--border-primary);
 }
 
 .usage-pricing-table {
   width: 100%;
   min-width: 980px;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: var(--font-size-meta);
 }
 
@@ -10105,7 +10137,22 @@ body.table-col-resizing * {
 
 .usage-pricing-table th:first-child,
 .usage-pricing-table td:first-child {
-  text-align: center;
+  position: sticky;
+  left: 0;
+  min-width: 180px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 1px 0 0 var(--border-color);
+}
+
+.usage-pricing-table td:first-child {
+  z-index: 1;
+  background: var(--bg-primary);
+}
+
+.usage-pricing-table th:first-child {
+  z-index: 2;
 }
 
 .usage-price-row-actions {
@@ -11268,24 +11315,6 @@ body.table-col-resizing * {
   }
 
   .usage-analysis-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .usage-pricing-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .usage-pricing-actions {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .usage-pricing-actions input {
-    width: 100%;
-  }
-
-  .usage-price-editor {
     grid-template-columns: 1fr;
   }
 

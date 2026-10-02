@@ -336,7 +336,7 @@ const rowFromRecord = (
     disabled: grouped ? providerGroupStatus(record) === 'disabled' : definitionFor(section).openAi
       ? readBoolean(record, 'disabled')
       : excludedModels.some((model) => model.trim() === '*'),
-    priority: readNumber(record, 'priority'),
+    priority: record.priority == null ? null : readNumber(record, 'priority'),
     authIndex: entry
       ? readString(entry, 'auth-index', 'authIndex')
       : readString(record, 'auth-index', 'authIndex'),
@@ -1477,6 +1477,7 @@ export function ApiAccessPage() {
               type="button"
               key={definition.id}
               className={definition.id === activeCategory ? 'active' : ''}
+              aria-pressed={definition.id === activeCategory}
               onClick={() => {
                 setActiveCategory(definition.id);
                 feedback.clearNotice();
@@ -1496,6 +1497,10 @@ export function ApiAccessPage() {
               <h2 title={t(activeDefinition.labelKey)}>{t(activeDefinition.labelKey)}</h2>
               <span>{t('apiAccess.groups.summary', { count: rows.length })}</span>
             </div>
+            <div className="management-toolbar compact-toolbar api-access-search">
+              <Search size={16} aria-hidden="true" />
+              <input value={filter} onChange={(event) => setFilter(event.currentTarget.value)} placeholder={t('apiAccess.search')} aria-label={t('apiAccess.search')} />
+            </div>
             <div className="api-access-heading-tools">
               <button type="button" className="secondary-button compact-button" onClick={() => void loadProviders()} disabled={loading || busy}>
                 <RefreshCw size={16} aria-hidden="true" />
@@ -1505,10 +1510,6 @@ export function ApiAccessPage() {
                 <Plus size={16} aria-hidden="true" />
                 {t('apiAccess.groups.add')}
               </button>
-              <div className="management-toolbar compact-toolbar">
-                <Search size={16} aria-hidden="true" />
-                <input value={filter} onChange={(event) => setFilter(event.currentTarget.value)} placeholder={t('apiAccess.search')} />
-              </div>
             </div>
           </div>
 
@@ -1545,21 +1546,20 @@ export function ApiAccessPage() {
                   <div className="provider-row-main">
                     <div className="provider-row-title">
                       <strong title={row.name}>{row.name}</strong>
-                      {row.remark ? <span>{row.remark}</span> : null}
+                      {providerGroupStatus(row.record) === 'partial' ? <span className="state-pill">{t('apiAccess.groups.partial')}</span> : null}
+                      {row.remark ? <span title={row.remark}>{row.remark}</span> : null}
                     </div>
-                    <code title={t('apiAccess.keys.count', { count: row.apiKeys.length })}>
-                      {row.apiKeys.length > 1
-                        ? t('apiAccess.keys.summary', { key: maskSecret(row.apiKey), count: row.apiKeys.length })
-                        : maskSecret(row.apiKey)}
-                    </code>
                     <span className="provider-row-url" title={row.baseUrl || undefined}>{row.baseUrl || t('apiAccess.defaultUrl')}</span>
-                    {row.models.length > 0 ? <span className="provider-row-models">{t('apiAccess.models.summary', { count: row.models.length })}</span> : null}
-                  </div>
-                  {row.priority === null ? null : (
                     <div className="provider-row-meta">
-                      <span>{t('apiAccess.priorityValue', { priority: row.priority })}</span>
+                      <code title={t('apiAccess.keys.count', { count: row.apiKeys.length })}>
+                        {row.apiKeys.length > 1
+                          ? t('apiAccess.keys.summary', { key: maskSecret(row.apiKey), count: row.apiKeys.length })
+                          : maskSecret(row.apiKey)}
+                      </code>
+                      {row.models.length > 0 ? <span className="provider-row-models">{t('apiAccess.models.summary', { count: row.models.length })}</span> : null}
+                      {row.priority === null ? null : <span>{t('apiAccess.priorityValue', { priority: row.priority })}</span>}
                     </div>
-                  )}
+                  </div>
                   <div className="provider-row-actions">
                     <button
                       type="button"
@@ -1582,7 +1582,6 @@ export function ApiAccessPage() {
                         <span className="switch-track" />
                       </span>
                     </label>
-                    {providerGroupStatus(row.record) === 'partial' ? <span className="state-pill">{t('apiAccess.groups.partial')}</span> : null}
                     <button type="button" className="icon-button quiet" onClick={() => openEdit(row)} disabled={busy} title={t('common.edit')} aria-label={t('common.edit')}>
                       <Edit3 size={16} aria-hidden="true" />
                     </button>
