@@ -42,9 +42,51 @@ const path = require('node:path');
     await page.locator('.nav-section').getByRole('button', { name: '高级功能' }).click();
     assert.equal(await page.locator('h1').count(), 1);
     const configTabs = page.locator('.config-subpage-tabs').getByRole('tab');
+    assert.equal(await page.locator('.config-subpage-tabs').getAttribute('aria-orientation'), 'horizontal');
+    assert.equal(await page.locator('.config-settings-sidebar').count(), 0);
+    assert.equal(await page.locator('.config-settings-header p, .config-nav-save-hint, .config-category-heading, .config-section-index').count(), 0);
+    assert.deepEqual(await configTabs.evaluateAll(elements => elements.map(element => element.id)), [
+      'config-subpage-tab-general', 'config-subpage-tab-routing', 'config-subpage-tab-requests',
+      'config-subpage-tab-oauth', 'config-subpage-tab-diagnostics', 'config-subpage-tab-extensions',
+      'config-subpage-tab-software',
+    ]);
+    assert.equal(await page.locator('.config-page [role="tabpanel"]').count(), 1);
     assert.deepEqual(await configTabs.evaluateAll((elements) => elements
       .map((element) => element.getAttribute('aria-controls'))
       .filter((id) => !id || !document.getElementById(id))), []);
+    assert.equal(await configTabs.evaluateAll(elements => elements.every(element =>
+      element.getAttribute('aria-controls') === 'config-subpage-panel')), true);
+    await configTabs.first().focus();
+    await page.keyboard.press('ArrowRight');
+    assert.equal(await page.locator('#config-subpage-tab-routing').getAttribute('aria-selected'), 'true');
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(await configTabs.first().getAttribute('aria-selected'), 'true');
+    await page.keyboard.press('End');
+    assert.equal(await page.locator('#config-subpage-tab-software').getAttribute('aria-selected'), 'true');
+    await page.waitForFunction(() => document.activeElement?.id === 'config-subpage-tab-software');
+    await page.keyboard.press('Home');
+    assert.equal(await configTabs.first().getAttribute('aria-selected'), 'true');
+    await page.waitForFunction(() => document.activeElement?.id === 'config-subpage-tab-general');
+    for (const key of ['ArrowDown', 'ArrowUp']) {
+      assert.equal(await configTabs.first().evaluate((element, pressedKey) => {
+        const event = new KeyboardEvent('keydown', { key: pressedKey, bubbles: true, cancelable: true });
+        element.dispatchEvent(event);
+        return event.defaultPrevented;
+      }, key), false, `${key} must remain available for normal page scrolling`);
+      assert.equal(await configTabs.first().getAttribute('aria-selected'), 'true');
+    }
+    assert.equal(await page.locator('#config-view-access').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('#config-view-connection').getAttribute('role'), null);
+    assert.equal(await page.getByLabel('搜索设置', { exact: true }).count(), 1);
+    const fieldHelp = page.locator('#template-field-management-0 .settings-help-trigger').first();
+    assert.equal(await fieldHelp.getAttribute('aria-expanded'), 'false');
+    assert.ok(await fieldHelp.getAttribute('aria-controls'));
+    assert.ok(await fieldHelp.getAttribute('aria-label'), 'Help icons need a meaningful accessible name');
+    await fieldHelp.focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await fieldHelp.getAttribute('aria-expanded'), 'true');
+    await page.keyboard.press('Escape');
+    assert.equal(await fieldHelp.getAttribute('aria-expanded'), 'false');
     const addKey = page.getByRole('button', { name: /新增鉴权密钥/ }).first();
     await addKey.focus();
     await addKey.click();

@@ -1189,6 +1189,14 @@ pub(crate) fn core_config_uses_v8(document: &serde_norway::Value) -> bool {
         || yaml_mapping_value(root, "api-keys").is_some_and(serde_norway::Value::is_mapping)
 }
 
+pub(crate) fn core_config_declares_v8(document: &serde_norway::Value) -> bool {
+    document
+        .as_mapping()
+        .and_then(|root| yaml_mapping_value(root, "config-version"))
+        .and_then(serde_norway::Value::as_u64)
+        .is_some_and(|version| version >= 8)
+}
+
 pub(crate) fn set_core_yaml_path_value(
     document: &mut serde_norway::Value,
     path: &[&str],
@@ -1217,6 +1225,156 @@ pub(crate) fn set_core_yaml_path_value(
     }
     mapping.insert(key, value);
     Ok(true)
+}
+
+pub(crate) fn migrate_legacy_core_config_to_v8(
+    template: &str,
+    legacy: &str,
+) -> Result<String, String> {
+    let template_document = serde_norway::from_str::<serde_norway::Value>(template)
+        .map_err(|error| format!("Failed to parse new kernel configuration template: {error}"))?;
+    if !core_config_uses_v8(&template_document) {
+        return Err("New kernel configuration template is not v8".to_string());
+    }
+    let legacy_document = serde_norway::from_str::<serde_norway::Value>(legacy)
+        .map_err(|error| format!("Failed to parse existing kernel configuration: {error}"))?;
+    if core_config_declares_v8(&legacy_document) {
+        return Ok(legacy.to_string());
+    }
+    let legacy_root = legacy_document
+        .as_mapping()
+        .ok_or_else(|| "Existing kernel configuration root must be a YAML mapping".to_string())?;
+    let mut migrated = template_document.clone();
+    // Start from the new template so newly introduced defaults remain available,
+    // then overlay the complete legacy document. The explicit lifts below only
+    // move fields whose spelling changed between schemas; all other user-owned
+    // sections must survive the upgrade as-is.
+    merge_yaml_values(&mut migrated, legacy_document.clone());
+    if let Some(version) = yaml_mapping_value(
+        template_document
+            .as_mapping()
+            .ok_or_else(|| "New kernel configuration template root must be a YAML mapping".to_string())?,
+        "config-version",
+    ).cloned() {
+        set_core_yaml_path_value(&mut migrated, &["config-version"], version)?;
+    } else {
+        remove_core_yaml_path_value(&mut migrated, &["config-version"]);
+    }
+    lift_legacy_core_config_fields(
+        &mut migrated,
+        legacy_root,
+        template_document
+            .as_mapping()
+            .ok_or_else(|| "New kernel configuration template root must be a YAML mapping".to_string())?,
+    )?;
+    render_yaml_value_changes(template, &template_document, &migrated)
+}
+
+fn lift_legacy_core_config_fields(
+    document: &mut serde_norway::Value,
+    legacy: &serde_norway::Mapping,
+    template: &serde_norway::Mapping,
+) -> Result<(), String> {
+    let copy = |document: &mut serde_norway::Value, legacy_path: &[&str], v8_path: &[&str]| -> Result<(), String> {
+        let Some(value) = nested_yaml_value(legacy, legacy_path).cloned() else {
+            return Ok(());
+        };
+        // A partially migrated file can contain both spellings. Prefer the
+        // canonical v8 value in that case; otherwise move the legacy value.
+        if nested_yaml_value(legacy, v8_path).is_none() {
+            set_core_yaml_path_value(document, v8_path, value)?;
+        }
+        if nested_yaml_value(template, legacy_path).is_none() {
+            remove_core_yaml_path_value(document, legacy_path);
+        }
+        Ok(())
+    };
+    for (legacy_path, v8_path) in [
+        (&["host"][..], &["server", "host"][..]),
+        (&["port"], &["server", "port"]),
+        (&["commercial-mode"], &["server", "commercial-mode"]),
+        (&["auth-dir"], &["oauth", "auth-dir"]),
+        (&["debug"], &["observability", "logs", "debug"]),
+        (&["logging-to-file"], &["observability", "logs", "logging-to-file"]),
+        (&["logs-max-total-size-mb"], &["observability", "logs", "logs-max-total-size-mb"]),
+        (&["error-logs-max-files"], &["observability", "logs", "error-logs-max-files"]),
+        (&["request-log"], &["observability", "logs", "request-log"]),
+        (&["usage-statistics-enabled"], &["observability", "usage", "usage-statistics-enabled"]),
+        (&["redis-usage-queue-retention-seconds"], &["observability", "usage", "redis-usage-queue-retention-seconds"]),
+        (&["proxy-url"], &["requests", "proxy-url"]),
+        (&["disable-cooling"], &["routing", "cooldown", "disable-cooling"]),
+        (&["request-retry"], &["routing", "retry", "request-retry"]),
+        (&["max-retry-credentials"], &["routing", "retry", "max-retry-credentials"]),
+        (&["max-retry-interval"], &["routing", "retry", "max-retry-interval"]),
+        (&["streaming", "bootstrap-retries"], &["requests", "streaming", "bootstrap-retries"]),
+        (&["remote-management", "secret-key"], &["management", "secret-key"]),
+        (&["oauth-model-alias"], &["oauth", "model-alias"]),
+        (&["payload"], &["requests", "payload"]),
+    ] {
+        copy(document, legacy_path, v8_path)?;
+    }
+    if let Some(tls) = yaml_mapping_value(legacy, "tls").filter(|value| value.is_mapping()).cloned() {
+        if nested_yaml_value(legacy, &["server", "tls"]).is_none() {
+            set_core_yaml_path_value(document, &["server", "tls"], tls)?;
+        }
+        if yaml_mapping_value(template, "tls").is_none() {
+            remove_core_yaml_path_value(document, &["tls"]);
+        }
+    }
+    if let Some(keys) = yaml_mapping_value(legacy, "api-keys").filter(|value| value.is_sequence()).cloned() {
+        if nested_yaml_value(legacy, &["access", "api-keys"]).is_none() {
+            set_core_yaml_path_value(document, &["access", "api-keys"], keys)?;
+        }
+        if let Some(template_upstreams) = yaml_mapping_value(template, "api-keys")
+            .filter(|value| value.is_mapping())
+            .cloned()
+        {
+            // A v8 template may already contain the upstream credential map at
+            // the root. The legacy client-key sequence must not replace it.
+            set_core_yaml_path_value(document, &["api-keys"], template_upstreams)?;
+        } else {
+            remove_core_yaml_path_value(document, &["api-keys"]);
+        }
+    }
+    let has_canonical_upstream_mapping = yaml_mapping_value(legacy, "api-keys")
+        .is_some_and(serde_norway::Value::is_mapping);
+    for (legacy_name, provider) in V8_PROVIDER_FAMILIES {
+        let Some(records) = yaml_mapping_value(legacy, legacy_name) else {
+            continue;
+        };
+        if !has_canonical_upstream_mapping
+            && nested_yaml_value(legacy, &["api-keys", provider]).is_none()
+        {
+            let grouped = group_legacy_provider_records(provider, records)?;
+            set_core_yaml_path_value(document, &["api-keys", provider], grouped)?;
+        }
+        if yaml_mapping_value(template, legacy_name).is_none() {
+            remove_core_yaml_path_value(document, &[legacy_name]);
+        }
+    }
+    for (legacy_path, v8_path) in legacy_extended_config_paths() {
+        copy(document, &legacy_path, &v8_path)?;
+    }
+    Ok(())
+}
+
+fn remove_core_yaml_path_value(document: &mut serde_norway::Value, path: &[&str]) -> bool {
+    let Some((key, parents)) = path.split_last() else {
+        return false;
+    };
+    let Some(mut mapping) = document.as_mapping_mut() else {
+        return false;
+    };
+    for section in parents {
+        let Some(parent) = mapping.get_mut(yaml_key(section)) else {
+            return false;
+        };
+        let Some(parent) = parent.as_mapping_mut() else {
+            return false;
+        };
+        mapping = parent;
+    }
+    mapping.remove(yaml_key(key)).is_some()
 }
 
 pub(crate) fn set_core_yaml_schema_value(

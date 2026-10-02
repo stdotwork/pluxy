@@ -4,6 +4,10 @@ import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   AlertCircle,
+  Search,
+  ChevronRight,
+  Puzzle,
+  SlidersHorizontal,
   Bug,
   Check,
   Copy,
@@ -40,11 +44,12 @@ import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
 import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { TemplateConfigSection } from '../components/TemplateConfigSection';
-import { generalTemplateGroups, networkTemplateGroups, requestTemplateGroups, routingTemplateGroups } from '../services/generalTemplateFields';
-import { oauthTemplateGroups } from '../services/oauthTemplateFields';
-import { extensionTemplateGroups } from '../services/extensionTemplateFields';
-import { payloadTemplateGroups } from '../services/payloadTemplateFields';
+import { SettingsHelp } from '../components/SettingsHelp';
 import { templateMessages, templateText } from '../i18n/templateConfig';
+import {
+  settingsCategories, settingsViews, settingsTemplateGroups,
+  allSettingsTemplateGroups, settingsMessages, type SettingsCategory, type SettingsView,
+} from '../services/settingsNavigation';
 
 type CoreConfigSettings = {
   managementSecretConfigured: boolean;
@@ -89,10 +94,12 @@ type ConfigAction =
   | 'tls'
   | 'software'
   | null;
-type ConfigSubpage = 'general' | 'network' | 'routing' | 'requests' | 'oauth' | 'extensions' | 'software' | 'aliases' | 'sensitive-words';
-const CONFIG_SUBPAGES: readonly ConfigSubpage[] = ['general', 'network', 'routing', 'requests', 'oauth', 'extensions', 'aliases', 'software', 'sensitive-words'];
-const TEMPLATE_GROUPS_BY_TAB = { general: generalTemplateGroups, network: networkTemplateGroups, routing: routingTemplateGroups, requests: [...requestTemplateGroups, ...payloadTemplateGroups], oauth: oauthTemplateGroups, extensions: extensionTemplateGroups, software: [], aliases: [], 'sensitive-words': [] };
-const ALL_TEMPLATE_GROUPS = Object.values(TEMPLATE_GROUPS_BY_TAB).flat();
+type ConfigSubpage = SettingsCategory;
+const CONFIG_SUBPAGES = settingsCategories.map(category => category.id);
+const CATEGORY_ICONS = { general: ShieldCheck, routing: Route, requests: SlidersHorizontal, oauth: KeyRound, diagnostics: FileText, extensions: Puzzle, software: Settings2 };
+type SettingDestination = { category: ConfigSubpage; view?: SettingsView; target: string; field?: string };
+type SettingSearchEntry = SettingDestination & { title: string; context: string; keywords: string };
+
 type CloseBehavior = 'ask' | 'exit' | 'minimize-to-tray';
 type NetworkDraftField =
   | 'port'
@@ -206,7 +213,52 @@ export function ConfigPanelPage() {
     <FloatingNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />
   );
   const [activeSubpage, setActiveSubpage] = useState<ConfigSubpage>('general');
+  const [categoryViews, setCategoryViews] = useState<Partial<Record<ConfigSubpage, SettingsView>>>({ general: 'access', requests: 'behavior' });
+  const activeView = categoryViews[activeSubpage] ?? 'behavior';
+  const [settingsSearch, setSettingsSearch] = useState('');
+  const [dirtyTemplateGroups, setDirtyTemplateGroups] = useState<readonly string[]>([]);
+  const [sensitiveWordsDirty, setSensitiveWordsDirty] = useState(false);
   const [sensitiveWordsVisited, setSensitiveWordsVisited] = useState(false);
+  const [aliasesVisited, setAliasesVisited] = useState(false);
+  const [pendingDestination, setPendingDestination] = useState<SettingDestination | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const categoryNavigationRef = useRef<HTMLDivElement>(null);
+  const st = (key: keyof typeof settingsMessages) => templateText(settingsMessages[key], locale);
+  const searching = settingsSearch.trim().length > 0;
+
+  useEffect(() => {
+    const navigation = categoryNavigationRef.current;
+    const tab = document.getElementById(`config-subpage-tab-${activeSubpage}`);
+    if (!navigation || !tab) return;
+    const revealSelectedTab = () => {
+      const bounds = navigation.getBoundingClientRect();
+      const tabBounds = tab.getBoundingClientRect();
+      if (tabBounds.left < bounds.left) navigation.scrollLeft += tabBounds.left - bounds.left;
+      else if (tabBounds.right > bounds.right) navigation.scrollLeft += tabBounds.right - bounds.right;
+    };
+    revealSelectedTab();
+    const observer = new ResizeObserver(revealSelectedTab);
+    observer.observe(navigation);
+    return () => observer.disconnect();
+  }, [activeSubpage]);
+
+  useEffect(() => {
+    if (!pendingDestination) return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.getElementById(pendingDestination.field ?? pendingDestination.target)
+        ?? document.getElementById(pendingDestination.target);
+      if (target) {
+        const details = target.closest<HTMLDetailsElement>('.template-config-custom') ?? target.querySelector<HTMLDetailsElement>('.template-config-custom');
+        if (details) details.open = true;
+        target.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+        const control = target.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)')
+          ?? target.querySelector<HTMLElement>('.template-config-custom > summary');
+        (control ?? target).focus({ preventScroll: true });
+      }
+      setPendingDestination(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [pendingDestination]);
   const [portDraft, setPortDraft] = useState('8317');
   const [hostDraft, setHostDraft] = useState('127.0.0.1');
   const [proxyUrlDraft, setProxyUrlDraft] = useState('');
@@ -337,8 +389,8 @@ export function ConfigPanelPage() {
     setSoftwareSavedStatusVisible(false);
     try {
       const result = await invoke<SoftwareSettings>('get_software_settings');
-      setSoftwareSettings(result);
       if (mode === 'preserve' && otherDraftDirtyRef.current.software) return;
+      setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
       setSoftwareAutostartDraft(result.autostartEnabled);
       setSoftwareStartCoreDraft(result.startCoreOnLaunch);
@@ -356,8 +408,8 @@ export function ConfigPanelPage() {
     setTlsSettingsLoading(true);
     try {
       const result = await invoke<CoreTlsSettings>('get_core_tls_settings');
-      setTlsSettings(result);
       if (mode === 'preserve' && otherDraftDirtyRef.current.tls) return;
+      setTlsSettings(result);
       setTlsEnabledDraft(result.enabled);
       setTlsCertDraft(result.cert);
       setTlsKeyDraft(result.key);
@@ -984,121 +1036,95 @@ export function ConfigPanelPage() {
     onEscape: busyAction === 'delete-key' ? undefined : () => setDeleteIndex(null),
     preventEscape: busyAction === 'delete-key',
   });
-  const activateConfigSubpage = (subpage: ConfigSubpage) => {
-    if (subpage === 'sensitive-words') setSensitiveWordsVisited(true);
+  const activateConfigSubpage = (subpage: ConfigSubpage, view?: SettingsView) => {
+    setSettingsSearch('');
     setActiveSubpage(subpage);
+    const nextView = view ?? categoryViews[subpage] ?? 'behavior';
+    if (subpage === 'general' || subpage === 'requests') {
+      setCategoryViews(previous => ({ ...previous, [subpage]: nextView }));
+    }
+    if (nextView === 'sensitive-words') setSensitiveWordsVisited(true);
+    if (nextView === 'aliases') setAliasesVisited(true);
   };
   const handleConfigTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, subpage: ConfigSubpage) => {
-    handleHorizontalTabKey(
-      event,
-      CONFIG_SUBPAGES,
-      subpage,
-      activateConfigSubpage,
-      (next) => document.getElementById(`config-subpage-tab-${next}`),
-    );
+    handleHorizontalTabKey(event, CONFIG_SUBPAGES, subpage, activateConfigSubpage,
+      next => document.getElementById(`config-subpage-tab-${next}`));
   };
+  const navigateToSetting = (destination: SettingDestination) => {
+    activateConfigSubpage(destination.category, destination.view);
+    setPendingDestination(destination);
+  };
+  const nativeDirty = {
+    keys: false, management: Boolean(managementSecretDraft || managementSecretConfirm),
+    network: networkSettingsDirty, tls: tlsSettingsDirty, routing: sessionRoutingDirty,
+    retry: retrySettingsDirty, logging: loggingSettingsDirty, software: softwareSettingsDirty,
+  };
+  const nativeEntries: SettingSearchEntry[] = [
+    { category: 'general', view: 'access', target: 'config-native-keys', title: t('config.keys.title'), context: '', keywords: 'API key token 鉴权密钥 api-keys access' },
+    { category: 'general', view: 'access', target: 'config-native-management', title: t('config.webuiKey.title'), context: '', keywords: 'WebUI secret-key 密钥 管理接口 面板 密码 management security' },
+    { category: 'general', view: 'connection', target: 'config-native-network', title: st('nativeNetwork'), context: '', keywords: [t('config.network.port'), t('config.network.listenHost'), t('config.network.proxyUrl'), t('config.network.systemProxy'), 'server host port proxy URL 8317 127.0.0.1 0.0.0.0 监听 地址 系统代理'].join(' ') },
+    { category: 'general', view: 'connection', target: 'config-native-tls', title: t('config.tls.enable'), context: '', keywords: [t('config.tls.cert'), t('config.tls.key'), 'TLS HTTPS cert key certificate 证书 私钥 加密'].join(' ') },
+    { category: 'routing', target: 'config-native-routing', title: st('nativeRouting'), context: '', keywords: [t('config.network.sessionAffinity'), t('config.network.sessionTtl'), t('config.routing.title'), 'session affinity ttl routing strategy round-robin 会话 粘性 加权 轮询'].join(' ') },
+    { category: 'routing', target: 'config-native-retry', title: st('nativeRetry'), context: '', keywords: [t('config.network.disableCooling'), t('config.network.requestRetry'), t('config.network.maxRetryCredentials'), t('config.network.maxRetryInterval'), t('config.network.streamingBootstrapRetries'), 'retry retries cooldown 重试 冷却 流式 失败 fallback'].join(' ') },
+    { category: 'diagnostics', target: 'config-native-logging', title: t('config.diagnostics.title'), context: '', keywords: [t('config.diagnostics.debug.title'), t('config.diagnostics.commercial.title'), t('config.diagnostics.fileLogging.title'), t('config.diagnostics.usage.title'), t('config.diagnostics.maxSize.title'), t('config.diagnostics.errorFiles.title'), t('config.diagnostics.redisRetention.title'), 'debug commercial-mode logging logs usage statistics redis retention 日志 调试 商业模式 用量 统计 留存 文件 容量'].join(' ') },
+    { category: 'software', target: 'config-native-software', title: t('config.software.title'), context: '', keywords: [t('config.software.autostart'), t('config.software.startCoreOnLaunch'), t('config.software.silentStart'), t('config.software.closeBehavior'), t('config.software.defaultTerminal'), 'startup autostart silent tray close terminal 软件 自启动 启动 静默 托盘 关闭 终端'].join(' ') },
+    { category: 'requests', view: 'aliases', target: 'config-native-aliases', title: t('app.nav.thinkingAliases'), context: '', keywords: 'thinking reasoning speed aliases effort 思考 推理 速度 别名 模型' },
+    { category: 'requests', view: 'sensitive-words', target: 'config-native-sensitive-words', title: t('config.sensitiveWords.title'), context: '', keywords: 'sensitive words filters antigravity devin 敏感词 内容 过滤' },
+  ];
+  const category = settingsCategories.find(item => item.id === activeSubpage)!;
+  const nativeCategoryDirty: Record<ConfigSubpage, boolean> = {
+    general: nativeDirty.management || networkSettingsDirty || tlsSettingsDirty,
+    routing: sessionRoutingDirty || retrySettingsDirty,
+    requests: sensitiveWordsDirty,
+    diagnostics: loggingSettingsDirty,
+    oauth: false,
+    extensions: false,
+    software: softwareSettingsDirty,
+  };
+  const categoryDirty = (id: ConfigSubpage) => nativeCategoryDirty[id]
+    || settingsTemplateGroups[id].some(group => dirtyTemplateGroups.includes(group.id));
+  const templateGroups = (activeSubpage === 'general' && activeView !== 'access')
+    || (activeSubpage === 'requests' && activeView !== 'behavior') ? [] : settingsTemplateGroups[activeSubpage];
+  const searchEntries: SettingSearchEntry[] = [
+    ...nativeEntries,
+    ...settingsCategories.flatMap(item => settingsTemplateGroups[item.id].flatMap(group => group.fields.map((field, index) => ({
+      category: item.id, view: item.id === 'general' ? 'access' as const : item.id === 'requests' ? 'behavior' as const : undefined,
+      target: `config-group-${group.id}`, field: `template-field-${group.id}-${index}`,
+      title: templateText(field.label, locale), context: templateText(group.title, locale),
+      keywords: `${JSON.stringify(field)} ${templateText(group.description, locale)} ${field.path.join('.')}`,
+    })))),
+  ];
+  const searchTerms = settingsSearch.trim().toLocaleLowerCase().split(/\s+/);
+  const searchResults = searchEntries.filter(entry => {
+    const categoryTitle = templateText(settingsCategories.find(item => item.id === entry.category)!.title, locale);
+    const text = `${entry.title} ${entry.context} ${entry.keywords} ${categoryTitle}`.toLocaleLowerCase();
+    return searchTerms.every(term => text.includes(term));
+  });
+  const views = activeSubpage === 'general' ? settingsViews.general : activeSubpage === 'requests' ? settingsViews.requests : [];
 
   return (
     <section className="page config-page">
       {confirmationDialog}
-      <h1 className="sr-only">{t('app.nav.config')}</h1>
-      <div className="agent-subpage-tabs config-subpage-tabs" role="tablist" aria-label={t('config.tabs.label')}>
-        <button
-          type="button"
-          id="config-subpage-tab-general"
-          role="tab"
-          className={activeSubpage === 'general' ? 'active' : ''}
-          aria-selected={activeSubpage === 'general'}
-          aria-controls="config-subpage-panel"
-          tabIndex={activeSubpage === 'general' ? 0 : -1}
-          onClick={() => activateConfigSubpage('general')}
-          onKeyDown={(event) => handleConfigTabKeyDown(event, 'general')}
-        >
-          {t('config.tabs.general')}
-        </button>
-        <button
-          type="button"
-          id="config-subpage-tab-network"
-          role="tab"
-          className={activeSubpage === 'network' ? 'active' : ''}
-          aria-selected={activeSubpage === 'network'}
-          aria-controls="config-subpage-panel"
-          tabIndex={activeSubpage === 'network' ? 0 : -1}
-          onClick={() => activateConfigSubpage('network')}
-          onKeyDown={(event) => handleConfigTabKeyDown(event, 'network')}
-        >
-          {t('config.tabs.network')}
-        </button>
-        <button
-          type="button"
-          id="config-subpage-tab-routing"
-          role="tab"
-          className={activeSubpage === 'routing' ? 'active' : ''}
-          aria-selected={activeSubpage === 'routing'}
-          aria-controls="config-subpage-panel"
-          tabIndex={activeSubpage === 'routing' ? 0 : -1}
-          onClick={() => activateConfigSubpage('routing')}
-          onKeyDown={(event) => handleConfigTabKeyDown(event, 'routing')}
-        >
-          {t('config.tabs.routing')}
-        </button>
-        {(['requests', 'oauth', 'extensions'] as const).map((subpage) => (
-          <button key={subpage} type="button" id={`config-subpage-tab-${subpage}`} role="tab"
-            className={activeSubpage === subpage ? 'active' : ''} aria-selected={activeSubpage === subpage}
-            aria-controls="config-template-panel" tabIndex={activeSubpage === subpage ? 0 : -1}
-            onClick={() => activateConfigSubpage(subpage)} onKeyDown={(event) => handleConfigTabKeyDown(event, subpage)}>
-            {templateText(templateMessages[subpage], locale)}
-          </button>
-        ))}
-        <button
-          type="button"
-          id="config-subpage-tab-aliases"
-          role="tab"
-          className={activeSubpage === 'aliases' ? 'active' : ''}
-          aria-selected={activeSubpage === 'aliases'}
-          aria-controls="config-subpage-panel"
-          tabIndex={activeSubpage === 'aliases' ? 0 : -1}
-          onClick={() => activateConfigSubpage('aliases')}
-          onKeyDown={(event) => handleConfigTabKeyDown(event, 'aliases')}
-        >
-          {t('app.nav.thinkingAliases')}
-        </button>
-        <button
-          type="button"
-          id="config-subpage-tab-software"
-          role="tab"
-          className={activeSubpage === 'software' ? 'active' : ''}
-          aria-selected={activeSubpage === 'software'}
-          aria-controls="config-subpage-panel"
-          tabIndex={activeSubpage === 'software' ? 0 : -1}
-          onClick={() => activateConfigSubpage('software')}
-          onKeyDown={(event) => handleConfigTabKeyDown(event, 'software')}
-        >
-          {t('config.tabs.software')}
-        </button>
-        <button
-          type="button"
-          id="config-subpage-tab-sensitive-words"
-          role="tab"
-          className={activeSubpage === 'sensitive-words' ? 'active' : ''}
-          aria-selected={activeSubpage === 'sensitive-words'}
-          aria-controls="config-subpage-panel"
-          tabIndex={activeSubpage === 'sensitive-words' ? 0 : -1}
-          onClick={() => activateConfigSubpage('sensitive-words')}
-          onKeyDown={(event) => handleConfigTabKeyDown(event, 'sensitive-words')}
-        >
-          {t('config.tabs.sensitiveWords')}
-        </button>
-      </div>
-
-      {activeSubpage === 'general' ? (
-        <div
-          className="config-subpage-panel config-general-subpage"
-          id="config-subpage-panel"
-          role="tabpanel"
-          aria-labelledby="config-subpage-tab-general"
-        >
-        <section className="panel config-keys-panel">
+      <header className="config-settings-header">
+        <h1>{st('title')}</h1>
+        <div className="config-settings-search"><Search size={18} aria-hidden="true" /><input ref={searchRef} type="search" aria-label={st('search')} placeholder={st('searchHint')} value={settingsSearch} onChange={event => setSettingsSearch(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Escape') setSettingsSearch(''); }} />{searching ? <button type="button" className="icon-button quiet" aria-label={st('clearSearch')} onClick={() => { setSettingsSearch(''); searchRef.current?.focus(); }}><X size={16} /></button> : null}</div>
+      </header>
+      <div className="config-settings-layout">
+        <div className="config-settings-topnav">
+          <div ref={categoryNavigationRef} className="config-subpage-tabs config-settings-navigation" role="tablist" aria-orientation="horizontal" aria-label={t('config.tabs.label')}>
+            {settingsCategories.map(item => {
+              const Icon = CATEGORY_ICONS[item.id];
+              const dirty = categoryDirty(item.id);
+              return <button type="button" key={item.id} id={`config-subpage-tab-${item.id}`} role="tab" className={activeSubpage === item.id ? 'active' : ''} aria-selected={activeSubpage === item.id} aria-controls="config-subpage-panel" tabIndex={activeSubpage === item.id ? 0 : -1} onClick={() => activateConfigSubpage(item.id)} onKeyDown={event => handleConfigTabKeyDown(event, item.id)}><Icon size={17} aria-hidden="true" /><span>{templateText(item.title, locale)}</span>{dirty ? <span className="config-nav-dirty" title={st('dirty')}><span className="sr-only">{st('dirty')}</span></span> : null}</button>;
+            })}
+          </div>
+        </div>
+        <div className="config-settings-content" id="config-subpage-panel" role="tabpanel" aria-labelledby={`config-subpage-tab-${activeSubpage}`}>
+          {searching ? <section className="config-search-results" aria-label={st('results')}><div className="config-search-heading"><h2>{st('results')}</h2><span role="status">{searchResults.length}</span></div>{searchResults.length ? <div className="config-search-result-list">{searchResults.map(entry => <button type="button" key={`${entry.target}-${entry.field ?? ''}`} onClick={() => navigateToSetting(entry)}><span className="config-search-result-copy"><strong>{entry.title}</strong><small>{templateText(settingsCategories.find(item => item.id === entry.category)!.title, locale)}{entry.context ? ` / ${entry.context}` : ''}</small></span><ChevronRight size={17} aria-hidden="true" /></button>)}</div> : <p className="config-search-empty">{st('noResults')}</p>}</section> : <>
+            {views.length ? <div className="config-settings-views" role="group" aria-label={templateText(category.title, locale)}>{views.map(view => <button key={view.id} id={`config-view-${view.id}`} type="button" className={activeView === view.id ? 'active' : ''} aria-pressed={activeView === view.id} onClick={() => activateConfigSubpage(activeSubpage, view.id)}>{templateText(view.title, locale)}</button>)}</div> : null}
+          </>}
+          <div className="config-settings-cards">
+<section id="config-native-keys" tabIndex={-1} hidden={searching || activeSubpage !== 'general' || activeView !== 'access'} className="panel config-keys-panel">
           <div className="config-panel-heading">
             <div className="config-heading-title">
               <KeyRound size={18} aria-hidden="true" />
@@ -1200,11 +1226,11 @@ export function ConfigPanelPage() {
           </div>
           {!addDialogOpen && deleteIndex === null ? renderFeedback(keyFeedback) : null}
         </section>
-        <section className="panel config-management-panel">
+<section id="config-native-management" tabIndex={-1} hidden={searching || activeSubpage !== 'general' || activeView !== 'access'} className="panel config-management-panel">
           <div className="config-panel-heading">
             <div className="config-heading-title">
               <ShieldCheck size={18} aria-hidden="true" />
-              <h2>{t('config.webuiKey.title')}</h2>
+              <h2>{t('config.webuiKey.title')}</h2><SettingsHelp label={t('config.webuiKey.title')}>{t('config.webuiKey.description')} {t('config.webuiKey.securityHint')}</SettingsHelp>
             </div>
             <div className="config-heading-actions">
               <button
@@ -1220,12 +1246,7 @@ export function ConfigPanelPage() {
           </div>
 
           <div className="config-management-content">
-            <div className="config-management-description">
-              <strong>{t('config.webuiKey.heading')}</strong>
-              <p>{t('config.webuiKey.description')}</p>
-              <small>{t('config.webuiKey.securityHint')}</small>
-              {settings?.managementSecretConfigured === false ? <p role="status">{templateText(templateMessages.managementDisabled, locale)}</p> : null}
-            </div>
+            {settings?.managementSecretConfigured === false ? <p role="status">{templateText(templateMessages.managementDisabled, locale)}</p> : null}
 
             <form
               className="config-management-form"
@@ -1315,211 +1336,16 @@ export function ConfigPanelPage() {
             {renderFeedback(managementFeedback)}
           </div>
         </section>
-
-        <section className="panel config-diagnostics-panel">
-          <div className="config-panel-heading">
-            <div className="config-heading-title">
-              <FileText size={18} aria-hidden="true" />
-              <h2>{t('config.diagnostics.title')}</h2>
-            </div>
-          </div>
-
-          <p className="config-diagnostics-intro">
-            {templateText(templateMessages.diagnostics, locale)}
-          </p>
-
-          <div className="config-diagnostics-toggle-grid">
-            <div className="config-diagnostics-setting">
-              <span className="config-diagnostics-setting-icon" aria-hidden="true"><Bug size={18} /></span>
-              <div className="config-diagnostics-setting-copy">
-                <strong>{t('config.diagnostics.debug.title')}</strong>
-                <small>{t('config.diagnostics.debug.description')}</small>
-              </div>
-              <label className="switch-control" title={t('config.diagnostics.debug.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={debugDraft}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
-                    setDebugDraft(event.currentTarget.checked);
-                    markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
-            </div>
-
-            <div className="config-diagnostics-setting">
-              <span className="config-diagnostics-setting-icon" aria-hidden="true"><Gauge size={18} /></span>
-              <div className="config-diagnostics-setting-copy">
-                <strong>{t('config.diagnostics.commercial.title')}</strong>
-                <small>{t('config.diagnostics.commercial.description')}</small>
-              </div>
-              <label className="switch-control" title={t('config.diagnostics.commercial.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={commercialModeDraft}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
-                    setCommercialModeDraft(event.currentTarget.checked);
-                    markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
-            </div>
-
-            <div className="config-diagnostics-setting">
-              <span className="config-diagnostics-setting-icon" aria-hidden="true"><HardDrive size={18} /></span>
-              <div className="config-diagnostics-setting-copy">
-                <strong>{t('config.diagnostics.fileLogging.title')}</strong>
-                <small>{t('config.diagnostics.fileLogging.description')}</small>
-              </div>
-              <label className="switch-control" title={t('config.diagnostics.fileLogging.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={loggingToFileDraft}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
-                    setLoggingToFileDraft(event.currentTarget.checked);
-                    markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
-            </div>
-
-            <div className="config-diagnostics-setting">
-              <span className="config-diagnostics-setting-icon" aria-hidden="true"><Database size={18} /></span>
-              <div className="config-diagnostics-setting-copy">
-                <strong>{t('config.diagnostics.usage.title')}</strong>
-                <small>{t('config.diagnostics.usage.description')}</small>
-              </div>
-              <label className="switch-control" title={t('config.diagnostics.usage.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={usageStatisticsDraft}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
-                    setUsageStatisticsDraft(event.currentTarget.checked);
-                    markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
-            </div>
-          </div>
-
-          <div className="config-diagnostics-fields">
-            <label className="config-diagnostics-field">
-              <span>{t('config.diagnostics.maxSize.title')}</span>
-              <input
-                className="config-dialog-text-input"
-                type="number"
-                min="0"
-                step="1"
-                value={logsMaxTotalSizeDraft}
-                disabled={controlsDisabled}
-                onChange={(event) => {
-                  setLogsMaxTotalSizeDraft(event.currentTarget.value);
-                  markLoggingDraftDirty();
-                }}
-              />
-              <small>{t('config.diagnostics.maxSize.hint')}</small>
-            </label>
-            <label className="config-diagnostics-field">
-              <span>{t('config.diagnostics.errorFiles.title')}</span>
-              <input
-                className="config-dialog-text-input"
-                type="number"
-                min="0"
-                step="1"
-                value={errorLogsMaxFilesDraft}
-                disabled={controlsDisabled}
-                onChange={(event) => {
-                  setErrorLogsMaxFilesDraft(event.currentTarget.value);
-                  markLoggingDraftDirty();
-                }}
-              />
-              <small>{t('config.diagnostics.errorFiles.hint')}</small>
-            </label>
-            <label className="config-diagnostics-field">
-              <span>{t('config.diagnostics.redisRetention.title')}</span>
-              <input
-                className="config-dialog-text-input"
-                type="number"
-                min="1"
-                max="3600"
-                step="1"
-                value={redisUsageRetentionDraft}
-                disabled={controlsDisabled}
-                onChange={(event) => {
-                  setRedisUsageRetentionDraft(event.currentTarget.value);
-                  markLoggingDraftDirty();
-                }}
-              />
-              <small>{t('config.diagnostics.redisRetention.hint')}</small>
-            </label>
-          </div>
-
-          {commercialModeDraft ? (
-            <div className="config-diagnostics-commercial-note">
-              <AlertCircle size={16} aria-hidden="true" />
-              <span>{t('config.diagnostics.commercial.warning')}</span>
-            </div>
-          ) : null}
-
-          <div className="config-diagnostics-footer">
-            <span className={`config-form-message ${loggingError ? 'error' : ''}`} role="alert">
-              {loggingError || ' '}
-            </span>
-            <div className="config-diagnostics-actions">
-              <button
-                type="button"
-                className="secondary-button compact-button"
-                disabled={controlsDisabled}
-                onClick={() => void openCoreLogsDirectory()}
-              >
-                <FolderOpen size={16} aria-hidden="true" />
-                {t('config.diagnostics.openLogs')}
-              </button>
-              <button
-                type="button"
-                className="primary-button compact-button"
-                disabled={controlsDisabled || !loggingSettingsDirty}
-                onClick={() => void saveCoreLoggingSettings()}
-              >
-                <Check size={16} aria-hidden="true" />
-                {loggingSettingsBusy ? t('common.saving') : t('config.diagnostics.save')}
-              </button>
-            </div>
-            {renderFeedback(loggingFeedback)}
-          </div>
-        </section>
-        </div>
-      ) : activeSubpage === 'network' || activeSubpage === 'routing' ? (
-        <div
-          className="config-subpage-panel config-network-subpage"
-          id="config-subpage-panel"
-          role="tabpanel"
-          aria-labelledby={`config-subpage-tab-${activeSubpage}`}
-        >
-      <div className="config-network-panel">
-        <div className="config-network-sections">
-          <section
+<section id="config-native-network" tabIndex={-1} hidden={searching || activeSubpage !== 'general' || activeView !== 'connection'}
             className="config-network-section"
             aria-labelledby="config-network-section-title"
-            hidden={activeSubpage !== 'network'}
           >
             <div className="config-network-section-heading config-section-heading-with-actions">
               <div className="config-network-section-title">
                 <Network size={16} aria-hidden="true" />
-                <h3 id="config-network-section-title">{t('config.network.networkSection')}</h3>
+                <h3 id="config-network-section-title">{st('nativeNetwork')}</h3>
               </div>
+              <span className="config-card-status" role="status">{nativeDirty.network ? st('dirty') : ''}</span>
               <button
                 type="button"
                 className="primary-button compact-button"
@@ -1527,14 +1353,15 @@ export function ConfigPanelPage() {
                 onClick={() => void saveNetworkEndpointSettings()}
               >
                 <Check size={16} aria-hidden="true" />
-                {busyAction === 'network' ? t('common.saving') : t('config.network.confirmSave')}
+                {busyAction === 'network' ? t('common.saving') : t('common.save')}
               </button>
             </div>
             {renderFeedback(networkFeedback)}
             <div className="config-network-grid">
-              <label className="config-network-field config-network-port-field">
-            <span>{t('config.network.port')}</span>
+              <div className="config-network-field config-network-port-field">
+            <span className="config-field-label"><label htmlFor="config-input-config-network-port">{t('config.network.port')}</label><SettingsHelp label={t('config.network.port')}>{t('config.network.portHint')}</SettingsHelp></span>
             <input
+                  id="config-input-config-network-port"
               className={`config-network-input ${portError ? 'error' : ''}`}
               type="text"
               inputMode="numeric"
@@ -1558,12 +1385,13 @@ export function ConfigPanelPage() {
                 }
               }}
             />
-            <small>{t('config.network.portHint')}</small>
-              </label>
 
-              <label className="config-network-field">
-                <span>{t('config.network.listenHost')}</span>
+              </div>
+
+              <div className="config-network-field">
+                <span className="config-field-label"><label htmlFor="config-input-config-network-listenHost">{t('config.network.listenHost')}</label><SettingsHelp label={t('config.network.listenHost')}>{templateText(templateMessages.hostHint, locale)}</SettingsHelp></span>
                 <input
+                  id="config-input-config-network-listenHost"
                   className={`config-network-input ${hostError ? 'error' : ''}`}
                   type="text"
                   value={hostDraft}
@@ -1585,8 +1413,8 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{templateText(templateMessages.hostHint, locale)}</small>
-              </label>
+
+              </div>
 
               <div className="config-network-field config-proxy-field">
                 <div className="config-proxy-heading">
@@ -1594,6 +1422,7 @@ export function ConfigPanelPage() {
                     <Link2 size={15} aria-hidden="true" />
                     {t('config.network.proxyUrl')}
                   </label>
+                  <SettingsHelp label={t('config.network.proxyUrl')}>{t('config.network.proxyHint')} {t('config.network.systemProxyHint')}</SettingsHelp>
                   <label className="config-proxy-system-toggle" title={t('config.network.systemProxyHint')}>
                     <span>{t('config.network.systemProxy')}</span>
                     <span className="switch-control">
@@ -1629,21 +1458,143 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{t('config.network.proxyHint')}</small>
+
               </div>
             </div>
           </section>
+<section id="config-native-tls" tabIndex={-1} hidden={searching || activeSubpage !== 'general' || activeView !== 'connection'}
+            className="config-network-section"
+            aria-labelledby="config-tls-section-title"
+          >
+          <div className="config-network-section-heading config-tls-section-heading">
+            <div className="config-tls-section-title">
+              <LockKeyhole size={18} aria-hidden="true" />
+              <h3 id="config-tls-section-title">{t('config.tls.enable')}</h3>
+            </div>
+            <div className="config-heading-actions">
+              {tlsStatusLabel ? (
+                <span className={`state-pill ${tlsStatusIsSaved ? 'success' : ''}`}>
+                  {tlsStatusLabel}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="primary-button compact-button"
+                disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null || !tlsSettingsDirty}
+                onClick={() => void saveTlsSettings()}
+              >
+                <Check size={16} aria-hidden="true" />
+                {busyAction === 'tls' ? t('common.saving') : t('common.save')}
+              </button>
+            </div>
+          </div>
 
-          <section
+          <div className="config-tls-content">
+            <div className="config-software-setting-row config-tls-toggle-row">
+              <div className="config-software-setting-copy">
+                <span className="config-software-setting-icon" aria-hidden="true">
+                  <ShieldCheck size={18} />
+                </span>
+                <div>
+                  <span className="config-field-label"><strong>{t('config.tls.enable')}</strong><SettingsHelp label={t('config.tls.enable')}>{t('config.tls.enableDescription')} {t('config.tls.restartHint')}</SettingsHelp></span>
+
+                </div>
+              </div>
+              <label className="switch-control" title={t('config.tls.enable')}>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  aria-label={t('config.tls.enable')}
+                  checked={tlsEnabledDraft}
+                  disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null}
+                  onChange={(event) => {
+                    setTlsSavedStatusVisible(false);
+                    setTlsError('');
+                    setTlsEnabledDraft(event.currentTarget.checked);
+                  }}
+                />
+                <span className="switch-track" />
+              </label>
+            </div>
+
+            {tlsEnabledDraft ? (
+              <div className="config-tls-fields">
+                <div className="config-network-field">
+                  <span className="config-field-label"><span>{t('config.tls.cert')}</span><SettingsHelp label={t('config.tls.cert')}>{t('config.tls.certHint')}</SettingsHelp></span>
+                  <div className="config-tls-path-control">
+                    <input
+                      className={`config-network-input ${tlsError && !tlsCertDraft.trim() ? 'error' : ''}`}
+                      type="text"
+                      value={tlsCertDraft}
+                      aria-label={t('config.tls.cert')}
+                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
+                      placeholder={t('config.tls.certPlaceholder')}
+                      onChange={(event) => {
+                        setTlsSavedStatusVisible(false);
+                        setTlsError('');
+                        setTlsCertDraft(event.currentTarget.value);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button compact-button config-tls-browse-button"
+                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
+                      title={t('config.tls.selectCertTitle')}
+                      onClick={() => void selectTlsFile('cert')}
+                    >
+                      <FolderOpen size={16} aria-hidden="true" />
+                      {tlsFileSelecting === 'cert' ? t('common.processing') : t('config.tls.browse')}
+                    </button>
+                  </div>
+
+                </div>
+                <div className="config-network-field">
+                  <span className="config-field-label"><span>{t('config.tls.key')}</span><SettingsHelp label={t('config.tls.key')}>{t('config.tls.keyHint')}</SettingsHelp></span>
+                  <div className="config-tls-path-control">
+                    <input
+                      className={`config-network-input ${tlsError && !tlsKeyDraft.trim() ? 'error' : ''}`}
+                      type="text"
+                      value={tlsKeyDraft}
+                      aria-label={t('config.tls.key')}
+                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
+                      placeholder={t('config.tls.keyPlaceholder')}
+                      onChange={(event) => {
+                        setTlsSavedStatusVisible(false);
+                        setTlsError('');
+                        setTlsKeyDraft(event.currentTarget.value);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button compact-button config-tls-browse-button"
+                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
+                      title={t('config.tls.selectKeyTitle')}
+                      onClick={() => void selectTlsFile('key')}
+                    >
+                      <FolderOpen size={16} aria-hidden="true" />
+                      {tlsFileSelecting === 'key' ? t('common.processing') : t('config.tls.browse')}
+                    </button>
+                  </div>
+
+                </div>
+              </div>
+            ) : null}
+
+            <MessageNotice message={tlsError} onDismiss={() => setTlsError('')} />
+
+            {renderFeedback(tlsFeedback)}
+          </div>
+        </section>
+<section id="config-native-routing" tabIndex={-1} hidden={searching || activeSubpage !== 'routing'}
             className="config-network-section"
             aria-labelledby="config-routing-section-title"
-            hidden={activeSubpage !== 'routing'}
           >
             <div className="config-network-section-heading config-section-heading-with-actions">
               <div className="config-network-section-title">
                 <Route size={16} aria-hidden="true" />
-                <h3 id="config-routing-section-title">{t('config.network.routingSection')}</h3>
+                <h3 id="config-routing-section-title">{st('nativeRouting')}</h3>
               </div>
+              <span className="config-card-status" role="status">{nativeDirty.routing ? st('dirty') : ''}</span>
               <button
                 type="button"
                 className="primary-button compact-button"
@@ -1651,15 +1602,15 @@ export function ConfigPanelPage() {
                 onClick={() => void saveSessionRoutingSettings()}
               >
                 <Check size={16} aria-hidden="true" />
-                {busyAction === 'routing' ? t('common.saving') : t('config.network.confirmSave')}
+                {busyAction === 'routing' ? t('common.saving') : t('common.save')}
               </button>
             </div>
             {renderFeedback(routingFeedback)}
             <div className="config-network-grid">
               <div className="config-network-field config-network-toggle">
                 <div>
-                  <span>{t('config.network.sessionAffinity')}</span>
-                  <small>{t('config.network.sessionAffinityHint')}</small>
+                  <span className="config-field-label"><span>{t('config.network.sessionAffinity')}</span><SettingsHelp label={t('config.network.sessionAffinity')}>{t('config.network.sessionAffinityHint')}</SettingsHelp></span>
+
                 </div>
                 <label className="switch-control" title={t('config.network.sessionAffinity')}>
                   <input
@@ -1676,12 +1627,13 @@ export function ConfigPanelPage() {
                 </label>
               </div>
 
-              <label className="config-network-field">
-                <span className="config-network-label">
+              <div className="config-network-field">
+                <span className="config-field-label"><label htmlFor="config-input-config-network-sessionTtl">
                   <Clock3 size={15} aria-hidden="true" />
                   {t('config.network.sessionTtl')}
-                </span>
+                </label><SettingsHelp label={t('config.network.sessionTtl')}>{t('config.network.sessionTtlHint')}</SettingsHelp></span>
                 <input
+                  id="config-input-config-network-sessionTtl"
                   className="config-network-input"
                   type="text"
                   value={sessionTtlDraft}
@@ -1699,13 +1651,14 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{t('config.network.sessionTtlHint')}</small>
-              </label>
+
+              </div>
 
               <div className="config-network-field config-network-routing-field">
                 <span className="config-network-label">
                   <Route size={15} aria-hidden="true" />
                   {t('config.routing.title')}
+                  <span className="config-inline-status">{st('automatic')}</span>
                 </span>
                 <div className="routing-segmented" role="group" aria-label={t('config.routing.title')}>
                   {ROUTING_OPTIONS.map((option) => (
@@ -1732,17 +1685,16 @@ export function ConfigPanelPage() {
               </div>
             </div>
           </section>
-
-          <section
+<section id="config-native-retry" tabIndex={-1} hidden={searching || activeSubpage !== 'routing'}
             className="config-network-section"
             aria-labelledby="config-retry-section-title"
-            hidden={activeSubpage !== 'network'}
           >
             <div className="config-network-section-heading config-section-heading-with-actions">
               <div className="config-network-section-title">
                 <RefreshCw size={16} aria-hidden="true" />
-                <h3 id="config-retry-section-title">{t('config.network.retrySection')}</h3>
+                <h3 id="config-retry-section-title">{st('nativeRetry')}</h3>
               </div>
+              <span className="config-card-status" role="status">{nativeDirty.retry ? st('dirty') : ''}</span>
               <button
                 type="button"
                 className="primary-button compact-button"
@@ -1750,15 +1702,15 @@ export function ConfigPanelPage() {
                 onClick={() => void saveRetrySettings()}
               >
                 <Check size={16} aria-hidden="true" />
-                {busyAction === 'retry' ? t('common.saving') : t('config.network.confirmSave')}
+                {busyAction === 'retry' ? t('common.saving') : t('common.save')}
               </button>
             </div>
             {renderFeedback(retryFeedback)}
             <div className="config-network-grid">
               <div className="config-network-field config-network-toggle">
                 <div>
-                  <span>{t('config.network.disableCooling')}</span>
-                  <small>{t('config.network.disableCoolingHint')}</small>
+                  <span className="config-field-label"><span>{t('config.network.disableCooling')}</span><SettingsHelp label={t('config.network.disableCooling')}>{t('config.network.disableCoolingHint')}</SettingsHelp></span>
+
                 </div>
                 <label className="switch-control" title={t('config.network.disableCooling')}>
                   <input
@@ -1776,9 +1728,10 @@ export function ConfigPanelPage() {
                 </label>
               </div>
 
-              <label className="config-network-field">
-                <span>{t('config.network.requestRetry')}</span>
+              <div className="config-network-field">
+                <span className="config-field-label"><label htmlFor="config-input-config-network-requestRetry">{t('config.network.requestRetry')}</label><SettingsHelp label={t('config.network.requestRetry')}>{templateText(templateMessages.retryHint, locale)}</SettingsHelp></span>
                 <input
+                  id="config-input-config-network-requestRetry"
                   className={`config-network-input ${retryError ? 'error' : ''}`}
                   type="text"
                   inputMode="numeric"
@@ -1801,12 +1754,13 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{templateText(templateMessages.retryHint, locale)}</small>
-              </label>
 
-              <label className="config-network-field">
-                <span>{t('config.network.maxRetryCredentials')}</span>
+              </div>
+
+              <div className="config-network-field">
+                <span className="config-field-label"><label htmlFor="config-input-config-network-maxRetryCredentials">{t('config.network.maxRetryCredentials')}</label><SettingsHelp label={t('config.network.maxRetryCredentials')}>{templateText(templateMessages.credentialsHint, locale)}</SettingsHelp></span>
                 <input
+                  id="config-input-config-network-maxRetryCredentials"
                   className={`config-network-input ${retryError ? 'error' : ''}`}
                   type="text"
                   inputMode="numeric"
@@ -1829,12 +1783,13 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{templateText(templateMessages.credentialsHint, locale)}</small>
-              </label>
 
-              <label className="config-network-field">
-                <span>{t('config.network.maxRetryInterval')}</span>
+              </div>
+
+              <div className="config-network-field">
+                <span className="config-field-label"><label htmlFor="config-input-config-network-maxRetryInterval">{t('config.network.maxRetryInterval')}</label><SettingsHelp label={t('config.network.maxRetryInterval')}>{templateText(templateMessages.waitHint, locale)}</SettingsHelp></span>
                 <input
+                  id="config-input-config-network-maxRetryInterval"
                   className={`config-network-input ${retryError ? 'error' : ''}`}
                   type="text"
                   inputMode="numeric"
@@ -1858,12 +1813,13 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{templateText(templateMessages.waitHint, locale)}</small>
-              </label>
 
-              <label className="config-network-field">
-                <span>{t('config.network.streamingBootstrapRetries')}</span>
+              </div>
+
+              <div className="config-network-field">
+                <span className="config-field-label"><label htmlFor="config-input-config-network-streamingBootstrapRetries">{t('config.network.streamingBootstrapRetries')}</label><SettingsHelp label={t('config.network.streamingBootstrapRetries')}>{t('config.network.streamingBootstrapRetriesHint')}</SettingsHelp></span>
                 <input
+                  id="config-input-config-network-streamingBootstrapRetries"
                   className={`config-network-input ${retryError ? 'error' : ''}`}
                   type="text"
                   inputMode="numeric"
@@ -1886,145 +1842,198 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{t('config.network.streamingBootstrapRetriesHint')}</small>
-              </label>
+
+              </div>
             </div>
           </section>
-          <section
-            className="config-network-section"
-            aria-labelledby="config-tls-section-title"
-            hidden={activeSubpage !== 'network'}
-          >
-          <div className="config-network-section-heading config-tls-section-heading">
-            <div className="config-tls-section-title">
-              <LockKeyhole size={18} aria-hidden="true" />
-              <h3 id="config-tls-section-title">{t('config.tls.enable')}</h3>
-            </div>
-            <div className="config-heading-actions">
-              {tlsStatusLabel ? (
-                <span className={`state-pill ${tlsStatusIsSaved ? 'success' : ''}`}>
-                  {tlsStatusLabel}
-                </span>
-              ) : null}
-              <button
-                type="button"
-                className="primary-button compact-button"
-                disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null || !tlsSettingsDirty}
-                onClick={() => void saveTlsSettings()}
-              >
-                <Check size={16} aria-hidden="true" />
-                {busyAction === 'tls' ? t('common.saving') : t('config.network.confirmSave')}
-              </button>
+<section id="config-native-logging" tabIndex={-1} hidden={searching || activeSubpage !== 'diagnostics'} className="panel config-diagnostics-panel">
+          <div className="config-panel-heading">
+            <div className="config-heading-title">
+              <FileText size={18} aria-hidden="true" />
+              <h2>{t('config.diagnostics.title')}</h2>
             </div>
           </div>
 
-          <div className="config-tls-content">
-            <div className="config-software-setting-row config-tls-toggle-row">
-              <div className="config-software-setting-copy">
-                <span className="config-software-setting-icon" aria-hidden="true">
-                  <ShieldCheck size={18} />
-                </span>
-                <div>
-                  <strong>{t('config.tls.enable')}</strong>
-                  <small>{t('config.tls.enableDescription')}</small>
-                </div>
+          <div className="config-diagnostics-toggle-grid">
+            <div className="config-diagnostics-setting">
+              <span className="config-diagnostics-setting-icon" aria-hidden="true"><Bug size={18} /></span>
+              <div className="config-diagnostics-setting-copy">
+                <span className="config-field-label"><strong>{t('config.diagnostics.debug.title')}</strong><SettingsHelp label={t('config.diagnostics.debug.title')}>{t('config.diagnostics.debug.description')}</SettingsHelp></span>
+
               </div>
-              <label className="switch-control" title={t('config.tls.enable')}>
+              <label className="switch-control" title={t('config.diagnostics.debug.title')}>
                 <input
                   type="checkbox"
                   role="switch"
-                  aria-label={t('config.tls.enable')}
-                  checked={tlsEnabledDraft}
-                  disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null}
+                  checked={debugDraft}
+                  aria-label={t('config.diagnostics.debug.title')}
+                  disabled={controlsDisabled}
                   onChange={(event) => {
-                    setTlsSavedStatusVisible(false);
-                    setTlsError('');
-                    setTlsEnabledDraft(event.currentTarget.checked);
+                    setDebugDraft(event.currentTarget.checked);
+                    markLoggingDraftDirty();
                   }}
                 />
                 <span className="switch-track" />
               </label>
             </div>
 
-            {tlsEnabledDraft ? (
-              <div className="config-tls-fields">
-                <div className="config-network-field">
-                  <span>{t('config.tls.cert')}</span>
-                  <div className="config-tls-path-control">
-                    <input
-                      className={`config-network-input ${tlsError && !tlsCertDraft.trim() ? 'error' : ''}`}
-                      type="text"
-                      value={tlsCertDraft}
-                      aria-label={t('config.tls.cert')}
-                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
-                      placeholder={t('config.tls.certPlaceholder')}
-                      onChange={(event) => {
-                        setTlsSavedStatusVisible(false);
-                        setTlsError('');
-                        setTlsCertDraft(event.currentTarget.value);
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="secondary-button compact-button config-tls-browse-button"
-                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
-                      title={t('config.tls.selectCertTitle')}
-                      onClick={() => void selectTlsFile('cert')}
-                    >
-                      <FolderOpen size={16} aria-hidden="true" />
-                      {tlsFileSelecting === 'cert' ? t('common.processing') : t('config.tls.browse')}
-                    </button>
-                  </div>
-                  <small>{t('config.tls.certHint')}</small>
-                </div>
-                <div className="config-network-field">
-                  <span>{t('config.tls.key')}</span>
-                  <div className="config-tls-path-control">
-                    <input
-                      className={`config-network-input ${tlsError && !tlsKeyDraft.trim() ? 'error' : ''}`}
-                      type="text"
-                      value={tlsKeyDraft}
-                      aria-label={t('config.tls.key')}
-                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
-                      placeholder={t('config.tls.keyPlaceholder')}
-                      onChange={(event) => {
-                        setTlsSavedStatusVisible(false);
-                        setTlsError('');
-                        setTlsKeyDraft(event.currentTarget.value);
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="secondary-button compact-button config-tls-browse-button"
-                      disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null || tlsFileSelecting !== null}
-                      title={t('config.tls.selectKeyTitle')}
-                      onClick={() => void selectTlsFile('key')}
-                    >
-                      <FolderOpen size={16} aria-hidden="true" />
-                      {tlsFileSelecting === 'key' ? t('common.processing') : t('config.tls.browse')}
-                    </button>
-                  </div>
-                  <small>{t('config.tls.keyHint')}</small>
-                </div>
-              </div>
-            ) : null}
+            <div className="config-diagnostics-setting">
+              <span className="config-diagnostics-setting-icon" aria-hidden="true"><Gauge size={18} /></span>
+              <div className="config-diagnostics-setting-copy">
+                <span className="config-field-label"><strong>{t('config.diagnostics.commercial.title')}</strong><SettingsHelp label={t('config.diagnostics.commercial.title')}>{t('config.diagnostics.commercial.description')} {t('config.diagnostics.commercial.warning')}</SettingsHelp></span>
 
-            <MessageNotice message={tlsError} onDismiss={() => setTlsError('')} />
-            <div className="config-tls-message">{t('config.tls.restartHint')}</div>
-            {renderFeedback(tlsFeedback)}
+              </div>
+              <label className="switch-control" title={t('config.diagnostics.commercial.title')}>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={commercialModeDraft}
+                  aria-label={t('config.diagnostics.commercial.title')}
+                  disabled={controlsDisabled}
+                  onChange={(event) => {
+                    setCommercialModeDraft(event.currentTarget.checked);
+                    markLoggingDraftDirty();
+                  }}
+                />
+                <span className="switch-track" />
+              </label>
+            </div>
+
+            <div className="config-diagnostics-setting">
+              <span className="config-diagnostics-setting-icon" aria-hidden="true"><HardDrive size={18} /></span>
+              <div className="config-diagnostics-setting-copy">
+                <span className="config-field-label"><strong>{t('config.diagnostics.fileLogging.title')}</strong><SettingsHelp label={t('config.diagnostics.fileLogging.title')}>{t('config.diagnostics.fileLogging.description')}</SettingsHelp></span>
+
+              </div>
+              <label className="switch-control" title={t('config.diagnostics.fileLogging.title')}>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={loggingToFileDraft}
+                  aria-label={t('config.diagnostics.fileLogging.title')}
+                  disabled={controlsDisabled}
+                  onChange={(event) => {
+                    setLoggingToFileDraft(event.currentTarget.checked);
+                    markLoggingDraftDirty();
+                  }}
+                />
+                <span className="switch-track" />
+              </label>
+            </div>
+
+            <div className="config-diagnostics-setting">
+              <span className="config-diagnostics-setting-icon" aria-hidden="true"><Database size={18} /></span>
+              <div className="config-diagnostics-setting-copy">
+                <span className="config-field-label"><strong>{t('config.diagnostics.usage.title')}</strong><SettingsHelp label={t('config.diagnostics.usage.title')}>{t('config.diagnostics.usage.description')}</SettingsHelp></span>
+
+              </div>
+              <label className="switch-control" title={t('config.diagnostics.usage.title')}>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={usageStatisticsDraft}
+                  aria-label={t('config.diagnostics.usage.title')}
+                  disabled={controlsDisabled}
+                  onChange={(event) => {
+                    setUsageStatisticsDraft(event.currentTarget.checked);
+                    markLoggingDraftDirty();
+                  }}
+                />
+                <span className="switch-track" />
+              </label>
+            </div>
+          </div>
+
+          <div className="config-diagnostics-fields">
+            <div className="config-diagnostics-field">
+              <span className="config-field-label"><label htmlFor="config-input-config-diagnostics-maxSize-title">{t('config.diagnostics.maxSize.title')}</label><SettingsHelp label={t('config.diagnostics.maxSize.title')}>{t('config.diagnostics.maxSize.hint')}</SettingsHelp></span>
+              <input
+                  id="config-input-config-diagnostics-maxSize-title"
+                className="config-dialog-text-input"
+                type="number"
+                min="0"
+                step="1"
+                value={logsMaxTotalSizeDraft}
+                disabled={controlsDisabled}
+                onChange={(event) => {
+                  setLogsMaxTotalSizeDraft(event.currentTarget.value);
+                  markLoggingDraftDirty();
+                }}
+              />
+
+            </div>
+            <div className="config-diagnostics-field">
+              <span className="config-field-label"><label htmlFor="config-input-config-diagnostics-errorFiles-title">{t('config.diagnostics.errorFiles.title')}</label><SettingsHelp label={t('config.diagnostics.errorFiles.title')}>{t('config.diagnostics.errorFiles.hint')}</SettingsHelp></span>
+              <input
+                  id="config-input-config-diagnostics-errorFiles-title"
+                className="config-dialog-text-input"
+                type="number"
+                min="0"
+                step="1"
+                value={errorLogsMaxFilesDraft}
+                disabled={controlsDisabled}
+                onChange={(event) => {
+                  setErrorLogsMaxFilesDraft(event.currentTarget.value);
+                  markLoggingDraftDirty();
+                }}
+              />
+
+            </div>
+            <div className="config-diagnostics-field">
+              <span className="config-field-label"><label htmlFor="config-input-config-diagnostics-redisRetention-title">{t('config.diagnostics.redisRetention.title')}</label><SettingsHelp label={t('config.diagnostics.redisRetention.title')}>{t('config.diagnostics.redisRetention.hint')}</SettingsHelp></span>
+              <input
+                  id="config-input-config-diagnostics-redisRetention-title"
+                className="config-dialog-text-input"
+                type="number"
+                min="1"
+                max="3600"
+                step="1"
+                value={redisUsageRetentionDraft}
+                disabled={controlsDisabled}
+                onChange={(event) => {
+                  setRedisUsageRetentionDraft(event.currentTarget.value);
+                  markLoggingDraftDirty();
+                }}
+              />
+
+            </div>
+          </div>
+
+          {settings && commercialModeDraft !== settings.commercialMode ? (
+            <div className="config-diagnostics-commercial-note">
+              <AlertCircle size={16} aria-hidden="true" />
+              <span>{st('restart')}</span>
+            </div>
+          ) : null}
+
+          <div className="config-diagnostics-footer">
+            <span className={`config-form-message ${loggingError ? 'error' : ''}`} role="alert">
+              {loggingError || ' '}
+            </span>
+            <div className="config-diagnostics-actions"><span className="config-card-status" role="status">{loggingSettingsDirty ? st('dirty') : ''}</span>
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                disabled={controlsDisabled}
+                onClick={() => void openCoreLogsDirectory()}
+              >
+                <FolderOpen size={16} aria-hidden="true" />
+                {t('config.diagnostics.openLogs')}
+              </button>
+              <button
+                type="button"
+                className="primary-button compact-button"
+                disabled={controlsDisabled || !loggingSettingsDirty}
+                onClick={() => void saveCoreLoggingSettings()}
+              >
+                <Check size={16} aria-hidden="true" />
+                {loggingSettingsBusy ? t('common.saving') : t('common.save')}
+              </button>
+            </div>
+            {renderFeedback(loggingFeedback)}
           </div>
         </section>
-        </div>
-      </div>
-        </div>
-      ) : activeSubpage === 'software' ? (
-        <div
-          className="config-subpage-panel"
-          id="config-subpage-panel"
-          role="tabpanel"
-          aria-labelledby="config-subpage-tab-software"
-        >
-          <section className="panel config-software-panel">
+<section id="config-native-software" tabIndex={-1} hidden={searching || activeSubpage !== 'software'} className="panel config-software-panel">
             <div className="config-panel-heading">
               <div className="config-heading-title">
                 <Settings2 size={18} aria-hidden="true" />
@@ -2043,7 +2052,7 @@ export function ConfigPanelPage() {
                   onClick={() => void saveSoftwareSettings()}
                 >
                   <Check size={16} aria-hidden="true" />
-                  {busyAction === 'software' ? t('common.saving') : t('config.network.confirmSave')}
+                  {busyAction === 'software' ? t('common.saving') : t('common.save')}
                 </button>
               </div>
             </div>
@@ -2057,7 +2066,6 @@ export function ConfigPanelPage() {
                     </span>
                     <div>
                       <strong>{t('config.software.autostart')}</strong>
-                      <small>{t('config.software.autostartDescription')}</small>
                     </div>
                   </div>
                   <label className="switch-control" title={t('config.software.autostart')}>
@@ -2082,7 +2090,6 @@ export function ConfigPanelPage() {
                     </span>
                     <div>
                       <strong>{t('config.software.startCoreOnLaunch')}</strong>
-                      <small>{t('config.software.startCoreOnLaunchDescription')}</small>
                     </div>
                   </div>
                   <label className="switch-control" title={t('config.software.startCoreOnLaunch')}>
@@ -2106,8 +2113,8 @@ export function ConfigPanelPage() {
                       <EyeOff size={18} />
                     </span>
                     <div>
-                      <strong>{t('config.software.silentStart')}</strong>
-                      <small>{t('config.software.silentStartDescription')}</small>
+                      <span className="config-field-label"><strong>{t('config.software.silentStart')}</strong><SettingsHelp label={t('config.software.silentStart')}>{t('config.software.silentStartDescription')}</SettingsHelp></span>
+
                     </div>
                   </div>
                   <label className="switch-control" title={t('config.software.silentStart')}>
@@ -2132,7 +2139,6 @@ export function ConfigPanelPage() {
                     </span>
                     <div>
                       <strong>{t('config.software.defaultTerminal')}</strong>
-                      <small>{t('config.software.defaultTerminalDescription')}</small>
                     </div>
                   </div>
                   <label className="config-software-select">
@@ -2161,7 +2167,6 @@ export function ConfigPanelPage() {
                     </span>
                     <div>
                       <strong>{t('config.software.closeBehavior')}</strong>
-                      <small>{t('config.software.closeBehaviorDescription')}</small>
                     </div>
                   </div>
                   <label className="config-software-select">
@@ -2184,34 +2189,12 @@ export function ConfigPanelPage() {
               </div>
             </div>
           </section>
+            <div id="config-native-aliases" tabIndex={-1} role="region" aria-label={t('app.nav.thinkingAliases')} hidden={searching || activeSubpage !== 'requests' || activeView !== 'aliases'}>{aliasesVisited ? <ThinkingAliasesPage embedded /> : null}</div>
+            <div id="config-native-sensitive-words" tabIndex={-1} role="region" aria-label={t('config.sensitiveWords.title')} hidden={searching || activeSubpage !== 'requests' || activeView !== 'sensitive-words'}>{sensitiveWordsVisited ? <SensitiveWordsPage onDirtyChange={setSensitiveWordsDirty} /> : null}</div>
+          </div>
+          <div id="config-template-panel" hidden={searching || templateGroups.length === 0}><TemplateConfigSection groups={allSettingsTemplateGroups} visibleGroups={templateGroups.map(group => group.id)} onDirtyGroupsChange={setDirtyTemplateGroups} /></div>
         </div>
-      ) : activeSubpage === 'aliases' ? (
-        <div
-          className="config-subpage-panel"
-          id="config-subpage-panel"
-          role="tabpanel"
-          aria-labelledby="config-subpage-tab-aliases"
-        >
-          <ThinkingAliasesPage embedded />
-        </div>
-      ) : null}
-
-      <div id="config-template-panel" role="tabpanel" aria-labelledby={`config-subpage-tab-${activeSubpage}`} hidden={TEMPLATE_GROUPS_BY_TAB[activeSubpage].length === 0}>
-        <TemplateConfigSection groups={ALL_TEMPLATE_GROUPS} visibleGroups={TEMPLATE_GROUPS_BY_TAB[activeSubpage].map((group) => group.id)} />
       </div>
-
-      {sensitiveWordsVisited ? (
-        <div
-          className="config-subpage-panel"
-          id={activeSubpage === 'sensitive-words' ? 'config-subpage-panel' : undefined}
-          role="tabpanel"
-          aria-labelledby="config-subpage-tab-sensitive-words"
-          aria-hidden={activeSubpage === 'sensitive-words' ? undefined : true}
-          style={{ display: activeSubpage === 'sensitive-words' ? undefined : 'none' }}
-        >
-          <SensitiveWordsPage />
-        </div>
-      ) : null}
 
       {addDialogOpen ? (
         <div className="config-dialog-backdrop" onMouseDown={(event) => {

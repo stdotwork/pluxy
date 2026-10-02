@@ -65,10 +65,8 @@ const PATHS: &[(&str, &str)] = &[
     ("oauth/providers/xai", "xai"),
     ("server/host", "host"),
     ("server/port", "port"),
-    ("server/trusted-proxies", "trusted-proxies"),
     ("server/tls", "tls"),
     ("server/commercial-mode", "commercial-mode"),
-    ("server/discovery", "discovery"),
     ("management", "remote-management"),
     ("credentials/concurrency", "credential-concurrency"),
     ("credentials/in-flight", "credential-in-flight"),
@@ -138,6 +136,18 @@ const PATHS: &[(&str, &str)] = &[
     ),
     ("observability/pprof", "pprof"),
 ];
+
+pub(crate) fn legacy_extended_config_paths() -> Vec<(Vec<&'static str>, Vec<&'static str>)> {
+    PATHS
+        .iter()
+        .map(|(native, legacy)| {
+            (
+                legacy.split('/').collect::<Vec<_>>(),
+                native.split('/').collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+}
 
 fn parts(path: &str) -> Vec<String> {
     path.split('/').map(str::to_owned).collect()
@@ -285,8 +295,6 @@ fn legacy_path(path: &[String]) -> Vec<String> {
 // Only template-backed settings are writable. Existing GUI-owned settings and
 // system metadata cannot be changed by this command, even via a parent object.
 const OBJECT_PATHS: &[&str] = &[
-    "server/discovery",
-    "server/discovery/interfaces",
     "credentials/concurrency",
     "credentials/in-flight",
     "client/codex",
@@ -306,11 +314,6 @@ const OBJECT_PATHS: &[&str] = &[
     "oauth/providers/xai",
 ];
 const FIELD_GROUPS: &[(&str, &str, &str)] = &[
-    ("server", "strings", "trusted-proxies"),
-    ("server/discovery", "bool", "enabled auth-required advertise-management"),
-    ("server/discovery", "string", "service-name service-type"),
-    ("server/discovery", "strings", "subtypes"),
-    ("server/discovery/interfaces", "strings", "include exclude"),
     ("management", "bool", "allow-remote disable-control-panel disable-auto-update-panel"),
     ("management", "string", "base-url panel-github-repository"),
     ("credentials/concurrency", "string", "cpa-heartbeat-timeout cpa-cancel-bound reclaim-grace cleanup-interval release-flush-interval release-max-backoff busy-retry-min busy-retry-max"),
@@ -420,17 +423,6 @@ fn duration_nanos(value: &str) -> Option<i64> {
     }
     (end == text.len() && nanos < i64::MAX as f64)
         .then(|| (nanos as i64) * if value.starts_with('-') { -1 } else { 1 })
-}
-fn valid_ip_or_cidr(value: &str) -> bool {
-    if let Some((address, prefix)) = value.split_once('/') {
-        address.parse::<IpAddr>().is_ok_and(|address| {
-            prefix
-                .parse::<u8>()
-                .is_ok_and(|prefix| prefix <= if address.is_ipv4() { 32 } else { 128 })
-        })
-    } else {
-        value.parse::<IpAddr>().is_ok()
-    }
 }
 fn valid_ice_url(value: &str) -> bool {
     let Some((scheme, address)) = value.split_once(':') else {
@@ -722,10 +714,9 @@ fn validate_value(path: &[String], value: &Json, before: &Json) -> Result<(), St
         Some("strings")
             if value.as_array().is_some_and(|items| {
                 items.iter().all(|value| {
-                    value.as_str().is_some_and(|text| {
-                        !text.chars().any(char::is_control)
-                            && (key != "server/trusted-proxies" || valid_ip_or_cidr(text))
-                    })
+                    value
+                        .as_str()
+                        .is_some_and(|text| !text.chars().any(char::is_control))
                 })
             }) => {}
         Some("image-mode")
@@ -1075,7 +1066,6 @@ fn prepare_patch(
                 "server/host",
                 "server/port",
                 "server/tls",
-                "server/trusted-proxies",
                 "management",
                 "oauth/auth-dir",
             ]
@@ -1242,7 +1232,7 @@ client: {codex: {optimize-multi-agent-v2: false}}
                 json!(true),
                 false,
             ),
-            change(content, "server/trusted-proxies", json!([]), false),
+            change(content, "management/allow-remote", json!(true), false),
         ];
         let (rendered, result) = prepare_patch(content, &changes).unwrap();
         assert!(rendered.contains("# keep heading"));
@@ -1404,7 +1394,6 @@ client: {codex: {optimize-multi-agent-v2: false}}
             "999999999999999999"
         ));
         let rejected = [
-            ("server/trusted-proxies", json!(["192.0.2.1/40"])),
             ("observability/pprof/addr", json!("bad-address")),
             (
                 "oauth/providers/codex/live-media-relay/public-ip",
@@ -1449,7 +1438,6 @@ client: {codex: {optimize-multi-agent-v2: false}}
             );
         }
         let accepted = [
-            ("server/trusted-proxies", json!(["192.0.2.1/24", "::1/128"])),
             ("observability/pprof/addr", json!("[::1]:8316")),
             (
                 "oauth/providers/codex/live-media-relay/public-ip",
@@ -1526,8 +1514,6 @@ client: {codex: {optimize-multi-agent-v2: false}}
     fn extended_restart_hint_distinguishes_live_updates_from_startup_settings() {
         let content = "config-version: 8\n";
         for (path, value) in [
-            ("server/discovery", json!({"enabled": true})),
-            ("server/discovery/service-name", json!("office")),
             (
                 "observability/pprof",
                 json!({"enable": true, "addr": "127.0.0.1:8316"}),
@@ -1541,7 +1527,6 @@ client: {codex: {optimize-multi-agent-v2: false}}
             assert!(!result.restart_required, "{path} supports live updates");
         }
         for (path, value) in [
-            ("server/trusted-proxies", json!(["127.0.0.1"])),
             ("management/allow-remote", json!(true)),
             ("oauth/auth-dir", json!("~/selected-oauth")),
         ] {
@@ -1549,13 +1534,13 @@ client: {codex: {optimize-multi-agent-v2: false}}
                 prepare_patch(content, &[change(content, path, value, false)]).unwrap();
             assert!(result.restart_required, "{path} requires a restart");
         }
-        let unchanged = "config-version: 8\nserver: {trusted-proxies: []}\n";
+        let unchanged = "config-version: 8\nmanagement: {allow-remote: false}\n";
         let (_, result) = prepare_patch(
             unchanged,
             &[change(
                 unchanged,
-                "server/trusted-proxies",
-                json!([]),
+                "management/allow-remote",
+                json!(false),
                 false,
             )],
         )

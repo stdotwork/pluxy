@@ -25,27 +25,6 @@ export const generalTemplateGroups: readonly TemplateConfigGroup[] = [
   },
 ];
 
-export const networkTemplateGroups: readonly TemplateConfigGroup[] = [
-  {
-    id: 'trusted-proxies', title: text('可信代理', 'Trusted proxies', '信頼するプロキシ'),
-    fields: [field('server.trusted-proxies', 'string-list', '可信代理 IP / CIDR', 'Trusted proxy IPs / CIDRs', '信頼するプロキシの IP / CIDR', [], text('仅信任这些代理提供的客户端 IP 转发头。空列表表示不信任转发头；修改后需重启内核。', 'Only trust forwarded client IP headers from these proxies. An empty list trusts none. Restart the core after changing this setting.', '指定したプロキシからのクライアント IP 転送ヘッダーのみを信頼します。空のリストでは信頼しません。変更後はコアを再起動してください。'), { restart: true })],
-  },
-  {
-    id: 'discovery', title: text('局域网服务发现', 'Local network discovery', 'ローカルネットワークでのサービス検出'),
-    description: text('通过 mDNS / DNS-SD 广播服务，运行中的内核会自动应用修改。', 'Advertise this service through mDNS / DNS-SD. The running core applies changes automatically.', 'mDNS / DNS-SD でサービスを通知します。実行中のコアが変更を自動で適用します。'),
-    fields: [
-      field('server.discovery.enabled', 'boolean', '启用服务发现', 'Enable service discovery', 'サービス検出を有効化', false),
-      field('server.discovery.service-name', 'string', '服务名称前缀', 'Service name prefix', 'サービス名の接頭辞', '', text('留空使用 CPA；内核会自动追加短 ID。', 'Leave blank to use CPA. The core appends a short ID.', '空欄では CPA を使用します。コアが短い ID を追加します。')),
-      field('server.discovery.service-type', 'string', '服务类型', 'Service type', 'サービス種別', '_ai-gateway._tcp'),
-      field('server.discovery.subtypes', 'string-list', '广播的协议子类型', 'Advertised protocol subtypes', '通知するプロトコルのサブタイプ', undefined, text('未单独配置时由内核决定。示例：_chat-completions、_responses、_messages。', 'When unset, the core chooses subtypes. Examples: _chat-completions, _responses, _messages.', '未設定ではコアがサブタイプを選択します。例：_chat-completions、_responses、_messages。')),
-      field('server.discovery.interfaces.include', 'string-list', '允许的网卡', 'Included interfaces', '使用するネットワークインターフェース', [], text('空列表表示自动检测物理网卡。', 'An empty list automatically detects physical interfaces.', '空のリストでは物理ネットワークインターフェースを自動検出します。')),
-      field('server.discovery.interfaces.exclude', 'string-list', '排除的网卡模式', 'Excluded interface patterns', '除外するインターフェースのパターン', []),
-      field('server.discovery.auth-required', 'boolean', '广播需要身份验证', 'Advertise authentication requirement', '認証が必要なことを通知', true),
-      field('server.discovery.advertise-management', 'boolean', '广播管理接口可用性', 'Advertise management availability', '管理 API の利用可否を通知', false),
-    ],
-  },
-];
-
 export const routingTemplateGroups: readonly TemplateConfigGroup[] = [
   {
     id: 'routing-advanced', title: text('会话与冷却策略', 'Session & cooldown behavior', 'セッションとクールダウンの動作'),

@@ -214,10 +214,25 @@ const viewports = [
       }
 
       await open('高级功能', '#config-subpage-panel');
-      for (const id of ['general', 'network', 'routing', 'aliases', 'software', 'sensitive-words']) {
+      for (const id of ['general', 'routing', 'requests', 'oauth', 'diagnostics', 'extensions', 'software']) {
         await tab(`config-subpage-tab-${id}`, `#config-subpage-panel[aria-labelledby="config-subpage-tab-${id}"]`);
         await assertNoPageOverflow(`${label} settings ${id}`);
       }
+      for (const [category, views] of [['general', ['access', 'connection']], ['requests', ['behavior', 'aliases', 'sensitive-words']]]) {
+        await tab(`config-subpage-tab-${category}`, '#config-subpage-panel');
+        for (const view of views) {
+          await page.locator(`#config-view-${view}`).click();
+          await settle();
+          assert.equal(await page.locator(`#config-view-${view}`).getAttribute('aria-pressed'), 'true');
+          await assertNoPageOverflow(`${label} settings ${category}/${view}`);
+          await assertReachable(page.locator(`#config-view-${view}`), `${label} settings ${view} navigation`);
+        }
+      }
+      await page.getByLabel('搜索设置', { exact: true }).fill('重试');
+      await page.locator('.config-search-results button').first().waitFor();
+      await settle();
+      await assertNoPageOverflow(`${label} settings search results`);
+      await page.getByLabel('搜索设置', { exact: true }).fill('');
 
       await open('版本管理', '.version-list-item');
       await assertNoPageOverflow(`${label} versions`);
@@ -233,7 +248,7 @@ const viewports = [
     await page.locator('.home-page').waitFor();
     await page.addStyleTag({ content: '#browser-mock-toolbar { display: none; }' });
     await open('Advanced Features', '.config-subpage-tabs');
-    for (const id of ['general', 'network', 'routing', 'aliases', 'software', 'sensitive-words']) {
+    for (const id of ['general', 'routing', 'requests', 'oauth', 'diagnostics', 'extensions', 'software']) {
       await tab(`config-subpage-tab-${id}`, `#config-subpage-panel[aria-labelledby="config-subpage-tab-${id}"]`);
       await assertNoPageOverflow(`640x600 English settings ${id}`);
       const button = page.locator(`#config-subpage-tab-${id}`);
@@ -246,6 +261,10 @@ const viewports = [
         return text.left >= bounds.left - 1 && text.right <= bounds.right + 1;
       }), true, `English ${id} label must fit inside its own clickable tab`);
     }
+    await page.getByLabel('Search settings', { exact: true }).fill('retry');
+    await page.locator('.config-search-results button').first().waitFor();
+    await settle();
+    await assertNoPageOverflow('640x600 English settings search results');
     await page.close();
     assert.deepEqual(errors, [], 'Responsive navigation must not produce runtime errors');
     console.log('PASS: responsive pages, short-window navigation, reachable controls, and independent request-table scrolling.');

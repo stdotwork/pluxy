@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Plus, Trash2, Undo2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { templateText } from '../i18n/templateConfig';
 import { configRecord, defaultStructuredValue, type ConfigShape, type ConfigText } from '../services/structuredConfig';
+import { SettingsHelp } from './SettingsHelp';
 import './StructuredConfigEditor.css';
 
 export function useConfigText() {
@@ -75,11 +76,11 @@ export function StructuredConfigEditor({ shape, value, onChange, disabled = fals
     return <div className="structured-object">
       {Object.entries(shape.fields ?? {}).map(([key, field]) => <div key={key} className={`structured-field${['array', 'map', 'object', 'any'].includes(field.type) ? ' structured-field-wide' : ''}`}>
         <div className="structured-label"><label htmlFor={`${id}-${key}`}>{tx(field.label) || key}</label>
+          {field.hint && <SettingsHelp label={tx(field.label) || key}>{tx(field.hint)}</SettingsHelp>}
           {field.optional && record[key] !== undefined && <button type="button" className="icon-button quiet" disabled={disabled} onClick={() => update(key, undefined)} title={inheritText} aria-label={`${inheritText}: ${tx(field.label) || key}`}><Undo2 size={13} /></button>}
         </div>
         {field.optional && record[key] == null ? <button type="button" className="secondary-button structured-unset" disabled={disabled} aria-label={`${tx(field.label) || key}: ${inheritText}`} onClick={() => update(key, defaultStructuredValue(field))}>{inheritText} · {tx({ zh: '设置', en: 'Set', ja: '設定' })}</button>
           : <StructuredConfigEditor shape={field} value={record[key]} onChange={next => update(key, next)} disabled={disabled} id={`${id}-${key}`} />}
-        {field.hint && <small>{tx(field.hint)}</small>}
       </div>)}
     </div>;
   }

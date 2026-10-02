@@ -196,7 +196,7 @@ oauth: {auth-dir: ${JSON.stringify(join(work, 'auth'))}}
     const values: Array<[string, unknown]> = [
       ['routing/strategy', 'weighted-round-robin'], ['routing/session-affinity-subagents', false],
       ['routing/cooldown/transient-error-cooldown-seconds', -1], ['routing/retry/max-retry-interval', -1],
-      ['requests/streaming/keepalive-seconds', 0], ['server/trusted-proxies', []],
+      ['requests/streaming/keepalive-seconds', 0], ['plugins/store-sources', []],
       ['client/codex/enable-apply-patch', false], ['client/codex/optimize-multi-agent-v2', true],
       ['multimedia/disable-image-generation', 'passthrough'],
       ['oauth/settings', { codex: [{ name: 'gpt-template', 'max-context-length': 524288 }] }],

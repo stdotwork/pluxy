@@ -594,20 +594,36 @@ fn replacing_a_core_migrates_old_fields_into_the_new_template() {
 }
 
 #[test]
-fn replacing_v7_with_v8_preserves_the_legacy_config_byte_for_byte() {
+fn replacing_v7_with_v8_lifts_legacy_values_into_the_new_layout() {
     let root = agent_test_home("core-config-v8-preserve");
     let source = root.join("source");
     let target = root.join("target");
     fs::create_dir_all(&source).unwrap();
     fs::create_dir_all(&target).unwrap();
-    let old_config = "# User v7 config\nhost: 127.0.0.1\nport: 9527\nremote-management:\n  secret-key: user-secret\napi-keys: [client-key]\nproxy-url: direct\n";
-    let v8_template = "config-version: 8\nserver: {host: '', port: 8317}\nmanagement: {secret-key: ''}\naccess: {api-keys: [template-key]}\nrequests: {proxy-url: ''}\n";
+    let old_config = "# User v7 config\nhost: 127.0.0.1\nport: 9527\nremote-management:\n  secret-key: user-secret\napi-keys: [client-key]\nproxy-url: direct\nrouting:\n  strategy: fill-first\n  session-affinity: true\n  session-affinity-ttl: 2h\nplugins:\n  configs:\n    local:\n      enabled: true\n  store-auth:\n    registry: stored-token\n";
+    let v8_template = "config-version: 8\nserver: {host: '', port: 8317}\nmanagement: {secret-key: ''}\naccess: {api-keys: [template-key]}\napi-keys: {codex: [{name: template-upstream, keys: []}]}\nrequests: {proxy-url: ''}\nrouting: {strategy: round-robin, session-affinity: false, session-affinity-ttl: 30m}\nplugins: {configs: {}, store-auth: {}}\n";
     fs::write(source.join(CORE_CONFIG_FILE), old_config).unwrap();
     fs::write(target.join(CORE_EXAMPLE_CONFIG_FILE), v8_template).unwrap();
 
     migrate_core_config_for_update(&source, &target).unwrap();
 
-    assert_eq!(fs::read_to_string(target.join(CORE_CONFIG_FILE)).unwrap(), old_config);
+    let migrated = fs::read_to_string(target.join(CORE_CONFIG_FILE)).unwrap();
+    let document = serde_norway::from_str::<serde_norway::Value>(&migrated).unwrap();
+    let settings = core_config_settings_from_value(&document).unwrap();
+    assert_eq!(settings.host, "127.0.0.1");
+    assert_eq!(settings.port, 9527);
+    assert_eq!(settings.api_keys, vec!["client-key"]);
+    assert_eq!(settings.management_secret_key.as_deref(), Some("user-secret"));
+    assert_eq!(settings.proxy_url, "direct");
+    assert_eq!(document["routing"]["strategy"], "fill-first");
+    assert_eq!(document["routing"]["session-affinity"], true);
+    assert_eq!(document["routing"]["session-affinity-ttl"], "2h");
+    assert_eq!(document["plugins"]["configs"]["local"]["enabled"], true);
+    assert_eq!(document["plugins"]["store-auth"]["registry"], "stored-token");
+    assert_eq!(document["api-keys"]["codex"][0]["name"], "template-upstream");
+    assert!(migrated.starts_with("config-version:"));
+    assert!(document.get("host").is_none());
+    assert!(document.get("port").is_none());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -623,16 +639,17 @@ fn v8_core_updates_preserve_partially_migrated_config_and_credentials() {
     let legacy = "# User configuration\nusage-statistics-enabled: true\nhost: 127.0.0.1\nport: 9527\nauth-dir: ../oauth\napi-keys: [client-key]\nremote-management: {secret-key: user-secret}\nproxy-url: direct\nrequest-retry: 9\ncodex-api-key: [{api-key: upstream-key, base-url: 'https://example.invalid/v1'}]\noauth-model-alias: {codex: [{name: model, alias: custom-model}]}\n";
     let template = "observability: {usage: {usage-statistics-enabled: false}}\nserver: {host: '', port: 8317}\noauth: {auth-dir: '~/.cli-proxy-api'}\naccess: {api-keys: [your-api-key-1]}\nmanagement: {secret-key: ''}\nrequests: {proxy-url: ''}\nrouting: {retry: {request-retry: 3}}\n";
 
-    for prefix in ["", "config-version: 8\n", "server: {host: 127.0.0.1}\n", "config-version: 8\nserver: {host: 127.0.0.1}\n"] {
+    for prefix in ["", "server: {host: 127.0.0.1}\n"] {
         let original = format!("{prefix}{legacy}");
         fs::write(install_dir.join(CORE_CONFIG_FILE), &original).unwrap();
         for template_prefix in ["config-version: 8\n", ""] {
             fs::create_dir_all(&staging_dir).unwrap();
             fs::write(staging_dir.join(CORE_EXAMPLE_CONFIG_FILE), format!("{template_prefix}{template}")).unwrap();
             migrate_core_config_for_update(&install_dir, &staging_dir).unwrap();
+            let migrated = fs::read_to_string(staging_dir.join(CORE_CONFIG_FILE)).unwrap();
             overlay_install_dir(&install_dir, &staging_dir).unwrap();
+            fs::write(install_dir.join(CORE_CONFIG_FILE), &original).unwrap();
 
-            let migrated = fs::read_to_string(install_dir.join(CORE_CONFIG_FILE)).unwrap();
             let document = serde_norway::from_str::<serde_norway::Value>(&migrated).unwrap();
             let settings = core_config_settings_from_value(&document).unwrap();
             assert_eq!(settings.auth_dir, "../oauth", "credential directory changed during update");
@@ -642,7 +659,12 @@ fn v8_core_updates_preserve_partially_migrated_config_and_credentials() {
             assert_eq!(settings.management_secret_key.as_deref(), Some("user-secret"));
             assert_eq!(settings.proxy_url, "direct");
             assert_eq!(settings.request_retry, 9);
-            assert_eq!(migrated, original, "update must preserve every existing field and comment");
+            assert!(migrated.contains("server:"), "legacy configuration must be lifted into the v8 layout: {migrated}");
+            assert!(document.get("host").is_none(), "{migrated}");
+            assert!(document.get("auth-dir").is_none());
+            assert!(document.get("codex-api-key").is_none());
+            assert_eq!(document["oauth"]["model-alias"]["codex"][0]["alias"], "custom-model");
+            assert_eq!(document["api-keys"]["codex"][0]["keys"][0]["api-key"], "upstream-key");
 
             let mut gui = GuiConfigFile::default();
             apply_core_settings_to_gui_config(&mut gui, &settings);
@@ -652,8 +674,8 @@ fn v8_core_updates_preserve_partially_migrated_config_and_credentials() {
             let effective = core_config_settings_from_value(&startup).unwrap();
             assert_eq!(auth_dir_path_for_core(&effective.auth_dir, &install_dir).unwrap(), root.join("oauth"));
             assert!(effective.usage_statistics_enabled);
-            assert_eq!(startup["codex-api-key"], document["codex-api-key"]);
-            assert_eq!(startup["oauth-model-alias"], document["oauth-model-alias"]);
+            assert_eq!(startup["api-keys"]["codex"], document["api-keys"]["codex"]);
+            assert_eq!(startup["oauth"]["model-alias"], document["oauth"]["model-alias"]);
             assert_eq!(fs::read(&credential_path).unwrap(), b"existing-credential");
         }
     }

@@ -4,7 +4,7 @@ import {
   templateFieldSaveValue, templateFieldValidation, type TemplateConfigField,
 } from '../src/services/templateConfig';
 import { createBrowserMockRuntime } from '../src/mocks/browserMockRuntime';
-import { generalTemplateGroups, networkTemplateGroups, requestTemplateGroups, routingTemplateGroups } from '../src/services/generalTemplateFields';
+import { generalTemplateGroups, requestTemplateGroups, routingTemplateGroups } from '../src/services/generalTemplateFields';
 import { templateMessages } from '../src/i18n/templateConfig';
 import { oauthTemplateGroups } from '../src/services/oauthTemplateFields';
 
@@ -13,7 +13,7 @@ const change = (path: string[], value: unknown, expected: unknown = null, expect
 
 describe('template configuration drafts', () => {
   test('all general settings labels and help messages include Japanese', () => {
-    const groups = [...generalTemplateGroups, ...networkTemplateGroups, ...requestTemplateGroups, ...routingTemplateGroups];
+    const groups = [...generalTemplateGroups, ...requestTemplateGroups, ...routingTemplateGroups];
     const messages = [...Object.values(templateMessages), ...groups.flatMap((group) => [group.title, group.description, ...group.fields.flatMap((item) => [item.label, item.description, ...item.options?.map((option) => option.label) ?? []])])].filter((value) => value !== undefined);
     for (const message of messages) {
       expect(typeof message).toBe('object');
@@ -85,9 +85,9 @@ describe('template configuration drafts', () => {
 });
 
 describe('extended browser mock persistence', () => {
-  test('hot-reloadable discovery, diagnostics and plugins do not ask for a restart', async () => {
+  test('hot-reloadable diagnostics and plugins do not ask for a restart', async () => {
     const runtime = createBrowserMockRuntime('running');
-    const changes = [change(['server', 'discovery', 'enabled'], true), change(['observability', 'pprof', 'enable'], true), change(['plugins', 'enabled'], true), change(['plugins', 'dir'], 'custom-plugins')];
+    const changes = [change(['observability', 'pprof', 'enable'], true), change(['plugins', 'enabled'], true), change(['plugins', 'dir'], 'custom-plugins')];
     expect(await runtime.invoke('save_extended_core_config', { changes })).toMatchObject({ restartRequired: false });
   });
   test('credential directory changes and restoring defaults require a restart', async () => {
@@ -101,7 +101,7 @@ describe('extended browser mock persistence', () => {
   test('saves offline, supports explicit overrides, removal and preserves unrelated values', async () => {
     const events: string[] = [];
     const runtime = createBrowserMockRuntime('stopped', (event) => events.push(event));
-    const changes = [change(['plugins', 'enabled'], false), change(['plugins', 'configs'], {}), change(['server', 'trusted-proxies'], [])];
+    const changes = [change(['plugins', 'enabled'], false), change(['plugins', 'configs'], {}), change(['management', 'disable-auto-update-panel'], false)];
     const result = await runtime.invoke('save_extended_core_config', { changes }) as { config: Record<string, unknown>; restartRequired: boolean };
     expect(readTemplatePath(result.config, ['plugins', 'enabled'])).toEqual({ exists: true, value: false });
     expect(readTemplatePath(result.config, ['plugins', 'configs']).value).toEqual({});
