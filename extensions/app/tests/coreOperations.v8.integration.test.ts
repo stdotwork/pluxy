@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -146,6 +146,27 @@ oauth: {auth-dir: ${JSON.stringify(join(work, 'auth'))}}
     await managementApi.delete('/oauth-excluded-models', { query: { provider: 'claude' } });
   });
 
+  it('round-trips template credential aliases and Claude settings without replacing token metadata', async () => {
+    const fileName = 'template-claude.json';
+    await managementApi.uploadAuthFile(new File([JSON.stringify({ type: 'claude', access_token: 'isolated-template-token',
+      expired: '2099-01-01T00:00:00Z', custom_metadata: { keep: true } })], fileName, { type: 'application/json' }));
+    try {
+      const original = await loadAuthFileSettings(fileName);
+      const advanced = { cloak_mode: 'always', cloak_strict_mode: false, cloak_cache_user_id: true, cloak_sensitive_words: ['Word'],
+        fingerprint_profile: 'claude-code-cli', timezone: 'Asia/Shanghai',
+        model_aliases: [{ name: 'claude-template', alias: 'public-template', fork: false, 'display-name': 'Template model', 'force-mapping': true }] };
+      await saveAuthFileSettings(fileName, original, { ...original, advanced });
+      const loaded = await loadAuthFileSettings(fileName);
+      expect(loaded.advanced).toEqual(advanced);
+      const metadata = await managementApi.get<Record<string, unknown>>('/auth-files/download', { name: fileName });
+      expect(metadata.access_token).toBe('isolated-template-token');
+      expect(metadata.custom_metadata).toEqual({ keep: true });
+      await saveAuthFileSettings(fileName, loaded, { ...loaded, advanced: {} });
+      const cleared = await loadAuthFileSettings(fileName);
+      expect(Object.values(cleared.advanced).every(value => value === null)).toBe(true);
+    } finally { await managementApi.delete('/auth-files', { query: { name: fileName } }); }
+  });
+
   it('discovers models and forwards API-call requests to an isolated local upstream', async () => {
     const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
       if (request.headers.get('Authorization') !== 'Bearer local-key') return new Response('wrong key', { status: 401 });
@@ -169,5 +190,41 @@ oauth: {auth-dir: ${JSON.stringify(join(work, 'auth'))}}
     await expect(call('GET', '/oauth/auth-url', { provider: 'unsupported-test-provider' })).rejects.toThrow('(404): provider_not_found');
     await expect(call('POST', '/oauth/callback', undefined, { provider: 'codex', redirect_url: 'http://localhost/callback' })).rejects.toThrow('(400)');
     await managementApi.delete('/oauth-session', { query: { state: 'isolated-unknown-state' } });
+  });
+
+  it('accepts new template controls and retains explicit false, zero and empty collections', async () => {
+    const values: Array<[string, unknown]> = [
+      ['routing/strategy', 'weighted-round-robin'], ['routing/session-affinity-subagents', false],
+      ['routing/cooldown/transient-error-cooldown-seconds', -1], ['routing/retry/max-retry-interval', -1],
+      ['requests/streaming/keepalive-seconds', 0], ['server/trusted-proxies', []],
+      ['client/codex/enable-apply-patch', false], ['client/codex/optimize-multi-agent-v2', true],
+      ['multimedia/disable-image-generation', 'passthrough'],
+      ['oauth/settings', { codex: [{ name: 'gpt-template', 'max-context-length': 524288 }] }],
+      ['oauth/model-alias', { meta: [{ name: 'muse-template', alias: 'public-template', fork: false, 'display-name': 'Template', 'force-mapping': true }] }],
+      ['oauth/request-scoped-errors', { claude: [{ status: 400, match: ['context'], 'match-regexr': ['^limit'], action: 'stop' }] }],
+      ['requests/payload/default-raw', [{ models: [{ name: 'gpt-*', protocol: 'codex', 'from-protocol': 'responses', headers: { 'X-Tier': 'test-*' },
+        match: [{ 'metadata.client': 'codex' }], 'not-match': [{ 'metadata.mode': 'dev' }], exist: ['input'], 'not-exist': ['metadata.disable'] }],
+        params: { response_format: '{"type":"json_object"}', temperature: 0.5, enabled: false, schema: { type: 'object' } } }]],
+      ['plugins/configs', { 'template-test': { enabled: false, mode: 'safe', nested: { list: [1, false, 'value'] } } }],
+    ];
+    for (const [path, value] of values) {
+      await call('PUT', `/config/${path}`, undefined, value);
+      const actual = await call('GET', `/config/${path}`);
+      // The core's typed alias JSON omits fork:false (its default); the
+      // effective value is still false. Other explicit defaults stay intact.
+      if (path === 'oauth/model-alias') actual.meta[0].fork ??= false;
+      expect(actual).toEqual(value);
+    }
+  });
+
+  it('keeps TURN secrets in YAML although the JSON config response redacts them', async () => {
+    const relay = { enabled: false, 'max-sessions': 1, 'udp-port-min': 49152, 'udp-port-max': 49155,
+      'ice-servers': [{ urls: ['turn:example.invalid:3478'], username: 'isolated', credential: 'isolated-turn-secret' }] };
+    await call('PUT', '/config/oauth/providers/codex/live-media-relay', undefined, relay);
+    const json = await call('GET', '/config/oauth/providers/codex/live-media-relay');
+    expect(JSON.stringify(json)).not.toContain('isolated-turn-secret');
+    expect(await readFile(join(work, 'config.yaml'), 'utf8')).toContain('isolated-turn-secret');
+    await call('PUT', '/config/oauth/providers/codex/live-media-relay/max-sessions', undefined, 2);
+    expect(await readFile(join(work, 'config.yaml'), 'utf8')).toContain('isolated-turn-secret');
   });
 });

@@ -6,7 +6,7 @@ describe('credential settings', () => {
     const draft = authFileSettingsFromPayload(JSON.stringify({ prefix: 'team', 'proxy-url': 'socks5://localhost:1080', priority: -4, weight: 6,
       'disable-cooling': false, websocket: true, 'excluded-models': [' GPT-* ', 'gpt-*'], headers: { 'X-Team': 'test' }, note: 'note', access_token: 'secret' }));
     expect(draft).toEqual({ prefix: 'team', proxy_url: 'socks5://localhost:1080', priority: '-4', weight: '6', disable_cooling: 'false',
-      websockets: 'true', excluded_models: 'gpt-*', headers: '{\n  "X-Team": "test"\n}', note: 'note' });
+      websockets: 'true', excluded_models: 'gpt-*', headers: '{\n  "X-Team": "test"\n}', note: 'note', advanced: {} });
     expect(JSON.stringify(draft)).not.toContain('secret');
   });
 
@@ -84,5 +84,19 @@ describe('credential settings', () => {
     await expect(saveAuthFileSettings('test.json', original, { ...original, note: 'test' }, {
       get: async () => ({}), patch: async () => { throw new Error('save failed'); },
     })).rejects.toThrow('save failed');
+  });
+
+  it('edits template credential fields without resending tokens or unmodified metadata', () => {
+    const original = authFileSettingsFromPayload({ access_token: 'never-copy', cloak_mode: 'auto', timezone: 'Asia/Tokyo',
+      cloak_strict_mode: true, model_aliases: [{ name: 'upstream', alias: 'public', future_metadata: true }] });
+    expect(buildAuthFileSettingsPatch(original, { ...original, advanced: { ...original.advanced, cloak_mode: 'always', cloak_strict_mode: false } }))
+      .toEqual({ cloak_mode: 'always', cloak_strict_mode: false });
+    const next = { ...original.advanced }; delete next.timezone;
+    expect(buildAuthFileSettingsPatch(original, { ...original, advanced: next })).toEqual({ timezone: null });
+    expect(buildAuthFileSettingsPatch(original, { ...original, advanced: { ...original.advanced, model_aliases: [] } })).toEqual({ model_aliases: [] });
+    expect(JSON.stringify(original)).not.toContain('never-copy');
+    for (const advanced of [{ timezone: 'Not/AZone' }, { cloak_mode: 'invalid' }, { model_aliases: [{ name: '', alias: 'x' }] }]) {
+      expect(() => buildAuthFileSettingsPatch(original, { ...original, advanced: { ...original.advanced, ...advanced } })).toThrow();
+    }
   });
 });

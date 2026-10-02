@@ -19,6 +19,8 @@ pub(crate) struct ProviderHealthProbeRequest {
     header: HashMap<String, String>,
     data: String,
     protocol: String,
+    #[serde(default)]
+    source_provider: Option<String>,
     timeout_ms: Option<u64>,
     #[serde(default)]
     model: String,
@@ -125,6 +127,15 @@ fn provider_health_json_has_text(protocol: &str, value: &serde_json::Value) -> b
                         })
                 })
             }),
+        "interactions" => {
+            let event = value.get("event_type").or_else(|| value.get("type")).and_then(serde_json::Value::as_str);
+            (event == Some("content.delta")
+                && value.pointer("/delta/type").and_then(serde_json::Value::as_str) == Some("text")
+                && provider_health_value_has_text(value.pointer("/delta/text")))
+                || (event == Some("interaction.complete")
+                    && value.pointer("/interaction/status").and_then(serde_json::Value::as_str) == Some("completed")
+                    && provider_health_value_has_text(value.pointer("/interaction/outputs")))
+        }
         _ => false,
     }
 }
@@ -144,6 +155,11 @@ pub(crate) fn provider_health_stream_has_text(protocol: &str, bytes: &[u8]) -> b
 }
 
 fn provider_health_json_has_terminal_success(protocol: &str, value: &serde_json::Value) -> bool {
+    if protocol == "interactions" {
+        let event = value.get("event_type").or_else(|| value.get("type")).and_then(serde_json::Value::as_str);
+        return event == Some("interaction.complete")
+            && value.pointer("/interaction/status").and_then(serde_json::Value::as_str) == Some("completed");
+    }
     if protocol != "gemini" {
         return false;
     }
@@ -238,6 +254,7 @@ fn provider_health_usage_provider(protocol: &str) -> &str {
         "openai-chat" => "openai",
         "claude" => "claude",
         "gemini" => "gemini",
+        "interactions" => "interactions",
         _ => "unknown",
     }
 }
@@ -258,7 +275,9 @@ fn persist_provider_health_success(
         "source": request.source.as_str(),
         "auth_index": request.auth_index.as_str(),
         "failed": false,
-        "provider": provider_health_usage_provider(&request.protocol),
+        "provider": request.source_provider.as_deref()
+            .filter(|provider| matches!(*provider, "interactions" | "vertex" | "xai" | "meta"))
+            .unwrap_or_else(|| provider_health_usage_provider(&request.protocol)),
         "model": request.model.as_str(),
         "executor_type": "DesktopProviderHealthCheck",
         "endpoint": endpoint,
@@ -296,7 +315,7 @@ pub(crate) async fn provider_health_probe(
     }
     if !matches!(
         request.protocol.as_str(),
-        "openai-chat" | "openai-responses" | "claude" | "gemini"
+        "openai-chat" | "openai-responses" | "claude" | "gemini" | "interactions"
     ) {
         return Err("Unsupported health check protocol".to_string());
     }

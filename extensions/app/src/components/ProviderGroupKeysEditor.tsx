@@ -5,6 +5,7 @@ import type { MessageKey } from '../i18n/resources';
 import { isRecord, maskSecret, readString } from '../services/managementApi';
 import { effectiveProviderKey, providerKeyDraft, providerKeyOverrides, type ProviderKeyDraft } from '../services/providerGroups';
 import '../styles/provider-groups.css';
+import { ProviderKeyTemplateFields, ProviderModelFields } from './ProviderTemplateFields';
 
 type Props = {
   keys: ProviderKeyDraft[];
@@ -60,10 +61,10 @@ export function ProviderGroupKeysEditor({ keys, shared, section, disabled, onCha
         </div>
         <details className="provider-key-settings">
           <summary>{t('apiAccess.groups.keySettings')} · {overrideCount ? t('apiAccess.groups.overrides', { count: overrideCount }) : t('apiAccess.groups.inherits')}</summary>
-          <label><span>{t('apiAccess.groups.weight')}</span><input type="number" min="0" max="1000000" step="1" value={key.weight == null ? '' : String(key.weight)}
+          <label><span>{t('apiAccess.groups.weight')}</span><input type="number" max="1000000" step="1" value={key.weight == null ? '' : String(key.weight)}
             placeholder="1" onChange={(event) => set(draft.id, 'weight', event.currentTarget.value === '' ? undefined : Number(event.currentTarget.value))} /></label>
           <p className="provider-group-hint">{t('apiAccess.groups.overrideHint')}</p>
-          {fields.map(({ field, label, kind, initial }) => {
+          {fields.filter(({ field }) => section !== 'openai-compatibility' || field === 'proxy-url').map(({ field, label, kind, initial }) => {
             const overridden = key[field] != null;
             const content = draft.text?.[field] ?? (field === 'headers' && isRecord(key[field])
               ? Object.entries(key[field]).map(([name, value]) => `${name}: ${value}`).join('\n')
@@ -79,7 +80,7 @@ export function ProviderGroupKeysEditor({ keys, shared, section, disabled, onCha
                   onChange={(event) => set(draft.id, field, kind === 'number' ? Number(event.currentTarget.value) : event.currentTarget.value)} /> : null}
             </div>;
           })}
-          <div className="provider-key-override">
+          {section !== 'openai-compatibility' ? <div className="provider-key-override">
             <label className="provider-key-override-toggle"><input type="checkbox" checked={key.models != null}
               onChange={(event) => set(draft.id, 'models', event.currentTarget.checked ? structuredClone(effective.models ?? []) : undefined)} />
               <span>{t('apiAccess.groups.overrideModels')}</span></label>
@@ -87,16 +88,17 @@ export function ProviderGroupKeysEditor({ keys, shared, section, disabled, onCha
               {key.models.map((raw, modelIndex) => {
                 const model = isRecord(raw) ? raw : { name: String(raw) };
                 const change = (patch: Record<string, string>) => set(draft.id, 'models', (key.models as unknown[]).map((item, i) => i === modelIndex ? { ...model, ...patch } : item));
-                return <div className="model-config-entry" key={modelIndex}>
+                return <div className="provider-model-config" key={modelIndex}><div className="model-config-entry">
                   <input aria-label={t('apiAccess.models.namePlaceholder')} value={readString(model, 'name')} onChange={(event) => change({ name: event.currentTarget.value })} />
                   <input aria-label={t('apiAccess.models.aliasPlaceholder')} value={readString(model, 'alias')} onChange={(event) => change({ alias: event.currentTarget.value })} />
                   <button type="button" className="icon-button quiet danger" aria-label={t('apiAccess.models.remove')} onClick={() => set(draft.id, 'models', (key.models as unknown[]).filter((_, i) => i !== modelIndex))}><Trash2 size={14} /></button>
-                </div>;
+                </div><ProviderModelFields value={model} section={section} onChange={(next) => set(draft.id, 'models', (key.models as unknown[]).map((item, i) => i === modelIndex ? next : item))} /></div>;
               })}
               <button type="button" className="secondary-button compact-button" onClick={() => set(draft.id, 'models', [...key.models as unknown[], { name: '', alias: '' }])}><Plus size={14} />{t('apiAccess.models.add')}</button>
             </div> : null}
-          </div>
-          {section === 'codex-api-key' ? <label><span>WebSocket</span><select value={key.websockets == null ? '' : String(key.websockets)} onChange={(event) => set(draft.id, 'websockets', event.currentTarget.value === '' ? undefined : event.currentTarget.value === 'true')}>
+          </div> : null}
+          <ProviderKeyTemplateFields value={key} section={section} inherited={shared} onChange={(value) => update(draft.id, (current) => ({ ...current, value }))} />
+          {section === 'codex-api-key' || section === 'xai-api-key' ? <label><span>WebSocket</span><select value={key.websockets == null ? '' : String(key.websockets)} onChange={(event) => set(draft.id, 'websockets', event.currentTarget.value === '' ? undefined : event.currentTarget.value === 'true')}>
             <option value="">{t('apiAccess.option.inherit')}</option><option value="true">{t('common.enabled')}</option><option value="false">{t('common.disabled')}</option>
           </select></label> : null}
           {section === 'claude-api-key' ? <div className="provider-cloak-settings">

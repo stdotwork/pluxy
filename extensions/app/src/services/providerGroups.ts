@@ -54,10 +54,64 @@ export function validateProviderGroupKeys(keys: ProviderKeyDraft[]): string | nu
       const valueField = value[field];
       if (valueField == null) continue;
       if (typeof valueField !== 'number' || !Number.isSafeInteger(valueField)) return field;
-      if (field === 'weight' && (valueField < 0 || valueField > 1_000_000)) return field;
+      if (field === 'weight' && valueField > 1_000_000) return field;
     }
   }
   return null;
+}
+
+// Validate only known editable fields. Unknown provider extensions survive edits.
+export function validateProviderTemplateRecord(value: Record<string, unknown>, path = ''): string | null {
+  const at = (field: string) => path ? `${path}.${field}` : field;
+  for (const field of ['priority', 'weight', 'request-retry']) {
+    const item = value[field];
+    if (item == null) continue;
+    if (!Number.isSafeInteger(item) || (field === 'weight' && Number(item) > 1_000_000)) return at(field);
+  }
+  const rules = value['request-scoped-errors'];
+  if (rules != null) {
+    if (!Array.isArray(rules)) return at('request-scoped-errors');
+    for (const [index, rule] of rules.entries()) {
+      const rulePath = at(`request-scoped-errors[${index + 1}]`);
+      if (!isRecord(rule) || !Number.isSafeInteger(rule.status) || Number(rule.status) < 100 || Number(rule.status) > 599) return `${rulePath}.status`;
+      if (!['stop', 'stop-and-cooldown', 'continue', 'continue-and-cooldown'].includes(String(rule.action))) return `${rulePath}.action`;
+      for (const field of ['match', 'match-regexr']) {
+        if (rule[field] != null && (!Array.isArray(rule[field]) || rule[field].some((pattern: unknown) => typeof pattern !== 'string'))) return `${rulePath}.${field}`;
+      }
+    }
+  }
+  if (Array.isArray(value.models)) {
+    for (const [index, model] of value.models.entries()) {
+      const modelPath = at(`models[${index + 1}]`);
+      if (!isRecord(model) || !readString(model, 'name').trim()) return `${modelPath}.name`;
+      if (model['max-context-length'] != null && (!Number.isSafeInteger(model['max-context-length']) || Number(model['max-context-length']) < 0)) return `${modelPath}.max-context-length`;
+      for (const field of ['input-modalities', 'output-modalities']) {
+        if (model[field] != null && (!Array.isArray(model[field]) || model[field].some((item: unknown) => typeof item !== 'string' || !item.trim()))) return `${modelPath}.${field}`;
+      }
+      if (model.thinking != null) {
+        if (!isRecord(model.thinking)) return `${modelPath}.thinking`;
+        const thinking = model.thinking;
+        for (const field of ['min', 'max']) if (thinking[field] != null && (!Number.isSafeInteger(thinking[field]) || Number(thinking[field]) < 0)) return `${modelPath}.thinking.${field}`;
+        if (typeof thinking.min === 'number' && typeof thinking.max === 'number' && thinking.min > thinking.max) return `${modelPath}.thinking.max`;
+        if (thinking.levels != null && (!Array.isArray(thinking.levels) || thinking.levels.some((item: unknown) => typeof item !== 'string' || !item.trim()))) return `${modelPath}.thinking.levels`;
+      }
+    }
+  }
+  if (Array.isArray(value.keys)) for (const [index, key] of value.keys.entries()) {
+    if (!isRecord(key)) return at(`keys[${index + 1}]`);
+    const error = validateProviderTemplateRecord(key, at(`keys[${index + 1}]`));
+    if (error) return error;
+  }
+  return null;
+}
+
+export function appendNativeProviderGroup(groups: Record<string, unknown>[], group: Record<string, unknown>): Record<string, unknown>[] {
+  const base = readString(group, 'name').trim() || 'provider';
+  let name = base;
+  let suffix = 2;
+  const names = new Set(groups.map((item) => readString(item, 'name')));
+  while (names.has(name)) name = `${base} (${suffix++})`;
+  return [...groups.map(cleanProviderGroup), cleanProviderGroup({ ...group, name })];
 }
 
 export function serializeProviderKey(draft: ProviderKeyDraft): Record<string, unknown> {

@@ -6,6 +6,8 @@ import { managementApi } from '../services/managementApi';
 import { loadAuthFileSettings, saveAuthFileSettings, type AuthFileSettingsDraft, type BooleanOverride } from '../services/authFileSettings';
 import { modelMatchesRule, normalizeOAuthExcludedRules, oauthModelCandidates, oauthModelsFromPayload, setOAuthModelsExcluded, type OAuthModelDefinition } from '../services/oauthModels';
 import './AuthFileSettingsDialog.css';
+import { StructuredConfigEditor, useConfigText } from './StructuredConfigEditor';
+import { credentialAdvancedShape } from '../services/credentialAdvancedSettings';
 
 export function AuthFileSettingsDialog({ name, onClose, onSaved }: {
   name: string;
@@ -13,6 +15,7 @@ export function AuthFileSettingsDialog({ name, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const { t } = useI18n();
+  const tx = useConfigText();
   const id = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const savingRef = useRef(false);
@@ -164,6 +167,13 @@ export function AuthFileSettingsDialog({ name, onClose, onSaved }: {
                     })}
                     {!catalogLoading && !candidates.length ? <p>{t('authFiles.settings.noModels')}</p> : null}
                   </div>
+                </details>
+              </section>
+              <section className="credential-settings-section">
+                <details>
+                  <summary>{tx({ zh: '模型别名与 Claude 兼容设置', en: 'Model aliases and Claude compatibility', ja: 'モデル別名と Claude 互換性' })}</summary>
+                  <p><small>{tx({ zh: '这里的别名仅作用于此凭据，优先于全局别名。伪装与请求指纹适用于 Claude 及兼容委派凭据；未设置的字段继续使用默认行为。', en: 'Aliases apply only to this credential and take precedence over global aliases. Cloaking and fingerprints apply to Claude and compatible delegated credentials. Unset fields retain default behavior.', ja: '別名はこの認証情報にのみ適用され、全体の別名より優先されます。偽装とフィンガープリントは Claude と互換の委譲認証情報に適用します。' })}</small></p>
+                  <StructuredConfigEditor shape={credentialAdvancedShape} value={draft.advanced} onChange={value => update('advanced', value as Record<string, unknown>)} disabled={saving} id={`${id}-advanced`} />
                 </details>
               </section>
               <section className="credential-settings-section">

@@ -1,3 +1,5 @@
+import { applyTemplateChanges, readTemplatePath, sameTemplateValue, type TemplateConfigChange } from '../services/templateConfig';
+
 export type BrowserMockScenario = 'running' | 'stopped' | 'empty' | 'error';
 export type BrowserMockMode = BrowserMockScenario | 'off';
 
@@ -18,14 +20,23 @@ const SCENARIOS = new Set<BrowserMockScenario>(['running', 'stopped', 'empty', '
 const BUNDLED_CORE = { version: '7.3.15', assetName: 'CLIProxyAPI_7.3.15_windows_amd64.zip' };
 const PROVIDER_SECTIONS = [
   'gemini-api-key',
+  'interactions-api-key',
+  'vertex-api-key',
   'codex-api-key',
   'claude-api-key',
+  'xai-api-key',
+  'meta-api-key',
   'openai-compatibility',
 ] as const;
+type ProviderSection = (typeof PROVIDER_SECTIONS)[number];
 const V8_PROVIDER_BY_SECTION = {
   'gemini-api-key': 'gemini',
+  'interactions-api-key': 'interactions',
+  'vertex-api-key': 'vertex',
   'codex-api-key': 'codex',
   'claude-api-key': 'claude',
+  'xai-api-key': 'xai',
+  'meta-api-key': 'meta',
   'openai-compatibility': 'openai-compatibility',
 } as const;
 const SHARED_PROVIDER_FIELDS = new Set([
@@ -50,6 +61,38 @@ const readNumber = (value: unknown, fallback = 0) => {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+
+function groupProviderRecords(section: ProviderSection, records: JsonObject[]): JsonObject[] {
+  return records.map((record, index) => {
+    if (section === 'openai-compatibility') {
+      const group: JsonObject = { ...clone(record), keys: asArray(record['api-key-entries']).map((item) => clone(asObject(item))) };
+      delete group['api-key-entries'];
+      return group;
+    }
+    const group: JsonObject = { name: readString(record.name).trim() || `${V8_PROVIDER_BY_SECTION[section]}-${index + 1}` };
+    const key: JsonObject = {};
+    Object.entries(record).forEach(([field, value]) => {
+      if (field === 'base-url' || SHARED_PROVIDER_FIELDS.has(field)) group[field] = clone(value);
+      else key[field] = clone(value);
+    });
+    group.keys = [key];
+    return group;
+  });
+}
+
+function flattenProviderGroups(section: ProviderSection, groups: JsonObject[]): JsonObject[] {
+  return groups.flatMap((group) => {
+    const keys = asArray(group.keys).map(asObject);
+    if (section === 'openai-compatibility') {
+      const record: JsonObject = clone(group);
+      delete record.keys;
+      if (keys.length > 0) record['api-key-entries'] = clone(keys);
+      return [record];
+    }
+    const shared = Object.fromEntries(Object.entries(group).filter(([field]) => field === 'base-url' || SHARED_PROVIDER_FIELDS.has(field)));
+    return keys.map((key) => clone({ ...shared, ...Object.fromEntries(Object.entries(key).filter(([, value]) => value !== null)) }));
+  });
+}
 
 const isoHoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 const localHourKey = (date: Date) => [
@@ -285,7 +328,11 @@ function createState(scenario: BrowserMockScenario) {
       failed: 0,
     },
   ];
-  const providerConfig: Record<(typeof PROVIDER_SECTIONS)[number], JsonObject[]> = {
+  const legacyProviderConfig: Record<ProviderSection, JsonObject[]> = {
+    'interactions-api-key': [],
+    'vertex-api-key': [],
+    'xai-api-key': [],
+    'meta-api-key': [],
     'codex-api-key': [
       {
         name: 'Codex Direct',
@@ -380,6 +427,9 @@ function createState(scenario: BrowserMockScenario) {
       errorLogsMaxFiles: 10,
       usageStatisticsEnabled: true,
       redisUsageQueueRetentionSeconds: 60,
+      requestLog: false,
+      pluginsEnabled: false,
+      managementSecretConfigured: true,
       host: '127.0.0.1',
       port: 8317,
       allowLan: false,
@@ -394,6 +444,18 @@ function createState(scenario: BrowserMockScenario) {
       maxRetryInterval: 30,
       streamingBootstrapRetries: 0,
     },
+    extendedConfig: {
+      'config-version': 8,
+      server: { host: '127.0.0.1', port: 8317, 'commercial-mode': false, tls: { enable: false, cert: '', key: '' } },
+      management: { 'allow-remote': false, 'disable-control-panel': false },
+      routing: {
+        strategy: 'round-robin', 'session-affinity': true, 'session-affinity-ttl': '30m',
+        retry: { 'request-retry': 3, 'max-retry-credentials': 0, 'max-retry-interval': 30 },
+        cooldown: { 'disable-cooling': false },
+      },
+      requests: { 'proxy-url': '', streaming: { 'bootstrap-retries': 0 } },
+      observability: { logs: { debug: false, 'logging-to-file': true, 'logs-max-total-size-mb': 256, 'error-logs-max-files': 10 }, usage: { 'usage-statistics-enabled': true, 'redis-usage-queue-retention-seconds': 60 } },
+    } as JsonObject,
     softwareSettings: {
       closeBehavior: 'ask',
       autostartEnabled: false,
@@ -447,7 +509,10 @@ function createState(scenario: BrowserMockScenario) {
       result: null,
     },
     versionSource: { source: 'github', gitcodeAvailable: true, customMirrors: ['https://gh-proxy.example.com/'] },
-    providerConfig,
+    // Native groups are authoritative; legacy routes only adapt their own view.
+    providerConfig: Object.fromEntries(PROVIDER_SECTIONS.map((section) => [
+      section, groupProviderRecords(section, legacyProviderConfig[section]),
+    ])) as Record<ProviderSection, JsonObject[]>,
     authFiles,
     oauthExcludedModels: { codex: [], claude: ['claude-legacy-*'], gemini: [] } as Record<string, string[]>,
     oauthSessions: new Map<string, string>(),
@@ -654,64 +719,37 @@ function managementResponse(state: BrowserMockState, payload: JsonObject) {
   const v8Provider = Object.entries(V8_PROVIDER_BY_SECTION).find(
     ([, provider]) => path === `/config/api-keys/${provider}`,
   );
-  const groupRecords = (section: (typeof PROVIDER_SECTIONS)[number], records: JsonObject[]) => records.map((record, index) => {
-    if (section === 'openai-compatibility') {
-      const group: JsonObject = { ...record, keys: asArray(record['api-key-entries']).map((item) => clone(asObject(item))) };
-      delete group['api-key-entries'];
-      return group;
-    }
-    const group: JsonObject = { name: `${V8_PROVIDER_BY_SECTION[section]}-${index + 1}` };
-    const key: JsonObject = {};
-    Object.entries(record).forEach(([field, value]) => {
-      if (field === 'base-url' || SHARED_PROVIDER_FIELDS.has(field)) group[field] = value;
-      else key[field] = value;
-    });
-    group.keys = [key];
-    return group;
-  });
-  const flattenGroups = (section: (typeof PROVIDER_SECTIONS)[number], groups: unknown) => asArray(groups).flatMap((item) => {
-    const group = asObject(item);
-    const keys = asArray(group.keys).map(asObject);
-    if (section === 'openai-compatibility') {
-      const record: JsonObject = { ...group };
-      delete record.keys;
-      if (keys.length > 0) record['api-key-entries'] = keys;
-      return [record];
-    }
-    const shared = Object.fromEntries(Object.entries(group).filter(([field]) => field === 'base-url' || SHARED_PROVIDER_FIELDS.has(field)));
-    return keys.map((key) => ({ ...shared, ...Object.fromEntries(Object.entries(key).filter(([, value]) => value !== null)) }));
-  });
-
   if (method === 'GET' && path === '/config') {
     return {
+      ...clone(state.extendedConfig),
       'config-version': 8,
       'api-keys': Object.fromEntries(PROVIDER_SECTIONS.map((section) => [
         V8_PROVIDER_BY_SECTION[section],
-        groupRecords(section, state.providerConfig[section]),
+        clone(state.providerConfig[section]),
       ])),
     };
   }
   if (v8Provider) {
-    const section = v8Provider[0] as (typeof PROVIDER_SECTIONS)[number];
-    if (method === 'GET') return groupRecords(section, state.providerConfig[section]);
+    const section = v8Provider[0] as ProviderSection;
+    if (method === 'GET') return clone(state.providerConfig[section]);
     if (method === 'PUT') {
-      state.providerConfig[section] = flattenGroups(section, body).map((item) => clone(asObject(item)));
+      state.providerConfig[section] = asArray(body).map((item) => clone(asObject(item)));
       return { status: 'ok', 'config-version': 8 };
     }
   }
   if (PROVIDER_SECTIONS.some((section) => path === `/${section}`)) {
-    const section = path.slice(1) as (typeof PROVIDER_SECTIONS)[number];
-    if (method === 'GET') return { [section]: clone(state.providerConfig[section]) };
+    const section = path.slice(1) as ProviderSection;
+    if (method === 'GET') return { [section]: flattenProviderGroups(section, state.providerConfig[section]) };
     if (method === 'PUT') {
-      state.providerConfig[section] = asArray(body).map((item) => clone(asObject(item)));
-      return { [section]: clone(state.providerConfig[section]) };
+      state.providerConfig[section] = groupProviderRecords(section, asArray(body).map(asObject));
+      return { [section]: flattenProviderGroups(section, state.providerConfig[section]) };
     }
     if (method === 'PATCH' && section === 'openai-compatibility') {
       const patch = asObject(body);
       const index = readNumber(patch.index, -1);
-      const current = state.providerConfig[section][index];
-      if (current) state.providerConfig[section][index] = { ...current, ...asObject(patch.value) };
-      return { [section]: clone(state.providerConfig[section]) };
+      const current = flattenProviderGroups(section, state.providerConfig[section])[index];
+      if (current) state.providerConfig[section][index] = groupProviderRecords(section, [{ ...current, ...asObject(patch.value) }])[0];
+      return { [section]: flattenProviderGroups(section, state.providerConfig[section]) };
     }
   }
   if (method === 'GET' && path === '/credentials') {
@@ -760,8 +798,24 @@ function managementResponse(state: BrowserMockState, payload: JsonObject) {
   return {};
 }
 
+const CORE_CONFIG_PATHS: Record<string, string> = {
+  debug: 'observability.logs.debug', commercialMode: 'server.commercial-mode',
+  loggingToFile: 'observability.logs.logging-to-file', logsMaxTotalSizeMb: 'observability.logs.logs-max-total-size-mb',
+  errorLogsMaxFiles: 'observability.logs.error-logs-max-files', usageStatisticsEnabled: 'observability.usage.usage-statistics-enabled',
+  redisUsageQueueRetentionSeconds: 'observability.usage.redis-usage-queue-retention-seconds',
+  requestLog: 'observability.logs.request-log', pluginsEnabled: 'plugins.enabled',
+  host: 'server.host', port: 'server.port', routingStrategy: 'routing.strategy', proxyUrl: 'requests.proxy-url',
+  routingSessionAffinity: 'routing.session-affinity', routingSessionAffinityTtl: 'routing.session-affinity-ttl',
+  disableCooling: 'routing.cooldown.disable-cooling', requestRetry: 'routing.retry.request-retry',
+  maxRetryCredentials: 'routing.retry.max-retry-credentials', maxRetryInterval: 'routing.retry.max-retry-interval',
+  streamingBootstrapRetries: 'requests.streaming.bootstrap-retries',
+};
+
 function updateCoreConfig(state: BrowserMockState, payload: JsonObject) {
-  Object.assign(state.coreConfig, asObject(payload.settings));
+  const settings = asObject(payload.settings);
+  Object.assign(state.coreConfig, settings);
+  const changes: TemplateConfigChange[] = Object.entries(settings).flatMap(([key, value]) => CORE_CONFIG_PATHS[key] ? [{ path: CORE_CONFIG_PATHS[key].split('.'), value, remove: false, expected: null, expectedExists: false }] : []);
+  state.extendedConfig = applyTemplateChanges(state.extendedConfig, changes);
   state.guiSettings.host = state.coreConfig.host;
   state.guiSettings.port = state.coreConfig.port;
   return clone(state.coreConfig);
@@ -781,6 +835,7 @@ const ERROR_SCENARIO_COMMANDS = new Set([
   'get_core_status',
   'get_gui_settings',
   'get_core_config_settings',
+  'get_extended_core_config',
   'check_app_update',
   'check_latest_core',
   'management_request',
@@ -854,6 +909,27 @@ export function createBrowserMockRuntime(
       }
       case 'get_gui_settings': return clone(state.guiSettings);
       case 'get_core_config_settings': return clone(state.coreConfig);
+      case 'get_extended_core_config': return clone(state.extendedConfig);
+      case 'save_extended_core_config': {
+        const changes = asArray(payload.changes) as TemplateConfigChange[];
+        for (const change of changes) {
+          const original = readTemplatePath(state.extendedConfig, change.path);
+          if (original.exists !== change.expectedExists || (original.exists && !sameTemplateValue(original.value, change.expected))) throw new Error(`Configuration changed externally: ${change.path.join('.')}. Discard this group's changes and edit the latest values.`);
+        }
+        const before = state.extendedConfig;
+        state.extendedConfig = applyTemplateChanges(before, changes);
+        const syncValues: JsonObject = {};
+        for (const [key, path] of Object.entries(CORE_CONFIG_PATHS)) {
+          if (!changes.some((change) => change.path.join('.') === path)) continue;
+          const current = readTemplatePath(state.extendedConfig, path.split('.'));
+          if (current.exists) syncValues[key] = current.value;
+          else if (key === 'requestLog' || key === 'pluginsEnabled') syncValues[key] = false;
+        }
+        Object.assign(state.coreConfig, syncValues);
+        const restartRequired = changes.some((change) => !sameTemplateValue(readTemplatePath(before, change.path), readTemplatePath(state.extendedConfig, change.path)) && ['server.host', 'server.port', 'server.tls', 'server.trusted-proxies', 'management', 'oauth.auth-dir'].some((prefix) => change.path.join('.') === prefix || change.path.join('.').startsWith(`${prefix}.`)));
+        emit('config-files-changed', { paths: ['cpa-core/config.yaml'], errors: [] });
+        return { config: clone(state.extendedConfig), restartRequired };
+      }
       case 'get_software_settings': return clone(state.softwareSettings);
       case 'get_core_tls_settings': return clone(state.tlsSettings);
       case 'get_core_sensitive_words_settings': return clone(state.sensitiveWords);
@@ -868,28 +944,31 @@ export function createBrowserMockRuntime(
       }
       case 'save_core_tls_settings': {
         Object.assign(state.tlsSettings, asObject(payload.settings));
+        state.extendedConfig = applyTemplateChanges(state.extendedConfig, [{ path: ['server', 'tls'], value: { enable: state.tlsSettings.enabled, cert: state.tlsSettings.cert, key: state.tlsSettings.key }, remove: false, expected: null, expectedExists: false }]);
         emit('config-files-changed', { paths: ['cpa-core/config.yaml'], errors: [] });
         return clone(state.tlsSettings);
       }
       case 'save_core_logging_settings':
       case 'save_network_endpoint_settings':
       case 'save_retry_settings':
-      case 'save_session_routing_settings': return updateCoreConfig(state, payload);
+      case 'save_session_routing_settings': {
+        const config = updateCoreConfig(state, payload);
+        emit('config-files-changed', { paths: ['cpa-core/config.yaml'], errors: [] });
+        return config;
+      }
       case 'set_core_routing_strategy': {
-        state.coreConfig.routingStrategy = readString(payload.strategy);
-        return clone(state.coreConfig);
+        const config = updateCoreConfig(state, { settings: { routingStrategy: readString(payload.strategy) } });
+        emit('config-files-changed', { paths: ['cpa-core/config.yaml'], errors: [] });
+        return config;
       }
       case 'set_core_proxy_url': {
-        state.coreConfig.proxyUrl = readString(payload.proxyUrl);
-        return clone(state.coreConfig);
+        return updateCoreConfig(state, { settings: { proxyUrl: readString(payload.proxyUrl) } });
       }
       case 'set_core_session_affinity': {
-        state.coreConfig.routingSessionAffinity = Boolean(payload.enabled);
-        return clone(state.coreConfig);
+        return updateCoreConfig(state, { settings: { routingSessionAffinity: Boolean(payload.enabled) } });
       }
       case 'set_core_session_affinity_ttl': {
-        state.coreConfig.routingSessionAffinityTtl = readString(payload.ttl);
-        return clone(state.coreConfig);
+        return updateCoreConfig(state, { settings: { routingSessionAffinityTtl: readString(payload.ttl) } });
       }
       case 'add_core_api_key': {
         state.coreConfig.apiKeys.push({ apiKey: readString(payload.apiKey), remark: readString(payload.remark) });
@@ -904,8 +983,14 @@ export function createBrowserMockRuntime(
         state.coreConfig.apiKeys = state.coreConfig.apiKeys.filter((item) => item.apiKey !== payload.apiKey);
         return clone(state.coreConfig);
       }
-      case 'set_core_management_secret_key':
-      case 'clear_core_management_secret_key': return clone(state.coreConfig);
+      case 'set_core_management_secret_key': {
+        state.coreConfig.managementSecretConfigured = true;
+        return clone(state.coreConfig);
+      }
+      case 'clear_core_management_secret_key': {
+        state.coreConfig.managementSecretConfigured = false;
+        return clone(state.coreConfig);
+      }
 
       case 'check_app_update': return clone(state.appUpdateInfo);
       case 'get_app_update_task': return clone(state.appUpdateTask);

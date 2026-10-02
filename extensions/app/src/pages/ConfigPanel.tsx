@@ -38,8 +38,16 @@ import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 import { SensitiveWordsPage } from './SensitiveWordsPage';
 import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
 import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { useConfirmation } from '../components/ConfirmationDialog';
+import { TemplateConfigSection } from '../components/TemplateConfigSection';
+import { generalTemplateGroups, networkTemplateGroups, requestTemplateGroups, routingTemplateGroups } from '../services/generalTemplateFields';
+import { oauthTemplateGroups } from '../services/oauthTemplateFields';
+import { extensionTemplateGroups } from '../services/extensionTemplateFields';
+import { payloadTemplateGroups } from '../services/payloadTemplateFields';
+import { templateMessages, templateText } from '../i18n/templateConfig';
 
 type CoreConfigSettings = {
+  managementSecretConfigured: boolean;
   apiKeys: CoreApiKey[];
   debug: boolean;
   commercialMode: boolean;
@@ -81,8 +89,10 @@ type ConfigAction =
   | 'tls'
   | 'software'
   | null;
-type ConfigSubpage = 'general' | 'network' | 'routing' | 'software' | 'aliases' | 'sensitive-words';
-const CONFIG_SUBPAGES: readonly ConfigSubpage[] = ['general', 'network', 'routing', 'aliases', 'software', 'sensitive-words'];
+type ConfigSubpage = 'general' | 'network' | 'routing' | 'requests' | 'oauth' | 'extensions' | 'software' | 'aliases' | 'sensitive-words';
+const CONFIG_SUBPAGES: readonly ConfigSubpage[] = ['general', 'network', 'routing', 'requests', 'oauth', 'extensions', 'aliases', 'software', 'sensitive-words'];
+const TEMPLATE_GROUPS_BY_TAB = { general: generalTemplateGroups, network: networkTemplateGroups, routing: routingTemplateGroups, requests: [...requestTemplateGroups, ...payloadTemplateGroups], oauth: oauthTemplateGroups, extensions: extensionTemplateGroups, software: [], aliases: [], 'sensitive-words': [] };
+const ALL_TEMPLATE_GROUPS = Object.values(TEMPLATE_GROUPS_BY_TAB).flat();
 type CloseBehavior = 'ask' | 'exit' | 'minimize-to-tray';
 type NetworkDraftField =
   | 'port'
@@ -136,11 +146,13 @@ const cleanNetworkDraft = (): NetworkDraftDirty => ({
 
 const ROUTING_OPTIONS = [
   { value: 'round-robin', labelKey: 'config.routing.roundRobin' },
+  { value: 'weighted-round-robin', labelKey: 'config.routing.roundRobin' },
   { value: 'fill-first', labelKey: 'config.routing.fillFirst' },
 ] as const;
 
 export function ConfigPanelPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const { askConfirmation, confirmationDialog } = useConfirmation();
   const { status: coreStatus, publishStatus, refreshStatus } = useCoreRuntime();
   const [settings, setSettings] = useState<CoreConfigSettings | null>(null);
   const [softwareSettings, setSoftwareSettings] = useState<SoftwareSettings | null>(null);
@@ -211,6 +223,7 @@ export function ConfigPanelPage() {
   const [retryError, setRetryError] = useState('');
   const networkDraftDirtyRef = useRef<NetworkDraftDirty>(cleanNetworkDraft());
   const loggingDraftDirtyRef = useRef(false);
+  const otherDraftDirtyRef = useRef({ software: false, tls: false });
   const copyTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -222,8 +235,8 @@ export function ConfigPanelPage() {
     void listen('config-files-changed', () => {
       if (!disposed) {
         void loadSettings('preserve');
-        void loadSoftwareSettings();
-        void loadTlsSettings();
+        void loadSoftwareSettings('preserve');
+        void loadTlsSettings('preserve');
       }
     }).then((unlisten) => {
       if (disposed) unlisten();
@@ -319,12 +332,13 @@ export function ConfigPanelPage() {
     }
   }
 
-  async function loadSoftwareSettings() {
+  async function loadSoftwareSettings(mode: DraftRefreshMode = 'replace') {
     setSoftwareSettingsLoading(true);
     setSoftwareSavedStatusVisible(false);
     try {
       const result = await invoke<SoftwareSettings>('get_software_settings');
       setSoftwareSettings(result);
+      if (mode === 'preserve' && otherDraftDirtyRef.current.software) return;
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
       setSoftwareAutostartDraft(result.autostartEnabled);
       setSoftwareStartCoreDraft(result.startCoreOnLaunch);
@@ -338,11 +352,12 @@ export function ConfigPanelPage() {
     }
   }
 
-  async function loadTlsSettings() {
+  async function loadTlsSettings(mode: DraftRefreshMode = 'replace') {
     setTlsSettingsLoading(true);
     try {
       const result = await invoke<CoreTlsSettings>('get_core_tls_settings');
       setTlsSettings(result);
+      if (mode === 'preserve' && otherDraftDirtyRef.current.tls) return;
       setTlsEnabledDraft(result.enabled);
       setTlsCertDraft(result.cert);
       setTlsKeyDraft(result.key);
@@ -463,6 +478,18 @@ export function ConfigPanelPage() {
       setShowManagementSecret(false);
       setManagementSecretError('');
     }
+  };
+
+  const disableManagement = async () => {
+    const confirmed = await askConfirmation({
+      title: templateText(templateMessages.disableManagement, locale),
+      message: templateText(templateMessages.disableManagementMessage, locale),
+      confirmText: templateText(templateMessages.disableManagement, locale),
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+    const saved = await runMutation('management-secret', 'clear_core_management_secret_key', {}, templateText(templateMessages.managementDisabled, locale));
+    if (saved) { setManagementSecretDraft(''); setManagementSecretConfirm(''); setShowManagementSecret(false); setManagementSecretError(''); }
   };
 
   const submitApiKey = async (event: FormEvent) => {
@@ -615,9 +642,11 @@ export function ConfigPanelPage() {
       ]);
       applySettings(latestSettings, 'preserve');
       setTlsSettings(latestTlsSettings);
-      setTlsEnabledDraft(latestTlsSettings.enabled);
-      setTlsCertDraft(latestTlsSettings.cert);
-      setTlsKeyDraft(latestTlsSettings.key);
+      if (!otherDraftDirtyRef.current.tls) {
+        setTlsEnabledDraft(latestTlsSettings.enabled);
+        setTlsCertDraft(latestTlsSettings.cert);
+        setTlsKeyDraft(latestTlsSettings.key);
+      }
       await invoke('open_external_url', {
         url: webUiManagementUrl(latestSettings.port, latestTlsSettings.enabled, latestSettings.host),
       });
@@ -658,7 +687,7 @@ export function ConfigPanelPage() {
     } catch (error) {
       setTlsError(String(error));
       void refreshStatus();
-      void loadTlsSettings();
+      void loadTlsSettings('preserve');
     } finally {
       setBusyAction(null);
     }
@@ -708,11 +737,6 @@ export function ConfigPanelPage() {
     networkFeedback.clearNotice();
     if (!settings || busyAction !== null) return;
     const host = hostDraft.trim();
-    if (!host) {
-      setHostError(t('config.error.hostRequired'));
-      networkFeedback.showNotice({ key: 'config.error.hostRequired' }, 'error');
-      return;
-    }
     const port = Number(portDraft);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       setPortError(t('config.error.portRange'));
@@ -772,10 +796,10 @@ export function ConfigPanelPage() {
     const retryValues = retryDrafts.map(Number);
     if (
       retryDrafts.some((value) => value.length === 0)
-      || retryValues.some((value) => !Number.isInteger(value) || value < 0 || value > 4294967295)
+      || retryValues.some((value, index) => !Number.isInteger(value) || value < (index === 2 ? -2147483648 : 0) || value > (index === 2 ? 2147483647 : 4294967295))
     ) {
-      setRetryError(t('config.error.retryRange'));
-      retryFeedback.showNotice({ key: 'config.error.retryRange' }, 'error');
+      setRetryError(templateText(templateMessages.retryRange, locale));
+      retryFeedback.showNotice(templateText(templateMessages.retryRange, locale), 'error');
       return;
     }
     const [requestRetry, maxRetryCredentials, maxRetryInterval, streamingBootstrapRetries] = retryValues;
@@ -862,14 +886,9 @@ export function ConfigPanelPage() {
       setSoftwareDefaultTerminalDraft(result.defaultTerminal);
       setSoftwareSavedStatusVisible(true);
     } catch (error) {
-      setSoftwareCloseBehaviorDraft(softwareSettings.closeBehavior);
-      setSoftwareAutostartDraft(softwareSettings.autostartEnabled);
-      setSoftwareStartCoreDraft(softwareSettings.startCoreOnLaunch);
-      setSoftwareSilentStartDraft(softwareSettings.silentStartEnabled);
-      setSoftwareDefaultTerminalDraft(softwareSettings.defaultTerminal);
       setSoftwareSavedStatusVisible(false);
       softwareFeedback.showNotice({ key: 'config.error.saveFailed', variables: { error: String(error) } }, 'error');
-      void loadSoftwareSettings();
+      void loadSoftwareSettings('preserve');
     } finally {
       setBusyAction(null);
     }
@@ -935,6 +954,7 @@ export function ConfigPanelPage() {
     || tlsCertDraft.trim() !== tlsSettings.cert
     || tlsKeyDraft.trim() !== tlsSettings.key
   );
+  otherDraftDirtyRef.current = { software: softwareSettingsDirty, tls: tlsSettingsDirty };
   const tlsStatusLabel = tlsSettingsLoading
     ? t('common.loading')
     : tlsSettings === null
@@ -980,6 +1000,7 @@ export function ConfigPanelPage() {
 
   return (
     <section className="page config-page">
+      {confirmationDialog}
       <h1 className="sr-only">{t('app.nav.config')}</h1>
       <div className="agent-subpage-tabs config-subpage-tabs" role="tablist" aria-label={t('config.tabs.label')}>
         <button
@@ -1021,6 +1042,14 @@ export function ConfigPanelPage() {
         >
           {t('config.tabs.routing')}
         </button>
+        {(['requests', 'oauth', 'extensions'] as const).map((subpage) => (
+          <button key={subpage} type="button" id={`config-subpage-tab-${subpage}`} role="tab"
+            className={activeSubpage === subpage ? 'active' : ''} aria-selected={activeSubpage === subpage}
+            aria-controls="config-template-panel" tabIndex={activeSubpage === subpage ? 0 : -1}
+            onClick={() => activateConfigSubpage(subpage)} onKeyDown={(event) => handleConfigTabKeyDown(event, subpage)}>
+            {templateText(templateMessages[subpage], locale)}
+          </button>
+        ))}
         <button
           type="button"
           id="config-subpage-tab-aliases"
@@ -1195,6 +1224,7 @@ export function ConfigPanelPage() {
               <strong>{t('config.webuiKey.heading')}</strong>
               <p>{t('config.webuiKey.description')}</p>
               <small>{t('config.webuiKey.securityHint')}</small>
+              {settings?.managementSecretConfigured === false ? <p role="status">{templateText(templateMessages.managementDisabled, locale)}</p> : null}
             </div>
 
             <form
@@ -1260,6 +1290,9 @@ export function ConfigPanelPage() {
                   {managementSecretError || ' '}
                 </span>
                 <div className="config-management-actions">
+                  <button type="button" className="secondary-button compact-button" disabled={controlsDisabled || settings?.managementSecretConfigured === false} onClick={() => void disableManagement()}>
+                    {templateText(templateMessages.disableManagement, locale)}
+                  </button>
                   <button
                     type="button"
                     className="secondary-button compact-button"
@@ -1292,9 +1325,7 @@ export function ConfigPanelPage() {
           </div>
 
           <p className="config-diagnostics-intro">
-            {t('config.diagnostics.description').split('**').map((part, index) => (
-              index % 2 === 1 ? <strong key={index}>{part}</strong> : part
-            ))}
+            {templateText(templateMessages.diagnostics, locale)}
           </p>
 
           <div className="config-diagnostics-toggle-grid">
@@ -1539,7 +1570,7 @@ export function ConfigPanelPage() {
                   disabled={controlsDisabled}
                   placeholder="127.0.0.1"
                   aria-invalid={Boolean(hostError)}
-                  title={hostError || t('config.network.listenHostHint')}
+                  title={hostError || templateText(templateMessages.hostHint, locale)}
                   onChange={(event) => {
                     markDraftDirty('host');
                     setHostDraft(event.currentTarget.value);
@@ -1554,7 +1585,7 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{t('config.network.listenHostHint')}</small>
+                <small>{templateText(templateMessages.hostHint, locale)}</small>
               </label>
 
               <div className="config-network-field config-proxy-field">
@@ -1687,7 +1718,7 @@ export function ConfigPanelPage() {
                       onClick={() => void changeRoutingStrategy(option.value)}
                       title={option.value}
                     >
-                      {t(option.labelKey)}
+                      {option.value === 'weighted-round-robin' ? templateText(templateMessages.weighted, locale) : t(option.labelKey)}
                     </button>
                   ))}
                 </div>
@@ -1696,7 +1727,7 @@ export function ConfigPanelPage() {
                     ? t('common.loading')
                     : settings === null
                       ? t('common.unavailable')
-                      : routingStrategyLabel(settings.routingStrategy, t)}
+                      : routingStrategyLabel(settings.routingStrategy, t, locale)}
                 </small>
               </div>
             </div>
@@ -1770,7 +1801,7 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{t('config.network.requestRetryHint')}</small>
+                <small>{templateText(templateMessages.retryHint, locale)}</small>
               </label>
 
               <label className="config-network-field">
@@ -1798,7 +1829,7 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{t('config.network.maxRetryCredentialsHint')}</small>
+                <small>{templateText(templateMessages.credentialsHint, locale)}</small>
               </label>
 
               <label className="config-network-field">
@@ -1807,14 +1838,15 @@ export function ConfigPanelPage() {
                   className={`config-network-input ${retryError ? 'error' : ''}`}
                   type="text"
                   inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={10}
+                  pattern="-?[0-9]*"
+                  maxLength={11}
                   value={maxRetryIntervalDraft}
                   disabled={controlsDisabled}
                   aria-invalid={Boolean(retryError)}
                   onChange={(event) => {
                     markDraftDirty('maxRetryInterval');
-                    setMaxRetryIntervalDraft(event.currentTarget.value.replace(/\D/g, '').slice(0, 10));
+                    const raw = event.currentTarget.value;
+                    setMaxRetryIntervalDraft(`${raw.startsWith('-') ? '-' : ''}${raw.replace(/\D/g, '').slice(0, 10)}`);
                     setRetryError('');
                   }}
                   onKeyDown={(event) => {
@@ -1826,7 +1858,7 @@ export function ConfigPanelPage() {
                     }
                   }}
                 />
-                <small>{t('config.network.maxRetryIntervalHint')}</small>
+                <small>{templateText(templateMessages.waitHint, locale)}</small>
               </label>
 
               <label className="config-network-field">
@@ -2164,6 +2196,10 @@ export function ConfigPanelPage() {
         </div>
       ) : null}
 
+      <div id="config-template-panel" role="tabpanel" aria-labelledby={`config-subpage-tab-${activeSubpage}`} hidden={TEMPLATE_GROUPS_BY_TAB[activeSubpage].length === 0}>
+        <TemplateConfigSection groups={ALL_TEMPLATE_GROUPS} visibleGroups={TEMPLATE_GROUPS_BY_TAB[activeSubpage].map((group) => group.id)} />
+      </div>
+
       {sensitiveWordsVisited ? (
         <div
           className="config-subpage-panel"
@@ -2344,10 +2380,11 @@ function maskApiKey(apiKey: string) {
   return `${value.slice(0, visible)}${'*'.repeat(Math.max(6, 10 - visible * 2))}${value.slice(-visible)}`;
 }
 
-function routingStrategyLabel(strategy: string | undefined, t: ReturnType<typeof useI18n>['t']) {
+function routingStrategyLabel(strategy: string | undefined, t: ReturnType<typeof useI18n>['t'], locale: ReturnType<typeof useI18n>['locale']) {
   if (!strategy) {
     return t('common.loading');
   }
   const option = ROUTING_OPTIONS.find((item) => item.value === strategy);
+  if (strategy === 'weighted-round-robin') return templateText(templateMessages.weighted, locale);
   return option ? t(option.labelKey) : strategy;
 }

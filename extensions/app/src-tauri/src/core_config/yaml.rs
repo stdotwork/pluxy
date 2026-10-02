@@ -1468,7 +1468,7 @@ pub(crate) fn core_config_settings_from_value(
                 .ok_or_else(|| "auth-dir must be a string".to_string())
         })
         .transpose()?
-        .unwrap_or_else(|| OAUTH_DIR_NAME.to_string());
+        .unwrap_or_else(|| "~/.cli-proxy-api".to_string());
     let debug = v8_or_legacy(&["observability", "logs", "debug"], &["debug"])
         .map(|value| {
             value
@@ -1622,9 +1622,8 @@ pub(crate) fn core_config_settings_from_value(
     let max_retry_interval = v8_or_legacy(&["routing", "retry", "max-retry-interval"], &["max-retry-interval"])
         .map(|value| {
             value
-                .as_u64()
-                .and_then(|value| u32::try_from(value).ok())
-                .ok_or_else(|| "max-retry-interval must be a non-negative integer".to_string())
+                .as_i64()
+                .ok_or_else(|| "max-retry-interval must be an integer".to_string())
         })
         .transpose()?
         .unwrap_or(0);
@@ -1743,9 +1742,6 @@ pub(crate) fn extract_core_management_secret_key(
         .ok_or_else(|| "remote-management.secret-key must be a string".to_string())?
         .trim()
         .to_string();
-    if value.is_empty() {
-        return Ok(None);
-    }
     Ok(Some(value))
 }
 

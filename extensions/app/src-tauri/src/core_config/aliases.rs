@@ -12,7 +12,7 @@ pub(crate) struct OAuthAliasChannel {
     pub(crate) force_mapping: bool,
 }
 
-pub(crate) const OAUTH_ALIAS_CHANNELS: [OAuthAliasChannel; 8] = [
+pub(crate) const OAUTH_ALIAS_CHANNELS: [OAuthAliasChannel; 9] = [
     OAuthAliasChannel {
         key: "vertex",
         provider: "Vertex OAuth",
@@ -85,6 +85,15 @@ pub(crate) const OAUTH_ALIAS_CHANNELS: [OAuthAliasChannel; 8] = [
         supports_fast: false,
         force_mapping: false,
     },
+    OAuthAliasChannel {
+        key: "meta",
+        provider: "Meta OAuth",
+        kind: "meta-oauth",
+        protocol: "openai",
+        supports_reasoning: false,
+        supports_fast: false,
+        force_mapping: false,
+    },
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,6 +146,7 @@ pub(crate) fn normalize_oauth_alias_channel(value: &str) -> Option<&'static str>
         "kimi" | "moonshot" => Some("kimi"),
         "devin" | "cognition" => Some("devin"),
         "xai" | "x-ai" | "grok" => Some("xai"),
+        "meta" => Some("meta"),
         _ => None,
     }
 }

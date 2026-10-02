@@ -277,13 +277,17 @@ it('keeps remark identities separate for records that share an API key', () => {
 });
 
 describe('API 接入配置合并', () => {
-  it('固定使用 Codex、OpenAI、DeepSeek、Claude、Gemini 顺序且不包含 Vertex', () => {
+  it('保留常用分类顺序并覆盖 v8 模板全部原生提供商', () => {
     expect(providerSectionOrder).toEqual([
       'codex-api-key',
       'openai-compatibility',
       'deepseek',
       'claude-api-key',
       'gemini-api-key',
+      'interactions-api-key',
+      'vertex-api-key',
+      'xai-api-key',
+      'meta-api-key',
     ]);
   });
 

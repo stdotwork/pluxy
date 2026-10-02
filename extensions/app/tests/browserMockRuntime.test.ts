@@ -96,3 +96,92 @@ describe('browser mock runtime', () => {
     expect(await runtime.invoke('plugin:app|version')).toBe('0.2.97-mock');
   });
 });
+
+describe('browser mock native provider groups', () => {
+  const providers = ['gemini', 'interactions', 'vertex', 'codex', 'claude', 'xai', 'meta', 'openai-compatibility'] as const;
+  const request = (runtime: ReturnType<typeof createBrowserMockRuntime>, method: string, path: string, body?: unknown) =>
+    runtime.invoke('management_request', { request: { method, path, body } });
+
+  for (const provider of providers) {
+    test(`preserves native ${provider} groups, overrides, and extensions across saves`, async () => {
+      const runtime = createBrowserMockRuntime('running');
+      const path = `/config/api-keys/${provider}`;
+      const groups = [{
+        name: `${provider} production`,
+        'base-url': 'https://provider.example/v1',
+        headers: { 'X-Team': 'shared' },
+        models: [{ name: 'model', alias: 'primary', 'future-model-option': false }],
+        'request-retry': 0,
+        'future-group-option': { enabled: false, values: [] },
+        keys: [
+          { 'api-key': 'first', weight: 2, headers: null, models: [], 'future-key-option': 0 },
+          { 'api-key': 'second', 'proxy-url': '', headers: {}, models: null },
+        ],
+      }, { name: `${provider} empty standby`, keys: [], 'future-group-option': null }];
+
+      expect(await request(runtime, 'GET', path)).toBeArray();
+      expect(await request(runtime, 'PUT', path, groups)).toEqual({ status: 'ok', 'config-version': 8 });
+      expect(await request(runtime, 'GET', path)).toEqual(groups);
+      expect(await request(runtime, 'GET', '/config')).toMatchObject({
+        'config-version': 8, 'api-keys': { [provider]: groups },
+      });
+
+      // Reading the legacy view must not flatten the authoritative state.
+      const legacyPath = provider === 'openai-compatibility' ? path.slice('/config/api-keys'.length) : `/${provider}-api-key`;
+      await request(runtime, 'GET', legacyPath);
+      expect(await request(runtime, 'GET', path)).toEqual(groups);
+
+      // Both writes and reads isolate stored values from caller mutations.
+      const expected = structuredClone(groups);
+      groups[0].keys[0]['api-key'] = 'mutated request';
+      const readBack = await request(runtime, 'GET', path) as typeof groups;
+      readBack[0].keys[0]['api-key'] = 'mutated response';
+      expect(await request(runtime, 'GET', path)).toEqual(expected);
+
+      await request(runtime, 'PUT', path, []);
+      expect(await request(runtime, 'GET', path)).toEqual([]);
+    });
+  }
+
+  test('derives effective legacy key records without changing native inheritance', async () => {
+    const runtime = createBrowserMockRuntime('running');
+    const groups = [{
+      name: 'preserve this group name',
+      'base-url': 'https://provider.example',
+      priority: 5,
+      headers: { 'X-Team': 'shared' },
+      models: [{ name: 'shared-model' }],
+      keys: [
+        { 'api-key': 'first', priority: 0, headers: null, models: [] },
+        { 'api-key': 'second', headers: {}, models: null },
+      ],
+    }];
+    await request(runtime, 'PUT', '/config/api-keys/interactions', groups);
+    expect(await request(runtime, 'GET', '/interactions-api-key')).toEqual({
+      'interactions-api-key': [
+        { 'api-key': 'first', 'base-url': 'https://provider.example', priority: 0, headers: { 'X-Team': 'shared' }, models: [] },
+        { 'api-key': 'second', 'base-url': 'https://provider.example', priority: 5, headers: {}, models: [{ name: 'shared-model' }] },
+      ],
+    });
+    expect(await request(runtime, 'GET', '/config/api-keys/interactions')).toEqual(groups);
+  });
+
+  test('adapts legacy OpenAI mutations while preserving native group metadata and keys', async () => {
+    const runtime = createBrowserMockRuntime('running');
+    const group = {
+      name: 'custom group', 'base-url': 'https://provider.example/v1', disabled: false,
+      'future-option': { enabled: false },
+      keys: [{ 'api-key': 'first', weight: 0, 'proxy-url': '' }, { 'api-key': 'second', weight: 3 }],
+    };
+    await request(runtime, 'PUT', '/config/api-keys/openai-compatibility', [group]);
+    await request(runtime, 'PATCH', '/openai-compatibility', { index: 0, value: { disabled: true } });
+    expect(await request(runtime, 'GET', '/config/api-keys/openai-compatibility')).toEqual([{ ...group, disabled: true }]);
+    const { keys, ...shared } = group;
+    expect(await request(runtime, 'GET', '/openai-compatibility')).toEqual({
+      'openai-compatibility': [{ ...shared, disabled: true, 'api-key-entries': keys }],
+    });
+
+    await request(runtime, 'PUT', '/openai-compatibility', [{ ...shared, 'api-key-entries': [keys[1]] }]);
+    expect(await request(runtime, 'GET', '/config/api-keys/openai-compatibility')).toEqual([{ ...shared, keys: [keys[1]] }]);
+  });
+});

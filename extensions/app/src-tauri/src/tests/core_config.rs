@@ -116,7 +116,7 @@ fn webui_management_secret_requires_a_non_empty_plaintext_value() {
 }
 
 #[test]
-fn management_secret_rotation_replaces_empty_values_and_preserves_custom_values() {
+fn management_secret_rotation_preserves_disabled_and_custom_values() {
     let fresh = GuiConfigFile::default();
     assert_eq!(
         fresh.management_secret_key,
@@ -130,9 +130,9 @@ fn management_secret_rotation_replaces_empty_values_and_preserves_custom_values(
         management_secret_key: String::new(),
         ..GuiConfigFile::default()
     };
-    assert!(ensure_strong_management_secret(&mut empty).unwrap());
-    assert!(empty.management_secret_key.starts_with("wui-Aa9_"));
-    assert!(empty.management_secret_key.len() >= 50);
+    assert!(!ensure_strong_management_secret(&mut empty).unwrap());
+    assert!(empty.management_secret_key.is_empty());
+    assert!(validate_gui_config(&empty).is_ok());
 
     let mut legacy = GuiConfigFile {
         management_secret_key: LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY.to_string(),
@@ -207,6 +207,7 @@ fn default_auth_directory_is_relative_and_legacy_absolute_value_is_migrated() {
 
     let mut config = GuiConfigFile {
         auth_dir: path_to_string(&fixed_oauth_dir().unwrap()),
+        auth_dir_user_selected: false,
         ..GuiConfigFile::default()
     };
     assert!(sanitize_gui_config(&mut config).unwrap());
@@ -1886,7 +1887,7 @@ fn core_config_validates_keys_and_routing_strategy() {
     assert!(validate_core_api_key("").is_err());
     assert!(validate_core_api_key("contains space").is_err());
     assert!(validate_routing_strategy("round-robin").is_ok());
-    assert!(validate_routing_strategy("weighted-round-robin").is_err());
+    assert!(validate_routing_strategy("weighted-round-robin").is_ok());
     assert!(validate_routing_strategy("fill-first").is_ok());
     assert!(validate_routing_strategy("random").is_err());
 }
@@ -1949,6 +1950,7 @@ fn startup_preserves_all_user_owned_yaml_and_only_applies_gui_managed_values() {
         window_width: None,
         window_height: None,
         auth_dir: path_to_string(&fixed_oauth_dir().unwrap()),
+        auth_dir_user_selected: false,
         api_keys: vec![
             default_api_key_entry(),
             GuiApiKeyEntry {
@@ -2118,4 +2120,53 @@ fn startup_merge_can_shrink_template_api_key_sequence() {
         document["remote-management"]["secret-key"],
         config.management_secret_key
     );
+}
+
+
+#[test]
+fn v8_signed_retry_weighted_routing_and_empty_host_roundtrip() {
+    let content = "config-version: 8\nserver: {host: '', port: 8317}\nrouting: {strategy: weighted-round-robin, retry: {max-retry-interval: -1}}\nmanagement: {secret-key: ''}\n";
+    let settings = core_config_settings_from_value(&serde_norway::from_str(content).unwrap()).unwrap();
+    let mut config = GuiConfigFile::default();
+    apply_core_settings_to_gui_config(&mut config, &settings);
+    sanitize_gui_config(&mut config).unwrap();
+    validate_gui_config(&config).unwrap();
+    assert_eq!(config.host, "");
+    assert_eq!(config.max_retry_interval, -1);
+    assert_eq!(config.routing_strategy, "weighted-round-robin");
+    assert!(!ensure_strong_management_secret(&mut config).unwrap());
+    assert!(config.management_secret_key.is_empty());
+    let serialized = toml::to_string(&config).unwrap();
+    let mut restored: GuiConfigFile = toml::from_str(&serialized).unwrap();
+    assert!(!ensure_strong_management_secret(&mut restored).unwrap());
+    assert_eq!(restored.max_retry_interval, -1);
+    let saved = apply_gui_managed_settings(content, &restored).unwrap();
+    let document: serde_norway::Value = serde_norway::from_str(&saved).unwrap();
+    assert_eq!(document["server"]["host"], "");
+    assert_eq!(document["management"]["secret-key"], "");
+    assert_eq!(document["routing"]["retry"]["max-retry-interval"], -1);
+}
+
+
+#[test]
+fn explicitly_selected_auth_directory_is_not_moved_on_restart() {
+    let root = agent_test_home("selected-auth-no-migration");
+    let install_dir = root.join("cpa-core");
+    let selected = install_dir.join("oauth");
+    let persistent = root.join("oauth");
+    fs::create_dir_all(&selected).unwrap();
+    fs::write(selected.join("account.json"), "credential").unwrap();
+    let mut config = GuiConfigFile { auth_dir: "oauth".into(), auth_dir_user_selected: true, ..GuiConfigFile::default() };
+    sanitize_gui_config_at(&mut config, &install_dir, &persistent).unwrap();
+    assert_eq!(config.auth_dir, "oauth");
+    assert!(selected.join("account.json").exists());
+    assert!(!persistent.exists());
+    let config_path = root.join("selected.toml");
+    write_gui_config_to_path(&config, &config_path).unwrap();
+    let mut restored: GuiConfigFile = toml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert!(restored.auth_dir_user_selected);
+    sanitize_gui_config_at(&mut restored, &install_dir, &persistent).unwrap();
+    assert_eq!(restored.auth_dir, "oauth");
+    assert!(selected.join("account.json").exists());
+    fs::remove_dir_all(root).unwrap();
 }

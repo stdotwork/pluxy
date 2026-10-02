@@ -166,8 +166,8 @@ pub(crate) fn save_network_endpoint_settings(
         return Err("Port must be between 1 and 65535".to_string());
     }
     let host = normalize_optional_config_string(settings.host, "Listen IP")?;
-    if host.parse::<IpAddr>().is_err() {
-        return Err("Listen IP must be a valid IPv4 or IPv6 address".to_string());
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") && host.parse::<IpAddr>().is_err() {
+        return Err("Listen address must be empty, localhost, or a valid IPv4 or IPv6 address".to_string());
     }
     let previous = gui_config_state.snapshot()?;
     let mut next = previous.clone();

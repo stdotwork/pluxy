@@ -26,9 +26,11 @@ import type { MessageKey } from "../i18n/resources";
 import { MessageNotice, FloatingNotice, useAppNotice, type NoticeMessage } from "../appNotice";
 import {
   managementApi,
+  providerGroupsApi,
   readString,
   responseList,
 } from "../services/managementApi";
+import { appendNativeProviderGroup } from '../services/providerGroups';
 import {
   DEEPSEEK_BASE_URL,
   fetchModels,
@@ -51,6 +53,7 @@ import devinIcon from "../assets/icons/devin.svg";
 import openaiIcon from "../assets/icons/openai-light.svg";
 import deepseekIcon from "../assets/icons/deepseek.svg";
 import geminiIcon from "../assets/icons/gemini.svg";
+import vertexIcon from '../assets/icons/vertex.svg';
 
 type AuthMethod = "oauth" | "api";
 type SetupStep = 1 | 2;
@@ -73,13 +76,14 @@ const oauthProviders: OAuthProviderInfo[] = [
   { id: "devin", name: "Devin OAuth", icon: devinIcon, descriptionKey: "easyMode.oauth.providerDesc.devin" },
 ];
 
-type ApiSection = "openai-compatibility" | "deepseek" | "claude" | "gemini" | "codex";
-type ApiManagementSection = "openai-compatibility" | "claude-api-key" | "codex-api-key" | "gemini-api-key";
+type ApiSection = "openai-compatibility" | "deepseek" | "claude" | "gemini" | "codex" | 'interactions' | 'vertex' | 'xai' | 'meta';
+type ApiManagementSection = "openai-compatibility" | "claude-api-key" | "codex-api-key" | "gemini-api-key" | 'interactions-api-key' | 'vertex-api-key' | 'xai-api-key' | 'meta-api-key';
 
 type ApiSectionOption = {
   id: ApiSection;
   managementSection: ApiManagementSection;
   nameKey: MessageKey;
+  name?: string;
   provider: ModelProvider;
   defaultBaseUrl: string;
   icon: string;
@@ -91,6 +95,10 @@ const apiSectionOptions: ApiSectionOption[] = [
   { id: "codex", managementSection: "codex-api-key", nameKey: "easyMode.api.platformName.codex", provider: "codex", defaultBaseUrl: "", icon: codexIcon },
   { id: "gemini", managementSection: "gemini-api-key", nameKey: "easyMode.api.platformName.gemini", provider: "gemini", defaultBaseUrl: "", icon: geminiIcon },
   { id: "deepseek", managementSection: "codex-api-key", nameKey: "easyMode.api.platformName.deepseek", provider: "deepseek", defaultBaseUrl: DEEPSEEK_BASE_URL, icon: deepseekIcon },
+  { id: 'interactions', managementSection: 'interactions-api-key', nameKey: 'easyMode.api.platformName.gemini', name: 'Gemini Interactions', provider: 'interactions', defaultBaseUrl: 'https://generativelanguage.googleapis.com', icon: geminiIcon },
+  { id: 'vertex', managementSection: 'vertex-api-key', nameKey: 'easyMode.api.platformName.gemini', name: 'Vertex AI', provider: 'vertex', defaultBaseUrl: 'https://aiplatform.googleapis.com', icon: vertexIcon },
+  { id: 'xai', managementSection: 'xai-api-key', nameKey: 'easyMode.api.platformName.openai', name: 'xAI', provider: 'xai', defaultBaseUrl: 'https://api.x.ai/v1', icon: grokIcon },
+  { id: 'meta', managementSection: 'meta-api-key', nameKey: 'easyMode.api.platformName.openai', name: 'Meta', provider: 'meta', defaultBaseUrl: 'https://api.meta.ai/v1', icon: openaiIcon },
 ];
 
 const isDeepSeekRecord = (record: Record<string, unknown>) => {
@@ -119,6 +127,7 @@ export function EasyModePage({
 
   const [authFiles, setAuthFiles] = useState<Record<string, unknown>[]>([]);
   const [apiCounts, setApiCounts] = useState<Record<ApiSection, number>>({
+    interactions: 0, vertex: 0, xai: 0, meta: 0,
     "openai-compatibility": 0,
     deepseek: 0,
     claude: 0,
@@ -195,6 +204,7 @@ export function EasyModePage({
       setAuthFiles(files);
 
       const counts: Record<ApiSection, number> = {
+        interactions: 0, vertex: 0, xai: 0, meta: 0,
         "openai-compatibility": 0,
         deepseek: 0,
         claude: 0,
@@ -202,13 +212,8 @@ export function EasyModePage({
         codex: 0,
       };
 
-      const configPayload = await managementApi.get("/config");
-      const recordsBySection: Record<ApiManagementSection, Record<string, unknown>[]> = {
-        "openai-compatibility": responseList(configPayload, "openai-compatibility"),
-        "claude-api-key": responseList(configPayload, "claude-api-key"),
-        "codex-api-key": responseList(configPayload, "codex-api-key"),
-        "gemini-api-key": responseList(configPayload, "gemini-api-key"),
-      };
+      const sections = [...new Set(apiSectionOptions.map((option) => option.managementSection))];
+      const recordsBySection = Object.fromEntries(await Promise.all(sections.map(async (section) => [section, await providerGroupsApi.get(section)]))) as Record<ApiManagementSection, Record<string, unknown>[]>;
 
       for (const section of apiSectionOptions) {
         const sourceList = recordsBySection[section.managementSection];
@@ -447,28 +452,16 @@ export function EasyModePage({
     try {
       const selectedOption = apiSectionOptions.find((option) => option.id === selectedApiSection);
       const managementSection = selectedOption?.managementSection ?? "openai-compatibility";
-      const configPayload = await managementApi.get("/config");
-      const list = responseList(configPayload, managementSection);
+      const list = await providerGroupsApi.get(managementSection);
       const selectedModels = apiSelectedModels.map((model) => ({ name: model.name.trim() }));
       const models = selectedModels;
-      const newEntry = managementSection === "openai-compatibility"
-        ? {
-          name: apiRemark.trim() || `${selectedApiSection} (${list.length + 1})`,
-          "base-url": normalizeBaseUrl(apiBaseUrl.trim()),
-          "api-key-entries": [
-            { "api-key": apiKey.trim(), ...(proxyUrl ? { "proxy-url": proxyUrl } : {}) },
-          ],
-          models,
-        }
-        : {
-          ...(selectedApiSection === "deepseek" ? { name: "DeepSeek" } : {}),
-          "api-key": apiKey.trim(),
-          ...(proxyUrl ? { "proxy-url": proxyUrl } : {}),
-          "base-url": normalizeBaseUrl(apiBaseUrl.trim()),
-          models,
-        };
-
-      await managementApi.put(`/${managementSection}`, [...list, newEntry]);
+      const newEntry = {
+        name: apiRemark.trim() || (selectedApiSection === 'deepseek' ? 'DeepSeek' : selectedApiSection),
+        'base-url': normalizeBaseUrl(apiBaseUrl.trim()),
+        keys: [{ 'api-key': apiKey.trim(), ...(proxyUrl ? { 'proxy-url': proxyUrl } : {}) }],
+        models,
+      };
+      await providerGroupsApi.put(managementSection, appendNativeProviderGroup(list, newEntry));
       showApiNotice({ key: "easyMode.notice.apiSaveSuccess" });
       setGuideApiSaved(true);
       void refreshSourceStatus();
@@ -959,7 +952,7 @@ export function EasyModePage({
                       onClick={() => handleApiSectionChange(opt.id)}
                     >
                       <img className="simple-mode-api-platform-icon" src={opt.icon} alt="" />
-                      {t(opt.nameKey)}
+                      {opt.name ?? t(opt.nameKey)}
                     </button>
                   ))}
                 </div>

@@ -66,6 +66,51 @@ oauth: {auth-dir: ${JSON.stringify(join(work, 'auth'))}}
     return flattenV8ProviderGroups(provider, await loaded.json());
   };
 
+  for (const provider of ['gemini', 'interactions', 'vertex', 'codex', 'claude', 'xai', 'meta', 'openai-compatibility']) {
+    it(`${provider}: saves all template provider, key and model options through native v8 groups`, async () => {
+      const section = (provider === 'openai-compatibility' ? provider : `${provider}-api-key`) as ProviderSection;
+      const model: Record<string, unknown> = { name: 'isolated-model', alias: 'isolated-public' };
+      {
+        model.thinking = { levels: ['low', 'high'], min: 0, max: 32768, 'zero-allowed': false, 'dynamic-allowed': true };
+        model['display-name'] = 'Isolated model';
+        if (provider !== 'vertex') { model['max-context-length'] = 1048576; model['is-compat'] = false; }
+      }
+      model['force-mapping'] = true;
+      if (['codex', 'xai', 'meta'].includes(provider)) model['support-configuration-update'] = false;
+      if (provider === 'openai-compatibility') Object.assign(model, { image: false, 'input-modalities': ['text', 'image'], 'output-modalities': ['text'], 'use-max-completion-tokens': true });
+      const special = provider === 'codex' ? { 'disable-codex-cloaking': false, 'alpha-search': false, websockets: false }
+        : provider === 'claude' ? { 'rebuild-mid-system-message': false, 'fingerprint-profile': 'claude-code-cli', 'experimental-cch-signing': false,
+          cloak: { mode: 'auto', 'strict-mode': false, 'sensitive-words': [], 'cache-user-id': false } }
+        : provider === 'xai' ? { websockets: true } : {};
+      const group = { name: 'isolated-template', 'base-url': 'https://gateway.example.test/v1', priority: 0, prefix: '', 'proxy-url': 'direct',
+        headers: { 'X-Session': '$X-Client-Session' }, 'request-retry': 0, 'disable-cooling': false,
+        'request-scoped-errors': [{ status: 400, match: ['context'], 'match-regexr': ['^context'], action: 'stop' }],
+        ...(provider === 'openai-compatibility' ? { 'support-prompt-cache-key': false } : {}),
+        models: [model], 'excluded-models': [],
+        keys: [{ 'api-key': 'isolated-template-key', weight: 0, priority: null, models: null, headers: {}, 'request-scoped-errors': [], ...special }],
+      };
+      if (provider === 'vertex') {
+        delete (group as Record<string, unknown>)['request-scoped-errors'];
+        delete (group.keys[0] as Record<string, unknown>)['request-scoped-errors'];
+      }
+      if (provider === 'openai-compatibility') {
+        delete (group as Record<string, unknown>)['proxy-url'];
+        delete (group as Record<string, unknown>)['excluded-models'];
+        group.keys = [{ 'api-key': 'isolated-template-key', weight: 0, 'proxy-url': 'direct' }] as never;
+      }
+      const draft = providerDraftFromRecord(section, group);
+      const saved = buildProviderGroupRecord(section, draft, group);
+      const url = `${origin}/config/api-keys/${provider}`;
+      const response = await fetch(url, { method: 'PUT', headers, body: JSON.stringify([saved]) });
+      const result = await response.text();
+      expect({ status: response.status, result: response.ok ? 'ok' : result }).toEqual({ status: 200, result: 'ok' });
+      const loaded = await (await fetch(url, { headers })).json();
+      expect(loaded[0].keys[0]['api-key']).toBe('isolated-template-key');
+      expect(loaded[0]['request-retry']).toBe(0);
+      expect(loaded[0].models[0].alias).toBe('isolated-public');
+    });
+  }
+
   it('native group edits preserve multiple keys, shared models and explicit overrides in v8', async () => {
     const url = `${origin}/config/api-keys/codex`;
     const groups = [{ name: 'native-multi-key', 'base-url': 'https://gateway.example.test/v1',

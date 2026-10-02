@@ -154,7 +154,7 @@ const DEFAULT_AGENT_TERMINAL: &str = "auto";
 const DEFAULT_API_KEY_INITIAL_REMARK: &str = "Default key";
 const DEFAULT_REQUEST_RETRY: u32 = 3;
 const DEFAULT_MAX_RETRY_CREDENTIALS: u32 = 0;
-const DEFAULT_MAX_RETRY_INTERVAL: u32 = 30;
+const DEFAULT_MAX_RETRY_INTERVAL: i64 = 30;
 const DEFAULT_STREAMING_BOOTSTRAP_RETRIES: u32 = 0;
 const DEFAULT_DISABLE_COOLING: bool = false;
 const DEFAULT_LOGS_MAX_TOTAL_SIZE_MB: u32 = 0;
@@ -603,6 +603,7 @@ struct GuiConfigFile {
     window_width: Option<u32>,
     window_height: Option<u32>,
     auth_dir: String,
+    auth_dir_user_selected: bool,
     #[serde(deserialize_with = "deserialize_gui_api_keys")]
     api_keys: Vec<GuiApiKeyEntry>,
     api_access_remarks: Vec<GuiApiAccessRemark>,
@@ -628,7 +629,7 @@ struct GuiConfigFile {
     disable_cooling: bool,
     request_retry: u32,
     max_retry_credentials: u32,
-    max_retry_interval: u32,
+    max_retry_interval: i64,
     streaming_bootstrap_retries: u32,
 }
 
@@ -909,6 +910,7 @@ impl Default for GuiConfigFile {
             window_width: Some(DEFAULT_MAIN_WINDOW_WIDTH),
             window_height: Some(DEFAULT_MAIN_WINDOW_HEIGHT),
             auth_dir: DEFAULT_AUTH_DIR.to_string(),
+            auth_dir_user_selected: false,
             api_keys: vec![default_api_key_entry()],
             api_access_remarks: Vec::new(),
             management_secret_key: LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY.to_string(),
@@ -975,7 +977,7 @@ struct GuiConfigPresence {
     disable_cooling: Option<bool>,
     request_retry: Option<u32>,
     max_retry_credentials: Option<u32>,
-    max_retry_interval: Option<u32>,
+    max_retry_interval: Option<i64>,
     streaming_bootstrap_retries: Option<u32>,
 }
 
@@ -1467,7 +1469,7 @@ struct GuiNetworkRoutingSettings {
     disable_cooling: bool,
     request_retry: u32,
     max_retry_credentials: u32,
-    max_retry_interval: u32,
+    max_retry_interval: i64,
     streaming_bootstrap_retries: u32,
 }
 
@@ -1489,7 +1491,7 @@ struct GuiRetrySettings {
     disable_cooling: bool,
     request_retry: u32,
     max_retry_credentials: u32,
-    max_retry_interval: u32,
+    max_retry_interval: i64,
     streaming_bootstrap_retries: u32,
 }
 
@@ -1554,7 +1556,7 @@ struct CoreConfigSettings {
     disable_cooling: bool,
     request_retry: u32,
     max_retry_credentials: u32,
-    max_retry_interval: u32,
+    max_retry_interval: i64,
     streaming_bootstrap_retries: u32,
     #[allow(dead_code)]
     #[serde(skip_serializing)]
@@ -1593,7 +1595,7 @@ struct CoreConfigView {
     disable_cooling: bool,
     request_retry: u32,
     max_retry_credentials: u32,
-    max_retry_interval: u32,
+    max_retry_interval: i64,
     streaming_bootstrap_retries: u32,
 }
 
@@ -2208,7 +2210,6 @@ impl GuiConfigState {
             if let Some(secret_key) = settings
                 .management_secret_key
                 .as_deref()
-                .filter(|secret_key| !secret_key.is_empty())
                 .filter(|secret_key| !is_hashed_management_secret_key(secret_key))
             {
                 config.management_secret_key = secret_key.to_string();
@@ -2675,6 +2676,8 @@ fn main() {
             get_core_sensitive_words_settings,
             save_core_sensitive_words_settings,
             get_core_config_settings,
+            get_extended_core_config,
+            save_extended_core_config,
             save_core_logging_settings,
             set_core_request_log,
             add_core_api_key,

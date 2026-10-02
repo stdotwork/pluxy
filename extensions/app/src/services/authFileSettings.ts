@@ -3,6 +3,10 @@ import { isRecord, managementApi } from './managementApi';
 import { normalizeAuthFilePriorityInput } from './authFiles';
 import { authFileExcludedRulesFromPayload } from './oauthModelSettings';
 import { normalizeOAuthExcludedRules } from './oauthModels';
+import { credentialAdvancedShape } from './credentialAdvancedSettings';
+import { validateStructuredValueText } from './structuredConfig';
+import { templateText } from '../i18n/templateConfig';
+import { sameTemplateValue } from './templateConfig';
 
 export type BooleanOverride = '' | 'true' | 'false';
 export type AuthFileSettingsDraft = {
@@ -15,6 +19,7 @@ export type AuthFileSettingsDraft = {
   excluded_models: string;
   headers: string;
   note: string;
+  advanced: Record<string, unknown>;
 };
 
 const fail = (key: 'metadata' | 'headers' | 'weight' | 'priority') => {
@@ -68,6 +73,10 @@ export const authFileSettingsFromPayload = (payload: unknown): AuthFileSettingsD
     excluded_models: authFileExcludedRulesFromPayload(metadata).join('\n'),
     headers: JSON.stringify(headers, null, 2),
     note: text(metadata.note),
+    advanced: Object.fromEntries(Object.keys(credentialAdvancedShape.fields ?? {}).flatMap(key => {
+      const value = read(key, key.replace(/_/g, '-'));
+      return value === undefined ? [] : [[key, value]];
+    })),
   };
 };
 
@@ -108,6 +117,13 @@ export const buildAuthFileSettingsPatch = (
       if (previous[name] !== next[name]) headers[name] = next[name] ?? '';
     }
     if (Object.keys(headers).length) patch.headers = headers;
+  }
+  for (const [key, shape] of Object.entries(credentialAdvancedShape.fields ?? {})) {
+    const next = draft.advanced[key];
+    if (sameTemplateValue(next, original.advanced[key])) continue;
+    const error = validateStructuredValueText(shape, next, key);
+    if (error) throw new Error(templateText(error, getCurrentLocale()));
+    patch[key] = next ?? null;
   }
   return patch;
 };
