@@ -50,6 +50,7 @@ fn oauth_auth_provider_names_map_to_alias_channels() {
     );
     assert_eq!(normalize_oauth_alias_channel("grok"), Some("xai"));
     assert_eq!(normalize_oauth_alias_channel("meta"), Some("meta"));
+    assert_eq!(normalize_oauth_alias_channel(" Muse "), Some("meta"));
 }
 
 #[test]

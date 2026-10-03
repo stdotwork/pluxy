@@ -1300,6 +1300,45 @@
   min-width: 0;
 }
 
+.simple-mode-oauth-authorization {
+  min-width: 0;
+}
+
+.simple-mode-oauth-authorization .oauth-hint {
+  margin: 0 0 0.6rem;
+}
+
+.simple-mode-oauth-authorization .oauth-auth-url-actions {
+  flex-wrap: wrap;
+}
+
+.simple-mode-device-code {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.6rem;
+  margin-top: 0.8rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.65rem;
+  background: var(--bg-tertiary);
+}
+
+.simple-mode-device-code-label {
+  flex: 1 0 100%;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.simple-mode-device-code code {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
 .simple-mode-provider-card-foot .primary-button,
 .simple-mode-provider-card-foot .secondary-button {
   min-height: 34px;

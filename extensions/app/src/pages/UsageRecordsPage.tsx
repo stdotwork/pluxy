@@ -37,6 +37,7 @@ import {
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { usageViewScopeKey } from '../services/usageViewScope';
 import { EventsView, type UsageEventPage } from './UsageEventsView';
+import { UsageAnalysisView, type UsageAnalysis, type UsageCategory } from './UsageAnalysisView';
 
 type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing' | 'data-management';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
@@ -73,21 +74,6 @@ type UsageOverview = {
   estimatedCost: number;
   pricedRequests: number;
   timeline: TimelinePoint[];
-};
-
-type UsageCategory = {
-  key: string;
-  label: string;
-  requests: number;
-  failures: number;
-  tokens: number;
-};
-
-type UsageAnalysis = {
-  models: UsageCategory[];
-  providers: UsageCategory[];
-  sources: UsageCategory[];
-  apiKeys: UsageCategory[];
 };
 
 type ModelPrice = {
@@ -458,22 +444,6 @@ export function UsageRecordsPage() {
     setPage(1);
   };
 
-  const hasActiveFilters = Boolean(
-    model || provider || source || apiKeyHash || (result && result !== 'all') || range === 'custom'
-  );
-
-  const resetFilters = () => {
-    setModel('');
-    setProvider('');
-    setSource('');
-    setApiKeyHash('');
-    setResult('all');
-    if (range === 'custom') setRange('24h');
-    setCustomStart('');
-    setCustomEnd('');
-    setPage(1);
-  };
-
   const collectorTone = status?.state === 'error' ? 'error' : status?.state === 'collecting' ? 'success' : '';
   const hasCurrentSnapshot = loadedScopeKey === scopeKey;
   const showInitialLoading =
@@ -501,7 +471,7 @@ export function UsageRecordsPage() {
         <div className="usage-filter-row">
           <div className="usage-filter-group">
             <label className="usage-filter-item">
-              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.filter.timeRange')}</span>
+              <span className="sr-only">{t('usage.filter.timeRange')}</span>
               <select
                 value={range}
                 onChange={(event) => {
@@ -521,7 +491,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.filter.model')}</span>
+              <span className="sr-only">{t('usage.filter.model')}</span>
               <select
                 value={model}
                 onChange={(event) => changeFilter(setModel, event.currentTarget.value)}
@@ -537,7 +507,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.column.provider')}</span>
+              <span className="sr-only">{t('usage.column.provider')}</span>
               <select
                 value={provider}
                 onChange={(event) => changeFilter(setProvider, event.currentTarget.value)}
@@ -553,7 +523,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.filter.source')}</span>
+              <span className="sr-only">{t('usage.filter.source')}</span>
               <select
                 value={source}
                 onChange={(event) => changeFilter(setSource, event.currentTarget.value)}
@@ -569,7 +539,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('apiAccess.field.key')}</span>
+              <span className="sr-only">{t('apiAccess.field.key')}</span>
               <select
                 value={apiKeyHash}
                 onChange={(event) => changeFilter(setApiKeyHash, event.currentTarget.value)}
@@ -585,7 +555,7 @@ export function UsageRecordsPage() {
             </label>
 
             <label className="usage-filter-item">
-              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.filter.result')}</span>
+              <span className="sr-only">{t('usage.filter.result')}</span>
               <select
                 value={result}
                 onChange={(event) => changeFilter(setResult, event.currentTarget.value)}
@@ -598,19 +568,6 @@ export function UsageRecordsPage() {
               </select>
             </label>
           </div>
-
-          {hasActiveFilters || activeTab === 'events' ? (
-            <button
-              type="button"
-              className="usage-filter-reset-btn"
-              disabled={!hasActiveFilters}
-              onClick={resetFilters}
-              title={t('usage.filter.reset')}
-            >
-              <span>{t('usage.filter.reset')}</span>
-            </button>
-          ) : null}
-
         </div>
 
         {range === 'custom' ? (
@@ -740,7 +697,7 @@ export function UsageRecordsPage() {
         role="tabpanel"
         aria-labelledby={`usage-tab-${activeTab}`}
       >
-      {activeTab !== 'data-management' && activeTab !== 'events' ? filterPanel : null}
+      {activeTab !== 'data-management' ? filterPanel : null}
 
       {showInitialLoading && activeTab !== 'events' ? (
         <div className="usage-initial-loading">
@@ -750,11 +707,10 @@ export function UsageRecordsPage() {
       ) : null}
 
       {hasCurrentSnapshot && activeTab === 'overview' && overview ? <OverviewView overview={overview} range={overviewRange} /> : null}
-      {hasCurrentSnapshot && activeTab === 'analysis' ? <AnalysisView analysis={analysis} overview={overview} /> : null}
+      {hasCurrentSnapshot && activeTab === 'analysis' ? <UsageAnalysisView analysis={analysis} overview={overview} range={overviewRange} /> : null}
       {activeTab === 'events' ? (
         <EventsView
           events={hasCurrentSnapshot && events ? events : { items: [], total: 0, page, pageSize, totalPages: 1 }}
-          filters={filterPanel}
           loading={showInitialLoading}
           pageSize={pageSize}
           onPage={setPage}
@@ -1567,81 +1523,6 @@ function TokenComposition({ overview }: { overview: UsageOverview }) {
           </section>
         </div>
       </div>
-    </section>
-  );
-}
-
-function AnalysisView({ analysis, overview }: { analysis: UsageAnalysis; overview: UsageOverview | null }) {
-  const { t } = useI18n();
-  const hours = (overview?.timeline ?? [])
-    .map((point) => ({
-      key: point.hour,
-      label: point.hour,
-      requests: point.requests,
-      failures: point.failure,
-      tokens: point.tokens,
-    }))
-    .sort((left, right) => right.tokens - left.tokens);
-  return (
-    <div className="usage-analysis-grid">
-      <CategoryPanel title={t('usage.analysis.models')} items={analysis.models} />
-      <CategoryPanel title={t('usage.column.provider')} items={analysis.providers} />
-      <CategoryPanel title={t('usage.analysis.sources')} items={analysis.sources} compactLabels />
-      <CategoryPanel title={t('usage.analysis.keys')} items={analysis.apiKeys} />
-      <CategoryPanel title={t('usage.analysis.hours')} items={hours} />
-    </div>
-  );
-}
-
-function CategoryPanel({
-  title,
-  items,
-  compactLabels = false,
-}: {
-  title: string;
-  items: UsageCategory[];
-  compactLabels?: boolean;
-}) {
-  const { t } = useI18n();
-  const max = Math.max(...items.map((item) => item.tokens), 1);
-  const total = items.reduce((sum, item) => sum + item.tokens, 0);
-  return (
-    <section className={`panel usage-category-panel${compactLabels ? ' compact-labels' : ''}`}>
-      <div className="usage-section-heading">
-        <div>
-          <strong>{title}</strong>
-          <span>{t('usage.analysis.sortedByTokens')}</span>
-        </div>
-      </div>
-      {items.length ? (
-        <div className="usage-category-list">
-          {items.slice(0, 10).map((item, idx) => {
-            const percent = total ? ((item.tokens * 100) / total).toFixed(1) : '0.0';
-            return (
-              <div key={item.key} className="usage-category-row">
-                <div className="usage-category-header">
-                  <div className="usage-category-label-wrap">
-                    <span className={`usage-rank-badge${idx < 3 ? ' top' : ''}`}>{idx + 1}</span>
-                    <strong className="usage-category-name" title={item.label}>
-                      {item.label}
-                    </strong>
-                  </div>
-                  <small className="usage-category-meta">
-                    <span>{compactNumber(item.requests)} {t('usage.unit.requests')}</span>
-                    <span className="usage-category-pct">{percent}%</span>
-                    <strong>{compactNumber(item.tokens)} {t('usage.unit.tokens')}</strong>
-                  </small>
-                </div>
-                <div className="usage-category-track">
-                  <div className="usage-category-fill" style={{ width: `${(item.tokens * 100) / max}%` }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <UsageEmpty />
-      )}
     </section>
   );
 }

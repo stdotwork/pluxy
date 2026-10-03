@@ -1,16 +1,21 @@
 use super::{
-    build_http_client_with_proxy, is_loopback_host, usage, GuiConfigState, APP_USER_AGENT,
+    build_http_client_with_proxy, effective_agent_api_key, fetch_agent_model_payload, is_loopback_host,
+    managed_core_loopback_origin, managed_core_tls_enabled, usage, validate_agent_model,
+    GuiConfigFile, GuiConfigState, APP_USER_AGENT,
 };
 use chrono::Local;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
 const MAX_PROVIDER_HEALTH_STREAM_BYTES: usize = 256 * 1024;
 static PROVIDER_HEALTH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -160,6 +165,22 @@ fn provider_health_json_has_terminal_success(protocol: &str, value: &serde_json:
         return event == Some("interaction.complete")
             && value.pointer("/interaction/status").and_then(serde_json::Value::as_str) == Some("completed");
     }
+    if protocol == "openai-chat" {
+        // CPA translates Gemini's exhausted thinking budget into OpenAI chunks.
+        // A confirmed reasoning-only generation is usable, but has no text TTFT.
+        let exhausted_thinking_budget = value
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|choices| choices.iter().any(|choice| {
+                matches!(choice.get("finish_reason").and_then(serde_json::Value::as_str),
+                    Some("length" | "max_tokens"))
+            }));
+        let thoughts = value.pointer("/usage/completion_tokens_details/reasoning_tokens")
+            .and_then(serde_json::Value::as_u64).unwrap_or_default();
+        let output = value.pointer("/usage/completion_tokens")
+            .and_then(serde_json::Value::as_u64).unwrap_or_default();
+        return exhausted_thinking_budget && thoughts > 0 && output >= thoughts;
+    }
     if protocol != "gemini" {
         return false;
     }
@@ -303,9 +324,147 @@ pub(crate) fn provider_health_content_type_is_streaming(content_type: &str) -> b
 }
 
 #[tauri::command]
+pub(crate) async fn get_core_models(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<Vec<CoreHealthModel>, String> {
+    let config = gui_config_state.snapshot()?;
+    fetch_core_models(config.port, effective_agent_api_key(&config)).await
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CoreHealthModel {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+}
+
+async fn fetch_core_models(port: u16, api_key: &str) -> Result<Vec<CoreHealthModel>, String> {
+    let payload = fetch_agent_model_payload(port, api_key).await?;
+    parse_core_models(&payload)
+}
+
+fn parse_core_models(payload: &serde_json::Value) -> Result<Vec<CoreHealthModel>, String> {
+    let object_models = payload.get("models").and_then(serde_json::Value::as_object).map(|models| {
+        models.iter().map(|(id, value)| {
+            let mut entry = value.as_object().cloned().unwrap_or_default();
+            entry.entry("id").or_insert(serde_json::json!(id));
+            serde_json::Value::Object(entry)
+        }).collect::<Vec<_>>()
+    });
+    let entries = payload.as_array()
+        .or_else(|| payload.get("data").and_then(serde_json::Value::as_array))
+        .or_else(|| payload.get("models").and_then(serde_json::Value::as_array))
+        .or(object_models.as_ref())
+        .ok_or_else(|| "Local model list response is missing a data array or models catalog".to_string())?;
+    let mut seen = HashSet::new();
+    let mut models = Vec::new();
+    for entry in entries {
+        let name = entry.as_str()
+            .or_else(|| entry.get("id").and_then(serde_json::Value::as_str))
+            .or_else(|| entry.get("name").and_then(serde_json::Value::as_str))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| "Local model list contains an invalid model ID".to_string())?;
+        // Agent configuration may resolve aliases or ignore case. Health checks
+        // must use each ID exactly as published by the inference endpoint.
+        if !seen.insert(name.to_string()) {
+            continue;
+        }
+        let display_name = ["display_name", "displayName", "name"].into_iter()
+            .find_map(|key| entry.get(key).and_then(serde_json::Value::as_str))
+            .map(str::trim)
+            .filter(|display| !display.is_empty() && *display != name)
+            .map(str::to_string);
+        models.push(CoreHealthModel { name: name.to_string(), display_name });
+    }
+    Ok(models)
+}
+
+#[tauri::command]
+pub(crate) async fn core_health_probe(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    model: String,
+    timeout_ms: Option<u64>,
+) -> Result<ProviderHealthProbeResponse, String> {
+    let config = gui_config_state.snapshot()?;
+    probe_core_model(&config, &model, timeout_ms).await
+}
+
+async fn probe_core_model(
+    config: &GuiConfigFile,
+    model: &str,
+    timeout_ms: Option<u64>,
+) -> Result<ProviderHealthProbeResponse, String> {
+    let model = validate_agent_model(model)?;
+    if config.port == 0 {
+        return Err("Invalid kernel port".to_string());
+    }
+    let tls_enabled = managed_core_tls_enabled();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(health_probe_timeout(timeout_ms))
+        .danger_accept_invalid_certs(tls_enabled)
+        .build()
+        .map_err(|error| format!("Failed to create kernel health check client: {error}"))?;
+    let request = ProviderHealthProbeRequest {
+        url: format!("{}/v1/chat/completions", managed_core_loopback_origin(config.port)),
+        header: HashMap::from([
+            ("Authorization".to_string(), format!("Bearer {}", effective_agent_api_key(config))),
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Accept".to_string(), "text/event-stream".to_string()),
+        ]),
+        data: serde_json::json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "Reply with OK." }],
+            "max_tokens": 16,
+            "stream": true,
+        }).to_string(),
+        protocol: "openai-chat".to_string(),
+        source_provider: None,
+        timeout_ms,
+        model,
+        source: String::new(),
+        auth_index: String::new(),
+    };
+    // The kernel records these requests itself. Only direct upstream probes need a
+    // desktop usage event, otherwise one health check appears twice in usage.
+    execute_health_probe(None, client, request).await
+}
+
+fn health_probe_timeout(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(timeout_ms.unwrap_or(15_000).clamp(1_000, 120_000))
+}
+
+#[tauri::command]
 pub(crate) async fn provider_health_probe(
     app: tauri::AppHandle,
     gui_config_state: tauri::State<'_, GuiConfigState>,
+    request: ProviderHealthProbeRequest,
+) -> Result<ProviderHealthProbeResponse, String> {
+    let url = reqwest::Url::parse(request.url.trim())
+        .map_err(|error| format!("Invalid health check URL: {error}"))?;
+    let config = gui_config_state.snapshot()?;
+    let proxy_url = url
+        .host_str()
+        .filter(|host| !is_loopback_host(host))
+        .map(|_| config.proxy_url.as_str())
+        .unwrap_or_default();
+    let client = build_http_client_with_proxy(
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(health_probe_timeout(request.timeout_ms)),
+        proxy_url,
+        "Failed to create health check client",
+    )?;
+    execute_health_probe(Some(&app), client, request).await
+}
+
+async fn execute_health_probe(
+    usage_app: Option<&tauri::AppHandle>,
+    client: reqwest::Client,
     request: ProviderHealthProbeRequest,
 ) -> Result<ProviderHealthProbeResponse, String> {
     let url = reqwest::Url::parse(request.url.trim())
@@ -328,20 +487,6 @@ pub(crate) async fn provider_health_probe(
         .acquire()
         .await
         .map_err(|error| error.to_string())?;
-    let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(15_000).clamp(1_000, 120_000));
-    let config = gui_config_state.snapshot()?;
-    let proxy_url = url
-        .host_str()
-        .filter(|host| !is_loopback_host(host))
-        .map(|_| config.proxy_url.as_str())
-        .unwrap_or_default();
-    let client = build_http_client_with_proxy(
-        reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(timeout),
-        proxy_url,
-        "Failed to create health check client",
-    )?;
     let mut headers = reqwest::header::HeaderMap::new();
     for (name, value) in &request.header {
         let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
@@ -395,21 +540,25 @@ pub(crate) async fn provider_health_probe(
         received.extend_from_slice(&chunk);
         let elapsed_ms = started_at.elapsed().as_millis().max(1) as u64;
         if provider_health_stream_has_text(&request.protocol, &received) {
-            persist_provider_health_success(
-                &app,
-                &request,
-                &endpoint,
-                elapsed_ms,
-                Some(elapsed_ms),
-                &received,
-            );
+            if let Some(app) = usage_app {
+                persist_provider_health_success(
+                    app,
+                    &request,
+                    &endpoint,
+                    elapsed_ms,
+                    Some(elapsed_ms),
+                    &received,
+                );
+            }
             return Ok(ProviderHealthProbeResponse {
                 first_token_latency_ms: Some(elapsed_ms),
                 response_latency_ms: elapsed_ms,
             });
         }
         if provider_health_stream_has_terminal_success(&request.protocol, &received) {
-            persist_provider_health_success(&app, &request, &endpoint, elapsed_ms, None, &received);
+            if let Some(app) = usage_app {
+                persist_provider_health_success(app, &request, &endpoint, elapsed_ms, None, &received);
+            }
             return Ok(ProviderHealthProbeResponse {
                 first_token_latency_ms: None,
                 response_latency_ms: elapsed_ms,

@@ -75,11 +75,11 @@ export function ProviderErrorRules({ value, onChange, inherited }: { value: Valu
   </details>;
 }
 
-export function ProviderGroupTemplateFields({ value, onChange, section }: { value: Value; onChange: Change; section: string }) {
+export function ProviderGroupTemplateFields({ value, onChange, section, includeErrors = true }: { value: Value; onChange: Change; section: string; includeErrors?: boolean }) {
   return <div className="provider-template-fields">
     <ProviderField value={value} onChange={onChange} field="request-retry" label="retry" kind="number" initial={0} hint="retryHint" />
     {section === 'openai-compatibility' ? <ProviderField value={value} onChange={onChange} field="support-prompt-cache-key" label="promptCache" /> : null}
-    {section !== 'vertex-api-key' ? <ProviderErrorRules value={value} onChange={onChange} /> : null}
+    {includeErrors && section !== 'vertex-api-key' ? <ProviderErrorRules value={value} onChange={onChange} /> : null}
   </div>;
 }
 

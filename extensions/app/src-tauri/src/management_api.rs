@@ -21,6 +21,9 @@ use std::{
 pub(crate) struct OAuthStartResult {
     url: String,
     state: Option<String>,
+    user_code: Option<String>,
+    flow: Option<String>,
+    expires_in: Option<u64>,
     opened: bool,
     open_error: Option<String>,
 }
@@ -36,6 +39,9 @@ pub(crate) struct OAuthStatusResult {
 struct OAuthStartApiResponse {
     url: Option<String>,
     state: Option<String>,
+    user_code: Option<String>,
+    flow: Option<String>,
+    expires_in: Option<u64>,
     error: Option<String>,
     #[serde(rename = "error_message")]
     error_message: Option<String>,
@@ -178,10 +184,11 @@ pub(crate) async fn start_oauth_login(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     provider: String,
     browser: Option<String>,
+    plugin_provider: Option<bool>,
 ) -> Result<OAuthStartResult, String> {
     super::network_proxy::prepare_oauth(&app).await;
     let config = gui_config_state.snapshot()?;
-    let provider_key = normalize_management_oauth_provider(&provider)?;
+    let provider_key = normalize_oauth_request_provider(&provider, plugin_provider.unwrap_or(false))?;
     let client = management_http_client()?;
     let mut request = client
         .get(management_endpoint(&config, "oauth/auth-url")?)
@@ -195,6 +202,15 @@ pub(crate) async fn start_oauth_login(
         .await
         .map_err(|err| format_management_request_error("Failed to request OAuth login URL", &err))?;
     let payload = read_management_json::<OAuthStartApiResponse>(response).await?;
+    let mut result = normalize_oauth_start_response(payload)?;
+    match open_oauth_url_inner(&app, &result.url, browser.as_deref()) {
+        Ok(()) => result.opened = true,
+        Err(error) => result.open_error = Some(error),
+    }
+    Ok(result)
+}
+
+fn normalize_oauth_start_response(payload: OAuthStartApiResponse) -> Result<OAuthStartResult, String> {
     if let Some(error) = payload
         .error
         .or(payload.error_message)
@@ -212,16 +228,20 @@ pub(crate) async fn start_oauth_login(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    let (opened, open_error) = match open_oauth_url_inner(&app, &url, browser.as_deref()) {
-        Ok(()) => (true, None),
-        Err(error) => (false, Some(error)),
-    };
-
     Ok(OAuthStartResult {
         url,
         state,
-        opened,
-        open_error,
+        user_code: payload
+            .user_code
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        flow: payload
+            .flow
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty()),
+        expires_in: payload.expires_in.filter(|value| *value > 0),
+        opened: false,
+        open_error: None,
     })
 }
 
@@ -264,13 +284,14 @@ pub(crate) async fn submit_oauth_callback(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     provider: String,
     redirect_url: String,
+    plugin_provider: Option<bool>,
 ) -> Result<(), String> {
     let redirect_url = redirect_url.trim().to_string();
     if redirect_url.is_empty() {
         return Err("Callback URL cannot be empty".to_string());
     }
     let config = gui_config_state.snapshot()?;
-    let provider_key = normalize_management_oauth_provider(&provider)?;
+    let provider_key = normalize_oauth_request_provider(&provider, plugin_provider.unwrap_or(false))?;
     let client = management_http_client()?;
     let body = serde_json::json!({
         "provider": provider_key,
@@ -355,12 +376,30 @@ pub(crate) fn management_endpoint(config: &GuiConfigFile, path: &str) -> Result<
     Ok(format!("{origin}/v8/management/{path}"))
 }
 
+fn normalize_oauth_request_provider(provider: &str, plugin_provider: bool) -> Result<String, String> {
+    if !plugin_provider {
+        return normalize_management_oauth_provider(provider);
+    }
+    // Plugin provider IDs are literal backend identifiers. A plugin named grok
+    // or cognition must not be redirected to the built-in xai or devin flow.
+    let key = provider.trim().to_ascii_lowercase();
+    if key.is_empty()
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err("Invalid OAuth provider".to_string());
+    }
+    Ok(key)
+}
+
 fn normalize_management_oauth_provider(provider: &str) -> Result<String, String> {
     let key = provider.trim().to_ascii_lowercase().replace('_', "-");
     let key = match key.as_str() {
         "claude" | "anthropic" => "claude".to_string(),
         "anti-gravity" => "antigravity".to_string(),
         "cognition" => "devin".to_string(),
+        "muse" => "meta".to_string(),
         "grok" | "x-ai" | "x.ai" => "xai".to_string(),
         other => other.to_string(),
     };
@@ -469,6 +508,45 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn plugin_oauth_preserves_literal_provider_ids_without_builtin_aliases() {
+        for provider in [
+            "grok",
+            "cognition",
+            "anti-gravity",
+            "anthropic",
+            "custom-sso",
+        ] {
+            assert_eq!(
+                normalize_oauth_request_provider(provider, true).unwrap(),
+                provider
+            );
+        }
+        assert_eq!(
+            normalize_oauth_request_provider(" Custom-SSO ", true).unwrap(),
+            "custom-sso"
+        );
+        for provider in ["", "custom_sso", "custom/sso", "custom.sso", "custom sso"] {
+            assert!(normalize_oauth_request_provider(provider, true).is_err());
+        }
+    }
+
+    #[test]
+    fn builtin_oauth_retains_aliases_when_plugin_provider_is_not_requested() {
+        for (provider, expected) in [
+            ("grok", "xai"),
+            ("cognition", "devin"),
+            ("anti-gravity", "antigravity"),
+            ("anthropic", "claude"),
+            ("custom_sso", "custom-sso"),
+        ] {
+            assert_eq!(
+                normalize_oauth_request_provider(provider, false).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn management_errors_include_v8_validation_details() {
         assert_eq!(
             format_management_error(400, r#"{"error":"invalid_config","message":"field name not found in type config.CodexKey"}"#),
@@ -500,6 +578,62 @@ mod tests {
             let key = normalize_management_oauth_provider(provider).unwrap();
             assert_eq!(key, "devin");
             assert!(management_oauth_uses_webui_callback(&key));
+        }
+    }
+
+    #[test]
+    fn meta_oauth_uses_the_device_flow() {
+        for provider in ["Meta", " muse "] {
+            let key = normalize_management_oauth_provider(provider).unwrap();
+            assert_eq!(key, "meta");
+            assert!(!management_oauth_uses_webui_callback(&key));
+        }
+    }
+
+    #[test]
+    fn oauth_start_preserves_device_authorization_fields_for_the_frontend() {
+        let payload = serde_json::from_value::<OAuthStartApiResponse>(serde_json::json!({
+            "status": "ok",
+            "url": " https://auth.meta.com/device ",
+            "state": " meta-device-state ",
+            "user_code": " ABCD-EFGH ",
+            "flow": "device",
+            "expires_in": 900,
+        }))
+        .unwrap();
+        let result = normalize_oauth_start_response(payload).unwrap();
+        let value = serde_json::to_value(result).unwrap();
+
+        assert_eq!(value["url"], "https://auth.meta.com/device");
+        assert_eq!(value["state"], "meta-device-state");
+        assert_eq!(value["userCode"], "ABCD-EFGH");
+        assert_eq!(value["flow"], "device");
+        assert_eq!(value["expiresIn"], 900);
+        assert_eq!(value["opened"], false);
+        assert!(value["openError"].is_null());
+    }
+
+    #[test]
+    fn oauth_start_keeps_device_metadata_optional_for_existing_providers() {
+        for extra in [serde_json::json!({}), serde_json::json!({
+            "user_code": " ", "flow": " ", "expires_in": 0,
+        })] {
+            let mut payload = serde_json::json!({
+                "url": "https://example.com/oauth",
+                "state": "oauth-state",
+            });
+            payload
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let result = normalize_oauth_start_response(
+                serde_json::from_value::<OAuthStartApiResponse>(payload).unwrap(),
+            )
+            .unwrap();
+
+            assert!(result.user_code.is_none());
+            assert!(result.flow.is_none());
+            assert!(result.expires_in.is_none());
         }
     }
 

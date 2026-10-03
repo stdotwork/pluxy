@@ -1,5 +1,6 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConfirmation } from '../components/ConfirmationDialog';
+import { OAuthPageToolbar } from '../components/OAuthPageToolbar';
 import { QuotaActionFeedback } from '../components/QuotaActionFeedback';
 import { AuthFileQuotaPanel } from '../components/AuthFileQuotaPanel';
 import { AuthFileSettingsDialog } from '../components/AuthFileSettingsDialog';
@@ -14,6 +15,7 @@ import {
   Check,
   Copy,
   FileDown,
+  Files,
   FolderOpen,
   Import,
   LoaderCircle,
@@ -30,6 +32,7 @@ import geminiIcon from '../assets/icons/gemini.svg';
 import grokIcon from '../assets/icons/grok.svg';
 import devinIcon from '../assets/icons/devin.svg';
 import kimiIcon from '../assets/icons/kimi-light.svg';
+import metaIcon from '../assets/icons/meta.svg';
 import vertexIcon from '../assets/icons/vertex.svg';
 import {
   formatDate,
@@ -59,6 +62,7 @@ import {
   isOAuthCredentialFile,
   isRuntimeOnlyAuthFile,
   oauthModelProvidersFromAuthFiles,
+  normalizeOAuthProvider,
   parseAuthFilePriority,
   setOAuthCredentialFileDisabled,
 } from '../services/authFiles';
@@ -88,21 +92,21 @@ const providerIcons: Record<string, string> = {
   vertex: vertexIcon,
   xai: grokIcon,
   devin: devinIcon,
+  meta: metaIcon,
 };
 
 const providerName = (file: AuthFile) => {
-  const value = readString(file, 'provider', 'type', 'account_type').toLowerCase();
-  if (value === 'anthropic') return 'Claude';
-  if (value === 'anti-gravity') return 'Antigravity';
+  const value = normalizeOAuthProvider(readString(file, 'provider', 'type', 'account_type'));
+  if (value === 'claude') return 'Claude';
+  if (value === 'antigravity') return 'Antigravity';
   if (value === 'xai') return 'xAI';
-  if (value === 'cognition') return 'Devin';
+  if (value === 'devin') return 'Devin';
+  if (value === 'meta') return 'Muse (Meta)';
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : translate(getCurrentLocale(), 'authFiles.unknownProvider');
 };
 
 const providerKey = (file: AuthFile) => {
-  const value = readString(file, 'provider', 'type', 'account_type').toLowerCase();
-  if (value === 'cognition') return 'devin';
-  return value === 'anthropic' ? 'claude' : value === 'anti-gravity' ? 'antigravity' : value;
+  return normalizeOAuthProvider(readString(file, 'provider', 'type', 'account_type'));
 };
 
 const fileName = authFileName;
@@ -373,27 +377,24 @@ export function AuthFileManagementPage() {
   return (
     <section className="page management-page auth-files-page">
       {confirmationDialog}
-      <header className="management-header">
-        <div className="management-heading-actions">
-          <span className="muted-summary">{t('authFiles.summary', { files: files.length, disabled: disabledCount })}</span>
-          <button type="button" className="secondary-button compact-button" onClick={() => {
-            const provider = oauthModelProviders.find((item) => item.label === providerFilter) ?? oauthModelProviders[0];
-            if (provider) void openOauthModelSettings({ ...provider, scope: 'provider' });
-          }} disabled={loading || busy || oauthModelSaving || oauthModelProviders.length === 0}>
-            <Settings2 size={16} />{t('authFiles.models.globalButton')}
-          </button>
-          <button type="button" className="secondary-button compact-button" onClick={() => void loadFiles()} disabled={loading || busy}>
-            <RefreshCw size={16} />{t('common.refresh')}
-          </button>
-          <button type="button" className="secondary-button compact-button" onClick={() => void openAuthFilesDirectory()} disabled={busy}>
-            <FolderOpen size={16} />{t('authFiles.openDirectory')}
-          </button>
-          <button type="button" className="primary-button compact-button" onClick={() => fileInputRef.current?.click()} disabled={busy}>
-            <Import size={16} />{t('authFiles.import')}
-          </button>
-          <input ref={fileInputRef} type="file" accept=".json,application/json" multiple hidden onChange={(event) => void handleUpload(event)} />
-        </div>
-      </header>
+      <OAuthPageToolbar icon={<Files size={18} />} summary={t('authFiles.summary', { files: files.length, disabled: disabledCount })}>
+        <button type="button" className="secondary-button compact-button oauth-toolbar-quiet" title={t('authFiles.models.globalButton')} onClick={() => {
+          const provider = oauthModelProviders.find((item) => item.label === providerFilter) ?? oauthModelProviders[0];
+          if (provider) void openOauthModelSettings({ ...provider, scope: 'provider' });
+        }} disabled={loading || busy || oauthModelSaving || oauthModelProviders.length === 0}>
+          <Settings2 size={16} />{t('authFiles.models.toolbarButton')}
+        </button>
+        <button type="button" className="secondary-button compact-button oauth-toolbar-quiet" onClick={() => void openAuthFilesDirectory()} disabled={busy}>
+          <FolderOpen size={16} />{t('authFiles.openDirectory')}
+        </button>
+        <button type="button" className="secondary-button compact-button" onClick={() => void loadFiles()} disabled={loading || busy}>
+          <RefreshCw size={16} className={loading ? 'spin' : ''} />{t('common.refresh')}
+        </button>
+        <button type="button" className="primary-button compact-button" onClick={() => fileInputRef.current?.click()} disabled={busy}>
+          <Import size={16} />{t('authFiles.import')}
+        </button>
+        <input ref={fileInputRef} type="file" accept=".json,application/json" multiple hidden onChange={(event) => void handleUpload(event)} />
+      </OAuthPageToolbar>
 
       {error ? <MessageNotice message={error} onDismiss={() => setError('')} /> : null}
       <FloatingNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />

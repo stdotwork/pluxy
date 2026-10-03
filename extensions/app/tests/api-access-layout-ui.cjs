@@ -2,7 +2,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const widths = [1440, 980, 854, 640];
+const widths = [1440, 1266, 980, 854, 640];
 const locales = ['zh-CN', 'en'];
 
 (async () => {
@@ -31,8 +31,8 @@ const locales = ['zh-CN', 'en'];
       page.on('pageerror', error => errors.push(`${label}: ${error}`));
       await page.route('**/*', route => route.request().url().startsWith(`${base}/`) ? route.continue() : route.abort());
       await page.goto(`${base}/tests/fixtures/provider-groups.html?layout=dense&locale=${locale}`, { waitUntil: 'domcontentloaded' });
-      await page.waitForFunction(() => document.querySelectorAll('.real-provider-row').length === 4
-        && document.querySelectorAll('.provider-row-title > span:not(.state-pill)').length === 4);
+      await page.waitForFunction(() => document.querySelectorAll('.real-provider-row').length === 8
+        && document.querySelectorAll('.provider-row-title > span:not(.state-pill)').length === 8);
       await page.evaluate(async () => {
         await document.fonts.ready;
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -62,8 +62,8 @@ const locales = ['zh-CN', 'en'];
           listTop: document.querySelector('.provider-resource-panel').getBoundingClientRect().top,
         };
       });
-      assert.equal(navigation.count, 5, `${label}: every provider category remains available`);
-      assert.equal(navigation.rows, 1, `${label}: categories retain a single top row`);
+      assert.equal(navigation.count, 9, `${label}: every provider category remains available`);
+      assert.equal(navigation.rows, 2, `${label}: categories fit into two rows above the resource list`);
       assert.equal(navigation.allVisible, true, `${label}: all category controls fit without hidden columns`);
       assert.equal(navigation.labelsFit, true, `${label}: full category names stay readable`);
       assert.ok(navigation.bottom <= navigation.listTop + 1, `${label}: category navigation stays above the resource list`);
@@ -76,21 +76,21 @@ const locales = ['zh-CN', 'en'];
 
       const groups = await page.evaluate(() => window.groupFixture.groups);
       const rows = page.locator('.real-provider-row');
-      for (const group of groups) {
-        const row = rows.filter({ has: page.locator('.provider-row-title strong', { hasText: group.name }) });
+      let rowIndex = 0;
+      for (const group of groups) for (const key of group.keys) {
+        const effective = { ...group, ...Object.fromEntries(Object.entries(key).filter(([, value]) => value !== null)) };
+        const row = rows.nth(rowIndex++);
         const meta = row.locator('.provider-row-meta');
-        assert.equal(await row.count(), 1, `${label}: each group has exactly one row`);
+        assert.equal(await row.count(), 1, `${label}: each API key has its own row`);
         assert.equal(await meta.isVisible(), true, `${label} ${group.name}: metadata stays visible`);
         const metaText = await meta.innerText();
-        const expectedModels = locale === 'en' ? `${group.models.length} models` : `模型 ${group.models.length} 个`;
-        if (group.models.length) assert.ok(metaText.includes(expectedModels), `${label} ${group.name}: model count is preserved`);
+        const expectedModels = locale === 'en' ? `${effective.models.length} models` : `模型 ${effective.models.length} 个`;
+        if (effective.models.length) assert.ok(metaText.includes(expectedModels), `${label} ${group.name}: effective model count is preserved`);
         const priorityLabel = locale === 'en' ? 'Priority' : '优先级';
-        if (group.priority === null) assert.ok(!metaText.includes(priorityLabel), `${label}: inherited priority is not displayed as zero`);
-        else assert.ok(metaText.includes(`${priorityLabel} ${group.priority}`), `${label} ${group.name}: priority, including zero, is preserved`);
-        if (group.keys.length > 1) {
-          const keyCount = locale === 'en' ? `${group.keys.length} keys total` : `共 ${group.keys.length} 个密钥`;
-          assert.ok(metaText.includes(keyCount), `${label} ${group.name}: multiple keys stay grouped and counted`);
-        }
+        if (effective.priority === null) assert.ok(!metaText.includes(priorityLabel), `${label}: inherited priority is not displayed as zero`);
+        else assert.ok(metaText.includes(`${priorityLabel} ${effective.priority}`), `${label} ${group.name}: effective priority, including zero, is preserved`);
+        assert.equal(await row.getByRole('checkbox').isChecked(), !effective['excluded-models']?.includes('*'), `${label}: each key shows its own effective enabled state`);
+        assert.ok(!metaText.includes(locale === 'en' ? 'keys total' : '个密钥'), `${label}: individual rows do not show group key counts`);
         assert.equal(await row.locator('.provider-row-url').getAttribute('title'), group['base-url'], `${label}: full URL remains available`);
         const remark = row.locator('.provider-row-title > span:not(.state-pill)');
         assert.equal(await remark.getAttribute('title'), await remark.textContent(), `${label}: the full remark remains available when shortened`);
@@ -123,14 +123,12 @@ const locales = ['zh-CN', 'en'];
         }
       }
 
-      const partial = rows.filter({ hasText: 'Mock Borealis partial' });
-      assert.equal(await partial.locator('.state-pill').textContent(), locale === 'en' ? 'Some keys disabled' : '部分密钥已停用');
-      assert.equal(await rows.filter({ hasText: 'Mock Dusk disabled' }).getByRole('checkbox').isChecked(), false);
+      assert.equal(await rows.locator('.state-pill').count(), 0, 'Individual keys do not display a partial group state');
       assert.deepEqual(await page.evaluate(() => window.groupFixture.writes), [], 'Layout checks must not change provider records');
       await page.close();
     }
     assert.deepEqual(errors, [], 'Dense API layouts must not produce runtime errors');
-    console.log('PASS: dense API groups retain navigation, metadata and reachable actions at four widths in Chinese and English.');
+    console.log('PASS: dense API key rows retain navigation, effective metadata, existing remarks and reachable actions at five widths in Chinese and English.');
   } finally {
     if (browser) await browser.close();
     await server.close();

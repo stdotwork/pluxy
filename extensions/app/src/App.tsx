@@ -15,6 +15,7 @@ import {
   MessageCircle,
   Network,
   PackageOpen,
+  Puzzle,
   ServerCog,
   Settings,
   X,
@@ -30,6 +31,7 @@ import { OAuthManagementPage } from './pages/ManagementPages';
 import { AgentsPage } from './pages/AgentsPage';
 import { EasyModePage } from './pages/EasyModePage';
 import { UsageRecordsPage } from './pages/UsageRecordsPage';
+import { PluginsPage } from './pages/PluginsPage';
 import { languageOptions, useI18n } from './i18n';
 import { AppUpdateDialog, AppUpdateProvider, useAppUpdate } from './appUpdate';
 import { appUpdateIndicatorState } from './appUpdateModel';
@@ -76,6 +78,12 @@ const pages = [
     labelKey: 'app.nav.usageRecords',
     icon: History,
     component: UsageRecordsPage,
+  },
+  {
+    id: 'plugins',
+    labelKey: 'app.nav.plugins',
+    icon: Puzzle,
+    component: PluginsPage,
   },
   {
     id: 'config',

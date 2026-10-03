@@ -14,6 +14,7 @@ import codexIcon from '../assets/icons/codex.svg';
 import grokIcon from '../assets/icons/grok.svg';
 import devinIcon from '../assets/icons/devin.svg';
 import kimiIcon from '../assets/icons/kimi-light.svg';
+import metaIcon from '../assets/icons/meta.svg';
 import { useI18n } from '../i18n';
 import { FloatingNotice, useAppNotice } from '../appNotice';
 import { oauthSubpages, type OAuthSubpage } from '../oauthNavigation';
@@ -32,11 +33,12 @@ import { QuotaPage } from './QuotaPage';
 import { validateDevinCallback } from '../services/devinOAuth';
 import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
 
-type OAuthProviderId = 'codex' | 'claude' | 'antigravity' | 'kimi' | 'xai' | 'devin';
+type OAuthProviderId = 'codex' | 'claude' | 'antigravity' | 'kimi' | 'xai' | 'devin' | 'meta';
 type OAuthFlowStatus = 'idle' | 'waiting' | 'success' | 'error';
 
 type OAuthProviderState = {
   url?: string;
+  userCode?: string;
   state?: string;
   status: OAuthFlowStatus;
   error?: string;
@@ -51,6 +53,9 @@ type OAuthProviderState = {
 type OAuthStartResult = {
   url: string;
   state?: string | null;
+  userCode?: string | null;
+  flow?: string | null;
+  expiresIn?: number | null;
   opened: boolean;
   openError?: string | null;
 };
@@ -72,6 +77,7 @@ const oauthProviders = [
   { id: 'kimi' as const, name: 'Kimi OAuth', icon: kimiIcon },
   { id: 'xai' as const, name: 'xAI OAuth', icon: grokIcon },
   { id: 'devin' as const, name: 'Devin OAuth', icon: devinIcon },
+  { id: 'meta' as const, name: 'Muse (Meta) OAuth', icon: metaIcon },
 ];
 
 const OAUTH_CALLBACK_SUPPORTED = new Set<OAuthProviderId>([
@@ -241,6 +247,7 @@ export function OAuthLoginPage() {
       updateProviderState(provider, {
         url: undefined,
         state: undefined,
+        userCode: undefined,
         status: 'success',
         error: undefined,
         polling: false,
@@ -348,6 +355,7 @@ export function OAuthLoginPage() {
     updateProviderState(provider, {
       url: undefined,
       state: undefined,
+      userCode: undefined,
       status: 'waiting',
       polling: true,
       error: undefined,
@@ -377,6 +385,7 @@ export function OAuthLoginPage() {
       updateProviderState(provider, {
         url: result.url,
         state: result.state,
+        userCode: result.userCode ?? undefined,
         status: 'waiting',
         polling: true,
       });
@@ -444,6 +453,16 @@ export function OAuthLoginPage() {
       showNotice({ key: 'oauth.linkCopied' }, 'success');
     } catch {
       showNotice({ key: 'oauth.linkCopyFailed' }, 'error');
+    }
+  };
+
+  const copyDeviceCode = async (code?: string) => {
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      showNotice({ key: 'oauth.deviceCodeCopied' }, 'success');
+    } catch {
+      showNotice({ key: 'oauth.deviceCodeCopyFailed' }, 'error');
     }
   };
 
@@ -544,7 +563,7 @@ export function OAuthLoginPage() {
               </div>
 
               <div className="oauth-card-body">
-                <p className="oauth-hint">{t(provider.id === 'devin' ? 'oauth.devinHint' : 'oauth.hint')}</p>
+                <p className="oauth-hint">{t(provider.id === 'devin' ? 'oauth.devinHint' : provider.id === 'meta' ? 'oauth.metaHint' : 'oauth.hint')}</p>
                 {state.url ? (
                   <div className="oauth-auth-url-box">
                     <div className="oauth-auth-url-label">{t('oauth.authorizationLink')}</div>
@@ -557,6 +576,15 @@ export function OAuthLoginPage() {
                         <ExternalLink size={15} aria-hidden="true" />{t('oauth.openLink')}
                       </button>
                     </div>
+                    {state.userCode ? (
+                      <div className="oauth-device-code-box">
+                        <div className="oauth-auth-url-label">{t('oauth.deviceCodeLabel')}</div>
+                        <div className="oauth-device-code-value">{state.userCode}</div>
+                        <button type="button" className="secondary-button compact-button" onClick={() => void copyDeviceCode(state.userCode)}>
+                          <Copy size={15} aria-hidden="true" />{t('oauth.copyDeviceCode')}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 

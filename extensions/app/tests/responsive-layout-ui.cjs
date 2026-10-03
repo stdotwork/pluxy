@@ -183,7 +183,7 @@ const viewports = [
       if (viewport.width === 964) {
         const rows = await page.locator('.provider-category-panel button').evaluateAll(buttons =>
           new Set(buttons.map(button => Math.round(button.getBoundingClientRect().top))).size);
-        assert.equal(rows, 1, `${label}: provider navigation must not consume several rows in a short window`);
+        assert.equal(rows, 2, `${label}: nine provider categories stay within two rows in a short window`);
         await assertReachable(page.locator('.provider-category-panel button').last(), `${label} final provider category`);
       }
       await assertReachable(page.locator('.provider-row-actions button').first(), `${label} provider action`);

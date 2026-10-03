@@ -1,0 +1,23 @@
+.quota-page .quota-group-heading {
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 0 2px;
+}
+
+.quota-page .quota-provider-title {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.quota-page .quota-provider-count {
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}

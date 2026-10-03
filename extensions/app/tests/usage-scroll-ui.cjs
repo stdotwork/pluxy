@@ -29,10 +29,136 @@ function parseCsv(text) {
     ignoreDefaultArgs: ['--hide-scrollbars'],
   });
   try {
-    const page = await browser.newPage({ viewport: { width: 1100, height: 700 } });
+    const page = await browser.newPage({ viewport: { width: 1375, height: 897 } });
     const errors = [];
     page.on('pageerror', error => errors.push(String(error)));
     await page.route('**/*', (route) => route.request().url().startsWith(`${base}/`) ? route.continue() : route.abort());
+    await page.addInitScript(() => {
+      localStorage.setItem('easy-cli-proxy-api.locale', 'zh-CN');
+      localStorage.setItem('easy-cli-proxy-api.theme', 'light');
+      localStorage.setItem('cpa-gui.usage-records-tab.v1', 'overview');
+    });
+    // A delayed real-app mock exposes layout differences before and after data arrives.
+    await page.goto(`${base}/?mock=running&mockDelay=400`, { waitUntil: 'domcontentloaded' });
+    await page.locator('.nav-section').getByRole('button', { name: '使用记录', exact: true }).click();
+    await page.addStyleTag({ content: '#browser-mock-toolbar { display: none; }' });
+
+    const assertSharedFilterLayout = async (label, expectSingleRow) => {
+      const panel = page.locator('.usage-records-page > .usage-tab-panel > .usage-filter-panel');
+      await panel.waitFor();
+      await page.evaluate(async () => {
+        await document.fonts.ready;
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      });
+      assert.equal(await panel.evaluate(element => element === element.parentElement.firstElementChild), true,
+        `${label}: shared filters stay above the tab content`);
+      assert.equal(await page.locator('.usage-events-panel .usage-filter-panel').count(), 0,
+        `${label}: request details do not embed a second filter toolbar`);
+      const geometry = await panel.evaluate(element => {
+        const row = element.querySelector('.usage-filter-row');
+        const selects = [...row.querySelectorAll('select')];
+        return {
+          selectCount: selects.length,
+          tops: selects.map(control => control.getBoundingClientRect().top),
+          overflow: [document.documentElement, document.body, document.querySelector('.content'),
+            document.querySelector('.usage-records-page'), element, row]
+            .filter(node => node.scrollWidth > node.clientWidth + 1)
+            .map(node => node.className || node.tagName),
+        };
+      });
+      assert.equal(geometry.selectCount, 6, `${label}: all six filters are present`);
+      if (expectSingleRow) {
+        assert.ok(Math.max(...geometry.tops) - Math.min(...geometry.tops) <= 1,
+          `${label}: all six selectors fit on one desktop row`);
+      }
+      assert.deepEqual(geometry.overflow, [], `${label}: responsive filters do not overflow horizontally`);
+      assert.equal(await panel.locator('button').count(), 0, `${label}: filters have no reset button`);
+      for (const control of await panel.locator('select').all()) {
+        assert.equal(await control.isEnabled(), true, `${label}: every filter is usable`);
+        await control.scrollIntoViewIfNeeded();
+        assert.equal(await control.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          const row = element.closest('.usage-filter-row').getBoundingClientRect();
+          return bounds.left >= Math.max(0, row.left) - 1
+            && bounds.right <= Math.min(innerWidth, row.right) + 1;
+        }), true, `${label}: every filter remains fully visible within the row`);
+      }
+    };
+
+    const readSharedGeometry = () => page.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const layoutBox = (element) => {
+        const bounds = element.getBoundingClientRect();
+        let x = bounds.x + scrollX;
+        let y = bounds.y + scrollY;
+        // Compare layout positions, including when Playwright brings a tab into
+        // view by scrolling a narrow viewport or an inner scrolling container.
+        for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          if (ancestor !== document.scrollingElement) {
+            x += ancestor.scrollLeft;
+            y += ancestor.scrollTop;
+          }
+        }
+        return { x, y, width: bounds.width, height: bounds.height };
+      };
+      const selectors = ['.usage-topbar', '.usage-page-navigation', '.usage-tabs'];
+      const shared = Object.fromEntries(selectors.map(selector => [selector, layoutBox(document.querySelector(selector))]));
+      const filters = document.querySelector('.usage-filter-panel');
+      return {
+        shared,
+        filters: filters ? layoutBox(filters) : null,
+      };
+    });
+    const assertBoxesMatch = (actual, expected, label) => {
+      for (const property of ['x', 'y', 'width', 'height']) {
+        assert.ok(Math.abs(actual[property] - expected[property]) <= 1,
+          `${label}: ${property} must stay stable (${expected[property]} -> ${actual[property]})`);
+      }
+    };
+    const assertSharedGeometry = (actual, expected, label, hasFilters = true) => {
+      for (const selector of Object.keys(expected.shared)) {
+        assertBoxesMatch(actual.shared[selector], expected.shared[selector], `${label} ${selector}`);
+      }
+      if (hasFilters) {
+        assert.ok(actual.filters, `${label}: shared filters are present`);
+        assertBoxesMatch(actual.filters, expected.filters, `${label} shared filters`);
+      } else {
+        assert.equal(actual.filters, null, `${label}: data management has no shared filters`);
+      }
+    };
+
+    const initialGeometry = await readSharedGeometry();
+    await page.locator('.usage-refresh-btn:not(:disabled)').waitFor();
+    assertSharedGeometry(await readSharedGeometry(), initialGeometry, 'Initial overview data load');
+
+    for (const viewport of [
+      { width: 1167, height: 895 },
+      { width: 1375, height: 897 },
+      { width: 1024, height: 700 },
+      { width: 800, height: 700 },
+      { width: 640, height: 700 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.locator('#usage-tab-overview').click();
+      await page.locator('.usage-refresh-btn:not(:disabled)').waitFor();
+      const baseline = await readSharedGeometry();
+      const size = `${viewport.width}x${viewport.height}`;
+      for (const tab of ['overview', 'analysis', 'events', 'pricing', 'data-management']) {
+        await page.locator(`#usage-tab-${tab}`).click();
+        const hasFilters = tab !== 'data-management';
+        assertSharedGeometry(await readSharedGeometry(), baseline, `${size} ${tab} loading`, hasFilters);
+        await page.locator('.usage-refresh-btn:not(:disabled)').waitFor();
+        assertSharedGeometry(await readSharedGeometry(), baseline, `${size} ${tab} loaded`, hasFilters);
+        if (hasFilters) await assertSharedFilterLayout(`${size} ${tab}`, viewport.width >= 800);
+        await page.locator('.usage-refresh-btn').click();
+        assertSharedGeometry(await readSharedGeometry(), baseline, `${size} ${tab} refreshing`, hasFilters);
+        await page.locator('.usage-refresh-btn:not(:disabled)').waitFor();
+        assertSharedGeometry(await readSharedGeometry(), baseline, `${size} ${tab} refreshed`, hasFilters);
+      }
+    }
+
+    await page.setViewportSize({ width: 1100, height: 700 });
     await page.goto(`${base}/tests/fixtures/usage-layout.html?tab=events&locale=en`, { waitUntil: 'domcontentloaded' });
     await page.locator('.usage-table-top-scrollbar:not(.is-hidden)').waitFor();
     await page.locator('.usage-page-size-select').selectOption('200');
@@ -208,8 +334,7 @@ function parseCsv(text) {
     assert.notEqual(await firstRow.locator('.usage-td-time strong').textContent(), originalTime, 'Bottom pagination loads a different request page');
     assert.equal(await page.locator('.usage-pagination-summary').textContent(), 'Showing 21 - 40 of 400');
 
-    assert.equal(await page.getByRole('button', { name: 'Reset Filters', exact: true }).count(), 1, 'The request log keeps a clear filters control visible');
-    assert.equal(await page.getByRole('button', { name: 'Reset Filters', exact: true }).isDisabled(), true, 'The clear filters control is disabled without active filters');
+    assert.equal(await page.getByRole('button', { name: 'Reset Filters', exact: true }).count(), 0, 'The request log has no reset filters control');
     await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('test-model');
     await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 266');
     assert.equal(await page.locator('.usage-events-table tbody strong[title="test-model"]').count(), 20, 'Changing a filter resets pagination and shows matching models');
@@ -219,7 +344,14 @@ function parseCsv(text) {
     await page.getByRole('combobox', { name: 'Request result', exact: true }).selectOption('failed');
     await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 66');
     assert.equal(await page.locator('.usage-events-table tbody .usage-result.failed').count(), 20);
-    assert.equal(await page.getByRole('button', { name: 'Reset Filters', exact: true }).isDisabled(), false, 'Active filters enable the clear filters control');
+    assert.equal(await page.getByRole('button', { name: 'Reset Filters', exact: true }).count(), 0, 'Active filters do not show a reset filters control');
+    await page.locator('.usage-filter-panel select').first().selectOption('custom');
+    const customInputs = page.locator('.usage-custom-range input');
+    assert.equal(await customInputs.count(), 2, 'Custom time range inputs remain available');
+    await customInputs.first().fill('2026-10-01T00:00');
+    await customInputs.last().fill('2026-10-03T23:59');
+    assert.equal(await page.locator('.usage-filter-panel button').count(), 0, 'Custom time ranges do not show a reset filters control');
+    await page.locator('.usage-filter-panel select').first().selectOption('4h');
     await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('');
     await page.getByRole('combobox', { name: 'Source', exact: true }).selectOption('');
     await page.getByRole('combobox', { name: 'Request result', exact: true }).selectOption('all');
@@ -229,7 +361,7 @@ function parseCsv(text) {
     assert.equal(await page.getByRole('combobox', { name: 'Request result', exact: true }).inputValue(), 'all');
     assert.deepEqual(errors, [], 'Request log interactions do not produce runtime errors');
 
-    console.log('PASS: request values, CSV export, filters, bottom pagination, column visibility/resizing, and synchronized horizontal scrolling with 200 rows.');
+    console.log('PASS: stable navigation/filter geometry across all five tabs, loading, and refresh at 1167/1375/1024/800/640px; responsive filters without reset controls, custom ranges, request values, CSV export, pagination, column visibility/resizing, and synchronized horizontal scrolling with 200 rows.');
   } finally {
     await browser.close();
   }

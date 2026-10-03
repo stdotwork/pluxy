@@ -4,6 +4,7 @@ import {
   dedupeAuthFiles,
   isOAuthCredentialFile,
   normalizeAuthFilePriorityInput,
+  normalizeOAuthProvider,
   oauthModelProvidersFromAuthFiles,
   parseAuthFilePriority,
   setOAuthCredentialFileDisabled,
@@ -77,9 +78,10 @@ describe('OAuth credential file boundaries', () => {
       { name: 'devin.json', type: 'cognition' },
       { name: 'antigravity.json', type: 'anti-gravity' },
       { name: 'openai.json', type: 'openai' },
+      { name: 'muse.json', type: 'muse' },
       { name: 'plugin.json', provider: 'custom-oauth', source: 'file' },
       { name: 'unknown.json' },
-    ])).toEqual(['antigravity', 'claude', 'codex', 'custom-oauth', 'devin']);
+    ])).toEqual(['antigravity', 'claude', 'codex', 'custom-oauth', 'devin', 'meta']);
     expect(oauthModelProvidersFromAuthFiles(nonOAuthFiles)).toEqual([]);
   });
 
@@ -103,6 +105,12 @@ describe('OAuth credential file boundaries', () => {
       }
     }
     expect(writes).toEqual([]);
+  });
+
+  it('normalizes Meta OAuth aliases used by the core and Management Center', () => {
+    expect(normalizeOAuthProvider(' Muse ')).toBe('meta');
+    expect(normalizeOAuthProvider('meta_ai')).toBe('meta_ai');
+    expect(normalizeOAuthProvider('anthropic')).toBe('claude');
   });
 });
 
@@ -134,5 +142,16 @@ describe('authentication file priority', () => {
       { name: 'codex-new.json', type: 'codex', modtime: 2 },
       { name: 'claude-old.json', provider: 'claude', modtime: 2 },
     ], 'codex')).toEqual(['codex-old.json', 'codex-new.json']);
+  });
+
+  it('applies the default priority to a newly created Muse credential through the muse alias', () => {
+    const before = snapshotAuthFiles([
+      { name: 'muse-existing.json', provider: 'muse', modtime: 1 },
+    ]);
+    expect(changedOAuthAuthFileNames(before, [
+      { name: 'muse-existing.json', provider: 'muse', modtime: 2 },
+      { name: 'muse-new.json', provider: 'meta', modtime: 2 },
+      { name: 'muse-priority.json', provider: 'muse', modtime: 2, priority: 4 },
+    ], 'muse')).toEqual(['muse-existing.json', 'muse-new.json']);
   });
 });

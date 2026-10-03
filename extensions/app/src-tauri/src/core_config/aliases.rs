@@ -146,7 +146,7 @@ pub(crate) fn normalize_oauth_alias_channel(value: &str) -> Option<&'static str>
         "kimi" | "moonshot" => Some("kimi"),
         "devin" | "cognition" => Some("devin"),
         "xai" | "x-ai" | "grok" => Some("xai"),
-        "meta" => Some("meta"),
+        "meta" | "muse" => Some("meta"),
         _ => None,
     }
 }

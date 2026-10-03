@@ -13,8 +13,10 @@ import '../../src/styles/index.css';
 
 const query = new URLSearchParams(location.search);
 const denseLayout = query.get('layout') === 'dense';
+const remarkScenario = query.get('scenario') === 'remarks';
+const remarkStorageKey = 'provider-groups-fixture-remarks';
 localStorage.setItem('easy-cli-proxy-api.locale', query.get('locale') ?? 'en');
-const fixture = window as typeof window & { groupFixture: { groups: Record<string, unknown>[], writes: unknown[], probes: unknown[] } };
+const fixture = window as typeof window & { groupFixture: { groups: Record<string, unknown>[], openaiGroups: Record<string, unknown>[], writes: unknown[], probes: unknown[] } };
 fixture.groupFixture = {
   groups: denseLayout ? [
     {
@@ -43,7 +45,7 @@ fixture.groupFixture = {
     keys: [{ 'api-key': 'key-inherited', weight: 2, priority: null },
       { 'api-key': 'key-overridden', weight: 5, priority: 0, 'proxy-url': 'direct', headers: { 'X-Key': 'second' }, models: [{ name: 'private-model' }], 'excluded-models': [], 'disable-cooling': false }],
   }, { name: 'Backup gateway', 'base-url': 'https://backup.example.test/v1', models: [{ name: 'backup-model' }], keys: [{ 'api-key': 'backup-key' }] }],
-  writes: [], probes: [],
+  openaiGroups: [], writes: [], probes: [],
 };
 const denseRemarks = [
   'Fictional layout fixture · 三个测试密钥',
@@ -55,16 +57,50 @@ const remarks = new Map<string, string>();
 if (denseLayout) fixture.groupFixture.groups.forEach((group, index) => {
   remarks.set(providerRemarkIdentity('codex-api-key', apiAccessRemarkLocatorFromRecord('codex-api-key', group)), denseRemarks[index]);
 });
+if (remarkScenario) {
+  const persisted = sessionStorage.getItem(remarkStorageKey);
+  if (persisted) {
+    const state = JSON.parse(persisted) as { groups: Record<string, unknown>[]; remarks: [string, string][] };
+    fixture.groupFixture.groups = state.groups;
+    state.remarks.forEach(([identity, remark]) => remarks.set(identity, remark));
+  } else {
+    remarks.set(providerRemarkIdentity('codex-api-key', apiAccessRemarkLocatorFromRecord('codex-api-key', fixture.groupFixture.groups[0])), 'Existing group note');
+  }
+}
+const persistRemarkScenario = () => {
+  if (remarkScenario) sessionStorage.setItem(remarkStorageKey, JSON.stringify({ groups: fixture.groupFixture.groups, remarks: [...remarks] }));
+};
+const resolveRemark = (section: ProviderSection, locator: ApiAccessRemarkLocator) => {
+  const candidates = [locator];
+  if (['gemini-api-key', 'codex-api-key', 'claude-api-key'].includes(section) && locator.providerName) {
+    candidates.push({ ...locator, providerName: '' });
+  }
+  for (const candidate of candidates) {
+    for (const record of [candidate, { ...candidate, configIdentity: '' }]) {
+      const identity = providerRemarkIdentity(section, record);
+      if (remarks.has(identity)) return remarks.get(identity)!;
+    }
+  }
+  return '';
+};
 mockIPC((cmd, args: any) => {
   if (cmd === 'set_app_locale') return null;
   if (cmd === 'resolve_api_access_remarks') return args.queries.map((item: ApiAccessRemarkLocator & { providerSection: ProviderSection }) =>
-    denseLayout ? remarks.get(providerRemarkIdentity(item.providerSection, item)) ?? '' : '');
+    resolveRemark(item.providerSection, item));
   if (cmd === 'save_api_access_remark') {
-    if (denseLayout) {
-      const update = args.update as { providerSection: ProviderSection; previousRecords: ApiAccessRemarkLocator[]; records: ApiAccessRemarkLocator[]; remark: string };
-      update.previousRecords.forEach(record => remarks.delete(providerRemarkIdentity(update.providerSection, record)));
-      update.records.forEach(record => remarks.set(providerRemarkIdentity(update.providerSection, record), update.remark));
+    const update = args.update as { providerSection: ProviderSection; previousRecords: ApiAccessRemarkLocator[]; records: ApiAccessRemarkLocator[]; allRecords: ApiAccessRemarkLocator[]; remark: string };
+    const identity = (record: ApiAccessRemarkLocator) => providerRemarkIdentity(update.providerSection, record);
+    const allRecords = new Set(update.allRecords.map(identity));
+    const replacing = new Set([...update.previousRecords, ...update.records].map(identity));
+    const migrations = update.allRecords.map(record => [identity(record), resolveRemark(update.providerSection, record)] as const);
+    // Match the backend: discard orphaned/group identities, replace explicit updates,
+    // then migrate surviving records, including intentionally empty remarks.
+    for (const stored of remarks.keys()) {
+      if (JSON.parse(stored)[0] === update.providerSection && (!allRecords.has(stored) || replacing.has(stored))) remarks.delete(stored);
     }
+    update.records.forEach(record => remarks.set(identity(record), update.remark.trim()));
+    migrations.forEach(([stored, remark]) => { if (!remarks.has(stored)) remarks.set(stored, remark); });
+    persistRemarkScenario();
     return null;
   }
   if (cmd !== 'management_request') throw new Error(`Unexpected ${cmd}`);
@@ -73,10 +109,16 @@ mockIPC((cmd, args: any) => {
     fixture.groupFixture.probes.push(request.body);
     return { status_code: 200, body: { data: [{ id: 'gpt-original' }, { id: 'new-discovered' }] } };
   }
-  if (request.method === 'GET') return request.path === '/config/api-keys/codex' ? structuredClone(fixture.groupFixture.groups) : [];
-  if (request.path !== '/config/api-keys/codex' || request.method !== 'PUT') throw new Error('Unexpected mutation');
+  if (request.method === 'GET') {
+    if (request.path === '/config/api-keys/codex') return structuredClone(fixture.groupFixture.groups);
+    if (request.path === '/config/api-keys/openai-compatibility') return structuredClone(fixture.groupFixture.openaiGroups);
+    return [];
+  }
+  if (!['/config/api-keys/codex', '/config/api-keys/openai-compatibility'].includes(request.path) || request.method !== 'PUT') throw new Error('Unexpected mutation');
   fixture.groupFixture.writes.push(structuredClone(request.body));
-  fixture.groupFixture.groups = structuredClone(request.body);
+  if (request.path === '/config/api-keys/codex') fixture.groupFixture.groups = structuredClone(request.body);
+  else fixture.groupFixture.openaiGroups = structuredClone(request.body);
+  persistRemarkScenario();
   return { status: 'ok' };
 });
 createRoot(document.getElementById('root')!).render(<I18nProvider><div className="app-shell"><aside className="sidebar" /><div className="workspace"><main className="content"><ApiAccessPage /></main></div></div></I18nProvider>);

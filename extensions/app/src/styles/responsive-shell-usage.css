@@ -14,6 +14,13 @@
   }
 }
 
+@media (max-width: 900px) {
+  .app-shell:has(.usage-records-page) {
+    /* Loading a shorter tab must not stretch the navigation row above it. */
+    grid-template-rows: max-content minmax(0, 1fr);
+  }
+}
+
 /* Let toolbar rows keep their height instead of overlapping the table. */
 .usage-events-summary {
   flex: none;
@@ -131,13 +138,8 @@
   white-space: nowrap;
 }
 
-.usage-records-page:has(.usage-overview-layout) {
-  gap: clamp(8px, 1.5vh, 16px);
-}
-
 @container workspace (min-width: 600px) {
-  .usage-overview-layout .usage-stat-grid,
-  .usage-records-page:has(.usage-overview-layout) .usage-filter-group {
+  .usage-overview-layout .usage-stat-grid {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
@@ -166,6 +168,10 @@
 }
 
 @media (max-width: 760px) {
+  :root:has(.usage-records-page) {
+    scrollbar-gutter: stable;
+  }
+
   .usage-overview-layout {
     grid-template-rows: max-content auto;
     overflow: visible;

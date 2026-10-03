@@ -1,4 +1,5 @@
 import { applyTemplateChanges, readTemplatePath, sameTemplateValue, type TemplateConfigChange } from '../services/templateConfig';
+import { createPluginMock } from './pluginMock';
 
 export type BrowserMockScenario = 'running' | 'stopped' | 'empty' | 'error';
 export type BrowserMockMode = BrowserMockScenario | 'off';
@@ -840,6 +841,8 @@ const ERROR_SCENARIO_COMMANDS = new Set([
   'check_latest_core',
   'management_request',
   'get_usage_overview',
+  'get_core_models',
+  'core_health_probe',
   'get_agent_config_statuses',
 ]);
 
@@ -849,6 +852,7 @@ export function createBrowserMockRuntime(
   delayMs = 0,
 ): BrowserMockRuntime {
   const state = createState(scenario);
+  const pluginMock = createPluginMock(state);
   const emit = (event: string, payload: unknown) => emitEvent(event, clone(payload));
 
   const invoke = async (command: string, rawPayload?: unknown): Promise<unknown> => {
@@ -857,6 +861,9 @@ export function createBrowserMockRuntime(
     if (scenario === 'error' && ERROR_SCENARIO_COMMANDS.has(command)) {
       throw new Error(`Browser Mock error scenario: ${command}`);
     }
+
+    const pluginResponse = pluginMock.handle(command, payload);
+    if (pluginResponse.handled) return pluginResponse.value;
 
     switch (command) {
       case 'plugin:app|version': return '0.2.97-mock';
@@ -1064,6 +1071,11 @@ export function createBrowserMockRuntime(
       }
       case 'save_api_access_remark': return null;
       case 'provider_health_probe': return { firstTokenLatencyMs: 184, responseLatencyMs: 642 };
+      case 'core_health_probe': {
+        if (!state.coreStatus.ready) throw new Error('Browser Mock: the core is not ready');
+        if (!readString(payload.model).trim()) throw new Error('Select a model first');
+        return { firstTokenLatencyMs: 184, responseLatencyMs: 642 };
+      }
 
       case 'list_oauth_browsers': return [
         { id: 'default', label: 'System default browser' },
@@ -1173,6 +1185,10 @@ export function createBrowserMockRuntime(
 
       case 'get_agent_config_statuses':
       case 'refresh_agent_config_statuses': return clone(state.agentStatuses);
+      case 'get_core_models': {
+        if (!state.coreStatus.ready) throw new Error('Browser Mock: the core is not ready');
+        return invoke('get_agent_models', {});
+      }
       case 'get_agent_models': return [
         { name: 'gpt-5.2-codex', alias: 'codex-latest', displayName: 'GPT-5.2 Codex', isAlias: true, contextWindow: 272_000, inputModalities: ['text', 'image'] },
         { name: 'claude-opus-4-6', displayName: 'Claude Opus 4.6', contextWindow: 200_000, inputModalities: ['text', 'image'] },

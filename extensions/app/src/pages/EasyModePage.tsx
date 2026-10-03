@@ -10,8 +10,10 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft,
   ArrowRight,
+  Copy,
   Check,
   ChevronDown,
+  ExternalLink,
   Languages,
   LoaderCircle,
   Monitor,
@@ -41,6 +43,7 @@ import {
   type ModelProvider,
 } from "../services/modelService";
 import { normalizeProviderProxyUrl } from "../services/providerProxy";
+import { normalizeOAuthProvider } from "../services/authFiles";
 import { type ThemePreference } from "../theme";
 import { AgentsPage } from "./AgentsPage";
 
@@ -50,6 +53,7 @@ import antigravityIcon from "../assets/icons/antigravity.svg";
 import kimiIcon from "../assets/icons/kimi-light.svg";
 import grokIcon from "../assets/icons/grok.svg";
 import devinIcon from "../assets/icons/devin.svg";
+import metaIcon from "../assets/icons/meta.svg";
 import openaiIcon from "../assets/icons/openai-light.svg";
 import deepseekIcon from "../assets/icons/deepseek.svg";
 import geminiIcon from "../assets/icons/gemini.svg";
@@ -58,7 +62,7 @@ import vertexIcon from '../assets/icons/vertex.svg';
 type AuthMethod = "oauth" | "api";
 type SetupStep = 1 | 2;
 
-type OAuthProviderId = "codex" | "claude" | "antigravity" | "kimi" | "xai" | "devin";
+type OAuthProviderId = "codex" | "claude" | "antigravity" | "kimi" | "xai" | "devin" | "meta";
 
 type OAuthProviderInfo = {
   id: OAuthProviderId;
@@ -74,6 +78,7 @@ const oauthProviders: OAuthProviderInfo[] = [
   { id: "kimi", name: "Kimi OAuth", icon: kimiIcon, descriptionKey: "easyMode.oauth.providerDesc.kimi" },
   { id: "xai", name: "xAI OAuth", icon: grokIcon, descriptionKey: "easyMode.oauth.providerDesc.xai" },
   { id: "devin", name: "Devin OAuth", icon: devinIcon, descriptionKey: "easyMode.oauth.providerDesc.devin" },
+  { id: "meta", name: "Muse (Meta) OAuth", icon: metaIcon, descriptionKey: "easyMode.oauth.providerDesc.meta" },
 ];
 
 type ApiSection = "openai-compatibility" | "deepseek" | "claude" | "gemini" | "codex" | 'interactions' | 'vertex' | 'xai' | 'meta';
@@ -136,6 +141,8 @@ export function EasyModePage({
   });
 
   const [oauthLoggingIn, setOauthLoggingIn] = useState<OAuthProviderId | null>(null);
+  const [oauthAuthorization, setOauthAuthorization] = useState<{ provider: OAuthProviderId; url: string } | null>(null);
+  const [oauthDeviceCode, setOauthDeviceCode] = useState<{ provider: OAuthProviderId; code: string } | null>(null);
   const oauthFeedback = useAppNotice();
   const { showNotice: showOAuthNotice, clearNotice: clearOAuthNotice } = oauthFeedback;
   const oauthPollTimer = useRef<number | null>(null);
@@ -239,9 +246,10 @@ export function EasyModePage({
   }, [refreshSourceStatus]);
 
   const isOAuthLoggedIn = (providerId: OAuthProviderId) => {
-    const norm = providerId === "claude" ? "claude" : providerId === "codex" ? "codex" : providerId;
+    const norm = providerId;
     return authFiles.some((f) => {
       const p = readString(f, "provider", "type").toLowerCase();
+      if (norm === "meta") return normalizeOAuthProvider(p) === "meta";
       return (norm === "devin" && p === "cognition") || p.includes(norm) || (norm === "codex" && p.includes("openai")) || (norm === "claude" && p.includes("anthropic"));
     });
   };
@@ -269,6 +277,8 @@ export function EasyModePage({
     const generation = ++oauthGeneration.current;
     if (oauthPollTimer.current !== null) window.clearTimeout(oauthPollTimer.current);
     oauthPollTimer.current = null;
+    setOauthAuthorization(null);
+    setOauthDeviceCode(null);
     setOauthLoggingIn(provider);
     clearOAuthNotice();
 
@@ -276,6 +286,9 @@ export function EasyModePage({
       const result = await invoke<{
         url?: string;
         state?: string;
+        userCode?: string | null;
+        flow?: string | null;
+        expiresIn?: number | null;
         opened?: boolean;
         openError?: string;
       }>("start_oauth_login", {
@@ -285,19 +298,35 @@ export function EasyModePage({
 
       if (generation !== oauthGeneration.current) return;
 
+      if (result.url) setOauthAuthorization({ provider, url: result.url });
+
       if (!result.state) {
         showOAuthNotice({ key: "easyMode.notice.oauthStateFailed" }, "error");
         setOauthLoggingIn(null);
         return;
       }
 
+      if (result.userCode?.trim()) {
+        setOauthDeviceCode({ provider, code: result.userCode.trim() });
+      }
+
+      if (!result.opened) {
+        showOAuthNotice(result.openError
+          ? { key: "oauth.openFailedDetail", variables: { error: result.openError } }
+          : { key: "oauth.openFailed" }, "info");
+      }
+
       const stateKey = result.state;
-      const deadline = Date.now() + 10 * 60_000;
+      const expirySeconds = result.expiresIn;
+      const deadline = Date.now() + (typeof expirySeconds === "number" && Number.isFinite(expirySeconds) && expirySeconds > 0
+        ? expirySeconds * 1000 : 10 * 60_000);
       let failures = 0;
       const poll = async () => {
         if (generation !== oauthGeneration.current) return;
         if (Date.now() >= deadline) {
           setOauthLoggingIn(null);
+          setOauthAuthorization(null);
+          setOauthDeviceCode((current) => current?.provider === provider ? null : current);
           showOAuthNotice({ key: "easyMode.notice.oauthTimeout" }, "error");
           return;
         }
@@ -311,11 +340,15 @@ export function EasyModePage({
           const status = (pollRes.status || "").toLowerCase();
           if (status === "ok") {
             setOauthLoggingIn(null);
+            setOauthAuthorization(null);
+            setOauthDeviceCode((current) => current?.provider === provider ? null : current);
             showOAuthNotice({ key: "easyMode.notice.oauthSuccess" }, "success");
             setGuideOAuthCompleted(true);
             void refreshSourceStatus();
           } else if (status === "error") {
             setOauthLoggingIn(null);
+            setOauthAuthorization(null);
+            setOauthDeviceCode((current) => current?.provider === provider ? null : current);
             showOAuthNotice(pollRes.error
               ? { key: "easyMode.notice.oauthFailedWithReason", variables: { error: pollRes.error } }
               : { key: "easyMode.notice.oauthFailed" }, "error");
@@ -326,6 +359,8 @@ export function EasyModePage({
           failures += 1;
           if (failures >= 3) {
             setOauthLoggingIn(null);
+            setOauthAuthorization(null);
+            setOauthDeviceCode((current) => current?.provider === provider ? null : current);
             showOAuthNotice(String(error), "error");
             return;
           }
@@ -338,7 +373,34 @@ export function EasyModePage({
     } catch (err) {
       if (generation !== oauthGeneration.current) return;
       setOauthLoggingIn(null);
+      setOauthDeviceCode((current) => current?.provider === provider ? null : current);
       showOAuthNotice(String(err), "error");
+    }
+  };
+
+  const copyDeviceCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      showOAuthNotice({ key: "oauth.deviceCodeCopied" }, "success");
+    } catch {
+      showOAuthNotice({ key: "oauth.deviceCodeCopyFailed" }, "error");
+    }
+  };
+
+  const copyAuthorizationUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      showOAuthNotice({ key: "oauth.linkCopied" }, "success");
+    } catch {
+      showOAuthNotice({ key: "oauth.linkCopyFailed" }, "error");
+    }
+  };
+
+  const openAuthorizationUrl = async (url: string) => {
+    try {
+      await invoke("open_oauth_url", { url, browser: "default" });
+    } catch (error) {
+      showOAuthNotice(String(error), "error");
     }
   };
 
@@ -896,6 +958,38 @@ export function EasyModePage({
                           <span>{t(provider.descriptionKey)}</span>
                         </div>
                       </div>
+
+                      {oauthAuthorization?.provider === provider.id ? (
+                        <div className="simple-mode-oauth-authorization">
+                          {provider.id === "meta" ? <p className="oauth-hint">{t("oauth.metaHint")}</p> : null}
+                          <div className="oauth-auth-url-box">
+                            <div className="oauth-auth-url-label">{t("oauth.authorizationLink")}</div>
+                            <div className="oauth-auth-url-value" title={oauthAuthorization.url}>{oauthAuthorization.url}</div>
+                            <div className="oauth-auth-url-actions">
+                              <button type="button" className="secondary-button compact-button" onClick={() => void copyAuthorizationUrl(oauthAuthorization.url)}>
+                                <Copy size={14} aria-hidden="true" />{t("oauth.copyLink")}
+                              </button>
+                              <button type="button" className="secondary-button compact-button" onClick={() => void openAuthorizationUrl(oauthAuthorization.url)}>
+                                <ExternalLink size={14} aria-hidden="true" />{t("oauth.openLink")}
+                              </button>
+                            </div>
+                          </div>
+                          {oauthDeviceCode?.provider === provider.id ? (
+                            <div className="simple-mode-device-code">
+                              <div className="simple-mode-device-code-label">{t("oauth.deviceCodeLabel")}</div>
+                              <code>{oauthDeviceCode.code}</code>
+                              <button
+                                type="button"
+                                className="secondary-button compact-button"
+                                onClick={() => void copyDeviceCode(oauthDeviceCode.code)}
+                              >
+                                <Copy size={14} aria-hidden="true" />
+                                {t("oauth.copyDeviceCode")}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
 
                       <div className="simple-mode-provider-card-foot">
                         {loggedIn ? (

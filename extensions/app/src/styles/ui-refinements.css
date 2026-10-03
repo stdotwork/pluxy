@@ -528,8 +528,12 @@ body, html, #root {
 }
 
 /* Usage records follow the same shell surface as the home page. */
+.app-shell:has(.usage-records-page) .content {
+  padding: clamp(12px, 1.5vw, 20px) clamp(12px, 1.5vw, 20px) 16px;
+}
+
 .usage-records-page {
-  gap: 16px;
+  gap: clamp(8px, 1.5vh, 16px);
   color: #1d1d1f;
 }
 
@@ -560,7 +564,6 @@ body, html, #root {
 
 .usage-records-page .usage-trend-panel,
 .usage-records-page .usage-health-panel,
-.usage-records-page .usage-category-panel,
 .usage-records-page .usage-events-panel {
   border: 0;
   border-radius: 18px;
@@ -643,23 +646,7 @@ body, html, #root {
   box-shadow: none;
 }
 
-.usage-records-page .usage-filter-reset-btn {
-  align-self: center;
-  height: 36px;
-  border-style: solid;
-  border-color: var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-primary);
-  color: var(--text-secondary);
-}
-
-.usage-records-page .usage-filter-reset-btn:hover {
-  border-color: var(--border-hover);
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-@container workspace (max-width: 880px) {
+@container workspace (width < 600px) {
   .usage-records-page .usage-filter-group {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -729,10 +716,6 @@ body, html, #root {
   font-weight: 650;
   letter-spacing: -0.045em;
   line-height: 1.02;
-}
-
-.app-shell:has(.usage-overview-layout) .content {
-  padding: clamp(12px, 1.5vw, 20px) clamp(12px, 1.5vw, 20px) 16px;
 }
 
 .usage-overview-layout {
@@ -1062,7 +1045,6 @@ body, html, #root {
 
 :root[data-theme='dark'] .usage-records-page .usage-trend-panel,
 :root[data-theme='dark'] .usage-records-page .usage-health-panel,
-:root[data-theme='dark'] .usage-records-page .usage-category-panel,
 :root[data-theme='dark'] .usage-records-page .usage-events-panel,
 :root[data-theme='dark'] .usage-stat-card {
   background: #1c1c1e;
@@ -1087,7 +1069,6 @@ body, html, #root {
 :root[data-theme='dark'] .usage-filter-panel,
 :root[data-theme='dark'] .usage-trend-panel,
 :root[data-theme='dark'] .usage-health-panel,
-:root[data-theme='dark'] .usage-category-panel,
 :root[data-theme='dark'] .usage-events-panel,
 :root[data-theme='dark'] .usage-collector-state,
 :root[data-theme='dark'] .usage-refresh-btn {

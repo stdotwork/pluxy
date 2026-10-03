@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ArrowDown, ArrowUp, Brain, ChevronLeft, ChevronRight, Columns3Cog, Database, DatabaseZap, Download, RotateCcw, Terminal, TriangleAlert, X } from 'lucide-react';
 import { getCurrentLocale, useI18n } from '../i18n';
 import type { MessageKey } from '../i18n/resources';
@@ -30,6 +30,8 @@ export type UsageRecord = {
   failure_body: string;
   provider: string;
   model: string;
+  /** Model name reported by the upstream response, when available. */
+  response_model?: string;
   alias: string;
   reasoning_effort: string;
   endpoint: string;
@@ -296,13 +298,25 @@ function UsageEventCell({
           <small>{formatEventDate(record.timestamp)}</small>
         </td>
       );
-    case 'model':
+    case 'model': {
+      const responseModel = (record.response_model ?? '').trim();
+      const modelTitle = responseModel ? [
+        `${t('usage.model.request')}: ${record.alias || record.model}`,
+        `${t('usage.model.upstream')}: ${record.model}`,
+        `${t('usage.model.response')}: ${responseModel}`,
+      ].join('\n') : undefined;
       return (
-        <td className="usage-stacked-cell align-left">
-          <strong title={record.alias || record.model}>{record.alias || record.model}</strong>
-          {record.alias && record.alias !== record.model ? <small title={record.model}>{record.model}</small> : null}
+        <td className="usage-stacked-cell usage-td-model align-left" title={modelTitle}>
+          <strong title={modelTitle || record.alias || record.model}>{record.alias || record.model}</strong>
+          {record.alias && record.alias !== record.model ? <small title={modelTitle || record.model}>{record.model}</small> : null}
+          {responseModel ? (
+            <small className="usage-response-model" title={modelTitle}>
+              <span aria-hidden="true">↳ </span>{t('usage.model.response')}: {responseModel}
+            </small>
+          ) : null}
         </td>
       );
+    }
     case 'effort':
       return <td className="usage-stacked-cell align-left" title={record.reasoning_effort || 'auto'}><strong>{record.reasoning_effort || 'auto'}</strong></td>;
     case 'request':
@@ -410,14 +424,12 @@ export function EventsView({
   pageSize,
   onPage,
   onPageSizeChange,
-  filters,
   loading = false,
 }: {
   events: UsageEventPage;
   pageSize: number;
   onPage: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
-  filters?: ReactNode;
   loading?: boolean;
 }) {
   const { t } = useI18n();
@@ -581,13 +593,13 @@ export function EventsView({
   const endRecordNum = Math.min(events.page * pageSize, events.total);
 
   const exportCurrentPage = () => {
-    const headers = ['id', 'row_id', 'timestamp', 'api_key_display', 'api_key_remark', 'api_key_hash', 'source', 'source_display', 'provider', 'model', 'alias', 'reasoning_effort', 'endpoint', 'failed', 'canceled', 'failure_status', 'failure_body', 'latency_ms', 'ttft_ms', 'input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'total_tokens'];
+    const headers = ['id', 'row_id', 'timestamp', 'api_key_display', 'api_key_remark', 'api_key_hash', 'source', 'source_display', 'provider', 'model', 'alias', 'response_model', 'reasoning_effort', 'endpoint', 'failed', 'canceled', 'failure_status', 'failure_body', 'latency_ms', 'ttft_ms', 'input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'total_tokens'];
     const csvCell = (value: string | number | boolean | null) => {
       const text = value == null ? '' : String(value);
       const safe = typeof value === 'string' && /^[\s\u0000-\u001f]*[=+@-]/.test(text) ? `'${text}` : text;
       return `"${safe.replace(/"/g, '""')}"`;
     };
-    const rows = events.items.map((record) => [record.id, record.row_id, record.timestamp, record.api_key_display, record.api_key_remark, record.api_key_hash, record.source, record.source_display, record.provider, record.model, record.alias, record.reasoning_effort, record.endpoint, record.failed, record.canceled, record.failure_status, record.failure_body, record.latency_ms, record.ttft_ms, record.tokens.input_tokens, record.tokens.output_tokens, record.tokens.reasoning_tokens, record.tokens.cache_read_tokens, record.tokens.cache_creation_tokens, record.tokens.total_tokens]);
+    const rows = events.items.map((record) => [record.id, record.row_id, record.timestamp, record.api_key_display, record.api_key_remark, record.api_key_hash, record.source, record.source_display, record.provider, record.model, record.alias, record.response_model ?? '', record.reasoning_effort, record.endpoint, record.failed, record.canceled, record.failure_status, record.failure_body, record.latency_ms, record.ttft_ms, record.tokens.input_tokens, record.tokens.output_tokens, record.tokens.reasoning_tokens, record.tokens.cache_read_tokens, record.tokens.cache_creation_tokens, record.tokens.total_tokens]);
     const csv = '\uFEFF' + [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a');
@@ -637,8 +649,6 @@ export function EventsView({
           </button>
         </div>
       </div>
-
-      {filters ? <div className="usage-events-filter-slot">{filters}</div> : null}
 
       {loading ? <div className="usage-empty" role="status"><Database size={20} aria-hidden="true" /><span>{t('usage.loading')}</span></div> : events.items.length ? (
         <div ref={tableWrapRef} className="usage-table-wrap" tabIndex={0} role="region" aria-label={t('usage.events.title')}>

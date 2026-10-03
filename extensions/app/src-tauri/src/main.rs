@@ -20,6 +20,7 @@ mod network_proxy;
 ))]
 mod native_i18n;
 mod oauth_browser;
+mod plugins;
 mod progress;
 mod provider_health;
 #[cfg(any(
@@ -2686,7 +2687,11 @@ fn main() {
             set_core_management_secret_key,
             clear_core_management_secret_key,
             management_api::management_request,
+            plugins::get_plugin_support,
+            plugins::get_plugin_resource_url,
             provider_health::provider_health_probe,
+            provider_health::get_core_models,
+            provider_health::core_health_probe,
             management_api::upload_auth_file,
             management_api::open_auth_files_directory,
             management_api::open_core_logs_directory,

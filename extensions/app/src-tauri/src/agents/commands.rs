@@ -722,6 +722,14 @@ pub(crate) async fn fetch_agent_models(
     port: u16,
     api_key: &str,
 ) -> Result<Vec<AgentModelOption>, String> {
+    let payload = fetch_agent_model_payload(port, api_key).await?;
+    parse_agent_model_options(&payload)
+}
+
+pub(crate) async fn fetch_agent_model_payload(
+    port: u16,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
     if port == 0 {
         return Err("Invalid kernel port".to_string());
     }
@@ -760,7 +768,7 @@ pub(crate) async fn fetch_agent_models(
                     truncate_for_error(&body)
                 )
             })?;
-            return parse_agent_model_options(&payload);
+            return Ok(payload);
         }
 
         let can_try_legacy_path = index == 0 && matches!(status.as_u16(), 404 | 405);

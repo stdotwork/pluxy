@@ -47,12 +47,13 @@ export const normalizeAuthFilePriorityInput = (value: string): number | null => 
   return parseAuthFilePriority(normalized) ?? null;
 };
 
-const normalizeOAuthProvider = (value: string) => {
+export const normalizeOAuthProvider = (value: string) => {
   const provider = value.trim().toLowerCase();
   if (provider === 'cognition') return 'devin';
   if (provider === 'anthropic') return 'claude';
   if (provider === 'anti-gravity') return 'antigravity';
   if (provider === 'openai') return 'codex';
+  if (provider === 'muse') return 'meta';
   return provider;
 };
 

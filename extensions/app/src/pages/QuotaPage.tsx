@@ -1,7 +1,8 @@
 import { MessageNotice } from '../appNotice';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, LoaderCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle, Gauge, ListRestart, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useConfirmation } from '../components/ConfirmationDialog';
+import { OAuthPageToolbar } from '../components/OAuthPageToolbar';
 import { QuotaActionFeedback } from '../components/QuotaActionFeedback';
 import { canResetCodexQuota } from '../services/quotaActions';
 import { useCodexQuotaReset } from '../components/useCodexQuotaReset';
@@ -34,6 +35,7 @@ import {
 } from '../services/quotaCache';
 import { dedupeAuthFiles } from '../services/authFiles';
 import { useI18n } from '../i18n';
+import './QuotaPage.css';
 
 const providerMeta: Record<QuotaProvider, { label: string; icon: string }> = {
   claude: { label: 'Claude', icon: claudeIcon },
@@ -144,17 +146,17 @@ export function QuotaPage() {
     <section className="page management-page quota-page">
       {confirmationDialog}
       {error ? <MessageNotice message={error} /> : null}
-      {loading || grouped.length === 0 ? (
-        <div className="management-heading-actions quota-empty-actions">
-          <span className="muted-summary">{t(files.length === 1 ? 'quota.queryableCredentials.one' : 'quota.queryableCredentials.other', { count: files.length })}</span>
-          <button type="button" className="secondary-button compact-button" onClick={() => void loadFiles()} disabled={loading || refreshing || querying}>
-            <RefreshCw size={16} />{t('quota.readList')}
-          </button>
-          <button type="button" className="secondary-button compact-button" onClick={() => void refreshAll()} disabled={refreshing || loading || querying || files.length === 0}>
-            <RefreshCw size={16} className={refreshing ? 'spin' : ''} />{t('quota.refreshAll')}
-          </button>
-        </div>
-      ) : null}
+      <OAuthPageToolbar
+        icon={<Gauge size={18} />}
+        summary={t(files.length === 1 ? 'quota.queryableCredentials.one' : 'quota.queryableCredentials.other', { count: files.length })}
+      >
+        <button type="button" className="secondary-button compact-button" onClick={() => void loadFiles()} disabled={loading || refreshing || querying}>
+          {loading ? <RefreshCw size={16} className="spin" /> : <ListRestart size={16} />}{t('quota.readList')}
+        </button>
+        <button type="button" className="primary-button compact-button" onClick={() => void refreshAll()} disabled={refreshing || loading || querying || files.length === 0}>
+          <RefreshCw size={16} className={refreshing ? 'spin' : ''} />{t('quota.refreshAll')}
+        </button>
+      </OAuthPageToolbar>
       {loading ? (
         <div className="management-loading"><LoaderCircle size={20} className="spin" />{t('quota.loadingFiles')}</div>
       ) : grouped.length === 0 ? (
@@ -164,20 +166,10 @@ export function QuotaPage() {
           {grouped.map(([provider, items]) => (
             <section className="quota-provider-group" key={provider}>
               <div className="quota-group-heading">
-                <div><img src={providerMeta[provider].icon} alt="" className={provider === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} /><h2>{providerMeta[provider].label}</h2></div>
-                <div className="quota-group-actions">
-                  <span>{t(items.length === 1 ? 'quota.credentials.one' : 'quota.credentials.other', { count: items.length })}</span>
-                  {provider === grouped[0]?.[0] ? (
-                    <>
-                      <span className="muted-summary">{t(files.length === 1 ? 'quota.queryableCredentials.one' : 'quota.queryableCredentials.other', { count: files.length })}</span>
-                      <button type="button" className="secondary-button compact-button" onClick={() => void loadFiles()} disabled={loading || refreshing || querying}>
-                        <RefreshCw size={16} />{t('quota.readList')}
-                      </button>
-                      <button type="button" className="secondary-button compact-button" onClick={() => void refreshAll()} disabled={refreshing || loading || querying || files.length === 0}>
-                        <RefreshCw size={16} className={refreshing ? 'spin' : ''} />{t('quota.refreshAll')}
-                      </button>
-                    </>
-                  ) : null}
+                <div className="quota-provider-title">
+                  <img src={providerMeta[provider].icon} alt="" className={provider === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} />
+                  <h2>{providerMeta[provider].label}</h2>
+                  <span className="quota-provider-count">{t(items.length === 1 ? 'quota.credentials.one' : 'quota.credentials.other', { count: items.length })}</span>
                 </div>
               </div>
               <div className="real-quota-grid">{items.map(({ file, quota }) => <QuotaCard key={quotaKey(file)} file={file} quota={quota} onRefresh={() => void refreshOne(file)} onReset={provider === 'codex' ? () => void resetCodexQuota(file, quota) : undefined} />)}</div>

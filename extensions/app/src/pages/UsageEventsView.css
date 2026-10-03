@@ -11,6 +11,7 @@
   --usage-log-reasoning: #7c3aed;
   --usage-log-cache-read: #b45309;
   --usage-log-cache-write: #be185d;
+  --usage-log-response-model: #c2410c;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -133,130 +134,6 @@
   outline-offset: 3px;
 }
 
-.usage-request-log .usage-events-filter-slot {
-  min-width: 0;
-  flex: none;
-}
-
-.usage-records-page .usage-request-log .usage-filter-panel {
-  flex: none;
-  gap: 12px;
-  padding: 16px 20px;
-  border: 0;
-  border-bottom: 1px solid var(--usage-log-line);
-  border-radius: 0;
-  background: var(--usage-log-surface);
-  box-shadow: none;
-}
-
-.usage-records-page .usage-request-log .usage-filter-row {
-  align-items: flex-end;
-  justify-content: flex-start;
-  gap: 12px;
-}
-
-.usage-records-page .usage-request-log .usage-filter-group {
-  display: flex;
-  flex: 0 1 auto;
-  align-items: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.usage-records-page .usage-request-log .usage-filter-item {
-  display: flex;
-  width: 160px;
-  min-width: 130px;
-  height: auto;
-  padding: 0;
-  flex: 0 1 160px;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 5px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.usage-records-page .usage-request-log .usage-filter-label {
-  display: block;
-  padding: 0;
-  margin: 0;
-  border: 0;
-  color: var(--usage-log-muted);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.usage-records-page .usage-request-log .usage-filter-item select,
-.usage-records-page .usage-request-log .usage-filter-item input {
-  width: 100%;
-  height: 39px;
-  padding: 0 28px 0 13px;
-  border: 1px solid var(--usage-log-line);
-  border-radius: 999px;
-  background-color: var(--usage-log-surface);
-  color: var(--usage-log-text);
-  font-size: 12px;
-  box-shadow: none;
-}
-
-.usage-records-page .usage-request-log .usage-filter-item select:hover,
-.usage-records-page .usage-request-log .usage-filter-item input:hover {
-  border-color: var(--border-hover);
-}
-
-.usage-records-page .usage-request-log .usage-filter-item select:focus,
-.usage-records-page .usage-request-log .usage-filter-item input:focus {
-  border-color: var(--ui-accent);
-  box-shadow: 0 0 0 3px var(--ui-focus-ring);
-}
-
-.usage-records-page .usage-request-log .usage-filter-item:focus-within {
-  border: 0;
-  box-shadow: none;
-}
-
-.usage-records-page .usage-request-log .usage-filter-reset-btn {
-  align-self: flex-end;
-  height: 36px;
-  margin-bottom: 1px;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: var(--usage-log-soft);
-  color: var(--usage-log-muted);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.usage-records-page .usage-request-log .usage-filter-reset-btn:hover {
-  border-color: var(--usage-log-line);
-  background: var(--bg-hover);
-  color: var(--usage-log-text);
-}
-
-.usage-records-page .usage-request-log .usage-filter-reset-btn:disabled {
-  opacity: .46;
-  cursor: default;
-}
-
-.usage-request-log .usage-custom-range {
-  flex-wrap: wrap;
-  padding-top: 10px;
-  border-color: var(--usage-log-line);
-  color: var(--usage-log-muted);
-}
-
-.usage-request-log .usage-custom-range input {
-  border-color: var(--usage-log-line);
-  border-radius: 8px;
-  background: var(--usage-log-surface);
-  color: var(--usage-log-text);
-}
-
 .usage-request-log .usage-table-wrap {
   min-height: 0;
   flex: 1 1 auto;
@@ -316,6 +193,10 @@
 
 .usage-request-log .usage-events-table .usage-stacked-cell > small {
   margin-top: 2px;
+}
+
+.usage-request-log .usage-events-table .usage-td-model > .usage-response-model {
+  color: var(--usage-log-response-model);
 }
 
 .usage-request-log .usage-events-table .usage-td-key > strong {
@@ -528,6 +409,7 @@
   --usage-log-reasoning: #b69cff;
   --usage-log-cache-read: #fbbf24;
   --usage-log-cache-write: #f472b6;
+  --usage-log-response-model: #fb923c;
   border-color: var(--usage-log-line);
   background: var(--usage-log-surface);
   box-shadow: none;
@@ -543,28 +425,9 @@
   background-color: #505258;
 }
 
-:root[data-theme='dark'] .usage-records-page .usage-request-log .usage-filter-item select,
-:root[data-theme='dark'] .usage-records-page .usage-request-log .usage-filter-item input {
-  background: var(--usage-log-surface);
-  color: var(--usage-log-text);
-}
-
 @container workspace (max-width: 760px) {
   .usage-request-log .usage-events-summary {
     padding: 17px 16px;
-  }
-
-  .usage-records-page .usage-request-log .usage-filter-panel {
-    padding: 14px 16px;
-  }
-
-  .usage-records-page .usage-request-log .usage-filter-group {
-    flex: 1 1 100%;
-  }
-
-  .usage-records-page .usage-request-log .usage-filter-item {
-    flex: 1 1 140px;
-    max-width: none;
   }
 
   .usage-request-log .usage-events-footer {
