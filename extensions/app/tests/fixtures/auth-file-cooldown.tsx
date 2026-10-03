@@ -53,6 +53,11 @@ mockIPC(async (cmd, args) => {
       observed_at: new Date().toISOString(),
       files: state.files.map(file => ({
         provider: 'codex', source: 'file', size: 1024, updated_at: '2026-10-01T00:00:00Z',
+        recent_requests: Array.from({ length: 20 }, (_, index) => ({
+          time: `${String(8 + Math.floor(index / 6)).padStart(2, '0')}:${String(index % 6 * 10).padStart(2, '0')}`,
+          success: index === 19 ? 0 : index === 18 ? 2 : 1,
+          failed: index === 18 ? 1 : 0,
+        })),
         success: 20, failed: 2, ...file,
         ...(Array.isArray(file.cooldowns) ? { cooldowns: file.cooldowns.map(record => ({
           ...record, remaining_seconds: Math.max(1, Number(record.remaining_seconds) - elapsed),

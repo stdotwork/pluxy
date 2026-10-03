@@ -70,6 +70,7 @@ import { CodexSessionsPanel } from './CodexSessionsPanel';
 import { CodexModelCatalogDialog } from './CodexModelCatalogDialog';
 import { DeepSeekHarnessCatalogDialog } from './DeepSeekHarnessCatalogDialog';
 import { AgentConfigBackupDialog } from './AgentConfigBackupDialog';
+import { AgentClientList } from './AgentClientList';
 import { AgentConfigManagementPanel, AgentConfigurationFeedback, AgentRunControls } from './AgentControls';
 import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 
@@ -2029,44 +2030,19 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       ) : null}
 
       <div className="agent-workbench">
-        <aside className="panel agent-client-list" aria-label={t('agents.localClients')}>
-          <div className="agent-client-list-heading">
-            <strong>{t('agents.localClients')}</strong>
-            <button
-              type="button"
-              className="icon-button quiet"
-              onClick={() => void refresh()}
-              disabled={loading || busy}
-              title={t('agents.redetect')}
-              aria-label={t('agents.redetect')}
-            >
-              <RefreshCw size={15} className={loading ? 'spin' : ''} aria-hidden="true" />
-            </button>
-          </div>
-          {detectionError ? (
-            <MessageNotice message={detectionError} onDismiss={() => setDetectionError('')} />
-          ) : null}
-          <div className="agent-list-items">
-            {agentDefinitions.map((agent) => {
-              const status = statuses.find((item) => item.id === agent.id);
-              return (
-                <button
-                  type="button"
-                  className={selected === agent.id ? 'active' : ''}
-                  key={agent.id}
-                  onClick={() => setSelected(agent.id)}
-                  disabled={busy}
-                >
-                  <span className="agent-client-icon"><AgentMark definition={agent} /></span>
-                  <span><strong title={agent.name}>{agent.name}</strong><small title={listStatusText(status)}>{listStatusText(status)}</small></span>
-                  {status?.installed ? (
-                    <i className="agent-installed-indicator" title={t('agents.clientDetected')} aria-hidden="true" />
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </aside>
+        <AgentClientList clients={agentDefinitions.map((agent) => {
+          const status = statuses.find((item) => item.id === agent.id);
+          return {
+            id: agent.id,
+            name: agent.name,
+            icon: <AgentMark definition={agent} />,
+            summary: listStatusText(status),
+            installed: Boolean(status?.installed),
+            detected: Boolean(status && (status.installed || status.configExists || status.configured
+              || (agent.id === 'pi' && status.pluginInstalled))),
+          };
+        })} selected={selected} onSelect={setSelected} onRefresh={() => void refresh()}
+          loading={loading} busy={busy} error={detectionError} onDismissError={() => setDetectionError('')} />
 
         <section className="panel agent-config-panel">
           {availableSubpages.length > 1 ? (

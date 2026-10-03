@@ -316,6 +316,52 @@ const base = process.env.HOME_DASHBOARD_TEST_BASE_URL || 'http://127.0.0.1:1421'
       await page.screenshot({ path: `misc/home-health-dialog-app-${theme}-${width}.png`, animations: 'disabled' });
       if (theme === 'light' && width === 1280) await page.screenshot({ path: 'misc/home-health-dialog-app.png', animations: 'disabled' });
     }
+    // The normal desktop dashboard must fit the usable viewport, including the
+    // shorter CSS viewport produced by desktop display scaling.
+    const desktopViewports = [
+      { width: 1464, height: 845 },
+      { width: 1280, height: 800 },
+      { width: 1440, height: 900 },
+      { width: 1280, height: 720 },
+    ];
+    for (const locale of ['zh-CN', 'en']) {
+      for (const theme of ['light', 'dark']) {
+        await page.setViewportSize(desktopViewports[0]);
+        await page.evaluate(({ locale, theme }) => {
+          localStorage.setItem('easy-cli-proxy-api.locale', locale);
+          localStorage.setItem('easy-cli-proxy-api.theme', theme);
+        }, { locale, theme });
+        await page.goto(`${base}/?mock=running`, { waitUntil: 'domcontentloaded' });
+        await page.locator('.home-overview[aria-busy="false"]').waitFor();
+        const toolbar = page.locator('#browser-mock-toolbar');
+        if (await toolbar.count()) await toolbar.evaluate(node => { node.style.display = 'none'; });
+        assert.equal(await page.locator('html').getAttribute('lang'), locale);
+        assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
+        for (const viewport of desktopViewports) {
+          await page.setViewportSize(viewport);
+          const layout = await page.evaluate(async () => {
+            await document.fonts.ready;
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            window.scrollTo(0, 0);
+            const root = document.scrollingElement;
+            const cards = [...document.querySelectorAll('.home-top-grid > .panel, .home-stat-card')].map(node => {
+              const bounds = node.getBoundingClientRect();
+              return { name: node.getAttribute('data-stat') || node.className, top: bounds.top, bottom: bounds.bottom, height: bounds.height };
+            });
+            return { scrollHeight: root.scrollHeight, clientHeight: root.clientHeight, viewportHeight: innerHeight, cards };
+          });
+          const context = `${locale}/${theme}/${viewport.width}x${viewport.height}`;
+          assert.equal(layout.cards.length, 6, `${context} must show both top panels and all four overview cards`);
+          assert.ok(layout.scrollHeight <= layout.clientHeight + 1,
+            `${context} homepage causes a vertical page scrollbar: ${layout.scrollHeight}px content in ${layout.clientHeight}px viewport`);
+          for (const card of layout.cards) {
+            assert.ok(card.height > 0 && card.top >= -1 && card.bottom <= layout.viewportHeight + 1,
+              `${context} ${card.name} must be fully visible without scrolling: ${JSON.stringify(card)}`);
+          }
+        }
+      }
+    }
+    console.log('Desktop homepage fits all four viewport sizes in Chinese/English and light/dark themes without vertical page overflow.');
     assert.deepEqual(errors, []);
     console.log('Home dashboard browser checks passed. Screenshots: misc/home-{dashboard,health-dialog}-{light,dark}-{1280,640,390}.png and app.png');
   } finally {

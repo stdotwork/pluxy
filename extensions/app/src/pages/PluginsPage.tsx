@@ -6,7 +6,7 @@ import { pluginText } from '../i18n/plugins';
 import { FloatingNotice, useAppNotice } from '../appNotice';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { pluginsApi, pluginStoreApi, type PluginListEntry, type PluginListResponse, type PluginStoreEntry, type PluginStoreResponse } from '../services/plugins';
-import { collectPluginResourceEntries, getPluginTitle, isOfficialPlugin, type PluginResourceEntry } from '../services/pluginResources';
+import { collectPluginResourceEntries, getPluginTitle, isOfficialPlugin, notifyPluginResourcesChanged, type PluginResourceEntry } from '../services/pluginResources';
 import { getPluginStatus, isPluginInstalled } from '../services/pluginStatus';
 import { PluginConfigDialog } from './PluginConfigDialog';
 import { PluginInstallDialog } from './PluginInstallDialog';
@@ -54,6 +54,7 @@ export function PluginsPage() {
       const next = await pluginsApi.list();
       if (!mounted.current || revision !== requests.current) return;
       setData(next);
+      notifyPluginResourcesChanged();
       setResource(previous => previous && collectPluginResourceEntries(next.plugins).some(entry => entry.pluginID === previous.entry.pluginID && entry.menuIndex === previous.entry.menuIndex && entry.menu.path === previous.entry.menu.path) ? previous : null);
       if (target === 'store') {
         const nextStore = await pluginStoreApi.list();
@@ -80,6 +81,7 @@ export function PluginsPage() {
         const next = await pluginsApi.list();
         if (cancelled || requests.current !== revision) return;
         setData(next);
+        notifyPluginResourcesChanged();
       } catch { /* The manual refresh exposes errors without replacing action feedback. */ }
       if (!cancelled && ++attempts < 8) timer = setTimeout(() => void poll(), 1500);
     };

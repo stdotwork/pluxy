@@ -38,6 +38,7 @@ type HealthProps = {
   resetting?: boolean;
   resetDisabled?: boolean;
   onReset?: () => void;
+  compact?: boolean;
 };
 
 export function AuthFileHealthStatus({ file, receivedAtMs, observedAt, ...resetProps }: Omit<HealthProps, 'snapshot'> & {
@@ -58,7 +59,7 @@ function TimedHealthStatus(props: HealthProps) {
   return <HealthStatus {...props} nowMs={nowMs} />;
 }
 
-function HealthStatus({ file, snapshot, nowMs, resetting = false, resetDisabled = false, onReset }: HealthProps & { nowMs: number }) {
+function HealthStatus({ file, snapshot, nowMs, resetting = false, resetDisabled = false, onReset, compact = false }: HealthProps & { nowMs: number }) {
   const { t, formatNumber, formatDate } = useI18n();
   const health = authFileHealth(file);
   const cooldown = summarizeAuthFileCooldowns(snapshot, nowMs);
@@ -87,37 +88,38 @@ function HealthStatus({ file, snapshot, nowMs, resetting = false, resetDisabled 
     ? cooldown.modelCount ? t('authFiles.health.credentialModels', { count: cooldown.modelCount })
       : t('authFiles.health.credential')
     : cooldown.modelCount ? t('authFiles.health.models', { count: cooldown.modelCount }) : '';
-  const title = health.disabled ? t(health.label)
+  const title = compact && snapshot?.records === null ? t('authFiles.health.unknownCooldown')
+    : health.disabled && !compact ? t(health.label)
     : cooldown.elapsed ? t('authFiles.health.elapsed')
       : scope || (healthy ? t('authFiles.health.unknownCooldown') : t(health.label));
   const subtitle = health.disabled ? scope : reasons.map((key) => t(key)).join(' · ');
   const formatTimestamp = (value: string) => formatDate(value, {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   });
   const summary = <>
     <Icon size={16} className="auth-health-icon" aria-hidden="true" />
     <span className="auth-health-summary-content">
-      <span className="auth-health-heading"><strong>{title}</strong>{subtitle ? <span>{subtitle}</span> : null}</span>
-      {separateState ? <span className="auth-health-hint">{t('authFiles.health.coreStatus', { status: t(health.label) })}</span> : null}
-      {health.message && !hasTimers && !health.label.startsWith('authFiles.health.reason.')
+      <span className="auth-health-heading"><strong title={compact && health.message ? health.message : undefined}>{title}</strong>{!compact && subtitle ? <span>{subtitle}</span> : null}</span>
+      {!compact && separateState ? <span className="auth-health-hint">{t('authFiles.health.coreStatus', { status: t(health.label) })}</span> : null}
+      {!compact && health.message && !hasTimers && !health.label.startsWith('authFiles.health.reason.')
         ? <span className="auth-health-message-preview">{health.message}</span> : null}
       {cooldown.elapsed ? <span className="auth-health-hint">{t('authFiles.health.expiredHint')}</span> : null}
-      {snapshot?.records === null && !healthy ? <span className="auth-health-hint">{t('authFiles.health.unknownCooldown')}</span> : null}
+      {!compact && snapshot?.records === null && !healthy ? <span className="auth-health-hint">{t('authFiles.health.unknownCooldown')}</span> : null}
       {snapshot === undefined && health.tone === 'error' ? <span className="auth-health-hint">{t('authFiles.health.missingCooldown')}</span> : null}
     </span>
     {cooldown.active.length > 0 ? <span className="auth-health-countdown">
       {t('authFiles.health.earliest', { time: duration(cooldown.earliestSeconds) })}
     </span> : null}
-    {hasDetails ? <span className="auth-health-disclosure"><span>{t('authFiles.health.details')}</span><ChevronDown size={14} aria-hidden="true" /></span> : null}
+    {hasDetails ? <span className="auth-health-disclosure">{!compact ? <span>{t('authFiles.health.details')}</span> : null}<ChevronDown size={14} aria-hidden="true" /></span> : null}
   </>;
 
   return (
-    <section className={`auth-file-health ${tone}${hasDetails ? ' detailed' : ''}`} aria-label={t('authFiles.health.title')}>
+    <section className={`auth-file-health ${tone}${hasDetails ? ' detailed' : ''}${compact ? ' auth-file-health-compact' : ''}`} aria-label={t('authFiles.health.title')}>
       {hasDetails ? <details>
         <summary className="auth-health-summary">{summary}</summary>
         <div className="auth-health-body">
-          {hasTimers && !healthy ? <p className="auth-health-core-state">{t('authFiles.health.coreStatus', { status: t(health.label) })}</p> : null}
-          {health.message ? <div className="auth-health-core-message">
+          {hasTimers && !healthy && (!compact || separateState || health.disabled) ? <p className="auth-health-core-state">{t('authFiles.health.coreStatus', { status: t(health.label) })}</p> : null}
+          {health.message && (!compact || !health.label.startsWith('authFiles.health.reason.')) ? <div className="auth-health-core-message">
             <span>{t('authFiles.health.coreMessage')}</span><p>{health.message}</p>
           </div> : null}
           <ul className="auth-health-records">

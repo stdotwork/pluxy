@@ -17,8 +17,9 @@ const MAX_SESSION_MS = 30 * 60 * 1000;
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
-export function PluginOAuthDialog({ plugin, onClose, onCompleted }: {
+export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onCompleted }: {
   plugin: PluginListEntry;
+  browser?: string;
   onClose: () => void;
   onCompleted: () => void;
 }) {
@@ -128,7 +129,7 @@ export function PluginOAuthDialog({ plugin, onClose, onCompleted }: {
     if (!session || !activeSession() || openPending.current) return;
     const current = generation.current;
     openPending.current = true; setOpening(true); setError('');
-    try { await invoke('open_oauth_url', { url: session.url, browser: 'default' }); }
+    try { await invoke('open_oauth_url', { url: session.url, browser }); }
     catch (reason) { if (generation.current === current && phaseRef.current === 'waiting') setError(message(reason)); }
     finally { if (generation.current === current) { openPending.current = false; setOpening(false); } }
   };

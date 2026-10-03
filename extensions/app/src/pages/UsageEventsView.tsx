@@ -612,44 +612,7 @@ export function EventsView({
   };
 
   return (
-    <section className="panel usage-events-panel usage-request-log" aria-busy={loading}>
-      <div className="usage-events-summary">
-        <div className="usage-events-heading">
-          <div className="usage-events-title-row">
-            <h2>{t('usage.events.title')}</h2>
-            <span className="usage-events-count-badge">{t('usage.events.total', { count: loading ? '—' : compactNumber(events.total) })}</span>
-          </div>
-          <p>{t('usage.events.description')}</p>
-        </div>
-
-        <div className="usage-events-summary-right">
-          <button
-            type="button"
-            className="usage-col-settings-btn"
-            onClick={openColumnSettings}
-            title={t('usage.events.columnSettings')}
-            aria-label={t('usage.events.columnSettings')}
-          >
-            <Columns3Cog size={14} />
-            <span>{t('usage.events.columns')}</span>
-          </button>
-          {isCustomized ? (
-            <button
-              type="button"
-              className="usage-col-reset-btn icon-only"
-              onClick={resetAllWidths}
-              title={t('usage.events.resetColumns')}
-              aria-label={t('usage.events.resetColumns')}
-            >
-              <RotateCcw size={13} />
-            </button>
-          ) : null}
-          <button type="button" className="usage-events-export-btn" disabled={loading || events.items.length === 0} onClick={exportCurrentPage} title={t('usage.events.exportDescription')}>
-            <Download size={14} aria-hidden="true" /><span>{t('usage.events.exportPage')}</span>
-          </button>
-        </div>
-      </div>
-
+    <section className="panel usage-events-panel usage-request-log" aria-label={t('usage.events.title')} aria-busy={loading}>
       {loading ? <div className="usage-empty" role="status"><Database size={20} aria-hidden="true" /><span>{t('usage.loading')}</span></div> : events.items.length ? (
         <div ref={tableWrapRef} className="usage-table-wrap" tabIndex={0} role="region" aria-label={t('usage.events.title')}>
           <table
@@ -717,6 +680,32 @@ export function EventsView({
 
       <div className="usage-events-footer">
         <span className="usage-pagination-summary">{t('usage.events.rangeSummary', { start: startRecordNum, end: endRecordNum, total: compactNumber(events.total) })}</span>
+        <div className="usage-events-actions">
+          <button
+            type="button"
+            className="usage-col-settings-btn"
+            onClick={openColumnSettings}
+            title={t('usage.events.columnSettings')}
+            aria-label={t('usage.events.columnSettings')}
+          >
+            <Columns3Cog size={14} aria-hidden="true" />
+            <span>{t('usage.events.columns')}</span>
+          </button>
+          {isCustomized ? (
+            <button
+              type="button"
+              className="usage-col-reset-btn icon-only"
+              onClick={resetAllWidths}
+              title={t('usage.events.resetColumns')}
+              aria-label={t('usage.events.resetColumns')}
+            >
+              <RotateCcw size={13} aria-hidden="true" />
+            </button>
+          ) : null}
+          <button type="button" className="usage-events-export-btn" disabled={loading || events.items.length === 0} onClick={exportCurrentPage} title={t('usage.events.exportDescription')}>
+            <Download size={14} aria-hidden="true" /><span>{t('usage.events.exportPage')}</span>
+          </button>
+        </div>
         <div className="usage-pagination-controls">
           <select className="usage-page-size-select" value={pageSize} disabled={loading} onChange={(event) => onPageSizeChange(Number(event.currentTarget.value))} aria-label={t('usage.events.pageSize', { size: pageSize })}>
             {[20, 50, 100, 200].map((size) => <option key={size} value={size}>{t('usage.events.pageSize', { size })}</option>)}

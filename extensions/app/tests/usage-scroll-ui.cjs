@@ -164,7 +164,7 @@ function parseCsv(text) {
     await page.locator('.usage-page-size-select').selectOption('200');
     await page.waitForFunction(() => document.querySelectorAll('.usage-events-table tbody tr').length === 200);
 
-    assert.equal(await page.getByRole('heading', { name: 'Request Event Log' }).count(), 1);
+    assert.equal(await page.getByRole('heading', { name: 'Request Event Log' }).count(), 0, 'The redundant request log heading is removed');
     const firstRow = page.locator('.usage-events-table tbody tr').first();
     assert.equal(await firstRow.locator('.usage-td-total').getAttribute('title'), '1,200 tokens', 'The displayed total uses the recorded total instead of adding cache and reasoning again');
     assert.equal(await firstRow.locator('.tone-input').getAttribute('aria-label'), 'Input: 1000');
@@ -175,7 +175,7 @@ function parseCsv(text) {
     assert.equal(await firstRow.locator('.tone-cache-write').textContent(), '50');
     assert.equal(await firstRow.locator('.usage-td-time small').count(), 1, 'The request date remains visible below its time');
     assert.ok((await firstRow.locator('.usage-td-latency small').textContent()).includes('200'), 'The latency cell includes first-token latency');
-    assert.equal(await page.locator('.usage-events-summary .usage-page-size-select').count(), 0);
+    assert.equal(await page.locator('.usage-events-summary').count(), 0, 'There is no separate toolbar above the request table');
     assert.equal(await page.locator('.usage-events-footer .usage-page-size-select').count(), 1, 'Pagination remains in the bottom footer');
 
     // Multiple input updates can arrive before the next animation frame. None

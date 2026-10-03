@@ -3,6 +3,9 @@ import { createTraditionalMessages } from './traditional';
 
 const messages = {
   title: ['插件登录', 'Plugin sign-in', 'プラグインのログイン'],
+  providerTitle: ['{name} OAuth', '{name} OAuth', '{name} OAuth'],
+  providerHint: ['通过插件登录并保存账号凭据。', 'Sign in through this plugin and save account credentials.', 'プラグインでログインし、アカウントの認証情報を保存します。'],
+  loadFailed: ['无法加载插件登录入口，请刷新重试。', 'Could not load plugin sign-in options. Refresh to retry.', 'プラグインのログイン項目を読み込めませんでした。更新して再試行してください。'],
   starting: ['正在获取登录链接…', 'Requesting a sign-in link…', 'ログインリンクを取得中…'],
   waiting: ['等待完成授权…', 'Waiting for authorization…', '認証の完了を待っています…'],
   success: ['授权完成，凭据已保存。', 'Authorization completed and credentials saved.', '認証が完了し、認証情報が保存されました。'],

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  authFileCooldownResetIndex,
   changedOAuthAuthFileNames,
   dedupeAuthFiles,
   isOAuthCredentialFile,
@@ -40,6 +41,57 @@ describe('认证文件列表规范化', () => {
     expect(files[0].runtime_only).toBeUndefined();
     expect(files[0].account_type).toBeUndefined();
     expect(isOAuthCredentialFile(files[0])).toBe(true);
+  });
+
+  const cooldown = {
+    scope: 'model', model_key: 'model-b', reason: 'quota',
+    retry_at: '2040-01-01T00:00:00Z', remaining_seconds: 30,
+  };
+
+  it('keeps different auth indexes separate when filenames match', () => {
+    const disk = { name: 'same.json', auth_index: 'A', source: 'file', path: '/synthetic/a', disabled: false };
+    const runtime = { name: 'same.json', auth_index: 'B', runtime_only: true, cooldowns: [cooldown] };
+    for (const entries of [[disk, runtime], [runtime, disk]]) {
+      const files = dedupeAuthFiles(entries);
+      expect(files).toHaveLength(2);
+      expect(files.find((file) => authFileCooldownResetIndex(file) === 'A')).toEqual(disk);
+      expect(files.find((file) => authFileCooldownResetIndex(file) === 'B')).toEqual(runtime);
+    }
+  });
+
+  it('merges the same normalized index and preserves atomic empty or unknown cooldowns', () => {
+    for (const cooldowns of [[], null]) {
+      const files = dedupeAuthFiles([
+        { name: 'same.json', auth_index: 0, source: 'file', path: '/synthetic/a', cooldowns },
+        { name: 'same.json', authIndex: ' 0 ', runtime_only: true, email: 'account@example.test', cooldowns: [cooldown] },
+        { name: 'same.json', auth_index: 'B', runtime_only: true, cooldowns: [cooldown] },
+      ]);
+      expect(files).toHaveLength(2);
+      const sameIdentity = files.find((file) => authFileCooldownResetIndex(file) === '0')!;
+      expect(sameIdentity.path).toBe('/synthetic/a');
+      expect(sameIdentity.email).toBe('account@example.test');
+      expect(sameIdentity.runtime_only).toBeUndefined();
+      expect(sameIdentity.cooldowns).toEqual(cooldowns);
+      expect(files.find((file) => authFileCooldownResetIndex(file) === 'B')?.cooldowns).toEqual([cooldown]);
+    }
+  });
+
+  it('keeps unindexed records separate when the filename has conflicting identities', () => {
+    const files = dedupeAuthFiles([
+      { name: 'same.json', source: 'file', path: '/synthetic/unknown', cooldowns: [cooldown] },
+      { name: 'same.json', auth_index: 'A', runtime_only: true, cooldowns: [] },
+      { name: 'same.json', authIndex: 'B', runtime_only: true, cooldowns: null },
+    ]);
+    expect(files).toHaveLength(3);
+    const unknown = files.find((file) => authFileCooldownResetIndex(file) === undefined)!;
+    expect(unknown.path).toBe('/synthetic/unknown');
+    expect(unknown.cooldowns).toEqual([cooldown]);
+    for (const index of ['A', 'B']) {
+      const file = files.find((entry) => authFileCooldownResetIndex(entry) === index)!;
+      expect(file.path).toBeUndefined();
+      expect(file.runtime_only).toBe(true);
+      expect(file.cooldowns).toEqual(index === 'A' ? [] : null);
+    }
   });
 });
 

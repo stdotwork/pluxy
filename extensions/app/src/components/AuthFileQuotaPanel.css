@@ -61,7 +61,125 @@
 }
 
 @container credential-quota (max-width: 280px) {
-  .credential-quota-compact .credential-quota-rows {
+  .credential-quota-compact:not(.credential-quota-dense) .credential-quota-rows {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.credential-quota.credential-quota-dense {
+  gap: 6px;
+  line-height: 1.35;
+}
+
+.credential-quota-dense .credential-quota-rows {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 8px 12px;
+}
+
+.credential-quota-dense .credential-quota-row:only-child {
+  grid-column: 1 / -1;
+}
+
+.credential-quota-dense .credential-quota-row {
+  align-content: start;
+  gap: 6px;
+}
+
+.credential-quota-dense .credential-quota-label {
+  align-items: center;
+  gap: 5px;
+  min-height: 19px;
+  line-height: 1.2;
+}
+
+.credential-quota-dense .credential-quota-label span {
+  min-width: 0;
+  padding: 2px 5px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  font-size: 10px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credential-quota-dense .credential-quota-label strong {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.credential-quota-dense .credential-quota-track {
+  height: 5px;
+}
+
+.credential-quota-dense .credential-quota-row small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.credential-quota-dense .credential-quota-reset-time {
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credential-quota-dense .credential-quota-heading {
+  gap: 4px 8px;
+}
+
+.credential-quota-dense .credential-quota-heading .credential-quota-reset {
+  min-height: 21px;
+  padding: 2px 6px;
+  margin: 0;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.credential-quota-dense .credential-quota-reset-credits,
+.credential-quota-dense .credential-quota-footnotes small {
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.credential-quota-dense .credential-quota-footnotes {
+  gap: 2px 8px;
+}
+
+.credential-quota-dense .credential-quota-empty,
+.credential-quota-dense .credential-quota-loading,
+.credential-quota-dense .credential-quota-error,
+.credential-quota-dense .credential-quota-more > summary {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.credential-quota-dense .credential-quota-loading {
+  gap: 5px;
+}
+
+.credential-quota-dense .credential-quota-error-details > summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.credential-quota-dense .credential-quota-error-details > small {
+  display: block;
+  padding-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.credential-quota-dense .credential-quota-more[open] > summary {
+  margin-bottom: 6px;
+}
+
+@container credential-quota (max-width: 180px) {
+  .credential-quota-dense .credential-quota-rows {
     grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -12,26 +12,29 @@ const params = new URLSearchParams(location.search);
 localStorage.setItem('easy-cli-proxy-api.locale', params.get('locale') || 'zh-CN');
 document.documentElement.dataset.theme = params.get('theme') || 'light';
 const startedAt = Date.now();
+const smallList = params.has('small');
 type Request = { path: string; method: string; body?: Record<string, unknown>; query?: Record<string, string> };
-const files: Record<string, unknown>[] = Array.from({ length: 12 }, (_, index) => ({
+const files: Record<string, unknown>[] = Array.from({ length: smallList ? 3 : 12 }, (_, index) => ({
   name: `${String(index + 1).padStart(2, '0')}-account.json`,
   email: index === 0 ? 'long-fictional-account-for-layout@example.test' : `account-${index + 1}@example.test`,
-  auth_index: `fixture-account-${index + 1}`, provider: index === 3 ? 'claude' : index === 4 ? 'xai' : 'codex',
+  auth_index: `fixture-account-${index + 1}`, provider: smallList ? ['codex', 'devin', 'xai'][index] : index === 3 ? 'claude' : index === 4 ? 'xai' : 'codex',
   source: 'file', size: 1800 + index * 350, updated_at: '2026-10-01T00:00:00Z',
-  disabled: index === 2 || index === 6, status: index === 2 || index === 6 ? 'disabled' : 'active',
-  priority: index % 3, plan_type: index % 3 === 0 ? 'Pro 20x' : 'Team',
+  disabled: smallList ? index !== 1 : index === 2 || index === 6,
+  status: (smallList ? index !== 1 : index === 2 || index === 6) ? 'disabled' : 'active',
+  priority: smallList ? 0 : index % 3, plan_type: smallList ? index === 0 ? 'Team' : '' : index % 3 === 0 ? 'Pro 20x' : 'Team',
   note: index === 0 ? 'Fictional account note, visible after opening credential details.' : '',
-  success: 1200 + index * 2450, failed: 3 + index * 97,
-  recent_requests: Array.from({ length: 20 }, (_, bucket) => ({
+  success: smallList ? 0 : 1200 + index * 2450, failed: smallList ? 0 : 3 + index * 97,
+  recent_requests: Array.from({ length: smallList ? 0 : 20 }, (_, bucket) => ({
     time: `${String(8 + Math.floor(bucket / 6)).padStart(2, '0')}:${String(bucket % 6 * 10).padStart(2, '0')}`,
     success: bucket === 19 ? 0 : (bucket + index) % 7 + 1,
     failed: bucket === 19 || (bucket + index) % 5 ? 0 : 2,
   })),
-  cooldowns: index === 1 ? [{ scope: 'model', model_key: 'gpt-fictional-layout', reason: 'quota',
+  cooldowns: !smallList && index === 1 ? [{ scope: 'model', model_key: 'gpt-fictional-layout', reason: 'quota',
     retry_at: new Date(startedAt + 180000).toISOString(), remaining_seconds: 180, http_status: 429, backoff_level: 0 }] : [],
 }));
 
 updateQuotaCache(Object.fromEntries(files.map((file, index) => {
+  if (smallList) return [quotaKey(file), { status: 'idle', rows: [] } satisfies QuotaState];
   const quota: QuotaState = {
     status: 'success', plan: String(file.plan_type),
     subscriptionActiveUntil: index === 0 ? '2026-11-01T00:00:00Z' : undefined,

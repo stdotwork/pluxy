@@ -187,8 +187,24 @@ export const dedupeAuthFiles = (files: AuthFileRecord[]) => {
     grouped.set(key, entries);
   });
   return Array.from(grouped.values())
-    .map(mergeDuplicateAuthFiles)
-    .sort((left, right) =>
-      authFileName(left).localeCompare(authFileName(right), undefined, { sensitivity: 'base' }),
-    );
+    .flatMap((entries) => {
+      const byAuthIndex = new Map<string | undefined, AuthFileRecord[]>();
+      entries.forEach((entry) => {
+        const authIndex = authFileCooldownResetIndex(entry);
+        const matches = byAuthIndex.get(authIndex) ?? [];
+        matches.push(entry);
+        byAuthIndex.set(authIndex, matches);
+      });
+      const knownIndexCount = byAuthIndex.size - (byAuthIndex.has(undefined) ? 1 : 0);
+      // Legacy disk entries can enrich one indexed runtime record. Conflicting
+      // indexes identify different credentials; unindexed entries stay separate.
+      return knownIndexCount <= 1
+        ? [mergeDuplicateAuthFiles(entries)]
+        : Array.from(byAuthIndex.values()).map(mergeDuplicateAuthFiles);
+    })
+    .sort((left, right) => {
+      const nameOrder = authFileName(left).localeCompare(authFileName(right), undefined, { sensitivity: 'base' });
+      return nameOrder || (authFileCooldownResetIndex(left) ?? '')
+        .localeCompare(authFileCooldownResetIndex(right) ?? '');
+    });
 };

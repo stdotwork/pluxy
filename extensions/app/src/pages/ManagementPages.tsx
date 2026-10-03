@@ -31,6 +31,8 @@ import {
 import { AuthFileManagementPage } from './AuthFileManagementPage';
 import { validateDevinCallback } from '../services/devinOAuth';
 import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
+import { PluginOAuthProviders } from './PluginOAuthProviders';
+import { notifyPluginResourcesChanged } from '../services/pluginResources';
 
 type OAuthProviderId = 'codex' | 'claude' | 'antigravity' | 'kimi' | 'xai' | 'devin' | 'meta';
 type OAuthFlowStatus = 'idle' | 'waiting' | 'success' | 'error';
@@ -86,6 +88,7 @@ const OAUTH_CALLBACK_SUPPORTED = new Set<OAuthProviderId>([
   'xai',
   'devin',
 ]);
+const BUILTIN_OAUTH_PROVIDER_IDS = oauthProviders.map(provider => provider.id);
 const XAI_CALLBACK_URL = 'http://127.0.0.1:56121/callback';
 const OAUTH_POLL_INTERVAL_MS = 3000;
 const OAUTH_BROWSER_STORAGE_KEY = 'easy-cli-proxy-api.oauth-browser.v3';
@@ -535,6 +538,9 @@ export function OAuthLoginPage() {
             <option value={NO_AUTO_OPEN_BROWSER_ID}>{t('oauth.browser.noAutoOpen')}</option>
           </select>
         </label>
+        <button type="button" className="secondary-button" onClick={notifyPluginResourcesChanged}>
+          <RefreshCw size={16} aria-hidden="true" />{t('common.refresh')}
+        </button>
       </header>
 
       <FloatingNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />
@@ -625,6 +631,10 @@ export function OAuthLoginPage() {
             </section>
           );
         })}
+        <PluginOAuthProviders
+          builtInProviderIds={BUILTIN_OAUTH_PROVIDER_IDS}
+          browser={selectedBrowser === NO_AUTO_OPEN_BROWSER_ID ? 'default' : selectedBrowser || 'default'}
+        />
       </div>
     </section>
   );
