@@ -131,16 +131,29 @@
   white-space: nowrap;
 }
 
+.usage-records-page:has(.usage-overview-layout) {
+  gap: clamp(8px, 1.5vh, 16px);
+}
+
+@container workspace (min-width: 600px) {
+  .usage-overview-layout .usage-stat-grid,
+  .usage-records-page:has(.usage-overview-layout) .usage-filter-group {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+@container workspace (max-width: 880px) {
+  .usage-overview-layout .usage-stat-card {
+    gap: 5px;
+    padding: 10px 8px;
+  }
+
+  .usage-overview-layout .usage-stat-card-value {
+    font-size: 24px;
+  }
+}
+
 @container workspace (max-width: 760px) {
-  .usage-overview-layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: max-content minmax(280px, 1fr) auto;
-  }
-
-  .usage-health-panel {
-    height: auto;
-  }
-
   .usage-data-management-action {
     flex-wrap: wrap;
     gap: 12px;
@@ -149,6 +162,41 @@
   .usage-data-management-action > div:first-child {
     min-width: 0;
     flex: 1 1 260px;
+  }
+}
+
+@media (max-width: 760px) {
+  .usage-overview-layout {
+    grid-template-rows: max-content auto;
+    overflow: visible;
+  }
+
+  .usage-overview-canvas {
+    position: static;
+    width: 100%;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 300px auto;
+    transform: none;
+  }
+
+  .usage-health-panel {
+    container-type: inline-size;
+    grid-template-rows: auto auto;
+  }
+
+  .usage-token-content {
+    grid-template-rows: auto auto auto;
+  }
+
+  .usage-token-composition {
+    container-type: inline-size;
+    min-height: 240px;
+  }
+
+  .usage-token-donut {
+    width: 100%;
+    max-width: 240px;
   }
 }
 

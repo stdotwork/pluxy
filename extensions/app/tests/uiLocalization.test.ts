@@ -36,16 +36,12 @@ function componentFiles(directory: string): string[] {
 
 describe('UI localization boundaries', () => {
   it('preserves the raw reasoning effort in usage text and tooltips', () => {
-    const file = join(sourceRoot, 'pages', 'UsageRecordsPage.tsx');
+    const file = join(sourceRoot, 'pages', 'UsageEventsView.tsx');
     const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-    let effortCell: ts.JsxElement | undefined;
-    const findEffortCell = (node: ts.Node) => {
-      if (ts.isJsxElement(node) && node.openingElement.tagName.getText(source) === 'small') effortCell = node;
-      ts.forEachChild(node, findEffortCell);
-    };
+    let effortCase: ts.CaseClause | undefined;
     const visit = (node: ts.Node) => {
-      if (ts.isCaseClause(node) && ts.isStringLiteral(node.expression) && node.expression.text === 'model') {
-        findEffortCell(node);
+      if (ts.isCaseClause(node) && ts.isStringLiteral(node.expression) && node.expression.text === 'effort') {
+        effortCase = node;
       } else {
         ts.forEachChild(node, visit);
       }
@@ -53,13 +49,21 @@ describe('UI localization boundaries', () => {
     const component = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'UsageEventCell');
     expect(component).toBeDefined();
     if (component) visit(component);
-    const text = effortCell?.children.find(ts.isJsxExpression);
-    const title = effortCell?.openingElement.attributes.properties.find((attribute) =>
-      ts.isJsxAttribute(attribute) && attribute.name.getText(source) === 'title',
-    );
-    expect(text?.expression?.getText(source)).toBe("record.reasoning_effort || 'auto'");
-    expect(title && ts.isJsxAttribute(title) && title.initializer?.getText(source))
-      .toBe("{record.reasoning_effort || 'auto'}");
+    const displayedExpressions: string[] = [];
+    const titleExpressions: string[] = [];
+    const inspectEffort = (node: ts.Node) => {
+      if (ts.isJsxExpression(node) && !ts.isJsxAttribute(node.parent) && node.expression) {
+        displayedExpressions.push(node.expression.getText(source));
+      }
+      if (ts.isJsxAttribute(node) && node.name.getText(source) === 'title' && node.initializer) {
+        titleExpressions.push(node.initializer.getText(source));
+      }
+      ts.forEachChild(node, inspectEffort);
+    };
+    expect(effortCase).toBeDefined();
+    if (effortCase) inspectEffort(effortCase);
+    expect(displayedExpressions).toContain("record.reasoning_effort || 'auto'");
+    expect(titleExpressions).toContain("{record.reasoning_effort || 'auto'}");
   });
 
   it('routes visible prose and accessibility labels through translations', () => {

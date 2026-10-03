@@ -72,26 +72,36 @@ const viewports = [
     const assertRequestToolbar = async label => {
       const metrics = await page.locator('.usage-events-panel').evaluate(panel => {
         const summary = panel.querySelector('.usage-events-summary');
+        const table = panel.querySelector('.usage-table-wrap');
         const scrollbar = panel.querySelector('.usage-table-top-scrollbar');
+        const footer = panel.querySelector('.usage-events-footer');
         const pagination = panel.querySelector('.usage-pagination-controls');
         const summaryRect = summary.getBoundingClientRect();
+        const tableRect = table.getBoundingClientRect();
         const scrollbarRect = scrollbar.getBoundingClientRect();
+        const footerRect = footer.getBoundingClientRect();
         const paginationRect = pagination.getBoundingClientRect();
         const controls = [...pagination.querySelectorAll('button, select, .usage-pagination-info')];
         return {
           summaryBottom: summaryRect.bottom,
+          tableTop: tableRect.top,
+          tableBottom: tableRect.bottom,
           scrollbarTop: scrollbarRect.top,
+          scrollbarBottom: scrollbarRect.bottom,
+          footerTop: footerRect.top,
           controlsContained: controls.every(control => {
             const rect = control.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0
               && rect.left >= paginationRect.left - 1 && rect.right <= paginationRect.right + 1
               && rect.top >= paginationRect.top - 1 && rect.bottom <= paginationRect.bottom + 1
-              && rect.bottom <= summaryRect.bottom + 1;
+              && rect.bottom <= footerRect.bottom + 1;
           }),
         };
       });
-      assert.ok(metrics.summaryBottom <= metrics.scrollbarTop + 1, `${label}: request summary must not overlap the horizontal scrollbar`);
-      assert.equal(metrics.controlsContained, true, `${label}: pagination controls must fit completely inside their toolbar`);
+      assert.ok(metrics.summaryBottom <= metrics.tableTop + 1, `${label}: request heading and filters must remain above the table`);
+      assert.ok(metrics.tableBottom <= metrics.scrollbarTop + 1, `${label}: the horizontal scrollbar must remain below the table`);
+      assert.ok(metrics.scrollbarBottom <= metrics.footerTop + 1, `${label}: the scrollbar must not overlap the pagination footer`);
+      assert.equal(metrics.controlsContained, true, `${label}: pagination controls must fit completely inside their footer`);
       for (const control of await page.locator('.usage-pagination-controls button, .usage-page-size-select').all()) {
         await assertReachable(control, `${label} pagination`);
       }

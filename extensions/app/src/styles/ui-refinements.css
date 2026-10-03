@@ -689,6 +689,7 @@ body, html, #root {
 .usage-stat-card {
   --usage-tone: #1d1d1f;
   position: relative;
+  justify-content: flex-start;
   gap: 8px;
   overflow: hidden;
   padding: 16px 16px 14px;
@@ -730,68 +731,13 @@ body, html, #root {
   line-height: 1.02;
 }
 
-.usage-stat-meter {
-  display: block;
-  height: 5px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #e5e5ea;
+.app-shell:has(.usage-overview-layout) .content {
+  padding: clamp(12px, 1.5vw, 20px) clamp(12px, 1.5vw, 20px) 16px;
 }
 
-.usage-stat-meter > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--usage-tone);
-}
-
-.usage-stat-card-meta {
-  display: flex;
-  min-height: 0;
-  flex-wrap: wrap;
-  gap: 5px;
-  overflow: visible;
-  color: var(--text-secondary);
-  white-space: normal;
-  -webkit-line-clamp: unset;
-  -webkit-box-orient: unset;
-}
-
-.usage-stat-chip {
-  display: inline-flex;
-  max-width: 100%;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #f2f2f7;
-  color: #3a3a3c;
-  font-size: var(--font-size-caption);
-  font-weight: 590;
-  line-height: 1.45;
-}
-
-.usage-stat-chip.tone-ok {
-  background: rgba(52, 199, 89, 0.14);
-  color: #248a3d;
-}
-
-.usage-stat-chip.tone-bad {
-  background: rgba(255, 59, 48, 0.12);
-  color: #d70015;
-}
-
-.usage-stat-chip.tone-warn {
-  background: rgba(255, 149, 0, 0.16);
-  color: #c93400;
-}
-
-.usage-stat-chip.tone-note {
-  width: 100%;
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  font-weight: 500;
+.usage-overview-layout {
+  grid-template-rows: max-content minmax(0, 1fr);
+  align-content: stretch;
 }
 
 .usage-metrics-grid .metric-card {
@@ -1133,29 +1079,8 @@ body, html, #root {
   --usage-tone: #f5f5f7;
 }
 
-:root[data-theme='dark'] .usage-stat-card-label,
-:root[data-theme='dark'] .usage-stat-chip.tone-note {
+:root[data-theme='dark'] .usage-stat-card-label {
   color: var(--text-secondary);
-}
-
-:root[data-theme='dark'] .usage-stat-chip {
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-}
-
-:root[data-theme='dark'] .usage-stat-chip.tone-ok {
-  background: rgba(16, 185, 129, 0.16);
-  color: #6ee7b7;
-}
-
-:root[data-theme='dark'] .usage-stat-chip.tone-bad {
-  background: rgba(239, 68, 68, 0.16);
-  color: #fca5a5;
-}
-
-:root[data-theme='dark'] .usage-stat-chip.tone-warn {
-  background: rgba(245, 158, 11, 0.16);
-  color: #fcd34d;
 }
 
 :root[data-theme='dark'] .usage-stat-card,

@@ -1,28 +1,24 @@
 import { useConfirmation } from '../components/ConfirmationDialog';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
-  ChevronLeft,
-  ChevronRight,
-  Columns3Cog,
+  Activity,
   Database,
-  FilterX,
+  Gauge,
   Pencil,
   RefreshCw,
-  RotateCcw,
   Trash2,
   TriangleAlert,
+  Wallet,
   Wrench,
   X,
 } from 'lucide-react';
 import { getCurrentLocale, useI18n } from '../i18n';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
-import type { MessageKey } from '../i18n/resources';
-import { formatCacheReadRate, formatGenerationSpeed } from '../services/usageMetrics';
+import { calculateTokenComposition } from '../services/usageMetrics';
 import { formatDuration, formatUsageNumber } from '../services/usageNumber';
 import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 import {
   OTHER_TREND_MODEL_KEY,
   buildUsageTrendSeries,
@@ -40,6 +36,7 @@ import {
 } from '../services/usageTrend';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { usageViewScopeKey } from '../services/usageViewScope';
+import { EventsView, type UsageEventPage } from './UsageEventsView';
 
 type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing' | 'data-management';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
@@ -91,44 +88,6 @@ type UsageAnalysis = {
   providers: UsageCategory[];
   sources: UsageCategory[];
   apiKeys: UsageCategory[];
-};
-
-type UsageRecord = {
-  id: string;
-  row_id: string;
-  timestamp: string;
-  latency_ms: number;
-  ttft_ms: number | null;
-  source: string;
-  source_display: string;
-  failed: boolean;
-  canceled: boolean;
-  failure_status: number;
-  failure_body: string;
-  provider: string;
-  model: string;
-  alias: string;
-  reasoning_effort: string;
-  endpoint: string;
-  api_key_hash: string;
-  api_key_display: string;
-  api_key_remark: string;
-  tokens: {
-    input_tokens: number;
-    output_tokens: number;
-    reasoning_tokens: number;
-    cache_read_tokens: number;
-    cache_creation_tokens: number;
-    total_tokens: number;
-  };
-};
-
-type UsageEventPage = {
-  items: UsageRecord[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
 };
 
 type ModelPrice = {
@@ -287,19 +246,6 @@ const formatUsd = (amount: number) => {
     minimumFractionDigits: 2,
     maximumFractionDigits,
   }).format(amount)}`;
-};
-
-const formatTime = (value: string) => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : new Intl.DateTimeFormat(getCurrentLocale(), {
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      }).format(date);
 };
 
 const filterOptions = (items: UsageCategory[]) => items.filter((item) => item.key && item.label);
@@ -550,8 +496,145 @@ export function UsageRecordsPage() {
     );
   };
 
+  const filterPanel = (
+      <section className="panel usage-filter-panel">
+        <div className="usage-filter-row">
+          <div className="usage-filter-group">
+            <label className="usage-filter-item">
+              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.filter.timeRange')}</span>
+              <select
+                value={range}
+                onChange={(event) => {
+                  setRange(event.currentTarget.value as UsageRange);
+                  setPage(1);
+                }}
+                aria-label={t('usage.filter.timeRange')}
+              >
+                <option value="4h">{t('usage.range.4h')}</option>
+                <option value="24h">{t('usage.range.24h')}</option>
+                <option value="today">{t('usage.range.today')}</option>
+                <option value="7d">{t('usage.range.7d')}</option>
+                <option value="30d">{t('usage.range.30d')}</option>
+                <option value="all">{t('usage.range.all')}</option>
+                <option value="custom">{t('usage.range.custom')}</option>
+              </select>
+            </label>
+
+            <label className="usage-filter-item">
+              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.filter.model')}</span>
+              <select
+                value={model}
+                onChange={(event) => changeFilter(setModel, event.currentTarget.value)}
+                aria-label={t('usage.filter.model')}
+              >
+                <option value="">{t('usage.filter.allModels')}</option>
+                {filterOptions(optionsAnalysis.models).map((item) => (
+                  <option value={item.key} key={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="usage-filter-item">
+              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.column.provider')}</span>
+              <select
+                value={provider}
+                onChange={(event) => changeFilter(setProvider, event.currentTarget.value)}
+                aria-label={t('usage.column.provider')}
+              >
+                <option value="">{t('usage.filter.allProviders')}</option>
+                {filterOptions(optionsAnalysis.providers).map((item) => (
+                  <option value={item.key} key={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="usage-filter-item">
+              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.filter.source')}</span>
+              <select
+                value={source}
+                onChange={(event) => changeFilter(setSource, event.currentTarget.value)}
+                aria-label={t('usage.filter.source')}
+              >
+                <option value="">{t('usage.filter.allSources')}</option>
+                {filterOptions(optionsAnalysis.sources).map((item) => (
+                  <option value={item.key} key={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="usage-filter-item">
+              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('apiAccess.field.key')}</span>
+              <select
+                value={apiKeyHash}
+                onChange={(event) => changeFilter(setApiKeyHash, event.currentTarget.value)}
+                aria-label={t('apiAccess.field.key')}
+              >
+                <option value="">{t('usage.filter.allKeys')}</option>
+                {filterOptions(optionsAnalysis.apiKeys).map((item) => (
+                  <option value={item.key} key={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="usage-filter-item">
+              <span className={activeTab === 'events' ? 'usage-filter-label' : 'sr-only'}>{t('usage.filter.result')}</span>
+              <select
+                value={result}
+                onChange={(event) => changeFilter(setResult, event.currentTarget.value)}
+                aria-label={t('usage.filter.result')}
+              >
+                <option value="all">{t('usage.filter.allResults')}</option>
+                <option value="success">{t('usage.result.success')}</option>
+                <option value="failed">{t('usage.result.failed')}</option>
+                <option value="canceled">{t('usage.result.canceled')}</option>
+              </select>
+            </label>
+          </div>
+
+          {hasActiveFilters || activeTab === 'events' ? (
+            <button
+              type="button"
+              className="usage-filter-reset-btn"
+              disabled={!hasActiveFilters}
+              onClick={resetFilters}
+              title={t('usage.filter.reset')}
+            >
+              <span>{t('usage.filter.reset')}</span>
+            </button>
+          ) : null}
+
+        </div>
+
+        {range === 'custom' ? (
+          <div className="usage-custom-range">
+            <input
+              type="datetime-local"
+              value={customStart}
+              onChange={(event) => setCustomStart(event.currentTarget.value)}
+              aria-label={t('usage.filter.startTime')}
+            />
+            <span>{t('usage.filter.to')}</span>
+            <input
+              type="datetime-local"
+              value={customEnd}
+              onChange={(event) => setCustomEnd(event.currentTarget.value)}
+              aria-label={t('usage.filter.endTime')}
+            />
+          </div>
+        ) : null}
+      </section>
+  );
+
   return (
-    <section className="page management-page usage-records-page">
+    <section className="page management-page usage-records-page" data-active-tab={activeTab}>
       {error ? <MessageNotice message={error} onDismiss={() => setError('')} /> : null}
 
       <div className="usage-topbar">
@@ -657,143 +740,9 @@ export function UsageRecordsPage() {
         role="tabpanel"
         aria-labelledby={`usage-tab-${activeTab}`}
       >
-      {activeTab !== 'data-management' ? (
-      <section className="panel usage-filter-panel">
-        <div className="usage-filter-row">
-          <div className="usage-filter-group">
-            <label className="usage-filter-item">
-              <span className="sr-only">{t('usage.filter.timeRange')}</span>
-              <select
-                value={range}
-                onChange={(event) => {
-                  setRange(event.currentTarget.value as UsageRange);
-                  setPage(1);
-                }}
-                aria-label={t('usage.filter.timeRange')}
-              >
-                <option value="4h">{t('usage.range.4h')}</option>
-                <option value="24h">{t('usage.range.24h')}</option>
-                <option value="today">{t('usage.range.today')}</option>
-                <option value="7d">{t('usage.range.7d')}</option>
-                <option value="30d">{t('usage.range.30d')}</option>
-                <option value="all">{t('usage.range.all')}</option>
-                <option value="custom">{t('usage.range.custom')}</option>
-              </select>
-            </label>
+      {activeTab !== 'data-management' && activeTab !== 'events' ? filterPanel : null}
 
-            <label className="usage-filter-item">
-              <span className="sr-only">{t('usage.filter.model')}</span>
-              <select
-                value={model}
-                onChange={(event) => changeFilter(setModel, event.currentTarget.value)}
-                aria-label={t('usage.filter.model')}
-              >
-                <option value="">{t('usage.filter.allModels')}</option>
-                {filterOptions(optionsAnalysis.models).map((item) => (
-                  <option value={item.key} key={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="usage-filter-item">
-              <span className="sr-only">{t('usage.column.provider')}</span>
-              <select
-                value={provider}
-                onChange={(event) => changeFilter(setProvider, event.currentTarget.value)}
-                aria-label={t('usage.column.provider')}
-              >
-                <option value="">{t('usage.filter.allProviders')}</option>
-                {filterOptions(optionsAnalysis.providers).map((item) => (
-                  <option value={item.key} key={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="usage-filter-item">
-              <span className="sr-only">{t('usage.filter.source')}</span>
-              <select
-                value={source}
-                onChange={(event) => changeFilter(setSource, event.currentTarget.value)}
-                aria-label={t('usage.filter.source')}
-              >
-                <option value="">{t('usage.filter.allSources')}</option>
-                {filterOptions(optionsAnalysis.sources).map((item) => (
-                  <option value={item.key} key={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="usage-filter-item">
-              <span className="sr-only">{t('apiAccess.field.key')}</span>
-              <select
-                value={apiKeyHash}
-                onChange={(event) => changeFilter(setApiKeyHash, event.currentTarget.value)}
-                aria-label={t('apiAccess.field.key')}
-              >
-                <option value="">{t('usage.filter.allKeys')}</option>
-                {filterOptions(optionsAnalysis.apiKeys).map((item) => (
-                  <option value={item.key} key={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="usage-filter-item">
-              <span className="sr-only">{t('usage.filter.result')}</span>
-              <select
-                value={result}
-                onChange={(event) => changeFilter(setResult, event.currentTarget.value)}
-                aria-label={t('usage.filter.result')}
-              >
-                <option value="all">{t('usage.filter.allResults')}</option>
-                <option value="success">{t('usage.result.success')}</option>
-                <option value="failed">{t('usage.result.failed')}</option>
-                <option value="canceled">{t('usage.result.canceled')}</option>
-              </select>
-            </label>
-          </div>
-
-          {hasActiveFilters ? (
-            <button
-              type="button"
-              className="usage-filter-reset-btn"
-              onClick={resetFilters}
-              title={t('usage.filter.reset')}
-            >
-              <FilterX size={14} />
-              <span>{t('usage.filter.reset')}</span>
-            </button>
-          ) : null}
-        </div>
-
-        {range === 'custom' ? (
-          <div className="usage-custom-range">
-            <input
-              type="datetime-local"
-              value={customStart}
-              onChange={(event) => setCustomStart(event.currentTarget.value)}
-              aria-label={t('usage.filter.startTime')}
-            />
-            <span>{t('usage.filter.to')}</span>
-            <input
-              type="datetime-local"
-              value={customEnd}
-              onChange={(event) => setCustomEnd(event.currentTarget.value)}
-              aria-label={t('usage.filter.endTime')}
-            />
-          </div>
-        ) : null}
-      </section>
-      ) : null}
-
-      {showInitialLoading ? (
+      {showInitialLoading && activeTab !== 'events' ? (
         <div className="usage-initial-loading">
           <Database size={22} />
           <span>{t('usage.loading')}</span>
@@ -802,9 +751,11 @@ export function UsageRecordsPage() {
 
       {hasCurrentSnapshot && activeTab === 'overview' && overview ? <OverviewView overview={overview} range={overviewRange} /> : null}
       {hasCurrentSnapshot && activeTab === 'analysis' ? <AnalysisView analysis={analysis} overview={overview} /> : null}
-      {hasCurrentSnapshot && activeTab === 'events' && events ? (
+      {activeTab === 'events' ? (
         <EventsView
-          events={events}
+          events={hasCurrentSnapshot && events ? events : { items: [], total: 0, page, pageSize, totalPages: 1 }}
+          filters={filterPanel}
+          loading={showInitialLoading}
           pageSize={pageSize}
           onPage={setPage}
           onPageSizeChange={(size) => {
@@ -1052,206 +1003,129 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
       tone: 'requests',
       label: t('usage.stat.requests'),
       value: compactNumber(overview.totalRequests),
-      meta: t('usage.stat.requestMeta', {
-        success: compactNumber(overview.successCount),
-        failed: compactNumber(overview.failureCount),
-        canceled: compactNumber(overview.canceledCount),
-      }),
       metaTitle: t('usage.stat.requestMetaTitle', {
         total: compactNumber(overview.totalRequests),
         success: compactNumber(overview.successCount),
         failed: compactNumber(overview.failureCount),
         canceled: compactNumber(overview.canceledCount),
       }),
-      chips: [
-        { text: `${t('usage.result.success')} ${compactNumber(overview.successCount)}`, tone: 'ok' },
-        { text: `${t('usage.result.failed')} ${compactNumber(overview.failureCount)}`, tone: 'bad' },
-        { text: `${t('usage.result.canceled')} ${compactNumber(overview.canceledCount)}`, tone: 'warn' },
-      ],
     },
     {
       key: 'speed',
       tone: 'speed',
       label: t('usage.stat.tps'),
       value: overview.tpsSampleCount > 0 ? overview.tps.toFixed(1) : '—',
-      meta: t('usage.stat.performanceMeta', {
-        samples: compactNumber(overview.tpsSampleCount),
-        rpm: overview.rpm.toFixed(2),
-        latency: Math.round(overview.averageLatencyMs),
-      }),
       metaTitle: t('usage.stat.performanceMetaTitle', {
         tps: overview.tpsSampleCount > 0 ? overview.tps.toFixed(1) : '—',
         samples: compactNumber(overview.tpsSampleCount),
         rpm: overview.rpm.toFixed(2),
         latency: Math.round(overview.averageLatencyMs),
       }),
-      chips: [
-        { text: `RPM ${overview.rpm.toFixed(2)}`, tone: 'neutral' },
-        { text: compactDuration(overview.averageLatencyMs), tone: 'neutral' },
-      ],
     },
     {
       key: 'tokens',
       tone: 'tokens',
       label: t('usage.stat.tokens'),
       value: compactNumber(overview.totalTokens),
-      meta: t('usage.stat.tokenMeta', {
-        input: compactNumber(overview.inputTokens),
-        output: compactNumber(overview.outputTokens),
-      }),
       metaTitle: t('usage.stat.tokenMetaTitle', {
         input: compactNumber(overview.inputTokens),
         output: compactNumber(overview.outputTokens),
         reasoning: compactNumber(overview.reasoningTokens),
         cache: compactNumber(overview.cacheReadTokens),
       }),
-      chips: [
-        { text: `${t('usage.token.input')} ${compactNumber(overview.inputTokens)}`, tone: 'neutral' },
-        { text: `${t('usage.token.output')} ${compactNumber(overview.outputTokens)}`, tone: 'ok' },
-      ],
     },
     {
       key: 'success',
       tone: 'success',
       label: t('usage.stat.successRate'),
       value: `${overview.successRate.toFixed(1)}%`,
-      meter: overview.successRate,
-      meta: t('usage.stat.successMeta', {
-        success: compactNumber(overview.successCount),
-        failed: compactNumber(overview.failureCount),
-      }),
       metaTitle: t('usage.stat.successMetaTitle', {
         success: compactNumber(overview.successCount),
         failed: compactNumber(overview.failureCount),
         canceled: compactNumber(overview.canceledCount),
       }),
-      chips: [
-        { text: `${t('usage.result.success')} ${compactNumber(overview.successCount)}`, tone: 'ok' },
-        { text: `${t('usage.result.failed')} ${compactNumber(overview.failureCount)}`, tone: 'bad' },
-      ],
     },
     {
       key: 'cache',
       tone: 'cache',
       label: t('usage.stat.cacheHitRate'),
       value: `${(overview.cacheHitRate * 100).toFixed(1)}%`,
-      meter: overview.cacheHitRate * 100,
-      meta: t('usage.stat.cacheHitMeta', {
-        hit: compactNumber(overview.cacheReadTokens),
-        input: compactNumber(overview.inputTokens),
-      }),
       metaTitle: t('usage.stat.cacheHitMetaTitle', {
         rate: (overview.cacheHitRate * 100).toFixed(1),
         hit: compactNumber(overview.cacheReadTokens),
         input: compactNumber(overview.inputTokens),
       }),
-      chips: [
-        { text: `${t('usage.token.cacheRead')} ${compactNumber(overview.cacheReadTokens)}`, tone: 'warn' },
-        { text: `${t('usage.token.input')} ${compactNumber(overview.inputTokens)}`, tone: 'neutral' },
-      ],
     },
     {
       key: 'cost',
       tone: 'cost',
       label: t('usage.stat.estimatedCost'),
       value: formatUsd(overview.estimatedCost),
-      meta: t('usage.stat.costMeta', {
-        priced: compactNumber(overview.pricedRequests),
-        total: compactNumber(overview.totalRequests),
-      }),
       metaTitle: t('usage.stat.costMetaTitle', {
         priced: compactNumber(overview.pricedRequests),
         total: compactNumber(overview.totalRequests),
         unpriced: compactNumber(Math.max(overview.totalRequests - overview.pricedRequests, 0)),
       }),
-      chips: [
-        { text: t('usage.stat.costNote'), tone: 'note' },
-        {
-          text: t('usage.stat.costIncluded', {
-            count: compactNumber(overview.pricedRequests),
-          }),
-          tone: 'ok',
-        },
-        ...(overview.totalRequests > overview.pricedRequests
-          ? [{
-              text: t('usage.stat.costExcluded', {
-                count: compactNumber(Math.max(overview.totalRequests - overview.pricedRequests, 0)),
-              }),
-              tone: 'warn',
-            }]
-          : []),
-      ],
     },
   ];
 
   return (
     <div className="usage-overview-layout">
       <div className="usage-stat-grid">
-        {cards.map(({ key, tone, label, value, meter, meta, metaTitle, chips }) => (
-          <article className={`panel usage-stat-card tone-${tone}`} key={key} title={metaTitle ?? meta}>
+        {cards.map(({ key, tone, label, value, metaTitle }) => (
+          <article className={`panel usage-stat-card tone-${tone}`} key={key} title={metaTitle}>
             <span className="usage-stat-card-label">{label}</span>
             <strong className="usage-stat-card-value">{value}</strong>
-            {typeof meter === 'number' ? (
-              <span className="usage-stat-meter" aria-hidden="true">
-                <span style={{ width: `${Math.max(0, Math.min(meter, 100))}%` }} />
-              </span>
-            ) : null}
-            <span className="usage-stat-card-meta">
-              {chips.map((chip) => (
-                <span className={`usage-stat-chip tone-${chip.tone}`} key={chip.text}>{chip.text}</span>
-              ))}
-            </span>
           </article>
         ))}
       </div>
-      <section className="panel usage-trend-panel">
-        <div className="usage-section-heading">
-          <div>
-            <strong>{t('usage.trend.title')}</strong>
+      <UsageOverviewPanels>
+        <section className="panel usage-trend-panel">
+          <div className="usage-section-heading">
+            <div>
+              <strong>{t('usage.trend.title')}</strong>
+            </div>
           </div>
-        </div>
-        <UsageTrend points={overview.timeline} range={range} />
-      </section>
-      <section className="panel usage-health-panel">
-        <div className="usage-section-heading">
-          <div>
-            <strong>{t('usage.token.title')}</strong>
-            <span>{t('usage.token.description')}</span>
-          </div>
-        </div>
-        <div className="usage-token-breakdown">
-          <TokenMetric
-            label={t('usage.token.input')}
-            value={overview.inputTokens}
-            total={overview.totalTokens}
-            tone="input"
-          />
-          <TokenMetric
-            label={t('usage.token.output')}
-            value={overview.outputTokens}
-            total={overview.totalTokens}
-            tone="output"
-          />
-          <TokenMetric
-            label={t('usage.token.reasoning')}
-            value={overview.reasoningTokens}
-            total={overview.totalTokens}
-            tone="reasoning"
-          />
-          <TokenMetric
-            label={t('usage.token.cacheRead')}
-            value={overview.cacheReadTokens}
-            total={overview.totalTokens}
-            tone="cache-read"
-          />
-          <TokenMetric
-            label={t('usage.token.cacheCreation')}
-            value={overview.cacheCreationTokens}
-            total={overview.totalTokens}
-            tone="cache-creation"
-          />
-        </div>
-      </section>
+          <UsageTrend points={overview.timeline} range={range} />
+        </section>
+        <TokenComposition overview={overview} />
+      </UsageOverviewPanels>
+    </div>
+  );
+}
+
+function UsageOverviewPanels({ children }: { children: ReactNode }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let frame = 0;
+    const measure = () => {
+      const { width, height } = container.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+      const nextScale = Math.min(1, width / 900, height / 420);
+      setScale((current) => Math.abs(current - nextScale) < 0.001 ? current : nextScale);
+    };
+    const scheduleMeasure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    measure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    observer.observe(container);
+    window.addEventListener('resize', scheduleMeasure);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener('resize', scheduleMeasure);
+    };
+  }, []);
+
+  return (
+    <div className="usage-overview-panels" ref={containerRef} style={{ '--usage-overview-scale': scale } as CSSProperties}>
+      <div className="usage-overview-canvas">{children}</div>
     </div>
   );
 }
@@ -1302,7 +1176,7 @@ function UsageTrend({
     measure();
     const observer = typeof ResizeObserver === 'undefined'
       ? null
-      : new ResizeObserver(([entry]) => updateWidth(entry.contentRect.width));
+      : new ResizeObserver(measure);
     observer?.observe(plot);
     window.addEventListener('resize', measure);
     return () => {
@@ -1600,31 +1474,100 @@ function UsageTrend({
   );
 }
 
-function TokenMetric({
-  label,
-  value,
-  total,
-  tone,
-}: {
-  label: string;
-  value: number;
-  total: number;
-  tone: 'input' | 'output' | 'reasoning' | 'cache-read' | 'cache-creation';
-}) {
-  const percent = total ? Math.min((value * 100) / total, 100) : 0;
+function TokenComposition({ overview }: { overview: UsageOverview }) {
+  const { t, locale } = useI18n();
+  const composition = calculateTokenComposition(overview);
+  const unpricedRequests = Math.max(overview.totalRequests - overview.pricedRequests, 0);
+  const pricingLabel = unpricedRequests > 0
+    ? t('usage.token.pricingNeedsUpdate')
+    : t('usage.token.pricing');
+  const labels = {
+    input: t('usage.token.uncachedInput'),
+    'cache-read': t('usage.token.cacheRead'),
+    'cache-creation': t('usage.token.cacheWrite'),
+    output: t('usage.token.output'),
+  };
   return (
-    <div className={`usage-token-row tone-${tone}`}>
-      <div className="usage-token-info">
-        <strong className="usage-token-name">{label}</strong>
-        <div className="usage-token-vals">
-          <span className="usage-token-count">{compactNumber(value)}</span>
-          <span className="usage-token-pct">{percent.toFixed(1)}%</span>
+    <section className="panel usage-health-panel" aria-labelledby="usage-token-title">
+      <div className="usage-section-heading">
+        <strong id="usage-token-title">{t('usage.token.title')}</strong>
+      </div>
+      <div className="usage-token-content">
+        <div className="usage-token-composition">
+          <div className="usage-token-donut">
+            <svg viewBox="0 0 200 200" aria-hidden="true">
+              <circle className="usage-token-donut-track" cx="100" cy="100" r="80" />
+              {composition.segments.filter((segment) => segment.value > 0).map(({ key, percent, offset }) => {
+                const gap = percent === 100 ? 0 : Math.min(0.7, percent / 6);
+                return (
+                  <circle
+                    className={`usage-token-donut-segment tone-${key}`}
+                    key={key}
+                    cx="100"
+                    cy="100"
+                    r="80"
+                    pathLength="100"
+                    strokeDasharray={`${percent - gap} ${100 - percent + gap}`}
+                    strokeDashoffset={-offset - gap / 2}
+                    transform="rotate(-90 100 100)"
+                  />
+                );
+              })}
+            </svg>
+            <div className="usage-token-donut-label">
+              <strong>{composition.cacheShare.toFixed(1)}%</strong>
+              <span>{t('usage.token.cacheShare')}</span>
+            </div>
+          </div>
+          <dl className="usage-token-breakdown">
+            {composition.segments.map(({ key, value, percent }) => (
+              <div className={`usage-token-row tone-${key}`} key={key}>
+                <dt className="usage-token-name"><i aria-hidden="true" />{labels[key]}</dt>
+                <dd className="usage-token-measurement">
+                  <div className="usage-token-vals">
+                    <span className="usage-token-count" title={value.toLocaleString(locale)}>{compactNumber(value)}</span>
+                    <span className="usage-token-pct">{percent.toFixed(1)}%</span>
+                  </div>
+                  <div className="usage-token-bar-track" aria-hidden="true">
+                    <div className="usage-token-bar-fill" style={{ width: `${percent}%` }} />
+                  </div>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+        <div className="usage-token-notes">
+          <span>{t('usage.token.input')} <b>{compactNumber(overview.inputTokens)}</b></span>
+          <span>{t('usage.token.output')} <b>{compactNumber(overview.outputTokens)}</b></span>
+          <span title={t('usage.token.reasoningNote')}>{t('usage.token.reasoning')} <b>{compactNumber(overview.reasoningTokens)}</b></span>
+          <span>{t('usage.stat.cacheHitRate')} <b>{(overview.cacheHitRate * 100).toFixed(1)}%</b></span>
+        </div>
+        <div className="usage-token-context">
+          <section className="usage-token-context-group usage-token-results" aria-labelledby="usage-token-results-title">
+            <h3 id="usage-token-results-title"><Activity size={14} aria-hidden="true" />{t('usage.token.requestStatus')}</h3>
+            <dl className="usage-token-context-metrics">
+              <div className="tone-success"><dt>{t('usage.result.success')}</dt><dd>{compactNumber(overview.successCount)}</dd></div>
+              <div className="tone-failed"><dt>{t('usage.result.failed')}</dt><dd>{compactNumber(overview.failureCount)}</dd></div>
+              <div><dt>{t('usage.result.canceled')}</dt><dd>{compactNumber(overview.canceledCount)}</dd></div>
+            </dl>
+          </section>
+          <section className="usage-token-context-group" aria-labelledby="usage-token-performance-title">
+            <h3 id="usage-token-performance-title"><Gauge size={14} aria-hidden="true" />{t('usage.token.performance')}</h3>
+            <dl className="usage-token-context-metrics">
+              <div><dt>RPM</dt><dd>{overview.rpm.toFixed(2)}</dd></div>
+              <div><dt>{t('usage.stat.averageLatency')}</dt><dd>{compactDuration(overview.averageLatencyMs)}</dd></div>
+            </dl>
+          </section>
+          <section className="usage-token-context-group" aria-labelledby="usage-token-pricing-title" title={t('usage.stat.costNote')}>
+            <h3 id="usage-token-pricing-title"><Wallet size={14} aria-hidden="true" />{pricingLabel}</h3>
+            <dl className="usage-token-context-metrics">
+              <div><dt>{t('usage.token.priced')}</dt><dd>{compactNumber(overview.pricedRequests)}</dd></div>
+              <div><dt>{t('usage.token.unpriced')}</dt><dd>{compactNumber(unpricedRequests)}</dd></div>
+            </dl>
+          </section>
         </div>
       </div>
-      <div className="usage-token-bar-track">
-        <div className="usage-token-bar-fill" style={{ width: `${percent}%` }} />
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -1699,729 +1642,6 @@ function CategoryPanel({
       ) : (
         <UsageEmpty />
       )}
-    </section>
-  );
-}
-
-type EventColumnKey =
-  | 'time'
-  | 'model'
-  | 'provider'
-  | 'source'
-  | 'key'
-  | 'input'
-  | 'output'
-  | 'reasoning'
-  | 'cache'
-  | 'total'
-  | 'result'
-  | 'latency'
-  | 'ttft'
-  | 'speed'
-  | 'cacheRate';
-
-type EventColumnDef = {
-  key: EventColumnKey;
-  labelKey: MessageKey;
-  defaultWidth: number;
-  minWidth: number;
-  align: 'left' | 'center' | 'right';
-};
-
-const EVENT_COLUMNS: readonly EventColumnDef[] = [
-  { key: 'time', labelKey: 'usage.column.time', defaultWidth: 150, minWidth: 110, align: 'center' },
-  { key: 'model', labelKey: 'usage.column.model', defaultWidth: 190, minWidth: 120, align: 'center' },
-  { key: 'input', labelKey: 'usage.column.input', defaultWidth: 84, minWidth: 60, align: 'center' },
-  { key: 'output', labelKey: 'usage.column.output', defaultWidth: 84, minWidth: 60, align: 'center' },
-  { key: 'cache', labelKey: 'usage.column.cache', defaultWidth: 84, minWidth: 60, align: 'center' },
-  { key: 'cacheRate', labelKey: 'usage.column.cacheRate', defaultWidth: 92, minWidth: 70, align: 'center' },
-  { key: 'total', labelKey: 'usage.column.total', defaultWidth: 90, minWidth: 65, align: 'center' },
-  { key: 'speed', labelKey: 'usage.column.speed', defaultWidth: 104, minWidth: 80, align: 'center' },
-  { key: 'ttft', labelKey: 'usage.column.ttft', defaultWidth: 100, minWidth: 75, align: 'center' },
-  { key: 'latency', labelKey: 'usage.column.latency', defaultWidth: 100, minWidth: 75, align: 'center' },
-  { key: 'result', labelKey: 'usage.column.result', defaultWidth: 150, minWidth: 100, align: 'center' },
-  { key: 'provider', labelKey: 'usage.column.provider', defaultWidth: 120, minWidth: 80, align: 'center' },
-  { key: 'source', labelKey: 'usage.column.source', defaultWidth: 120, minWidth: 80, align: 'center' },
-  { key: 'key', labelKey: 'usage.column.key', defaultWidth: 145, minWidth: 95, align: 'center' },
-  { key: 'reasoning', labelKey: 'usage.column.reasoning', defaultWidth: 84, minWidth: 60, align: 'center' },
-] as const;
-
-const DEFAULT_EVENT_VISIBLE_COLUMNS: readonly EventColumnKey[] = [
-  'time',
-  'model',
-  'input',
-  'output',
-  'cache',
-  'cacheRate',
-  'total',
-  'speed',
-  'ttft',
-  'latency',
-  'result',
-  'provider',
-  'source',
-];
-
-const EVENT_COL_WIDTHS_STORAGE_KEY = 'cpa-gui.usage-events-col-widths.v1';
-const EVENT_VISIBLE_COLS_STORAGE_KEY = 'cpa-gui.usage-events-visible-cols.v2';
-
-const getAllEventColumnKeys = () => EVENT_COLUMNS.map((column) => column.key);
-
-const getInitialVisibleColumns = (): EventColumnKey[] => {
-  try {
-    const raw = localStorage.getItem(EVENT_VISIBLE_COLS_STORAGE_KEY);
-    if (raw) {
-      const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        const knownKeys = new Set<EventColumnKey>(getAllEventColumnKeys());
-        const seen = new Set<EventColumnKey>();
-        const savedKeys = parsed.filter((key): key is EventColumnKey => {
-          if (typeof key !== 'string' || !knownKeys.has(key as EventColumnKey) || seen.has(key as EventColumnKey)) {
-            return false;
-          }
-          seen.add(key as EventColumnKey);
-          return true;
-        });
-        if (savedKeys.length > 0) return savedKeys;
-      }
-    }
-  } catch {
-  }
-  return [...DEFAULT_EVENT_VISIBLE_COLUMNS];
-};
-
-const getInitialColumnWidths = (): Record<EventColumnKey, number> => {
-  const initial: Record<EventColumnKey, number> = {} as any;
-  for (const col of EVENT_COLUMNS) {
-    initial[col.key] = col.defaultWidth;
-  }
-  try {
-    const raw = localStorage.getItem(EVENT_COL_WIDTHS_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        for (const col of EVENT_COLUMNS) {
-          if (
-            typeof parsed[col.key] === 'number' &&
-            Number.isFinite(parsed[col.key]) &&
-            parsed[col.key] >= col.minWidth
-          ) {
-            initial[col.key] = Math.round(parsed[col.key]);
-          }
-        }
-      }
-    }
-  } catch {
-  }
-  return initial;
-};
-
-function TableTopScrollbar({
-  tableWrapRef,
-}: {
-  tableWrapRef: React.RefObject<HTMLDivElement | null>;
-}) {
-  const scrollbarRef = useRef<HTMLDivElement | null>(null);
-  const trackRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const scrollbar = scrollbarRef.current;
-    const track = trackRef.current;
-    const tableWrap = tableWrapRef.current;
-    if (!scrollbar || !track || !tableWrap) return;
-
-    // Remember the positions we applied, rather than locking a whole frame.
-    // This ignores delayed programmatic/vertical scroll events without dropping
-    // newer drag or trackpad input on either surface.
-    let lastScrollbarLeft = scrollbar.scrollLeft;
-    let lastTableLeft = tableWrap.scrollLeft;
-
-    const syncTable = () => {
-      const left = scrollbar.scrollLeft;
-      if (left === lastScrollbarLeft) return;
-      lastScrollbarLeft = left;
-      tableWrap.scrollLeft = left;
-      lastTableLeft = tableWrap.scrollLeft;
-    };
-
-    const syncScrollbar = () => {
-      const left = tableWrap.scrollLeft;
-      if (left === lastTableLeft) return;
-      lastTableLeft = left;
-      scrollbar.scrollLeft = left;
-      lastScrollbarLeft = scrollbar.scrollLeft;
-    };
-
-    const updateLayout = () => {
-      const clientWidth = tableWrap.clientWidth;
-      const maxScroll = Math.max(0, tableWrap.scrollWidth - clientWidth);
-      const left = Math.min(tableWrap.scrollLeft, maxScroll);
-
-      // Commit the range before the position. A deferred React width update can
-      // clamp the thumb to its old range and then rewind the table via scroll.
-      scrollbar.classList.toggle('is-hidden', maxScroll <= 1);
-      track.style.width = `${(scrollbar.clientWidth || clientWidth) + maxScroll}px`;
-      tableWrap.scrollLeft = left;
-      scrollbar.scrollLeft = left;
-      lastTableLeft = tableWrap.scrollLeft;
-      lastScrollbarLeft = scrollbar.scrollLeft;
-    };
-
-    updateLayout();
-    scrollbar.addEventListener('scroll', syncTable, { passive: true });
-    tableWrap.addEventListener('scroll', syncScrollbar, { passive: true });
-
-    const resizeObserver = new ResizeObserver(updateLayout);
-    resizeObserver.observe(tableWrap);
-    resizeObserver.observe(scrollbar);
-    // Column resizing changes the table's width without resizing its viewport.
-    if (tableWrap.firstElementChild) resizeObserver.observe(tableWrap.firstElementChild);
-
-    return () => {
-      scrollbar.removeEventListener('scroll', syncTable);
-      tableWrap.removeEventListener('scroll', syncScrollbar);
-      resizeObserver.disconnect();
-    };
-  }, [tableWrapRef]);
-
-  return (
-    <div
-      ref={scrollbarRef}
-      className="usage-table-top-scrollbar"
-      aria-hidden="true"
-    >
-      <div ref={trackRef} style={{ height: '1px' }} />
-    </div>
-  );
-}
-
-function UsageResultCell({ record }: { record: UsageRecord }) {
-  const { t } = useI18n();
-  const state = record.canceled ? 'canceled' : record.failed ? 'failed' : 'success';
-  const detail = [
-    record.failure_status > 0 ? `HTTP ${record.failure_status}` : '',
-    record.failure_body.trim(),
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  return (
-    <td className="usage-result-cell align-center" title={detail || t(`usage.result.${state}`)}>
-      <span className={`usage-result ${state}`}>
-        <span className="usage-result-dot" />
-        {t(`usage.result.${state}`)}
-      </span>
-      {detail ? <small title={detail}>{detail}</small> : null}
-    </td>
-  );
-}
-
-function UsageEventCell({
-  record,
-  columnKey,
-  noRemarkLabel,
-}: {
-  record: UsageRecord;
-  columnKey: EventColumnKey;
-  noRemarkLabel: string;
-}) {
-  const { formatDate } = useI18n();
-
-  switch (columnKey) {
-    case 'time':
-      return (
-        <td className="usage-td-time align-center" title={formatDate(record.timestamp)}>
-          {formatTime(record.timestamp)}
-        </td>
-      );
-    case 'model':
-      return (
-        <td className="usage-stacked-cell align-center">
-          <strong title={record.alias || record.model}>{record.alias || record.model}</strong>
-          <small title={record.reasoning_effort || 'auto'}>{record.reasoning_effort || 'auto'}</small>
-        </td>
-      );
-    case 'provider':
-      return (
-        <td className="usage-td-provider align-center" title={record.provider || undefined}>
-          <span className="usage-tag-pill">{record.provider || '—'}</span>
-        </td>
-      );
-    case 'source':
-      return (
-        <td className="usage-td-source align-center" title={record.source_display || record.source || undefined}>
-          <span className="usage-tag-pill">{record.source_display || record.source || '—'}</span>
-        </td>
-      );
-    case 'key':
-      return (
-        <td className="usage-stacked-cell align-center">
-          <strong title={record.api_key_remark}>{record.api_key_remark || noRemarkLabel}</strong>
-          <small title={record.api_key_display || undefined}>{record.api_key_display || '—'}</small>
-        </td>
-      );
-    case 'input':
-      return (
-        <td className="usage-td-token align-center" title={`${record.tokens.input_tokens.toLocaleString()} tokens`}>
-          {compactNumber(record.tokens.input_tokens)}
-        </td>
-      );
-    case 'output':
-      return (
-        <td className="usage-td-token align-center" title={`${record.tokens.output_tokens.toLocaleString()} tokens`}>
-          {compactNumber(record.tokens.output_tokens)}
-        </td>
-      );
-    case 'reasoning':
-      return (
-        <td className="usage-td-token align-center" title={`${record.tokens.reasoning_tokens.toLocaleString()} tokens`}>
-          {compactNumber(record.tokens.reasoning_tokens)}
-        </td>
-      );
-    case 'cache':
-      return (
-        <td
-          className="usage-td-token align-center"
-          title={`Read: ${record.tokens.cache_read_tokens.toLocaleString()} tokens${
-            record.tokens.cache_creation_tokens > 0
-              ? ` / Creation: ${record.tokens.cache_creation_tokens.toLocaleString()} tokens`
-              : ''
-          }`}
-        >
-          {compactNumber(record.tokens.cache_read_tokens)}
-        </td>
-      );
-    case 'cacheRate': {
-      const value = formatCacheReadRate({
-        inputTokens: record.tokens.input_tokens,
-        cacheReadTokens: record.tokens.cache_read_tokens,
-      });
-      return <td className="usage-td-cache-rate align-center" title={value === '—' ? undefined : value}>{value}</td>;
-    }
-    case 'total':
-      return (
-        <td className="usage-td-token align-center" title={`${record.tokens.total_tokens.toLocaleString()} tokens`}>
-          <strong>{compactNumber(record.tokens.total_tokens)}</strong>
-        </td>
-      );
-    case 'result':
-      return <UsageResultCell record={record} />;
-    case 'latency':
-      return (
-        <td className="usage-td-latency align-center" title={`${record.latency_ms} ms`}>
-          {compactDuration(record.latency_ms)}
-        </td>
-      );
-    case 'ttft':
-      return (
-        <td className="usage-td-ttft align-center" title={record.ttft_ms == null ? undefined : `${record.ttft_ms} ms`}>
-          {record.ttft_ms == null ? '—' : compactDuration(record.ttft_ms)}
-        </td>
-      );
-    case 'speed': {
-      const value = formatGenerationSpeed({
-        outputTokens: record.tokens.output_tokens,
-        latencyMs: record.latency_ms,
-      });
-      return <td className="usage-td-speed align-center" title={value === '—' ? undefined : value}>{value}</td>;
-    }
-  }
-}
-
-function EventsView({
-  events,
-  pageSize,
-  onPage,
-  onPageSizeChange,
-}: {
-  events: UsageEventPage;
-  pageSize: number;
-  onPage: (page: number) => void;
-  onPageSizeChange: (pageSize: number) => void;
-}) {
-  const { t } = useI18n();
-  const [widths, setWidths] = useState<Record<EventColumnKey, number>>(getInitialColumnWidths);
-  const [visibleColumnKeys, setVisibleColumnKeys] = useState<EventColumnKey[]>(getInitialVisibleColumns);
-  const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
-  const [draftVisibleColumnKeys, setDraftVisibleColumnKeys] = useState<EventColumnKey[]>(visibleColumnKeys);
-  const [resizingCol, setResizingCol] = useState<EventColumnKey | null>(null);
-
-  const columnDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: columnSettingsOpen,
-    onEscape: () => setColumnSettingsOpen(false),
-  });
-  const tableWrapRef = useRef<HTMLDivElement | null>(null);
-
-  const visibleColumnKeySet = new Set(visibleColumnKeys);
-  const visibleColumns = EVENT_COLUMNS.filter((column) => visibleColumnKeySet.has(column.key));
-  const isCustomized = EVENT_COLUMNS.some((col) => widths[col.key] !== col.defaultWidth);
-  const noRemarkLabel = t('usage.key.noRemark');
-
-  const resetAllWidths = () => {
-    const defaults: Record<EventColumnKey, number> = {} as any;
-    for (const col of EVENT_COLUMNS) {
-      defaults[col.key] = col.defaultWidth;
-    }
-    setWidths(defaults);
-    try {
-      localStorage.removeItem(EVENT_COL_WIDTHS_STORAGE_KEY);
-    } catch {}
-  };
-
-  const openColumnSettings = () => {
-    setDraftVisibleColumnKeys(visibleColumnKeys);
-    setColumnSettingsOpen(true);
-  };
-
-  const toggleDraftColumn = (key: EventColumnKey) => {
-    setDraftVisibleColumnKeys((current) => {
-      if (current.includes(key)) {
-        return current.length > 1 ? current.filter((columnKey) => columnKey !== key) : current;
-      }
-      return EVENT_COLUMNS.filter(
-        (column) => current.includes(column.key) || column.key === key
-      ).map((column) => column.key);
-    });
-  };
-
-  const applyColumnSettings = () => {
-    const next =
-      draftVisibleColumnKeys.length > 0 ? draftVisibleColumnKeys : getAllEventColumnKeys();
-    setVisibleColumnKeys(next);
-    try {
-      localStorage.setItem(EVENT_VISIBLE_COLS_STORAGE_KEY, JSON.stringify(next));
-    } catch {}
-    setColumnSettingsOpen(false);
-  };
-
-  const resetVisibleColumns = () => {
-    setDraftVisibleColumnKeys(getAllEventColumnKeys());
-  };
-
-  const resetSingleColumn = (key: EventColumnKey, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const colDef = EVENT_COLUMNS.find((c) => c.key === key);
-    if (!colDef) return;
-    setWidths((prev) => {
-      const next = { ...prev, [key]: colDef.defaultWidth };
-      try {
-        localStorage.setItem(EVENT_COL_WIDTHS_STORAGE_KEY, JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-  };
-
-  const persistColumnWidth = (key: EventColumnKey, width: number) => {
-    setWidths((current) => {
-      const next = { ...current, [key]: width };
-      try {
-        localStorage.setItem(EVENT_COL_WIDTHS_STORAGE_KEY, JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-  };
-
-  const handleResizeKeyDown = (key: EventColumnKey, event: KeyboardEvent<HTMLDivElement>) => {
-    const column = EVENT_COLUMNS.find((item) => item.key === key);
-    if (!column) return;
-    const current = widths[key] ?? column.defaultWidth;
-    const step = event.shiftKey ? 25 : 10;
-    const next = event.key === 'Home'
-      ? column.defaultWidth
-      : event.key === 'ArrowLeft'
-        ? Math.max(column.minWidth, current - step)
-        : event.key === 'ArrowRight'
-          ? Math.min(800, current + step)
-          : null;
-    if (next === null) return;
-    event.preventDefault();
-    persistColumnWidth(key, next);
-  };
-
-  const handleResizeStart = (key: EventColumnKey, e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const startX = e.clientX;
-    const startWidth =
-      widths[key] ?? EVENT_COLUMNS.find((c) => c.key === key)?.defaultWidth ?? 100;
-    const colDef = EVENT_COLUMNS.find((c) => c.key === key);
-    const minWidth = colDef?.minWidth ?? 50;
-
-    setResizingCol(key);
-    document.body.classList.add('table-col-resizing');
-
-    let currentWidth = startWidth;
-
-    const onPointerMove = (moveEvent: PointerEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const nextWidth = Math.max(minWidth, Math.round(startWidth + delta));
-      currentWidth = nextWidth;
-      setWidths((prev) => ({ ...prev, [key]: nextWidth }));
-    };
-
-    const onPointerUp = () => {
-      window.removeEventListener('pointermove', onPointerMove);
-      window.removeEventListener('pointerup', onPointerUp);
-      document.body.classList.remove('table-col-resizing');
-      setResizingCol(null);
-
-      setWidths((prev) => {
-        const next = { ...prev, [key]: currentWidth };
-        try {
-          localStorage.setItem(EVENT_COL_WIDTHS_STORAGE_KEY, JSON.stringify(next));
-        } catch {}
-        return next;
-      });
-    };
-
-    window.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
-  };
-
-  const totalTableWidth = visibleColumns.reduce(
-    (sum, col) => sum + (widths[col.key] ?? col.defaultWidth),
-    0
-  );
-
-  const startRecordNum = events.total > 0 ? (events.page - 1) * pageSize + 1 : 0;
-  const endRecordNum = Math.min(events.page * pageSize, events.total);
-
-  return (
-    <section className="panel usage-events-panel">
-      <div className="usage-events-summary">
-        <div className="usage-events-summary-left">
-          <span className="usage-events-count-badge">
-            {t('usage.events.total', { count: compactNumber(events.total) })}
-          </span>
-          <span className="usage-pagination-summary">
-            {t('usage.events.rangeSummary', {
-              start: startRecordNum,
-              end: endRecordNum,
-              total: compactNumber(events.total),
-            })}
-          </span>
-        </div>
-
-        <div className="usage-events-summary-right">
-          <div className="usage-pagination-controls">
-          <select
-            className="usage-page-size-select"
-            value={pageSize}
-            onChange={(e) => onPageSizeChange(Number(e.currentTarget.value))}
-            aria-label={t('usage.events.pageSize', { size: pageSize })}
-          >
-            <option value="20">{t('usage.events.pageSize', { size: 20 })}</option>
-            <option value="50">{t('usage.events.pageSize', { size: 50 })}</option>
-            <option value="100">{t('usage.events.pageSize', { size: 100 })}</option>
-            <option value="200">{t('usage.events.pageSize', { size: 200 })}</option>
-          </select>
-
-          <div className="usage-pagination-right usage-pagination-top">
-            <button
-              type="button"
-              className="usage-page-nav-btn"
-              disabled={events.page <= 1}
-              onClick={() => onPage(events.page - 1)}
-            >
-              <ChevronLeft size={14} />
-              <span>{t('usage.previous')}</span>
-            </button>
-            <span className="usage-pagination-info">
-              {events.page} / {events.totalPages}
-            </span>
-            <button
-              type="button"
-              className="usage-page-nav-btn"
-              disabled={events.page >= events.totalPages}
-              onClick={() => onPage(events.page + 1)}
-            >
-              <span>{t('usage.next')}</span>
-              <ChevronRight size={14} />
-            </button>
-          </div>
-          </div>
-
-          <button
-            type="button"
-            className="usage-col-settings-btn"
-            onClick={openColumnSettings}
-            title={t('usage.events.columnSettings')}
-          >
-            <Columns3Cog size={14} />
-            <span>{t('usage.events.columnSettings')}</span>
-          </button>
-          {isCustomized ? (
-            <button
-              type="button"
-              className="usage-col-reset-btn icon-only"
-              onClick={resetAllWidths}
-              title={t('usage.events.resetColumns')}
-              aria-label={t('usage.events.resetColumns')}
-            >
-              <RotateCcw size={13} />
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      {events.items.length > 0 ? (
-        <TableTopScrollbar
-          tableWrapRef={tableWrapRef}
-        />
-      ) : null}
-
-      {events.items.length ? (
-        <div ref={tableWrapRef} className="usage-table-wrap">
-          <table
-            className="usage-events-table"
-            style={{ width: `max(100%, ${totalTableWidth}px)` }}
-          >
-            <colgroup>
-              {visibleColumns.map((col) => (
-                <col key={col.key} style={{ width: `${widths[col.key]}px` }} />
-              ))}
-            </colgroup>
-            <thead>
-              <tr>
-                {visibleColumns.map((col) => {
-                  const label = t(col.labelKey);
-                  return (
-                    <th
-                      key={col.key}
-                      className={`usage-th-${col.key} align-${col.align}`}
-                      style={{ width: `${widths[col.key]}px` }}
-                    >
-                      <div className="usage-th-content" title={label}>
-                        <span>{label}</span>
-                      </div>
-                      <div
-                        className={`usage-col-resizer ${resizingCol === col.key ? 'active' : ''}`}
-                        role="separator"
-                        tabIndex={0}
-                        aria-label={`${label}: ${t('usage.events.resizeHint')}`}
-                        aria-orientation="vertical"
-                        aria-valuemin={col.minWidth}
-                        aria-valuemax={800}
-                        aria-valuenow={widths[col.key]}
-                        onPointerDown={(e) => handleResizeStart(col.key, e)}
-                        onDoubleClick={(e) => resetSingleColumn(col.key, e)}
-                        onKeyDown={(event) => handleResizeKeyDown(col.key, event)}
-                        title={t('usage.events.resizeHint')}
-                      />
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {events.items.map((record) => (
-                <tr key={record.row_id}>
-                  {visibleColumns.map((column) => (
-                    <UsageEventCell
-                      key={column.key}
-                      record={record}
-                      columnKey={column.key}
-                      noRemarkLabel={noRemarkLabel}
-                    />
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <UsageEmpty />
-      )}
-
-      {columnSettingsOpen ? (
-        <div
-          className="config-dialog-backdrop"
-          onMouseDown={(event) =>
-            event.currentTarget === event.target && setColumnSettingsOpen(false)
-          }
-        >
-          <section
-            ref={columnDialogRef}
-            className="config-dialog usage-column-dialog"
-            role="dialog"
-            tabIndex={-1}
-            aria-modal="true"
-            aria-labelledby="usage-column-dialog-title"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') setColumnSettingsOpen(false);
-            }}
-          >
-            <div className="usage-column-dialog-heading">
-              <div>
-                <Columns3Cog size={19} aria-hidden="true" />
-                <h2 id="usage-column-dialog-title">{t('usage.events.columnSettings')}</h2>
-              </div>
-              <button
-                type="button"
-                className="icon-button quiet"
-                onClick={() => setColumnSettingsOpen(false)}
-                title={t('common.close')}
-                aria-label={t('common.close')}
-              >
-                <X size={17} />
-              </button>
-            </div>
-            <p className="usage-column-dialog-description">
-              {t('usage.events.columnSettingsDescription')}
-            </p>
-            <div className="usage-column-options">
-              {EVENT_COLUMNS.map((column) => {
-                const checked = draftVisibleColumnKeys.includes(column.key);
-                return (
-                  <label key={column.key} className="usage-column-option">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={checked && draftVisibleColumnKeys.length === 1}
-                      onChange={() => toggleDraftColumn(column.key)}
-                    />
-                    <span>{t(column.labelKey)}</span>
-                  </label>
-                );
-              })}
-            </div>
-            <div className="usage-column-dialog-footer">
-              <div className="usage-column-dialog-meta">
-                <span>
-                  {t('usage.events.columnsSelected', {
-                    selected: draftVisibleColumnKeys.length,
-                    total: EVENT_COLUMNS.length,
-                  })}
-                </span>
-                <button
-                  type="button"
-                  className="usage-column-select-all"
-                  onClick={resetVisibleColumns}
-                >
-                  {t('usage.events.selectAllColumns')}
-                </button>
-              </div>
-              <div className="usage-column-dialog-actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => setColumnSettingsOpen(false)}
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={applyColumnSettings}
-                >
-                  {t('usage.events.applyColumns')}
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
     </section>
   );
 }
