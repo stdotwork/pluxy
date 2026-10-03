@@ -107,14 +107,6 @@ const fs = require('node:fs');
     await dialog().getByLabel('Version tag (blank for latest)').fill('../unsafe');
     assert.equal(await dialog().getByRole('button', { name: 'Install', exact: true }).isDisabled(), true);
     await dialog().getByLabel('Version tag (blank for latest)').fill('v1.2.3');
-    await dialog().getByRole('button', { name: 'Install', exact: true }).click();
-    assert.equal((await installs()).length, 0, 'First third-party confirmation cannot install');
-    await dialog().getByText(/has not been reviewed by the official project/).waitFor();
-    await dialog().getByRole('button', { name: 'Understood, review source' }).click();
-    const token = dialog().getByLabel(/Type the following/);
-    await token.fill('wrong/source');
-    assert.equal(await dialog().getByRole('button', { name: 'Install', exact: true }).isDisabled(), true);
-    await token.fill('router-for-me/analytics');
     await page.evaluate(() => { window.pluginsFixture.holdInstall = true; });
     await dialog().getByRole('button', { name: 'Install', exact: true }).click();
     await page.waitForFunction(() => window.pluginsFixture.installs.length === 1);
@@ -166,7 +158,7 @@ const fs = require('node:fs');
     await page.getByRole('alert').filter({ hasText: 'Fixture list temporarily unavailable' }).waitFor({ state: 'detached' });
 
     for (const locale of ['en', 'zh-CN']) {
-      for (const width of [640, 1024]) {
+      for (const width of [375, 640, 1070, 1368]) {
         await page.setViewportSize({ width, height: 800 });
         await open(`locale=${locale}&theme=${locale === 'en' ? 'light' : 'dark'}`);
         await page.locator('.plugin-card').first().waitFor();
@@ -186,6 +178,27 @@ const fs = require('node:fs');
           fs.mkdirSync(process.env.PLUGIN_SCREENSHOT_DIR, { recursive: true });
           await page.screenshot({ path: path.join(process.env.PLUGIN_SCREENSHOT_DIR, `plugins-${locale}-${width}.png`), fullPage: true });
         }
+        await card('Community analytics').getByRole('button', { name: locale === 'en' ? 'Install' : '安装', exact: true }).click();
+        await dialog().waitFor();
+        // Exercise wrapping and scrolling with metadata longer than a typical registry entry.
+        await dialog().locator('h2').evaluate(el => { el.textContent += ' · model-fallback-router-compatibility'; });
+        await dialog().locator('.plugin-install-origin small').evaluate(el => { el.textContent = 'https://raw.githubusercontent.com/example/plugins-store/main/' + 'long-registry-path-'.repeat(10) + 'registry.json'; });
+        await page.setViewportSize({ width, height: 480 });
+        const layout = await dialog().evaluate(el => {
+          const heading = el.querySelector('.config-dialog-heading').getBoundingClientRect();
+          const body = el.querySelector('.plugin-install-body').getBoundingClientRect();
+          const footer = el.querySelector('.plugin-dialog-actions').getBoundingClientRect();
+          const bounds = el.getBoundingClientRect();
+          return { ordered: heading.bottom <= body.top + 1 && body.bottom <= footer.top + 1,
+            fits: bounds.top >= 0 && bounds.bottom <= innerHeight && el.scrollWidth <= el.clientWidth + 1 };
+        });
+        assert.deepEqual(layout, { ordered: true, fits: true }, 'Dialog sections must not overlap or overflow');
+        await noOverflow();
+        if (process.env.PLUGIN_SCREENSHOT_DIR) {
+          await page.screenshot({ path: path.join(process.env.PLUGIN_SCREENSHOT_DIR, `plugins-install-${locale}-${width}.png`) });
+        }
+        await page.keyboard.press('Escape');
+        await dialog().waitFor({ state: 'detached' });
       }
     }
     await open('unsupported');
@@ -193,7 +206,7 @@ const fs = require('node:fs');
     assert.equal(await page.locator('.plugin-tabs').count(), 0);
     assert.equal(await page.evaluate(() => window.pluginsFixture.requests.length), 0, 'Unsupported cores do not receive plugin mutations or list requests');
     assert.deepEqual(errors, []);
-    console.log('Plugin UI passed: configured-only and unloaded states, installed counts, store lookup, configuration removal, resources, global/instance toggle, store filters, source trust gate, versions, retry, settings, uninstall, unsupported cores, responsive English/Chinese.');
+    console.log('Plugin UI passed: configured-only and unloaded states, installed counts, store lookup, configuration removal, resources, global/instance toggle, store filters, single-step installation, versions, retry, settings, uninstall, unsupported cores, responsive English/Chinese.');
   } finally {
     await browser?.close();
     await server.close();

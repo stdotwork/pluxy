@@ -1015,6 +1015,9 @@ pub(crate) fn inspect_agent_config(
     let opencode_desktop_application = (client == AgentClient::OpenCode)
         .then(|| find_opencode_desktop_application(home))
         .flatten();
+    let harness_desktop_application = (client == AgentClient::DeepSeekHarness)
+        .then(|| find_deepseek_harness_desktop_application(home))
+        .flatten();
     let app_version = match client {
         AgentClient::ClaudeDesktop => read_claude_desktop_version(home),
         AgentClient::Codex => codex_app_installation
@@ -1023,13 +1026,21 @@ pub(crate) fn inspect_agent_config(
         AgentClient::OpenCode => opencode_desktop_application
             .as_deref()
             .and_then(read_opencode_desktop_version),
-        AgentClient::DeepSeekHarness => read_deepseek_harness_profile_version(home),
+        AgentClient::DeepSeekHarness => harness_desktop_application
+            .as_deref()
+            .and_then(read_deepseek_harness_desktop_version),
         AgentClient::ZCode => executable.as_deref().and_then(read_zcode_app_version),
         AgentClient::WorkBuddy => executable.as_deref().and_then(read_workbuddy_app_version),
         _ => None,
     };
-    let version = cli_version.clone().or_else(|| app_version.clone());
-    let app_installed = codex_app_installation.is_some() || opencode_desktop_application.is_some();
+    let version = cli_version.clone().or_else(|| app_version.clone()).or_else(|| {
+        (client == AgentClient::DeepSeekHarness)
+            .then(|| read_deepseek_harness_profile_version(home))
+            .flatten()
+    });
+    let app_installed = codex_app_installation.is_some()
+        || opencode_desktop_application.is_some()
+        || harness_desktop_application.is_some();
     let installed = agent_installation_detected(
         client,
         version.as_deref(),
@@ -1188,6 +1199,13 @@ pub(crate) fn agent_launch_targets(
                     id: "cli".to_string(),
                     label: "DeepSeek Harness Web".to_string(),
                     detail: format!("{} web", path_to_string(executable)),
+                });
+            }
+            if app_installed {
+                targets.push(AgentLaunchTarget {
+                    id: "app".to_string(),
+                    label: "DeepSeek Harness Desktop".to_string(),
+                    detail: "DeepSeek Harness Desktop".to_string(),
                 });
             }
         }

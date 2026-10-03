@@ -3,12 +3,23 @@
   contain: size;
 }
 
-.agents-page .agent-list-items {
+.agents-page .agent-client-list .agent-list-items {
   gap: 4px;
+  flex: 1 1 auto;
+  grid-auto-flow: row;
+  grid-auto-columns: auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: none;
+  grid-auto-rows: 56px;
+  min-height: 56px;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+  padding: 0;
 }
 
-.agents-page .agent-list-items button {
+.agents-page .agent-client-list .agent-list-items button {
   min-height: 56px;
+  height: 56px;
   padding: 8px;
   gap: 8px;
 }
@@ -29,14 +40,44 @@
 }
 
 .agent-client-list-footer {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   flex: none;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
   gap: 8px;
   border-top: 1px solid var(--border-primary);
   padding-top: 10px;
+}
+
+.agent-client-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  grid-column: 1 / -1;
+}
+
+.agent-client-list-footer > .compact-button {
+  width: auto;
+}
+
+.agent-client-manager button.agent-client-option {
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.agent-client-manager button.agent-client-option:hover,
+.agent-client-manager button.agent-client-option[aria-pressed="true"] {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.agent-client-manager button.agent-client-option > svg {
+  flex: none;
+  margin-left: auto;
 }
 
 .agent-client-list-footer small,
@@ -221,7 +262,25 @@
 }
 
 @container agent-workspace (max-width: 760px) {
-  .agents-page:not(.agents-page-embedded) .agent-client-list {
+  .agents-page:not(.agents-page-embedded) .agent-client-list,
+  .app-shell:has(.agents-page:not(.agents-page-embedded)) .agent-client-list {
     contain: none;
+    height: 270px;
+    max-height: 270px;
+  }
+}
+
+/* These three compact controls fit side by side at ordinary desktop widths. */
+@container agent-panel (min-width: 620px) and (max-width: 760px) {
+  .agent-claude-desktop-mapping-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .agent-claude-code-runtime-settings {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  }
+
+  .agent-claude-code-disable-compact {
+    grid-column: auto;
   }
 }

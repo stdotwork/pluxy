@@ -12,7 +12,14 @@ const assert = require('node:assert/strict');
     page.on('pageerror', error => errors.push(String(error)));
     const tab = name => page.getByRole('tab', { name, exact: true });
     const button = name => page.getByRole('button', { name, exact: true });
-    const client = name => page.locator('.agent-list-items button').filter({ has: page.getByText(name, { exact: true }) });
+    const client = name => ({ click: async () => {
+      const shortcut = page.locator('.agent-list-items button').filter({ has: page.getByText(name, { exact: true }) });
+      if (await shortcut.count()) await shortcut.click();
+      else {
+        await button('切换客户端').click();
+        await page.getByRole('dialog', { name: '切换客户端', exact: true }).getByRole('button', { name, exact: true }).click();
+      }
+    } });
     const active = async name => {
       await page.waitForFunction(name => Array.from(document.querySelectorAll('[role=tab]'))
         .some(el => el.textContent === name && el.getAttribute('aria-selected') === 'true'), name);

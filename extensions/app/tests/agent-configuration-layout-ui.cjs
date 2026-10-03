@@ -130,48 +130,23 @@ const desktopViewports = [
       return metrics;
     };
 
-    const assertClientListScroll = async (label, { requireOverflow = false } = {}) => {
+    const assertClientShortcuts = async label => {
       const metrics = await page.locator('.agent-list-items').evaluate(list => {
-        const style = getComputedStyle(list);
-        const overflowX = list.scrollWidth > list.clientWidth + 1;
-        const overflowY = list.scrollHeight > list.clientHeight + 1;
-        const original = {
-          left: list.scrollLeft,
-          top: list.scrollTop,
-          snap: list.style.scrollSnapType,
-          behavior: list.style.scrollBehavior,
-        };
-        list.style.scrollSnapType = 'none';
-        list.style.scrollBehavior = 'auto';
-        const listRect = list.getBoundingClientRect();
-        const unreachable = Array.from(list.querySelectorAll('button')).filter(button => {
-          const before = button.getBoundingClientRect();
-          list.scrollLeft += before.left - listRect.left;
-          list.scrollTop += before.top - listRect.top;
-          const after = button.getBoundingClientRect();
-          return after.left < listRect.left - 1 || after.right > listRect.right + 1
-            || after.top < listRect.top - 1 || after.bottom > listRect.bottom + 1;
-        }).map(button => button.textContent.trim());
-        const scrollable = (!overflowX || ['auto', 'scroll'].includes(style.overflowX))
-          && (!overflowY || ['auto', 'scroll'].includes(style.overflowY));
-        list.scrollLeft = original.left;
-        list.scrollTop = original.top;
-        list.style.scrollSnapType = original.snap;
-        list.style.scrollBehavior = original.behavior;
-        return {
-          overflows: overflowX || overflowY,
-          scrollable,
-          unreachable,
-        };
+        const rect = list.getBoundingClientRect();
+        const buttons = Array.from(list.querySelectorAll('button'));
+        return { count: buttons.length,
+          overflow: list.scrollHeight > list.clientHeight + 1 || list.scrollWidth > list.clientWidth + 1,
+          clipped: buttons.filter(button => {
+            const r = button.getBoundingClientRect();
+            return r.top < rect.top - 1 || r.bottom > rect.bottom + 1 || r.left < rect.left - 1 || r.right > rect.right + 1;
+          }).map(button => button.textContent) };
       });
-      assert.equal(metrics.scrollable, true, `${label}: overflowing client options must remain scrollable`);
-      if (requireOverflow) {
-        assert.equal(metrics.overflows, true, `${label}: the fixture must exercise scrolling through the client list`);
-      }
-      assert.deepEqual(metrics.unreachable, [], `${label}: scrolling must reveal every client option`);
+      assert.ok(metrics.count >= 1 && metrics.count <= 6, `${label}: show at most six shortcuts`);
+      assert.equal(metrics.overflow, false, `${label}: shortcuts must fit without scrolling`);
+      assert.deepEqual(metrics.clipped, [], `${label}: no shortcut may be clipped`);
     };
 
-    const assertDesktopLayout = async (label, { requireClientOverflow = false } = {}) => {
+    const assertDesktopLayout = async label => {
       const [clientList, configuration] = await page.locator('.agent-client-list, .agent-config-panel')
         .evaluateAll(nodes => nodes.map(node => {
           const rect = node.getBoundingClientRect();
@@ -184,7 +159,7 @@ const desktopViewports = [
       assert.ok(Math.abs(clientList.y - configuration.y) <= 1,
         `${label}: the desktop panels must share a top edge`);
       await assertNaturalPanel(label);
-      await assertClientListScroll(label, { requireOverflow: requireClientOverflow });
+      await assertClientShortcuts(label);
       return { clientList, configuration };
     };
 
@@ -200,7 +175,7 @@ const desktopViewports = [
       assert.ok(clientList.y + clientList.height <= configuration.y + 1,
         `${label}: the client list must stay above the configuration panel`);
       await assertNaturalPanel(label, { checkControls: false });
-      await assertClientListScroll(label);
+      await assertClientShortcuts(label);
       const pageWidth = await page.evaluate(() => ({
         clientWidth: document.documentElement.clientWidth,
         scrollWidth: document.documentElement.scrollWidth,
@@ -335,7 +310,7 @@ const desktopViewports = [
       };
     });
 
-    const assertFixedShellDesktop = async (label, { requireRightOverflow = false, requireClientOverflow = false } = {}) => {
+    const assertFixedShellDesktop = async (label, { requireRightOverflow = false } = {}) => {
       const metrics = await shellLayoutMetrics();
       assert.ok(Math.abs(metrics.client.height - metrics.configuration.height) <= 1,
         `${label}: fixed-height desktop panels must remain equal in height`);
@@ -349,7 +324,7 @@ const desktopViewports = [
         `${label}: fixed-height desktop layout must not create a far-right page scrollbar`);
       assert.ok(metrics.documentScrollWidth <= metrics.documentClientWidth + 1,
         `${label}: fixed-height desktop layout must not create horizontal page scrolling`);
-      await assertClientListScroll(label, { requireOverflow: requireClientOverflow });
+      await assertClientShortcuts(label);
       await assertShellScrollRegion(label, { requireOverflow: requireRightOverflow });
       return metrics;
     };
@@ -369,10 +344,10 @@ const desktopViewports = [
           const label = `${viewport.width}x${viewport.height}/${embedded ? 'embedded' : 'full'}/${client}/core`;
           await assertDesktopLayout(label);
           if (client === 'zcode' && viewport.height === 941) {
-            const status = page.locator('.agent-list-items button').filter({ hasText: 'Antigravity CLI' }).locator('small');
+            const status = page.locator('.agent-list-items button').filter({ hasText: 'Claude Code' }).locator('small');
             const longModel = 'gemini-3.8-flash-high-with-a-long-client-status-for-layout-verification';
             await page.evaluate(model => {
-              window.fixtureClientStatusesOverride = { 'antigravity-cli': { appliedModel: model } };
+              window.fixtureClientStatusesOverride = { 'claude-code': { appliedModel: model } };
             }, longModel);
             await page.locator('.agent-client-list-heading button').click();
             await page.waitForFunction(model => Array.from(document.querySelectorAll('.agent-list-items small'))
@@ -429,7 +404,6 @@ const desktopViewports = [
       const label = `${viewport.width}x${viewport.height}/shell/claude-desktop/core`;
       const metrics = await assertFixedShellDesktop(label, {
         requireRightOverflow: height === 700,
-        requireClientOverflow: height === 700,
       });
       fixedShellByHeight.set(height, metrics);
     }
@@ -466,7 +440,7 @@ const desktopViewports = [
       `${shellNarrowLabel}: the stacked workbench must preserve the fixed window-edge gap`);
     assert.ok(shellNarrow.documentScrollHeight <= shellNarrow.documentClientHeight + 1,
       `${shellNarrowLabel}: the bounded one-column shell must not leak scrolling to the page`);
-    await assertClientListScroll(shellNarrowLabel);
+    await assertClientShortcuts(shellNarrowLabel);
     await assertShellScrollRegion(shellNarrowLabel);
 
     // At phone width the shell follows Usage records and returns to natural document scrolling.
@@ -482,7 +456,7 @@ const desktopViewports = [
       `${shellPhoneLabel}: phone-width client list must remain above configuration content`);
     assert.ok(shellPhone.documentScrollWidth <= shellPhone.documentClientWidth + 1,
       `${shellPhoneLabel}: natural document flow must not create horizontal scrolling`);
-    await assertClientListScroll(shellPhoneLabel);
+    await assertClientShortcuts(shellPhoneLabel);
     await assertShellScrollRegion(shellPhoneLabel, { natural: true });
 
     for (const viewport of [{ width: 640, height: 700 }, { width: 360, height: 941 }]) {
@@ -511,7 +485,7 @@ const desktopViewports = [
       await tab('会话管理').click();
       await page.locator('.codex-session-row').first().waitFor();
       const label = `${viewport.width}x${viewport.height}/full/codex/sessions`;
-      await assertDesktopLayout(label, { requireClientOverflow: false });
+      await assertDesktopLayout(label);
       const sessions = await page.locator('.codex-session-list').evaluate(list => {
         const style = getComputedStyle(list);
         const last = list.querySelector('.codex-session-row:last-child');

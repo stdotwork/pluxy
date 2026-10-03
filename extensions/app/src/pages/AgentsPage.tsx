@@ -1079,7 +1079,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const selectedModel = selectedModelOption?.name ?? '';
   const isPiClient = selected === 'pi';
   const isDeepSeekHarnessClient = selected === 'deepseek-harness';
-  const hasIndependentCliAndApp = selected === 'codex' || selected === 'opencode';
+  const hasIndependentCliAndApp = selected === 'codex' || selected === 'opencode' || isDeepSeekHarnessClient;
   const isClaudeModelMappingClient = selected === 'claude-code' || selected === 'claude-desktop';
   const claudeModelMappingsDraft = isClaudeModelMappingClient
     ? claudeModelMappingsDraftByClient[selected]
@@ -2461,7 +2461,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
           <MessageNotice tone="success" message={!configurationErrorMessage ? configurationNotice || clearNotice : null}
             onDismiss={() => { setConfigurationNotice(''); setClearNotice(''); }} />
           {activeSubpage === 'core' ? <AgentRunControls name={activeDefinition.name} dualTargets={hasIndependentCliAndApp}
-            desktop={hasIndependentCliAndApp || selected === 'claude-desktop' || selected === 'zcode' || selected === 'workbuddy'}
+            desktop={(hasIndependentCliAndApp && !isDeepSeekHarnessClient) || selected === 'claude-desktop' || selected === 'zcode' || selected === 'workbuddy'}
             targets={activeLaunchTargets} enabled={launchEnabled} busyAction={busyAction}
             harness={isDeepSeekHarnessClient ? deepSeekHarnessProcessStatus : null}
             onLaunch={(target) => void launchAgent(target)} onRestart={() => void restartDesktopApp()}

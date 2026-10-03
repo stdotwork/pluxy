@@ -238,7 +238,7 @@ pub(crate) fn collect_windows_zcode_registrations() -> Vec<WindowsZcodeRegistrat
     collect_windows_desktop_registrations("ZCode.exe", windows_display_name_matches_zcode)
 }
 
-fn collect_windows_desktop_registrations(executable: &str, matches_name: fn(&str) -> bool) -> Vec<WindowsZcodeRegistration> {
+pub(crate) fn collect_windows_desktop_registrations(executable: &str, matches_name: fn(&str) -> bool) -> Vec<WindowsZcodeRegistration> {
     let mut registrations = Vec::new();
     for root in current_version_roots() {
         if let Some(path) = RegistryKey::open(

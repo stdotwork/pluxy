@@ -21,15 +21,13 @@ const screenshots = path.join(os.tmpdir(), 'easycliproxy-agent-clients');
     await page.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
     fs.mkdirSync(screenshots, { recursive: true });
 
-    const clients = () => page.locator('.agent-list-items button strong');
-    const visibleClients = () => clients().allTextContents();
     const activeClient = () => page.locator('.agent-list-items button.active strong').textContent();
     const stored = () => page.evaluate(key => localStorage.getItem(key), storageKey);
-    const manage = () => page.getByRole('button', { name: '管理客户端', exact: true });
-    const dialog = () => page.getByRole('dialog', { name: '管理客户端', exact: true });
+    const manage = () => page.getByRole('button', { name: /^(管理客户端|Manage Clients)$/, exact: true });
+    const dialog = () => page.getByRole('dialog', { name: /^(管理客户端|Manage Clients)$/, exact: true });
     const checkbox = name => dialog().getByRole('checkbox', { name, exact: true });
     const save = () => dialog().getByRole('button', { name: '保存', exact: true });
-    const cancel = () => dialog().getByRole('button', { name: '取消', exact: true });
+    const cancel = () => dialog().getByRole('button', { name: /^(取消|Cancel)$/, exact: true });
     const search = () => dialog().getByRole('searchbox', { name: '搜索客户端', exact: true });
     const automatic = () => dialog().getByRole('button', { name: '恢复自动显示', exact: true });
     const ready = () => page.waitForFunction(() => window.fixtureCalls?.some(call => call.cmd === 'get_agent_config_statuses')
@@ -37,10 +35,15 @@ const screenshots = path.join(os.tmpdir(), 'easycliproxy-agent-clients');
       && !document.querySelector('.agent-client-list-heading button').disabled);
     const waitClients = async names => {
       await page.waitForFunction(expected => {
-        const actual = Array.from(document.querySelectorAll('.agent-list-items button strong'), node => node.textContent);
-        return JSON.stringify(actual) === JSON.stringify(expected);
+        const list = document.querySelector('.agent-list-items');
+        const actual = Array.from(list.querySelectorAll('button strong'), node => node.textContent);
+        const selected = list.querySelector('button.active strong')?.textContent;
+        return actual.length > 0 && actual.length <= 6 && actual.every(name => expected.includes(name))
+          && expected.includes(selected) && list.scrollHeight <= list.clientHeight + 1;
       }, names);
-      assert.deepEqual(await visibleClients(), names);
+      await manage().click();
+      assert.deepEqual(await dialog().locator('label:has(input:checked) strong').allTextContents(), names);
+      await cancel().click();
     };
     const open = async (extra = 'mixed-clients', saved = null) => {
       if (page.url() !== 'about:blank') {
@@ -171,6 +174,48 @@ const screenshots = path.join(os.tmpdir(), 'easycliproxy-agent-clients');
     await dialog().waitFor();
     await page.screenshot({ path: path.join(screenshots, 'manager-desktop.png'), fullPage: true });
     await closeAndFocus(() => cancel().click());
+
+    // Reproduce the reported desktop size with twelve previously saved clients.
+    await page.setViewportSize({ width: 1368, height: 912 });
+    const twelve = ['claude-code', 'claude-desktop', 'codex', 'deepseek-harness', 'opencode', 'pi',
+      'grok-build', 'antigravity-cli', 'workbuddy', 'zcode', 'kimi-code', 'openclaw'];
+    await page.evaluate(({ key, ids }) => localStorage.setItem(key, JSON.stringify(ids)), { key: storageKey, ids: twelve });
+    await page.goto(`${base}/tests/fixtures/agent-backups.html?shell&client=claude-code`, { waitUntil: 'domcontentloaded' });
+    await ready();
+    await page.waitForFunction(() => document.querySelectorAll('.agent-list-items button').length === 6);
+    const assertFits = async () => {
+      const metrics = await page.locator('.agent-list-items').evaluate(list => {
+        const rect = list.getBoundingClientRect();
+        return { height: list.clientHeight, scrollHeight: list.scrollHeight, scrollWidth: list.scrollWidth,
+          width: list.clientWidth, clipped: Array.from(list.children).some(child => {
+            const r = child.getBoundingClientRect();
+            return r.top < rect.top - 1 || r.bottom > rect.bottom + 1;
+          }) };
+      });
+      assert.ok(metrics.scrollHeight <= metrics.height + 1 && metrics.scrollWidth <= metrics.width + 1);
+      assert.equal(metrics.clipped, false, 'all shortcuts are fully visible without hiding overflowing rows');
+    };
+    await assertFits();
+    assert.deepEqual(JSON.parse(await stored()), twelve, 'limiting shortcuts preserves saved preferences');
+    const right = await page.locator('.agent-config-scroll-region').evaluate(node => [node.clientHeight, node.scrollHeight]);
+    assert.ok(right[1] <= right[0] + 1, 'Claude Code settings fit at the reported desktop size');
+    const switchClient = () => page.getByRole('button', { name: '切换客户端', exact: true });
+    await switchClient().click();
+    const picker = page.getByRole('dialog', { name: '切换客户端', exact: true });
+    await picker.getByRole('searchbox').fill('herMES');
+    await picker.getByRole('button', { name: 'Hermes Agent', exact: true }).click();
+    assert.equal(await activeClient(), 'Hermes Agent', 'a client outside the first six remains in the shortcuts after selection');
+    assert.ok(JSON.parse(await stored()).includes('hermes'), 'switching to a hidden client brings it back');
+    assert.equal(await switchClient().evaluate(node => node === document.activeElement), true);
+    await assertFits();
+    await page.setViewportSize({ width: 360, height: 600 });
+    await page.waitForFunction(() => document.querySelectorAll('.agent-list-items button').length < 6);
+    await assertFits();
+    assert.equal(await activeClient(), 'Hermes Agent', 'resizing always retains the active client');
+    await page.setViewportSize({ width: 1368, height: 912 });
+    await switchClient().click();
+    await picker.getByRole('button', { name: 'Claude Code', exact: true }).click();
+    await page.locator('.agent-workbench').screenshot({ path: path.join(screenshots, 'shortcuts-desktop.png') });
 
     // Both entry points remain usable with narrow windows and English text in dark mode.
     for (const embedded of [false, true]) {
