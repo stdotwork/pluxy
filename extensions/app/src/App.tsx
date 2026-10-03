@@ -7,6 +7,7 @@ import {
   Check,
   ChevronUp,
   ExternalLink,
+  Gauge,
   History,
   House,
   Languages,
@@ -28,6 +29,7 @@ import { ApiAccessPage } from './pages/ApiAccessPage';
 import { KernelPage } from './pages/Kernel';
 import { VersionManagementPage } from './pages/VersionManagementPage';
 import { OAuthManagementPage } from './pages/ManagementPages';
+import { QuotaPage } from './pages/QuotaPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { EasyModePage } from './pages/EasyModePage';
 import { UsageRecordsPage } from './pages/UsageRecordsPage';
@@ -66,6 +68,12 @@ const pages = [
     labelKey: 'app.nav.oauth',
     icon: LogIn,
     component: OAuthManagementPage,
+  },
+  {
+    id: 'quota',
+    labelKey: 'app.nav.quota',
+    icon: Gauge,
+    component: QuotaPage,
   },
   {
     id: 'agents',

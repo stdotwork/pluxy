@@ -29,7 +29,6 @@ import {
   shouldShowOAuthLoginStatus,
 } from '../services/oauthLoginState';
 import { AuthFileManagementPage } from './AuthFileManagementPage';
-import { QuotaPage } from './QuotaPage';
 import { validateDevinCallback } from '../services/devinOAuth';
 import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
 
@@ -169,7 +168,6 @@ export function OAuthManagementPage() {
       >
         {activeSubpage === 'login' ? <OAuthLoginPage /> : null}
         {activeSubpage === 'authFiles' ? <AuthFileManagementPage /> : null}
-        {activeSubpage === 'quota' ? <QuotaPage /> : null}
       </div>
     </section>
   );

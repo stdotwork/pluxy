@@ -3,7 +3,7 @@ import { useI18n } from '../i18n';
 import { authFileRequestStats, requestRateColor } from '../services/authFileRequests';
 import './AuthFileRequestStatus.css';
 
-export function AuthFileRequestStatus({ file }: { file: Record<string, unknown> }) {
+export function AuthFileRequestStatus({ file, compact = false }: { file: Record<string, unknown>; compact?: boolean }) {
   const { t, formatNumber } = useI18n();
   const stats = useMemo(() => authFileRequestStats(file), [file]);
   const [active, setActive] = useState<number | null>(null);
@@ -15,6 +15,7 @@ export function AuthFileRequestStatus({ file }: { file: Record<string, unknown> 
   const rateClass = stats.recentRate === null ? ''
     : stats.recentRate >= 0.9 ? 'success' : stats.recentRate >= 0.5 ? 'mixed' : 'failure';
   const detail = active === null ? null : stats.buckets[active];
+  const latestRequest = [...stats.buckets].reverse().find((bucket) => bucket.rate !== null);
   const bucketLabel = (index: number) => {
     const bucket = stats.buckets[index];
     const time = bucket.time || t('authFiles.requests.interval', { index: index + 1 });
@@ -24,15 +25,15 @@ export function AuthFileRequestStatus({ file }: { file: Record<string, unknown> 
   };
 
   return (
-    <div className="auth-file-requests" role="group" aria-label={t('authFiles.requests.title')}>
-      <div className="auth-file-requests-heading">
+    <div className={`auth-file-requests${compact ? ' auth-file-requests-compact' : ''}`} role="group" aria-label={t('authFiles.requests.title')}>
+      {compact ? <div className="auth-file-requests-latest" title={t('authFiles.requests.window')}>{latestRequest?.time || '—'}</div> : <div className="auth-file-requests-heading">
         <span>{t('authFiles.requests.title')}</span>
         <span className="auth-file-requests-counts" title={t('authFiles.requests.totalsHint')}>
           <span className={stats.success ? 'success' : ''}>{t('authFiles.requests.success', { count: countText(stats.success) })}</span>
           <span className={stats.failure ? 'failure' : ''}>{t('authFiles.requests.failure', { count: countText(stats.failure) })}</span>
         </span>
         {stats.recentAvailable ? <span className="auth-file-requests-window">{t('authFiles.requests.window')}</span> : null}
-      </div>
+      </div>}
       {stats.recentAvailable ? (
         <div className="auth-file-requests-timeline">
           <div className="auth-file-requests-chart">
@@ -74,9 +75,9 @@ export function AuthFileRequestStatus({ file }: { file: Record<string, unknown> 
               </div>
             ) : null}
           </div>
-          <span className={`auth-file-requests-rate ${rateClass}`} title={t('authFiles.requests.recentRate')}>
+          {!compact ? <span className={`auth-file-requests-rate ${rateClass}`} title={t('authFiles.requests.recentRate')}>
             {rateText(stats.recentRate)}
-          </span>
+          </span> : null}
           {stats.recentRate === null ? <span>{t('authFiles.requests.empty')}</span> : null}
         </div>
       ) : <span className="auth-file-requests-unavailable">{t('authFiles.requests.unavailable')}</span>}

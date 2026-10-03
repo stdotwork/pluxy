@@ -189,12 +189,16 @@ const viewports = [
       await assertReachable(page.locator('.provider-row-actions button').first(), `${label} provider action`);
 
       await open('OAuth', '.oauth-subpage-tabs');
+      assert.equal(await page.locator('#oauth-subpage-tab-quota').count(), 0, `${label}: quota has a separate sidebar entry`);
       await tab('oauth-subpage-tab-login', '.oauth-card');
       await assertNoPageOverflow(`${label} OAuth login`);
       await tab('oauth-subpage-tab-authFiles', '.auth-file-card');
       await assertNoPageOverflow(`${label} OAuth credentials`);
-      await tab('oauth-subpage-tab-quota', '.real-quota-card');
-      await assertNoPageOverflow(`${label} OAuth quota`);
+      await open('额度查询', '.quota-page .real-quota-card');
+      assert.equal(await page.locator('.nav-section button.active').innerText(), '额度查询', `${label}: quota activates its sidebar entry`);
+      assert.equal(await page.locator('.quota-page h1').innerText(), '额度查询', `${label}: standalone quota page has its own heading`);
+      assert.equal(await page.locator('.oauth-subpage-tabs').count(), 0, `${label}: standalone quota page does not contain OAuth navigation`);
+      await assertNoPageOverflow(`${label} quota`);
 
       await open('智能体配置', '.agent-config-panel');
       await page.waitForFunction(() => !document.querySelector('.agent-client-list-heading button')?.disabled);

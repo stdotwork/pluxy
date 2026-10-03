@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import { ChevronDown, CircleHelp, Clock3, Info, PauseCircle, ShieldAlert } from 'lucide-react';
+import { ChevronDown, CircleHelp, Clock3, Info, LoaderCircle, PauseCircle, RotateCcw, ShieldAlert } from 'lucide-react';
 import { useI18n } from '../i18n';
 import {
   authFileHealth,
@@ -35,10 +35,12 @@ const subscribeClock = (listener: () => void) => {
 type HealthProps = {
   file: Record<string, unknown>;
   snapshot?: AuthFileCooldownSnapshot;
+  resetting?: boolean;
+  resetDisabled?: boolean;
+  onReset?: () => void;
 };
 
-export function AuthFileHealthStatus({ file, receivedAtMs, observedAt }: {
-  file: Record<string, unknown>;
+export function AuthFileHealthStatus({ file, receivedAtMs, observedAt, ...resetProps }: Omit<HealthProps, 'snapshot'> & {
   receivedAtMs: number;
   observedAt?: string;
 }) {
@@ -47,8 +49,8 @@ export function AuthFileHealthStatus({ file, receivedAtMs, observedAt }: {
     [file, receivedAtMs, observedAt],
   );
   return snapshot?.records?.length
-    ? <TimedHealthStatus file={file} snapshot={snapshot} />
-    : <HealthStatus file={file} snapshot={snapshot} nowMs={receivedAtMs} />;
+    ? <TimedHealthStatus file={file} snapshot={snapshot} {...resetProps} />
+    : <HealthStatus file={file} snapshot={snapshot} nowMs={receivedAtMs} {...resetProps} />;
 }
 
 function TimedHealthStatus(props: HealthProps) {
@@ -56,7 +58,7 @@ function TimedHealthStatus(props: HealthProps) {
   return <HealthStatus {...props} nowMs={nowMs} />;
 }
 
-function HealthStatus({ file, snapshot, nowMs }: HealthProps & { nowMs: number }) {
+function HealthStatus({ file, snapshot, nowMs, resetting = false, resetDisabled = false, onReset }: HealthProps & { nowMs: number }) {
   const { t, formatNumber, formatDate } = useI18n();
   const health = authFileHealth(file);
   const cooldown = summarizeAuthFileCooldowns(snapshot, nowMs);
@@ -67,10 +69,6 @@ function HealthStatus({ file, snapshot, nowMs }: HealthProps & { nowMs: number }
   const reasonSet = new Set(cooldown.active.map(({ record }) => cooldownReasonKey(record.reason)));
   if (reasonSet.has('authFiles.health.reason.credentialQuota')) reasonSet.delete('authFiles.health.reason.quota');
   const reasons = Array.from(reasonSet);
-  const title = health.disabled ? t(health.label)
-    : cooldown.elapsed ? t('authFiles.health.elapsed')
-      : cooldown.active.length ? reasons.map((key) => t(key)).join(' · ')
-        : healthy ? t('authFiles.health.unknownCooldown') : t(health.label);
   const tone = health.disabled || (healthy && !hasTimers) ? 'neutral' : hasTimers ? 'warning' : health.tone;
   const separateState = hasTimers && !health.disabled && (
     health.status === 'pending' || health.status === 'refreshing'
@@ -89,13 +87,17 @@ function HealthStatus({ file, snapshot, nowMs }: HealthProps & { nowMs: number }
     ? cooldown.modelCount ? t('authFiles.health.credentialModels', { count: cooldown.modelCount })
       : t('authFiles.health.credential')
     : cooldown.modelCount ? t('authFiles.health.models', { count: cooldown.modelCount }) : '';
+  const title = health.disabled ? t(health.label)
+    : cooldown.elapsed ? t('authFiles.health.elapsed')
+      : scope || (healthy ? t('authFiles.health.unknownCooldown') : t(health.label));
+  const subtitle = health.disabled ? scope : reasons.map((key) => t(key)).join(' · ');
   const formatTimestamp = (value: string) => formatDate(value, {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   });
   const summary = <>
     <Icon size={16} className="auth-health-icon" aria-hidden="true" />
     <span className="auth-health-summary-content">
-      <span className="auth-health-heading"><strong>{title}</strong>{scope ? <span>{scope}</span> : null}</span>
+      <span className="auth-health-heading"><strong>{title}</strong>{subtitle ? <span>{subtitle}</span> : null}</span>
       {separateState ? <span className="auth-health-hint">{t('authFiles.health.coreStatus', { status: t(health.label) })}</span> : null}
       {health.message && !hasTimers && !health.label.startsWith('authFiles.health.reason.')
         ? <span className="auth-health-message-preview">{health.message}</span> : null}
@@ -138,6 +140,15 @@ function HealthStatus({ file, snapshot, nowMs }: HealthProps & { nowMs: number }
           {hasTimers ? <p className="auth-health-hint">{t('authFiles.health.note')}</p> : null}
         </div>
       </details> : <div className="auth-health-summary">{summary}</div>}
+      {hasTimers && onReset ? <div className="auth-health-actions">
+        <span className="auth-health-hint">{t('authFiles.cooldown.resetHint')}</span>
+        <button type="button" className="secondary-button compact-button auth-health-reset"
+          onClick={onReset} disabled={resetDisabled || resetting} aria-busy={resetting}
+          title={t('authFiles.cooldown.resetHint')}>
+          {resetting ? <LoaderCircle size={14} className="spin" aria-hidden="true" /> : <RotateCcw size={14} aria-hidden="true" />}
+          {t(resetting ? 'authFiles.cooldown.resetting' : 'authFiles.cooldown.resetButton')}
+        </button>
+      </div> : null}
     </section>
   );
 }

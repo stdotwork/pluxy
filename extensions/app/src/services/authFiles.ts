@@ -1,8 +1,38 @@
-import { managementApi, readBoolean, readString } from './managementApi';
+import { isRecord, managementApi, readBoolean, readString } from './managementApi';
 import { getCurrentLocale, translate } from '../i18n';
 
 export type AuthFileRecord = Record<string, unknown>;
 export type AuthFileSnapshot = Map<string, string>;
+
+export type AuthFileCooldownResetResponse = {
+  status: 'ok';
+  auth_index: string;
+  models: string[];
+};
+
+export const authFileCooldownResetIndex = (file: AuthFileRecord): string | undefined => {
+  const value = file.auth_index ?? file.authIndex;
+  if (typeof value === 'string') return value.trim() || undefined;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return String(value);
+  return undefined;
+};
+
+export const resetAuthFileCooldown = async (
+  authIndex: string,
+  api: { post: (path: string, body: Record<string, unknown>) => Promise<unknown> } = managementApi,
+): Promise<AuthFileCooldownResetResponse> => {
+  const index = authFileCooldownResetIndex({ auth_index: authIndex });
+  if (!index) throw new Error(translate(getCurrentLocale(), 'authFiles.cooldown.missingIndex'));
+  const response = await api.post('/routing/cooldown/reset', { auth_index: index });
+  // Only an acknowledgement for this index confirms the operation. The caller
+  // reloads the list to obtain authoritative health and disabled state afterward.
+  if (!isRecord(response) || response.status !== 'ok' || response.auth_index !== index
+    || (response.models != null && (!Array.isArray(response.models)
+      || response.models.some((model) => typeof model !== 'string')))) {
+    throw new Error(translate(getCurrentLocale(), 'authFiles.cooldown.invalidResponse'));
+  }
+  return { status: 'ok', auth_index: index, models: (response.models ?? []) as string[] };
+};
 
 export const authFileName = (file: AuthFileRecord) =>
   readString(file, 'name') || translate(getCurrentLocale(), 'authFiles.unnamed');

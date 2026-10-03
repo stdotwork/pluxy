@@ -1,10 +1,12 @@
 import type { MessageKey } from './zh-CN';
 import { easyModeEn } from '../easyMode';
 import { homeEn } from '../home';
+import { authFileListEn } from '../authFileList';
 
 export const en: Record<MessageKey, string> = {
   'app.nav.plugins': 'Plugins',
   ...homeEn,
+  ...authFileListEn,
   'apiAccess.entries.addKey': 'Add API Key',
   'apiAccess.entries.addProvider': 'Add Service',
   'apiAccess.entries.editKey': 'Edit API Key',
@@ -98,6 +100,15 @@ export const en: Record<MessageKey, string> = {
   'authFiles.settings.quotaUnknown': "Remaining quota unknown",
   'authFiles.settings.quotaIdle': "Quota not fetched",
   'authFiles.health.title': 'Credential status',
+  'authFiles.cooldown.resetButton': 'Clear cooldown',
+  'authFiles.cooldown.resetHint': 'Clear this credential’s local routing cooldown',
+  'authFiles.cooldown.resetTitle': 'Clear credential cooldown?',
+  'authFiles.cooldown.resetConfirm': 'Clear the local routing cooldown for “{name}”? This may make the credential eligible for another request immediately. It does not restore upstream quota.',
+  'authFiles.cooldown.resetSuccess': 'Cooldown cleared for {name}.',
+  'authFiles.cooldown.resetFailed': 'Could not clear cooldown for {name}: {message}',
+  'authFiles.cooldown.resetting': 'Clearing…',
+  'authFiles.cooldown.missingIndex': 'This credential has no valid auth index. Refresh the list before clearing its cooldown.',
+  'authFiles.cooldown.invalidResponse': 'The core did not return a valid reset result. Refresh the list to confirm the cooldown state.',
   'authFiles.health.active': 'Available',
   'authFiles.health.error': 'Request error',
   'authFiles.health.refreshing': 'Refreshing credentials',

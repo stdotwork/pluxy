@@ -1,9 +1,11 @@
 import { easyModeZhCN } from '../easyMode';
 import { homeZhCN } from '../home';
+import { authFileListZhCN } from '../authFileList';
 
 export const zhCN = {
   'app.nav.plugins': '插件',
   ...homeZhCN,
+  ...authFileListZhCN,
   'apiAccess.entries.addKey': '添加 API Key',
   'apiAccess.entries.addProvider': '添加服务',
   'apiAccess.entries.editKey': '编辑 API Key',
@@ -97,6 +99,15 @@ export const zhCN = {
   'authFiles.settings.quotaUnknown': "剩余额度未知",
   'authFiles.settings.quotaIdle': "尚未获取额度",
   'authFiles.health.title': '凭证状态',
+  'authFiles.cooldown.resetButton': '清除冷却',
+  'authFiles.cooldown.resetHint': '清除此凭证的本地路由冷却状态',
+  'authFiles.cooldown.resetTitle': '清除凭证冷却？',
+  'authFiles.cooldown.resetConfirm': '确定清除“{name}”的本地路由冷却状态吗？清除后此凭证可能立即再次参与请求，但不会恢复上游额度。',
+  'authFiles.cooldown.resetSuccess': '已清除 {name} 的冷却状态。',
+  'authFiles.cooldown.resetFailed': '无法清除 {name} 的冷却状态：{message}',
+  'authFiles.cooldown.resetting': '正在清除…',
+  'authFiles.cooldown.missingIndex': '凭证缺少有效的认证索引，无法清除冷却。请刷新列表后重试。',
+  'authFiles.cooldown.invalidResponse': '内核未返回有效的清除结果，请刷新列表确认冷却状态。',
   'authFiles.health.active': '正常可用',
   'authFiles.health.error': '请求异常',
   'authFiles.health.refreshing': '凭证刷新中',

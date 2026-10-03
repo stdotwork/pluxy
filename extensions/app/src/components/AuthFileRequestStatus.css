@@ -106,3 +106,33 @@
   left: auto;
   transform: none;
 }
+
+.auth-file-requests.auth-file-requests-compact {
+  grid-column: auto;
+  gap: 6px;
+  align-content: center;
+}
+
+.auth-file-requests-compact .auth-file-requests-latest {
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.auth-file-requests-compact .auth-file-requests-chart {
+  flex-basis: 100%;
+  max-width: none;
+}
+
+.auth-file-requests-compact .auth-file-requests-blocks {
+  gap: 2px;
+}
+
+.auth-file-requests-compact .auth-file-request-block {
+  height: 16px;
+}
+
+.auth-file-requests-compact .auth-file-requests-tooltip {
+  max-width: min(280px, 80vw);
+}

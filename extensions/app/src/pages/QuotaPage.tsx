@@ -145,6 +145,9 @@ export function QuotaPage() {
   return (
     <section className="page management-page quota-page">
       {confirmationDialog}
+      <header className="management-header">
+        <div><h1>{t('quota.title')}</h1></div>
+      </header>
       {error ? <MessageNotice message={error} /> : null}
       <OAuthPageToolbar
         icon={<Gauge size={18} />}

@@ -1,10 +1,12 @@
 import type { MessageKey } from './locales/zh-CN';
 import { easyModeJa } from './easyMode';
 import { homeJa } from './home';
+import { authFileListJa } from './authFileList';
 
 export const jaOverrides = {
   'app.nav.plugins': 'プラグイン',
   ...homeJa,
+  ...authFileListJa,
   'apiAccess.entries.addKey': 'API キーを追加',
   'apiAccess.entries.addProvider': 'サービスを追加',
   'apiAccess.entries.editKey': 'API キーを編集',
@@ -98,6 +100,15 @@ export const jaOverrides = {
   'authFiles.settings.quotaUnknown': "残量不明",
   'authFiles.settings.quotaIdle': "クォータ未取得",
   'authFiles.health.title': '認証情報の状態',
+  'authFiles.cooldown.resetButton': 'クールダウンを解除',
+  'authFiles.cooldown.resetHint': 'この認証情報のローカルルーティングのクールダウンを解除',
+  'authFiles.cooldown.resetTitle': '認証情報のクールダウンを解除しますか？',
+  'authFiles.cooldown.resetConfirm': '「{name}」のローカルルーティングのクールダウンを解除しますか？解除後、この認証情報はすぐにリクエストに使用される可能性があります。上流サービスのクォータは回復しません。',
+  'authFiles.cooldown.resetSuccess': '{name} のクールダウンを解除しました。',
+  'authFiles.cooldown.resetFailed': '{name} のクールダウンを解除できませんでした：{message}',
+  'authFiles.cooldown.resetting': '解除中…',
+  'authFiles.cooldown.missingIndex': '認証情報に有効な認証インデックスがありません。一覧を更新してからクールダウンの解除を再試行してください。',
+  'authFiles.cooldown.invalidResponse': 'コアから有効な解除結果が返されませんでした。一覧を更新してクールダウン状態を確認してください。',
   'authFiles.health.active': '利用可能',
   'authFiles.health.error': 'リクエストエラー',
   'authFiles.health.refreshing': '認証情報を更新中',

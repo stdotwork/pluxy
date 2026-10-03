@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 18px;
+  gap: 22px;
   min-width: 0;
 }
 
@@ -16,17 +16,15 @@
 .home-dashboard .home-top-grid > .panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
   margin: 0;
-  padding: 16px 20px;
+  padding: 20px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: var(--bg-card);
   box-shadow: none;
 }
-
-.home-dashboard .home-top-grid > .home-access-panel { gap: 14px; }
 
 .home-dashboard .home-top-grid .panel-heading {
   flex-direction: row;
@@ -63,8 +61,8 @@
   justify-content: space-between;
   gap: 16px;
   min-width: 0;
-  min-height: 28px;
-  padding: 3px 0;
+  min-height: 30px;
+  padding: 5px 0;
   border: 0;
   border-bottom: 1px solid var(--border-secondary);
 }
@@ -114,7 +112,6 @@
   min-height: 34px;
   padding: 6px 8px;
   font-size: 12px;
-  line-height: 18px;
 }
 
 .home-runtime-state { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--text-tertiary); }
@@ -168,7 +165,7 @@
   flex: 1;
   min-width: 0;
   margin: 0;
-  padding: 7px 4px 9px;
+  padding: 9px 4px 11px;
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
@@ -202,7 +199,7 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 4px 12px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
@@ -213,7 +210,7 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  min-height: 40px;
+  min-height: 42px;
   padding: 4px 6px 4px 12px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -243,7 +240,7 @@
   font-size: 11px;
 }
 
-.home-overview-heading { flex-wrap: wrap; margin-bottom: 10px; }
+.home-overview-heading { flex-wrap: wrap; margin-bottom: 14px; }
 .home-overview-heading > div { display: flex; align-items: center; gap: 8px; color: var(--text-tertiary); font-size: 12px; }
 .home-overview-heading .home-overview-label { gap: 12px; }
 .home-overview-label > span { padding-left: 12px; border-left: 1px solid var(--border-color); font-size: 11px; color: var(--text-quaternary); }
@@ -257,9 +254,9 @@
   --stat-color: var(--text-tertiary);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  padding: 14px 16px;
+  padding: 18px 20px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: var(--bg-card);
@@ -274,6 +271,37 @@
 .home-stat-track > span { display: block; height: 100%; border-radius: inherit; background: var(--stat-color); }
 .home-stat-card p { margin: 0; color: var(--text-tertiary); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 
+/* Use the desktop workspace height; smaller windows retain natural scrolling. */
+@media (min-width: 1160px) {
+  .content:has(> .home-dashboard) {
+    display: flex;
+    min-height: 100dvh;
+    padding-block: 32px;
+  }
+
+  .content > .home-page.home-dashboard { flex: 1; }
+  .home-dashboard .home-top-grid { flex: 1 0 auto; }
+  .home-dashboard .control-panel .panel-detail-grid { flex: 1; }
+  .home-dashboard .control-panel .panel-detail-row { flex: 1; }
+  .home-dashboard .home-access-panel { justify-content: space-between; }
+  .home-dashboard .home-overview { display: flex; flex-direction: column; flex: 1 0 auto; }
+  .home-dashboard .home-overview-heading { flex: none; }
+  .home-dashboard .home-stat-grid { flex: 1; }
+}
+
+/* A second row of metrics occupies the lower workspace without oversized panels. */
+@media (min-width: 1160px) and (min-height: 800px) {
+  .home-dashboard .home-top-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-dashboard .home-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(160px, 1fr));
+  }
+  .home-dashboard .home-stat-card { justify-content: center; padding: 20px 24px; }
+  .home-dashboard .home-stat-card h3 { font-size: 13px; }
+  .home-dashboard .home-stat-value { font-size: 34px; }
+  .home-dashboard .home-stat-card p { font-size: 12px; }
+}
+
 @container workspace (max-width: 800px) {
   .home-top-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .home-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -281,9 +309,9 @@
 
 @media (max-width: 620px) {
   .home-top-grid { grid-template-columns: minmax(0, 1fr); }
-  .home-dashboard .home-top-grid > .panel { padding: 16px; }
+  .home-dashboard .home-top-grid > .panel { padding: 18px; }
   .home-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .home-stat-card { padding: 14px; }
+  .home-stat-card { padding: 16px; }
   .home-stat-value { font-size: 26px; }
   .home-overview-heading { align-items: flex-start; gap: 10px; }
   .home-overview-heading .home-overview-actions { width: 100%; flex-wrap: nowrap; }

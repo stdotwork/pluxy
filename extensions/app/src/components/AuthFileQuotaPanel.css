@@ -1,0 +1,67 @@
+.credential-quota.credential-quota-compact {
+  container: credential-quota / inline-size;
+  min-width: 0;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.credential-quota-compact .credential-quota-rows {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.credential-quota-compact .credential-quota-row {
+  align-content: start;
+  gap: 5px;
+}
+
+.credential-quota-compact .credential-quota-label {
+  gap: 6px;
+}
+
+.credential-quota-compact .credential-quota-label span {
+  font-size: var(--font-size-caption);
+}
+
+.credential-quota-compact .credential-quota-label strong {
+  font-size: var(--font-size-caption);
+}
+
+.credential-quota-compact .credential-quota-track {
+  height: 5px;
+}
+
+.credential-quota-compact .credential-quota-row small {
+  line-height: 1.4;
+}
+
+.credential-quota-compact .credential-quota-heading .credential-quota-reset {
+  min-height: 22px;
+  padding: 2px 6px;
+}
+
+.credential-quota-compact .credential-quota-footnotes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+}
+
+.credential-quota-more > summary {
+  width: fit-content;
+  color: var(--primary-color);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+
+.credential-quota-more[open] > summary {
+  margin-bottom: 8px;
+}
+
+@container credential-quota (max-width: 280px) {
+  .credential-quota-compact .credential-quota-rows {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
