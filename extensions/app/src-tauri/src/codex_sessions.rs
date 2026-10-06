@@ -16,6 +16,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
+pub(crate) mod context;
+
 const DEFAULT_PAGE_SIZE: usize = 50;
 const MAX_PAGE_SIZE: usize = 100;
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1294,12 +1296,23 @@ fn validated_rollout_path(codex_home: &Path, path: &Path) -> Result<Option<PathB
     if !candidate.is_file() {
         return Ok(None);
     }
-    let canonical = fs::canonicalize(&candidate)
-        .map_err(|error| format!("Failed to resolve rollout path {}: {error}", candidate.display()))?;
+    let canonical_home = fs::canonicalize(codex_home).map_err(|error| {
+        format!(
+            "Failed to resolve Codex home {}: {error}",
+            codex_home.display()
+        )
+    })?;
+    let canonical = fs::canonicalize(&candidate).map_err(|error| {
+        format!(
+            "Failed to resolve rollout path {}: {error}",
+            candidate.display()
+        )
+    })?;
     for directory in SESSION_DIRS {
         let root = codex_home.join(directory);
         if let Ok(root) = fs::canonicalize(root) {
-            if canonical.starts_with(root)
+            if root.starts_with(&canonical_home)
+                && canonical.starts_with(&root)
                 && canonical.extension().and_then(OsStr::to_str) == Some("jsonl")
             {
                 return Ok(Some(canonical));
@@ -2414,7 +2427,7 @@ mod tests {
         assert_eq!(parse_windows_tasklist_process_ids(output), vec![1234, 5678]);
     }
 
-    fn test_root(name: &str) -> PathBuf {
+    pub(super) fn test_root(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "easy-cli-proxy-codex-sessions-{name}-{}-{}",
             std::process::id(),
