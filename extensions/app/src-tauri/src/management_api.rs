@@ -131,6 +131,37 @@ fn management_request_body(
 }
 
 #[tauri::command]
+pub(crate) async fn import_vertex_credential(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    name: String,
+    data: Vec<u8>,
+    location: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let name = name.trim();
+    if name.is_empty() || !name.to_ascii_lowercase().ends_with(".json") {
+        return Err("Credential filename must end with .json".to_string());
+    }
+    let config = gui_config_state.snapshot()?;
+    let part = reqwest::multipart::Part::bytes(data)
+        .file_name(name.to_owned())
+        .mime_str("application/json")
+        .map_err(|error| error.to_string())?;
+    let mut form = reqwest::multipart::Form::new().part("file", part);
+    if let Some(location) = location.filter(|value| !value.trim().is_empty()) {
+        form = form.text("location", location.trim().to_owned());
+    }
+    let response = management_http_client()?
+        .post(management_endpoint(&config, "oauth/import")?)
+        .header("Authorization", management_authorization(&config)?)
+        .query(&[("provider", "vertex")])
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|error| format_management_request_error("Failed to import Vertex credential", &error))?;
+    read_management_value(response).await
+}
+
+#[tauri::command]
 pub(crate) async fn upload_auth_file(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     name: String,

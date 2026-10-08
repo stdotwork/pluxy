@@ -33,6 +33,7 @@ import { validateDevinCallback } from '../services/devinOAuth';
 import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
 import { PluginOAuthProviders } from './PluginOAuthProviders';
 import { notifyPluginResourcesChanged } from '../services/pluginResources';
+import { VertexLoginCard } from './VertexLoginCard';
 
 type OAuthProviderId = 'codex' | 'claude' | 'antigravity' | 'kimi' | 'xai' | 'devin' | 'meta';
 type OAuthFlowStatus = 'idle' | 'waiting' | 'success' | 'error';
@@ -631,8 +632,9 @@ export function OAuthLoginPage() {
             </section>
           );
         })}
+        <VertexLoginCard />
         <PluginOAuthProviders
-          builtInProviderIds={BUILTIN_OAUTH_PROVIDER_IDS}
+          builtInProviderIds={[...BUILTIN_OAUTH_PROVIDER_IDS, 'vertex']}
           browser={selectedBrowser === NO_AUTO_OPEN_BROWSER_ID ? 'default' : selectedBrowser || 'default'}
         />
       </div>

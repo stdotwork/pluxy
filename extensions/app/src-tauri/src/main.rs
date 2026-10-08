@@ -2748,6 +2748,7 @@ fn main() {
             provider_health::get_core_models,
             provider_health::core_health_probe,
             management_api::upload_auth_file,
+            management_api::import_vertex_credential,
             management_api::open_auth_files_directory,
             management_api::open_core_logs_directory,
             set_core_plugins_enabled,

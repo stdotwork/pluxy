@@ -1021,6 +1021,24 @@ export function createBrowserMockRuntime(
       case 'set_prefer_gitcode_downloads': return clone(state.versionSource);
 
       case 'management_request': return clone(managementResponse(state, payload));
+      case 'import_vertex_credential': {
+        const parsed: unknown = JSON.parse(new TextDecoder().decode(Uint8Array.from(asArray(payload.data) as number[])));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid json');
+        const serviceAccount = asObject(parsed);
+        const projectId = readString(serviceAccount.project_id).trim();
+        const email = readString(serviceAccount.client_email).trim();
+        if (!projectId || !readString(serviceAccount.private_key).trim()) {
+          throw new Error('invalid service account');
+        }
+        const location = readString(payload.location).trim() || 'us-central1';
+        const name = `vertex-${projectId.replace(/[\\/:]/g, '_').replace(/ /g, '-')}.json`;
+        const existing = findAuthFile(state, name);
+        const file = { name, provider: 'vertex', type: 'vertex', project_id: projectId, email, location,
+          service_account: clone(serviceAccount), source: 'file',
+          auth_index: existing?.auth_index ?? `mock-vertex-${crypto.randomUUID()}`, modtime: Date.now() };
+        if (existing) state.authFiles[state.authFiles.indexOf(existing)] = file; else state.authFiles.push(file);
+        return { status: 'ok', project_id: projectId, email, location, 'auth-file': name };
+      }
       case 'upload_auth_file': {
         const name = readString(payload.name) || 'uploaded-mock.json';
         const parsed: unknown = JSON.parse(new TextDecoder().decode(Uint8Array.from(asArray(payload.data) as number[])));
