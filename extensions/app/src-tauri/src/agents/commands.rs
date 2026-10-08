@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 const AGENT_STATUS_DETECTION_CONCURRENCY: usize = 4;
 static CODEX_CATALOG_SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -14,6 +15,14 @@ enum AgentStatusDetectionTarget {
 pub(crate) fn inspect_agent_config_statuses(
     app: &tauri::AppHandle,
     config: &GuiConfigFile,
+) -> Result<Vec<AgentConfigStatus>, String> {
+    inspect_agent_config_statuses_with_overrides(app, config, &HashMap::new())
+}
+
+pub(crate) fn inspect_agent_config_statuses_with_overrides(
+    app: &tauri::AppHandle,
+    config: &GuiConfigFile,
+    executable_overrides: &HashMap<String, String>,
 ) -> Result<Vec<AgentConfigStatus>, String> {
     let home = app
         .path()
@@ -55,10 +64,12 @@ pub(crate) fn inspect_agent_config_statuses(
                     };
                     let status = match target {
                         AgentStatusDetectionTarget::Client(client) => {
-                            inspect_agent_config(client, home, config.port, api_key)
+                            inspect_agent_config_with_executable(client, home, config.port, api_key,
+                                executable_overrides.get(client.id()).map(Path::new))
                         }
                         AgentStatusDetectionTarget::PiProvider => {
-                            inspect_pi_provider_status(home, config.port, api_key)
+                            inspect_pi_provider_status_with_executable(home, config.port, api_key,
+                                executable_overrides.get(PI_AGENT_ID).map(Path::new))
                         }
                     };
                     results
@@ -102,6 +113,7 @@ pub(crate) fn refresh_agent_config_status_cache(
 #[tauri::command]
 pub(crate) async fn get_agent_config_statuses(
     app: tauri::AppHandle,
+    executable_overrides: Option<HashMap<String, String>>,
 ) -> Result<Vec<AgentConfigStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let gui_config_state = app.state::<GuiConfigState>();
@@ -113,11 +125,16 @@ pub(crate) async fn get_agent_config_statuses(
                 .map_err(|_| "Agent configuration status refresh lock is poisoned".to_string())?;
             let config = gui_config_state.snapshot()?;
             let port = config.port;
-            if let Some(statuses) = cache.get(port, effective_agent_api_key(&config))? {
+            if executable_overrides.as_ref().is_none_or(HashMap::is_empty) {
+              if let Some(statuses) = cache.get(port, effective_agent_api_key(&config))? {
                 return Ok(statuses);
+              }
             }
         }
-        refresh_agent_config_status_cache(&app, gui_config_state.inner(), cache.inner())
+        let config = gui_config_state.snapshot()?;
+        let statuses = inspect_agent_config_statuses_with_overrides(&app, &config, &executable_overrides.unwrap_or_default())?;
+        cache.replace(config.port, effective_agent_api_key(&config), statuses.clone())?;
+        Ok(statuses)
     })
     .await
     .map_err(|error| format!("Agent detection background task failed: {error}"))?
@@ -126,11 +143,15 @@ pub(crate) async fn get_agent_config_statuses(
 #[tauri::command]
 pub(crate) async fn refresh_agent_config_statuses(
     app: tauri::AppHandle,
+    executable_overrides: Option<HashMap<String, String>>,
 ) -> Result<Vec<AgentConfigStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let gui_config_state = app.state::<GuiConfigState>();
         let cache = app.state::<AgentConfigStatusCache>();
-        refresh_agent_config_status_cache(&app, gui_config_state.inner(), cache.inner())
+        let config = gui_config_state.snapshot()?;
+        let statuses = inspect_agent_config_statuses_with_overrides(&app, &config, &executable_overrides.unwrap_or_default())?;
+        cache.replace(config.port, effective_agent_api_key(&config), statuses.clone())?;
+        Ok(statuses)
     })
     .await
     .map_err(|error| format!("Agent detection background task failed: {error}"))?

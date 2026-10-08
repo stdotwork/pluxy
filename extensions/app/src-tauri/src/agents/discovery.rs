@@ -398,9 +398,19 @@ pub(crate) fn inspect_pi_provider_status(
     port: u16,
     api_key: &str,
 ) -> AgentConfigStatus {
+    inspect_pi_provider_status_with_executable(home, port, api_key, None)
+}
+
+pub(crate) fn inspect_pi_provider_status_with_executable(
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    executable_override: Option<&Path>,
+) -> AgentConfigStatus {
     let config_path = pi_provider_config_path(home);
     let settings_path = pi_provider_settings_path(home);
-    let executable = find_pi_executable(home);
+    let executable = executable_override.filter(|path| path.is_file()).map(Path::to_path_buf)
+        .or_else(|| find_pi_executable(home));
     let mut errors = Vec::new();
     let (plugin_installed, default_provider_matches, current_model) = match read_pi_settings(home) {
         Ok(Some(settings)) => {
@@ -1048,6 +1058,16 @@ pub(crate) fn inspect_agent_config(
     port: u16,
     api_key: &str,
 ) -> AgentConfigStatus {
+    inspect_agent_config_with_executable(client, home, port, api_key, None)
+}
+
+pub(crate) fn inspect_agent_config_with_executable(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    executable_override: Option<&Path>,
+) -> AgentConfigStatus {
     let paths = agent_config_paths(client, home);
     let config_exists = paths.iter().any(|path| path.is_file());
     let result = config_paths(client.id(), home)
@@ -1086,7 +1106,8 @@ pub(crate) fn inspect_agent_config(
             ),
         ),
     };
-    let executable = find_agent_executable(client, home);
+    let executable = executable_override.filter(|path| path.is_file()).map(Path::to_path_buf)
+        .or_else(|| find_agent_executable(client, home));
     let cli_version = if client == AgentClient::ZCode {
         find_named_agent_executable(home, &["zcode"])
             .filter(|path| executable.as_ref() != Some(path))

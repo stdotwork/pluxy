@@ -125,6 +125,7 @@ pub(crate) fn launch_agent(
     deepseek_process_state: tauri::State<'_, DeepSeekHarnessProcessState>,
     client: String,
     target: Option<String>,
+    executable_path: Option<String>,
     working_directory: Option<String>,
     deepseek_harness_options: Option<DeepSeekHarnessLaunchOptions>,
 ) -> Result<(), String> {
@@ -147,13 +148,14 @@ pub(crate) fn launch_agent(
         if requested_target.is_some_and(|value| value != "cli") {
             return Err("Pi supports only CLI launch mode".to_string());
         }
-        let status =
-            inspect_pi_provider_status(&home, config.port, effective_agent_api_key(&config));
+        let executable_override = executable_path.as_deref().map(Path::new);
+        let status = inspect_pi_provider_status_with_executable(&home, config.port, effective_agent_api_key(&config), executable_override);
         if !status.installed {
             return Err("Pi CLI was not detected. Install Pi and detect it again".to_string());
         }
-        let executable =
-            find_pi_executable(&home).ok_or_else(|| "Pi CLI executable not found".to_string())?;
+        let executable = executable_override.filter(|path| path.is_file()).map(Path::to_path_buf)
+            .or_else(|| find_pi_executable(&home))
+            .ok_or_else(|| "Pi CLI executable not found".to_string())?;
         let launch_directory = resolve_launch_directory(working_directory.as_deref(), &home)?;
         return launch_cli_agent(
             &executable,
@@ -170,7 +172,8 @@ pub(crate) fn launch_agent(
     if !client.supported_platform() {
         return Err(format!("The current platform does not support launching {}", client.name()));
     }
-    let status = inspect_agent_config(client, &home, config.port, effective_agent_api_key(&config));
+    let executable_override = executable_path.as_deref().map(Path::new);
+    let status = inspect_agent_config_with_executable(client, &home, config.port, effective_agent_api_key(&config), executable_override);
     if !status.installed {
         return Err(format!("{} was not detected. Install it and detect it again", client.name()));
     }
@@ -212,7 +215,8 @@ pub(crate) fn launch_agent(
             Err(format!("{} does not support CLI launch mode", client.name()))
         }
         (_, "cli") => {
-            let executable = find_agent_executable(client, &home)
+            let executable = executable_override.filter(|path| path.is_file()).map(Path::to_path_buf)
+                .or_else(|| find_agent_executable(client, &home))
                 .ok_or_else(|| format!("Executable for {} not found", client.name()))?;
             let launch_directory = resolve_launch_directory(working_directory.as_deref(), &home)?;
             if client == AgentClient::DeepSeekHarness {

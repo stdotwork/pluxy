@@ -12105,3 +12105,8 @@ body.table-col-resizing * {
   background: var(--theme-fdf1ee);
   color: var(--theme-a33b2b);
 }
+.agent-executable-path-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.agent-executable-path-control label { min-width: 88px; }
+.agent-executable-path-control input { flex: 1 1 320px; min-width: 180px; }
+.agent-detection-help { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; color: var(--text-secondary); }
+.agent-path-value { display: block; margin-top: 6px; max-width: 560px; overflow-wrap: anywhere; color: var(--text-tertiary); font-family: ui-monospace, monospace; }

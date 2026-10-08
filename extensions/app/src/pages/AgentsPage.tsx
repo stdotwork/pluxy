@@ -402,6 +402,21 @@ let agentStatusesCache: AgentConfigStatus[] | null = null;
 const agentModelsCache: Partial<Record<AgentClientId, ModelOption[]>> = {};
 const AGENT_SELECTED_CLIENT_KEY = 'cpa-gui.agent-selected-client.v1';
 const AGENT_LAUNCH_DIRECTORY_HISTORY_KEY = 'cpa-gui.agent-launch-directory-history.v1';
+const AGENT_EXECUTABLE_PATHS_KEY = 'cpa-gui.agent-executable-paths.v1';
+const readAgentExecutablePaths = (): Partial<Record<AgentClientId, string>> => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(AGENT_EXECUTABLE_PATHS_KEY) || '{}') as Record<string, unknown>;
+    return agentDefinitions.reduce<Partial<Record<AgentClientId, string>>>((result, agent) => {
+      const value = parsed[agent.id];
+      if (typeof value === 'string' && value.trim()) result[agent.id] = value.trim();
+      return result;
+    }, {});
+  } catch { return {}; }
+};
+const writeAgentExecutablePaths = (paths: Partial<Record<AgentClientId, string>>) => {
+  try { window.localStorage.setItem(AGENT_EXECUTABLE_PATHS_KEY, JSON.stringify(paths)); } catch { /* ignore storage failures */ }
+};
 
 const readSelectedAgentClient = (): AgentClientId => {
   const fallback = agentDefinitions[0].id;
@@ -566,6 +581,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const setClearNotice = (clearNotice: string) => updateViewState({ clearNotice });
   const setLaunchError = (launchError: string) => updateViewState({ launchError });
   const [statuses, setStatuses] = useState<AgentConfigStatus[]>(() => agentStatusesCache ?? []);
+  const [executablePaths, setExecutablePaths] = useState(() => readAgentExecutablePaths());
   const [modelData, setModelData] = useState(() => ({
     client: selected, models: agentModelsCache[selected] ?? [],
   }));
@@ -686,10 +702,10 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     const command = forceRefresh
       ? 'refresh_agent_config_statuses'
       : 'get_agent_config_statuses';
-    const nextStatuses = await invoke<AgentConfigStatus[]>(command);
+    const nextStatuses = await invoke<AgentConfigStatus[]>(command, { executableOverrides: executablePaths });
     if (requestId !== statusRequestRef.current) return;
     setStatuses(nextStatuses);
-  }, []);
+  }, [executablePaths]);
 
   useEffect(() => {
     if (statuses.length) agentStatusesCache = statuses;
@@ -1476,6 +1492,29 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     }
   };
 
+  const chooseExecutablePath = async () => {
+    try {
+      const selectedPath = await open({ directory: false, multiple: false, title: t('agents.executablePath.dialogTitle') });
+      if (typeof selectedPath !== 'string' || !selectedPath.trim()) return;
+      const next = { ...executablePaths, [selected]: selectedPath.trim() };
+      setExecutablePaths(next);
+      writeAgentExecutablePaths(next);
+      const refreshed = await invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: next });
+      setStatuses(refreshed);
+      setConfigurationNotice(t('agents.executablePath.saved'));
+    } catch (requestError) {
+      setConfigurationError(String(requestError));
+    }
+  };
+
+  const clearExecutablePath = () => {
+    const next = { ...executablePaths };
+    delete next[selected];
+    setExecutablePaths(next);
+    writeAgentExecutablePaths(next);
+    void invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: next }).then(setStatuses);
+  };
+
   const rememberLaunchDirectory = (client: AgentClientId, directory: string) => {
     setLaunchDirectoryHistory((current) => {
       const next = rememberAgentLaunchDirectory(current, client, directory);
@@ -1498,6 +1537,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       await invoke('launch_agent', {
         client: selected,
         target: target.id,
+        executablePath: executablePaths[selected] ?? null,
         workingDirectory,
         deepseekHarnessOptions: deepSeekHarnessOptions,
       });
@@ -1841,8 +1881,11 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                 </span>
               </div>
 
-              <MessageNotice message={activeStatus?.error || activeStatus?.warnings.join('；')} tone={activeStatus?.error ? 'error' : 'info'} />
-
+                <MessageNotice message={activeStatus?.error || activeStatus?.warnings.join('；')} tone={activeStatus?.error ? 'error' : 'info'} />
+                {activeStatus && !activeStatus.installed ? <div className="agent-detection-help" role="status">
+                  <span>{t('agents.executablePath.notDetected')}</span>
+                  <button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>
+                </div> : null}
               {selected === 'claude-desktop' ? desktopModelEditor : <div className="agent-minimal-field">
                 <label htmlFor="embedded-agent-model">{t(isDeepSeekHarnessClient ? 'agents.harness.defaultModel' : 'agents.useModel')}</label>
                 <AgentModelPicker
@@ -1935,6 +1978,10 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               </div>
 
               <MessageNotice message={activeStatus?.error || activeStatus?.warnings.join('；')} tone={activeStatus?.error ? 'error' : 'info'} />
+              {activeStatus && !activeStatus.installed ? <div className="agent-detection-help" role="status">
+                <span>{t('agents.executablePath.notDetected')}</span>
+                <button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>
+              </div> : null}
 
               {!isClaudeModelMappingClient ? (
                 <section className="agent-core-setting-section agent-model-section">
@@ -2187,6 +2234,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
           {activeSubpage === 'management' ? (
             <div id="agent-subpage-panel-management" role="tabpanel" aria-labelledby="agent-subpage-tab-management">
               <AgentConfigManagementPanel pi={isPiClient} codex={selected === 'codex'} busyAction={busyAction}
+                executablePath={executablePaths[selected] ?? ''} onChooseExecutablePath={() => void chooseExecutablePath()}
+                onClearExecutablePath={clearExecutablePath}
                 canTemplate={canEnable && !nativeOauth} canUpdatePi={canEnable && !configurationWriteBlocked && Boolean(activeStatus?.pluginInstalled)}
                 canUninstallPi={launchEnabled && Boolean(activeStatus?.pluginInstalled)}
                 pluginInstalled={Boolean(activeStatus?.pluginInstalled)} pluginVersion={activeStatus?.pluginVersion ?? null}

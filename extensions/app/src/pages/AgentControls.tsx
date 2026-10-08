@@ -1,5 +1,5 @@
 import { MessageNotice } from '../appNotice';
-import { AppWindow, LoaderCircle, Play, RefreshCw, Square, Terminal, Trash2 } from 'lucide-react';
+import { AppWindow, FolderOpen, LoaderCircle, Play, RefreshCw, Square, Terminal, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 
 type LaunchTarget = { id: 'app' | 'cli'; label: string; detail: string };
@@ -76,10 +76,11 @@ export function AgentConfigurationFeedback({ pending, description, status = '' }
 
 export function AgentConfigManagementPanel({
   pi, codex, busyAction, canTemplate, canUpdatePi, canUninstallPi, pluginInstalled, pluginVersion, updateLabel,
-  onBackup, onRestore, onTemplate, onClear, onUpdatePi, onUninstallPi, canClearIntegration, onClearIntegration,
+  executablePath, onChooseExecutablePath, onClearExecutablePath, onBackup, onRestore, onTemplate, onClear, onUpdatePi, onUninstallPi, canClearIntegration, onClearIntegration,
 }: {
   pi: boolean; codex: boolean; busyAction: string | null; canTemplate: boolean;
   canUpdatePi: boolean; canUninstallPi: boolean; pluginInstalled: boolean; pluginVersion: string | null; updateLabel: string;
+  executablePath: string; onChooseExecutablePath: () => void; onClearExecutablePath: () => void;
   onBackup: () => void; onRestore: () => void; onTemplate: () => void; onClear: () => void;
   onUpdatePi: () => void; onUninstallPi: () => void;
   canClearIntegration: boolean; onClearIntegration: () => void;
@@ -87,6 +88,16 @@ export function AgentConfigManagementPanel({
   const { t } = useI18n();
   const busy = busyAction !== null;
   return <div className="agent-management-sections">
+    <section className="agent-management-row">
+      <div><h3>{t('agents.executablePath.title')}</h3><p>{t('agents.executablePath.description')}</p>
+        {executablePath ? <small className="agent-path-value" title={executablePath}>{executablePath}</small> : null}</div>
+      <div className="agent-management-actions">
+        <button type="button" className="secondary-button" onClick={onChooseExecutablePath} disabled={busy}>
+          <FolderOpen size={16} />{t('agents.executablePath.choose')}
+        </button>
+        {executablePath ? <button type="button" className="quiet-button" onClick={onClearExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
+      </div>
+    </section>
     {!pi ? <section className="agent-management-row">
       <div><h3>{t('agents.management.backups')}</h3><p>{t('agents.management.backupsDescription')}</p></div>
       <div className="agent-management-actions">
