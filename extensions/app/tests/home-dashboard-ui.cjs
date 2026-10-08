@@ -13,7 +13,7 @@ const base = process.env.HOME_DASHBOARD_TEST_BASE_URL || 'http://127.0.0.1:1421'
       server = await createServer({ configFile: false, cacheDir: 'node_modules/.vite-home-dashboard', plugins: [react()], logLevel: 'error', optimizeDeps: { noDiscovery: true, include: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', '@tauri-apps/api/core', '@tauri-apps/api/mocks', '@tauri-apps/api/event', 'lucide-react', 'react-markdown', '@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'] }, server: { host: '127.0.0.1', port: Number(new URL(base).port), strictPort: true, watch: null } });
       await server.listen();
     }
-    browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--no-proxy-server'] });
+    browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || 'msedge', headless: true, args: ['--no-proxy-server'] });
     const errors = [];
     const makePage = async (viewport = { width: 1280, height: 1050 }) => {
       const page = await browser.newPage({ viewport });
@@ -91,6 +91,7 @@ const base = process.env.HOME_DASHBOARD_TEST_BASE_URL || 'http://127.0.0.1:1421'
     await openaiTab.focus();
     await page.keyboard.press('ArrowRight');
     assert.equal(await page.locator('#home-protocol-claude').getAttribute('aria-selected'), 'true');
+    await page.waitForFunction(() => document.activeElement?.id === 'home-protocol-claude');
     assert.equal(await page.locator('#home-protocol-claude').evaluate(node => node === document.activeElement), true);
     assert.equal(await page.getByRole('tabpanel').locator('code').innerText(), 'http://127.0.0.1:8317');
     await page.getByRole('tabpanel').getByRole('button').click();
@@ -105,6 +106,7 @@ const base = process.env.HOME_DASHBOARD_TEST_BASE_URL || 'http://127.0.0.1:1421'
     await showHealth();
     const dialog = page.getByRole('dialog', { name: 'Model Health', exact: true });
     assert.equal(await dialog.getAttribute('aria-modal'), 'true');
+    await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.contains(document.activeElement));
     assert.equal(await dialog.evaluate(node => node.contains(document.activeElement)), true, 'opening the modal must focus a control inside it');
     assert.equal(await dialog.getByRole('checkbox').count(), 0, 'health checks must not offer automatic mode');
     assert.equal(await dialog.getByText(/automatically|automatic check/i).count(), 0);

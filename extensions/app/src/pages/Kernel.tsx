@@ -210,7 +210,15 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
 
   return (
     <section className="page kernel-page home-page home-dashboard">
-      <h1 className="sr-only">{t('app.nav.home')}</h1>
+      <header className="home-masthead">
+        <h1>{t('app.nav.home')}</h1>
+      </header>
+      <HomeOverviewCards snapshot={overview.snapshot} loading={overview.loading} coreReady={coreReady} onRefresh={overview.refresh} actions={<CoreHealthPanel compact
+        coreReady={coreReady} models={overview.snapshot?.models ?? []}
+        modelsLoading={overview.loading}
+        modelsError={overview.snapshot?.errors.models ?? ''}
+        onRefreshModels={overview.refresh} contextKey={healthContext}
+      />} />
       <div className="home-top-grid">
         <div className="panel control-panel">
           <div className="panel-heading home-panel-heading">
@@ -290,12 +298,6 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
         />
       </div>
       <FloatingNotice key={copyFeedback.revision} notice={copyFeedback.notice} onDismiss={copyFeedback.clearNotice} />
-      <HomeOverviewCards snapshot={overview.snapshot} loading={overview.loading} coreReady={coreReady} onRefresh={overview.refresh} actions={<CoreHealthPanel compact
-        coreReady={coreReady} models={overview.snapshot?.models ?? []}
-        modelsLoading={overview.loading}
-        modelsError={overview.snapshot?.errors.models ?? ''}
-        onRefreshModels={overview.refresh} contextKey={healthContext}
-      />} />
     </section>
   );
 }
