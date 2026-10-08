@@ -732,7 +732,7 @@ pub(crate) fn fresh_agent_contents_with_oauth(
             None, &openai_base, api_key, model, models,
         )?]),
         AgentClient::ZCode => Ok(vec![build_zcode_agent_config(
-            None, &root_base, api_key, model, models,
+            None, &openai_base, api_key, model, models,
         )?]),
         AgentClient::KimiCode => Ok(vec![build_kimi_code_agent_config(
             None,

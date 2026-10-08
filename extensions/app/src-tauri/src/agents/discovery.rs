@@ -3537,6 +3537,11 @@ pub(crate) fn inspect_zcode_agent_config(
         .and_then(|selection| selection.get("modelId"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+    let expected_origin = managed_core_loopback_origin(port);
+    let expected_base = format!("{expected_origin}/v1");
+    let provider_base = provider
+        .and_then(|provider| provider.pointer("/config/api/baseUrl"))
+        .and_then(serde_json::Value::as_str);
     let configured = model.as_deref().is_some_and(|model| {
         provider
             .and_then(|provider| provider.get("config"))
@@ -3559,10 +3564,12 @@ pub(crate) fn inspect_zcode_agent_config(
         && provider
             .and_then(|provider| provider.pointer("/config/api/type"))
             .and_then(serde_json::Value::as_str) == Some("anthropic-messages")
-        && provider
-            .and_then(|provider| provider.pointer("/config/api/baseUrl"))
-            .and_then(serde_json::Value::as_str)
-            == Some(managed_core_loopback_origin(port).as_str());
+        && provider_base.is_some_and(|base| {
+            // Older CPA configurations used the origin. ZCode also normalizes
+            // that form to /v1 before making Anthropic Messages requests.
+            let base = base.trim_end_matches('/');
+            base == expected_base || base == expected_origin
+        });
     Ok((configured, model))
 }
 

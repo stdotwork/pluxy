@@ -198,7 +198,7 @@ pub(crate) fn build_agent_updates_with_oauth(
         AgentClient::ZCode => {
             let before = read_optional_text(&paths[0])?;
             let after = build_zcode_agent_config(
-                before.as_deref(), &root_base, api_key, model, models,
+                before.as_deref(), &openai_base, api_key, model, models,
             )?;
             Ok(vec![AgentFileUpdate { path: paths[0].clone(), after }])
         }
@@ -3362,7 +3362,9 @@ pub(crate) fn build_zcode_agent_config(
         let properties = ensure_json_object_entry(ensure_json_object_entry(entry, "config"), "properties");
         if let Some(context_window) = option.context_window {
             properties.insert("contextWindow".to_string(), serde_json::json!(context_window));
-        } else {
+        } else if manual.is_none() {
+            // Smart rules inherit ZCode defaults; manual rules require a complete
+            // config, including contextWindow, even when CPA has no runtime limit.
             properties.remove("contextWindow");
         }
         if properties.is_empty() {

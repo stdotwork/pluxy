@@ -1175,29 +1175,149 @@ fn zcode_desktop_and_cli_share_the_provider_configuration() {
 
 #[test]
 fn zcode_preserves_manual_model_rules_and_rejects_unknown_schema_versions() {
-    let existing = r#"{"schemaVersion":1,"config":{"providerConfigRules":{"providerRules":[]},"modelConfigRules":{"providerModelRules":[],"manualProviderModelRules":[{"providerId":"cpa-gui","modelId":"gpt-test","config":{"enabled":true,"properties":{"supportsToolCall":true}}}]}}}"#;
-    let mut models = test_agent_models(&["gpt-test", "without-context"]);
+    let fixture: serde_json::Value = serde_json::from_str(
+        include_str!("fixtures/zcode-provider-config-3.14.4.json"),
+    ).unwrap();
+    let existing = serde_json::json!({
+        "schemaVersion": 1,
+        "config": {
+            "providerConfigRules": {"providerRules": []},
+            "modelConfigRules": {
+                "providerModelRules": [],
+                "manualProviderModelRules": fixture["config"]["modelConfigRules"]["manualProviderModelRules"],
+            },
+        },
+    });
+    let mut models = test_agent_models(&["gpt-manual", "without-context"]);
     models[1].context_window = None;
     let rendered = build_zcode_agent_config(
-        Some(existing),
-        "http://127.0.0.1:8317",
+        Some(&existing.to_string()),
+        "http://127.0.0.1:8317/v1",
         DEFAULT_API_KEY,
-        "gpt-test",
+        "gpt-manual",
         &models,
     ).unwrap();
     let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
     assert!(value["config"]["modelConfigRules"]["providerModelRules"]
         .as_array().unwrap().is_empty());
     let manual = &value["config"]["modelConfigRules"]["manualProviderModelRules"][0];
-    assert_eq!(manual["config"]["properties"]["supportsToolCall"], true);
+    assert_eq!(manual["config"]["properties"]["inputFormat"]["supportsImage"], true);
     assert_eq!(manual["config"]["properties"]["contextWindow"], 200_000);
     assert!(build_zcode_agent_config(
         Some(r#"{"schemaVersion":2,"config":{}}"#),
-        "http://127.0.0.1:8317",
+        "http://127.0.0.1:8317/v1",
         DEFAULT_API_KEY,
-        "gpt-test",
-        &test_agent_models(&["gpt-test"]),
+        "gpt-manual",
+        &test_agent_models(&["gpt-manual"]),
     ).is_err());
+}
+
+#[test]
+fn zcode_latest_manual_rules_preserve_required_fields_without_runtime_context() {
+    let existing = include_str!("fixtures/zcode-provider-config-3.14.4.json");
+    let original: serde_json::Value = serde_json::from_str(existing).unwrap();
+    let mut models = test_agent_models(&["gpt-manual", "gpt-test"]);
+    for option in &mut models {
+        option.context_window = None;
+    }
+    let rendered = build_zcode_agent_config(
+        Some(existing),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-manual",
+        &models,
+    ).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(
+        value["config"]["modelConfigRules"]["manualProviderModelRules"],
+        original["config"]["modelConfigRules"]["manualProviderModelRules"],
+    );
+    assert_eq!(value["config"]["defaultModelSelection"], original["config"]["defaultModelSelection"]);
+    let smart = &value["config"]["modelConfigRules"]["providerModelRules"][1];
+    assert!(smart["config"]["properties"].get("contextWindow").is_none());
+    assert_eq!(smart["config"]["properties"]["supportsToolCall"], true);
+    assert_eq!(
+        build_zcode_agent_config(
+            Some(&rendered), "http://127.0.0.1:8317/v1", DEFAULT_API_KEY, "gpt-manual", &models,
+        ).unwrap(),
+        rendered,
+    );
+}
+
+#[test]
+fn zcode_latest_manual_rules_update_context_and_restore_without_losing_native_options() {
+    let existing = include_str!("fixtures/zcode-provider-config-3.14.4.json");
+    let original: serde_json::Value = serde_json::from_str(existing).unwrap();
+    let mut models = test_agent_models(&["gpt-manual", "gpt-test"]);
+    models[0].context_window = Some(372_000);
+    let rendered = build_zcode_agent_config(
+        Some(existing),
+        "http://127.0.0.1:8317/v1",
+        DEFAULT_API_KEY,
+        "gpt-manual",
+        &models,
+    ).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    let mut expected_manual = original["config"]["modelConfigRules"]["manualProviderModelRules"].clone();
+    expected_manual[0]["config"]["properties"]["contextWindow"] = serde_json::json!(372_000);
+    assert_eq!(value["config"]["modelConfigRules"]["manualProviderModelRules"], expected_manual);
+    assert_eq!(value["config"]["defaultModelSelection"], original["config"]["defaultModelSelection"]);
+    assert_eq!(
+        value["config"]["providerConfigRules"]["providerRules"][0],
+        original["config"]["providerConfigRules"]["providerRules"][0],
+    );
+    assert_eq!(
+        value["config"]["providerConfigRules"]["providerRules"][1]["config"]["api"]["headers"],
+        original["config"]["providerConfigRules"]["providerRules"][1]["config"]["api"]["headers"],
+    );
+    // Restoring CPA must not undo later edits made in ZCode to another provider.
+    value["config"]["providerConfigRules"]["providerRules"][0]["providerName"] = serde_json::json!("Renamed in ZCode");
+    let restored = build_restored_zcode_provider_config(
+        &value.to_string(), Some(existing),
+    ).unwrap().unwrap();
+    let restored: serde_json::Value = serde_json::from_str(&restored).unwrap();
+    let mut expected = original;
+    expected["config"]["providerConfigRules"]["providerRules"][0]["providerName"] = serde_json::json!("Renamed in ZCode");
+    assert_eq!(restored, expected);
+}
+
+#[test]
+fn zcode_versioned_api_configuration_and_legacy_addresses_are_detected() {
+    let home = agent_test_home("zcode-versioned-api");
+    let paths = agent_config_paths(AgentClient::ZCode, &home);
+    let updates = build_agent_updates(
+        AgentClient::ZCode, &home, 8317, DEFAULT_API_KEY, "gpt-test",
+        &test_agent_models(&["gpt-test"]), None,
+    ).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&updates[0].after).unwrap();
+    assert_eq!(
+        value["config"]["providerConfigRules"]["providerRules"][0]["config"]["api"]["baseUrl"],
+        "http://127.0.0.1:8317/v1",
+    );
+    let fresh = fresh_agent_contents(AgentClient::ZCode, 8317, DEFAULT_API_KEY, "gpt-test").unwrap();
+    let fresh: serde_json::Value = serde_json::from_str(&fresh[0]).unwrap();
+    assert_eq!(
+        fresh["config"]["providerConfigRules"]["providerRules"][0]["config"]["api"]["baseUrl"],
+        "http://127.0.0.1:8317/v1",
+    );
+    fs::create_dir_all(paths[0].parent().unwrap()).unwrap();
+    for base_url in [
+        "http://127.0.0.1:8317/v1",
+        "http://127.0.0.1:8317/v1/",
+        "http://127.0.0.1:8317",
+        "http://127.0.0.1:8317/",
+        "http://127.0.0.1:8318/v1",
+        "http://127.0.0.1:8317/other/v1",
+    ] {
+        value["config"]["providerConfigRules"]["providerRules"][0]["config"]["api"]["baseUrl"] = serde_json::json!(base_url);
+        fs::write(&paths[0], value.to_string()).unwrap();
+        assert_eq!(
+            inspect_zcode_agent_config(&paths[0], 8317, DEFAULT_API_KEY).unwrap(),
+            (matches!(base_url.trim_end_matches('/'), "http://127.0.0.1:8317" | "http://127.0.0.1:8317/v1"), Some("gpt-test".to_string())),
+            "{base_url}",
+        );
+    }
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[test]

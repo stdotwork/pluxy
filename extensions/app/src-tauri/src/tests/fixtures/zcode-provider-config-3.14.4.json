@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "config": {
+    "providerConfigRules": {
+      "providerRules": [
+        {
+          "providerId": "other",
+          "providerName": "Other provider",
+          "enabled": true,
+          "config": {
+            "group": "standard-personal",
+            "access": { "type": "api-key", "apiKey": "other-test-key" },
+            "api": { "type": "openai-responses", "baseUrl": "https://example.com/v1" },
+            "personalModelIds": ["other-model"],
+            "modelOrder": ["other-model"]
+          }
+        },
+        {
+          "providerId": "cpa-gui",
+          "providerName": "EasyCLIProxyAPI",
+          "enabled": true,
+          "config": {
+            "group": "standard-personal",
+            "access": {
+              "type": "api-key",
+              "apiKey": "cpa-test-key",
+              "apiKeyManagementUrl": "https://example.com/keys"
+            },
+            "api": {
+              "type": "anthropic-messages",
+              "baseUrl": "http://127.0.0.1:8317",
+              "headers": { "x-client-name": "test-client" }
+            },
+            "personalModelIds": ["gpt-manual", "gpt-test"],
+            "modelOrder": ["gpt-manual", "gpt-test"]
+          }
+        }
+      ]
+    },
+    "modelConfigRules": {
+      "providerModelRules": [
+        {
+          "providerId": "other",
+          "modelId": "other-model",
+          "config": { "enabled": true, "properties": { "contextWindow": 131072 } }
+        },
+        {
+          "providerId": "cpa-gui",
+          "modelId": "gpt-test",
+          "config": {
+            "properties": { "contextWindow": 200000, "supportsToolCall": true }
+          }
+        }
+      ],
+      "manualProviderModelRules": [
+        {
+          "providerId": "cpa-gui",
+          "modelId": "gpt-manual",
+          "config": {
+            "enabled": true,
+            "properties": {
+              "contextWindow": 262144,
+              "inputFormat": {
+                "supportsImage": true,
+                "supportsVideo": false,
+                "supportsPdf": true
+              },
+              "supportsJsonSchemaOutput": true,
+              "supportsNativeWebSearch": false,
+              "supportsMidConversationSystem": false
+            },
+            "optionSpecs": {
+              "reasoningLevel": { "values": ["low", "medium", "high"], "map": "{}" },
+              "maxOutputTokens": { "max": 65536 }
+            }
+          }
+        }
+      ]
+    },
+    "providerOrder": ["other", "cpa-gui"],
+    "defaultModelSelection": {
+      "providerId": "cpa-gui",
+      "modelId": "gpt-manual",
+      "options": { "reasoningLevel": "high" }
+    }
+  }
+}
