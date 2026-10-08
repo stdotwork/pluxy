@@ -38,7 +38,7 @@ pub(crate) fn agent_config_paths(client: AgentClient, home: &Path) -> Vec<PathBu
         AgentClient::ClaudeDesktop => claude_desktop_config_paths(home),
         AgentClient::Codex => vec![codex_configuration_directory(home).join("config.toml")],
         AgentClient::OpenCode => vec![opencode_config_path(home)],
-        AgentClient::OpenClaw => vec![home.join(".openclaw/openclaw.json")],
+        AgentClient::OpenClaw => vec![openclaw_agent_config_path(home)],
         AgentClient::Hermes => vec![hermes_agent_config_path(home)],
         AgentClient::DeepSeekHarness => {
             let directory = deepseek_harness_home(home);
@@ -101,6 +101,62 @@ pub(crate) fn opencode_config_path_from_environment(
         .or_else(|| candidates.iter().find(|path| path.is_file()))
         .cloned()
         .unwrap_or(json)
+}
+
+pub(crate) fn openclaw_agent_config_path(home: &Path) -> PathBuf {
+    #[cfg(test)]
+    let (custom_config, state_directory, openclaw_home): (
+        Option<PathBuf>,
+        Option<PathBuf>,
+        Option<PathBuf>,
+    ) = (None, None, None);
+    #[cfg(not(test))]
+    let custom_config = agent_configuration_environment("OPENCLAW_CONFIG_PATH");
+    #[cfg(not(test))]
+    let state_directory = agent_configuration_environment("OPENCLAW_STATE_DIR");
+    #[cfg(not(test))]
+    let openclaw_home = agent_configuration_environment("OPENCLAW_HOME");
+    openclaw_agent_config_path_from_environment(
+        home,
+        custom_config.as_deref(),
+        state_directory.as_deref(),
+        openclaw_home.as_deref(),
+    )
+}
+
+pub(crate) fn openclaw_agent_config_path_from_environment(
+    home: &Path,
+    custom_config: Option<&Path>,
+    state_directory: Option<&Path>,
+    openclaw_home: Option<&Path>,
+) -> PathBuf {
+    if let Some(path) = custom_config.filter(|path| !path.as_os_str().is_empty()) {
+        return expand_openclaw_path(home, path);
+    }
+
+    if let Some(path) = state_directory.filter(|path| !path.as_os_str().is_empty()) {
+        return expand_openclaw_path(home, path).join("openclaw.json");
+    }
+
+    openclaw_home
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| expand_openclaw_path(home, path))
+        .unwrap_or_else(|| home.to_path_buf())
+        .join(".openclaw/openclaw.json")
+}
+
+fn expand_openclaw_path(home: &Path, path: &Path) -> PathBuf {
+    let value = path.to_string_lossy();
+    if value == "~" {
+        return home.to_path_buf();
+    }
+    if let Some(suffix) = value
+        .strip_prefix("~/")
+        .or_else(|| value.strip_prefix("~\\"))
+    {
+        return home.join(suffix);
+    }
+    path.to_path_buf()
 }
 
 pub(crate) fn kimi_code_home(home: &Path) -> PathBuf {
@@ -960,6 +1016,32 @@ pub(crate) fn hermes_agent_config_path(home: &Path) -> PathBuf {
     home.join(".hermes/config.yaml")
 }
 
+fn hermes_managed_provider(root: &serde_yaml::Value) -> Option<&serde_yaml::Value> {
+    let custom_provider = root
+        .get("custom_providers")
+        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(|providers| {
+            providers.iter().find(|provider| {
+                provider.get("name").and_then(serde_yaml::Value::as_str)
+                    == Some(MANAGED_AGENT_PROVIDER_ID)
+            })
+        });
+    custom_provider.or_else(|| {
+        root.get("providers")
+            .and_then(serde_yaml::Value::as_mapping)
+            .and_then(|providers| {
+                providers
+                    .iter()
+                    .find(|(key, provider)| {
+                        key.as_str() == Some(MANAGED_AGENT_PROVIDER_ID)
+                            || provider.get("name").and_then(serde_yaml::Value::as_str)
+                                == Some(MANAGED_AGENT_PROVIDER_ID)
+                    })
+                    .map(|(_, provider)| provider)
+            })
+    })
+}
+
 pub(crate) fn inspect_agent_config(
     client: AgentClient,
     home: &Path,
@@ -1521,15 +1603,7 @@ pub(crate) fn agent_has_managed_marker(
                     .map_err(|error| format!("Failed to read Hermes configuration: {error}"))?,
             )
             .map_err(|error| format!("Failed to parse Hermes configuration: {error}"))?;
-            let provider_exists = root
-                .get("custom_providers")
-                .and_then(serde_yaml::Value::as_sequence)
-                .is_some_and(|providers| {
-                    providers.iter().any(|provider| {
-                        provider.get("name").and_then(serde_yaml::Value::as_str)
-                            == Some(MANAGED_AGENT_PROVIDER_ID)
-                    })
-                });
+            let provider_exists = hermes_managed_provider(&root).is_some();
             let model_selected = root
                 .get("model")
                 .and_then(|value| value.get("provider"))
@@ -3725,22 +3799,14 @@ pub(crate) fn inspect_hermes_agent_config(
         &fs::read_to_string(path).map_err(|error| format!("Failed to read Hermes configuration: {error}"))?,
     )
     .map_err(|error| format!("Failed to parse Hermes YAML configuration: {error}"))?;
-    let provider = root
-        .get("custom_providers")
-        .and_then(serde_yaml::Value::as_sequence)
-        .and_then(|providers| {
-            providers.iter().find(|provider| {
-                provider.get("name").and_then(serde_yaml::Value::as_str)
-                    == Some(MANAGED_AGENT_PROVIDER_ID)
-            })
-        });
+    let provider = hermes_managed_provider(&root);
     let expected_base = format!("{}/v1", managed_core_loopback_origin(port));
     let configured = provider
-        .and_then(|provider| provider.get("base_url"))
+        .and_then(|provider| provider.get("base_url").or_else(|| provider.get("baseUrl")))
         .and_then(serde_yaml::Value::as_str)
         == Some(expected_base.as_str())
         && provider
-            .and_then(|provider| provider.get("api_key"))
+            .and_then(|provider| provider.get("api_key").or_else(|| provider.get("apiKey")))
             .and_then(serde_yaml::Value::as_str)
             == Some(api_key)
         && root

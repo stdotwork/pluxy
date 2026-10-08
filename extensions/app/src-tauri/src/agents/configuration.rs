@@ -3721,6 +3721,11 @@ pub(crate) fn build_openclaw_agent_config(
         .or_insert_with(|| serde_json::json!("merge"));
     let providers = ensure_json_object_entry(models, "providers");
     let managed_provider = ensure_json_object_entry(providers, MANAGED_AGENT_PROVIDER_ID);
+    let existing_model_entries = managed_provider
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     managed_provider.insert("baseUrl".to_string(), serde_json::json!(base_url));
     managed_provider.insert("apiKey".to_string(), serde_json::json!(api_key));
     managed_provider.insert("api".to_string(), serde_json::json!("openai-completions"));
@@ -3730,10 +3735,27 @@ pub(crate) fn build_openclaw_agent_config(
             ordered_models
                 .iter()
                 .map(|model| {
-                    serde_json::json!({
-                        "id": model.name.clone(),
-                        "name": model.alias.as_deref().unwrap_or(&model.name),
-                    })
+                    let mut entry = existing_model_entries
+                        .iter()
+                        .find(|entry| {
+                            entry.get("id").and_then(serde_json::Value::as_str)
+                                == Some(model.name.as_str())
+                        })
+                        .and_then(serde_json::Value::as_object)
+                        .cloned()
+                        .unwrap_or_default();
+                    entry.insert("id".to_string(), serde_json::json!(model.name.clone()));
+                    entry.insert(
+                        "name".to_string(),
+                        serde_json::json!(model.alias.as_deref().unwrap_or(&model.name)),
+                    );
+                    if let Some(context_window) = model.context_window {
+                        entry.insert(
+                            "contextWindow".to_string(),
+                            serde_json::json!(context_window),
+                        );
+                    }
+                    serde_json::Value::Object(entry)
                 })
                 .collect(),
         ),
@@ -3747,15 +3769,21 @@ pub(crate) fn build_openclaw_agent_config(
     );
     let model_catalog = ensure_json_object_entry(defaults, "models");
     let managed_prefix = format!("{MANAGED_AGENT_PROVIDER_ID}/");
+    let existing_catalog = model_catalog.clone();
     model_catalog.retain(|name, _| !name.starts_with(&managed_prefix));
     for model in &ordered_models {
         let name = format!("{MANAGED_AGENT_PROVIDER_ID}/{}", model.name);
-        let value = model
-            .alias
-            .as_deref()
-            .map(|alias| serde_json::json!({ "alias": alias }))
-            .unwrap_or_else(|| serde_json::json!({}));
-        model_catalog.insert(name, value);
+        let mut entry = existing_catalog
+            .get(&name)
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(alias) = model.alias.as_deref() {
+            entry.insert("alias".to_string(), serde_json::json!(alias));
+        } else {
+            entry.remove("alias");
+        }
+        model_catalog.insert(name, serde_json::Value::Object(entry));
     }
     let rendered = render_agent_json(root.clone(), "OpenClaw configuration")?;
     let comments = existing.map(extract_json5_comments).unwrap_or_default();
@@ -3865,6 +3893,19 @@ pub(crate) fn build_hermes_agent_config(
     let mapping = root
         .as_mapping_mut()
         .ok_or_else(|| "Hermes config.yaml root must be a mapping".to_string())?;
+    let dictionary_provider = mapping
+        .get("providers")
+        .and_then(serde_norway::Value::as_mapping)
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find(|(key, provider)| {
+                    key.as_str() == Some(MANAGED_AGENT_PROVIDER_ID)
+                        || provider.get("name").and_then(serde_norway::Value::as_str)
+                            == Some(MANAGED_AGENT_PROVIDER_ID)
+                })
+                .and_then(|(_, provider)| provider.as_mapping().cloned())
+        });
     let providers = ensure_yaml_sequence_entry(mapping, "custom_providers");
     let mut managed_provider = None;
     let mut retained_providers = Vec::with_capacity(providers.len());
@@ -3879,19 +3920,63 @@ pub(crate) fn build_hermes_agent_config(
             None => {}
         }
     }
-    let provider_models = ordered_agent_models(available_models, model)
-        .into_iter()
-        .map(|model| (model.name, serde_json::json!({})))
-        .collect::<serde_json::Map<_, _>>();
-    let canonical_provider = serde_norway::to_value(serde_json::json!({
+    let mut managed_provider = managed_provider.or(dictionary_provider);
+    if let Some(provider) = managed_provider.as_mut() {
+        for (legacy_key, current_key) in [
+            ("baseUrl", "base_url"),
+            ("apiKey", "api_key"),
+            ("apiMode", "api_mode"),
+            ("maxTokens", "max_tokens"),
+            ("contextLength", "context_length"),
+        ] {
+            let legacy_key = serde_norway::Value::String(legacy_key.to_string());
+            let current_key = serde_norway::Value::String(current_key.to_string());
+            if provider.contains_key(&current_key) {
+                provider.remove(&legacy_key);
+            } else if let Some(value) = provider.remove(&legacy_key) {
+                provider.insert(current_key, value);
+            }
+        }
+    }
+    let ordered_models = ordered_agent_models(available_models, model);
+    let existing_model_metadata = managed_provider
+        .as_ref()
+        .and_then(|provider| provider.get("models"))
+        .and_then(serde_norway::Value::as_mapping);
+    let mut provider_models = serde_norway::Mapping::new();
+    for model in &ordered_models {
+        let model_key = serde_norway::Value::String(model.name.clone());
+        let mut metadata = existing_model_metadata
+            .and_then(|models| models.get(&model_key))
+            .and_then(serde_norway::Value::as_mapping)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(context_window) = model.context_window {
+            let value = serde_norway::to_value(context_window)
+                .map_err(|error| format!("Failed to generate Hermes model metadata: {error}"))?;
+            metadata.insert(
+                serde_norway::Value::String("context_length".to_string()),
+                value,
+            );
+        }
+        provider_models.insert(model_key, serde_norway::Value::Mapping(metadata));
+    }
+    let mut canonical_provider = serde_norway::to_value(serde_json::json!({
         "name": MANAGED_AGENT_PROVIDER_ID,
         "base_url": base_url,
         "api_key": api_key,
         "api_mode": "chat_completions",
         "model": model,
-        "models": provider_models
+        "models": {}
     }))
     .map_err(|error| format!("Failed to generate Hermes provider: {error}"))?;
+    canonical_provider
+        .as_mapping_mut()
+        .ok_or_else(|| "Failed to generate Hermes provider: root is not a mapping".to_string())?
+        .insert(
+            serde_norway::Value::String("models".to_string()),
+            serde_norway::Value::Mapping(provider_models),
+        );
     let canonical_provider = canonical_provider
         .as_mapping()
         .ok_or_else(|| "Failed to generate Hermes provider: root is not a mapping".to_string())?;
