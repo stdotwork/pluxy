@@ -11059,9 +11059,8 @@ body.table-col-resizing * {
   align-items: center;
   gap: 12px;
   min-width: 0;
-  padding: 0 12px;
-  border-radius: 6px;
-  background: var(--theme-f4f1ea);
+  padding: 0;
+  background: transparent;
 }
 
 .install-dialog-phase span {

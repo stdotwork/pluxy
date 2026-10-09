@@ -258,7 +258,7 @@ export function AppUpdateDialog() {
             </div>
             <div className="install-progress-meta">
               <strong>{percent === null ? t('kernel.dialog.unknownProgress') : `${percent.toFixed(1)}%`}</strong>
-              <span>{task.message || phaseLabel}</span>
+              {task.message ? <span>{task.message}</span> : null}
             </div>
             {error ? (
               <MessageNotice message={error} />
