@@ -1947,6 +1947,7 @@ pub(crate) fn thinking_aliases_from_value(
         .as_mapping()
         .ok_or_else(|| "Kernel configuration root must be a YAML mapping".to_string())?;
     let mut entries = Vec::new();
+    let revision = model_alias_value_revision(document)?;
     if let Some(oauth_aliases) = yaml_mapping_value(root, "oauth-model-alias") {
         let oauth_aliases = oauth_aliases
             .as_mapping()
@@ -1957,7 +1958,7 @@ pub(crate) fn thinking_aliases_from_value(
                 .as_sequence()
                 .ok_or_else(|| format!("oauth-model-alias.{channel} must be an array"))?;
             let (provider, kind, protocol) = oauth_alias_channel_details(channel);
-            for entry in channel_aliases {
+            for (model_index, entry) in channel_aliases.iter().enumerate() {
                 let Some(mapping) = entry.as_mapping() else {
                     continue;
                 };
@@ -1976,6 +1977,7 @@ pub(crate) fn thinking_aliases_from_value(
                     continue;
                 };
                 entries.push(ThinkingAliasEntry {
+                    mapping_id: model_alias_mapping_id(&revision, channel, 0, model_index),
                     source_model: source_model.to_string(),
                     alias: alias.to_string(),
                     effort: find_thinking_alias_effort(root, alias, &protocol),
@@ -2044,6 +2046,7 @@ pub(crate) fn speed_aliases_from_value(
         .as_mapping()
         .ok_or_else(|| "Kernel configuration root must be a YAML mapping".to_string())?;
     let mut entries = Vec::new();
+    let revision = model_alias_value_revision(document)?;
     if let Some(oauth_aliases) = yaml_mapping_value(root, "oauth-model-alias") {
         let oauth_aliases = oauth_aliases
             .as_mapping()
@@ -2054,7 +2057,7 @@ pub(crate) fn speed_aliases_from_value(
                 .as_sequence()
                 .ok_or_else(|| format!("oauth-model-alias.{channel} must be an array"))?;
             let (provider, kind, protocol) = oauth_alias_channel_details(channel);
-            for entry in channel_aliases {
+            for (model_index, entry) in channel_aliases.iter().enumerate() {
                 let Some(mapping) = entry.as_mapping() else {
                     continue;
                 };
@@ -2077,6 +2080,7 @@ pub(crate) fn speed_aliases_from_value(
                     continue;
                 };
                 entries.push(SpeedAliasEntry {
+                    mapping_id: model_alias_mapping_id(&revision, channel, 0, model_index),
                     source_model: source_model.to_string(),
                     alias: alias.to_string(),
                     service_tier,
@@ -2124,6 +2128,7 @@ pub(crate) fn collect_config_thinking_alias_entries(
     protocol: &str,
     entries: &mut Vec<ThinkingAliasEntry>,
 ) -> Result<(), String> {
+    let revision = model_alias_value_revision(&serde_norway::Value::Mapping(root.clone()))?;
     let Some(providers) = yaml_mapping_value(root, section) else {
         return Ok(());
     };
@@ -2142,7 +2147,7 @@ pub(crate) fn collect_config_thinking_alias_entries(
         let models = models
             .as_sequence()
             .ok_or_else(|| format!("{section}.models must be an array"))?;
-        for model in models {
+        for (model_index, model) in models.iter().enumerate() {
             let Some((source_model, alias, _)) = configured_model_identity(model) else {
                 continue;
             };
@@ -2154,6 +2159,7 @@ pub(crate) fn collect_config_thinking_alias_entries(
                 continue;
             }
             entries.push(ThinkingAliasEntry {
+                mapping_id: model_alias_mapping_id(&revision, section, provider_index, model_index),
                 source_model,
                 alias,
                 effort,
@@ -2174,6 +2180,7 @@ pub(crate) fn collect_config_speed_alias_entries(
     protocol: &str,
     entries: &mut Vec<SpeedAliasEntry>,
 ) -> Result<(), String> {
+    let revision = model_alias_value_revision(&serde_norway::Value::Mapping(root.clone()))?;
     let Some(providers) = yaml_mapping_value(root, section) else {
         return Ok(());
     };
@@ -2192,7 +2199,7 @@ pub(crate) fn collect_config_speed_alias_entries(
         let models = models
             .as_sequence()
             .ok_or_else(|| format!("{section}.models must be an array"))?;
-        for model in models {
+        for (model_index, model) in models.iter().enumerate() {
             let Some((source_model, alias, _)) = configured_model_identity(model) else {
                 continue;
             };
@@ -2203,6 +2210,7 @@ pub(crate) fn collect_config_speed_alias_entries(
                 continue;
             };
             entries.push(SpeedAliasEntry {
+                mapping_id: model_alias_mapping_id(&revision, section, provider_index, model_index),
                 source_model,
                 alias,
                 service_tier,
@@ -2424,10 +2432,7 @@ pub(crate) fn add_model_alias_to_yaml(
     let root = updated
         .as_mapping_mut()
         .ok_or_else(|| "Kernel configuration root must be a YAML mapping".to_string())?;
-
-    if configured_model_alias_exists(root, alias) {
-        return Err(format!("Alias model {alias} already exists"));
-    }
+    let sharing_alias = configured_model_alias_exists(root, alias);
 
     match &source.location {
         ThinkingAliasSourceLocation::Oauth {
@@ -2450,7 +2455,9 @@ pub(crate) fn add_model_alias_to_yaml(
     }
 
     let scope = AliasPayloadScope::for_protocol(&source.source.protocol);
-    remove_alias_payload_options(root, alias, &scope)?;
+    if !sharing_alias {
+        remove_alias_payload_options(root, alias, &scope)?;
+    }
     if !effort.is_empty() {
         let mut params_mapping = serde_norway::Mapping::new();
         insert_thinking_effort_params(&mut params_mapping, &source.source, effort)?;
@@ -2524,10 +2531,7 @@ pub(crate) fn add_speed_alias_to_yaml(
     let root = updated
         .as_mapping_mut()
         .ok_or_else(|| "Kernel configuration root must be a YAML mapping".to_string())?;
-
-    if configured_model_alias_exists(root, alias) {
-        return Err(format!("Alias model {alias} already exists"));
-    }
+    let sharing_alias = configured_model_alias_exists(root, alias);
 
     match &source.location {
         ThinkingAliasSourceLocation::Oauth {
@@ -2548,11 +2552,13 @@ pub(crate) fn add_speed_alias_to_yaml(
         )?,
     }
 
-    remove_alias_payload_options(
+    if !sharing_alias {
+        remove_alias_payload_options(
         root,
         alias,
         &AliasPayloadScope::for_protocol(&source.source.protocol),
-    )?;
+        )?;
+    }
     let mut params_mapping = serde_norway::Mapping::new();
     params_mapping.insert(
         yaml_key("service_tier"),
@@ -2919,7 +2925,7 @@ pub(crate) fn remove_config_speed_alias(
     Ok(removed)
 }
 
-struct AliasPayloadScope {
+pub(crate) struct AliasPayloadScope {
     protocol: Option<String>,
     preserved_protocols: BTreeSet<String>,
 }
@@ -2932,7 +2938,7 @@ impl AliasPayloadScope {
         }
     }
 
-    fn after_removal(root: &serde_norway::Mapping, alias: &str, channel: Option<&str>) -> Self {
+    pub(crate) fn after_removal(root: &serde_norway::Mapping, alias: &str, channel: Option<&str>) -> Self {
         let mut preserved_protocols = BTreeSet::new();
         if let Some(channels) =
             yaml_mapping_value(root, "oauth-model-alias").and_then(serde_norway::Value::as_mapping)
@@ -2980,7 +2986,7 @@ impl AliasPayloadScope {
         }
     }
 
-    fn matches(&self, model: &serde_norway::Value, alias: &str) -> bool {
+    pub(crate) fn matches(&self, model: &serde_norway::Value, alias: &str) -> bool {
         if !thinking_payload_model_name_matches(model, alias) {
             return false;
         }
@@ -3005,7 +3011,7 @@ impl AliasPayloadScope {
     }
 }
 
-fn remove_alias_payload_options(
+pub(crate) fn remove_alias_payload_options(
     root: &mut serde_norway::Mapping,
     alias: &str,
     scope: &AliasPayloadScope,

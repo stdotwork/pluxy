@@ -30,6 +30,7 @@ import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 type PresetThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 type ThinkingAliasEntry = {
+  mappingId?: string;
   sourceModel: string;
   alias: string;
   effort: string | null;
@@ -39,6 +40,7 @@ type ThinkingAliasEntry = {
 };
 
 type SpeedAliasEntry = {
+  mappingId?: string;
   sourceModel: string;
   alias: string;
   serviceTier: string;
@@ -87,9 +89,9 @@ export const combineModelAliasEntries = (
 ): AliasListEntry[] => {
   const entries = new Map<string, AliasListEntry>();
   const entryKey = (
-    entry: Pick<ThinkingAliasEntry, 'kind' | 'provider' | 'sourceModel' | 'alias' | 'oauthChannel'>,
+    entry: Pick<ThinkingAliasEntry, 'mappingId' | 'kind' | 'provider' | 'sourceModel' | 'alias' | 'oauthChannel'>,
   ) => (
-    [entry.oauthChannel ?? '', entry.kind, entry.provider, entry.sourceModel, entry.alias]
+    entry.mappingId ?? [entry.oauthChannel ?? '', entry.kind, entry.provider, entry.sourceModel, entry.alias]
       .map((value) => value.toLocaleLowerCase())
       .join('\u0000')
   );
@@ -426,6 +428,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
           sourceId: selectedSource.id, alias: normalizedAlias,
           effort: normalizedEffort, fast: fastEnabled, originalAlias: editingEntry.alias,
           expectedRevision: editingRevision,
+          originalMappingId: editingEntry.mappingId,
         });
         setNotice(t('aliases.updated', { alias: normalizedAlias }));
       } else if (normalizedEffort) {
@@ -508,7 +511,9 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
     setError('');
     setNotice('');
     try {
-      const context = await invoke<ModelAliasEditContext>('get_model_alias_edit_source', { alias: entry.alias });
+      const context = await invoke<ModelAliasEditContext>('get_model_alias_edit_source', {
+        alias: entry.alias, mappingId: entry.mappingId,
+      });
       const source = context.source;
       setEditingEntry(entry);
       setEditingSource(source);
@@ -540,11 +545,13 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
         await invoke<ThinkingAliasEntry[]>('delete_thinking_alias', {
           alias: entry.alias,
           oauthChannel: entry.oauthChannel,
+          mappingId: entry.mappingId,
         });
       } else {
         await invoke<SpeedAliasEntry[]>('delete_speed_alias', {
           alias: entry.alias,
           oauthChannel: entry.oauthChannel,
+          mappingId: entry.mappingId,
         });
       }
       setNotice(t('aliases.deleted', { alias: entry.alias }));
@@ -832,7 +839,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
                 <span>{t('aliases.empty.description')}</span>
               </div>
             ) : entries.map((entry) => (
-              <article className="thinking-alias-row" key={`${entry.kind}:${entry.provider}:${entry.alias}`}>
+              <article className="thinking-alias-row" key={entry.mappingId ?? `${entry.kind}:${entry.provider}:${entry.sourceModel}:${entry.alias}`}>
                 <div className="thinking-alias-route">
                   <div className="thinking-alias-route-source">
                     <span title={entry.sourceModel}>{entry.sourceModel}</span>

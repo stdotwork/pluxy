@@ -1260,6 +1260,7 @@ struct CodexModelDefinition {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ThinkingAliasEntry {
+    mapping_id: String,
     source_model: String,
     alias: String,
     effort: Option<String>,
@@ -1271,6 +1272,7 @@ struct ThinkingAliasEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SpeedAliasEntry {
+    mapping_id: String,
     source_model: String,
     alias: String,
     service_tier: String,
