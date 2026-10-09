@@ -336,6 +336,7 @@ function AppContent() {
           <nav className="nav-section" aria-label={t('app.navigation')}>
             {pages.filter((page) => page.id !== 'easy').map((page) => {
               const Icon = page.icon;
+              const isActive = page.id === active;
               const locked = !canOpenAppPage(page.id, coreReady);
               const updateIndicator = page.id === 'versions'
                 ? appUpdateIndicatorState(hasUpdate, coreHasUpdate, appUpdateProcessing)
@@ -345,19 +346,20 @@ function AppContent() {
                   key={page.id}
                   type="button"
                   className={[
-                    page.id === active ? 'active' : '',
+                    isActive ? 'active' : '',
                     locked ? 'locked' : '',
                   ]
                     .filter(Boolean)
                     .join(' ')}
+                  aria-current={isActive ? 'page' : undefined}
                   disabled={locked}
                   title={locked ? t('app.nav.lockedHint') : undefined}
                   onClick={() => select(page.id)}
                 >
-                  <Icon size={17} aria-hidden="true" />
+                  <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
                   <span>{t(page.labelKey)}</span>
                   {locked ? (
-                    <Lock size={13} className="nav-lock-icon" aria-hidden="true" />
+                    <Lock size={12} strokeWidth={1.75} className="nav-lock-icon" aria-hidden="true" />
                   ) : updateIndicator ? (
                     <i
                       className={`nav-update-indicator ${updateIndicator}`}
