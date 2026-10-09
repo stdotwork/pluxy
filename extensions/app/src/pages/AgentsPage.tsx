@@ -736,7 +736,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       setModelByClient((current) => {
         const next = {
           ...current,
-          [client]: resolveAgentModelSelection(nextModels, current[client] ?? preferredModel),
+          [client]: resolveAgentModelSelection(nextModels, current[client] || preferredModel),
         };
         writeAgentModelSelections(next);
         return next;
@@ -840,6 +840,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
+  const missingModelHint = !modelLoading && savedSelectedModel && !selectedModelOption
+    ? t('agents.error.selectionGone') : '';
   const isPiClient = selected === 'pi';
   const isDeepSeekHarnessClient = selected === 'deepseek-harness';
   const hasIndependentCliAndApp = selected === 'codex' || selected === 'opencode' || isDeepSeekHarnessClient;
@@ -1894,7 +1896,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                 <label htmlFor="embedded-agent-model">{t(isDeepSeekHarnessClient ? 'agents.harness.defaultModel' : 'agents.useModel')}</label>
                 <AgentModelPicker
                   models={isClaudeModelMappingClient ? claudeMappingModels : models}
-                  value={isClaudeModelMappingClient ? claudeModelMappingsDraft.sonnet : selectedModel}
+                  value={isClaudeModelMappingClient ? claudeModelMappingsDraft.sonnet : savedSelectedModel}
+                  preserveValue={!isClaudeModelMappingClient}
                   loading={modelLoading}
                   error={modelError}
                   disabled={busy || !canConfigureActiveClient}
@@ -1902,6 +1905,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                   onRefresh={refreshModels}
                 />
                 {codexCatalogButton}{harnessCatalogButton}
+                {!isClaudeModelMappingClient && missingModelHint ? <span className="agent-model-hint" role="status">{missingModelHint}</span> : null}
               </div>}
 
               {isDeepSeekHarnessClient ? <p className="agent-model-hint">{t('agents.harness.defaultHint')}</p> : null}
@@ -1994,7 +1998,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                   </div>
                   <AgentModelPicker
                     models={models}
-                    value={selectedModel}
+                    value={savedSelectedModel}
+                    preserveValue
                     loading={modelLoading}
                     error={modelError}
                     disabled={busy || !canConfigureActiveClient}
@@ -2002,6 +2007,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                     onRefresh={refreshModels}
                   />
                   {modelHint ? <span className="agent-model-hint agent-model-status" title={modelHint} aria-live="polite">{modelHint}</span> : null}
+                  {missingModelHint ? <span className="agent-model-hint" role="status">{missingModelHint}</span> : null}
                   {isDeepSeekHarnessClient ? <p className="agent-model-hint">{t('agents.harness.defaultHint')}</p> : null}
                   {harnessCatalogButton}
                   {selected === 'codex' ? (

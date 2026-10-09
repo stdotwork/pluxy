@@ -46,11 +46,20 @@ describe('智能体模型选择器', () => {
     expect(agentModelAlias(models, 'gpt-5.2')).toBe('');
   });
 
-  test('没有历史选择时默认第一项，旧选择失效时也回退第一项', () => {
+  test('只有没有历史选择时默认第一项，暂时不可用的选择保持不变', () => {
     expect(resolveAgentModelSelection(models, '')).toBe('claude-sonnet-4-5');
-    expect(resolveAgentModelSelection(models, 'removed-model')).toBe('claude-sonnet-4-5');
+    expect(resolveAgentModelSelection(models, 'removed-model')).toBe('removed-model');
     expect(resolveAgentModelSelection(models, 'GPT-5.2-CODEX')).toBe('gpt-5.2-codex');
-    expect(resolveAgentModelSelection([], 'gpt-5.2')).toBe('');
+    expect(resolveAgentModelSelection([], 'gpt-5.2')).toBe('gpt-5.2');
+    expect(resolveAgentModelSelection([], '')).toBe('');
+  });
+
+  test('列表清空、缺少原模型和恢复后仍保留原选择', () => {
+    let selected = 'gpt-5.2-codex';
+    for (const refreshed of [[], models.slice(2), models]) {
+      selected = resolveAgentModelSelection(refreshed, selected);
+      expect(selected).toBe('gpt-5.2-codex');
+    }
   });
 
   test('配置前只能解析模型列表中真实存在的模型', () => {

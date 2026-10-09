@@ -71,6 +71,7 @@ mockIPC(async (cmd,args:any) => {
    nativeOauth=true; return {outcome:'updated'};
  }
  if(cmd==='get_agent_models') {
+   if((window as any).fixtureModelsOverride !== undefined)return (window as any).fixtureModelsOverride;
    if(params.has('claude-alias-layout'))return claudeAliasLayoutModels;
    if(params.has('no-models'))return [];
    if(params.has('no-core'))throw new Error('CPA core is offline');
