@@ -1242,6 +1242,8 @@ export const en: Record<MessageKey, string> = {
   'agents.launchDirectory.directoryRequired': 'Select a working directory first',
   'agents.launchDirectory.launch': 'Start {client}',
   'agents.executablePath.label': 'Program path',
+  'agents.executablePath.cliTitle': 'Command-line program path',
+  'agents.executablePath.desktopTitle': 'Desktop program path',
   'agents.executablePath.placeholder': 'Detected automatically; enter the full executable path if detection fails',
   'agents.executablePath.save': 'Apply path and detect again',
   'agents.executablePath.clear': 'Clear manual path',

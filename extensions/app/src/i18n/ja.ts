@@ -1242,6 +1242,8 @@ export const jaOverrides = {
   'agents.launchDirectory.directoryRequired': '先に作業ディレクトリを選択してください',
   'agents.launchDirectory.launch': '{client} を起動',
   'agents.executablePath.label': 'プログラムパス',
+  'agents.executablePath.cliTitle': 'CLI プログラムのパス',
+  'agents.executablePath.desktopTitle': 'デスクトップアプリのパス',
   'agents.executablePath.placeholder': '自動検出。検出できない場合は実行ファイルの完全パスを入力してください',
   'agents.executablePath.save': 'パスを適用して再検出',
   'agents.executablePath.clear': '手動パスをクリア',

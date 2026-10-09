@@ -108,7 +108,7 @@ const path = require('node:path');
       await page.evaluate(() => window.fixtureFinishRestart());
       await button('重启 App').waitFor();
       await pending();
-      assert.deepEqual((await calls('restart_agent_app')).map(call => call.args), [{ client: 'codex' }]);
+      assert.deepEqual((await calls('restart_agent_app')).map(call => call.args), [{ client: 'codex', executablePath: null }]);
       assert.equal((await calls('update_agent_config')).length, 0);
 
       await tab('配置管理').click();
@@ -135,7 +135,7 @@ const path = require('node:path');
         assert.ok(await button('重启 App').isEnabled());
         await button('重启 App').click();
         await page.waitForFunction(() => window.fixtureCalls.some(call => call.cmd === 'restart_agent_app'));
-        assert.deepEqual((await calls('restart_agent_app'))[0].args, { client });
+        assert.deepEqual((await calls('restart_agent_app'))[0].args, { client, executablePath: null });
         if (client === 'opencode') assert.ok(await button('启动 CLI').isDisabled());
       }
       await open(mode + 'not-installed');
@@ -202,7 +202,7 @@ const path = require('node:path');
       assert.ok(await button('安装 Pi 插件').isEnabled());
       await open(mode + 'client=pi&config-only=pi&no-plugin&fresh');
       assert.ok(await button('安装 Pi 插件').isEnabled());
-      assert.ok(await button('启动 CLI').isDisabled());
+      assert.ok(await page.locator('.agent-launch-actions button').first().isDisabled());
       await button('安装 Pi 插件').click();
       await page.waitForFunction(() => window.fixtureCalls.some(call => call.cmd === 'install_pi_provider'));
 

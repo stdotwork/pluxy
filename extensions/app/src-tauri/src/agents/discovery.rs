@@ -1061,12 +1061,31 @@ pub(crate) fn inspect_agent_config(
     inspect_agent_config_with_executable(client, home, port, api_key, None)
 }
 
+pub(crate) fn manual_desktop_path(path: Option<&Path>) -> Option<&Path> {
+    path.filter(|path| {
+        path.is_file()
+            || (cfg!(target_os = "macos") && path.is_dir()
+                && path.extension().is_some_and(|extension| extension == "app"))
+    })
+}
+
 pub(crate) fn inspect_agent_config_with_executable(
     client: AgentClient,
     home: &Path,
     port: u16,
     api_key: &str,
     executable_override: Option<&Path>,
+) -> AgentConfigStatus {
+    inspect_agent_config_with_executables(client, home, port, api_key, executable_override, None)
+}
+
+pub(crate) fn inspect_agent_config_with_executables(
+    client: AgentClient,
+    home: &Path,
+    port: u16,
+    api_key: &str,
+    executable_override: Option<&Path>,
+    desktop_override: Option<&Path>,
 ) -> AgentConfigStatus {
     let paths = agent_config_paths(client, home);
     let config_exists = paths.iter().any(|path| path.is_file());
@@ -1106,7 +1125,9 @@ pub(crate) fn inspect_agent_config_with_executable(
             ),
         ),
     };
-    let executable = executable_override.filter(|path| path.is_file()).map(Path::to_path_buf)
+    let executable = executable_override.filter(|path| path.is_file()
+        || (matches!(client, AgentClient::ClaudeDesktop | AgentClient::ZCode | AgentClient::WorkBuddy)
+            && manual_desktop_path(Some(path)).is_some())).map(Path::to_path_buf)
         .or_else(|| find_agent_executable(client, home));
     let cli_version = if client == AgentClient::ZCode {
         find_named_agent_executable(home, &["zcode"])
@@ -1121,13 +1142,17 @@ pub(crate) fn inspect_agent_config_with_executable(
         None
     };
     let codex_app_installation = (client == AgentClient::Codex)
-        .then(|| find_codex_app_installation(home))
+        .then(|| manual_desktop_path(desktop_override)
+            .map(|path| DesktopAppTarget::Application(path.to_path_buf()))
+            .or_else(|| find_codex_app_installation(home)))
         .flatten();
     let opencode_desktop_application = (client == AgentClient::OpenCode)
-        .then(|| find_opencode_desktop_application(home))
+        .then(|| manual_desktop_path(desktop_override).map(Path::to_path_buf)
+            .or_else(|| find_opencode_desktop_application(home)))
         .flatten();
     let harness_desktop_application = (client == AgentClient::DeepSeekHarness)
-        .then(|| find_deepseek_harness_desktop_application(home))
+        .then(|| manual_desktop_path(desktop_override).map(Path::to_path_buf)
+            .or_else(|| find_deepseek_harness_desktop_application(home)))
         .flatten();
     let app_version = match client {
         AgentClient::ClaudeDesktop => read_claude_desktop_version(home),

@@ -64,8 +64,9 @@ pub(crate) fn inspect_agent_config_statuses_with_overrides(
                     };
                     let status = match target {
                         AgentStatusDetectionTarget::Client(client) => {
-                            inspect_agent_config_with_executable(client, home, config.port, api_key,
-                                executable_overrides.get(client.id()).map(Path::new))
+                            inspect_agent_config_with_executables(client, home, config.port, api_key,
+                                executable_overrides.get(client.id()).map(Path::new),
+                                executable_overrides.get(&format!("{}:app", client.id())).map(Path::new))
                         }
                         AgentStatusDetectionTarget::PiProvider => {
                             inspect_pi_provider_status_with_executable(home, config.port, api_key,

@@ -1242,6 +1242,8 @@ export const zhCN = {
   'agents.launchDirectory.directoryRequired': '请先选择工作目录',
   'agents.launchDirectory.launch': '启动 {client}',
   'agents.executablePath.label': '程序路径',
+  'agents.executablePath.cliTitle': '命令行程序路径',
+  'agents.executablePath.desktopTitle': '桌面程序路径',
   'agents.executablePath.placeholder': '自动检测；失败时可填写可执行文件完整路径',
   'agents.executablePath.save': '应用路径并重新检测',
   'agents.executablePath.clear': '清除手动路径',
