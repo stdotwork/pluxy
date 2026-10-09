@@ -1,0 +1,580 @@
+/*
+ * App sidebar — a quiet source list.
+ *
+ * Rules this file follows:
+ * - One vertical axis: 12px gutter + 10px row inset. Logo, nav icons, footer
+ *   icons and the language icon all start on it.
+ * - One selection language: a raised surface (white in light, lifted glass in
+ *   dark). The active nav row and the active theme segment share it.
+ * - Rows have no borders. Hierarchy comes from weight, tone and spacing.
+ * - Navigation is used dozens of times a day, so nothing moves: only colour
+ *   and background change, and press feedback is instant.
+ *
+ * This is the only stylesheet that styles the sidebar; keep it that way.
+ */
+
+:root {
+  --sidebar-bg: #f7f8fa;
+  --sidebar-edge: rgba(15, 23, 42, 0.07);
+  --sidebar-text: #334155;
+  --sidebar-text-strong: #0f172a;
+  --sidebar-text-subtle: #55657a;
+  --sidebar-icon: #64748b;
+  --sidebar-hover-bg: rgba(15, 23, 42, 0.045);
+  --sidebar-press-bg: rgba(15, 23, 42, 0.075);
+  --sidebar-selected-bg: #ffffff;
+  --sidebar-selected-shadow: 0 0 0 1px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.06),
+    0 2px 6px -2px rgba(15, 23, 42, 0.06);
+  --sidebar-track-bg: rgba(15, 23, 42, 0.05);
+  --sidebar-thumb-bg: #ffffff;
+  --sidebar-logo-ring: 0 0 0 1px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.08);
+  --sidebar-popover-bg: #ffffff;
+  --sidebar-popover-edge: rgba(15, 23, 42, 0.08);
+  --sidebar-popover-shadow: 0 12px 32px -8px rgba(15, 23, 42, 0.2), 0 2px 6px rgba(15, 23, 42, 0.06);
+  --sidebar-focus: color-mix(in srgb, var(--ui-accent) 70%, transparent);
+  --sidebar-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+:root[data-theme='dark'] {
+  --sidebar-bg: #0f1218;
+  --sidebar-edge: rgba(255, 255, 255, 0.06);
+  --sidebar-text: #b7c2d3;
+  --sidebar-text-strong: #f8fafc;
+  --sidebar-text-subtle: #8593a8;
+  --sidebar-icon: #8593a8;
+  --sidebar-hover-bg: rgba(255, 255, 255, 0.045);
+  --sidebar-press-bg: rgba(255, 255, 255, 0.08);
+  --sidebar-selected-bg: rgba(255, 255, 255, 0.075);
+  --sidebar-selected-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --sidebar-track-bg: rgba(255, 255, 255, 0.05);
+  --sidebar-thumb-bg: rgba(255, 255, 255, 0.13);
+  --sidebar-logo-ring: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --sidebar-popover-bg: #1a1e27;
+  --sidebar-popover-edge: rgba(255, 255, 255, 0.08);
+  --sidebar-popover-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* ---------- Shell ---------- */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  min-height: 0;
+  height: 100vh;
+  flex-direction: column;
+  padding: 16px 12px 12px;
+  border-right: 1px solid var(--sidebar-edge);
+  background: var(--sidebar-bg);
+  color: var(--sidebar-text);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.sidebar button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sidebar button:focus-visible {
+  outline: 2px solid var(--sidebar-focus);
+  outline-offset: -2px;
+}
+
+/* ---------- Brand ---------- */
+
+.sidebar-brand {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-bottom: 18px;
+  padding: 2px 10px;
+}
+
+.sidebar .brand-mark {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: var(--sidebar-logo-ring);
+}
+
+.sidebar-brand-text {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sidebar-brand-text strong,
+.sidebar-brand-text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-brand-text strong {
+  color: var(--sidebar-text-strong);
+  font-size: 14px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 18px;
+  letter-spacing: -0.01em;
+}
+
+.sidebar-brand-text span {
+  color: var(--sidebar-text-subtle);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* ---------- Rows (nav items and footer links share one style) ---------- */
+
+.nav-section {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 2px;
+  /* Room for the selected row's ring and shadow inside the scroll clip. */
+  margin: 0 -2px;
+  padding: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.nav-section button,
+.sidebar-link {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sidebar-text);
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-regular);
+  line-height: 20px;
+  text-align: left;
+  transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.nav-section button > svg:first-child,
+.sidebar-link > svg:first-child {
+  flex: none;
+  color: var(--sidebar-icon);
+  transition: color 150ms ease;
+}
+
+.nav-section button > span,
+.sidebar-link > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (hover: hover) {
+  .nav-section button:not(:disabled, .active):hover,
+  .sidebar-link:hover {
+    background: var(--sidebar-hover-bg);
+    color: var(--sidebar-text-strong);
+  }
+
+  .nav-section button:not(:disabled, .active):hover > svg:first-child,
+  .sidebar-link:hover > svg:first-child {
+    color: var(--sidebar-text);
+  }
+}
+
+/* Press feedback lands on pointer-down, with no easing in the way. */
+.nav-section button:not(:disabled, .active):active,
+.sidebar-link:active {
+  background: var(--sidebar-press-bg);
+  transition-duration: 0ms;
+}
+
+.nav-section button.active {
+  background: var(--sidebar-selected-bg);
+  box-shadow: var(--sidebar-selected-shadow);
+  color: var(--sidebar-text-strong);
+  font-weight: var(--font-weight-medium);
+}
+
+.nav-section button.active > svg:first-child {
+  color: var(--ui-accent);
+}
+
+.nav-section button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.nav-lock-icon {
+  flex: none;
+  color: var(--sidebar-icon);
+}
+
+.nav-update-indicator {
+  display: block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-right: 2px;
+  border-radius: 50%;
+  background: var(--amber-color);
+}
+
+.nav-update-indicator.processing {
+  background: var(--ui-accent);
+  animation: sidebar-indicator-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes sidebar-indicator-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ---------- Footer ---------- */
+
+.sidebar-bottom {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+
+.sidebar-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-contact > svg:last-child {
+  flex: none;
+  color: var(--sidebar-icon);
+  opacity: 0.7;
+  transition: opacity 150ms ease;
+}
+
+.sidebar-contact:hover > svg:last-child {
+  opacity: 1;
+}
+
+.sidebar-utility {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sidebar-edge);
+}
+
+/* Language: a borderless popup button, menu grows from its corner. */
+
+.sidebar-language {
+  position: relative;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.sidebar-language-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--sidebar-text);
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-regular);
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.sidebar-language-trigger > svg {
+  flex: none;
+  color: var(--sidebar-icon);
+}
+
+.sidebar-language-trigger > svg:last-child {
+  margin-left: -4px;
+}
+
+.sidebar-language-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-language-trigger[aria-expanded='true'] {
+  background: var(--sidebar-hover-bg);
+  color: var(--sidebar-text-strong);
+}
+
+@media (hover: hover) {
+  .sidebar-language-trigger:hover {
+    background: var(--sidebar-hover-bg);
+    color: var(--sidebar-text-strong);
+  }
+}
+
+.sidebar-language-trigger:active {
+  background: var(--sidebar-press-bg);
+  transition-duration: 0ms;
+}
+
+.sidebar-language-list {
+  position: absolute;
+  z-index: 120;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  min-width: 184px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid var(--sidebar-popover-edge);
+  border-radius: 10px;
+  background: var(--sidebar-popover-bg);
+  box-shadow: var(--sidebar-popover-shadow);
+  transform-origin: bottom left;
+  animation: sidebar-popover-in-up 160ms var(--sidebar-ease-out);
+}
+
+.sidebar-language-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sidebar-text);
+  font-size: var(--font-size-meta);
+  font-weight: var(--font-weight-regular);
+  text-align: left;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-language-list button:hover,
+.sidebar-language-list button:focus-visible {
+  background: var(--sidebar-hover-bg);
+  color: var(--sidebar-text-strong);
+}
+
+.sidebar-language-list button.selected {
+  color: var(--sidebar-text-strong);
+  font-weight: var(--font-weight-medium);
+}
+
+.sidebar-language-list button svg {
+  flex: none;
+  color: var(--ui-accent);
+}
+
+@keyframes sidebar-popover-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+}
+
+@keyframes sidebar-popover-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+
+@keyframes sidebar-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Theme: icon segmented control; the thumb is the same raised surface. */
+
+.sidebar-theme-selector {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--sidebar-track-bg);
+}
+
+.sidebar-theme-selector button {
+  display: grid;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sidebar-icon);
+  transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease,
+    transform 120ms var(--sidebar-ease-out);
+}
+
+@media (hover: hover) {
+  .sidebar-theme-selector button:not(.active):hover {
+    color: var(--sidebar-text-strong);
+  }
+}
+
+.sidebar-theme-selector button:active {
+  transform: scale(0.92);
+}
+
+.sidebar-theme-selector button.active {
+  background: var(--sidebar-thumb-bg);
+  box-shadow: var(--sidebar-selected-shadow);
+  color: var(--sidebar-text-strong);
+}
+
+/* ---------- Motion & contrast preferences ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-update-indicator.processing {
+    animation: none;
+  }
+
+  .sidebar-language-list {
+    animation-name: sidebar-fade-in;
+  }
+
+  .sidebar-theme-selector button:active {
+    transform: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --sidebar-edge: rgba(15, 23, 42, 0.24);
+    --sidebar-text: var(--sidebar-text-strong);
+  }
+
+  :root[data-theme='dark'] {
+    --sidebar-edge: rgba(255, 255, 255, 0.24);
+  }
+
+  .nav-section button.active {
+    box-shadow: inset 0 0 0 1px var(--ui-accent);
+  }
+}
+
+/* ---------- Compact: the sidebar becomes a top bar ---------- */
+
+@media (max-width: 900px) {
+  .app-shell:not(.app-shell-easy-mode) .sidebar {
+    position: static;
+    display: grid;
+    width: 100%;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 10px 14px 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--sidebar-edge);
+  }
+
+  .sidebar-brand {
+    grid-column: 1;
+    grid-row: 1;
+    margin: 0;
+    padding: 0;
+  }
+
+  .sidebar-bottom {
+    grid-column: 2;
+    grid-row: 1;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+  }
+
+  .sidebar-links {
+    flex-direction: row;
+  }
+
+  .sidebar-link {
+    width: auto;
+    height: 30px;
+    font-size: var(--font-size-meta);
+  }
+
+  .sidebar-contact {
+    width: 30px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .sidebar-contact > span,
+  .sidebar-contact > svg:last-child {
+    display: none;
+  }
+
+  .sidebar-utility {
+    gap: 6px;
+    padding: 0;
+    border: 0;
+  }
+
+  .sidebar-language-list {
+    top: calc(100% + 6px);
+    right: 0;
+    bottom: auto;
+    left: auto;
+    transform-origin: top right;
+    animation-name: sidebar-popover-in-down;
+  }
+
+  .nav-section {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    flex-direction: row;
+    margin: 0 -2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  .nav-section button {
+    width: auto;
+    height: 32px;
+    padding: 0 12px;
+    scroll-snap-align: start;
+  }
+}
+
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .sidebar-language-list {
+    animation-name: sidebar-fade-in;
+  }
+}
+
+@media (max-width: 700px) {
+  .sidebar-brand-text span {
+    display: none;
+  }
+}

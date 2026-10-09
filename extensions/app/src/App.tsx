@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import {
   Bot,
   Check,
-  ChevronUp,
+  ChevronsUpDown,
   ExternalLink,
   Gauge,
   History,
@@ -14,11 +14,15 @@ import {
   Lock,
   LogIn,
   MessageCircle,
+  Monitor,
+  Moon,
   Network,
   PackageOpen,
   Puzzle,
   ServerCog,
   Settings,
+  Sprout,
+  Sun,
   X,
 } from 'lucide-react';
 import appLogo from './assets/logo.jpg';
@@ -43,6 +47,13 @@ import { useDialogFocusTrap } from './components/useDialogFocusTrap';
 
 const QQ_CONTACT_URL = 'https://qm.qq.com/q/3queDaIG';
 const DISCORD_SERVER_URL = 'https://discord.gg/PxvX4D9kgs';
+
+// Order matters: light, dark, system — matches the Easy Mode selector.
+const themeOptions = [
+  { value: 'light', icon: Sun, labelKey: 'app.theme.light', titleKey: 'app.theme.switchToLight' },
+  { value: 'dark', icon: Moon, labelKey: 'app.theme.dark', titleKey: 'app.theme.switchToDark' },
+  { value: 'system', icon: Monitor, labelKey: 'app.theme.system', titleKey: 'app.theme.switchToSystem' },
+] as const;
 
 const pages = [
   {
@@ -325,166 +336,157 @@ function AppContent() {
       <div className={`app-shell${active === "easy" ? " app-shell-easy-mode" : ""}`}>
         {active !== "easy" ? (
           <aside className="sidebar">
-          <div className="sidebar-brand" title={t('app.desktopConsole')}>
-            <img src={appLogo} alt="" className="brand-mark brand-logo" />
-            <div>
-              <strong>EasyCLIProxyAPI</strong>
-              <span>{t('app.desktopConsole')}</span>
+            <div className="sidebar-brand" title={t('app.desktopConsole')}>
+              <img src={appLogo} alt="" className="brand-mark brand-logo" />
+              <div className="sidebar-brand-text">
+                <strong>EasyCLIProxyAPI</strong>
+                <span>{t('app.desktopConsole')}</span>
+              </div>
             </div>
-          </div>
 
-          <nav className="nav-section" aria-label={t('app.navigation')}>
-            {pages.filter((page) => page.id !== 'easy').map((page) => {
-              const Icon = page.icon;
-              const locked = !canOpenAppPage(page.id, coreReady);
-              const updateIndicator = page.id === 'versions'
-                ? appUpdateIndicatorState(hasUpdate, coreHasUpdate, appUpdateProcessing)
-                : null;
-              return (
+            <nav className="nav-section" aria-label={t('app.navigation')}>
+              {pages.filter((page) => page.id !== 'easy').map((page) => {
+                const Icon = page.icon;
+                const isActive = page.id === active;
+                const locked = !canOpenAppPage(page.id, coreReady);
+                const updateIndicator = page.id === 'versions'
+                  ? appUpdateIndicatorState(hasUpdate, coreHasUpdate, appUpdateProcessing)
+                  : null;
+                return (
+                  <button
+                    key={page.id}
+                    type="button"
+                    className={[
+                      isActive ? 'active' : '',
+                      locked ? 'locked' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    aria-current={isActive ? 'page' : undefined}
+                    disabled={locked}
+                    title={locked ? t('app.nav.lockedHint') : undefined}
+                    onClick={() => select(page.id)}
+                  >
+                    <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+                    <span>{t(page.labelKey)}</span>
+                    {locked ? (
+                      <Lock size={12} strokeWidth={1.75} className="nav-lock-icon" aria-hidden="true" />
+                    ) : updateIndicator ? (
+                      <i
+                        className={`nav-update-indicator ${updateIndicator}`}
+                        title={updateIndicator === 'processing'
+                          ? t('appUpdate.progressTitle')
+                          : availableUpdateLabel}
+                        aria-label={updateIndicator === 'processing'
+                          ? t('appUpdate.progressTitle')
+                          : availableUpdateLabel}
+                      />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </nav>
+
+            <div className="sidebar-bottom">
+              <div className="sidebar-links">
                 <button
-                  key={page.id}
                   type="button"
-                  className={[
-                    page.id === active ? 'active' : '',
-                    locked ? 'locked' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  disabled={locked}
-                  title={locked ? t('app.nav.lockedHint') : undefined}
-                  onClick={() => select(page.id)}
+                  className="sidebar-link sidebar-easy-entry"
+                  onClick={() => select('easy')}
                 >
-                  <Icon size={17} aria-hidden="true" />
-                  <span>{t(page.labelKey)}</span>
-                  {locked ? (
-                    <Lock size={13} className="nav-lock-icon" aria-hidden="true" />
-                  ) : updateIndicator ? (
-                    <i
-                      className={`nav-update-indicator ${updateIndicator}`}
-                      title={updateIndicator === 'processing'
-                        ? t('appUpdate.progressTitle')
-                        : availableUpdateLabel}
-                      aria-label={updateIndicator === 'processing'
-                        ? t('appUpdate.progressTitle')
-                        : availableUpdateLabel}
-                    />
-                  ) : null}
+                  <Sprout size={16} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{t('app.nav.easy')}</span>
                 </button>
-              );
-            })}
-          </nav>
-
-          <div className="sidebar-bottom">
-            <button
-              type="button"
-              className="sidebar-easy-entry"
-              onClick={() => select('easy')}
-            >
-              <span>{t('app.nav.easy')}</span>
-            </button>
-            <div
-              className="sidebar-theme-selector"
-              role="group"
-              aria-label={t('app.theme.label')}
-            >
-              <button
-                type="button"
-                className={theme === 'light' ? 'active' : ''}
-                aria-pressed={theme === 'light'}
-                title={t('app.theme.switchToLight')}
-                onClick={() => setTheme('light')}
-              >
-                {t('app.theme.light')}
-              </button>
-              <button
-                type="button"
-                className={theme === 'dark' ? 'active' : ''}
-                aria-pressed={theme === 'dark'}
-                title={t('app.theme.switchToDark')}
-                onClick={() => setTheme('dark')}
-              >
-                {t('app.theme.dark')}
-              </button>
-              <button
-                type="button"
-                className={theme === 'system' ? 'active' : ''}
-                aria-pressed={theme === 'system'}
-                title={t('app.theme.switchToSystem')}
-                onClick={() => setTheme('system')}
-              >
-                {t('app.theme.system')}
-              </button>
-            </div>
-            <div ref={languageMenuRef} className="sidebar-language">
-              <button
-                ref={languageButtonRef}
-                type="button"
-                className="sidebar-language-trigger"
-                aria-label={t('app.language')}
-                aria-haspopup="listbox"
-                aria-expanded={languageMenuOpen}
-                aria-controls="sidebar-language-list"
-                onClick={() => setLanguageMenuOpen((open) => !open)}
-                onKeyDown={(event) => {
-                  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-                  event.preventDefault();
-                  setLanguageMenuOpen(true);
-                  window.requestAnimationFrame(() => {
-                    const options = languageMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
-                    options?.[event.key === 'ArrowUp' ? options.length - 1 : 0]?.focus();
-                  });
-                }}
-              >
-                <Languages size={16} aria-hidden="true" />
-                <span lang={selectedLanguage.value}>{selectedLanguage.nativeLabel}</span>
-                <ChevronUp
-                  size={14}
-                  aria-hidden="true"
-                  className={languageMenuOpen ? 'expanded' : ''}
-                />
-              </button>
-              {languageMenuOpen ? (
-                <div
-                  id="sidebar-language-list"
-                  className="sidebar-language-list"
-                  role="listbox"
-                  aria-label={t('app.language')}
-                  onKeyDown={handleLanguageListKeyDown}
+                <button
+                  type="button"
+                  className="sidebar-link sidebar-contact"
+                  title={t('app.contact.title')}
+                  onClick={() => void openContact()}
                 >
-                  {languageOptions.map((option) => {
-                    const selected = option.value === locale;
-                    return (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={selected ? 'selected' : ''}
-                        role="option"
-                        aria-selected={selected}
-                        onClick={() => {
-                          setLocale(option.value);
-                          setLanguageMenuOpen(false);
-                          window.requestAnimationFrame(() => languageButtonRef.current?.focus());
-                        }}
-                      >
-                        <span lang={option.value}>{option.nativeLabel}</span>
-                        {selected ? <Check size={14} aria-hidden="true" /> : null}
-                      </button>
-                    );
-                  })}
+                  <MessageCircle size={16} strokeWidth={1.75} aria-hidden="true" />
+                  <span>{t('app.contact.label')}</span>
+                  <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="sidebar-utility">
+                <div ref={languageMenuRef} className="sidebar-language">
+                  <button
+                    ref={languageButtonRef}
+                    type="button"
+                    className="sidebar-language-trigger"
+                    aria-label={t('app.language')}
+                    aria-haspopup="listbox"
+                    aria-expanded={languageMenuOpen}
+                    aria-controls="sidebar-language-list"
+                    onClick={() => setLanguageMenuOpen((open) => !open)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+                      event.preventDefault();
+                      setLanguageMenuOpen(true);
+                      window.requestAnimationFrame(() => {
+                        const options = languageMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
+                        options?.[event.key === 'ArrowUp' ? options.length - 1 : 0]?.focus();
+                      });
+                    }}
+                  >
+                    <Languages size={16} strokeWidth={1.75} aria-hidden="true" />
+                    <span lang={selectedLanguage.value}>{selectedLanguage.nativeLabel}</span>
+                    <ChevronsUpDown size={12} strokeWidth={1.75} aria-hidden="true" />
+                  </button>
+                  {languageMenuOpen ? (
+                    <div
+                      id="sidebar-language-list"
+                      className="sidebar-language-list"
+                      role="listbox"
+                      aria-label={t('app.language')}
+                      onKeyDown={handleLanguageListKeyDown}
+                    >
+                      {languageOptions.map((option) => {
+                        const selected = option.value === locale;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={selected ? 'selected' : ''}
+                            role="option"
+                            aria-selected={selected}
+                            onClick={() => {
+                              setLocale(option.value);
+                              setLanguageMenuOpen(false);
+                              window.requestAnimationFrame(() => languageButtonRef.current?.focus());
+                            }}
+                          >
+                            <span lang={option.value}>{option.nativeLabel}</span>
+                            {selected ? <Check size={14} strokeWidth={2} aria-hidden="true" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+
+                <div
+                  className="sidebar-theme-selector"
+                  role="group"
+                  aria-label={t('app.theme.label')}
+                >
+                  {themeOptions.map(({ value, icon: ThemeIcon, labelKey, titleKey }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={theme === value ? 'active' : ''}
+                      aria-pressed={theme === value}
+                      aria-label={t(labelKey)}
+                      title={t(titleKey)}
+                      onClick={() => setTheme(value)}
+                    >
+                      <ThemeIcon size={14} strokeWidth={1.75} aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-            <button
-              type="button"
-              className="sidebar-contact"
-              title={t('app.contact.title')}
-              onClick={() => void openContact()}
-            >
-              <MessageCircle size={16} aria-hidden="true" />
-              <span>{t('app.contact.label')}</span>
-              <ExternalLink size={13} aria-hidden="true" />
-            </button>
-          </div>
           </aside>
         ) : null}
 
