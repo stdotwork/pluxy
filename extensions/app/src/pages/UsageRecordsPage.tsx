@@ -1491,7 +1491,7 @@ function TokenComposition({ overview }: { overview: UsageOverview }) {
           <section className="usage-token-context-group" aria-labelledby="usage-token-performance-title">
             <h3 id="usage-token-performance-title"><Gauge size={14} aria-hidden="true" />{t('usage.token.performance')}</h3>
             <dl className="usage-token-context-metrics">
-              <div><dt>RPM</dt><dd>{overview.rpm.toFixed(2)}</dd></div>
+              <div><dt>{t('usage.stat.rpm')}</dt><dd>{overview.rpm.toFixed(2)}</dd></div>
               <div><dt>{t('usage.stat.averageLatency')}</dt><dd>{compactDuration(overview.averageLatencyMs)}</dd></div>
             </dl>
           </section>

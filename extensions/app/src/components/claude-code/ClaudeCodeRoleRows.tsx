@@ -27,7 +27,7 @@ export function ClaudeCodeRoleRows({ routes, models, loading, error, disabled, o
       <label className="claude-inline-context">
         <span className="switch-control"><input type="checkbox" role="switch" checked={routes[`${role}1m`]} disabled={disabled}
           aria-label={`${role} 1M`} onChange={event => onContextChange(`${role}1m`, event.currentTarget.checked)} />
-        <span className="switch-track" aria-hidden="true" /></span><span>1M</span>
+        <span className="switch-track" aria-hidden="true" /></span><span>{t('agents.claudeMapping.context1m')}</span>
       </label>
     </div>)}
   </section>;

@@ -47,7 +47,7 @@ export function HomeAccessPanel({ profiles, apiKey, keyError, ready, copiedField
         ))}
       </div>
       <div id="home-protocol-panel" className={`home-connection-details client-api-card ${profile.id}`} role="tabpanel" aria-labelledby={`home-protocol-${profile.id}`}>
-        <div className="home-field-label"><span>API Base URL</span><span>{profile.description}</span></div>
+        <div className="home-field-label"><span>{t('easyMode.api.baseUrl')}</span><span>{profile.description}</span></div>
         <div className="home-copy-field">
           <code title={profile.baseUrl}>{profile.baseUrl}</code>
           <button type="button" className={`icon-button quiet ${copiedUrl ? 'copied' : ''}`}

@@ -170,7 +170,7 @@ export function CredentialAdvancedFields({
         <div className="credential-settings-grid">
           <label className="credential-settings-field">
             <span>{t('authFiles.settings.timezone')}</span>
-            <input value={textValue(advanced.timezone)} disabled={disabled} autoComplete="off" spellCheck={false} placeholder="Asia/Shanghai"
+            <input value={textValue(advanced.timezone)} disabled={disabled} autoComplete="off" spellCheck={false} placeholder={t('authFiles.settings.timezoneHint')}
               onChange={(event) => setField('timezone', event.currentTarget.value)}
               onBlur={(event) => setField('timezone', event.currentTarget.value.trim() || undefined)} />
             <small>{t('authFiles.settings.timezoneHint')}</small>

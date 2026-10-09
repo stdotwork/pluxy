@@ -641,6 +641,7 @@ export const zhCN = {
   'usage.stat.averageLatency': '平均延迟',
   'usage.stat.tps': 'TPS',
   'usage.stat.performanceMeta': '{samples} 条样本 · RPM {rpm}',
+  'usage.stat.rpm': 'RPM',
   'usage.stat.performanceMetaTitle': 'TPS {tps}（按总延迟加权），{samples} 条有效样本，RPM {rpm}，平均延迟 {latency} ms',
   'usage.stat.cacheHitRate': '缓存命中率',
   'usage.stat.cacheHitMeta': '读取 {hit} · 输入 {input}',

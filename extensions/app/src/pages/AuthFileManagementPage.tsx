@@ -578,7 +578,7 @@ export function AuthFileManagementPage() {
                       <button type="button" className="auth-list-action danger" onClick={() => void deleteFile(file)} disabled={busy || resettingCooldown || isRuntimeOnly(file)} title={t('common.delete')}>{t('common.delete')}</button>
                     </div>
                     <div className="auth-list-main-actions">
-                      <button type="button" className="auth-list-switch" role="switch" aria-checked={!disabled} aria-label={`${t(disabled ? 'common.enable' : 'common.disable')} ${identity || name}`} onClick={() => void toggleStatus(file)} disabled={busy || resettingCooldown || !isOAuthCredentialFile(file)} title={t(isOAuthCredentialFile(file) ? disabled ? 'common.enable' : 'common.disable' : 'authFiles.fileOnly')}><span /></button>
+                      <button type="button" className={`${disabled ? 'primary-button' : 'secondary-button'} compact-button auth-card-toggle`} role="switch" aria-checked={!disabled} aria-label={`${t(disabled ? 'common.enable' : 'common.disable')} ${identity || name}`} onClick={() => void toggleStatus(file)} disabled={busy || resettingCooldown || !isOAuthCredentialFile(file)} title={t(isOAuthCredentialFile(file) ? disabled ? 'common.enable' : 'common.disable' : 'authFiles.fileOnly')}>{t(disabled ? 'common.enable' : 'common.disable')}</button>
                       <button type="button" className="auth-list-details-button" onClick={() => toggleDetails(key)} aria-expanded={expanded} aria-controls={detailsId}>{t(expanded ? 'authFiles.list.collapse' : 'authFiles.list.details')}</button>
                     </div>
                   </footer>
