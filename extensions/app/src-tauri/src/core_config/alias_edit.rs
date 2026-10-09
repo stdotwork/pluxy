@@ -10,28 +10,14 @@ struct EditableModelAlias {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ModelAliasEditContext {
     pub(crate) source: ThinkingAliasSource,
-    pub(crate) revision: String,
     pub(crate) effort: Option<String>,
     pub(crate) fast: bool,
 }
 
-pub(crate) fn validate_model_alias_revision(
-    content: &str,
-    revision: Option<&str>,
-) -> Result<(), String> {
-    if revision != Some(model_alias_config_revision(content)?.as_str()) {
-        return Err("Configuration changed. Close the editor, refresh, and try again".to_string());
-    }
-    Ok(())
-}
-
+// Used by backup/template comparisons, not as an alias editor version lock.
 pub(crate) fn model_alias_config_revision(content: &str) -> Result<String, String> {
     let document = serde_norway::from_str::<serde_norway::Value>(content)
         .map_err(|error| format!("Failed to parse kernel YAML configuration: {error}"))?;
-    model_alias_value_revision(&document)
-}
-
-pub(crate) fn model_alias_value_revision(document: &serde_norway::Value) -> Result<String, String> {
     let mut value = serde_json::to_value(document).map_err(|error| error.to_string())?;
     let root = value
         .as_object_mut()
@@ -51,6 +37,7 @@ pub(crate) fn model_alias_value_revision(document: &serde_norway::Value) -> Resu
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn model_alias_edit_context(
     content: &str,
     alias: &str,
@@ -63,9 +50,9 @@ pub(crate) fn model_alias_edit_context_for_mapping(
     content: &str,
     alias: &str,
     definitions: &[OAuthModelDefinitions],
-    mapping_id: Option<&str>,
+    entry: Option<&ThinkingAliasEntry>,
 ) -> Result<ModelAliasEditContext, String> {
-    let source = resolve_model_alias_edit_source_for_mapping(content, alias, definitions, mapping_id)?.source;
+    let source = resolve_model_alias_edit_source_for_mapping(content, alias, definitions, entry)?.source;
     let document = serde_norway::from_str::<serde_norway::Value>(content)
         .map_err(|error| error.to_string())?;
     let root = document
@@ -76,7 +63,6 @@ pub(crate) fn model_alias_edit_context_for_mapping(
         fast: find_speed_alias_service_tier(root, alias, &source.protocol).as_deref()
             == Some("priority"),
         source,
-        revision: model_alias_config_revision(content)?,
     })
 }
 
@@ -84,16 +70,67 @@ pub(crate) fn model_alias_edit_source_id(alias: &str) -> String {
     format!("alias-edit:{}", alias.to_ascii_lowercase())
 }
 
-pub(crate) fn model_alias_mapping_id(revision: &str, section: &str, provider: usize, model: usize) -> String {
-    format!("{revision}:{section}:{provider}:{model}")
-}
-
 fn editable_model_alias_for_mapping(
     root: &serde_norway::Mapping,
     alias: &str,
-    mapping_id: Option<&str>,
+    entry: Option<&ThinkingAliasEntry>,
 ) -> Result<EditableModelAlias, String> {
-    let revision = model_alias_value_revision(&serde_norway::Value::Mapping(root.clone()))?;
+    if let Some(entry) = entry {
+        let position = &entry.position;
+        let (models, location, provider, kind, protocol) = if position.section == "oauth-model-alias" {
+            let channel = entry.oauth_channel.as_deref().and_then(oauth_alias_channel)
+                .ok_or("Unknown OAuth alias channel")?;
+            let models = root.get(yaml_key("oauth-model-alias"))
+                .and_then(|channels| channels.get(channel.key));
+            (models, ThinkingAliasSourceLocation::Oauth {
+                channel: channel.key, force_mapping: channel.force_mapping,
+            }, channel.provider.to_string(), channel.kind.to_string(), channel.protocol.to_string())
+        } else {
+            let (section, fallback, kind, protocol) = [
+                ("codex-api-key", "Codex API", "codex-api", "codex"),
+                ("openai-compatibility", "OpenAI-compatible", "openai-compatible", "openai"),
+                ("claude-api-key", "Claude API", "claude-api", "claude"),
+                ("gemini-api-key", "Gemini API", "gemini-api", "gemini"),
+            ].into_iter().find(|(section, ..)| *section == position.section)
+                .ok_or("Unknown model alias section")?;
+            let provider_index = position.provider_index.ok_or("Missing alias provider position")?;
+            let provider = root.get(yaml_key(section))
+                .and_then(serde_norway::Value::as_sequence)
+                .and_then(|providers| providers.get(provider_index))
+                .and_then(serde_norway::Value::as_mapping)
+                .ok_or("Alias provider no longer exists")?;
+            (provider.get(yaml_key("models")), ThinkingAliasSourceLocation::ConfigModel {
+                section, provider_index, model_index: position.model_index,
+            }, thinking_alias_provider_name(provider, fallback, provider_index), kind.into(), protocol.into())
+        };
+        let model_list = models.and_then(serde_norway::Value::as_sequence)
+            .ok_or("Alias model list no longer exists")?;
+        let model_index = if model_list.get(position.model_index)
+            .and_then(configured_model_identity)
+            .is_some_and(|(upstream, client, _)| upstream == entry.source_model && client == entry.alias) {
+            position.model_index
+        } else {
+            model_list.iter().position(|model| configured_model_identity(model)
+                .is_some_and(|(upstream, client, _)| upstream == entry.source_model && client == entry.alias))
+                .ok_or("Alias row moved or changed. Refresh the list and select it again")?
+        };
+        let model = &model_list[model_index];
+        let location = match location {
+            ThinkingAliasSourceLocation::ConfigModel { section, provider_index, .. } =>
+                ThinkingAliasSourceLocation::ConfigModel { section, provider_index, model_index },
+            other => other,
+        };
+        let (upstream, _client, display_name) = configured_model_identity(model)
+            .ok_or("Invalid model alias record")?;
+        return Ok(EditableModelAlias {
+            source: ResolvedThinkingAliasSource {
+                source: ThinkingAliasSource {
+                    id: model_alias_edit_source_id(alias), model: upstream, display_name,
+                    provider, kind, reasoning_levels: configured_model_reasoning_levels(model, &protocol), protocol,
+                }, location,
+            }, value: model.clone(), model_index,
+        });
+    }
     let mut matches = Vec::new();
     let mut matching_names = 0;
     for (section, provider, kind, protocol) in [
@@ -131,8 +168,11 @@ fn editable_model_alias_for_mapping(
                 if !client.eq_ignore_ascii_case(alias) {
                     continue;
                 }
-                let id = model_alias_mapping_id(&revision, section, provider_index, model_index);
-                if mapping_id.is_some_and(|target| target != id) {
+                let provider_name = thinking_alias_provider_name(value, provider, provider_index);
+                if entry.is_some_and(|entry| {
+                    entry.source_model != upstream || entry.provider != provider_name
+                        || entry.kind != kind || entry.oauth_channel.is_some()
+                }) {
                     continue;
                 }
                 matching_names += 1;
@@ -142,10 +182,10 @@ fn editable_model_alias_for_mapping(
                 matches.push(EditableModelAlias {
                     source: ResolvedThinkingAliasSource {
                         source: ThinkingAliasSource {
-                            id: mapping_id.map(|_| format!("alias-edit:{id}")).unwrap_or_else(|| model_alias_edit_source_id(alias)),
+                            id: model_alias_edit_source_id(alias),
                             model: upstream,
                             display_name,
-                            provider: thinking_alias_provider_name(value, provider, provider_index),
+                            provider: provider_name,
                             kind: kind.to_string(),
                             protocol: protocol.to_string(),
                             reasoning_levels: configured_model_reasoning_levels(model, protocol),
@@ -178,8 +218,10 @@ fn editable_model_alias_for_mapping(
                 if !client.eq_ignore_ascii_case(alias) {
                     continue;
                 }
-                let id = model_alias_mapping_id(&revision, channel_name.as_str().unwrap_or_default(), 0, model_index);
-                if mapping_id.is_some_and(|target| target != id) {
+                if entry.is_some_and(|entry| {
+                    entry.source_model != upstream
+                        || entry.oauth_channel.as_deref() != channel_name.as_str()
+                }) {
                     continue;
                 }
                 matching_names += 1;
@@ -193,7 +235,7 @@ fn editable_model_alias_for_mapping(
                 matches.push(EditableModelAlias {
                     source: ResolvedThinkingAliasSource {
                         source: ThinkingAliasSource {
-                            id: mapping_id.map(|_| format!("alias-edit:{id}")).unwrap_or_else(|| model_alias_edit_source_id(alias)),
+                            id: model_alias_edit_source_id(alias),
                             model: upstream,
                             display_name,
                             provider: channel.provider.to_string(),
@@ -213,14 +255,12 @@ fn editable_model_alias_for_mapping(
         }
     }
     if matching_names != 1 || matches.len() != 1 {
-        if mapping_id.is_some() {
-            return Err("Configuration changed. Refresh and try again".to_string());
-        }
         return Err("Alias does not exist or has multiple mappings with the same name. Refresh, check the configuration, and try again".to_string());
     }
     Ok(matches.remove(0))
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_model_alias_edit_source(
     content: &str,
     alias: &str,
@@ -233,14 +273,14 @@ pub(crate) fn resolve_model_alias_edit_source_for_mapping(
     content: &str,
     alias: &str,
     definitions: &[OAuthModelDefinitions],
-    mapping_id: Option<&str>,
+    entry: Option<&ThinkingAliasEntry>,
 ) -> Result<ResolvedThinkingAliasSource, String> {
     let document = serde_norway::from_str::<serde_norway::Value>(content)
         .map_err(|error| format!("Failed to parse kernel YAML configuration: {error}"))?;
     let root = document
         .as_mapping()
         .ok_or("Kernel configuration root must be a YAML mapping")?;
-    let mut source = editable_model_alias_for_mapping(root, alias, mapping_id)?.source;
+    let mut source = editable_model_alias_for_mapping(root, alias, entry)?.source;
     if let ThinkingAliasSourceLocation::Oauth { channel, .. } = source.location {
         if let Some(model) = definitions
             .iter()
@@ -259,6 +299,7 @@ pub(crate) fn resolve_model_alias_edit_source_for_mapping(
     Ok(source)
 }
 
+#[cfg(test)]
 pub(crate) fn edit_model_alias_in_yaml(
     content: &str,
     original_alias: &str,
@@ -277,7 +318,7 @@ pub(crate) fn edit_model_alias_in_yaml_for_mapping(
     alias: &str,
     effort: &str,
     fast: bool,
-    mapping_id: Option<&str>,
+    entry: Option<&ThinkingAliasEntry>,
 ) -> Result<String, String> {
     if fast && !alias_source_supports_fast(source) {
         return Err("Fast supports only OpenAI-compatible API, Codex API, or Codex OAuth model sources".to_string());
@@ -288,7 +329,7 @@ pub(crate) fn edit_model_alias_in_yaml_for_mapping(
     let root = updated
         .as_mapping_mut()
         .ok_or("Kernel configuration root must be a YAML mapping")?;
-    let original = editable_model_alias_for_mapping(root, original_alias, mapping_id)?;
+    let original = editable_model_alias_for_mapping(root, original_alias, entry)?;
     let mut replacement = match &source.location {
         ThinkingAliasSourceLocation::ConfigModel {
             section,
@@ -456,11 +497,11 @@ fn remove_editable_model_alias(root: &mut serde_norway::Mapping, original: &Edit
     Ok(())
 }
 
-pub(crate) fn remove_model_alias_mapping_from_yaml(content: &str, alias: &str, mapping_id: &str) -> Result<String, String> {
+pub(crate) fn remove_model_alias_mapping_from_yaml(content: &str, alias: &str, entry: &ThinkingAliasEntry) -> Result<String, String> {
     let mut document = yaml_serde_edit::YamlValue::parse(content).map_err(|error| error.to_string())?;
     let mut updated = document.get().clone();
     let root = updated.as_mapping_mut().ok_or("Kernel configuration root must be a YAML mapping")?;
-    let original = editable_model_alias_for_mapping(root, alias, Some(mapping_id))?;
+    let original = editable_model_alias_for_mapping(root, alias, Some(entry))?;
     remove_editable_model_alias(root, &original)?;
     let scope = AliasPayloadScope::after_removal(root, alias, None);
     remove_alias_payload_options(root, alias, &scope)?;
@@ -510,6 +551,7 @@ fn edit_alias_payload(
     edit: &AliasPayloadEdit<'_>,
 ) -> Result<(), String> {
     let protocol = &edit.source.protocol;
+    let remaining = AliasPayloadScope::after_removal(root, original_alias, None);
     let mut found_effort = false;
     let mut found_fast = false;
     let payload = root
@@ -548,6 +590,18 @@ fn edit_alias_payload(
                 result.push(rule.clone());
                 continue;
             }
+            // Rules still used by another mapping stay in their original order.
+            let retained: Vec<_> = if original_alias != alias || original_protocol != protocol {
+                target
+                    .iter()
+                    .filter(|model| !remaining.matches(model, original_alias))
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut others = others;
+            others.extend(retained.iter().cloned());
             for model in &mut target {
                 let model = model
                     .as_mapping_mut()
@@ -556,7 +610,8 @@ fn edit_alias_payload(
                     yaml_key("name"),
                     serde_norway::Value::String(alias.to_string()),
                 );
-                if yaml_mapping_value(model, "protocol")
+                if (!retained.is_empty() && original_protocol != protocol)
+                    || yaml_mapping_value(model, "protocol")
                     .and_then(serde_norway::Value::as_str)
                     .is_some_and(|value| !value.trim().is_empty())
                 {

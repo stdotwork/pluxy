@@ -29,8 +29,14 @@ import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 
 type PresetThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+type ModelAliasPosition = {
+  section: string;
+  providerIndex: number | null;
+  modelIndex: number;
+};
+
 type ThinkingAliasEntry = {
-  mappingId?: string;
+  position: ModelAliasPosition;
   sourceModel: string;
   alias: string;
   effort: string | null;
@@ -40,7 +46,7 @@ type ThinkingAliasEntry = {
 };
 
 type SpeedAliasEntry = {
-  mappingId?: string;
+  position: ModelAliasPosition;
   sourceModel: string;
   alias: string;
   serviceTier: string;
@@ -70,7 +76,6 @@ type ModelAliasSource = ThinkingAliasSource & {
 
 type ModelAliasEditContext = {
   source: ThinkingAliasSource;
-  revision: string;
   effort: string | null;
   fast: boolean;
 };
@@ -88,13 +93,10 @@ export const combineModelAliasEntries = (
   speedEntries: SpeedAliasEntry[],
 ): AliasListEntry[] => {
   const entries = new Map<string, AliasListEntry>();
-  const entryKey = (
-    entry: Pick<ThinkingAliasEntry, 'mappingId' | 'kind' | 'provider' | 'sourceModel' | 'alias' | 'oauthChannel'>,
-  ) => (
-    entry.mappingId ?? [entry.oauthChannel ?? '', entry.kind, entry.provider, entry.sourceModel, entry.alias]
-      .map((value) => value.toLocaleLowerCase())
-      .join('\u0000')
-  );
+  const entryKey = (entry: ThinkingAliasEntry | SpeedAliasEntry) => JSON.stringify([
+    entry.position.section, entry.position.providerIndex, entry.oauthChannel,
+    entry.position.modelIndex,
+  ]);
 
   thinkingEntries.forEach((entry) => {
     entries.set(entryKey(entry), { ...entry, serviceTier: null });
@@ -205,7 +207,6 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
   const [alias, setAlias] = useState('');
   const [editingEntry, setEditingEntry] = useState<AliasListEntry | null>(null);
   const [editingSource, setEditingSource] = useState<ThinkingAliasSource | null>(null);
-  const [editingRevision, setEditingRevision] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -427,8 +428,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
         await invoke('create_thinking_alias', {
           sourceId: selectedSource.id, alias: normalizedAlias,
           effort: normalizedEffort, fast: fastEnabled, originalAlias: editingEntry.alias,
-          expectedRevision: editingRevision,
-          originalMappingId: editingEntry.mappingId,
+          originalEntry: editingEntry,
         });
         setNotice(t('aliases.updated', { alias: normalizedAlias }));
       } else if (normalizedEffort) {
@@ -472,7 +472,6 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
   const resetEditor = () => {
     setEditingEntry(null);
     setEditingSource(null);
-    setEditingRevision(null);
     setSelectedSourceId('');
     setEffort('');
     setFastEnabled(false);
@@ -512,12 +511,11 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
     setNotice('');
     try {
       const context = await invoke<ModelAliasEditContext>('get_model_alias_edit_source', {
-        alias: entry.alias, mappingId: entry.mappingId,
+        alias: entry.alias, entry,
       });
       const source = context.source;
       setEditingEntry(entry);
       setEditingSource(source);
-      setEditingRevision(context.revision);
       setSelectedSourceId(source.id);
       setEffort(context.effort ?? '');
       setFastEnabled(context.fast);
@@ -545,13 +543,13 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
         await invoke<ThinkingAliasEntry[]>('delete_thinking_alias', {
           alias: entry.alias,
           oauthChannel: entry.oauthChannel,
-          mappingId: entry.mappingId,
+          entry,
         });
       } else {
         await invoke<SpeedAliasEntry[]>('delete_speed_alias', {
           alias: entry.alias,
           oauthChannel: entry.oauthChannel,
-          mappingId: entry.mappingId,
+          entry,
         });
       }
       setNotice(t('aliases.deleted', { alias: entry.alias }));
@@ -839,7 +837,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
                 <span>{t('aliases.empty.description')}</span>
               </div>
             ) : entries.map((entry) => (
-              <article className="thinking-alias-row" key={entry.mappingId ?? `${entry.kind}:${entry.provider}:${entry.sourceModel}:${entry.alias}`}>
+              <article className="thinking-alias-row" key={JSON.stringify([entry.position, entry.oauthChannel])}>
                 <div className="thinking-alias-route">
                   <div className="thinking-alias-route-source">
                     <span title={entry.sourceModel}>{entry.sourceModel}</span>

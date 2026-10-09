@@ -1257,10 +1257,19 @@ struct CodexModelDefinition {
     supports_tools: Option<bool>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+// Coordinates in the configuration arrays; never persisted into CPA configuration.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelAliasPosition {
+    section: String,
+    provider_index: Option<usize>,
+    model_index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThinkingAliasEntry {
-    mapping_id: String,
+    position: ModelAliasPosition,
     source_model: String,
     alias: String,
     effort: Option<String>,
@@ -1272,7 +1281,7 @@ struct ThinkingAliasEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SpeedAliasEntry {
-    mapping_id: String,
+    position: ModelAliasPosition,
     source_model: String,
     alias: String,
     service_tier: String,

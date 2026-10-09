@@ -555,6 +555,7 @@ function createState(scenario: BrowserMockScenario) {
     },
     thinkingAliases: [
       {
+        position: { section: 'oauth-model-alias', providerIndex: null, modelIndex: 0 },
         sourceModel: 'gpt-5.2-codex',
         alias: 'codex-high',
         effort: 'high' as string | null,
@@ -565,6 +566,7 @@ function createState(scenario: BrowserMockScenario) {
     ],
     speedAliases: [
       {
+        position: { section: 'oauth-model-alias', providerIndex: null, modelIndex: 0 },
         sourceModel: 'gpt-5.2-codex',
         alias: 'codex-fast',
         serviceTier: 'priority',
@@ -1246,11 +1248,12 @@ export function createBrowserMockRuntime(
         const alias = readString(payload.alias);
         const entry = state.thinkingAliases.find((item) => item.alias === alias);
         const source = state.aliasSources.find((item) => item.model === entry?.sourceModel) ?? state.aliasSources[0];
-        return { source: clone(source), revision: 'mock-alias-r1', effort: entry?.effort ?? null, fast: state.speedAliases.some((item) => item.alias === alias) };
+        return { source: clone(source), effort: entry?.effort ?? null, fast: state.speedAliases.some((item) => item.alias === alias) };
       }
       case 'create_thinking_alias': {
         const request = asObject(payload.request ?? payload);
         const entry = {
+          position: { section: 'oauth-model-alias', providerIndex: null, modelIndex: state.thinkingAliases.length },
           sourceModel: readString(request.sourceModel ?? request.model),
           alias: readString(request.alias),
           effort: readString(request.effort) || null,
@@ -1268,6 +1271,7 @@ export function createBrowserMockRuntime(
       case 'create_speed_alias': {
         const request = asObject(payload.request ?? payload);
         const entry = {
+          position: { section: 'oauth-model-alias', providerIndex: null, modelIndex: state.speedAliases.length },
           sourceModel: readString(request.sourceModel ?? request.model),
           alias: readString(request.alias),
           serviceTier: readString(request.serviceTier) || 'priority',

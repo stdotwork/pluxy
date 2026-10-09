@@ -529,13 +529,13 @@ pub(crate) async fn get_thinking_alias_sources(
 pub(crate) async fn get_model_alias_edit_source(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     alias: String,
-    mapping_id: Option<String>,
+    entry: Option<ThinkingAliasEntry>,
 ) -> Result<ModelAliasEditContext, String> {
     let config = gui_config_state.snapshot()?;
     let alias = existing_thinking_alias_model_id(&alias, "Alias model")?;
     let content = fetch_management_config_yaml(&config).await?;
     let definitions = fetch_oauth_model_definitions(&config).await;
-    model_alias_edit_context_for_mapping(&content, &alias, &definitions, mapping_id.as_deref())
+    model_alias_edit_context_for_mapping(&content, &alias, &definitions, entry.as_ref())
 }
 
 #[tauri::command]
@@ -546,8 +546,7 @@ pub(crate) async fn create_thinking_alias(
     effort: String,
     fast: Option<bool>,
     original_alias: Option<String>,
-    original_mapping_id: Option<String>,
-    expected_revision: Option<String>,
+    original_entry: Option<ThinkingAliasEntry>,
 ) -> Result<Vec<ThinkingAliasEntry>, String> {
     let config = gui_config_state.snapshot()?;
     let source_id = source_id.trim().to_string();
@@ -571,11 +570,6 @@ pub(crate) async fn create_thinking_alias(
     };
     let fast = fast.unwrap_or(false);
     let content = fetch_management_config_yaml(&config).await?;
-    if original_alias.is_some() {
-        validate_model_alias_revision(&content, expected_revision.as_deref())?;
-    }
-    let available_models =
-        fetch_agent_models(config.port, effective_agent_api_key(&config)).await?;
     let definitions = fetch_oauth_model_definitions(&config).await;
     let capability = if !effort.is_empty() {
         AliasSourceCapability::Reasoning
@@ -585,11 +579,12 @@ pub(crate) async fn create_thinking_alias(
         AliasSourceCapability::Base
     };
     let source = if let Some(original) = original_alias.as_deref()
-        .filter(|original| source_id == model_alias_edit_source_id(original)
-            || original_mapping_id.as_deref().is_some_and(|id| source_id == format!("alias-edit:{id}")))
+        .filter(|original| source_id == model_alias_edit_source_id(original))
     {
-        resolve_model_alias_edit_source_for_mapping(&content, original, &definitions, original_mapping_id.as_deref())?
+        resolve_model_alias_edit_source_for_mapping(&content, original, &definitions, original_entry.as_ref())?
     } else {
+        let available_models =
+            fetch_agent_models(config.port, effective_agent_api_key(&config)).await?;
         resolved_oauth_alias_sources(&content, &definitions, &available_models, capability)?
             .into_iter()
             .find(|source| source.source.id == source_id)
@@ -616,17 +611,8 @@ pub(crate) async fn create_thinking_alias(
         return Err("Alias model cannot be the same as the source model".to_string());
     }
 
-    if available_models.iter().any(|model| {
-        model.name.eq_ignore_ascii_case(&alias)
-            && !original_alias
-                .as_deref()
-                .is_some_and(|original| original.eq_ignore_ascii_case(&alias))
-    }) {
-        return Err(format!("{alias} is already an actual model ID and cannot also be used as an alias"));
-    }
-
     let updated = match original_alias.as_deref() {
-        Some(original) => edit_model_alias_in_yaml_for_mapping(&content, original, &source, &alias, &effort, fast, original_mapping_id.as_deref())?,
+        Some(original) => edit_model_alias_in_yaml_for_mapping(&content, original, &source, &alias, &effort, fast, original_entry.as_ref())?,
         None => add_model_alias_to_yaml(&content, &source, &alias, &effort, fast)?,
     };
     put_management_alias_config_changes(&config, &content, &updated).await?;
@@ -638,13 +624,13 @@ pub(crate) async fn delete_thinking_alias(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     alias: String,
     oauth_channel: Option<String>,
-    mapping_id: Option<String>,
+    entry: Option<ThinkingAliasEntry>,
 ) -> Result<Vec<ThinkingAliasEntry>, String> {
     let config = gui_config_state.snapshot()?;
     let alias = existing_thinking_alias_model_id(&alias, "Alias model")?;
     let content = fetch_management_config_yaml(&config).await?;
-    let updated = match mapping_id.as_deref() {
-        Some(id) => remove_model_alias_mapping_from_yaml(&content, &alias, id)?,
+    let updated = match entry.as_ref() {
+        Some(entry) => remove_model_alias_mapping_from_yaml(&content, &alias, entry)?,
         None => remove_thinking_alias_from_yaml_for_channel(&content, &alias, oauth_channel.as_deref())?,
     };
     put_management_alias_config_changes(&config, &content, &updated).await?;
@@ -712,9 +698,6 @@ pub(crate) async fn create_speed_alias(
     if source.source.model.eq_ignore_ascii_case(&alias) {
         return Err("Alias model cannot be the same as the source model".to_string());
     }
-    if available_models.iter().any(|model| model.name.eq_ignore_ascii_case(&alias)) {
-        return Err(format!("{alias} is already an actual model ID and cannot also be used as an alias"));
-    }
     let updated = add_speed_alias_to_yaml(&content, &source, &alias)?;
     put_management_alias_config_changes(&config, &content, &updated).await?;
     speed_aliases_from_yaml(&updated)
@@ -725,13 +708,13 @@ pub(crate) async fn delete_speed_alias(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     alias: String,
     oauth_channel: Option<String>,
-    mapping_id: Option<String>,
+    entry: Option<ThinkingAliasEntry>,
 ) -> Result<Vec<SpeedAliasEntry>, String> {
     let config = gui_config_state.snapshot()?;
     let alias = existing_thinking_alias_model_id(&alias, "Alias model")?;
     let content = fetch_management_config_yaml(&config).await?;
-    let updated = match mapping_id.as_deref() {
-        Some(id) => remove_model_alias_mapping_from_yaml(&content, &alias, id)?,
+    let updated = match entry.as_ref() {
+        Some(entry) => remove_model_alias_mapping_from_yaml(&content, &alias, entry)?,
         None => remove_speed_alias_from_yaml_for_channel(&content, &alias, oauth_channel.as_deref())?,
     };
     put_management_alias_config_changes(&config, &content, &updated).await?;

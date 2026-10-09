@@ -610,12 +610,8 @@ async fn put_management_legacy_alias_view_changes(
             provider_changes.push((provider, before, after));
         }
     }
-    if current != updated {
-        return Err(
-            "The alias update changed unsupported kernel configuration; write rejected"
-                .to_string(),
-        );
-    }
+    // Only the extracted alias, payload, and supported provider sections are
+    // written below. Unrelated configuration remains owned by the management API.
 
     let native = if v8 && !provider_changes.is_empty() {
         Some(parse(&fetch_management_raw_config_yaml(config).await?)?)
@@ -1947,7 +1943,6 @@ pub(crate) fn thinking_aliases_from_value(
         .as_mapping()
         .ok_or_else(|| "Kernel configuration root must be a YAML mapping".to_string())?;
     let mut entries = Vec::new();
-    let revision = model_alias_value_revision(document)?;
     if let Some(oauth_aliases) = yaml_mapping_value(root, "oauth-model-alias") {
         let oauth_aliases = oauth_aliases
             .as_mapping()
@@ -1977,7 +1972,7 @@ pub(crate) fn thinking_aliases_from_value(
                     continue;
                 };
                 entries.push(ThinkingAliasEntry {
-                    mapping_id: model_alias_mapping_id(&revision, channel, 0, model_index),
+                    position: ModelAliasPosition { section: "oauth-model-alias".into(), provider_index: None, model_index },
                     source_model: source_model.to_string(),
                     alias: alias.to_string(),
                     effort: find_thinking_alias_effort(root, alias, &protocol),
@@ -2046,7 +2041,6 @@ pub(crate) fn speed_aliases_from_value(
         .as_mapping()
         .ok_or_else(|| "Kernel configuration root must be a YAML mapping".to_string())?;
     let mut entries = Vec::new();
-    let revision = model_alias_value_revision(document)?;
     if let Some(oauth_aliases) = yaml_mapping_value(root, "oauth-model-alias") {
         let oauth_aliases = oauth_aliases
             .as_mapping()
@@ -2080,7 +2074,7 @@ pub(crate) fn speed_aliases_from_value(
                     continue;
                 };
                 entries.push(SpeedAliasEntry {
-                    mapping_id: model_alias_mapping_id(&revision, channel, 0, model_index),
+                    position: ModelAliasPosition { section: "oauth-model-alias".into(), provider_index: None, model_index },
                     source_model: source_model.to_string(),
                     alias: alias.to_string(),
                     service_tier,
@@ -2128,7 +2122,6 @@ pub(crate) fn collect_config_thinking_alias_entries(
     protocol: &str,
     entries: &mut Vec<ThinkingAliasEntry>,
 ) -> Result<(), String> {
-    let revision = model_alias_value_revision(&serde_norway::Value::Mapping(root.clone()))?;
     let Some(providers) = yaml_mapping_value(root, section) else {
         return Ok(());
     };
@@ -2159,7 +2152,7 @@ pub(crate) fn collect_config_thinking_alias_entries(
                 continue;
             }
             entries.push(ThinkingAliasEntry {
-                mapping_id: model_alias_mapping_id(&revision, section, provider_index, model_index),
+                position: ModelAliasPosition { section: section.into(), provider_index: Some(provider_index), model_index },
                 source_model,
                 alias,
                 effort,
@@ -2180,7 +2173,6 @@ pub(crate) fn collect_config_speed_alias_entries(
     protocol: &str,
     entries: &mut Vec<SpeedAliasEntry>,
 ) -> Result<(), String> {
-    let revision = model_alias_value_revision(&serde_norway::Value::Mapping(root.clone()))?;
     let Some(providers) = yaml_mapping_value(root, section) else {
         return Ok(());
     };
@@ -2210,7 +2202,7 @@ pub(crate) fn collect_config_speed_alias_entries(
                 continue;
             };
             entries.push(SpeedAliasEntry {
-                mapping_id: model_alias_mapping_id(&revision, section, provider_index, model_index),
+                position: ModelAliasPosition { section: section.into(), provider_index: Some(provider_index), model_index },
                 source_model,
                 alias,
                 service_tier,

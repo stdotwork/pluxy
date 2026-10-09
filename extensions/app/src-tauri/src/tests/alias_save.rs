@@ -556,7 +556,7 @@ async fn alias_save_does_not_rollback_over_external_changes() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn alias_save_rejects_stale_snapshot_before_any_write() {
+async fn alias_save_allows_unrelated_changes_while_editor_was_open() {
     let core = MockCore::new(&format!("{CURRENT}debug: true\n"), Failure::None);
     let result = put_management_alias_config_changes(
         &core.config,
@@ -564,9 +564,9 @@ async fn alias_save_rejects_stale_snapshot_before_any_write() {
         &CURRENT.replace("my-alias", "renamed"),
     )
     .await;
-    assert!(result.unwrap_err().contains("Configuration changed"));
-    let (_, requests) = core.finish();
-    assert_eq!(requests, ["GET /v8/management/config.yaml"]);
+    result.unwrap();
+    let (_persisted, requests) = core.finish();
+    assert!(requests.iter().any(|request| request.starts_with("PUT")));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -586,7 +586,7 @@ async fn alias_save_succeeds_for_mixed_oauth_only_and_yaml_only_changes() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn alias_save_serializes_concurrent_writers_and_rejects_the_stale_one() {
+async fn alias_save_serializes_concurrent_writers() {
     let core = MockCore::new(CURRENT, Failure::None);
     let first = CURRENT.replace("my-alias", "first");
     let second = CURRENT.replace("my-alias", "second");
@@ -594,24 +594,21 @@ async fn alias_save_serializes_concurrent_writers_and_rejects_the_stale_one() {
         put_management_alias_config_changes(&core.config, CURRENT, &first),
         put_management_alias_config_changes(&core.config, CURRENT, &second),
     );
-    assert_ne!(a.is_ok(), b.is_ok());
+    assert!(a.is_ok());
+    assert!(b.is_ok());
     let (persisted, requests) = core.finish();
-    assert_eq!(
-        persisted,
-        yaml_json(if a.is_ok() { &first } else { &second })
-    );
+    assert!(persisted == yaml_json(&first) || persisted == yaml_json(&second));
     assert_eq!(
         requests
             .iter()
             .filter(|request| request.starts_with("PUT"))
             .count(),
-        2
+        4
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn alias_save_can_retry_after_restoration_reformats_yaml() {
-    let context = model_alias_edit_context(CURRENT, "my-alias", &[]).unwrap();
     let core = MockCore::new(CURRENT, Failure::YamlBeforeWrite);
     let updated = CURRENT.replace("my-alias", "renamed");
     assert!(
@@ -621,7 +618,6 @@ async fn alias_save_can_retry_after_restoration_reformats_yaml() {
             .contains("Original configuration was restored")
     );
     let restored = fetch_management_config_yaml(&core.config).await.unwrap();
-    validate_model_alias_revision(&restored, Some(&context.revision)).unwrap();
     let source = resolve_model_alias_edit_source(&restored, "my-alias", &[]).unwrap();
     let updated =
         edit_model_alias_in_yaml(&restored, "my-alias", &source, "renamed", "high", false).unwrap();
@@ -1041,7 +1037,7 @@ async fn alias_transaction_checks_core_before_a_local_only_commit() {
         Ok(())
     })
     .await;
-    assert!(result.is_err());
-    assert!(!committed.load(Ordering::SeqCst));
+    result.unwrap();
+    assert!(committed.load(Ordering::SeqCst));
     assert_eq!(core.finish().0, yaml_json(&current));
 }

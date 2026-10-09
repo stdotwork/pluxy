@@ -447,7 +447,7 @@ fn thinking_alias_adds_fork_and_matching_payload_rule() {
     assert_eq!(
         aliases,
         vec![ThinkingAliasEntry {
-            mapping_id: model_alias_mapping_id(&model_alias_config_revision(&rendered).unwrap(), "codex", 0, 0),
+            position: ModelAliasPosition { section: "oauth-model-alias".into(), provider_index: None, model_index: 0 },
             source_model: "gpt-5.5".to_string(),
             alias: "gpt-5.5-xhigh".to_string(),
             effort: Some("xhigh".to_string()),
@@ -468,7 +468,7 @@ fn model_alias_can_be_created_without_overrides() {
     assert_eq!(
         thinking_aliases_from_yaml(&rendered).unwrap(),
         vec![ThinkingAliasEntry {
-            mapping_id: model_alias_mapping_id(&model_alias_config_revision(&rendered).unwrap(), "codex", 0, 0),
+            position: ModelAliasPosition { section: "oauth-model-alias".into(), provider_index: None, model_index: 0 },
             source_model: "gpt-5.5".to_string(),
             alias: "gpt-5.5-alias".to_string(),
             effort: None,
@@ -569,7 +569,7 @@ fn speed_alias_adds_fast_service_tier_and_removes_only_its_rule() {
     assert_eq!(
         speed_aliases_from_yaml(&rendered).unwrap(),
         vec![SpeedAliasEntry {
-            mapping_id: model_alias_mapping_id(&model_alias_config_revision(&rendered).unwrap(), "codex", 0, 0),
+            position: ModelAliasPosition { section: "oauth-model-alias".into(), provider_index: None, model_index: 0 },
             source_model: "gpt-5.6-sol".to_string(),
             alias: "gpt-5.6-sol-fast".to_string(),
             service_tier: "priority".to_string(),
