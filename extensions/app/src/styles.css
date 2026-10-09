@@ -5620,9 +5620,10 @@ textarea:focus-visible {
 
 .thinking-alias-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 34px;
+  /* Keep the alias column fixed even when one row has HIGH/FAST badges. */
+  grid-template-columns: minmax(0, 1fr) 120px 73px;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-height: 66px;
   padding: 9px 7px 9px 10px;
   border-bottom: 1px solid var(--theme-eeeae2);
@@ -5708,6 +5709,17 @@ textarea:focus-visible {
   align-items: center;
   justify-content: flex-end;
   gap: 5px;
+  min-width: 0;
+}
+
+.thinking-alias-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.thinking-alias-actions .icon-button {
+  flex: 0 0 34px;
 }
 
 .thinking-effort-badge.missing {

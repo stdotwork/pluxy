@@ -230,7 +230,7 @@
 
 @container alias-list (max-width: 560px) {
   .thinking-alias-row {
-    grid-template-columns: minmax(0, 1fr) 34px;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .thinking-alias-route {
@@ -240,6 +240,10 @@
   .thinking-alias-badges {
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+
+  .thinking-alias-actions {
+    justify-content: flex-end;
   }
 }
 

@@ -858,23 +858,25 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
                   {entry.serviceTier ? (
                     <span className="thinking-effort-badge fast">{t('speedAliases.fast.title')}</span>
                   ) : null}
-                <button type="button" className="icon-button quiet" disabled={loading || Boolean(busyAlias)}
-                  onClick={() => void editAlias(entry)} title={t('common.edit')} aria-label={t('common.edit')}>
-                  <Pencil size={15} />
-                </button>
                 </div>
-                <button
-                  type="button"
-                  className="icon-button quiet danger"
-                  onClick={() => void deleteAlias(entry)}
-                  disabled={Boolean(busyAlias)}
-                  title={t('aliases.delete', { alias: entry.alias })}
-                  aria-label={t('aliases.delete', { alias: entry.alias })}
-                >
-                  {busyAction === 'delete' && busyAlias === entry.alias
-                    ? <LoaderCircle size={15} className="spin" />
-                    : <Trash2 size={15} />}
-                </button>
+                <div className="thinking-alias-actions">
+                  <button type="button" className="icon-button quiet" disabled={loading || Boolean(busyAlias)}
+                    onClick={() => void editAlias(entry)} title={t('common.edit')} aria-label={t('common.edit')}>
+                    <Pencil size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button quiet danger"
+                    onClick={() => void deleteAlias(entry)}
+                    disabled={Boolean(busyAlias)}
+                    title={t('aliases.delete', { alias: entry.alias })}
+                    aria-label={t('aliases.delete', { alias: entry.alias })}
+                  >
+                    {busyAction === 'delete' && busyAlias === entry.alias
+                      ? <LoaderCircle size={15} className="spin" />
+                      : <Trash2 size={15} />}
+                  </button>
+                </div>
               </article>
             ))}
           </div>
