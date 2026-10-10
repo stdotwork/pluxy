@@ -1,6 +1,10 @@
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { mkdirSync } = require('node:fs');
+
+const screenshots = path.resolve(__dirname, '..', 'output', 'playwright');
+mkdirSync(screenshots, { recursive: true });
 
 (async () => {
   const { createServer } = await import('vite');
@@ -28,6 +32,14 @@ const path = require('node:path');
     });
     await page.goto(`${base}/?mock=running&mockDelay=5`);
     await page.locator('.app-shell').waitFor();
+    await page.evaluate(() => {
+      const invoke = window.__TAURI_INTERNALS__.invoke;
+      window.contextReadRequests = [];
+      window.__TAURI_INTERNALS__.invoke = (command, args, options) => {
+        if (command === 'get_codex_session_context') window.contextReadRequests.push(args.request.sessionId);
+        return invoke(command, args, options);
+      };
+    });
     await page.locator('.nav-section button').nth(4).click();
     await page.locator('#agent-subpage-tab-sessions').click();
     await page.locator('.codex-sessions-page').waitFor();
@@ -46,9 +58,19 @@ const path = require('node:path');
     await page.locator('.sidebar-language-trigger').click();
     await page.getByRole('option', { name: 'English', exact: true }).click();
 
+    assert.deepEqual(await page.evaluate(() => window.contextReadRequests), []);
+    await page.locator('.codex-sessions-page').getByRole('button', { name: 'Refresh', exact: true }).click();
+    await entry.waitFor();
+    assert.deepEqual(await page.evaluate(() => window.contextReadRequests), []);
     await page.locator('.codex-session-context-button').first().click();
     await page.locator('.codex-session-context-editor').waitFor();
-    assert.equal(await page.locator('.context-metrics-grid > div').count(), 6);
+    await page.locator('.context-message-card').first().waitFor();
+    assert.equal((await page.evaluate(() => window.contextReadRequests)).length, 1);
+    assert.equal(await page.locator('.context-metrics-grid').count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Toggle session metadata', exact: true }).getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.getByLabel('Session Title', { exact: true }).count(), 0);
+    assert.equal(await page.locator('.context-role-filters .filter-chip').count(), 5);
+    await page.screenshot({ path: path.join(screenshots, 'codex-context-collapsed.png'), fullPage: true, animations: 'disabled' });
 
     const userCard = page.locator('.context-message-card.user').first();
     const toolCard = page.locator('.context-message-card.tool').first();
@@ -83,7 +105,9 @@ const path = require('node:path');
     await page.locator('.context-message-card.user', { hasText: 'Mock persistence check' }).waitFor();
 
     assert.equal(await page.locator('.raw-jsonl-textarea').count(), 0);
+    await page.getByRole('button', { name: 'Toggle session metadata', exact: true }).click();
     const sessionId = await page.locator('.context-id-badge').getAttribute('title');
+    assert.ok((await page.evaluate(() => window.contextReadRequests)).every(id => id === sessionId));
     await page.evaluate(() => {
       const invoke = window.__TAURI_INTERNALS__.invoke;
       window.rolloutOpenRequests = [];
@@ -142,7 +166,7 @@ const path = require('node:path');
       await page.locator('.sidebar-theme-selector button[aria-pressed="true"]').waitFor();
       const background = await page.locator('.context-meta-card').evaluate(card => getComputedStyle(card).backgroundColor);
       assert.equal(background, theme === 'dark' ? 'rgb(20, 23, 32)' : 'rgb(255, 255, 255)');
-      await page.screenshot({ path: `bin-work/codex-session-context-${theme}.png`, fullPage: true, animations: 'disabled' });
+      await page.screenshot({ path: path.join(screenshots, `codex-session-context-${theme}.png`), fullPage: true, animations: 'disabled' });
     }
 
     for (const width of [900, 640]) {
@@ -213,10 +237,10 @@ const path = require('node:path');
     await page.locator('.context-role-filters .filter-chip.assistant').click();
     await page.locator('.context-message-list').evaluate(list => { list.scrollTop = 0; });
     await page.locator('.context-message-card').first().scrollIntoViewIfNeeded();
-    await page.screenshot({ path: 'bin-work/codex-context-many-messages-fixed.png', animations: 'disabled' });
+    await page.screenshot({ path: path.join(screenshots, 'codex-context-many-messages-fixed.png'), animations: 'disabled' });
 
     assert.deepEqual(errors, []);
     assert.deepEqual(externalRequests, []);
-    console.log('PASS: Codex context saves, default-app opening, draft guards, themes and unclipped 43/1000-message lists across roles and widths.');
+    console.log('PASS: No context preloading; one target read on entry; collapsed metadata; saves, draft guards, themes and unclipped 43/1000-message lists.');
   } finally { await browser?.close(); await server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

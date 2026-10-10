@@ -1,7 +1,7 @@
 use super::*;
 use rusqlite::OptionalExtension;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::Write;
 
 const MAX_RAW_JSONL_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -128,6 +128,12 @@ struct RolloutTurnPosition {
     byte_offset: i64,
     end_ordinal: Option<i64>,
     end_byte_offset: Option<i64>,
+    status: &'static str,
+    started_at: Option<i64>,
+    completed_at: Option<i64>,
+    duration_ms: Option<i64>,
+    error_json: Option<String>,
+    root_turn_id: Option<String>,
 }
 
 /// Byte offset and next ordinal the local history projection must resume from
@@ -219,23 +225,6 @@ fn discover_thread_history_databases(codex_home: &Path) -> Vec<PathBuf> {
     }
     candidates.sort();
     candidates
-}
-
-fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("Failed to open {} for hashing: {error}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("Failed to hash {}: {error}", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn acquire_session_writer_lock(codex_home: &Path, session_id: &str) -> Result<fs::File, String> {
@@ -544,25 +533,6 @@ fn find_rollout_for_session(
             if let Some(id) = rollout_thread_id_from_file_name(path) {
                 if id == session_id {
                     return validated_rollout_path(codex_home, path);
-                }
-            }
-        }
-        for path in &rollout_files {
-            if let Ok(file) = fs::File::open(path) {
-                if let Some(Ok(first_line)) = BufReader::new(file).lines().next() {
-                    if let Ok(val) = serde_json::from_str::<Value>(&first_line) {
-                        if val.get("type").and_then(Value::as_str) == Some("session_meta") {
-                            if let Some(id) = val
-                                .get("payload")
-                                .and_then(|payload| payload.get("id"))
-                                .and_then(Value::as_str)
-                            {
-                                if id == session_id {
-                                    return validated_rollout_path(codex_home, path);
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -1149,6 +1119,7 @@ struct TrackedCopy {
     kind: TrackedItemKind,
     text: String,
     is_event_copy: bool,
+    is_legacy_copy: bool,
     turn_id: String,
     explicit_id: Option<String>,
 }
@@ -1221,15 +1192,31 @@ fn tracked_copies(records: &[Value]) -> Vec<TrackedCopy> {
                 }
                 continue;
             }
-            if event_type != "item_completed" {
-                continue;
-            }
             let turn_id = payload
                 .get("turn_id")
                 .and_then(Value::as_str)
                 .filter(|turn_id| !turn_id.is_empty())
                 .unwrap_or(current_turn_id.as_str())
                 .to_string();
+            if matches!(event_type, "user_message" | "agent_message") {
+                copies.push(TrackedCopy {
+                    line_index,
+                    kind: if event_type == "user_message" {
+                        TrackedItemKind::UserMessage
+                    } else {
+                        TrackedItemKind::AgentMessage
+                    },
+                    text: payload["message"].as_str().unwrap_or_default().to_string(),
+                    is_event_copy: true,
+                    is_legacy_copy: true,
+                    turn_id,
+                    explicit_id: None,
+                });
+                continue;
+            }
+            if event_type != "item_completed" {
+                continue;
+            }
             let Some(item) = payload.get("item") else {
                 continue;
             };
@@ -1243,6 +1230,7 @@ fn tracked_copies(records: &[Value]) -> Vec<TrackedCopy> {
                 kind,
                 text: tracked_item_text(item, kind),
                 is_event_copy: true,
+                is_legacy_copy: false,
                 turn_id,
                 explicit_id: non_empty_string(item.get("id")),
             });
@@ -1280,6 +1268,7 @@ fn tracked_copies(records: &[Value]) -> Vec<TrackedCopy> {
                     kind,
                     text: tracked_item_text(payload, kind),
                     is_event_copy: false,
+                    is_legacy_copy: false,
                     turn_id,
                     explicit_id: response_item_retained_id(record),
                 });
@@ -1289,6 +1278,7 @@ fn tracked_copies(records: &[Value]) -> Vec<TrackedCopy> {
                 kind: TrackedItemKind::Reasoning,
                 text: tracked_item_text(payload, TrackedItemKind::Reasoning),
                 is_event_copy: false,
+                is_legacy_copy: false,
                 turn_id,
                 explicit_id: non_empty_string(payload.get("id"))
                     .or_else(|| response_item_retained_id(record)),
@@ -1333,11 +1323,10 @@ fn group_tracked_copies(copies: Vec<TrackedCopy>) -> Vec<TrackedGroup> {
             if group.kind != orphan.kind {
                 continue;
             }
-            if group
-                .copies
-                .iter()
-                .any(|copy| copy.is_event_copy == orphan.is_event_copy)
-            {
+            if group.copies.iter().any(|copy| {
+                copy.is_event_copy == orphan.is_event_copy
+                    && copy.is_legacy_copy == orphan.is_legacy_copy
+            }) {
                 continue;
             }
             if !orphan.turn_id.is_empty()
@@ -1390,7 +1379,8 @@ fn group_ordinal(records: &[Value], group: &TrackedGroup) -> Option<i64> {
     let copy = group
         .copies
         .iter()
-        .find(|copy| copy.is_event_copy)
+        .find(|copy| copy.is_event_copy && !copy.is_legacy_copy)
+        .or_else(|| group.copies.iter().find(|copy| !copy.is_event_copy))
         .or_else(|| group.copies.first())?;
     Some(
         records
@@ -1450,10 +1440,32 @@ fn collect_projection_positions(records: &[Value], serialized: &[u8], plan: &mut
                                 byte_offset,
                                 end_ordinal: None,
                                 end_byte_offset: None,
+                                status: "inProgress",
+                                started_at: None,
+                                completed_at: None,
+                                duration_ms: None,
+                                error_json: None,
+                                root_turn_id: None,
                             });
+                    position.started_at = payload["started_at"].as_i64().or(position.started_at);
+                    position.root_turn_id = non_empty_string(payload.get("root_turn_id"))
+                        .or_else(|| position.root_turn_id.clone());
                     if matches!(event_type, "task_complete" | "turn_aborted") {
                         position.end_ordinal = Some(ordinal);
                         position.end_byte_offset = Some(end_offset);
+                        position.error_json = payload
+                            .get("error")
+                            .filter(|error| !error.is_null())
+                            .map(Value::to_string);
+                        position.status = if event_type == "turn_aborted" {
+                            "interrupted"
+                        } else if position.error_json.is_some() {
+                            "failed"
+                        } else {
+                            "completed"
+                        };
+                        position.completed_at = payload["completed_at"].as_i64();
+                        position.duration_ms = payload["duration_ms"].as_i64();
                     }
                     // Tool items also have canonical completion records.
                     if event_type == "item_completed" {
@@ -1488,7 +1500,8 @@ fn refresh_task_complete_messages(
         if let Some(copy) = group
             .copies
             .iter()
-            .find(|copy| copy.is_event_copy)
+            .find(|copy| copy.is_event_copy && !copy.is_legacy_copy)
+            .or_else(|| group.copies.iter().find(|copy| !copy.is_event_copy))
             .or_else(|| group.copies.first())
         {
             agents_by_line.insert(
@@ -1690,20 +1703,21 @@ fn build_updated_rollout(
             TrackedItemKind::AgentMessage => "assistant",
             TrackedItemKind::Reasoning => "reasoning",
         };
-        let event = group
+        let events = group
             .copies
             .iter()
-            .find(|copy| copy.is_event_copy)
-            .and_then(|copy| {
-                group
-                    .id
-                    .as_ref()
-                    .map(|id| (parsed[copy.line_index].0, id.clone()))
-            });
+            .filter(|copy| copy.is_event_copy)
+            .map(|copy| parsed[copy.line_index].0)
+            .collect::<Vec<_>>();
         for copy in group.copies.iter().filter(|copy| !copy.is_event_copy) {
             response_to_sync_info.insert(
                 parsed[copy.line_index].0,
-                (turn.clone(), role.to_string(), event.clone()),
+                (
+                    turn.clone(),
+                    role.to_string(),
+                    group.id.clone(),
+                    events.clone(),
+                ),
             );
         }
     }
@@ -1724,19 +1738,21 @@ fn build_updated_rollout(
         let update = updates[&line_number];
         if update.deleted == Some(true) {
             deleted_lines.insert(line_number);
-            if let Some((turn_id, role, maybe_event)) = response_to_sync_info.get(&line_number) {
-                if let Some((evt_line, evt_id)) = maybe_event {
-                    deleted_lines.insert(*evt_line);
+            if let Some((turn_id, role, item_id, event_lines)) =
+                response_to_sync_info.get(&line_number)
+            {
+                deleted_lines.extend(event_lines);
+                if let Some(item_id) = item_id {
                     sync_plan
                         .deleted_item_keys
-                        .insert((evt_id.clone(), turn_id.clone()));
+                        .insert((item_id.clone(), turn_id.clone()));
                 }
                 if role == "assistant" {
                     touched_agent_turns.insert(turn_id.clone());
                 }
             }
         } else if update.content.is_some() || update.role.is_some() {
-            if let Some((turn_id, original_role, maybe_event)) =
+            if let Some((turn_id, original_role, item_id, event_lines)) =
                 response_to_sync_info.get(&line_number)
             {
                 if let Some(requested_role) = update.role.as_deref() {
@@ -1752,10 +1768,12 @@ fn build_updated_rollout(
                     .clone()
                     .or_else(|| original_line_text.get(&line_number).cloned())
                     .ok_or_else(|| format!("Line {} has no editable text", line_number + 1))?;
-                if let Some((evt_line, evt_id)) = maybe_event {
-                    updated_event_content.insert(*evt_line, new_text.clone());
+                for event_line in event_lines {
+                    updated_event_content.insert(*event_line, new_text.clone());
+                }
+                if let Some(item_id) = item_id {
                     sync_plan.updated_items.push(RolloutItemSync {
-                        item_id: evt_id.clone(),
+                        item_id: item_id.clone(),
                         turn_id: turn_id.clone(),
                         item_type: match original_role.as_str() {
                             "user" => "userMessage",
@@ -1914,6 +1932,12 @@ fn build_updated_rollout(
             }
         } else if record.get("type").and_then(Value::as_str) == Some("event_msg") {
             if let Some(new_text) = updated_event_content.get(&line_number) {
+                if matches!(
+                    record["payload"]["type"].as_str(),
+                    Some("user_message" | "agent_message")
+                ) {
+                    record["payload"]["message"] = json!(new_text);
+                }
                 if let Some(item_obj) = record
                     .get_mut("payload")
                     .and_then(|p| p.get_mut("item"))
@@ -1992,6 +2016,31 @@ fn build_updated_rollout(
     }
 
     if !added_records.is_empty() {
+        let has_turn = original_records.iter().any(|record| {
+            record["type"] == "event_msg"
+                && matches!(
+                    record["payload"]["type"].as_str(),
+                    Some("task_started" | "item_completed" | "task_complete" | "turn_aborted")
+                )
+                && record["payload"]["turn_id"].as_str() == Some(last_turn_id.as_str())
+        });
+        if !has_turn {
+            let timestamp = Utc::now();
+            added_records.insert(
+                0,
+                json!({
+                    "timestamp": timestamp.to_rfc3339(), "type": "event_msg",
+                    "payload": { "type": "task_started", "turn_id": last_turn_id,
+                        "started_at": timestamp.timestamp() }
+                }),
+            );
+            added_records.push(json!({
+                "timestamp": timestamp.to_rfc3339(), "type": "event_msg",
+                "payload": { "type": "task_complete", "turn_id": last_turn_id,
+                    "started_at": timestamp.timestamp(), "completed_at": timestamp.timestamp(),
+                    "duration_ms": 0, "last_agent_message": null }
+            }));
+        }
         // Add within the last turn, before its existing terminal record. Keep
         // completed/aborted status and timing; an open turn stays open.
         let mut insertion = records.len();
@@ -2384,6 +2433,49 @@ fn sync_thread_history_projection_databases(
             total_rows_affected += deleted;
         }
 
+        let mut new_turns = HashSet::new();
+        for new_item in &plan.new_items {
+            if !new_turns.insert(new_item.turn_id.as_str()) || turn_columns.is_empty() {
+                continue;
+            }
+            let position = plan.turn_positions.get(&new_item.turn_id).ok_or_else(|| {
+                format!("Missing rollout position for new turn {}", new_item.turn_id)
+            })?;
+            let mut columns = vec!["thread_id", "turn_id"];
+            let mut values: Vec<Box<dyn ToSql>> = vec![
+                Box::new(session_id.to_string()),
+                Box::new(new_item.turn_id.clone()),
+            ];
+            for (column, value) in [
+                ("rollout_ordinal", json!(position.ordinal)),
+                ("rollout_byte_offset", json!(position.byte_offset)),
+                ("rollout_end_ordinal", json!(position.end_ordinal)),
+                ("rollout_end_byte_offset", json!(position.end_byte_offset)),
+                ("status", json!(position.status)),
+                ("started_at", json!(position.started_at)),
+                ("completed_at", json!(position.completed_at)),
+                ("duration_ms", json!(position.duration_ms)),
+                ("error_json", json!(position.error_json)),
+                ("root_turn_id", json!(position.root_turn_id)),
+            ] {
+                if turn_columns.contains(column) {
+                    columns.push(column);
+                    values.push(sqlite_param_for_json(Some(&value)));
+                }
+            }
+            let placeholders = vec!["?"; columns.len()].join(", ");
+            let refs = values
+                .iter()
+                .map(|value| value.as_ref())
+                .collect::<Vec<_>>();
+            total_rows_affected += transaction.execute(
+                &format!("INSERT INTO thread_turns ({}) SELECT {placeholders} WHERE NOT EXISTS (SELECT 1 FROM thread_turns WHERE thread_id = ? AND turn_id = ?)", columns.join(", ")),
+                rusqlite::params_from_iter(refs.into_iter().chain([
+                    &session_id as &dyn ToSql, &new_item.turn_id as &dyn ToSql,
+                ])),
+            ).map_err(|error| format!("Failed to create thread turn {}: {error}", new_item.turn_id))?;
+        }
+
         for (index, new_item) in plan.new_items.iter().enumerate() {
             let item_json = if new_item.item_type == "agentMessage" {
                 json!({
@@ -2693,18 +2785,31 @@ fn get_codex_session_context_from_home(
     let mut rollout_sha256 = None;
 
     if let Some(ref path) = rollout_path_buf {
-        if let Ok(meta) = fs::metadata(path) {
-            file_size_bytes = meta.len();
-        }
-        rollout_sha256 = Some(sha256_file(path)?);
-        if let Ok(file) = fs::File::open(path) {
-            let reader = BufReader::new(file);
-            for (idx, line_res) in reader.lines().enumerate() {
-                let Ok(line) = line_res else {
-                    continue;
-                };
+        let file = fs::File::open(path)
+            .map_err(|error| format!("Failed to read rollout {}: {error}", path.display()))?;
+        let mut hasher = Sha256::new();
+        let mut raw_bytes = Some(Vec::new());
+        {
+            let mut reader = BufReader::new(file);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                let read = reader.read_until(b'\n', &mut line).map_err(|error| {
+                    format!("Failed to read rollout {}: {error}", path.display())
+                })?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&line);
+                file_size_bytes += read as u64;
+                if file_size_bytes > MAX_RAW_JSONL_BYTES {
+                    raw_bytes = None;
+                } else if let Some(bytes) = raw_bytes.as_mut() {
+                    bytes.extend_from_slice(&line);
+                }
+                let idx = total_lines;
                 total_lines += 1;
-                let Ok(record) = serde_json::from_str::<Value>(&line) else {
+                let Ok(record) = serde_json::from_slice::<Value>(&line) else {
                     continue;
                 };
                 let rec_type = record
@@ -2815,14 +2920,8 @@ fn get_codex_session_context_from_home(
                 }
             }
         }
-        if file_size_bytes <= MAX_RAW_JSONL_BYTES {
-            raw_jsonl = fs::read_to_string(path).ok();
-        }
-        if rollout_sha256.as_deref() != Some(sha256_file(path)?.as_str()) {
-            return Err(
-                "The rollout changed while loading. Reload the session before editing".to_string(),
-            );
-        }
+        raw_jsonl = raw_bytes.and_then(|bytes| String::from_utf8(bytes).ok());
+        rollout_sha256 = Some(format!("{:x}", hasher.finalize()));
     } else if matched_database_path.is_none() {
         return Err(format!(
             "Session {session_id} not found in database or rollout files"
@@ -3108,6 +3207,138 @@ mod tests {
         )
     }
     #[test]
+    fn legacy_message_copies_follow_edits_and_deletions_in_their_turn() {
+        for canonical in [false, true] {
+            for deleted in [false, true] {
+                for role in ["user", "assistant"] {
+                    let root = test_root("legacy-message-mirrors");
+                    let session_id = dynamic_session_id();
+                    let fixture = seed_context_edit_fixture(&root, &session_id);
+                    let mut records =
+                        vec![json!({"type":"session_meta","payload":{"id":session_id}})];
+                    for turn in ["edited-turn", "untouched-turn"] {
+                        records.push(json!({"type":"event_msg","payload":{"type":"task_started","turn_id":turn}}));
+                        records.push(json!({"type":"event_msg","payload":{"type":"user_message","message":"Repeated user","images":[],"local_images":[]}}));
+                        records.push(json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Repeated user"}]}}));
+                        if canonical {
+                            records.push(json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":turn,"item":{"type":"UserMessage","id":"user-id","content":[{"type":"text","text":"Repeated user"}]}}}));
+                        }
+                        records.push(json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Repeated answer"}]}}));
+                        records.push(json!({"type":"event_msg","payload":{"type":"agent_message","message":"Repeated answer","phase":"final_answer"}}));
+                        if canonical {
+                            records.push(json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":turn,"item":{"type":"AgentMessage","id":"agent-id","content":[{"type":"Text","text":"Repeated answer"}]}}}));
+                        }
+                        records.push(json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":turn,"last_agent_message":"Repeated answer"}}));
+                    }
+                    let original = serialize_jsonl(&records, "\r\n").unwrap();
+                    fs::write(&fixture.rollout, &original).unwrap();
+                    let connection = Connection::open(&fixture.history_db).unwrap();
+                    connection.execute("UPDATE thread_history_projection_state SET next_rollout_byte_offset=?1,next_rollout_ordinal=?2", rusqlite::params![original.len() as i64, records.len() as i64]).unwrap();
+                    drop(connection);
+                    let context = get_codex_session_context_from_home(&root, &session_id).unwrap();
+                    let line = context
+                        .messages
+                        .iter()
+                        .find(|message| message.role == role)
+                        .unwrap()
+                        .line_number;
+                    let mut request = context_save_request(&context);
+                    request.message_updates = Some(vec![CodexSessionMessageUpdate {
+                        line_number: line,
+                        role: None,
+                        content: Some("Changed message".into()),
+                        deleted: Some(deleted),
+                    }]);
+                    save_codex_session_context_from_home(&root, request).unwrap();
+                    let saved = fs::read_to_string(&fixture.rollout).unwrap();
+                    let parsed = validate_raw_jsonl(&saved, &session_id).unwrap();
+                    let event_type = if role == "user" {
+                        "user_message"
+                    } else {
+                        "agent_message"
+                    };
+                    let messages = parsed
+                        .iter()
+                        .filter(|(_, record)| record["payload"]["type"] == event_type)
+                        .map(|(_, record)| record["payload"]["message"].as_str().unwrap())
+                        .collect::<Vec<_>>();
+                    let untouched = if role == "user" {
+                        "Repeated user"
+                    } else {
+                        "Repeated answer"
+                    };
+                    assert_eq!(
+                        messages,
+                        if deleted {
+                            vec![untouched]
+                        } else {
+                            vec!["Changed message", untouched]
+                        }
+                    );
+                    assert!(saved.contains("\r\n"));
+                    fs::remove_dir_all(root).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn appending_to_an_empty_fork_creates_a_readable_turn_and_rolls_back_on_failure() {
+        for fail_summary in [false, true] {
+            let root = test_root("context-empty-fork-turn");
+            let session_id = dynamic_session_id();
+            let fixture = seed_context_edit_fixture(&root, &session_id);
+            let original = serialize_jsonl(&[json!({"type":"session_meta","payload":{"id":session_id,"forked_from_id":"parent-thread"}})], "\n").unwrap();
+            fs::write(&fixture.rollout, &original).unwrap();
+            let connection = Connection::open(&fixture.history_db).unwrap();
+            connection.execute_batch("DELETE FROM thread_items; ALTER TABLE thread_turns ADD COLUMN rollout_byte_offset INTEGER; ALTER TABLE thread_turns ADD COLUMN rollout_end_ordinal INTEGER; ALTER TABLE thread_turns ADD COLUMN rollout_end_byte_offset INTEGER; CREATE UNIQUE INDEX turns_page ON thread_turns(thread_id, rollout_ordinal);").unwrap();
+            connection.execute("UPDATE thread_history_projection_state SET next_rollout_byte_offset=?1,next_rollout_ordinal=1", [original.len() as i64]).unwrap();
+            if fail_summary {
+                connection.execute_batch("CREATE TRIGGER fail_summary BEFORE UPDATE OF first_user_item_id ON thread_turns BEGIN SELECT RAISE(ABORT, 'summary failure'); END;").unwrap();
+            }
+            drop(connection);
+            let context = get_codex_session_context_from_home(&root, &session_id).unwrap();
+            let mut request = context_save_request(&context);
+            request.new_messages = Some(vec![
+                CodexSessionNewMessage {
+                    role: "user".into(),
+                    content: "New question".into(),
+                },
+                CodexSessionNewMessage {
+                    role: "assistant".into(),
+                    content: "New answer".into(),
+                },
+            ]);
+            let result = save_codex_session_context_from_home(&root, request);
+            let connection = Connection::open(&fixture.history_db).unwrap();
+            if fail_summary {
+                assert!(result.unwrap_err().contains("summary failure"));
+                assert_eq!(fs::read(&fixture.rollout).unwrap(), original);
+                let counts: (i64,i64) = connection.query_row("SELECT (SELECT COUNT(*) FROM thread_items), (SELECT COUNT(*) FROM thread_turns)", [], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+                assert_eq!(counts, (0, 0));
+            } else {
+                result.unwrap();
+                let summary: (String, String, String, i64, i64) = connection.query_row(
+                    "SELECT turns.status, user.item_json, agent.item_json, turns.rollout_ordinal, turns.rollout_end_byte_offset FROM thread_turns turns JOIN thread_items user ON user.thread_id=turns.thread_id AND user.turn_id=turns.turn_id AND user.item_id=turns.first_user_item_id JOIN thread_items agent ON agent.thread_id=turns.thread_id AND agent.turn_id=turns.turn_id AND agent.item_id=turns.final_agent_item_id WHERE turns.thread_id=?1",
+                    [&session_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).unwrap();
+                assert_eq!(summary.0, "completed");
+                assert!(summary.1.contains("New question"));
+                assert!(summary.2.contains("New answer"));
+                assert_eq!(summary.3, 1);
+                assert_eq!(
+                    summary.4,
+                    fs::metadata(&fixture.rollout).unwrap().len() as i64
+                );
+                let saved = fs::read_to_string(&fixture.rollout).unwrap();
+                assert!(saved.contains("\"type\":\"task_started\""));
+                assert!(saved.contains("\"last_agent_message\":\"New answer\""));
+            }
+            drop(connection);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn session_context_validation_rejects_path_traversal() {
         assert!(validate_session_id("../etc/passwd").is_err());
         assert!(validate_session_id("..\\windows\\system32").is_err());
@@ -3139,6 +3370,28 @@ mod tests {
     }
 
     #[test]
+    fn context_lookup_does_not_open_unrelated_rollouts() {
+        let root = test_root("context-no-unrelated-read");
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        let session_id = dynamic_session_id();
+        let other_id = dynamic_session_id();
+        let content = format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":session_id}})
+        );
+        fs::write(
+            root.join("sessions")
+                .join(format!("rollout-{other_id}.jsonl")),
+            content,
+        )
+        .unwrap();
+        assert!(find_rollout_for_session(&root, &session_id)
+            .unwrap()
+            .is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn export_jsonl_limit_keeps_structured_messages_and_original_path() {
         let root = test_root("context-export-limit");
         fs::create_dir_all(root.join("sessions")).unwrap();
@@ -3154,6 +3407,14 @@ mod tests {
             let detail = get_codex_session_context_from_home(&root, &session_id).unwrap();
             assert_eq!(detail.raw_jsonl_available, size <= MAX_RAW_JSONL_BYTES);
             assert_eq!(detail.raw_jsonl.is_some(), detail.raw_jsonl_available);
+            assert_eq!(
+                detail.rollout_sha256.as_deref(),
+                Some(sha256_hex(&bytes).as_str())
+            );
+            assert_eq!(detail.stats.file_size_bytes, bytes.len() as u64);
+            if let Some(raw) = detail.raw_jsonl.as_ref() {
+                assert_eq!(raw.as_bytes(), bytes);
+            }
             assert_eq!(detail.messages[0].content, "still readable");
             assert_eq!(
                 find_rollout_for_session(&root, &session_id)

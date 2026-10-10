@@ -76,7 +76,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
   const [model, setModel] = useState('');
   const [modelProvider, setModelProvider] = useState('');
   const [archived, setArchived] = useState(false);
-  const [metaExpanded, setMetaExpanded] = useState(true);
+  const [metaExpanded, setMetaExpanded] = useState(false);
 
   const [messageEdits, setMessageEdits] = useState<Record<number, MessageEditState>>({});
   const [newMessages, setNewMessages] = useState<CodexSessionNewMessage[]>([]);
@@ -91,6 +91,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
 
   const mountedRef = useRef(true);
+  const pendingReadRef = useRef<{ sessionId: string; promise: Promise<CodexSessionContextDetail> } | null>(null);
   const savingRef = useRef(false);
   const translateRef = useRef(t);
   translateRef.current = t;
@@ -123,11 +124,13 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
   const loadContext = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     if (!silent) setNotice(null);
+    const pending = pendingReadRef.current?.sessionId === sessionId
+      ? pendingReadRef.current
+      : { sessionId, promise: invoke<CodexSessionContextDetail>('get_codex_session_context', { request: { sessionId } }) };
+    pendingReadRef.current = pending;
     try {
-      const data = await invoke<CodexSessionContextDetail>('get_codex_session_context', {
-        request: { sessionId },
-      });
-      if (!mountedRef.current) return;
+      const data = await pending.promise;
+      if (!mountedRef.current || pendingReadRef.current !== pending) return;
       setDetail(data);
       setTitle(data.title || '');
       setCwd(data.cwd || '');
@@ -154,6 +157,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
       setNotice({ kind: 'error', message: translateRef.current('agents.sessions.context.loadFailed', { error: msg }) });
       return false;
     } finally {
+      if (pendingReadRef.current === pending) pendingReadRef.current = null;
       if (!silent && mountedRef.current) setLoading(false);
     }
   }, [sessionId]);
@@ -367,24 +371,6 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
           </button>
           <div className="context-editor-title-group">
             <h1>{title || t('agents.sessions.untitled')}</h1>
-            <div className="context-editor-badges">
-              <button
-                type="button"
-                className="context-badge context-id-badge"
-                title={sessionId}
-                aria-label={`${t('common.copy')}: ${sessionId}`}
-                onClick={() => copyToClipboard(sessionId, 'id')}
-              >
-                <code>{sessionId}</code>
-                {copiedKey === 'id' ? <Check size={12} className="success-icon" /> : <Copy size={12} />}
-              </button>
-              <span className={`context-badge ${archived ? 'archived' : 'active'}`}>
-                {archived ? t('agents.sessions.context.isArchived') : t('agents.sessions.context.isNotArchived')}
-              </span>
-              {modelProvider ? (
-                <span className="context-badge provider-badge">{modelProvider}</span>
-              ) : null}
-            </div>
           </div>
         </div>
 
@@ -398,17 +384,6 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
           >
             <RefreshCw size={14} className={loading ? 'spin' : ''} />
             <span>{t('agents.sessions.context.reload')}</span>
-          </button>
-
-          <button
-            type="button"
-            className="secondary-button compact-button"
-            disabled={loading || saving || isDirty || !detail?.rawJsonlAvailable || !detail.rawJsonl}
-            onClick={handleExportJsonl}
-            title={t('agents.sessions.context.exportJsonl')}
-          >
-            <Download size={14} />
-            <span>{t('agents.sessions.context.exportJsonl')}</span>
           </button>
 
           <button
@@ -435,39 +410,30 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
         </div>
       ) : null}
 
-      {detail ? (
-        <section className="codex-session-metrics context-metrics-grid">
-          {([
-            ['totalLines', detail.stats.totalLines],
-            ['messagesCount', detail.stats.messageCount],
-            ['userTurns', detail.stats.userMessageCount],
-            ['assistantTurns', detail.stats.assistantMessageCount],
-            ['toolExecutions', detail.stats.toolCount],
-            ['reasoningTurns', detail.stats.reasoningCount],
-            ['fileSize', formatBytes(detail.stats.fileSizeBytes)],
-          ] as const).filter(([label, value]) => label !== 'reasoningTurns' || value).map(([label, value]) => (
-            <div key={label}>
-              <span>{t(`agents.sessions.context.${label}`)}</span>
-              <strong>{value}</strong>
-            </div>
-          ))}
-        </section>
-      ) : null}
-
       <section className="context-meta-card">
-        <div className="context-meta-head" onClick={() => setMetaExpanded((prev) => !prev)}>
-          <div className="context-meta-head-title">
+        <button type="button" className="context-meta-head" onClick={() => setMetaExpanded((prev) => !prev)}
+          aria-expanded={metaExpanded} aria-controls="context-metadata" aria-label={t('agents.sessions.context.toggleMetadata')}>
+          <span className="context-meta-head-title">
             <Folder size={16} />
             <strong>{t('agents.sessions.context.metadata')}</strong>
-            <small>{detail?.updatedAtMs ? displayDate(detail.updatedAtMs) : t('agents.sessions.noTime')}</small>
-          </div>
-          <button type="button" className="context-toggle-button" aria-expanded={metaExpanded} aria-label={t('agents.sessions.context.toggleMetadata')}>
-            {metaExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
-        </div>
+          </span>
+          {metaExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
 
         {metaExpanded ? (
-          <div className="context-meta-body">
+          <div className="context-meta-body" id="context-metadata">
+            <div className="context-editor-badges">
+              <button type="button" className="context-badge context-id-badge" title={sessionId}
+                aria-label={`${t('common.copy')}: ${sessionId}`} onClick={() => copyToClipboard(sessionId, 'id')}>
+                <code>{sessionId}</code>
+                {copiedKey === 'id' ? <Check size={12} className="success-icon" /> : <Copy size={12} />}
+              </button>
+              <span className={`context-badge ${archived ? 'archived' : 'active'}`}>
+                {archived ? t('agents.sessions.context.isArchived') : t('agents.sessions.context.isNotArchived')}
+              </span>
+              <small>{detail?.updatedAtMs ? displayDate(detail.updatedAtMs) : t('agents.sessions.noTime')}</small>
+              {detail ? <small>{t('agents.sessions.context.fileSize')}: {formatBytes(detail.stats.fileSizeBytes)}</small> : null}
+            </div>
             <div className="context-form-grid">
               {([
                 { label: 'sessionTitle', value: title, set: setTitle, placeholder: 'agents.sessions.untitled' },
@@ -514,29 +480,34 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 <span>{t('agents.sessions.context.archived')}</span>
               </label>
             </div>
+            <div className="context-editor-actions">
+              <button type="button" className="secondary-button compact-button"
+                disabled={loading || saving || isDirty || !detail?.rawJsonlAvailable || !detail.rawJsonl}
+                onClick={handleExportJsonl} title={t('agents.sessions.context.exportJsonl')}>
+                <Download size={14} />
+                <span>{t('agents.sessions.context.exportJsonl')}</span>
+              </button>
+              <button type="button" className="secondary-button compact-button"
+                disabled={loading || saving || opening || isDirty || !detail?.rolloutPath}
+                onClick={async () => {
+                  setOpening(true);
+                  try {
+                    await invoke('open_codex_session_rollout', { request: { sessionId } });
+                  } catch (error) {
+                    setNotice({ kind: 'error', message: t('agents.sessions.context.openFailed', { error: String(error) }) });
+                  } finally {
+                    setOpening(false);
+                  }
+                }}>
+                <ExternalLink size={15} />
+                <span>{t('agents.sessions.context.openRaw')}</span>
+              </button>
+            </div>
+            <p className="context-edit-safety">{t('agents.sessions.context.externalEditNotice')}</p>
           </div>
         ) : null}
       </section>
 
-      <div className="context-filter-toolbar">
-        <span>{t('agents.sessions.context.tabStructured')}</span>
-        <button type="button" className="secondary-button compact-button"
-          disabled={loading || saving || opening || isDirty || !detail?.rolloutPath}
-          onClick={async () => {
-            setOpening(true);
-            try {
-              await invoke('open_codex_session_rollout', { request: { sessionId } });
-            } catch (error) {
-              setNotice({ kind: 'error', message: t('agents.sessions.context.openFailed', { error: String(error) }) });
-            } finally {
-              setOpening(false);
-            }
-          }}>
-          <ExternalLink size={15} />
-          <span>{t('agents.sessions.context.openRaw')}</span>
-        </button>
-      </div>
-      <p className="context-edit-safety">{t('agents.sessions.context.externalEditNotice')}</p>
         <section className="context-messages-section">
           <div className="context-filter-toolbar">
             <div className="context-role-filters">
