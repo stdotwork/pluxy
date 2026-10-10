@@ -40,6 +40,7 @@ let embedded=params.has('embedded');
 (window as any).fixtureSessionIds=Array.from({length:61},(_,index)=>`session-${index+1}`);
 mockIPC(async (cmd,args:any) => {
  calls.push({cmd,args});
+ if(cmd==='plugin:dialog|open') return (window as any).fixtureSelectedProgram ?? null;
  if((window as any).fixtureDeferredCommands?.includes(cmd)) {
    await new Promise<void>(resolve=>{
      ((window as any).fixturePendingCommands??=[]).push({cmd,resolve});
@@ -71,6 +72,7 @@ mockIPC(async (cmd,args:any) => {
    nativeOauth=true; return {outcome:'updated'};
  }
  if(cmd==='get_agent_models') {
+   if((window as any).fixtureModelsOverride !== undefined)return (window as any).fixtureModelsOverride;
    if(params.has('claude-alias-layout'))return claudeAliasLayoutModels;
    if(params.has('no-models'))return [];
    if(params.has('no-core'))throw new Error('CPA core is offline');

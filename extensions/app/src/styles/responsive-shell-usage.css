@@ -1,18 +1,3 @@
-/* Keep footer controls reachable when desktop navigation exceeds the height. */
-@media (min-width: 901px) {
-  .sidebar-brand,
-  .sidebar-bottom {
-    flex-shrink: 0;
-  }
-
-  .sidebar > .nav-section {
-    min-height: 0;
-    margin-bottom: 18px;
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-width: thin;
-  }
-}
 
 @media (max-width: 900px) {
   .app-shell:has(.usage-records-page) {

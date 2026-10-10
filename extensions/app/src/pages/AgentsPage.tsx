@@ -404,18 +404,21 @@ const agentModelsCache: Partial<Record<AgentClientId, ModelOption[]>> = {};
 const AGENT_SELECTED_CLIENT_KEY = 'cpa-gui.agent-selected-client.v1';
 const AGENT_LAUNCH_DIRECTORY_HISTORY_KEY = 'cpa-gui.agent-launch-directory-history.v1';
 const AGENT_EXECUTABLE_PATHS_KEY = 'cpa-gui.agent-executable-paths.v1';
-const readAgentExecutablePaths = (): Partial<Record<AgentClientId, string>> => {
+type AgentExecutablePaths = Partial<Record<AgentClientId | `${AgentClientId}:app`, string>>;
+const readAgentExecutablePaths = (): AgentExecutablePaths => {
   if (typeof window === 'undefined') return {};
   try {
     const parsed = JSON.parse(window.localStorage.getItem(AGENT_EXECUTABLE_PATHS_KEY) || '{}') as Record<string, unknown>;
-    return agentDefinitions.reduce<Partial<Record<AgentClientId, string>>>((result, agent) => {
-      const value = parsed[agent.id];
-      if (typeof value === 'string' && value.trim()) result[agent.id] = value.trim();
+    return agentDefinitions.reduce<AgentExecutablePaths>((result, agent) => {
+      for (const key of [agent.id, `${agent.id}:app`] as const) {
+        const value = parsed[key];
+        if (typeof value === 'string' && value.trim()) result[key] = value.trim();
+      }
       return result;
     }, {});
   } catch { return {}; }
 };
-const writeAgentExecutablePaths = (paths: Partial<Record<AgentClientId, string>>) => {
+const writeAgentExecutablePaths = (paths: AgentExecutablePaths) => {
   try { window.localStorage.setItem(AGENT_EXECUTABLE_PATHS_KEY, JSON.stringify(paths)); } catch { /* ignore storage failures */ }
 };
 
@@ -739,7 +742,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       setModelByClient((current) => {
         const next = {
           ...current,
-          [client]: resolveAgentModelSelection(nextModels, current[client] ?? preferredModel),
+          [client]: resolveAgentModelSelection(nextModels, current[client] || preferredModel),
         };
         writeAgentModelSelections(next);
         return next;
@@ -843,6 +846,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
+  const missingModelHint = !modelLoading && savedSelectedModel && !selectedModelOption
+    ? t('agents.error.selectionGone') : '';
   const isPiClient = selected === 'pi';
   const isDeepSeekHarnessClient = selected === 'deepseek-harness';
   const hasIndependentCliAndApp = selected === 'codex' || selected === 'opencode' || isDeepSeekHarnessClient;
@@ -1496,11 +1501,12 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     }
   };
 
-  const chooseExecutablePath = async () => {
+  const chooseExecutablePath = async (desktop = false) => {
     try {
       const selectedPath = await open({ directory: false, multiple: false, title: t('agents.executablePath.dialogTitle') });
       if (typeof selectedPath !== 'string' || !selectedPath.trim()) return;
-      const next = { ...executablePaths, [selected]: selectedPath.trim() };
+      const key = desktop ? `${selected}:app` as const : selected;
+      const next = { ...executablePaths, [key]: selectedPath.trim() };
       setExecutablePaths(next);
       writeAgentExecutablePaths(next);
       const refreshed = await invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: next });
@@ -1511,9 +1517,9 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     }
   };
 
-  const clearExecutablePath = () => {
+  const clearExecutablePath = (desktop = false) => {
     const next = { ...executablePaths };
-    delete next[selected];
+    delete next[desktop ? `${selected}:app` as const : selected];
     setExecutablePaths(next);
     writeAgentExecutablePaths(next);
     void invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: next }).then(setStatuses);
@@ -1542,6 +1548,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         client: selected,
         target: target.id,
         executablePath: executablePaths[selected] ?? null,
+        desktopExecutablePath: executablePaths[`${selected}:app`] ?? null,
         workingDirectory,
         deepseekHarnessOptions: deepSeekHarnessOptions,
       });
@@ -1591,7 +1598,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('restart-app');
     setLaunchError('');
     try {
-      await invoke('restart_agent_app', { client: selected });
+      await invoke('restart_agent_app', { client: selected,
+        executablePath: executablePaths[hasIndependentCliAndApp ? `${selected}:app` as const : selected] ?? null });
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'launch')) {
         setLaunchError(String(requestError));
@@ -1899,7 +1907,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                 <label htmlFor="embedded-agent-model">{t(isDeepSeekHarnessClient ? 'agents.harness.defaultModel' : 'agents.useModel')}</label>
                 <AgentModelPicker
                   models={isClaudeModelMappingClient ? claudeMappingModels : models}
-                  value={isClaudeModelMappingClient ? claudeModelMappingsDraft.sonnet : selectedModel}
+                  value={isClaudeModelMappingClient ? claudeModelMappingsDraft.sonnet : savedSelectedModel}
+                  preserveValue={!isClaudeModelMappingClient}
                   loading={modelLoading}
                   error={modelError}
                   disabled={busy || !canConfigureActiveClient}
@@ -1907,6 +1916,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                   onRefresh={refreshModels}
                 />
                 {codexCatalogButton}{harnessCatalogButton}
+                {!isClaudeModelMappingClient && missingModelHint ? <span className="agent-model-hint" role="status">{missingModelHint}</span> : null}
               </div>}
 
               {isDeepSeekHarnessClient ? <p className="agent-model-hint">{t('agents.harness.defaultHint')}</p> : null}
@@ -1999,7 +2009,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                   </div>
                   <AgentModelPicker
                     models={models}
-                    value={selectedModel}
+                    value={savedSelectedModel}
+                    preserveValue
                     loading={modelLoading}
                     error={modelError}
                     disabled={busy || !canConfigureActiveClient}
@@ -2007,6 +2018,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                     onRefresh={refreshModels}
                   />
                   {modelHint ? <span className="agent-model-hint agent-model-status" title={modelHint} aria-live="polite">{modelHint}</span> : null}
+                  {missingModelHint ? <span className="agent-model-hint" role="status">{missingModelHint}</span> : null}
                   {isDeepSeekHarnessClient ? <p className="agent-model-hint">{t('agents.harness.defaultHint')}</p> : null}
                   {harnessCatalogButton}
                   {selected === 'codex' ? (
@@ -2244,7 +2256,10 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
             <div id="agent-subpage-panel-management" role="tabpanel" aria-labelledby="agent-subpage-tab-management">
               <AgentConfigManagementPanel pi={isPiClient} codex={selected === 'codex'} busyAction={busyAction}
                 executablePath={executablePaths[selected] ?? ''} onChooseExecutablePath={() => void chooseExecutablePath()}
-                onClearExecutablePath={clearExecutablePath}
+                onClearExecutablePath={() => clearExecutablePath()}
+                dualTargets={hasIndependentCliAndApp} desktopExecutablePath={executablePaths[`${selected}:app`] ?? ''}
+                onChooseDesktopExecutablePath={() => void chooseExecutablePath(true)}
+                onClearDesktopExecutablePath={() => clearExecutablePath(true)}
                 canTemplate={canEnable && !nativeOauth} canUpdatePi={canEnable && !configurationWriteBlocked && Boolean(activeStatus?.pluginInstalled)}
                 canUninstallPi={launchEnabled && Boolean(activeStatus?.pluginInstalled)}
                 pluginInstalled={Boolean(activeStatus?.pluginInstalled)} pluginVersion={activeStatus?.pluginVersion ?? null}

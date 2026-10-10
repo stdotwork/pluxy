@@ -283,6 +283,26 @@ const providerDefinitions: ProviderDefinition[] = [
 
 const providerLabel = (definition: ProviderDefinition) => definition.label ?? translate(getCurrentLocale(), definition.labelKey);
 
+const SELECTED_CATEGORY_KEY = 'cpa-gui.api-access-selected-category.v1';
+
+const readSelectedCategory = (): ProviderCategory => {
+  const fallback = providerDefinitions[0].id;
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const saved = window.localStorage.getItem(SELECTED_CATEGORY_KEY);
+    return providerDefinitions.find((definition) => definition.id === saved)?.id ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const writeSelectedCategory = (category: ProviderCategory) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SELECTED_CATEGORY_KEY, category);
+  } catch { /* Keep category navigation available when storage is unavailable. */ }
+};
+
 export const providerSectionOrder = providerDefinitions.map((definition) => definition.id);
 
 const providerLoadDefinitions = providerDefinitions.filter(
@@ -1205,7 +1225,7 @@ export function ApiAccessPage() {
   const { askConfirmation, confirmationDialog } = useConfirmation();
   const { t } = useI18n();
   const [records, setRecords] = useState(emptyRecords);
-  const [activeCategory, setActiveCategory] = useState<ProviderCategory>('codex-api-key');
+  const [activeCategory, setActiveCategory] = useState<ProviderCategory>(readSelectedCategory);
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -1588,6 +1608,7 @@ export function ApiAccessPage() {
               aria-pressed={definition.id === activeCategory}
               onClick={() => {
                 setActiveCategory(definition.id);
+                writeSelectedCategory(definition.id);
                 feedback.clearNotice();
               }}
               disabled={busy}

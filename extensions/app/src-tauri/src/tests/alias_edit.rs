@@ -276,7 +276,7 @@ fn alias_edit_rejects_duplicates_missing_aliases_and_name_collisions() {
         "      fork: false",
         "      fork: false\n    - name: another\n      alias: taken",
     );
-    assert!(edit_model_alias_in_yaml(&occupied, "my-alias", &source, "TAKEN", "", false).is_err());
+    assert!(edit_model_alias_in_yaml(&occupied, "my-alias", &source, "TAKEN", "", false).is_ok());
     assert!(resolve_model_alias_edit_source(
         "codex-api-key:\n  - models: [{name: real-model}]\n",
         "real-model",

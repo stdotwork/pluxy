@@ -119,7 +119,7 @@ mkdirSync(screenshots, { recursive: true });
         return invoke(command, args, options);
       };
     });
-    const openRaw = page.getByRole('button', { name: 'Open JSONL with default app', exact: true });
+    const openRaw = page.getByRole('button', { name: 'Edit with local app', exact: true });
     await openRaw.click();
     await page.waitForFunction(() => window.rolloutOpenRequests.length === 1);
     assert.deepEqual(await page.evaluate(() => window.rolloutOpenRequests), [{ request: { sessionId } }]);

@@ -447,6 +447,7 @@ fn thinking_alias_adds_fork_and_matching_payload_rule() {
     assert_eq!(
         aliases,
         vec![ThinkingAliasEntry {
+            position: ModelAliasPosition { section: "oauth-model-alias".into(), provider_index: None, model_index: 0 },
             source_model: "gpt-5.5".to_string(),
             alias: "gpt-5.5-xhigh".to_string(),
             effort: Some("xhigh".to_string()),
@@ -467,6 +468,7 @@ fn model_alias_can_be_created_without_overrides() {
     assert_eq!(
         thinking_aliases_from_yaml(&rendered).unwrap(),
         vec![ThinkingAliasEntry {
+            position: ModelAliasPosition { section: "oauth-model-alias".into(), provider_index: None, model_index: 0 },
             source_model: "gpt-5.5".to_string(),
             alias: "gpt-5.5-alias".to_string(),
             effort: None,
@@ -567,6 +569,7 @@ fn speed_alias_adds_fast_service_tier_and_removes_only_its_rule() {
     assert_eq!(
         speed_aliases_from_yaml(&rendered).unwrap(),
         vec![SpeedAliasEntry {
+            position: ModelAliasPosition { section: "oauth-model-alias".into(), provider_index: None, model_index: 0 },
             source_model: "gpt-5.6-sol".to_string(),
             alias: "gpt-5.6-sol-fast".to_string(),
             service_tier: "priority".to_string(),
@@ -687,14 +690,11 @@ fn thinking_alias_removal_keeps_other_models_in_grouped_rule() {
 }
 
 #[test]
-fn thinking_alias_rejects_duplicate_client_visible_name() {
+fn thinking_alias_allows_duplicate_client_visible_name() {
     let input = "oauth-model-alias:\n  codex:\n    - name: gpt-5.5\n      alias: gpt-5.5-high\n      fork: true\n";
     let source = test_codex_oauth_thinking_source("gpt-5.4");
-    assert!(
-        add_model_alias_to_yaml(input, &source, "GPT-5.5-HIGH", "high", false)
-            .unwrap_err()
-            .contains("already exists")
-    );
+    let updated = add_model_alias_to_yaml(input, &source, "GPT-5.5-HIGH", "high", false).unwrap();
+    assert_eq!(thinking_aliases_from_yaml(&updated).unwrap().len(), 2);
 }
 
 #[test]

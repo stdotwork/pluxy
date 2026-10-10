@@ -126,6 +126,7 @@ pub(crate) fn launch_agent(
     client: String,
     target: Option<String>,
     executable_path: Option<String>,
+    desktop_executable_path: Option<String>,
     working_directory: Option<String>,
     deepseek_harness_options: Option<DeepSeekHarnessLaunchOptions>,
 ) -> Result<(), String> {
@@ -173,7 +174,8 @@ pub(crate) fn launch_agent(
         return Err(format!("The current platform does not support launching {}", client.name()));
     }
     let executable_override = executable_path.as_deref().map(Path::new);
-    let status = inspect_agent_config_with_executable(client, &home, config.port, effective_agent_api_key(&config), executable_override);
+    let desktop_override = desktop_executable_path.as_deref().map(Path::new);
+    let status = inspect_agent_config_with_executables(client, &home, config.port, effective_agent_api_key(&config), executable_override, desktop_override);
     if !status.installed {
         return Err(format!("{} was not detected. Install it and detect it again", client.name()));
     }
@@ -184,7 +186,7 @@ pub(crate) fn launch_agent(
         .unwrap_or("cli");
     let requested_target = requested_target.unwrap_or(default_target);
     match (client, requested_target) {
-        (AgentClient::ClaudeDesktop, "app") => launch_claude_desktop(&home),
+        (AgentClient::ClaudeDesktop, "app") => launch_claude_desktop(&home, executable_override),
         (AgentClient::AntigravityCli, "cli")
             if antigravity_has_marker(client, &agent_config_paths(client, &home))? => {
             if !status.configured {
@@ -195,19 +197,24 @@ pub(crate) fn launch_agent(
             launch_cli_agent(&executable, client.name(), &directory, &antigravity_cli_helper_arguments(&home), &[], &[], &terminal)
         }
         (AgentClient::WorkBuddy, "app") => {
-            let executable = find_workbuddy_desktop_executable(&home)
+            let executable = manual_desktop_path(executable_override).map(Path::to_path_buf)
+                .or_else(|| find_workbuddy_desktop_executable(&home))
                 .ok_or_else(|| "WorkBuddy application not found".to_string())?;
             launch_desktop_agent(&executable, client.name())
         }
         (AgentClient::ZCode, "app") => {
-            let executable = find_zcode_desktop_executable(&home)
+            let executable = manual_desktop_path(executable_override).map(Path::to_path_buf)
+                .or_else(|| find_zcode_desktop_executable(&home))
                 .ok_or_else(|| "ZCode application not found".to_string())?;
             launch_desktop_agent(&executable, client.name())
         }
-        (AgentClient::Codex, "app") => launch_codex_desktop(&home),
-        (AgentClient::OpenCode, "app") => launch_opencode_desktop(&home),
+        (AgentClient::Codex, "app") => {
+            launch_codex_desktop(&home, desktop_override)
+        }
+        (AgentClient::OpenCode, "app") => launch_opencode_desktop(&home, desktop_override),
         (AgentClient::DeepSeekHarness, "app") => {
-            let executable = find_deepseek_harness_desktop_application(&home)
+            let executable = manual_desktop_path(desktop_override).map(Path::to_path_buf)
+                .or_else(|| find_deepseek_harness_desktop_application(&home))
                 .ok_or_else(|| "DeepSeek Harness Desktop application not found".to_string())?;
             launch_desktop_agent(&executable, "DeepSeek Harness Desktop")
         }
@@ -713,16 +720,20 @@ fn validate_deepseek_harness_argument(value: &str, label: &str) -> Result<String
 
 #[tauri::command]
 pub(crate) async fn restart_codex_app(app: tauri::AppHandle) -> Result<(), String> {
-    restart_agent_app(app, "codex".to_string()).await
+    restart_agent_app(app, "codex".to_string(), None).await
 }
 
 #[tauri::command]
 pub(crate) async fn restart_opencode_app(app: tauri::AppHandle) -> Result<(), String> {
-    restart_agent_app(app, "opencode".to_string()).await
+    restart_agent_app(app, "opencode".to_string(), None).await
 }
 
 #[tauri::command]
-pub(crate) async fn restart_agent_app(app: tauri::AppHandle, client: String) -> Result<(), String> {
+pub(crate) async fn restart_agent_app(
+    app: tauri::AppHandle,
+    client: String,
+    executable_path: Option<String>,
+) -> Result<(), String> {
     let client = AgentClient::parse(&client)?;
     if !matches!(
         client,
@@ -739,7 +750,8 @@ pub(crate) async fn restart_agent_app(app: tauri::AppHandle, client: String) -> 
         .home_dir()
         .map_err(|error| format!("Failed to get user directory: {error}"))?;
     tauri::async_runtime::spawn_blocking(move || {
-        let target = find_desktop_restart_target(client, &home)?;
+        let executable_override = executable_path.as_deref().map(Path::new);
+        let target = find_desktop_restart_target(client, &home, executable_override)?;
         match client {
             AgentClient::Codex => stop_codex_desktop(&target)?,
             AgentClient::OpenCode => {
@@ -765,12 +777,14 @@ pub(crate) async fn restart_agent_app(app: tauri::AppHandle, client: String) -> 
 fn find_desktop_restart_target(
     client: AgentClient,
     home: &Path,
+    executable_override: Option<&Path>,
 ) -> Result<DesktopAppTarget, String> {
+    if let Some(path) = manual_desktop_path(executable_override) {
+        return Ok(DesktopAppTarget::Application(path.to_path_buf()));
+    }
     let target = match client {
         AgentClient::Codex => find_codex_app_installation(home),
-        AgentClient::OpenCode => {
-            find_opencode_desktop_application(home).map(DesktopAppTarget::Application)
-        }
+        AgentClient::OpenCode => find_opencode_desktop_application(home).map(DesktopAppTarget::Application),
         AgentClient::ZCode => {
             find_zcode_desktop_executable(home).map(DesktopAppTarget::Application)
         }
@@ -778,8 +792,7 @@ fn find_desktop_restart_target(
             find_workbuddy_desktop_executable(home).map(DesktopAppTarget::Application)
         }
         AgentClient::ClaudeDesktop => {
-            let executable =
-                find_claude_desktop_executable(home).map(DesktopAppTarget::Application);
+            let executable = find_claude_desktop_executable(home).map(DesktopAppTarget::Application);
             #[cfg(target_os = "windows")]
             {
                 executable
@@ -835,9 +848,8 @@ fn resolve_launch_directory(value: Option<&str>, fallback: &Path) -> Result<Path
     Ok(path)
 }
 
-fn launch_codex_desktop(home: &Path) -> Result<(), String> {
-    let target = find_codex_app_installation(home)
-        .ok_or_else(|| "Codex desktop application was not detected. Detect it again or use Codex CLI".to_string())?;
+fn launch_codex_desktop(home: &Path, executable_override: Option<&Path>) -> Result<(), String> {
+    let target = find_desktop_restart_target(AgentClient::Codex, home, executable_override)?;
     launch_codex_target(&target)
 }
 
@@ -1115,8 +1127,10 @@ fn stop_opencode_desktop(_application: &Path) -> Result<(), String> {
     Err("The current platform does not support restarting OpenCode Desktop".to_string())
 }
 
-fn launch_claude_desktop(home: &Path) -> Result<(), String> {
-    if let Some(executable) = find_claude_desktop_executable(home) {
+fn launch_claude_desktop(home: &Path, executable_override: Option<&Path>) -> Result<(), String> {
+    let executable = manual_desktop_path(executable_override).map(Path::to_path_buf)
+        .or_else(|| find_claude_desktop_executable(home));
+    if let Some(executable) = executable {
         return launch_desktop_agent(&executable, "Claude Desktop");
     }
     #[cfg(target_os = "windows")]
@@ -1127,8 +1141,9 @@ fn launch_claude_desktop(home: &Path) -> Result<(), String> {
     Err("Claude Desktop application was not detected. Install or detect it again".to_string())
 }
 
-fn launch_opencode_desktop(home: &Path) -> Result<(), String> {
-    let application = find_opencode_desktop_application(home)
+fn launch_opencode_desktop(home: &Path, executable_override: Option<&Path>) -> Result<(), String> {
+    let application = manual_desktop_path(executable_override).map(Path::to_path_buf)
+        .or_else(|| find_opencode_desktop_application(home))
         .ok_or_else(|| "OpenCode Desktop application was not detected. Install or detect it again".to_string())?;
     launch_desktop_agent(&application, "OpenCode Desktop")
 }
@@ -1466,6 +1481,43 @@ fn launch_cli_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_desktop_paths_drive_detection_and_restart_without_replacing_cli_paths() {
+        let root = env::temp_dir().join(format!("cpa-manual-desktop-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&root).unwrap();
+        let desktop = root.join("Custom Desktop.exe");
+        let cli = root.join("custom-cli.exe");
+        fs::write(&desktop, b"desktop fixture").unwrap();
+        fs::write(&cli, b"cli fixture").unwrap();
+        for client in [AgentClient::Codex, AgentClient::OpenCode, AgentClient::DeepSeekHarness] {
+            let status = inspect_agent_config_with_executables(client, &root, 8317, "test-key", Some(&cli), Some(&desktop));
+            assert!(status.installed, "{}", client.name());
+            assert!(status.launch_targets.iter().any(|target| target.id == "app"), "{}", client.name());
+            let cli_target = status.launch_targets.iter().find(|target| target.id == "cli").unwrap();
+            assert!(cli_target.detail.contains("custom-cli.exe"));
+            assert!(!cli_target.detail.contains("Custom Desktop.exe"));
+        }
+        for client in [AgentClient::ClaudeDesktop, AgentClient::ZCode, AgentClient::WorkBuddy] {
+            let status = inspect_agent_config_with_executable(client, &root, 8317, "test-key", Some(&desktop));
+            assert!(status.installed, "{}", client.name());
+            assert_eq!(status.launch_targets.len(), 1);
+            assert_eq!(status.launch_targets[0].id, "app");
+            assert_eq!(status.launch_targets[0].detail, path_to_string(&desktop));
+        }
+        for client in [AgentClient::Codex, AgentClient::OpenCode, AgentClient::ClaudeDesktop,
+            AgentClient::ZCode, AgentClient::WorkBuddy] {
+            match find_desktop_restart_target(client, &root, Some(&desktop)).unwrap() {
+                DesktopAppTarget::Application(path) => assert_eq!(path, desktop),
+                #[cfg(target_os = "windows")]
+                DesktopAppTarget::WindowsAppId(_) => panic!("manual path must take precedence"),
+            }
+        }
+        assert!(manual_desktop_path(Some(&root.join("missing.exe"))).is_none());
+        assert!(manual_desktop_path(Some(&root)).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn deepseek_harness_options(mode: &str) -> DeepSeekHarnessLaunchOptions {
         DeepSeekHarnessLaunchOptions {

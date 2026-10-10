@@ -75,5 +75,6 @@ export function findAgentModel(models: ModelOption[], value: string): ModelOptio
 }
 
 export function resolveAgentModelSelection(models: ModelOption[], previous: string): string {
-  return findAgentModel(models, previous)?.name ?? models[0]?.name.trim() ?? '';
+  // A refresh may temporarily omit a model; only default when no choice exists.
+  return findAgentModel(models, previous)?.name ?? (previous.trim() || models[0]?.name.trim() || '');
 }

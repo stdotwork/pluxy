@@ -4,6 +4,109 @@ use super::*;
 const BASE: &str =
     "oauth-model-alias:\n  codex:\n    - name: gpt-test\n      alias: my-alias\n      fork: true\n";
 
+const SHARED: &str = "openai-compatibility:\n  - name: Provider\n    models:\n      - {name: first, alias: shared}\n      - {name: second, alias: shared}\npayload:\n  override:\n    - models: [{name: shared, protocol: openai, headers: {X-Client: premium}}]\n      params: {reasoning_effort: high, service_tier: priority, temperature: 0.5}\n";
+
+#[test]
+fn alias_shared_rename_keeps_the_other_mapping_and_its_rules() {
+    let entries = thinking_aliases_from_yaml(SHARED).unwrap();
+    assert_ne!(entries[0].source_model, entries[1].source_model);
+    let selected = entries.iter().find(|entry| entry.source_model == "second").unwrap();
+    let source = resolve_model_alias_edit_source_for_mapping(SHARED, "shared", &[], Some(selected)).unwrap();
+    let updated = edit_model_alias_in_yaml_for_mapping(SHARED, "shared", &source, "renamed", "low", false, Some(selected)).unwrap();
+    let value = json(&updated);
+    assert_eq!(value["openai-compatibility"][0]["models"][0]["alias"], "shared");
+    assert_eq!(value["openai-compatibility"][0]["models"][1]["alias"], "renamed");
+    let rules = value["payload"]["override"].as_array().unwrap();
+    assert_eq!(rules.len(), 2);
+    assert_eq!(rules[0], json(SHARED)["payload"]["override"][0]);
+    assert_eq!(rules[1]["models"][0]["name"], "renamed");
+    assert_eq!(rules[1]["models"][0]["headers"]["X-Client"], "premium");
+    assert_eq!(rules[1]["params"]["reasoning_effort"], "low");
+    assert!(rules[1]["params"].get("service_tier").is_none());
+    assert_eq!(rules[1]["params"]["temperature"], 0.5);
+}
+
+#[test]
+fn alias_shared_delete_only_removes_the_selected_mapping() {
+    let entry = thinking_aliases_from_yaml(SHARED).unwrap().remove(1);
+    let latest = format!("debug: true\n{SHARED}");
+    let updated = remove_model_alias_mapping_from_yaml(&latest, "shared", &entry).unwrap();
+    let value = json(&updated);
+    assert_eq!(value["debug"], true);
+    assert_eq!(value["openai-compatibility"][0]["models"].as_array().unwrap().len(), 1);
+    assert_eq!(value["openai-compatibility"][0]["models"][0]["name"], "first");
+    assert_eq!(value["payload"], json(SHARED)["payload"]);
+}
+
+#[test]
+fn alias_shared_edit_follows_source_after_rows_are_reordered() {
+    let entry = thinking_aliases_from_yaml(SHARED).unwrap().remove(1);
+    let mut latest = json(SHARED);
+    latest["openai-compatibility"][0]["models"].as_array_mut().unwrap().swap(0, 1);
+    let latest = serde_norway::to_string(&latest).unwrap();
+    let source = resolve_model_alias_edit_source_for_mapping(&latest, "shared", &[], Some(&entry)).unwrap();
+    let updated = edit_model_alias_in_yaml_for_mapping(&latest, "shared", &source, "renamed", "high", true, Some(&entry)).unwrap();
+    assert_eq!(json(&updated)["openai-compatibility"][0]["models"][0]["name"], "second");
+    assert_eq!(json(&updated)["openai-compatibility"][0]["models"][0]["alias"], "renamed");
+    assert_eq!(json(&updated)["openai-compatibility"][0]["models"][1]["alias"], "shared");
+}
+
+#[test]
+fn alias_shared_delete_distinguishes_providers_with_the_same_model() {
+    let input = "openai-compatibility:\n  - name: First\n    models: [{name: model, alias: shared}]\n  - name: Second\n    models: [{name: model, alias: shared}]\n";
+    let entry = thinking_aliases_from_yaml(input).unwrap().into_iter().find(|entry| entry.provider == "Second").unwrap();
+    let updated = remove_model_alias_mapping_from_yaml(input, "shared", &entry).unwrap();
+    assert_eq!(json(&updated)["openai-compatibility"][0]["models"].as_array().unwrap().len(), 1);
+    assert!(json(&updated)["openai-compatibility"][1]["models"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn alias_identical_entries_can_be_removed_one_at_a_time() {
+    let input = "openai-compatibility:\n  - name: Provider\n    models: [{name: model, alias: shared}, {name: model, alias: shared}]\n";
+    let entry = thinking_aliases_from_yaml(input).unwrap().remove(0);
+    let updated = remove_model_alias_mapping_from_yaml(input, "shared", &entry).unwrap();
+    assert_eq!(thinking_aliases_from_yaml(&updated).unwrap().len(), 1);
+}
+
+#[test]
+fn alias_shared_can_use_an_existing_real_model_name() {
+    let input = "openai-compatibility:\n  - name: Provider\n    models: [{name: real}, {name: source}]\n";
+    let available = test_agent_models(&["real", "source"]);
+    let source = resolved_alias_sources(input, &[], &available, false).unwrap()
+        .into_iter().find(|source| source.source.model == "source").unwrap();
+    let updated = add_model_alias_to_yaml(input, &source, "real", "", false).unwrap();
+    let entry = thinking_aliases_from_yaml(&updated).unwrap().remove(0);
+    let resolved = resolve_model_alias_edit_source_for_mapping(&updated, "real", &[], Some(&entry)).unwrap();
+    let renamed = edit_model_alias_in_yaml_for_mapping(&updated, "real", &resolved, "renamed", "", false, Some(&entry)).unwrap();
+    assert_eq!(json(&renamed)["openai-compatibility"][0]["models"][0]["name"], "real");
+    assert_eq!(thinking_aliases_from_yaml(&renamed).unwrap()[0].alias, "renamed");
+}
+
+#[test]
+fn alias_shared_creation_preserves_existing_reasoning_and_fast() {
+    let input = SHARED.replace("payload:", "      - {name: third}\npayload:");
+    let available = test_agent_models(&["shared", "third"]);
+    let source = resolved_alias_sources(&input, &[], &available, false).unwrap().remove(0);
+    let updated = add_model_alias_to_yaml(&input, &source, "shared", "", false).unwrap();
+    assert_eq!(thinking_aliases_from_yaml(&updated).unwrap().len(), 3);
+    assert_eq!(json(&updated)["payload"], json(SHARED)["payload"]);
+}
+
+#[test]
+fn alias_shared_source_switch_preserves_rules_used_by_the_old_protocol() {
+    let input = SHARED.replace(", protocol: openai", "");
+    let selected = thinking_aliases_from_yaml(&input).unwrap().remove(1);
+    let source = test_codex_oauth_thinking_source("gpt-test");
+    let updated = edit_model_alias_in_yaml_for_mapping(&input, "shared", &source, "shared", "high", true, Some(&selected)).unwrap();
+    let value = json(&updated);
+    assert_eq!(value["openai-compatibility"][0]["models"].as_array().unwrap().len(), 1);
+    assert_eq!(value["openai-compatibility"][0]["models"][0]["name"], "first");
+    assert_eq!(value["oauth-model-alias"]["codex"][0]["alias"], "shared");
+    assert_eq!(value["payload"]["override"][0], json(&input)["payload"]["override"][0]);
+    assert_eq!(value["payload"]["override"][1]["models"][0]["protocol"], "codex");
+    assert_eq!(value["payload"]["override"][1]["params"]["reasoning.effort"], "high");
+}
+
 fn json(content: &str) -> serde_json::Value {
     serde_json::to_value(serde_norway::from_str::<serde_norway::Value>(content).unwrap()).unwrap()
 }
@@ -92,14 +195,14 @@ fn alias_regression_source_id_does_not_retarget_after_reordering() {
 }
 
 #[test]
-fn alias_regression_edit_snapshot_rejects_recreated_alias_and_missing_revision() {
-    let context = model_alias_edit_context(BASE, "my-alias", &[]).unwrap();
-    assert!(validate_model_alias_revision(BASE, Some(&context.revision)).is_ok());
-    let reformatted = serde_norway::to_string(&json(BASE)).unwrap();
-    assert!(validate_model_alias_revision(&reformatted, Some(&context.revision)).is_ok());
-    assert!(validate_model_alias_revision(BASE, None).is_err());
-    let recreated = BASE.replace("gpt-test", "another-upstream");
-    assert!(validate_model_alias_revision(&recreated, Some(&context.revision)).is_err());
+fn alias_regression_edit_uses_latest_config_after_unrelated_changes() {
+    let entry = thinking_aliases_from_yaml(BASE).unwrap().remove(0);
+    let latest = format!("debug: true\n{BASE}payload:\n  override:\n    - models: [{{name: unrelated}}]\n      params: {{temperature: 0.5}}\n");
+    let source = resolve_model_alias_edit_source_for_mapping(&latest, "my-alias", &[], Some(&entry)).unwrap();
+    let updated = edit_model_alias_in_yaml_for_mapping(&latest, "my-alias", &source, "renamed", "", false, Some(&entry)).unwrap();
+    assert_eq!(json(&updated)["debug"], true);
+    assert_eq!(json(&updated)["payload"], json(&latest)["payload"]);
+    assert_eq!(thinking_aliases_from_yaml(&updated).unwrap()[0].alias, "renamed");
 }
 
 #[test]

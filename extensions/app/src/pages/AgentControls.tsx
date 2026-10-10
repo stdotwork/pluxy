@@ -77,10 +77,13 @@ export function AgentConfigurationFeedback({ pending, description, status = '' }
 export function AgentConfigManagementPanel({
   pi, codex, busyAction, canTemplate, canUpdatePi, canUninstallPi, pluginInstalled, pluginVersion, updateLabel,
   executablePath, onChooseExecutablePath, onClearExecutablePath, onBackup, onRestore, onTemplate, onClear, onUpdatePi, onUninstallPi, canClearIntegration, onClearIntegration,
+  dualTargets, desktopExecutablePath, onChooseDesktopExecutablePath, onClearDesktopExecutablePath,
 }: {
   pi: boolean; codex: boolean; busyAction: string | null; canTemplate: boolean;
   canUpdatePi: boolean; canUninstallPi: boolean; pluginInstalled: boolean; pluginVersion: string | null; updateLabel: string;
   executablePath: string; onChooseExecutablePath: () => void; onClearExecutablePath: () => void;
+  dualTargets: boolean; desktopExecutablePath: string;
+  onChooseDesktopExecutablePath: () => void; onClearDesktopExecutablePath: () => void;
   onBackup: () => void; onRestore: () => void; onTemplate: () => void; onClear: () => void;
   onUpdatePi: () => void; onUninstallPi: () => void;
   canClearIntegration: boolean; onClearIntegration: () => void;
@@ -89,7 +92,7 @@ export function AgentConfigManagementPanel({
   const busy = busyAction !== null;
   return <div className="agent-management-sections">
     <section className="agent-management-row">
-      <div><h3>{t('agents.executablePath.title')}</h3><p>{t('agents.executablePath.description')}</p>
+      <div><h3>{t(dualTargets ? 'agents.executablePath.cliTitle' : 'agents.executablePath.title')}</h3><p>{t('agents.executablePath.description')}</p>
         {executablePath ? <small className="agent-path-value" title={executablePath}>{executablePath}</small> : null}</div>
       <div className="agent-management-actions">
         <button type="button" className="secondary-button" onClick={onChooseExecutablePath} disabled={busy}>
@@ -98,6 +101,16 @@ export function AgentConfigManagementPanel({
         {executablePath ? <button type="button" className="quiet-button" onClick={onClearExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
       </div>
     </section>
+    {dualTargets ? <section className="agent-management-row">
+      <div><h3>{t('agents.executablePath.desktopTitle')}</h3><p>{t('agents.executablePath.description')}</p>
+        {desktopExecutablePath ? <small className="agent-path-value" title={desktopExecutablePath}>{desktopExecutablePath}</small> : null}</div>
+      <div className="agent-management-actions">
+        <button type="button" className="secondary-button" onClick={onChooseDesktopExecutablePath} disabled={busy}>
+          <FolderOpen size={16} />{t('agents.executablePath.choose')}
+        </button>
+        {desktopExecutablePath ? <button type="button" className="quiet-button" onClick={onClearDesktopExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
+      </div>
+    </section> : null}
     {!pi ? <section className="agent-management-row">
       <div><h3>{t('agents.management.backups')}</h3><p>{t('agents.management.backupsDescription')}</p></div>
       <div className="agent-management-actions">
