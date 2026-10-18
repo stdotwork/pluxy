@@ -978,12 +978,6 @@ fn validate_unmanaged_preserved(
     if client == "vscode-copilot" { return validate_copilot_groups_preserved(before, after); }
     let project = |value: &Value| -> Result<Value, String> {
         let mut value = value.clone();
-        if client == "codex" && path.file_name().and_then(|v| v.to_str()) == Some("config.toml") {
-            let rendered = render(path, &value)?;
-            if codex_uses_openai_proxy(&parse_codex_document(Some(&rendered), "Codex configuration")?) {
-                if let Some(root) = value.as_object_mut() { root.remove("openai_base_url"); }
-            }
-        }
         if client == "claude-desktop" && paths.get(3).is_some_and(|p| p == path) {
             if let Some(root) = value.as_object_mut() {
                 repair_claude_desktop_meta_names(root);

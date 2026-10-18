@@ -83,6 +83,8 @@ if (params.has('foreign-source')) storeEntries.unshift({ ...storeEntries[0], sou
 
 mockIPC(async (command, args) => {
   state.commands.push({ command, args });
+  if (command === 'prepare_management_request') return `install-${state.commands.length}`;
+  if (command === 'cancel_management_request') return null;
   if (command === 'start_oauth_login') return { url: 'https://login.example.test/authorize?state=sample-state', state: 'sample-state' };
   if (command === 'get_oauth_status') return { status: 'wait' };
   if (command === 'plugin:dialog|open') return state.localSelection;

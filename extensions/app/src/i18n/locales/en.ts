@@ -4,16 +4,6 @@ import { homeEn } from '../home';
 import { authFileListEn } from '../authFileList';
 
 export const en: Record<MessageKey, string> = {
-  'agents.provider.label': 'Use the openai provider identity',
-  'agents.provider.oauthUnsupported': 'CPA did not accept the current Codex OAuth credentials. Configuration is unchanged. The built-in openai provider does not use the custom provider CPA key; use a CPA authentication extension that accepts these credentials, or API Key sign-in.',
-  'agents.provider.hint': 'Requests still use CPA; when off, the provider is cpa-gui. CPA authentication is checked before enabling. Predictions still depend on your account and client. Apply pending changes first; turn this off before changing the sign-in method.',
-  'agents.provider.title': 'Switch to {provider}',
-  'agents.provider.description': 'Keep the current proxy endpoint and sign-in method. Reopen Codex and test with a new conversation; existing conversations may still belong to the previous provider.',
-  'agents.provider.sync': 'Also sync conversations',
-  'agents.provider.syncHint': 'Back up and update the provider of local historical conversations to the selected provider (not cloud sync). Leave unchecked to keep history unchanged, or sync later in conversation management. Encrypted content from other accounts may remain unusable.',
-  'agents.provider.switched': 'Switched to {provider}, still using CPA. Reopen Codex to apply the configuration.',
-  'agents.provider.syncFailed': 'The provider was switched, but conversation sync failed: {error}. Retry in conversation management.',
-  'agents.provider.refreshFailed': 'The provider was switched, but refreshing its status failed: {error}',
   'app.nav.plugins': 'Plugins',
   'app.nav.pluginPages': 'Plugin pages',
   'oauth.vertex.title': 'Vertex JSON Login',

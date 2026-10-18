@@ -12,9 +12,52 @@ use std::{
     fs,
     path::Path,
     process::{Command, Stdio},
-    sync::LazyLock,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        LazyLock, Mutex,
+    },
     time::Duration,
 };
+use tokio_util::sync::CancellationToken;
+
+static REQUESTS: LazyLock<Mutex<HashMap<String, CancellationToken>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_REQUEST: AtomicU64 = AtomicU64::new(1);
+
+// Reserve before sending so cancellation also works before the HTTP request starts.
+#[tauri::command]
+pub(crate) fn prepare_management_request() -> Result<String, String> {
+    let mut requests = REQUESTS
+        .lock()
+        .map_err(|_| "Request registry unavailable")?;
+    if requests.len() >= 256 {
+        return Err("Too many pending management requests".into());
+    }
+    let id = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed).to_string();
+    requests.insert(id.clone(), CancellationToken::new());
+    Ok(id)
+}
+
+#[tauri::command]
+pub(crate) fn cancel_management_request(request_id: String) -> Result<(), String> {
+    if let Some(token) = REQUESTS
+        .lock()
+        .map_err(|_| "Request registry unavailable")?
+        .remove(&request_id)
+    {
+        token.cancel();
+    }
+    Ok(())
+}
+
+struct RequestCleanup(String);
+impl Drop for RequestCleanup {
+    fn drop(&mut self) {
+        if let Ok(mut requests) = REQUESTS.lock() {
+            requests.remove(&self.0);
+        }
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +101,7 @@ struct OAuthStatusApiResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ManagementRequest {
+    request_id: Option<String>,
     method: String,
     path: String,
     query: Option<HashMap<String, String>>,
@@ -67,7 +111,9 @@ pub(crate) struct ManagementRequest {
     timeout_ms: Option<u64>,
 }
 
-fn deserialize_management_body<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+fn deserialize_management_body<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -77,6 +123,40 @@ where
 
 #[tauri::command]
 pub(crate) async fn management_request(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+    request: ManagementRequest,
+) -> Result<serde_json::Value, String> {
+    let id = request.request_id.clone();
+    cancellable_management_request(id, management_request_inner(gui_config_state, request)).await
+}
+
+async fn cancellable_management_request(
+    request_id: Option<String>,
+    operation: impl std::future::Future<Output = Result<serde_json::Value, String>>,
+) -> Result<serde_json::Value, String> {
+    let cancellation = if let Some(id) = &request_id {
+        let token = REQUESTS
+            .lock()
+            .map_err(|_| "Request registry unavailable")?
+            .get(id)
+            .cloned()
+            .ok_or("Management API request cancelled")?;
+        Some((token, RequestCleanup(id.clone())))
+    } else {
+        None
+    };
+    if let Some((token, _cleanup)) = cancellation {
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => Err("Management API request cancelled".into()),
+            result = operation => result,
+        }
+    } else {
+        operation.await
+    }
+}
+
+async fn management_request_inner(
     gui_config_state: tauri::State<'_, GuiConfigState>,
     request: ManagementRequest,
 ) -> Result<serde_json::Value, String> {
@@ -565,6 +645,58 @@ fn format_management_error(status: u16, body: &str) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn cancellation_drops_stalled_requests_and_preserves_other_requests() {
+        let id = prepare_management_request().unwrap();
+        let other = prepare_management_request().unwrap();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (dropped, done) = tokio::sync::oneshot::channel();
+        struct DropNotice(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for DropNotice {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+        let task_id = id.clone();
+        let task = tokio::spawn(async move {
+            cancellable_management_request(Some(task_id), async move {
+                let _notice = DropNotice(Some(dropped));
+                let _ = started.send(());
+                std::future::pending().await
+            })
+            .await
+        });
+        ready.await.unwrap();
+        cancel_management_request(id.clone()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.unwrap_err(), "Management API request cancelled");
+        done.await.unwrap();
+        assert!(!REQUESTS.lock().unwrap().contains_key(&id));
+        assert!(REQUESTS.lock().unwrap().contains_key(&other));
+        // Normal errors also release reservations.
+        assert!(cancellable_management_request(Some(other.clone()), async {
+            Err("offline".into())
+        })
+        .await
+        .is_err());
+        assert!(!REQUESTS.lock().unwrap().contains_key(&other));
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_dispatch_never_polls_the_http_operation() {
+        let id = prepare_management_request().unwrap();
+        cancel_management_request(id.clone()).unwrap();
+        cancel_management_request(id.clone()).unwrap();
+        let result = cancellable_management_request(Some(id), async {
+            panic!("cancelled HTTP request must not be sent");
+        })
+        .await;
+        assert_eq!(result.unwrap_err(), "Management API request cancelled");
+    }
 
     #[test]
     fn v8_yaml_body_is_raw_text_and_config_values_remain_json() {

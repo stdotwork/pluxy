@@ -26,6 +26,41 @@ describe('plugin Management API', () => {
     else Reflect.deleteProperty(globalThis, 'window');
   });
 
+  it('cancels the native request and ignores its late success', async () => {
+    const controller = new AbortController();
+    const cancellations: unknown[] = [];
+    let finish!: (value: unknown) => void;
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    mockIPC((command, args) => {
+      if (command === 'prepare_management_request') return 'cancel-test';
+      if (command === 'cancel_management_request') { cancellations.push(args); return null; }
+      expect(args?.request).toMatchObject({ requestId: 'cancel-test' });
+      started();
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const result = pluginStoreApi.install('sample', { signal: controller.signal });
+    const rejected = result.catch(error => error);
+    await ready;
+    controller.abort();
+    finish({ status: 'ok', id: 'sample' });
+    expect(await rejected).toMatchObject({ name: 'AbortError' });
+    expect(cancellations).toContainEqual({ requestId: 'cancel-test' });
+  });
+
+  it('releases a reservation cancelled before dispatch without sending an installation', async () => {
+    const controller = new AbortController();
+    const commands: string[] = [];
+    mockIPC(command => {
+      commands.push(command);
+      if (command === 'prepare_management_request') { controller.abort(); return 'reserved'; }
+      return null;
+    });
+    await expect(pluginStoreApi.install('sample', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(commands).not.toContain('management_request');
+    expect(commands).toContain('cancel_management_request');
+  });
+
   it('preserves the latest unknown config fields and removes or replaces only edited fields', async () => {
     const requests: unknown[] = [];
     mockIPC((command, args) => {

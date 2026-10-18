@@ -138,6 +138,7 @@ export interface PluginSettings {
 }
 
 export interface PluginStoreInstallOptions {
+  signal?: AbortSignal;
   sourceId?: string;
   version?: string;
 }
@@ -330,17 +331,31 @@ export const pluginStoreApi = {
     ]);
     // Native request has a separate query field: source identity survives even
     // when multiple registries expose the same plugin ID.
-    const value = responseObject(await invoke<unknown>('management_request', {
-      request: {
-        method: 'POST', path: `/plugins/store/${pluginPathID(id)}/install`, query,
-        body: version ? { version } : undefined, timeoutMs: 120_000,
-      },
-    }), 'plugin installation');
-    return {
-      status: text(value.status), sourceId: text(value.source_id), sourceName: text(value.source_name),
-      sourceUrl: text(value.source_url), id: text(value.id), version: text(value.version),
-      installType: text(value.install_type), path: text(value.path),
-      pluginsEnabled: value.plugins_enabled === true, restartRequired: value.restart_required === true,
-    };
+    const signal = options.signal;
+    signal?.throwIfAborted();
+    const requestId = signal ? await invoke<string>('prepare_management_request') : undefined;
+    const cancel = () => { void invoke('cancel_management_request', { requestId }).catch(() => {}); };
+    signal?.addEventListener('abort', cancel, { once: true });
+    try {
+      // An abort during reservation must release the token without starting HTTP.
+      if (signal?.aborted) { cancel(); signal.throwIfAborted(); }
+      const value = responseObject(await invoke<unknown>('management_request', {
+        request: {
+          requestId,
+          method: 'POST', path: `/plugins/store/${pluginPathID(id)}/install`, query,
+          body: version ? { version } : undefined, timeoutMs: 120_000,
+        },
+      }), 'plugin installation');
+      signal?.throwIfAborted();
+      return {
+        status: text(value.status), sourceId: text(value.source_id), sourceName: text(value.source_name),
+        sourceUrl: text(value.source_url), id: text(value.id), version: text(value.version),
+        installType: text(value.install_type), path: text(value.path),
+        pluginsEnabled: value.plugins_enabled === true, restartRequired: value.restart_required === true,
+      };
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+      if (requestId !== undefined) cancel();
+    }
   },
 };

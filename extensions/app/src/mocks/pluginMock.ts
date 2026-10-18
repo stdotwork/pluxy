@@ -228,6 +228,8 @@ export function createPluginMock(host: PluginMockHost, extraPages = 0, onWebview
   }
 
   function handle(command: string, payload: JsonObject): PluginMockResult {
+    if (command === 'prepare_management_request') return { handled: true, value: crypto.randomUUID() };
+    if (command === 'cancel_management_request') return { handled: true, value: null };
     const request = object(payload.request);
     const path = text(request.path);
     const pluginRequest = command === 'management_request' && (

@@ -12,7 +12,6 @@ localStorage.setItem('cpa-gui.agent-selected-client.v1', params.get('client') ||
 const ids = ['claude-code','claude-desktop','codex','opencode','openclaw','hermes','deepseek-harness','antigravity-cli','copilot-cli','vscode-copilot','workbuddy','zcode','kimi-code','grok-build','omp','pi'];
 let count=0; let backupCount=0; const backups:any[]=[]; let currentModel=params.has('fresh')?null:'gpt-one';
 let nativeOauth=params.has('native-oauth'); let nativeSwitchCount=0; let codexClosed=false; let closeCount=0;
-let openaiProvider=false;
 let currentOauth=false; const currentMappings:Record<string,any>={};
 const claudeAliasLayoutModels = [
  {name:'gpt-6.1-sol-high-fast',alias:'gpt-6.1-sol',isAlias:true},
@@ -64,15 +63,7 @@ mockIPC(async (cmd,args:any) => {
        const installed=['claude-code','codex','opencode'].includes(status.id);
        return {...status,installed,pluginInstalled:status.id==='pi',configExists:installed||status.id==='claude-desktop',configured:installed&&!!currentModel,configurationSynchronized:installed&&!!currentModel,connectionState:installed&&currentModel?'configured':'not-configured',currentModel:installed?currentModel:null,appliedModel:installed?currentModel:null,modificationEnabled:installed&&!!currentModel,modificationState:installed&&currentModel?'applied':'unconfigured',launchTargets:installed?status.launchTargets:[],version:installed?status.version:null,cliVersion:installed?status.cliVersion:null,pluginVersion:status.id==='pi'?'1.0':null};
      })
-     .map(status=>({...status,codexOpenaiProvider:status.id==='codex'&&openaiProvider&&!nativeOauth&&!codexClosed,...((window as any).fixtureClientStatusesOverride?.[status.id]??{})}));
- }
- if(cmd==='set_codex_openai_provider') {
-   if(params.has('fail-provider'))throw new Error('CPA_CODEX_OAUTH_AUTH_UNSUPPORTED');
-   openaiProvider=!!args.enabled;return {outcome:'updated'};
- }
- if(cmd==='repair_codex_session_metadata') {
-   if(params.has('fail-provider-sync'))throw new Error('模拟会话同步失败');
-   return {targetProvider:openaiProvider?'openai':'cpa-gui',changedRolloutFiles:2,sqliteRowsUpdated:2,skippedLockedFiles:[],backupPath:'C:/test/backup',encryptedContentWarning:null,warnings:[]};
+     .map(status=>({...status,...((window as any).fixtureClientStatusesOverride?.[status.id]??{})}));
  }
  if(cmd==='close_codex_config_modification') {
    closeCount++;
