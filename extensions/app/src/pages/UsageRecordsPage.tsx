@@ -67,6 +67,7 @@ import { EventsView, type UsageEventPage } from './UsageEventsView';
 import { SelectMenu } from '../components/SelectMenu';
 import { Dialog } from '../components/Dialog';
 import { UsageAnalysisView, type UsageAnalysis, type UsageCategory } from './UsageAnalysisView';
+import { Select } from '../components/Select';
 
 type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing' | 'data-management';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
@@ -1557,10 +1558,10 @@ function PricingView({
             </button>
           </div>
           <div className="usage-pricing-action-group">
-            <select value={syncSource} onChange={(event) => changeSyncSource(event.currentTarget.value as 'models-dev' | 'litellm')} aria-label={t('usage.pricing.syncSource')}>
+            <Select value={syncSource} onChange={(event) => changeSyncSource(event.currentTarget.value as 'models-dev' | 'litellm')} aria-label={t('usage.pricing.syncSource')}>
               <option value="models-dev">Models.dev</option>
               <option value="litellm">LiteLLM</option>
-            </select>
+            </Select>
             <button type="button" className="primary-button" disabled={syncing} onClick={() => void previewPrices()}>
               {syncing ? t('usage.pricing.syncing') : t('usage.pricing.sync')}
             </button>

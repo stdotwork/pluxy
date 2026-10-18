@@ -167,7 +167,7 @@ const path = require('node:path');
       { name: 'plugin configuration', plugins: true, open: async (page) => button(page, 'Configure') },
       { name: 'plugin sign-in', plugins: true, open: async (page) => button(page, 'Sign in') },
       { name: 'plugin install', plugins: true, open: async (page) => {
-        await button(page, 'Plugin store').click();
+        await page.getByRole('tab', { name: 'Plugin store', exact: true }).click();
         return page.locator('.plugin-card .primary-button:not(:disabled)').first();
       } },
       { name: 'codex catalog', open: async (page) => button(await agents(page), 'Model list settings') },

@@ -9,6 +9,7 @@ import './AuthFileSettingsDialog.css';
 import { Dialog } from './Dialog';
 import { CredentialAdvancedFields, CredentialHeadersEditor, credentialProviderKey } from './CredentialAdvancedFields';
 import { modelSearchText, type ModelOption } from '../services/modelService';
+import { Select } from './Select';
 
 export function AuthFileSettingsDialog({ name, displayName = name, provider = '', onClose, onSaved }: {
   name: string;
@@ -98,11 +99,11 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
   const booleanField = (key: 'disable_cooling' | 'websockets') => (
     <label className="credential-settings-field">
       <span>{t(`authFiles.settings.${key}`)} <code>{key}</code></span>
-      <select value={draft?.[key] ?? ''} onChange={(event) => update(key, event.currentTarget.value as BooleanOverride)}>
+      <Select value={draft?.[key] ?? ''} onChange={(event) => update(key, event.currentTarget.value as BooleanOverride)}>
         <option value="">{t('authFiles.settings.inherit')}</option>
         <option value="true">{t('common.enable')}</option>
         <option value="false">{t('common.disable')}</option>
-      </select>
+      </Select>
       <small>{t(`authFiles.settings.${key}Hint`)}</small>
     </label>
   );

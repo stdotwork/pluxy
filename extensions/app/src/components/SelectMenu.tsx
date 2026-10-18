@@ -183,7 +183,7 @@ export function SelectMenu({
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
       moveActive(-1);
-    } else if (event.key === 'Enter' && options[activeIndex]) {
+    } else if ((event.key === 'Enter' || event.key === ' ') && options[activeIndex]) {
       event.preventDefault();
       choose(options[activeIndex].value);
     } else if (event.key === 'Escape') {
@@ -197,10 +197,12 @@ export function SelectMenu({
       <button
         type="button"
         className="select-menu-trigger"
+        role="combobox"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listboxId}
+        aria-activedescendant={open && options[activeIndex] ? `${listboxId}-option-${activeIndex}` : undefined}
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={handleKeyDown}
@@ -229,6 +231,7 @@ export function SelectMenu({
                     <button
                       type="button"
                       role="option"
+                      id={`${listboxId}-option-${index}`}
                       aria-selected={isSelected}
                       aria-label={option.group ? `${option.group}: ${option.label}` : undefined}
                       className={`select-menu-option${isSelected ? ' selected' : ''}${index === activeIndex ? ' active' : ''}`}

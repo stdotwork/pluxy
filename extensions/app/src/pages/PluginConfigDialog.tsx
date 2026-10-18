@@ -9,6 +9,7 @@ import {
   buildPluginConfigDraft, buildPluginConfigPatch, normalizePluginConfigFieldType,
   type PluginConfigDraft, type PluginDraftValue,
 } from '../services/pluginConfigDraft';
+import { Select } from '../components/Select';
 import './PluginConfigDialog.css';
 
 function customConfig(config: PluginConfigObject): PluginConfigObject {
@@ -133,14 +134,14 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
     };
     return <div className="plugin-config-field" key={field.name}>
       <label htmlFor={fieldId}><span>{field.name}</span><code>{type}</code></label>
-      {type === 'boolean' ? <select {...inputProps} value={draft.touchedFields[field.name] !== true && typeof original[field.name] !== 'boolean' ? '' : value === true ? 'true' : 'false'} onChange={event => changeField(field.name, event.currentTarget.value === 'true')}>
+      {type === 'boolean' ? <Select {...inputProps} value={draft.touchedFields[field.name] !== true && typeof original[field.name] !== 'boolean' ? '' : value === true ? 'true' : 'false'} onChange={event => changeField(field.name, event.currentTarget.value === 'true')}>
         <option value="" disabled>{pt('inherit')}</option>
         <option value="true">{t('common.enable')}</option><option value="false">{t('common.disable')}</option>
-      </select> : type === 'enum' ? <select {...inputProps} value={typeof value === 'string' ? value : ''} onChange={event => changeField(field.name, event.currentTarget.value)}>
+      </Select> : type === 'enum' ? <Select {...inputProps} value={typeof value === 'string' ? value : ''} onChange={event => changeField(field.name, event.currentTarget.value)}>
         <option value="">{pt('inherit')}</option>
         {typeof value === 'string' && value && !field.enumValues.includes(value) ? <option value={value}>{value}</option> : null}
         {field.enumValues.map(option => <option key={option} value={option}>{option}</option>)}
-      </select> : type === 'array' || type === 'object' ? <textarea {...inputProps} rows={5} spellCheck={false} autoComplete="off" value={typeof value === 'string' ? value : ''} placeholder={type === 'array' ? '[]' : '{}'} onChange={event => changeField(field.name, event.currentTarget.value)} />
+      </Select> : type === 'array' || type === 'object' ? <textarea {...inputProps} rows={5} spellCheck={false} autoComplete="off" value={typeof value === 'string' ? value : ''} placeholder={type === 'array' ? '[]' : '{}'} onChange={event => changeField(field.name, event.currentTarget.value)} />
         : <input {...inputProps} type="text" inputMode={type === 'number' ? 'decimal' : type === 'integer' ? 'numeric' : undefined} autoComplete="off" spellCheck={false} value={typeof value === 'string' ? value : ''} onChange={event => changeField(field.name, event.currentTarget.value)} />}
       <small id={`${fieldId}-hint`}>{field.description}</small>
       {fieldError ? <small className="plugin-config-error" id={`${fieldId}-error`}>{fieldError}</small> : null}

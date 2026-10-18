@@ -118,6 +118,7 @@ import { AgentConfigManagementPanel, AgentConfigurationFeedback, AgentRunControl
 import { Dialog } from '../components/Dialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { requestAppNavigation } from '../navigation';
+import { Select } from '../components/Select';
 
 const setupErrors: Record<string, MessageKey> = {
   COPILOT_SETUP_REQUIRED: 'agents.copilotSetup.required',
@@ -2287,7 +2288,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
             <div className="deepseek-harness-launch-options">
               <label className="config-dialog-field deepseek-harness-launch-field">
                 <span>{t('agents.deepseekLaunch.mode.label')}</span>
-                <select
+                <Select
                   className="config-dialog-text-input"
                   value={deepSeekHarnessLaunchDraft.mode}
                   onChange={(event) => updateDeepSeekHarnessLaunchDraft({
@@ -2301,7 +2302,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                   <option value="sdk">{t('agents.deepseekLaunch.mode.sdk')}</option>
                   <option value="sdk-minimal">{t('agents.deepseekLaunch.mode.sdkMinimal')}</option>
                   <option value="custom">{t('agents.deepseekLaunch.mode.custom')}</option>
-                </select>
+                </Select>
               </label>
               <p className="deepseek-harness-launch-mode-description">
                 {deepSeekHarnessLaunchModeDescription}

@@ -37,6 +37,7 @@ import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
 import { createVersionManagementVisitTracker } from '../services/versionManagementVisits';
 import { AppReleaseNotes } from '../components/AppReleaseNotes';
 import { Dialog } from '../components/Dialog';
+import { Select } from '../components/Select';
 
 export type { CoreInstallResult } from '../services/coreVersions';
 
@@ -519,7 +520,7 @@ export function VersionManagementPage() {
           <div className="version-source-control">
             <label>
               <span className="sr-only">{t('kernel.versions.downloadSource')}</span>
-              <select
+              <Select
                 value={versionSource?.source ?? DEFAULT_VERSION_DOWNLOAD_SOURCE}
                 disabled={
                   !versionSource
@@ -541,7 +542,7 @@ export function VersionManagementPage() {
                     {downloadSourceLabel(`custom:${url}`, t)}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <button
               type="button"

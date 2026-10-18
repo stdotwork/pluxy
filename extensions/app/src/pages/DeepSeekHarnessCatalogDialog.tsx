@@ -22,6 +22,7 @@ import { useI18n } from '../i18n';
 import { Dialog } from '../components/Dialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import type { MessageKey } from '../i18n/resources';
+import { Select } from '../components/Select';
 
 function HarnessContextWindowInput({ label, value, inherited, onChange }: {
   label: string; value?: string; inherited: HarnessContextDefault; onChange: (value: string) => void;
@@ -72,10 +73,10 @@ function HarnessFields({ group, draft, defaults = {}, prefix = '', api, contextD
       let mapping: HarnessProfile = {};
       try { const parsed: unknown = JSON.parse(value || '{}'); if (isHarnessRecord(parsed)) mapping = parsed; } catch {}
       return <div className="harness-reasoning wide" key={key}>
-        <label><span>{label(field.name)}</span><select aria-label={label(field.name)} value={!value ? '' : value === 'false' ? 'false' : 'custom'}
+        <label><span>{label(field.name)}</span><Select aria-label={label(field.name)} value={!value ? '' : value === 'false' ? 'false' : 'custom'}
           onChange={e => set(e.currentTarget.value === 'custom' ? JSON.stringify({ off: null, low: 'low', medium: 'medium', high: 'high' }) : e.currentTarget.value)}>
           <option value="">{automatic}</option><option value="false">{t('agents.harness.reasoningDisabled')}</option><option value="custom">{t('agents.harness.reasoningCustom')}</option>
-        </select></label>
+        </Select></label>
         {value && value !== 'false' ? <div className="harness-reasoning-levels">{harnessReasoningLevels.map(level => <div key={level}>
           <label><Checkbox checked={Object.prototype.hasOwnProperty.call(mapping, level)} onChange={e => {
             const next = { ...mapping }; if (e.currentTarget.checked) next[level] = level === 'off' ? null : level; else delete next[level]; set(JSON.stringify(next));
@@ -89,12 +90,12 @@ function HarnessFields({ group, draft, defaults = {}, prefix = '', api, contextD
     const jsonField = ['headers', 'kwargs', 'strings'].includes(field.kind);
     return <label key={key} className={jsonField ? 'wide' : undefined}>
       <span title={field.name}>{label(field.name)}{Object.prototype.hasOwnProperty.call(draft, key) ? <small className="harness-override">{t('agents.catalog.customized')}</small> : null}</span>
-      {['enum', 'boolean', 'modalities'].includes(field.kind) ? <select aria-label={label(field.name)} value={value} onChange={e => set(e.currentTarget.value)}>
+      {['enum', 'boolean', 'modalities'].includes(field.kind) ? <Select aria-label={label(field.name)} value={value} onChange={e => set(e.currentTarget.value)}>
         <option value="">{automatic}</option>
         {field.kind === 'boolean' ? <><option value="true">{t('agents.harness.yes')}</option><option value="false">{t('agents.harness.no')}</option></> : null}
         {field.kind === 'enum' ? field.values!.map(v => <option key={v} value={v}>{v}</option>) : null}
         {field.kind === 'modalities' ? <>{field.name === 'input' ? <option value="[]">{t('agents.harness.providerInput')}</option> : null}<option value='["text"]'>{t('agents.harness.textOnly')}</option><option value='["text","image"]'>{t('agents.harness.textImage')}</option><option value='["image"]'>{t('agents.catalog.image')}</option></> : null}
-      </select> : jsonField ? <textarea aria-label={label(field.name)} rows={4} spellCheck={false} value={value} placeholder={JSON.stringify(supplied ?? field.example, null, 2) ?? automatic} onChange={e => set(e.currentTarget.value)} />
+      </Select> : jsonField ? <textarea aria-label={label(field.name)} rows={4} spellCheck={false} value={value} placeholder={JSON.stringify(supplied ?? field.example, null, 2) ?? automatic} onChange={e => set(e.currentTarget.value)} />
         : <input aria-label={label(field.name)} type={['integer', 'number'].includes(field.kind) ? 'number' : 'text'} min={field.min ?? field.exclusiveMin} max={field.max} step={field.kind === 'integer' ? 1 : 'any'} value={value} placeholder={automatic} onChange={e => set(e.currentTarget.value)} />}
       {['input', 'defaultInput', 'maxTokens', 'defaultMaxTokens', 'api', 'headers'].includes(field.name) ? <small>{t(`agents.harness.hint.${field.name}` as MessageKey)}</small> : null}
     </label>;

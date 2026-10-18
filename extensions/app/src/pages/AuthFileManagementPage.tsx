@@ -88,6 +88,7 @@ import {
 } from '../services/oauthModelSettings';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import { usePrivacyMask } from '../privacy';
+import { Select } from '../components/Select';
 
 type AuthFile = Record<string, unknown>;
 
@@ -499,16 +500,16 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
           <input value={filter} onChange={(event) => setFilter(event.currentTarget.value)} placeholder={t('authFiles.searchPlaceholder')} aria-label={t('authFiles.searchPlaceholder')} />
           </div>
           <div className="auth-files-filters">
-          <select value={providerFilter} onChange={(event) => setProviderFilter(event.currentTarget.value)} aria-label={t('authFiles.filter.allProviders')}>
+          <Select value={providerFilter} onChange={(event) => setProviderFilter(event.currentTarget.value)} aria-label={t('authFiles.filter.allProviders')}>
             <option value="all">{t('authFiles.filter.allProviders')}</option>
             {providers.map((provider) => <option key={provider} value={provider}>{provider}</option>)}
-          </select>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.currentTarget.value as typeof statusFilter)} aria-label={t('authFiles.filter.allStatuses')}>
+          </Select>
+          <Select value={statusFilter} onChange={(event) => setStatusFilter(event.currentTarget.value as typeof statusFilter)} aria-label={t('authFiles.filter.allStatuses')}>
             <option value="all">{t('authFiles.filter.allStatuses')}</option>
             <option value="enabled">{t('authFiles.filter.enabled')}</option>
             <option value="disabled">{t('authFiles.filter.disabled')}</option>
             <option value="runtime">{t('authFiles.filter.runtime')}</option>
-          </select>
+          </Select>
           </div>
         </div>
 
@@ -613,9 +614,9 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
         )}
         {!loading && visibleFiles.length > 0 && files.length > 10 ? <nav className="auth-list-pagination" aria-label={t('authFiles.title')}>
           <span>{t('authFiles.list.pageSummary', { page: currentPage, pages: pageCount, start: (currentPage - 1) * pageSize + 1, end: Math.min(currentPage * pageSize, visibleFiles.length), total: visibleFiles.length })}</span>
-          <label>{t('authFiles.list.pageSize')}<select value={pageSize} onChange={(event) => setPageSize(Number(event.currentTarget.value))}>
+          <label>{t('authFiles.list.pageSize')}<Select value={pageSize} onChange={(event) => setPageSize(Number(event.currentTarget.value))}>
             {[10, 20, 50].map((size) => <option key={size} value={size}>{t('authFiles.list.perPage', { count: size })}</option>)}
-          </select></label>
+          </Select></label>
           <button type="button" className="secondary-button compact-button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}><ChevronLeft size={14} aria-hidden="true" />{t('authFiles.list.previous')}</button>
           <button type="button" className="secondary-button compact-button" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>{t('authFiles.list.next')}<ChevronRight size={14} aria-hidden="true" /></button>
         </nav> : null}
@@ -640,12 +641,12 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
               ) : (
                 <label className="auth-model-provider">
                   <span>{t('authFiles.models.provider')}</span>
-                  <select value={oauthModelTarget.provider} disabled={oauthModelSaving} onChange={(event) => {
+                  <Select value={oauthModelTarget.provider} disabled={oauthModelSaving} onChange={(event) => {
                     const provider = oauthModelProviders.find((item) => item.provider === event.currentTarget.value);
                     if (provider) void openOauthModelSettings({ ...provider, scope: 'provider' });
                   }}>
                     {oauthModelProviders.map((provider) => <option key={provider.provider} value={provider.provider}>{provider.label}</option>)}
-                  </select>
+                  </Select>
                 </label>
               )}
               <span>{t(oauthModelTarget.scope === 'credential' ? 'authFiles.models.description' : 'authFiles.models.globalDescription', { provider: oauthModelTarget.label })}</span>

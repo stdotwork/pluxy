@@ -96,6 +96,7 @@ import {
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import type { MessageKey } from '../i18n/resources';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
+import { Select } from '../components/Select';
 
 export type { ProviderSection } from '../services/apiAccessRemarks';
 
@@ -1750,9 +1751,9 @@ function ProviderGroupHealthDialog({ row, onClose }: ProviderHealthDialogProps) 
   }, [row, key]);
   return <ProviderHealthDialog key={selected} row={effectiveRow} onClose={onClose} keySelector={keys.length ?
     <label className="provider-health-key-selector"><span>{t('apiAccess.groups.healthKey')}</span>
-      <select value={selected} onChange={(event) => setSelected(Number(event.currentTarget.value))}>
+      <Select value={selected} onChange={(event) => setSelected(Number(event.currentTarget.value))}>
         {keys.map((entry, index) => <option key={index} value={index}>{t('apiAccess.groups.keyNumber', { number: index + 1 })} · {maskSecret(readString(entry, 'api-key'))}</option>)}
-      </select></label> : undefined} />;
+      </Select></label> : undefined} />;
 }
 
 type ProviderModelHealthState = { status: 'checking' } | ProviderModelHealthResult;
@@ -2279,10 +2280,10 @@ export function ApiProviderDialog({
               <RefreshCw size={15} />{t('apiAccess.models.fetch')}
             </button>
           </div>
-          {(draft.groupKeys?.length ?? 0) > 1 ? <label><span>{t('apiAccess.entries.discoveryKey')}</span><select value={draft.groupKeys!.some((key) => key.id === discoveryKeyId) ? discoveryKeyId : draft.groupKeys![0].id}
+          {(draft.groupKeys?.length ?? 0) > 1 ? <label><span>{t('apiAccess.entries.discoveryKey')}</span><Select value={draft.groupKeys!.some((key) => key.id === discoveryKeyId) ? discoveryKeyId : draft.groupKeys![0].id}
             onChange={(event) => { discoveryRequestRef.current += 1; setModelLoading(false); setDiscoveryKeyId(event.currentTarget.value); }}>
             {draft.groupKeys!.map((key, index) => <option value={key.id} key={key.id}>{t('apiAccess.entries.keyNumber', { number: index + 1 })} · {maskSecret(readString(key.value, 'api-key'))}</option>)}
-          </select></label> : null}
+          </Select></label> : null}
           <div className={`model-config-summary ${configuredModels.length || hasModelExclusions ? 'has-models' : ''}`}>
             <strong>{modelSummaryTitle}</strong>
             <span>{modelSummaryDetail}</span>
@@ -2391,12 +2392,12 @@ export function ApiProviderDialog({
               <div className="provider-cloak-settings">
                 <label>
                   <span>{t('apiAccess.cloak.mode')}</span>
-                  <select value={draft.cloakMode ?? ''} onChange={(event) => updateTextField('cloakMode', event.currentTarget.value)}>
+                  <Select value={draft.cloakMode ?? ''} onChange={(event) => updateTextField('cloakMode', event.currentTarget.value)}>
                     <option value="">{t('apiAccess.cloak.default')}</option>
                     <option value="auto">{t('apiAccess.cloak.auto')}</option>
                     <option value="always">{t('apiAccess.cloak.always')}</option>
                     <option value="never">{t('apiAccess.cloak.never')}</option>
-                  </select>
+                  </Select>
                 </label>
                 <label className="multiline-field">
                   <span>{t('apiAccess.cloak.words')}</span>
@@ -2408,11 +2409,11 @@ export function ApiProviderDialog({
                 </div>
                 <div className="provider-advanced-toggle">
                   <div><strong>{t('apiAccess.cloak.cacheUser')}</strong><span>{t('apiAccess.cloak.cacheUserDescription')}</span></div>
-                  <select aria-label={t('apiAccess.cloak.cacheUser')} value={draft.cloakCacheUserId == null ? '' : String(draft.cloakCacheUserId)} onChange={(event) => updateOptionalBooleanField('cloakCacheUserId', event.currentTarget.value)}>
+                  <Select aria-label={t('apiAccess.cloak.cacheUser')} value={draft.cloakCacheUserId == null ? '' : String(draft.cloakCacheUserId)} onChange={(event) => updateOptionalBooleanField('cloakCacheUserId', event.currentTarget.value)}>
                     <option value="">{t('apiAccess.option.inherit')}</option>
                     <option value="true">{t('common.enabled')}</option>
                     <option value="false">{t('common.disabled')}</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
             ) : null}
@@ -2424,11 +2425,11 @@ export function ApiProviderDialog({
             ) : null}
             <div className="provider-advanced-toggle">
               <div><strong>{t('apiAccess.cooling.title')}</strong><span>{t('apiAccess.cooling.description')}</span></div>
-              <select aria-label={t('apiAccess.cooling.title')} value={draft.disableCooling == null ? '' : String(draft.disableCooling)} onChange={(event) => updateOptionalBooleanField('disableCooling', event.currentTarget.value)}>
+              <Select aria-label={t('apiAccess.cooling.title')} value={draft.disableCooling == null ? '' : String(draft.disableCooling)} onChange={(event) => updateOptionalBooleanField('disableCooling', event.currentTarget.value)}>
                 <option value="">{t('apiAccess.option.inherit')}</option>
                 <option value="true">{t('apiAccess.cooling.disable')}</option>
                 <option value="false">{t('apiAccess.cooling.enable')}</option>
-              </select>
+              </Select>
             </div>
             </AdvancedSettingsGroup>
           </div>

@@ -15,6 +15,7 @@ import { formatDuration, formatUsageNumber } from '../services/usageNumber';
 import { Dialog } from '../components/Dialog';
 import { usageProviderDetails } from '../services/usageProvider';
 import { usageModelDetails } from '../services/usageModel';
+import { Select } from '../components/Select';
 
 const compactNumber = (value: number) => formatUsageNumber(value, getCurrentLocale());
 const compactDuration = (value: number) => formatDuration(value, getCurrentLocale());
@@ -815,9 +816,9 @@ export function EventsView({
           </div>
         </div>
         <div className="usage-pagination-controls">
-          <select className="usage-page-size-select" value={pageSize} disabled={loading} onChange={(event) => onPageSizeChange(Number(event.currentTarget.value))} aria-label={t('usage.events.pageSize', { size: pageSize })}>
+          <Select className="usage-page-size-select" value={pageSize} disabled={loading} onChange={(event) => onPageSizeChange(Number(event.currentTarget.value))} aria-label={t('usage.events.pageSize', { size: pageSize })}>
             {[20, 50, 100, 200].map((size) => <option key={size} value={size}>{t('usage.events.pageSize', { size })}</option>)}
-          </select>
+          </Select>
           <div className="usage-pagination-right">
             <button type="button" className="usage-page-nav-btn" disabled={loading || events.page <= 1} onClick={() => onPage(events.page - 1)}><ChevronLeft size={14} aria-hidden="true" /><span>{t('usage.previous')}</span></button>
             <span className="usage-pagination-info">{events.page} / {Math.max(1, events.totalPages)}</span>

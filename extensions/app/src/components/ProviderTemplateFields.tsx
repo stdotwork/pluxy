@@ -4,6 +4,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { providerText, type ProviderTemplateMessage } from '../i18n/providerTemplate';
 import { isRecord, readString } from '../services/managementApi';
+import { Select } from './Select';
 import '../styles/provider-template.css';
 
 type Value = Record<string, unknown>;
@@ -27,16 +28,16 @@ export function ProviderField({ value, onChange, field, label, kind = 'boolean',
   const set = (next: unknown) => onChange(changed(value, field, next));
   return <div className="provider-template-field">
     {kind === 'boolean' ? <label><span>{p(label)}</span>
-      <select aria-label={p(label)} value={enabled ? String(current) : ''} onChange={(event) => set(event.currentTarget.value === '' ? undefined : event.currentTarget.value === 'true')}>
+      <Select aria-label={p(label)} value={enabled ? String(current) : ''} onChange={(event) => set(event.currentTarget.value === '' ? undefined : event.currentTarget.value === 'true')}>
         <option value="">{p('inherit')}</option><option value="true">{p('enabled')}</option><option value="false">{p('disabled')}</option>
-      </select></label> : <>
+      </Select></label> : <>
       <label className="provider-template-toggle"><Checkbox checked={enabled} onChange={(event) => set(event.currentTarget.checked
         ? structuredClone(initial ?? (kind === 'number' ? 0 : kind === 'lines' ? [] : '')) : undefined)} /><span>{p(label)}</span></label>
       {enabled ? kind === 'lines' ? <textarea aria-label={p(label)} rows={3} value={lines(current)} onChange={(event) => set(event.currentTarget.value.split(/\r?\n/))} onBlur={(event) => set(event.currentTarget.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))} />
-        : kind === 'select' ? <select aria-label={p(label)} value={String(current)} onChange={(event) => set(event.currentTarget.value)}>
+        : kind === 'select' ? <Select aria-label={p(label)} value={String(current)} onChange={(event) => set(event.currentTarget.value)}>
           {!choices?.some((choice) => choice.value === current) ? <option value={String(current)}>{String(current)}</option> : null}
           {choices?.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
-        </select> : <input aria-label={p(label)} type={kind} step={kind === 'number' ? '1' : undefined} value={String(current)} onChange={(event) => set(kind === 'number' && event.currentTarget.value !== '' ? Number(event.currentTarget.value) : event.currentTarget.value)} /> : null}
+        </Select> : <input aria-label={p(label)} type={kind} step={kind === 'number' ? '1' : undefined} value={String(current)} onChange={(event) => set(kind === 'number' && event.currentTarget.value !== '' ? Number(event.currentTarget.value) : event.currentTarget.value)} /> : null}
     </>}
     {hint ? <small>{p(hint)}</small> : null}
   </div>;
@@ -60,10 +61,10 @@ export function ProviderErrorRules({ value, onChange, inherited }: { value: Valu
         return <fieldset key={index} className="provider-template-rule"><legend>{index + 1}</legend>
           <div className="provider-template-grid">
             <label><span>{p('status')}</span><input aria-label={p('status')} type="number" min="100" max="599" step="1" value={String(rule.status ?? '')} onChange={(event) => update({ ...rule, status: event.currentTarget.value === '' ? '' : Number(event.currentTarget.value) })} /></label>
-            <label><span>{p('action')}</span><select aria-label={p('action')} value={readString(rule, 'action')} onChange={(event) => update({ ...rule, action: event.currentTarget.value })}>
+            <label><span>{p('action')}</span><Select aria-label={p('action')} value={readString(rule, 'action')} onChange={(event) => update({ ...rule, action: event.currentTarget.value })}>
               {!actions.some((action) => action === rule.action) ? <option value={readString(rule, 'action')}>{readString(rule, 'action')}</option> : null}
               {actions.map((action) => <option key={action} value={action}>{p(action)}</option>)}
-            </select></label>
+            </Select></label>
             <ProviderField value={rule} onChange={update} field="match" label="match" kind="lines" />
             <ProviderField value={rule} onChange={update} field="match-regexr" label="regex" kind="lines" />
           </div>

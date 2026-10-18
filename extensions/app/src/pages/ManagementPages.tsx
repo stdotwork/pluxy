@@ -42,6 +42,7 @@ import { Tabs } from '../components/Tabs';
 import { PluginOAuthProviders } from './PluginOAuthProviders';
 import { notifyPluginResourcesChanged, PLUGIN_RESOURCES_REFRESH_EVENT } from '../services/pluginResources';
 import { VertexLoginCard } from './VertexLoginCard';
+import { Select } from '../components/Select';
 
 type OAuthProviderId = 'codex' | 'claude' | 'antigravity' | 'kimi' | 'xai' | 'devin' | 'meta';
 type OAuthFlowStatus = 'idle' | 'waiting' | 'success' | 'error';
@@ -509,7 +510,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
       <header className="management-header">
         <label className="oauth-browser-picker">
           <span>{t('oauth.browser.label')}</span>
-          <select
+          <Select
             value={selectedBrowser}
             onChange={(event) => setSelectedBrowser(event.currentTarget.value)}
             aria-label={t('oauth.browser.label')}
@@ -522,7 +523,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
               </option>
             ))}
             <option value={NO_AUTO_OPEN_BROWSER_ID}>{t('oauth.browser.noAutoOpen')}</option>
-          </select>
+          </Select>
         </label>
         <button type="button" className="secondary-button" onClick={notifyPluginResourcesChanged}>
           <RefreshCw size={16} aria-hidden="true" />{t('common.refresh')}

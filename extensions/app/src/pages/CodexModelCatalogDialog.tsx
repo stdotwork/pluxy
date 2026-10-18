@@ -20,6 +20,7 @@ import { Check, LoaderCircle, RefreshCw, Search, X } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { Dialog } from '../components/Dialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
+import { Select } from '../components/Select';
 
 type CodexModelCatalogDialogProps = {
   onClose: () => void;
@@ -261,7 +262,7 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
                   </div>
                 </fieldset>
 
-                <label><span>{t('agents.catalog.defaultReasoning')}</span><select value={activeModel.configuration.default_reasoning_level ?? ''} onChange={(event) => updateField('default_reasoning_level', (event.currentTarget.value || null) as CodexReasoningEffort | null)}><option value="">{t('agents.catalog.clientDefault')}</option>{activeModel.configuration.supported_reasoning_levels.map((level) => <option key={level.effort} value={level.effort}>{level.effort}</option>)}</select></label>
+                <label><span>{t('agents.catalog.defaultReasoning')}</span><Select value={activeModel.configuration.default_reasoning_level ?? ''} onChange={(event) => updateField('default_reasoning_level', (event.currentTarget.value || null) as CodexReasoningEffort | null)}><option value="">{t('agents.catalog.clientDefault')}</option>{activeModel.configuration.supported_reasoning_levels.map((level) => <option key={level.effort} value={level.effort}>{level.effort}</option>)}</Select></label>
 
                 <fieldset className="codex-catalog-choice-group">
                   <legend>{t('agents.catalog.modalities')}</legend>

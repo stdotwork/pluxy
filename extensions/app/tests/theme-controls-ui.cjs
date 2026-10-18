@@ -64,7 +64,7 @@ const settlePaint = locator => locator.evaluate(async element => {
       controller.setPreference('system');
     });
     await page.waitForFunction(() => document.documentElement.dataset.themeId === 'warm-sand-light');
-    await page.getByRole('button', { name: '时间范围', exact: true }).click();
+    await page.getByRole('combobox', { name: '时间范围', exact: true }).click();
     const menu = page.locator('.select-menu-dropdown');
     const assertMenuTheme = async (scheme, id) => {
       await page.emulateMedia({ colorScheme: scheme });

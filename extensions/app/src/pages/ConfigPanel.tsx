@@ -72,6 +72,7 @@ import {
   settingsCategories, settingsTemplateGroups,
   allSettingsTemplateGroups, settingsMessages, takeRequestedSettingField, type SettingsCategory,
 } from '../services/settingsNavigation';
+import { Select } from '../components/Select';
 
 type ConfigAction =
   | 'add-key'
@@ -1962,7 +1963,7 @@ export function ConfigPanelPage() {
                   </div>
                   <label className="config-software-select">
                     <span className="sr-only">{t('config.software.defaultTerminal')}</span>
-                    <select
+                    <Select
                       className="config-network-input"
                       value={softwareDefaultTerminalDraft}
                       disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
@@ -1976,7 +1977,7 @@ export function ConfigPanelPage() {
                           {terminal.id === 'auto' ? t('config.software.terminal.auto') : terminal.label}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 </div>
                 <div className="config-software-setting-row config-software-close-row">
@@ -1990,7 +1991,7 @@ export function ConfigPanelPage() {
                   </div>
                   <label className="config-software-select">
                     <span className="sr-only">{t('config.software.closeBehavior')}</span>
-                    <select
+                    <Select
                       className="config-network-input"
                       value={softwareCloseBehaviorDraft}
                       disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
@@ -2002,7 +2003,7 @@ export function ConfigPanelPage() {
                       <option value="ask">{t('config.software.behavior.ask')}</option>
                       <option value="minimize-to-tray">{t('config.software.behavior.minimize')}</option>
                       <option value="exit">{t('config.software.behavior.exit')}</option>
-                    </select>
+                    </Select>
                   </label>
                 </div>
               </div>

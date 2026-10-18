@@ -24,6 +24,7 @@ import { useI18n } from '../i18n';
 import { templateMessages, templateText } from '../i18n/templateConfig';
 import { useCoreRuntime } from '../coreRuntime';
 import { SettingsHelp } from './SettingsHelp';
+import { Select } from './Select';
 import '../styles/template-config.css';
 
 const restartHint = { zh: '需重启内核', en: 'Core restart required', ja: 'コアの再起動が必要' } satisfies TemplateText;
@@ -165,10 +166,10 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
     if (field.type === 'boolean') return <Switch {...common} checked={value === true} onChange={(event) => onChange(event.currentTarget.checked)} />;
     if (field.type === 'select') {
       const selected = field.options?.findIndex((option) => Object.is(option.value, value)) ?? -1;
-      return <select {...common} className="config-network-input" value={String(selected)} onChange={(event) => onChange(field.options?.[Number(event.currentTarget.value)]?.value)}>
+      return <Select {...common} className="config-network-input" value={String(selected)} onChange={(event) => onChange(field.options?.[Number(event.currentTarget.value)]?.value)}>
         {selected < 0 ? <option value="-1">{String(value ?? '')}</option> : null}
         {field.options?.map((option, index) => <option key={index} value={String(index)}>{templateText(option.label, locale)}</option>)}
-      </select>;
+      </Select>;
     }
     if (field.type === 'string-list' || field.type === 'json') return <textarea {...common} className="config-network-input template-config-textarea" rows={field.rows ?? (field.type === 'json' ? 6 : 3)}
       value={field.type === 'string-list' ? Array.isArray(value) ? value.join('\n') : '' : typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2)}
