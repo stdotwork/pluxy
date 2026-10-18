@@ -64,6 +64,7 @@ import { createRefreshScheduler } from '../services/refreshScheduler';
 import { usageViewScopeKey } from '../services/usageViewScope';
 import { EventsView, type UsageEventPage } from './UsageEventsView';
 import { SelectMenu } from '../components/SelectMenu';
+import { Dialog } from '../components/Dialog';
 import { UsageAnalysisView, type UsageAnalysis, type UsageCategory } from './UsageAnalysisView';
 
 type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing' | 'data-management';
@@ -1478,7 +1479,6 @@ function PricingView({
   const [syncPreview, setSyncPreview] = useState<ModelPriceSyncPreview | null>(null);
   const [syncDrafts, setSyncDrafts] = useState<SyncPriceDraft[]>([]);
   const [syncError, setSyncError] = useState('');
-  const syncDialog = useRef<HTMLDialogElement>(null);
   const { notice, revision, showNotice, clearNotice } = useAppNotice();
 
   const visibleRows = pricing.rows.filter((row) => {
@@ -1548,7 +1548,6 @@ function PricingView({
         cacheRead: String(price.cacheRead),
         cacheCreation: String(price.cacheCreation),
       })));
-      syncDialog.current?.showModal();
     } catch (syncError) {
       showNotice(String(syncError), 'error');
     } finally {
@@ -1580,7 +1579,7 @@ function PricingView({
     clearNotice();
     try {
       const result = await applyUsageModelPrices({ prices });
-      syncDialog.current?.close();
+      setSyncPreview(null);
       showNotice({ key: 'usage.pricing.syncResult', variables: { imported: result.imported } });
       await onChanged();
     } catch (syncError) {
@@ -1639,13 +1638,13 @@ function PricingView({
 
       <FloatingNotice key={revision} notice={notice} onDismiss={clearNotice} />
 
-      <dialog ref={syncDialog} className="usage-price-sync-dialog" onCancel={(event) => { if (applyingSync) event.preventDefault(); }} onClose={() => setSyncPreview(null)}>
+      {syncPreview ? <Dialog className="usage-price-sync-dialog" labelledBy="usage-price-sync-title" onClose={() => setSyncPreview(null)} closeDisabled={applyingSync}>
         <div className="usage-price-sync-header">
           <div>
-            <h2>{t('usage.pricing.syncPreview')}</h2>
+            <h2 id="usage-price-sync-title">{t('usage.pricing.syncPreview')}</h2>
             <a href={syncPreview?.sourceUrl} target="_blank" rel="noreferrer">{syncPreview?.source}</a>
           </div>
-          <button type="button" className="icon-button" aria-label={t('common.close')} disabled={applyingSync} onClick={() => syncDialog.current?.close()}><X size={16} /></button>
+          <button type="button" className="icon-button quiet" aria-label={t('common.close')} disabled={applyingSync} onClick={() => setSyncPreview(null)}><X size={16} /></button>
         </div>
         <p className="usage-price-sync-note">{t('usage.pricing.syncNote')}</p>
         <div className="usage-price-sync-controls">
@@ -1679,12 +1678,12 @@ function PricingView({
         )}
         {syncError && <p className="usage-price-sync-error" role="alert">{syncError}</p>}
         <div className="usage-price-sync-footer">
-          <button type="button" className="secondary-button" disabled={applyingSync} onClick={() => syncDialog.current?.close()}>{t('common.cancel')}</button>
+          <button type="button" className="secondary-button" disabled={applyingSync} onClick={() => setSyncPreview(null)}>{t('common.cancel')}</button>
           <button type="button" className="primary-button" disabled={applyingSync || !syncDrafts.some((item) => item.selected)} onClick={() => void applySyncPrices()}>
             {applyingSync ? t('usage.pricing.saving') : t('usage.pricing.applySelected', { count: syncDrafts.filter((item) => item.selected).length })}
           </button>
         </div>
-      </dialog>
+      </Dialog> : null}
 
       {draft ? (
         <div className="usage-price-editor">

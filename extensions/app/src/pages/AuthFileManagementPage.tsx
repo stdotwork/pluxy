@@ -11,7 +11,7 @@ import { AuthFileModelsDialog } from '../components/AuthFileModelsDialog';
 import { AuthFileRequestStatus } from '../components/AuthFileRequestStatus';
 import { AuthFileHealthStatus } from '../components/AuthFileHealthStatus';
 import { AuthFileUsageSummary } from '../components/AuthFileUsageSummary';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import {
   Check,
   ChevronLeft,
@@ -273,11 +273,6 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
     setOauthModelTarget(null);
     setOauthModelSettings(null);
   };
-  const oauthModelsDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: Boolean(oauthModelTarget),
-    onEscape: oauthModelSaving ? undefined : closeOauthModels,
-    preventEscape: oauthModelSaving,
-  });
 
   const openOauthModelSettings = async (target: OAuthModelTarget) => {
     if (oauthModelSaveRef.current) return;
@@ -635,86 +630,84 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
       {modelViewName ? <AuthFileModelsDialog name={modelViewName} displayName={shownNameFor(modelViewName)} onClose={() => setModelViewName(null)} /> : null}
 
       {oauthModelTarget ? (
-        <div className="model-discovery-backdrop" onMouseDown={(event) => event.currentTarget === event.target && !oauthModelSaving && closeOauthModels()}>
-          <section ref={oauthModelsDialogRef} className="model-discovery-dialog auth-model-dialog" role="dialog" aria-modal="true" aria-labelledby="oauth-model-title">
-            <div className="model-discovery-header">
-              <div>
-                <h2 id="oauth-model-title">{t(oauthModelTarget.scope === 'credential' ? 'authFiles.models.title' : 'authFiles.models.globalButton')}</h2>
-                {oauthModelTarget.scope === 'credential' ? (
-                  <span className="auth-model-target" title={shownNameFor(oauthModelTarget.name)}>{shownNameFor(oauthModelTarget.name)}</span>
-                ) : (
-                  <label className="auth-model-provider">
-                    <span>{t('authFiles.models.provider')}</span>
-                    <select value={oauthModelTarget.provider} disabled={oauthModelSaving} onChange={(event) => {
-                      const provider = oauthModelProviders.find((item) => item.provider === event.currentTarget.value);
-                      if (provider) void openOauthModelSettings({ ...provider, scope: 'provider' });
-                    }}>
-                      {oauthModelProviders.map((provider) => <option key={provider.provider} value={provider.provider}>{provider.label}</option>)}
-                    </select>
-                  </label>
-                )}
-                <span>{t(oauthModelTarget.scope === 'credential' ? 'authFiles.models.description' : 'authFiles.models.globalDescription', { provider: oauthModelTarget.label })}</span>
-              </div>
-              <button type="button" className="icon-button quiet" onClick={closeOauthModels} disabled={oauthModelSaving} title={t('common.close')} aria-label={t('common.close')}><X size={18} aria-hidden="true" /></button>
-            </div>
-
-            <div className="model-discovery-search">
-              <Search size={16} aria-hidden="true" />
-              <input autoFocus value={oauthModelSearch} onChange={(event) => setOauthModelSearch(event.currentTarget.value)} placeholder={t('authFiles.models.search')} />
-            </div>
-
-            <div className="model-discovery-toolbar">
-              <span>{t('authFiles.models.summary', { total: oauthModels.length, excluded: excludedOauthModelCount })}</span>
-              <div>
-                <button type="button" className="secondary-button compact-button" onClick={() => setOauthModelsExcluded(oauthModels, true)} disabled={oauthModelLoading || oauthModelSaving || oauthModels.length === 0} title={t('authFiles.models.excludeAllHint')}>{t('authFiles.models.excludeAll')}</button>
-                <button type="button" className="secondary-button compact-button" onClick={() => setOauthModelsExcluded(oauthModels, false)} disabled={oauthModelLoading || oauthModelSaving || oauthModels.length === 0} title={t('authFiles.models.clearHint')}>{t('authFiles.models.clearSelected')}</button>
-              </div>
-            </div>
-
-            <div className="model-discovery-content">
-              {oauthModelLoading ? (
-                <div className="model-discovery-message"><LoaderCircle size={20} className="spin" />{t('authFiles.models.loading')}</div>
-              ) : oauthModelError && !oauthModelSettings ? (
-                <div className="model-discovery-message error"><strong>{t('authFiles.models.loadFailed')}</strong><span>{oauthModelError}</span></div>
+        <Dialog className="model-discovery-dialog auth-model-dialog" backdropClassName="model-discovery-backdrop" labelledBy="oauth-model-title" onClose={closeOauthModels} closeDisabled={oauthModelSaving} dismissOnBackdrop>
+          <div className="model-discovery-header">
+            <div>
+              <h2 id="oauth-model-title">{t(oauthModelTarget.scope === 'credential' ? 'authFiles.models.title' : 'authFiles.models.globalButton')}</h2>
+              {oauthModelTarget.scope === 'credential' ? (
+                <span className="auth-model-target" title={shownNameFor(oauthModelTarget.name)}>{shownNameFor(oauthModelTarget.name)}</span>
               ) : (
-                <div className="model-discovery-results">
-                  <div>
-                    {oauthModelError ? <MessageNotice message={oauthModelError} onDismiss={() => setOauthModelError('')} /> : null}
-                    {oauthModelSettings?.catalogError ? <MessageNotice tone="info" message={t('authFiles.models.catalogUnavailable')} /> : null}
-                  </div>
-                  {visibleOauthModels.length === 0 ? (
-                    <div className="model-discovery-message"><strong>{oauthModels.length ? t('authFiles.models.noMatch') : t('authFiles.models.empty')}</strong></div>
-                  ) : (
-                    <div className="model-discovery-list">
-                      {visibleOauthModels.map((model) => {
-                        const wildcardRule = oauthExcludedRules.find((rule) => rule.includes('*') && modelMatchesRule(model.id, rule));
-                        const checked = oauthExcludedRules.some((rule) => modelMatchesRule(model.id, rule));
-                        return (
-                          <label className={['model-discovery-row', checked ? 'selected' : '', wildcardRule ? 'rule-blocked' : ''].join(' ')} key={model.id}>
-                            <input type="checkbox" checked={checked} disabled={oauthModelSaving || Boolean(wildcardRule)} onChange={(event) => setOauthModelsExcluded([model], event.currentTarget.checked)} />
-                            <span><strong title={model.id}>{model.id}</strong>{model.displayName ? <small title={model.displayName}>{model.displayName}</small> : null}{wildcardRule ? <small>{t('authFiles.models.wildcardBlocked', { rule: wildcardRule })}</small> : null}</span>
-                            {checked ? <Check size={16} aria-hidden="true" /> : null}
-                          </label>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                <label className="auth-model-provider">
+                  <span>{t('authFiles.models.provider')}</span>
+                  <select value={oauthModelTarget.provider} disabled={oauthModelSaving} onChange={(event) => {
+                    const provider = oauthModelProviders.find((item) => item.provider === event.currentTarget.value);
+                    if (provider) void openOauthModelSettings({ ...provider, scope: 'provider' });
+                  }}>
+                    {oauthModelProviders.map((provider) => <option key={provider.provider} value={provider.provider}>{provider.label}</option>)}
+                  </select>
+                </label>
               )}
+              <span>{t(oauthModelTarget.scope === 'credential' ? 'authFiles.models.description' : 'authFiles.models.globalDescription', { provider: oauthModelTarget.label })}</span>
             </div>
+            <button type="button" className="icon-button quiet" onClick={closeOauthModels} disabled={oauthModelSaving} title={t('common.close')} aria-label={t('common.close')}><X size={18} aria-hidden="true" /></button>
+          </div>
 
-            <label className="auth-model-rules" htmlFor="oauth-model-rules">
-              <span>{t('authFiles.models.rulesLabel')}</span>
-              <textarea id="oauth-model-rules" rows={3} spellCheck={false} value={oauthExcludedRulesText} disabled={oauthModelLoading || oauthModelSaving || !oauthModelSettings} onChange={(event) => setOauthExcludedRulesText(event.currentTarget.value)} placeholder={t('authFiles.models.rulesPlaceholder')} aria-describedby="oauth-model-rules-hint" />
-              <small id="oauth-model-rules-hint">{t('authFiles.models.rulesHint')}</small>
-            </label>
+          <div className="model-discovery-search">
+            <Search size={16} aria-hidden="true" />
+            <input autoFocus value={oauthModelSearch} onChange={(event) => setOauthModelSearch(event.currentTarget.value)} placeholder={t('authFiles.models.search')} />
+          </div>
 
-            <div className="model-discovery-actions">
-              <button type="button" className="secondary-button" onClick={closeOauthModels} disabled={oauthModelSaving}>{t('common.cancel')}</button>
-              <button type="button" className="primary-button" onClick={() => void saveOauthModels()} disabled={oauthModelLoading || oauthModelSaving || !oauthModelSettings}>{oauthModelSaving ? t('common.saving') : t('authFiles.models.save', { count: oauthExcludedRules.length })}</button>
+          <div className="model-discovery-toolbar">
+            <span>{t('authFiles.models.summary', { total: oauthModels.length, excluded: excludedOauthModelCount })}</span>
+            <div>
+              <button type="button" className="secondary-button compact-button" onClick={() => setOauthModelsExcluded(oauthModels, true)} disabled={oauthModelLoading || oauthModelSaving || oauthModels.length === 0} title={t('authFiles.models.excludeAllHint')}>{t('authFiles.models.excludeAll')}</button>
+              <button type="button" className="secondary-button compact-button" onClick={() => setOauthModelsExcluded(oauthModels, false)} disabled={oauthModelLoading || oauthModelSaving || oauthModels.length === 0} title={t('authFiles.models.clearHint')}>{t('authFiles.models.clearSelected')}</button>
             </div>
-          </section>
-        </div>
+          </div>
+
+          <div className="model-discovery-content">
+            {oauthModelLoading ? (
+              <div className="model-discovery-message"><LoaderCircle size={20} className="spin" />{t('authFiles.models.loading')}</div>
+            ) : oauthModelError && !oauthModelSettings ? (
+              <div className="model-discovery-message error"><strong>{t('authFiles.models.loadFailed')}</strong><span>{oauthModelError}</span></div>
+            ) : (
+              <div className="model-discovery-results">
+                <div>
+                  {oauthModelError ? <MessageNotice message={oauthModelError} onDismiss={() => setOauthModelError('')} /> : null}
+                  {oauthModelSettings?.catalogError ? <MessageNotice tone="info" message={t('authFiles.models.catalogUnavailable')} /> : null}
+                </div>
+                {visibleOauthModels.length === 0 ? (
+                  <div className="model-discovery-message"><strong>{oauthModels.length ? t('authFiles.models.noMatch') : t('authFiles.models.empty')}</strong></div>
+                ) : (
+                  <div className="model-discovery-list">
+                    {visibleOauthModels.map((model) => {
+                      const wildcardRule = oauthExcludedRules.find((rule) => rule.includes('*') && modelMatchesRule(model.id, rule));
+                      const checked = oauthExcludedRules.some((rule) => modelMatchesRule(model.id, rule));
+                      return (
+                        <label className={['model-discovery-row', checked ? 'selected' : '', wildcardRule ? 'rule-blocked' : ''].join(' ')} key={model.id}>
+                          <input type="checkbox" checked={checked} disabled={oauthModelSaving || Boolean(wildcardRule)} onChange={(event) => setOauthModelsExcluded([model], event.currentTarget.checked)} />
+                          <span><strong title={model.id}>{model.id}</strong>{model.displayName ? <small title={model.displayName}>{model.displayName}</small> : null}{wildcardRule ? <small>{t('authFiles.models.wildcardBlocked', { rule: wildcardRule })}</small> : null}</span>
+                          {checked ? <Check size={16} aria-hidden="true" /> : null}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <label className="auth-model-rules" htmlFor="oauth-model-rules">
+            <span>{t('authFiles.models.rulesLabel')}</span>
+            <textarea id="oauth-model-rules" rows={3} spellCheck={false} value={oauthExcludedRulesText} disabled={oauthModelLoading || oauthModelSaving || !oauthModelSettings} onChange={(event) => setOauthExcludedRulesText(event.currentTarget.value)} placeholder={t('authFiles.models.rulesPlaceholder')} aria-describedby="oauth-model-rules-hint" />
+            <small id="oauth-model-rules-hint">{t('authFiles.models.rulesHint')}</small>
+          </label>
+
+          <div className="model-discovery-actions">
+            <button type="button" className="secondary-button" onClick={closeOauthModels} disabled={oauthModelSaving}>{t('common.cancel')}</button>
+            <button type="button" className="primary-button" onClick={() => void saveOauthModels()} disabled={oauthModelLoading || oauthModelSaving || !oauthModelSettings}>{oauthModelSaving ? t('common.saving') : t('authFiles.models.save', { count: oauthExcludedRules.length })}</button>
+          </div>
+        </Dialog>
       ) : null}
     </section>
   );

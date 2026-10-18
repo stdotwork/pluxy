@@ -1,11 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Check, LoaderCircle, Settings2, X } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { managementApi } from '../services/managementApi';
 import { loadAuthFileSettings, saveAuthFileSettings, type AuthFileSettingsDraft, type BooleanOverride } from '../services/authFileSettings';
 import { modelMatchesRule, normalizeOAuthExcludedRules, oauthModelCandidates, oauthModelsFromPayload, setOAuthModelsExcluded, type OAuthModelDefinition } from '../services/oauthModels';
 import './AuthFileSettingsDialog.css';
+import { Dialog } from './Dialog';
 import { CredentialAdvancedFields, CredentialHeadersEditor, credentialProviderKey } from './CredentialAdvancedFields';
 import { modelSearchText, type ModelOption } from '../services/modelService';
 
@@ -19,7 +19,6 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
 }) {
   const { t } = useI18n();
   const id = useId();
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const savingRef = useRef(false);
   const [original, setOriginal] = useState<AuthFileSettingsDraft | null>(null);
   const [draft, setDraft] = useState<AuthFileSettingsDraft | null>(null);
@@ -33,19 +32,6 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const dirty = draft !== null && (Boolean(draft.normalizeCloakMetadata?.length) || JSON.stringify(draft) !== JSON.stringify(original));
-
-  useEffect(() => {
-    const previousFocus = document.activeElement;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const dialog = dialogRef.current;
-    dialog?.showModal();
-    return () => {
-      dialog?.close();
-      document.body.style.overflow = previousOverflow;
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
-    };
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -120,22 +106,8 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
     </label>
   );
 
-  const content = (
-    <dialog ref={dialogRef} className="credential-settings-dialog" aria-labelledby={`${id}-title`}
-      onCancel={(event) => { event.preventDefault(); close(); }} onKeyDown={(event) => {
-        if (event.key !== 'Tab') return;
-        const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button, input, select, textarea, summary'))
-          .filter((element) => !element.matches(':disabled') && element.getClientRects().length > 0);
-        const first = controls[0];
-        const last = controls[controls.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last?.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first?.focus();
-        }
-      }}>
+  return (
+    <Dialog className="credential-settings-dialog" labelledBy={`${id}-title`} onClose={close} closeDisabled={saving}>
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <header className="credential-settings-heading">
           <div><h2 id={`${id}-title`}><Settings2 size={20} />{t('authFiles.settings.title')}</h2><p>{displayName}</p></div>
@@ -193,7 +165,6 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
           </div>
         </footer>
       </form>
-    </dialog>
+    </Dialog>
   );
-  return typeof document === 'undefined' ? content : createPortal(content, document.body);
 }

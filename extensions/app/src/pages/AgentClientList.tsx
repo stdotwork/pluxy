@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { MessageNotice } from '../appNotice';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { useI18n } from '../i18n';
 
 const VISIBLE_CLIENTS_KEY = 'cpa-gui.agent-visible-clients.v1';
@@ -61,11 +61,6 @@ export function AgentClientList<Id extends string>({
   const searchRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
   const descriptionId = useId();
-  const dialogRef = useDialogFocusTrap<HTMLDialogElement>({
-    active: managing,
-    onEscape: close,
-    initialFocusRef: searchRef,
-  });
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -88,10 +83,6 @@ export function AgentClientList<Id extends string>({
       onSelect(visibleIds[0]);
     }
   }, [busy, onSelect, selected, visibleIds]);
-
-  useEffect(() => {
-    if (managing) dialogRef.current?.showModal();
-  }, [dialogRef, managing]);
 
   const save = () => {
     if (!draftSelection.length) return;
@@ -147,8 +138,8 @@ export function AgentClientList<Id extends string>({
         </button>
       </div>
     </aside>
-    {managing ? <dialog className="agent-client-manager" ref={dialogRef} aria-labelledby={titleId}
-      aria-describedby={descriptionId} onCancel={(event) => { event.preventDefault(); close(); }}>
+    {managing ? <Dialog className="agent-client-manager" labelledBy={titleId} describedBy={descriptionId}
+      initialFocusRef={searchRef} onClose={close}>
       <header>
         <h2 id={titleId}>{t('agents.clients.manage')}</h2>
         <button type="button" className="icon-button quiet" aria-label={t('common.close')} onClick={close}>
@@ -184,6 +175,6 @@ export function AgentClientList<Id extends string>({
           <button type="button" className="primary-button" onClick={save} disabled={!draftSelection.length}>{t('common.save')}</button>
         </div>
       </footer>
-    </dialog> : null}
+    </Dialog> : null}
   </>;
 }

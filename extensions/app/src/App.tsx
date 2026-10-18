@@ -60,7 +60,7 @@ import { appUpdateIndicatorState } from './appUpdateModel';
 import { canOpenAppPage, requestAppNavigation } from './navigation';
 import { useThemePreference } from './theme';
 import { usePrivacyMode } from './privacy';
-import { useDialogFocusTrap } from './components/useDialogFocusTrap';
+import { Dialog } from './components/Dialog';
 
 const QQ_CONTACT_URL = 'https://qm.qq.com/q/3queDaIG';
 const DISCORD_SERVER_URL = 'https://discord.gg/PxvX4D9kgs';
@@ -167,13 +167,6 @@ function AppContent() {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [privacyMode, setPrivacyMode] = usePrivacyMode();
   const [windowsClosePrompt, setWindowsClosePrompt] = useState<WindowsClosePrompt | null>(null);
-  const closeDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: Boolean(windowsClosePrompt),
-    onEscape: windowsClosePrompt?.resolvingAction
-      ? undefined
-      : () => setWindowsClosePrompt(null),
-    preventEscape: Boolean(windowsClosePrompt?.resolvingAction),
-  });
   const languageMenuRef = useRef<HTMLDivElement>(null);
   const languageButtonRef = useRef<HTMLButtonElement>(null);
   const { status } = useCoreRuntime();
@@ -575,77 +568,76 @@ function AppContent() {
       </div>
 
       {windowsClosePrompt ? (
-        <div className="close-dialog-backdrop">
-          <section
-            ref={closeDialogRef}
-            className="close-dialog"
-            role="alertdialog"
-            tabIndex={-1}
-            aria-modal="true"
-            aria-labelledby="close-dialog-title"
-            aria-describedby="close-dialog-description"
+        <Dialog
+          alert
+          className="close-dialog"
+          backdropClassName="close-dialog-backdrop"
+          tabIndex={-1}
+          labelledBy="close-dialog-title"
+          describedBy="close-dialog-description"
+          onClose={() => setWindowsClosePrompt(null)}
+          closeDisabled={Boolean(windowsClosePrompt.resolvingAction)}
+        >
+          <button
+            type="button"
+            className="close-dialog-dismiss"
+            aria-label={t('common.cancel')}
+            title={t('common.cancel')}
+            disabled={windowsClosePrompt.resolvingAction !== null}
+            onClick={() => setWindowsClosePrompt(null)}
           >
+            <X size={17} aria-hidden="true" />
+          </button>
+          <div className="close-dialog-heading">
+            <h2 id="close-dialog-title">{t('app.close.title')}</h2>
+          </div>
+          <p id="close-dialog-description">
+            {t('app.close.description')}
+          </p>
+          {windowsClosePrompt.error ? (
+            <MessageNotice message={windowsClosePrompt.error} onDismiss={() => setWindowsClosePrompt(current => current ? { ...current, error: null } : current)} />
+          ) : null}
+          <label className="close-dialog-remember">
+            <input
+              type="checkbox"
+              checked={windowsClosePrompt.rememberChoice}
+              disabled={windowsClosePrompt.resolvingAction !== null}
+              onChange={(event) => {
+                const rememberChoice = event.currentTarget.checked;
+                setWindowsClosePrompt((current) =>
+                  current ? { ...current, rememberChoice } : current,
+                );
+              }}
+            />
+            <span>{t('app.close.remember')}</span>
+          </label>
+          <div className="close-dialog-actions">
             <button
               type="button"
-              className="close-dialog-dismiss"
-              aria-label={t('common.cancel')}
-              title={t('common.cancel')}
+              className="close-choice-button primary-button"
               disabled={windowsClosePrompt.resolvingAction !== null}
-              onClick={() => setWindowsClosePrompt(null)}
+              onClick={() => void resolveWindowsCloseRequest('minimize-to-tray')}
             >
-              <X size={17} aria-hidden="true" />
+              <span>
+                {windowsClosePrompt.resolvingAction === 'minimize-to-tray'
+                  ? t('app.close.minimizing')
+                  : t('app.close.minimize')}
+              </span>
             </button>
-            <div className="close-dialog-heading">
-              <h2 id="close-dialog-title">{t('app.close.title')}</h2>
-            </div>
-            <p id="close-dialog-description">
-              {t('app.close.description')}
-            </p>
-            {windowsClosePrompt.error ? (
-              <MessageNotice message={windowsClosePrompt.error} onDismiss={() => setWindowsClosePrompt(current => current ? { ...current, error: null } : current)} />
-            ) : null}
-            <label className="close-dialog-remember">
-              <input
-                type="checkbox"
-                checked={windowsClosePrompt.rememberChoice}
-                disabled={windowsClosePrompt.resolvingAction !== null}
-                onChange={(event) => {
-                  const rememberChoice = event.currentTarget.checked;
-                  setWindowsClosePrompt((current) =>
-                    current ? { ...current, rememberChoice } : current,
-                  );
-                }}
-              />
-              <span>{t('app.close.remember')}</span>
-            </label>
-            <div className="close-dialog-actions">
-              <button
-                type="button"
-                className="close-choice-button primary-button"
-                disabled={windowsClosePrompt.resolvingAction !== null}
-                onClick={() => void resolveWindowsCloseRequest('minimize-to-tray')}
-              >
-                <span>
-                  {windowsClosePrompt.resolvingAction === 'minimize-to-tray'
-                    ? t('app.close.minimizing')
-                    : t('app.close.minimize')}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="close-choice-button danger-button"
-                disabled={windowsClosePrompt.resolvingAction !== null}
-                onClick={() => void resolveWindowsCloseRequest('exit')}
-              >
-                <span>
-                  {windowsClosePrompt.resolvingAction === 'exit'
-                    ? t('app.close.exiting')
-                    : t('app.close.exit')}
-                </span>
-              </button>
-            </div>
-          </section>
-        </div>
+            <button
+              type="button"
+              className="close-choice-button danger-button"
+              disabled={windowsClosePrompt.resolvingAction !== null}
+              onClick={() => void resolveWindowsCloseRequest('exit')}
+            >
+              <span>
+                {windowsClosePrompt.resolvingAction === 'exit'
+                  ? t('app.close.exiting')
+                  : t('app.close.exit')}
+              </span>
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       <AppUpdateDialog />

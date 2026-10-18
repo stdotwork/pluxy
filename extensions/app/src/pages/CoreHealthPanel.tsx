@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Activity, Check, ChevronRight, Circle, LoaderCircle, Play, RefreshCw, Search, Square, X } from 'lucide-react';
 import { useI18n } from '../i18n';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import {
   checkCoreModelsHealth,
   type CoreHealthModel,
@@ -97,7 +96,6 @@ export function CoreHealthPanel({
     if (controllerRef.current) stopChecks();
     setOpen(false);
   };
-  const dialogRef = useDialogFocusTrap<HTMLElement>({ active: open, onEscape: close });
 
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -110,13 +108,7 @@ export function CoreHealthPanel({
 
   const summary = t('home.health.summary', { healthy, failed, unchecked: Math.max(0, models.length - healthy - failed) });
   const dialog = (
-    <div className="config-dialog-backdrop core-health-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) {
-        event.preventDefault();
-        close();
-      }
-    }}>
-    <section ref={dialogRef} id={dialogId} className="core-health-panel core-health-dialog" role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-title`} aria-describedby={`${dialogId}-description`} tabIndex={-1}>
+    <Dialog id={dialogId} className="core-health-panel core-health-dialog" backdropClassName="core-health-backdrop" labelledBy={`${dialogId}-title`} describedBy={`${dialogId}-description`} tabIndex={-1} onClose={close} dismissOnBackdrop>
       <button type="button" className="icon-button quiet core-health-close" onClick={close} aria-label={t('common.close')} title={t('common.close')}><X size={18} aria-hidden="true" /></button>
       <div className="core-health-heading">
         <div className="core-health-title">
@@ -170,8 +162,7 @@ export function CoreHealthPanel({
                 </table>
               </div>}
       <div className="core-health-footer"><span>{t('home.health.hint')}</span></div>
-    </section>
-    </div>
+    </Dialog>
   );
 
   return (
@@ -182,7 +173,7 @@ export function CoreHealthPanel({
         </button>
         <span id={`${dialogId}-entry-status`} className="core-health-entry-status" aria-live="polite">{!coreReady ? t('home.health.offline') : healthy + failed > 0 ? summary : t('home.health.idle')}</span>
       </div>
-      {open && typeof document !== 'undefined' ? createPortal(dialog, document.body) : null}
+      {open ? dialog : null}
     </>
   );
 }

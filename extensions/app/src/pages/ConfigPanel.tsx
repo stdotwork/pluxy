@@ -61,7 +61,7 @@ import { webUiManagementUrl } from '../services/clientAccess';
 import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 import { SensitiveWordsPage } from './SensitiveWordsPage';
 import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { TemplateConfigSection } from '../components/TemplateConfigSection';
 import { SettingsHelp } from '../components/SettingsHelp';
@@ -990,16 +990,6 @@ export function ConfigPanelPage() {
   const keyMutationBusy = busyAction === 'add-key' || busyAction === 'update-key';
   const managementSecretBusy = busyAction === 'management-secret';
   const loggingSettingsBusy = busyAction === 'logging';
-  const addDialogRef = useDialogFocusTrap<HTMLFormElement>({
-    active: addDialogOpen,
-    onEscape: keyMutationBusy ? undefined : closeAddDialog,
-    preventEscape: keyMutationBusy,
-  });
-  const deleteDialogRef = useDialogFocusTrap<HTMLDivElement>({
-    active: deleteIndex !== null,
-    onEscape: busyAction === 'delete-key' ? undefined : () => setDeleteIndex(null),
-    preventEscape: busyAction === 'delete-key',
-  });
   const activateConfigSubpage = (subpage: ConfigSubpage) => {
     setSettingsSearch('');
     setActiveSubpage(subpage);
@@ -2150,157 +2140,149 @@ export function ConfigPanelPage() {
       </div>
 
       {addDialogOpen ? (
-        <div className="config-dialog-backdrop" onMouseDown={(event) => {
-          if (event.currentTarget === event.target) closeAddDialog();
-        }}>
-          <form
-            ref={addDialogRef}
-            className="config-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="add-api-key-title"
-            onSubmit={(event) => void submitApiKey(event)}
-          >
-            <div className="config-dialog-heading">
-              <div>
-                <KeyRound size={19} aria-hidden="true" />
-                <h2 id="add-api-key-title">
-                  {editingApiKey === null ? t('config.keys.addTitle') : t('config.keys.editTitle')}
-                </h2>
-              </div>
-              <button
-                type="button"
-                className="icon-button quiet"
-                onClick={closeAddDialog}
-                disabled={keyMutationBusy}
-                title={t('common.close')}
-                aria-label={t('common.close')}
-              >
-                <X size={18} aria-hidden="true" />
-              </button>
+        <Dialog
+          as="form"
+          labelledBy="add-api-key-title"
+          onSubmit={(event) => void submitApiKey(event)}
+          onClose={closeAddDialog}
+          closeDisabled={keyMutationBusy}
+          dismissOnBackdrop
+        >
+          <div className="config-dialog-heading">
+            <div>
+              <KeyRound size={19} aria-hidden="true" />
+              <h2 id="add-api-key-title">
+                {editingApiKey === null ? t('config.keys.addTitle') : t('config.keys.editTitle')}
+              </h2>
             </div>
+            <button
+              type="button"
+              className="icon-button quiet"
+              onClick={closeAddDialog}
+              disabled={keyMutationBusy}
+              title={t('common.close')}
+              aria-label={t('common.close')}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
 
-            <label className="config-dialog-field">
-              <span>{t('config.keys.label')}</span>
-              <div className="config-secret-input">
-                <input
-                  autoFocus
-                  type={showApiKey ? 'text' : 'password'}
-                  value={newApiKey}
-                  onChange={(event) => {
-                    setNewApiKey(event.currentTarget.value);
-                    setFormError('');
-                  }}
-                  disabled={keyMutationBusy}
-                  aria-invalid={Boolean(formError)}
-                  placeholder="sk-..."
-                />
-                <button
-                  type="button"
-                  className="icon-button quiet"
-                  onClick={() => setShowApiKey((visible) => !visible)}
-                  disabled={keyMutationBusy}
-                  title={showApiKey ? t('config.keys.hide') : t('config.keys.show')}
-                  aria-label={showApiKey ? t('config.keys.hide') : t('config.keys.show')}
-                >
-                  {showApiKey ? (
-                    <EyeOff size={17} aria-hidden="true" />
-                  ) : (
-                    <Eye size={17} aria-hidden="true" />
-                  )}
-                </button>
-              </div>
-            </label>
-
-            <label className="config-dialog-field">
-              <span>{t('config.keys.remark')}</span>
+          <label className="config-dialog-field">
+            <span>{t('config.keys.label')}</span>
+            <div className="config-secret-input">
               <input
-                className="config-dialog-text-input"
-                type="text"
-                value={newApiKeyRemark}
-                maxLength={80}
+                autoFocus
+                type={showApiKey ? 'text' : 'password'}
+                value={newApiKey}
                 onChange={(event) => {
-                  setNewApiKeyRemark(event.currentTarget.value);
+                  setNewApiKey(event.currentTarget.value);
                   setFormError('');
                 }}
                 disabled={keyMutationBusy}
-                placeholder={t('config.keys.remarkPlaceholder')}
+                aria-invalid={Boolean(formError)}
+                placeholder="sk-..."
               />
-            </label>
-
-            <div className={`config-form-message ${formError ? 'error' : ''}`}>
-              {formError || ' '}
-            </div>
-            {renderFeedback(keyFeedback)}
-
-            <div className="config-dialog-actions">
               <button
                 type="button"
-                className="secondary-button"
-                onClick={generateApiKey}
+                className="icon-button quiet"
+                onClick={() => setShowApiKey((visible) => !visible)}
                 disabled={keyMutationBusy}
+                title={showApiKey ? t('config.keys.hide') : t('config.keys.show')}
+                aria-label={showApiKey ? t('config.keys.hide') : t('config.keys.show')}
               >
-                {t('config.keys.generate')}
-              </button>
-              <button type="submit" className="primary-button" disabled={keyMutationBusy}>
-                {editingApiKey === null ? <Plus size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
-                {keyMutationBusy
-                  ? editingApiKey === null ? t('config.keys.adding') : t('common.saving')
-                  : editingApiKey === null ? t('common.add') : t('common.save')}
+                {showApiKey ? (
+                  <EyeOff size={17} aria-hidden="true" />
+                ) : (
+                  <Eye size={17} aria-hidden="true" />
+                )}
               </button>
             </div>
-          </form>
-        </div>
+          </label>
+
+          <label className="config-dialog-field">
+            <span>{t('config.keys.remark')}</span>
+            <input
+              className="config-dialog-text-input"
+              type="text"
+              value={newApiKeyRemark}
+              maxLength={80}
+              onChange={(event) => {
+                setNewApiKeyRemark(event.currentTarget.value);
+                setFormError('');
+              }}
+              disabled={keyMutationBusy}
+              placeholder={t('config.keys.remarkPlaceholder')}
+            />
+          </label>
+
+          <div className={`config-form-message ${formError ? 'error' : ''}`}>
+            {formError || ' '}
+          </div>
+          {renderFeedback(keyFeedback)}
+
+          <div className="config-dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={generateApiKey}
+              disabled={keyMutationBusy}
+            >
+              {t('config.keys.generate')}
+            </button>
+            <button type="submit" className="primary-button" disabled={keyMutationBusy}>
+              {editingApiKey === null ? <Plus size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
+              {keyMutationBusy
+                ? editingApiKey === null ? t('config.keys.adding') : t('common.saving')
+                : editingApiKey === null ? t('common.add') : t('common.save')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {deleteIndex !== null ? (
-        <div className="config-dialog-backdrop" onMouseDown={(event) => {
-          if (event.currentTarget === event.target && busyAction !== 'delete-key') {
-            setDeleteIndex(null);
-          }
-        }}>
-          <div
-            ref={deleteDialogRef}
-            className={`config-dialog config-delete-dialog ${deletingLastKey ? 'has-warning' : ''}`}
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="delete-api-key-title"
-          >
-            <div className="config-dialog-heading">
-              <div>
-                <Trash2 size={19} aria-hidden="true" />
-                <h2 id="delete-api-key-title">{t('config.keys.deleteTitle')}</h2>
-              </div>
-            </div>
-            <code className="config-delete-key">{maskApiKey(selectedDeleteKey)}</code>
-            {renderFeedback(keyFeedback)}
-            {deletingLastKey ? (
-              <div className="config-delete-warning">
-                <AlertCircle size={17} aria-hidden="true" />
-                <span>{t('config.keys.deleteAllWarning')}</span>
-              </div>
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setDeleteIndex(null)}
-                disabled={busyAction === 'delete-key'}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => void confirmDelete()}
-                disabled={busyAction === 'delete-key'}
-              >
-                <Trash2 size={16} aria-hidden="true" />
-                {busyAction === 'delete-key' ? t('common.deleting') : t('common.delete')}
-              </button>
+        <Dialog
+          as="div"
+          alert
+          className={`config-dialog config-delete-dialog ${deletingLastKey ? 'has-warning' : ''}`}
+          labelledBy="delete-api-key-title"
+          onClose={() => setDeleteIndex(null)}
+          closeDisabled={busyAction === 'delete-key'}
+          dismissOnBackdrop
+        >
+          <div className="config-dialog-heading">
+            <div>
+              <Trash2 size={19} aria-hidden="true" />
+              <h2 id="delete-api-key-title">{t('config.keys.deleteTitle')}</h2>
             </div>
           </div>
-        </div>
+          <code className="config-delete-key">{maskApiKey(selectedDeleteKey)}</code>
+          {renderFeedback(keyFeedback)}
+          {deletingLastKey ? (
+            <div className="config-delete-warning">
+              <AlertCircle size={17} aria-hidden="true" />
+              <span>{t('config.keys.deleteAllWarning')}</span>
+            </div>
+          ) : null}
+          <div className="config-dialog-actions two-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setDeleteIndex(null)}
+              disabled={busyAction === 'delete-key'}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => void confirmDelete()}
+              disabled={busyAction === 'delete-key'}
+            >
+              <Trash2 size={16} aria-hidden="true" />
+              {busyAction === 'delete-key' ? t('common.deleting') : t('common.delete')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
     </section>

@@ -117,7 +117,7 @@ const path = require('node:path');
       assert.equal(await nestedNotice.locator('.action-feedback-text').evaluate(el => el === document.activeElement), true);
       await page.keyboard.press('Tab');
       await page.keyboard.press('Tab');
-      assert.equal(await confirmation.getByRole('button', { name: '继续编辑', exact: true }).evaluate(el => el === document.activeElement), true, 'Notification remains within the nested focus trap');
+      assert.equal(await confirmation.evaluate(el => el.contains(document.activeElement)), true, 'Notification remains within the nested focus trap');
       await page.getByRole('button', { name: '继续编辑', exact: true }).click();
       await save();
       assert.equal(await context().inputValue(), '64000');

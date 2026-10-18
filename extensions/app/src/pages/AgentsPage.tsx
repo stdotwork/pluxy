@@ -112,7 +112,7 @@ import { DeepSeekHarnessCatalogDialog } from './DeepSeekHarnessCatalogDialog';
 import { AgentConfigBackupDialog } from './AgentConfigBackupDialog';
 import { AgentClientList } from './AgentClientList';
 import { AgentConfigManagementPanel, AgentConfigurationFeedback, AgentRunControls } from './AgentControls';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { requestAppNavigation } from '../navigation';
 
@@ -491,25 +491,9 @@ const listStatusText = (status: AgentConfigStatus | undefined) => {
 
 function ClaudeDesktopHelpDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    const previousFocus = document.activeElement;
-    dialog?.showModal();
-    return () => {
-      dialog?.close();
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
-    };
-  }, []);
   return (
-    <dialog ref={dialogRef} className="config-dialog agent-desktop-help-dialog" aria-labelledby={titleId}
-      onCancel={(event) => { event.preventDefault(); onClose(); }}
-      onMouseDown={(event) => {
-        if (event.target !== event.currentTarget) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose();
-      }}>
+    <Dialog className="config-dialog agent-desktop-help-dialog" labelledBy={titleId} onClose={onClose} dismissOnBackdrop>
       <div className="config-dialog-heading">
         <h2 id={titleId}>{t('agents.claudeDesktopMapping.help')}</h2>
         <button type="button" className="icon-button quiet" onClick={onClose} aria-label={t('common.close')}><X size={18} /></button>
@@ -522,7 +506,7 @@ function ClaudeDesktopHelpDialog({ onClose }: { onClose: () => void }) {
       <div className="agent-desktop-help-actions">
         <button type="button" className="primary-button" onClick={onClose}>{t('common.close')}</button>
       </div>
-    </dialog>
+    </Dialog>
   );
 }
 
@@ -628,30 +612,6 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const statusRequestRef = useRef(0);
   const piUpdateRequestRef = useRef(0);
   const claudeModelMappingsDirtyRef = useRef(claudeModelMappingsDirtyCache);
-  const launchDirectoryDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: launchDirectoryDialogOpen,
-    onEscape: busy
-      ? undefined
-      : () => {
-          setLaunchDirectoryDialogOpen(false);
-          setLaunchDirectoryTarget(null);
-        },
-    preventEscape: busy,
-  });
-  const defaultDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: defaultConfirmOpen,
-    onEscape: busy ? undefined : () => setDefaultConfirmOpen(false),
-    preventEscape: busy,
-  });
-  const clearDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: clearConfirmOpen,
-    onEscape: busy ? undefined : () => setClearConfirmOpen(false),
-    preventEscape: busy,
-  });
-  const oauthRequiredDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: Boolean(oauthLoginRequiredAction),
-    onEscape: () => setOauthLoginRequiredAction(null),
-  });
 
   const setClaudeModelMappingsDraftByClient = useCallback((
     update: (
@@ -2393,301 +2353,291 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       ) : null}
 
       {launchDirectoryDialogOpen ? (
-        <div className="config-dialog-backdrop" onMouseDown={(event) => {
-          if (event.currentTarget === event.target && !busy) {
+        <Dialog
+          className="config-dialog agent-launch-directory-dialog"
+          labelledBy="agent-launch-directory-title"
+          onClose={() => {
             setLaunchDirectoryDialogOpen(false);
             setLaunchDirectoryTarget(null);
-          }
-        }}>
-          <section
-            ref={launchDirectoryDialogRef}
-            className="config-dialog agent-launch-directory-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="agent-launch-directory-title"
-          >
-            <div className="config-dialog-heading">
-              <div>
-                <h2 id="agent-launch-directory-title">
-                  {isDeepSeekHarnessClient
-                    ? t('agents.deepseekLaunch.dialogTitle')
-                    : t('agents.launchDirectory.dialogTitle', { client: activeDefinition.name })}
-                </h2>
-              </div>
+          }}
+          closeDisabled={busy}
+          dismissOnBackdrop
+        >
+          <div className="config-dialog-heading">
+            <div>
+              <h2 id="agent-launch-directory-title">
+                {isDeepSeekHarnessClient
+                  ? t('agents.deepseekLaunch.dialogTitle')
+                  : t('agents.launchDirectory.dialogTitle', { client: activeDefinition.name })}
+              </h2>
             </div>
-            <p>{isDeepSeekHarnessClient
-              ? t('agents.deepseekLaunch.dialogDescription')
-              : t('agents.launchDirectory.dialogDescription', { client: activeDefinition.name })}</p>
-            {isDeepSeekHarnessClient ? (
-              <div className="deepseek-harness-launch-options">
-                <label className="config-dialog-field deepseek-harness-launch-field">
-                  <span>{t('agents.deepseekLaunch.mode.label')}</span>
-                  <select
-                    className="config-dialog-text-input"
-                    value={deepSeekHarnessLaunchDraft.mode}
-                    onChange={(event) => updateDeepSeekHarnessLaunchDraft({
-                      mode: event.currentTarget.value as DeepSeekHarnessLaunchMode,
-                    })}
-                    disabled={busy}
-                  >
-                    <option value="web">{t('agents.deepseekLaunch.mode.web')}</option>
-                    <option value="headless">{t('agents.deepseekLaunch.mode.headless')}</option>
-                    <option value="acp">{t('agents.deepseekLaunch.mode.acp')}</option>
-                    <option value="sdk">{t('agents.deepseekLaunch.mode.sdk')}</option>
-                    <option value="sdk-minimal">{t('agents.deepseekLaunch.mode.sdkMinimal')}</option>
-                    <option value="custom">{t('agents.deepseekLaunch.mode.custom')}</option>
-                  </select>
-                </label>
-                <p className="deepseek-harness-launch-mode-description">
-                  {deepSeekHarnessLaunchModeDescription}
-                </p>
+          </div>
+          <p>{isDeepSeekHarnessClient
+            ? t('agents.deepseekLaunch.dialogDescription')
+            : t('agents.launchDirectory.dialogDescription', { client: activeDefinition.name })}</p>
+          {isDeepSeekHarnessClient ? (
+            <div className="deepseek-harness-launch-options">
+              <label className="config-dialog-field deepseek-harness-launch-field">
+                <span>{t('agents.deepseekLaunch.mode.label')}</span>
+                <select
+                  className="config-dialog-text-input"
+                  value={deepSeekHarnessLaunchDraft.mode}
+                  onChange={(event) => updateDeepSeekHarnessLaunchDraft({
+                    mode: event.currentTarget.value as DeepSeekHarnessLaunchMode,
+                  })}
+                  disabled={busy}
+                >
+                  <option value="web">{t('agents.deepseekLaunch.mode.web')}</option>
+                  <option value="headless">{t('agents.deepseekLaunch.mode.headless')}</option>
+                  <option value="acp">{t('agents.deepseekLaunch.mode.acp')}</option>
+                  <option value="sdk">{t('agents.deepseekLaunch.mode.sdk')}</option>
+                  <option value="sdk-minimal">{t('agents.deepseekLaunch.mode.sdkMinimal')}</option>
+                  <option value="custom">{t('agents.deepseekLaunch.mode.custom')}</option>
+                </select>
+              </label>
+              <p className="deepseek-harness-launch-mode-description">
+                {deepSeekHarnessLaunchModeDescription}
+              </p>
 
-                {deepSeekHarnessLaunchDraft.mode === 'web' ? (
-                  <>
-                    <div className="deepseek-harness-launch-grid">
-                      <label className="config-dialog-field deepseek-harness-launch-field">
-                        <span>{t('agents.deepseekLaunch.web.host')}</span>
-                        <input
-                          className="config-dialog-text-input"
-                          type="text"
-                          value={deepSeekHarnessLaunchDraft.webHost}
-                          onChange={(event) => updateDeepSeekHarnessLaunchDraft({ webHost: event.currentTarget.value })}
-                          placeholder={t('agents.deepseekLaunch.web.hostPlaceholder')}
-                          disabled={busy}
-                        />
-                      </label>
-                      <label className="config-dialog-field deepseek-harness-launch-field">
-                        <span>{t('agents.deepseekLaunch.web.port')}</span>
-                        <input
-                          className="config-dialog-text-input"
-                          type="text"
-                          inputMode="numeric"
-                          value={deepSeekHarnessLaunchDraft.webPort}
-                          onChange={(event) => updateDeepSeekHarnessLaunchDraft({ webPort: event.currentTarget.value })}
-                          placeholder={t('agents.deepseekLaunch.web.portPlaceholder')}
-                          disabled={busy}
-                        />
-                      </label>
-                    </div>
-                    <label className="deepseek-harness-launch-checkbox">
+              {deepSeekHarnessLaunchDraft.mode === 'web' ? (
+                <>
+                  <div className="deepseek-harness-launch-grid">
+                    <label className="config-dialog-field deepseek-harness-launch-field">
+                      <span>{t('agents.deepseekLaunch.web.host')}</span>
                       <input
-                        type="checkbox"
-                        checked={deepSeekHarnessLaunchDraft.openBrowser}
-                        onChange={(event) => updateDeepSeekHarnessLaunchDraft({ openBrowser: event.currentTarget.checked })}
-                        disabled={busy}
-                      />
-                      <span>
-                        <strong>{t('agents.deepseekLaunch.web.openBrowser')}</strong>
-                        <small>{t('agents.deepseekLaunch.web.openBrowserDescription')}</small>
-                      </span>
-                    </label>
-                    <label className="config-dialog-field deepseek-harness-launch-field multiline">
-                      <span>{t('agents.deepseekLaunch.web.trustedHosts')}</span>
-                      <textarea
                         className="config-dialog-text-input"
-                        value={deepSeekHarnessLaunchDraft.trustedHosts}
-                        onChange={(event) => updateDeepSeekHarnessLaunchDraft({ trustedHosts: event.currentTarget.value })}
-                        placeholder={t('agents.deepseekLaunch.web.trustedHostsPlaceholder')}
+                        type="text"
+                        value={deepSeekHarnessLaunchDraft.webHost}
+                        onChange={(event) => updateDeepSeekHarnessLaunchDraft({ webHost: event.currentTarget.value })}
+                        placeholder={t('agents.deepseekLaunch.web.hostPlaceholder')}
                         disabled={busy}
                       />
                     </label>
-                  </>
-                ) : null}
-
-                {deepSeekHarnessLaunchDraft.mode === 'headless' ? (
-                  <label className="config-dialog-field deepseek-harness-launch-field">
-                    <span>{t('agents.deepseekLaunch.headless.task')}</span>
+                    <label className="config-dialog-field deepseek-harness-launch-field">
+                      <span>{t('agents.deepseekLaunch.web.port')}</span>
+                      <input
+                        className="config-dialog-text-input"
+                        type="text"
+                        inputMode="numeric"
+                        value={deepSeekHarnessLaunchDraft.webPort}
+                        onChange={(event) => updateDeepSeekHarnessLaunchDraft({ webPort: event.currentTarget.value })}
+                        placeholder={t('agents.deepseekLaunch.web.portPlaceholder')}
+                        disabled={busy}
+                      />
+                    </label>
+                  </div>
+                  <label className="deepseek-harness-launch-checkbox">
                     <input
+                      type="checkbox"
+                      checked={deepSeekHarnessLaunchDraft.openBrowser}
+                      onChange={(event) => updateDeepSeekHarnessLaunchDraft({ openBrowser: event.currentTarget.checked })}
+                      disabled={busy}
+                    />
+                    <span>
+                      <strong>{t('agents.deepseekLaunch.web.openBrowser')}</strong>
+                      <small>{t('agents.deepseekLaunch.web.openBrowserDescription')}</small>
+                    </span>
+                  </label>
+                  <label className="config-dialog-field deepseek-harness-launch-field multiline">
+                    <span>{t('agents.deepseekLaunch.web.trustedHosts')}</span>
+                    <textarea
                       className="config-dialog-text-input"
-                      type="text"
-                      value={deepSeekHarnessLaunchDraft.task}
-                      onChange={(event) => updateDeepSeekHarnessLaunchDraft({ task: event.currentTarget.value })}
-                      placeholder={t('agents.deepseekLaunch.headless.taskPlaceholder')}
+                      value={deepSeekHarnessLaunchDraft.trustedHosts}
+                      onChange={(event) => updateDeepSeekHarnessLaunchDraft({ trustedHosts: event.currentTarget.value })}
+                      placeholder={t('agents.deepseekLaunch.web.trustedHostsPlaceholder')}
                       disabled={busy}
                     />
                   </label>
-                ) : null}
+                </>
+              ) : null}
 
-                {deepSeekHarnessLaunchDraft.mode === 'custom' ? (
-                  <label className="config-dialog-field deepseek-harness-launch-field">
-                    <span>{t('agents.deepseekLaunch.custom.profile')}</span>
-                    <input
-                      className="config-dialog-text-input"
-                      type="text"
-                      value={deepSeekHarnessLaunchDraft.profile}
-                      onChange={(event) => updateDeepSeekHarnessLaunchDraft({ profile: event.currentTarget.value })}
-                      placeholder={t('agents.deepseekLaunch.custom.profilePlaceholder')}
-                      disabled={busy}
-                    />
-                  </label>
-                ) : null}
-
-                <label className="config-dialog-field deepseek-harness-launch-field multiline">
-                  <span>{t('agents.deepseekLaunch.patches')}</span>
-                  <textarea
+              {deepSeekHarnessLaunchDraft.mode === 'headless' ? (
+                <label className="config-dialog-field deepseek-harness-launch-field">
+                  <span>{t('agents.deepseekLaunch.headless.task')}</span>
+                  <input
                     className="config-dialog-text-input"
-                    value={deepSeekHarnessLaunchDraft.patches}
-                    onChange={(event) => updateDeepSeekHarnessLaunchDraft({ patches: event.currentTarget.value })}
-                    placeholder={t('agents.deepseekLaunch.patchesPlaceholder')}
+                    type="text"
+                    value={deepSeekHarnessLaunchDraft.task}
+                    onChange={(event) => updateDeepSeekHarnessLaunchDraft({ task: event.currentTarget.value })}
+                    placeholder={t('agents.deepseekLaunch.headless.taskPlaceholder')}
                     disabled={busy}
                   />
                 </label>
-              </div>
-            ) : null}
-            <div className="config-dialog-field">
-              <span>{t('agents.launchDirectory.workingDirectory')}</span>
-              <button
-                type="button"
-                className="agent-launch-directory-picker"
-                onClick={() => void chooseLaunchDirectory()}
-                disabled={busy}
-                autoFocus
-              >
-                <span>
-                  <small>{launchDirectory
-                    ? t('agents.launchDirectory.selectedDirectory')
-                    : t('agents.launchDirectory.noDirectory')}</small>
-                  <strong title={launchDirectory || undefined}>
-                    {launchDirectory || t('agents.launchDirectory.chooseDirectory')}
-                  </strong>
-                </span>
-                <b>{busyAction === 'directory'
-                  ? t('agents.launchDirectory.choosing')
-                  : t('agents.launchDirectory.browse')}</b>
-              </button>
+              ) : null}
+
+              {deepSeekHarnessLaunchDraft.mode === 'custom' ? (
+                <label className="config-dialog-field deepseek-harness-launch-field">
+                  <span>{t('agents.deepseekLaunch.custom.profile')}</span>
+                  <input
+                    className="config-dialog-text-input"
+                    type="text"
+                    value={deepSeekHarnessLaunchDraft.profile}
+                    onChange={(event) => updateDeepSeekHarnessLaunchDraft({ profile: event.currentTarget.value })}
+                    placeholder={t('agents.deepseekLaunch.custom.profilePlaceholder')}
+                    disabled={busy}
+                  />
+                </label>
+              ) : null}
+
+              <label className="config-dialog-field deepseek-harness-launch-field multiline">
+                <span>{t('agents.deepseekLaunch.patches')}</span>
+                <textarea
+                  className="config-dialog-text-input"
+                  value={deepSeekHarnessLaunchDraft.patches}
+                  onChange={(event) => updateDeepSeekHarnessLaunchDraft({ patches: event.currentTarget.value })}
+                  placeholder={t('agents.deepseekLaunch.patchesPlaceholder')}
+                  disabled={busy}
+                />
+              </label>
             </div>
-            {activeLaunchDirectoryHistory.length ? (
-              <div className="agent-launch-directory-history">
-                <strong>{t('agents.launchDirectory.historyTitle')}</strong>
-                <div className="agent-launch-directory-history-list">
-                  {activeLaunchDirectoryHistory.map((directory, index) => {
-                    const active = directory === launchDirectory;
-                    return (
-                      <button
-                        type="button"
-                        className={active ? 'active' : ''}
-                        key={directory}
-                        onClick={() => {
-                          setLaunchDirectory(directory);
-                          setLaunchDirectoryError('');
-                        }}
-                        disabled={busy}
-                        title={directory}
-                      >
-                        <span>
-                          <strong>{directory}</strong>
-                          <small>{index === 0
-                            ? t('agents.launchDirectory.lastUsed')
-                            : t('agents.launchDirectory.recentItem')}</small>
-                        </span>
-                        <b>
-                          {active ? <Check size={15} aria-hidden /> : null}
-                          {active
-                            ? t('agents.launchDirectory.historySelected')
-                            : t('agents.launchDirectory.historyUse')}
-                        </b>
-                      </button>
-                    );
-                  })}
-                </div>
+          ) : null}
+          <div className="config-dialog-field">
+            <span>{t('agents.launchDirectory.workingDirectory')}</span>
+            <button
+              type="button"
+              className="agent-launch-directory-picker"
+              onClick={() => void chooseLaunchDirectory()}
+              disabled={busy}
+              autoFocus
+            >
+              <span>
+                <small>{launchDirectory
+                  ? t('agents.launchDirectory.selectedDirectory')
+                  : t('agents.launchDirectory.noDirectory')}</small>
+                <strong title={launchDirectory || undefined}>
+                  {launchDirectory || t('agents.launchDirectory.chooseDirectory')}
+                </strong>
+              </span>
+              <b>{busyAction === 'directory'
+                ? t('agents.launchDirectory.choosing')
+                : t('agents.launchDirectory.browse')}</b>
+            </button>
+          </div>
+          {activeLaunchDirectoryHistory.length ? (
+            <div className="agent-launch-directory-history">
+              <strong>{t('agents.launchDirectory.historyTitle')}</strong>
+              <div className="agent-launch-directory-history-list">
+                {activeLaunchDirectoryHistory.map((directory, index) => {
+                  const active = directory === launchDirectory;
+                  return (
+                    <button
+                      type="button"
+                      className={active ? 'active' : ''}
+                      key={directory}
+                      onClick={() => {
+                        setLaunchDirectory(directory);
+                        setLaunchDirectoryError('');
+                      }}
+                      disabled={busy}
+                      title={directory}
+                    >
+                      <span>
+                        <strong>{directory}</strong>
+                        <small>{index === 0
+                          ? t('agents.launchDirectory.lastUsed')
+                          : t('agents.launchDirectory.recentItem')}</small>
+                      </span>
+                      <b>
+                        {active ? <Check size={15} aria-hidden /> : null}
+                        {active
+                          ? t('agents.launchDirectory.historySelected')
+                          : t('agents.launchDirectory.historyUse')}
+                      </b>
+                    </button>
+                  );
+                })}
               </div>
-            ) : null}
-            {launchDirectoryError ? (
-              <MessageNotice message={launchDirectoryError} onDismiss={() => setLaunchDirectoryError('')} />
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => {
-                  setLaunchDirectoryDialogOpen(false);
-                  setLaunchDirectoryTarget(null);
-                }}
-                disabled={busy}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => void launchFromDirectoryDialog()}
-                disabled={busy || !launchDirectory.trim() || !launchDirectoryTarget}
-              >
-                {busyAction === 'launch' || busyAction === 'launch-cli'
-                  ? <LoaderCircle size={16} className="spin" />
-                  : null}
-                {isDeepSeekHarnessClient
-                  ? t('agents.deepseekLaunch.launch', { mode: deepSeekHarnessLaunchModeLabel })
-                  : t('agents.launchDirectory.launch', { client: activeDefinition.name })}
-              </button>
             </div>
-          </section>
-        </div>
+          ) : null}
+          {launchDirectoryError ? (
+            <MessageNotice message={launchDirectoryError} onDismiss={() => setLaunchDirectoryError('')} />
+          ) : null}
+          <div className="config-dialog-actions two-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                setLaunchDirectoryDialogOpen(false);
+                setLaunchDirectoryTarget(null);
+              }}
+              disabled={busy}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => void launchFromDirectoryDialog()}
+              disabled={busy || !launchDirectory.trim() || !launchDirectoryTarget}
+            >
+              {busyAction === 'launch' || busyAction === 'launch-cli'
+                ? <LoaderCircle size={16} className="spin" />
+                : null}
+              {isDeepSeekHarnessClient
+                ? t('agents.deepseekLaunch.launch', { mode: deepSeekHarnessLaunchModeLabel })
+                : t('agents.launchDirectory.launch', { client: activeDefinition.name })}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {defaultConfirmOpen ? (
-        <div className="config-dialog-backdrop">
-          <section ref={defaultDialogRef} className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-default-title">
-            <div className="config-dialog-heading">
-              <div><AlertTriangle size={19} /><h2 id="agent-default-title">{t('agents.default.title')}</h2></div>
-            </div>
-            <p>
-              {t('agents.default.description', { name: activeDefinition.name })}
-            </p>
-            {templatePreview ? <ul className="agent-template-files">{templatePreview.files.map((file) => <li key={file}><code>{file}</code></li>)}</ul> : null}
-            {defaultError ? (
-              <MessageNotice message={defaultError} onDismiss={() => setDefaultError('')} />
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" onClick={closeDefaultConfirmation} disabled={busy}>{t('common.cancel')}</button>
-              <button type="button" className="danger-button" onClick={() => void resetConfigurationToDefault()} disabled={busy || !templatePreview}>
-                {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : null}
-                {t('agents.default.confirm')}
-              </button>
-            </div>
-          </section>
-        </div>
+        <Dialog alert className="config-dialog agent-restore-dialog" labelledBy="agent-default-title" onClose={() => setDefaultConfirmOpen(false)} closeDisabled={busy}>
+          <div className="config-dialog-heading">
+            <div><AlertTriangle size={19} /><h2 id="agent-default-title">{t('agents.default.title')}</h2></div>
+          </div>
+          <p>
+            {t('agents.default.description', { name: activeDefinition.name })}
+          </p>
+          {templatePreview ? <ul className="agent-template-files">{templatePreview.files.map((file) => <li key={file}><code>{file}</code></li>)}</ul> : null}
+          {defaultError ? (
+            <MessageNotice message={defaultError} onDismiss={() => setDefaultError('')} />
+          ) : null}
+          <div className="config-dialog-actions two-actions">
+            <button type="button" className="secondary-button" onClick={closeDefaultConfirmation} disabled={busy}>{t('common.cancel')}</button>
+            <button type="button" className="danger-button" onClick={() => void resetConfigurationToDefault()} disabled={busy || !templatePreview}>
+              {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : null}
+              {t('agents.default.confirm')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {clearConfirmOpen ? (
-        <div className="config-dialog-backdrop">
-          <section ref={clearDialogRef} className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-clear-title">
-            <div className="config-dialog-heading">
-              <div><AlertTriangle size={19} /><h2 id="agent-clear-title">{selected === 'codex' ? t('agents.clear.title') : t('agents.clearIntegration.title', { name: activeDefinition.name })}</h2></div>
-            </div>
-            <p>{t(selected === 'codex' ? 'agents.clear.description' : 'agents.clearIntegration.description')}</p>
-            {clearError ? (
-              <MessageNotice message={clearError} onDismiss={() => setClearError('')} />
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" onClick={closeClearConfirmation} disabled={busy}>{t('common.cancel')}</button>
-              <button type="button" className="danger-button" onClick={() => void clearConfiguration()} disabled={busy}>
-                {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
-                {t(selected === 'codex' ? 'agents.clear.confirm' : 'agents.clearIntegration.confirm')}
-              </button>
-            </div>
-          </section>
-        </div>
+        <Dialog alert className="config-dialog agent-restore-dialog" labelledBy="agent-clear-title" onClose={() => setClearConfirmOpen(false)} closeDisabled={busy}>
+          <div className="config-dialog-heading">
+            <div><AlertTriangle size={19} /><h2 id="agent-clear-title">{selected === 'codex' ? t('agents.clear.title') : t('agents.clearIntegration.title', { name: activeDefinition.name })}</h2></div>
+          </div>
+          <p>{t(selected === 'codex' ? 'agents.clear.description' : 'agents.clearIntegration.description')}</p>
+          {clearError ? (
+            <MessageNotice message={clearError} onDismiss={() => setClearError('')} />
+          ) : null}
+          <div className="config-dialog-actions two-actions">
+            <button type="button" className="secondary-button" onClick={closeClearConfirmation} disabled={busy}>{t('common.cancel')}</button>
+            <button type="button" className="danger-button" onClick={() => void clearConfiguration()} disabled={busy}>
+              {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
+              {t(selected === 'codex' ? 'agents.clear.confirm' : 'agents.clearIntegration.confirm')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {oauthLoginRequiredAction ? (
-        <div className="config-dialog-backdrop">
-          <section ref={oauthRequiredDialogRef} className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-oauth-login-required-title">
-            <div className="config-dialog-heading">
-              <div><AlertTriangle size={19} /><h2 id="agent-oauth-login-required-title">{t('agents.oauthLoginRequired.title')}</h2></div>
-            </div>
-            <p>{oauthLoginRequiredDescription}</p>
-            <div className={`config-dialog-actions${oauthLoginRequiredAction === 'launch' ? ' single-action' : ''}`}>
-              <button type="button" className={oauthLoginRequiredAction === 'launch' ? 'primary-button' : 'secondary-button'}
-                onClick={() => setOauthLoginRequiredAction(null)}>{t('agents.oauthLoginRequired.confirm')}</button>
-              {oauthLoginRequiredAction !== 'launch' ? (
-                <button type="button" className="primary-button" onClick={openClearIntegrationGuide}>
-                  {t('agents.oauthLoginRequired.openManagement')}
-                </button>
-              ) : null}
-            </div>
-          </section>
-        </div>
+        <Dialog alert className="config-dialog agent-restore-dialog" labelledBy="agent-oauth-login-required-title" onClose={() => setOauthLoginRequiredAction(null)}>
+          <div className="config-dialog-heading">
+            <div><AlertTriangle size={19} /><h2 id="agent-oauth-login-required-title">{t('agents.oauthLoginRequired.title')}</h2></div>
+          </div>
+          <p>{oauthLoginRequiredDescription}</p>
+          <div className={`config-dialog-actions${oauthLoginRequiredAction === 'launch' ? ' single-action' : ''}`}>
+            <button type="button" className={oauthLoginRequiredAction === 'launch' ? 'primary-button' : 'secondary-button'}
+              onClick={() => setOauthLoginRequiredAction(null)}>{t('agents.oauthLoginRequired.confirm')}</button>
+            {oauthLoginRequiredAction !== 'launch' ? (
+              <button type="button" className="primary-button" onClick={openClearIntegrationGuide}>
+                {t('agents.oauthLoginRequired.openManagement')}
+              </button>
+            ) : null}
+          </div>
+        </Dialog>
       ) : null}
       {confirmationDialog}
     </section>

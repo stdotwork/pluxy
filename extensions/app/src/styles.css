@@ -2695,6 +2695,10 @@ textarea:focus-visible {
   box-shadow: 0 18px 48px rgba(45, 42, 38, 0.24);
 }
 
+.config-dialog.config-dialog-sm {
+  width: min(460px, 100%);
+}
+
 .config-dialog-heading {
   display: flex;
   align-items: center;
@@ -6444,6 +6448,11 @@ textarea:focus-visible {
   color: var(--theme-9f2d20);
 }
 
+.codex-session-dialog .config-dialog-heading h2,
+.codex-session-cleanup-dialog .config-dialog-heading h2 {
+  line-height: var(--line-height-tight);
+}
+
 .codex-session-dialog > p,
 .codex-session-cleanup-dialog > p {
   margin: 0;
@@ -7040,11 +7049,6 @@ textarea:focus-visible {
   max-height: calc(100vh - 32px);
   margin: auto;
   overflow: auto;
-}
-
-.agent-desktop-help-dialog::backdrop {
-  background: var(--theme-scrim);
-  backdrop-filter: blur(3px);
 }
 
 .agent-desktop-help-list {
@@ -7783,50 +7787,6 @@ textarea:focus-visible {
 .codex-catalog-footer > div:last-child {
   display: flex;
   flex: none;
-  gap: 8px;
-}
-
-.codex-catalog-confirm {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  border-radius: inherit;
-  isolation: isolate;
-}
-
-/* Blur the backdrop without making it a containing block for fixed notices. */
-.codex-catalog-confirm::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
-  background: var(--theme-scrim);
-  backdrop-filter: blur(2px);
-}
-
-.codex-catalog-confirm > div {
-  display: grid;
-  gap: 12px;
-  width: min(420px, 100%);
-  padding: 20px;
-  border: 1px solid var(--theme-d5d2cb);
-  border-radius: 9px;
-  background: var(--theme-fffdf8);
-  box-shadow: 0 18px 48px rgba(45, 42, 38, 0.24);
-}
-
-.codex-catalog-confirm span {
-  color: var(--theme-716b61);
-  font-size: var(--font-size-label);
-}
-
-.codex-catalog-confirm > div > div {
-  display: flex;
-  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -9292,6 +9252,7 @@ textarea:focus-visible {
   overflow: hidden;
   color: var(--theme-2d2a26);
   font-size: var(--font-size-dialog-title);
+  line-height: var(--line-height-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -9966,15 +9927,12 @@ body.table-col-resizing * {
 .usage-price-sync-dialog {
   width: min(1100px, calc(100vw - 32px));
   max-height: min(760px, calc(100vh - 32px));
+  overflow: auto;
   padding: 20px;
   border: 1px solid var(--theme-e3e1db);
   border-radius: 10px;
   background: var(--theme-fff);
   color: var(--theme-2d2a26);
-}
-
-.usage-price-sync-dialog::backdrop {
-  background: var(--theme-scrim);
 }
 
 .usage-price-sync-header,
@@ -9986,7 +9944,7 @@ body.table-col-resizing * {
   gap: 10px;
 }
 
-.usage-price-sync-header h2 { margin: 0 0 4px; }
+.usage-price-sync-header h2 { margin: 0 0 4px; color: var(--theme-2d2a26); font-size: var(--font-size-panel-title); line-height: var(--line-height-tight); }
 .usage-price-sync-note { color: var(--theme-7a746c); }
 .usage-price-sync-controls { justify-content: flex-start; margin: 14px 0; flex-wrap: wrap; }
 .usage-price-sync-controls span { margin-right: auto; }
@@ -10452,7 +10410,6 @@ body.table-col-resizing * {
 }
 
 .config-dialog.app-confirm-dialog {
-  width: min(460px, 100%);
   height: auto;
   grid-template-rows: none;
   gap: 18px;

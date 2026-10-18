@@ -1,11 +1,10 @@
 import { useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Check, LoaderCircle, Upload, X } from 'lucide-react';
 import vertexIcon from '../assets/icons/vertex.svg';
 import { useI18n } from '../i18n';
 import { usePrivacyMask } from '../privacy';
 import { importVertexCredential, type VertexImportResult } from '../services/vertexImport';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import './VertexLoginCard.css';
 
 export function VertexLoginCard() {
@@ -44,11 +43,6 @@ function VertexImportDialog({ onClose }: { onClose: () => void }) {
   const busy = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const chooseFile = useRef<HTMLButtonElement>(null);
-  const dialogRef = useDialogFocusTrap<HTMLElement>({
-    onEscape: loading ? undefined : onClose,
-    preventEscape: loading,
-    initialFocusRef: chooseFile,
-  });
 
   const importCredential = async () => {
     if (busy.current) return;
@@ -67,12 +61,9 @@ function VertexImportDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
-  return createPortal(
-    <div className="config-dialog-backdrop" onMouseDown={event => {
-      if (event.currentTarget === event.target && !busy.current) onClose();
-    }}>
-    <section ref={dialogRef} className="config-dialog vertex-import-dialog" role="dialog" aria-modal="true"
-      aria-labelledby="vertex-import-title" aria-describedby="vertex-import-description" aria-busy={loading} tabIndex={-1}>
+  return (
+    <Dialog className="config-dialog vertex-import-dialog" labelledBy="vertex-import-title" describedBy="vertex-import-description"
+      busy={loading} tabIndex={-1} onClose={onClose} closeDisabled={loading} dismissOnBackdrop initialFocusRef={chooseFile}>
       <div className="config-dialog-heading">
         <div className="vertex-import-heading">
           <img src={vertexIcon} alt="" className="provider-logo" />
@@ -122,7 +113,6 @@ function VertexImportDialog({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       </form>
-    </section>
-    </div>, document.body,
+    </Dialog>
   );
 }

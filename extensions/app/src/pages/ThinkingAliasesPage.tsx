@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import { SettingsHelp } from '../components/SettingsHelp';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 
 type PresetThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -453,16 +453,6 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
     resetEditor();
   };
 
-  const editorRef = useDialogFocusTrap<HTMLElement>({
-    active: editorOpen,
-    initialFocusRef: modelSearchRef,
-    onEscape: busyAlias ? undefined : () => {
-      if (modelPickerOpen) setModelPickerOpen(false);
-      else closeEditor();
-    },
-    preventEscape: Boolean(busyAlias),
-  });
-
   const addAlias = () => {
     resetEditor();
     setError('');
@@ -556,241 +546,243 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
       </header>
 
       {editorOpen ? (
-        <div className="config-dialog-backdrop" onMouseDown={(event) => event.currentTarget === event.target && closeEditor()}>
-        <section
-          ref={editorRef}
+        <Dialog
           className="panel management-dialog thinking-alias-editor-panel thinking-alias-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="thinking-alias-editor-title"
+          labelledBy="thinking-alias-editor-title"
+          initialFocusRef={modelSearchRef}
+          onClose={() => {
+            if (modelPickerOpen) setModelPickerOpen(false);
+            else closeEditor();
+          }}
+          closeDisabled={Boolean(busyAlias)}
+          dismissOnBackdrop
         >
-            <div className="thinking-alias-panel-heading">
-              <span><GitFork size={18} /></span>
-              <div>
-                <h2 id="thinking-alias-editor-title">{t(editingEntry ? 'common.edit' : 'aliases.create.title')}</h2>
-              </div>
-              <button type="button" className="icon-button quiet" onClick={closeEditor} disabled={Boolean(busyAlias)} title={t('common.close')} aria-label={t('common.close')}>
-                <X size={18} />
-              </button>
+          <div className="thinking-alias-panel-heading">
+            <span><GitFork size={18} /></span>
+            <div>
+              <h2 id="thinking-alias-editor-title">{t(editingEntry ? 'common.edit' : 'aliases.create.title')}</h2>
             </div>
-
-            <div className="thinking-alias-dialog-body">
-
-            <div className="thinking-alias-field thinking-model-field">
-            <div className="config-field-label"><label htmlFor="thinking-model-search">{t('aliases.originalModel')}</label><SettingsHelp label={t('aliases.originalModel')}>{t('aliases.sourceHint')}</SettingsHelp></div>
-            <div className="thinking-model-picker" ref={modelPickerRef}>
-              <div className="thinking-model-search">
-                {loading ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}
-                <input
-                  id="thinking-model-search"
-                  ref={modelSearchRef}
-                  role="combobox"
-                  autoFocus
-                  aria-autocomplete="list"
-                  aria-expanded={modelPickerOpen}
-                  aria-controls="thinking-model-options"
-                  aria-activedescendant={modelPickerOpen && filteredSources[activeSourceIndex]
-                    ? `thinking-model-option-${activeSourceIndex}`
-                    : undefined}
-                  value={modelPickerOpen ? search : selectedSource?.model ?? ''}
-                  onFocus={(event) => {
-                    setSearch(selectedSource?.model ?? '');
-                    setModelPickerOpen(true);
-                    event.currentTarget.select();
-                  }}
-                  onChange={(event) => {
-                    const nextSearch = event.currentTarget.value;
-                    setSearch(nextSearch);
-                    setModelPickerOpen(true);
-                    if (
-                      selectedSource
-                      && nextSearch.trim().toLowerCase() !== selectedSource.model.trim().toLowerCase()
-                    ) {
-                      setSelectedSourceId('');
-                      setEffort('');
-                      setFastEnabled(false);
-                      if (!editingEntry) setAlias('');
-                      generatedAliasRef.current = '';
-                    }
-                  }}
-                  onKeyDown={handleModelSearchKeyDown}
-                  placeholder={loading ? t('aliases.loadingModels') : t('aliases.searchModel')}
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={loading || Boolean(busyAlias)}
-                />
-                {!modelPickerOpen && selectedSource ? (
-                  <span className="thinking-source-kind">
-                    {thinkingAliasSourceKindLabel(selectedSource.kind)}
-                  </span>
-                ) : null}
-              </div>
-              {modelPickerOpen ? (
-                <div
-                  className="thinking-model-list"
-                  data-theme-surface="overlay"
-                  id="thinking-model-options"
-                  role="listbox"
-                  aria-label={t('aliases.availableModels')}
-                >
-                  {filteredSources.length === 0 ? (
-                    <div className="thinking-model-empty">
-                      {sources.length ? t('aliases.noMatch') : t('aliases.noModels')}
-                    </div>
-                  ) : filteredSources.map((source, index) => {
-                    const selected = source.id === selectedSourceId;
-                    return (
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={selected}
-                        id={`thinking-model-option-${index}`}
-                        className={`${selected ? 'selected ' : ''}${index === activeSourceIndex ? 'active' : ''}`.trim()}
-                        key={source.id}
-                        onMouseEnter={() => setActiveSourceIndex(index)}
-                        onClick={() => chooseSource(source)}
-                        disabled={Boolean(busyAlias)}
-                      >
-                        <span className="thinking-model-option-copy">
-                          <span>
-                            <strong title={source.model}>{source.model}</strong>
-                            {source.displayName && source.displayName !== source.model
-                              ? <small>{source.displayName}</small>
-                              : null}
-                          </span>
-                          <span className="thinking-model-source">
-                            <em>{thinkingAliasSourceKindLabel(source.kind)}</em>
-                            <small title={thinkingAliasSourceDetail(source)}>
-                              {thinkingAliasSourceDetail(source)}
-                            </small>
-                          </span>
-                        </span>
-                        {selected ? <Check size={15} /> : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-            {selectedSource ? (
-              <div className="thinking-model-selection">
-                <span>{thinkingAliasSourceKindLabel(selectedSource.kind)}</span>
-                <strong title={thinkingAliasSourceDetail(selectedSource)}>
-                  {t('aliases.sourceLabel', { source: thinkingAliasSourceDetail(selectedSource) })}
-                </strong>
-              </div>
-            ) : null}
-            </div>
-
-            <div className="thinking-alias-field">
-            <div className="thinking-field-heading">
-              <strong>{t('aliases.effort.title')}</strong>
-            </div>
-            <div className="thinking-effort-options">
-              <button
-                type="button"
-                className={!normalizedEffort ? 'active none' : 'none'}
-                onClick={() => {
-                  chooseEffort('');
-                }}
-                disabled={Boolean(busyAlias)}
-                title={t('aliases.effort.noneHint')}
-              >
-                {t('aliases.effort.none')}
-              </button>
-              {visibleEffortOptions.map((option) => (
-                <button
-                  type="button"
-                  className={effort.trim().toLowerCase() === option.value ? 'active' : ''}
-                  key={option.value}
-                  onClick={() => {
-                    chooseEffort(option.value);
-                  }}
-                  disabled={Boolean(busyAlias) || Boolean(selectedSource && !selectedSource.supportsReasoning)}
-                  title={option.title}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            {selectedSource && !selectedSource.supportsReasoning ? (
-              <small className="thinking-model-hint">{t('aliases.effort.unsupported')}</small>
-            ) : null}
-            </div>
-
-            <div className="thinking-alias-field">
-              <div className="thinking-field-heading">
-                <strong>{t('aliases.fast.title')}</strong>
-              </div>
-              <label className={`thinking-fast-option${fastEnabled ? ' active' : ''}`}>
-                <span className="thinking-fast-option-copy">
-                  <span><Zap size={15} /> Fast</span>
-                </span>
-                <span className="switch-control thinking-fast-switch">
-                  <input
-                    type="checkbox"
-                    checked={fastEnabled}
-                    onChange={(event) => setFastEnabled(event.currentTarget.checked)}
-                    disabled={Boolean(busyAlias) || !fastAvailable}
-                    aria-label={t('aliases.fast.title')}
-                  />
-                  <span className="switch-track" />
-                </span>
-              </label>
-              {selectedSource && !selectedSource.supportsFast ? (
-                <small className="thinking-model-hint">{t('aliases.fast.unsupported')}</small>
-              ) : null}
-            </div>
-
-            <div className="thinking-alias-section-divider" aria-hidden="true" />
-
-            <div className="thinking-alias-field">
-              <div className="thinking-field-heading">
-                <strong>{t('aliases.aliasName.title')}</strong>
-                <span>{t('aliases.aliasName.autoDescription')}</span>
-              </div>
-              <input
-                id="thinking-alias-name"
-                className="thinking-alias-input"
-                value={alias}
-                onChange={(event) => setAlias(event.currentTarget.value)}
-                placeholder={selectedSource
-                  ? normalizedEffort
-                    ? t('aliases.aliasName.example', { model: selectedSource.model, effort: normalizedEffort })
-                    : fastEnabled
-                      ? t('speedAliases.aliasName.example', { model: selectedSource.model })
-                      : t('aliases.aliasName.example', { model: selectedSource.model, effort: 'alias' })
-                  : t('aliases.aliasName.selectFirst')}
-                disabled={Boolean(busyAlias)}
-              />
-            </div>
-
-            <div className="thinking-alias-preview">
-              {fastEnabled && !normalizedEffort ? <Zap size={18} /> : <BrainCircuit size={18} />}
-              <div>
-                <span>{selectedSource?.model || t('aliases.notSelected')} <ArrowRight size={13} /> {alias || t('aliases.enterAlias')}</span>
-              </div>
-            </div>
-            </div>
-
-            <div className="thinking-alias-dialog-actions">
-            <button type="button" className="secondary-button" disabled={Boolean(busyAlias)} onClick={closeEditor}>
-              {t('common.cancel')}
+            <button type="button" className="icon-button quiet" onClick={closeEditor} disabled={Boolean(busyAlias)} title={t('common.close')} aria-label={t('common.close')}>
+              <X size={18} />
             </button>
+          </div>
+
+          <div className="thinking-alias-dialog-body">
+
+          <div className="thinking-alias-field thinking-model-field">
+          <div className="config-field-label"><label htmlFor="thinking-model-search">{t('aliases.originalModel')}</label><SettingsHelp label={t('aliases.originalModel')}>{t('aliases.sourceHint')}</SettingsHelp></div>
+          <div className="thinking-model-picker" ref={modelPickerRef}>
+            <div className="thinking-model-search">
+              {loading ? <LoaderCircle size={15} className="spin" /> : <Search size={15} />}
+              <input
+                id="thinking-model-search"
+                ref={modelSearchRef}
+                role="combobox"
+                autoFocus
+                aria-autocomplete="list"
+                aria-expanded={modelPickerOpen}
+                aria-controls="thinking-model-options"
+                aria-activedescendant={modelPickerOpen && filteredSources[activeSourceIndex]
+                  ? `thinking-model-option-${activeSourceIndex}`
+                  : undefined}
+                value={modelPickerOpen ? search : selectedSource?.model ?? ''}
+                onFocus={(event) => {
+                  setSearch(selectedSource?.model ?? '');
+                  setModelPickerOpen(true);
+                  event.currentTarget.select();
+                }}
+                onChange={(event) => {
+                  const nextSearch = event.currentTarget.value;
+                  setSearch(nextSearch);
+                  setModelPickerOpen(true);
+                  if (
+                    selectedSource
+                    && nextSearch.trim().toLowerCase() !== selectedSource.model.trim().toLowerCase()
+                  ) {
+                    setSelectedSourceId('');
+                    setEffort('');
+                    setFastEnabled(false);
+                    if (!editingEntry) setAlias('');
+                    generatedAliasRef.current = '';
+                  }
+                }}
+                onKeyDown={handleModelSearchKeyDown}
+                placeholder={loading ? t('aliases.loadingModels') : t('aliases.searchModel')}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={loading || Boolean(busyAlias)}
+              />
+              {!modelPickerOpen && selectedSource ? (
+                <span className="thinking-source-kind">
+                  {thinkingAliasSourceKindLabel(selectedSource.kind)}
+                </span>
+              ) : null}
+            </div>
+            {modelPickerOpen ? (
+              <div
+                className="thinking-model-list"
+                data-theme-surface="overlay"
+                id="thinking-model-options"
+                role="listbox"
+                aria-label={t('aliases.availableModels')}
+              >
+                {filteredSources.length === 0 ? (
+                  <div className="thinking-model-empty">
+                    {sources.length ? t('aliases.noMatch') : t('aliases.noModels')}
+                  </div>
+                ) : filteredSources.map((source, index) => {
+                  const selected = source.id === selectedSourceId;
+                  return (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      id={`thinking-model-option-${index}`}
+                      className={`${selected ? 'selected ' : ''}${index === activeSourceIndex ? 'active' : ''}`.trim()}
+                      key={source.id}
+                      onMouseEnter={() => setActiveSourceIndex(index)}
+                      onClick={() => chooseSource(source)}
+                      disabled={Boolean(busyAlias)}
+                    >
+                      <span className="thinking-model-option-copy">
+                        <span>
+                          <strong title={source.model}>{source.model}</strong>
+                          {source.displayName && source.displayName !== source.model
+                            ? <small>{source.displayName}</small>
+                            : null}
+                        </span>
+                        <span className="thinking-model-source">
+                          <em>{thinkingAliasSourceKindLabel(source.kind)}</em>
+                          <small title={thinkingAliasSourceDetail(source)}>
+                            {thinkingAliasSourceDetail(source)}
+                          </small>
+                        </span>
+                      </span>
+                      {selected ? <Check size={15} /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+          {selectedSource ? (
+            <div className="thinking-model-selection">
+              <span>{thinkingAliasSourceKindLabel(selectedSource.kind)}</span>
+              <strong title={thinkingAliasSourceDetail(selectedSource)}>
+                {t('aliases.sourceLabel', { source: thinkingAliasSourceDetail(selectedSource) })}
+              </strong>
+            </div>
+          ) : null}
+          </div>
+
+          <div className="thinking-alias-field">
+          <div className="thinking-field-heading">
+            <strong>{t('aliases.effort.title')}</strong>
+          </div>
+          <div className="thinking-effort-options">
             <button
               type="button"
-              className="primary-button thinking-alias-create"
-              onClick={() => void createAlias()}
-              disabled={loading || Boolean(busyAlias)}
+              className={!normalizedEffort ? 'active none' : 'none'}
+              onClick={() => {
+                chooseEffort('');
+              }}
+              disabled={Boolean(busyAlias)}
+              title={t('aliases.effort.noneHint')}
             >
-              {busyAction === 'create'
-                ? <LoaderCircle size={16} className="spin" />
-                : fastEnabled && !normalizedEffort ? <Zap size={16} /> : <GitFork size={16} />}
-              {busyAction === 'create' ? t(editingEntry ? 'common.saving' : 'aliases.creating') : t(editingEntry ? 'common.save' : 'aliases.create')}
+              {t('aliases.effort.none')}
             </button>
+            {visibleEffortOptions.map((option) => (
+              <button
+                type="button"
+                className={effort.trim().toLowerCase() === option.value ? 'active' : ''}
+                key={option.value}
+                onClick={() => {
+                  chooseEffort(option.value);
+                }}
+                disabled={Boolean(busyAlias) || Boolean(selectedSource && !selectedSource.supportsReasoning)}
+                title={option.title}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {selectedSource && !selectedSource.supportsReasoning ? (
+            <small className="thinking-model-hint">{t('aliases.effort.unsupported')}</small>
+          ) : null}
+          </div>
+
+          <div className="thinking-alias-field">
+            <div className="thinking-field-heading">
+              <strong>{t('aliases.fast.title')}</strong>
             </div>
-        </section>
-        </div>
+            <label className={`thinking-fast-option${fastEnabled ? ' active' : ''}`}>
+              <span className="thinking-fast-option-copy">
+                <span><Zap size={15} /> Fast</span>
+              </span>
+              <span className="switch-control thinking-fast-switch">
+                <input
+                  type="checkbox"
+                  checked={fastEnabled}
+                  onChange={(event) => setFastEnabled(event.currentTarget.checked)}
+                  disabled={Boolean(busyAlias) || !fastAvailable}
+                  aria-label={t('aliases.fast.title')}
+                />
+                <span className="switch-track" />
+              </span>
+            </label>
+            {selectedSource && !selectedSource.supportsFast ? (
+              <small className="thinking-model-hint">{t('aliases.fast.unsupported')}</small>
+            ) : null}
+          </div>
+
+          <div className="thinking-alias-section-divider" aria-hidden="true" />
+
+          <div className="thinking-alias-field">
+            <div className="thinking-field-heading">
+              <strong>{t('aliases.aliasName.title')}</strong>
+              <span>{t('aliases.aliasName.autoDescription')}</span>
+            </div>
+            <input
+              id="thinking-alias-name"
+              className="thinking-alias-input"
+              value={alias}
+              onChange={(event) => setAlias(event.currentTarget.value)}
+              placeholder={selectedSource
+                ? normalizedEffort
+                  ? t('aliases.aliasName.example', { model: selectedSource.model, effort: normalizedEffort })
+                  : fastEnabled
+                    ? t('speedAliases.aliasName.example', { model: selectedSource.model })
+                    : t('aliases.aliasName.example', { model: selectedSource.model, effort: 'alias' })
+                : t('aliases.aliasName.selectFirst')}
+              disabled={Boolean(busyAlias)}
+            />
+          </div>
+
+          <div className="thinking-alias-preview">
+            {fastEnabled && !normalizedEffort ? <Zap size={18} /> : <BrainCircuit size={18} />}
+            <div>
+              <span>{selectedSource?.model || t('aliases.notSelected')} <ArrowRight size={13} /> {alias || t('aliases.enterAlias')}</span>
+            </div>
+          </div>
+          </div>
+
+          <div className="thinking-alias-dialog-actions">
+          <button type="button" className="secondary-button" disabled={Boolean(busyAlias)} onClick={closeEditor}>
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            className="primary-button thinking-alias-create"
+            onClick={() => void createAlias()}
+            disabled={loading || Boolean(busyAlias)}
+          >
+            {busyAction === 'create'
+              ? <LoaderCircle size={16} className="spin" />
+              : fastEnabled && !normalizedEffort ? <Zap size={16} /> : <GitFork size={16} />}
+            {busyAction === 'create' ? t(editingEntry ? 'common.saving' : 'aliases.creating') : t(editingEntry ? 'common.save' : 'aliases.create')}
+          </button>
+          </div>
+        </Dialog>
       ) : null}
 
         <section className="panel thinking-alias-list-panel">

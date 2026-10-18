@@ -14,7 +14,7 @@ import {
 } from 'react';
 import { Download, RefreshCw } from 'lucide-react';
 import { getCurrentLocale, translate, useI18n } from './i18n';
-import { useDialogFocusTrap } from './components/useDialogFocusTrap';
+import { Dialog } from './components/Dialog';
 
 export type { AppUpdateInfo } from './services/appUpdates';
 
@@ -169,12 +169,6 @@ export function AppUpdateDialog() {
     install,
     cancel,
   } = useAppUpdate();
-  const dialogRef = useDialogFocusTrap<HTMLElement>({
-    active: confirmOpen || task.running,
-    onEscape: confirmOpen ? dismissConfirm : undefined,
-    preventEscape: task.running,
-  });
-
   if (!confirmOpen && !task.running) return null;
 
   const percent = task.percent ?? (
@@ -185,68 +179,66 @@ export function AppUpdateDialog() {
   const phaseLabel = t(`appUpdate.phase.${task.phase}` as Parameters<typeof t>[0]);
 
   return (
-    <div className="install-dialog-backdrop app-update-dialog-backdrop">
-      <section
-        ref={dialogRef}
-        className="install-dialog app-update-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="app-update-dialog-title"
-      >
-        <div className="install-dialog-heading">
-          <span>{t('appUpdate.eyebrow')}</span>
-          <h2 id="app-update-dialog-title">
-            {confirmOpen ? t('appUpdate.confirmTitle') : t('appUpdate.progressTitle')}
-          </h2>
-        </div>
+    <Dialog
+      className="install-dialog app-update-dialog"
+      backdropClassName="install-dialog-backdrop app-update-dialog-backdrop"
+      labelledBy="app-update-dialog-title"
+      onClose={confirmOpen ? dismissConfirm : undefined}
+      closeDisabled={task.running}
+    >
+      <div className="install-dialog-heading">
+        <span>{t('appUpdate.eyebrow')}</span>
+        <h2 id="app-update-dialog-title">
+          {confirmOpen ? t('appUpdate.confirmTitle') : t('appUpdate.progressTitle')}
+        </h2>
+      </div>
 
-        {confirmOpen ? (
-          <>
-            <p className="app-update-confirm-copy">
-              {t('appUpdate.confirmDescription', { version: info?.latestVersion ?? '' })}
-            </p>
-            <div className="app-update-dialog-actions">
-              <button type="button" className="secondary-button" onClick={dismissConfirm}>
-                {t('common.cancel')}
-              </button>
-              <button type="button" className="primary-button" onClick={() => void install()}>
-                <Download size={15} aria-hidden="true" />
-                {t('appUpdate.installNow')}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="install-dialog-phase">
-              <span>{t('kernel.dialog.phase')}</span>
-              <strong>{phaseLabel}</strong>
-            </div>
-            <div className={`install-progress-track ${percent === null ? 'unknown is-running' : ''}`}>
-              <span
-                className="install-progress-fill"
-                style={percent === null ? undefined : { width: `${Math.max(0, Math.min(100, percent))}%` }}
-              />
-            </div>
-            <div className="install-progress-meta">
-              <strong>{percent === null ? t('kernel.dialog.unknownProgress') : `${percent.toFixed(1)}%`}</strong>
-              {task.message ? <span>{task.message}</span> : null}
-            </div>
-            {error ? (
-              <MessageNotice message={error} />
-            ) : null}
-            <button
-              type="button"
-              className="danger-button"
-              disabled={!task.cancellable}
-              onClick={() => void cancel()}
-            >
-              {task.cancellable ? t('appUpdate.cancelDownload') : (
-                <><RefreshCw size={15} className="spin" aria-hidden="true" /> {phaseLabel}</>
-              )}
+      {confirmOpen ? (
+        <>
+          <p className="app-update-confirm-copy">
+            {t('appUpdate.confirmDescription', { version: info?.latestVersion ?? '' })}
+          </p>
+          <div className="app-update-dialog-actions">
+            <button type="button" className="secondary-button" onClick={dismissConfirm}>
+              {t('common.cancel')}
             </button>
-          </>
-        )}
-      </section>
-    </div>
+            <button type="button" className="primary-button" onClick={() => void install()}>
+              <Download size={15} aria-hidden="true" />
+              {t('appUpdate.installNow')}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="install-dialog-phase">
+            <span>{t('kernel.dialog.phase')}</span>
+            <strong>{phaseLabel}</strong>
+          </div>
+          <div className={`install-progress-track ${percent === null ? 'unknown is-running' : ''}`}>
+            <span
+              className="install-progress-fill"
+              style={percent === null ? undefined : { width: `${Math.max(0, Math.min(100, percent))}%` }}
+            />
+          </div>
+          <div className="install-progress-meta">
+            <strong>{percent === null ? t('kernel.dialog.unknownProgress') : `${percent.toFixed(1)}%`}</strong>
+            {task.message ? <span>{task.message}</span> : null}
+          </div>
+          {error ? (
+            <MessageNotice message={error} />
+          ) : null}
+          <button
+            type="button"
+            className="danger-button"
+            disabled={!task.cancellable}
+            onClick={() => void cancel()}
+          >
+            {task.cancellable ? t('appUpdate.cancelDownload') : (
+              <><RefreshCw size={15} className="spin" aria-hidden="true" /> {phaseLabel}</>
+            )}
+          </button>
+        </>
+      )}
+    </Dialog>
   );
 }

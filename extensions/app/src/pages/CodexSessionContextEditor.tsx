@@ -29,7 +29,7 @@ import {
   X,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { APP_NAVIGATION_REQUEST_EVENT, type AppNavigationRequest } from '../navigation';
 import type {
   CodexSessionContextDetail,
@@ -95,10 +95,6 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
   const translateRef = useRef(t);
   translateRef.current = t;
   const pendingNavigationRef = useRef<(() => void) | null>(null);
-  const discardDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: discardConfirmOpen,
-    onEscape: () => setDiscardConfirmOpen(false),
-  });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -810,36 +806,34 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
         </section>
 
       {discardConfirmOpen ? (
-        <div className="config-dialog-backdrop">
-          <section ref={discardDialogRef} className="config-dialog codex-session-dialog" role="alertdialog" aria-modal="true" aria-labelledby="codex-session-context-discard-title">
-            <div className="config-dialog-heading">
-              <div>
-                <AlertCircle size={19} />
-                <h2 id="codex-session-context-discard-title">{t('agents.sessions.context.discardTitle')}</h2>
-              </div>
+        <Dialog alert className="config-dialog codex-session-dialog" labelledBy="codex-session-context-discard-title" onClose={() => setDiscardConfirmOpen(false)}>
+          <div className="config-dialog-heading">
+            <div>
+              <AlertCircle size={19} />
+              <h2 id="codex-session-context-discard-title">{t('agents.sessions.context.discardTitle')}</h2>
             </div>
-            <p>{t('agents.sessions.context.confirmDiscard')}</p>
-            <div className="config-dialog-actions two-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setDiscardConfirmOpen(false)}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => {
-                  setDiscardConfirmOpen(false);
-                  (pendingNavigationRef.current ?? onBack)();
-                }}
-              >
-                {t('agents.sessions.context.discard')}
-              </button>
-            </div>
-          </section>
-        </div>
+          </div>
+          <p>{t('agents.sessions.context.confirmDiscard')}</p>
+          <div className="config-dialog-actions two-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setDiscardConfirmOpen(false)}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => {
+                setDiscardConfirmOpen(false);
+                (pendingNavigationRef.current ?? onBack)();
+              }}
+            >
+              {t('agents.sessions.context.discard')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
     </div>
   );

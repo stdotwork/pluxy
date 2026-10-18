@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import {
   codexSessionPageCounts,
   retainVisibleCodexSessionIds,
@@ -78,16 +78,6 @@ export function CodexSessionsPanel() {
   const mountedRef = useRef(false);
   const loadRequestRef = useRef(0);
   const initialOffsetRef = useRef(sessionViewCache.offset);
-  const deleteDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: Boolean(deleteConfirmation),
-    onEscape: operation === 'delete' ? undefined : () => setDeleteConfirmation(null),
-    preventEscape: operation === 'delete',
-  });
-  const cleanupDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: Boolean(cleanupPreview),
-    onEscape: operation === 'cleanup' ? undefined : () => setCleanupPreview(null),
-    preventEscape: operation === 'cleanup',
-  });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -520,63 +510,59 @@ export function CodexSessionsPanel() {
       </section>
 
       {deleteConfirmation ? (
-        <div className="config-dialog-backdrop">
-          <section ref={deleteDialogRef} className="config-dialog codex-session-dialog" role="alertdialog" aria-modal="true" aria-labelledby="codex-session-delete-title">
-            <div className="config-dialog-heading"><div><TriangleAlert size={19} /><h2 id="codex-session-delete-title">{deleteConfirmation.title}</h2></div></div>
-            <p>{deleteConfirmation.description}</p>
-            <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" onClick={() => setDeleteConfirmation(null)}>{t('common.cancel')}</button>
-              <button type="button" className="danger-button" onClick={() => void confirmDelete()}><Trash2 size={15} />{t('agents.sessions.confirmDelete')}</button>
-            </div>
-          </section>
-        </div>
+        <Dialog alert className="config-dialog codex-session-dialog" labelledBy="codex-session-delete-title" onClose={() => setDeleteConfirmation(null)} closeDisabled={operation === 'delete'}>
+          <div className="config-dialog-heading"><div><TriangleAlert size={19} /><h2 id="codex-session-delete-title">{deleteConfirmation.title}</h2></div></div>
+          <p>{deleteConfirmation.description}</p>
+          <div className="config-dialog-actions two-actions">
+            <button type="button" className="secondary-button" onClick={() => setDeleteConfirmation(null)}>{t('common.cancel')}</button>
+            <button type="button" className="danger-button" onClick={() => void confirmDelete()}><Trash2 size={15} />{t('agents.sessions.confirmDelete')}</button>
+          </div>
+        </Dialog>
       ) : null}
 
       {cleanupPreview ? (
-        <div className="config-dialog-backdrop">
-          <section ref={cleanupDialogRef} className="config-dialog codex-session-cleanup-dialog" role="dialog" aria-modal="true" aria-labelledby="codex-session-cleanup-title">
-            <div className="config-dialog-heading">
-              <div><TriangleAlert size={19} /><h2 id="codex-session-cleanup-title">{t('agents.sessions.cleanupTitle')}</h2></div>
-              <button type="button" className="codex-session-dialog-close" aria-label={t('common.close')} onClick={() => setCleanupPreview(null)}><X size={16} /></button>
-            </div>
-            <p>{t('agents.sessions.cleanupDescription', { count: cleanupPreview.candidates.length })}</p>
-            <label className="codex-session-cleanup-select-all">
-              <input
-                type="checkbox"
-                checked={cleanupSelectedIds.size === cleanupPreview.candidates.length && cleanupPreview.candidates.length > 0}
-                onChange={(event) => setCleanupSelectedIds(event.currentTarget.checked ? new Set(cleanupPreview.candidates.map((candidate) => candidate.id)) : new Set())}
-              />
-              <span>{t('agents.sessions.cleanupSelectAll')}</span>
-            </label>
-            <div className="codex-session-cleanup-list">
-              {cleanupPreview.candidates.map((candidate) => (
-                <label key={candidate.id}>
-                  <input
-                    type="checkbox"
-                    checked={cleanupSelectedIds.has(candidate.id)}
-                    onChange={(event) => {
-                      const checked = event.currentTarget.checked;
-                      setCleanupSelectedIds((current) => {
-                        const next = new Set(current);
-                        if (checked) next.add(candidate.id);
-                        else next.delete(candidate.id);
-                        return next;
-                      });
-                    }}
-                  />
-                  <span><strong>{candidate.threadName || t('agents.sessions.untitled')}</strong><code>{candidate.id}</code><small>{candidate.updatedAt}</small></span>
-                </label>
-              ))}
-            </div>
-            <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" disabled={operation === 'cleanup'} onClick={() => setCleanupPreview(null)}>{t('common.cancel')}</button>
-              <button type="button" className="danger-button" disabled={operation === 'cleanup' || cleanupSelectedIds.size === 0} onClick={() => void applyCleanup()}>
-                {operation === 'cleanup' ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}
-                {t('agents.sessions.cleanupConfirm', { count: cleanupSelectedIds.size })}
-              </button>
-            </div>
-          </section>
-        </div>
+        <Dialog className="config-dialog codex-session-cleanup-dialog" labelledBy="codex-session-cleanup-title" onClose={() => setCleanupPreview(null)} closeDisabled={operation === 'cleanup'}>
+          <div className="config-dialog-heading">
+            <div><TriangleAlert size={19} /><h2 id="codex-session-cleanup-title">{t('agents.sessions.cleanupTitle')}</h2></div>
+            <button type="button" className="codex-session-dialog-close" aria-label={t('common.close')} onClick={() => setCleanupPreview(null)}><X size={16} /></button>
+          </div>
+          <p>{t('agents.sessions.cleanupDescription', { count: cleanupPreview.candidates.length })}</p>
+          <label className="codex-session-cleanup-select-all">
+            <input
+              type="checkbox"
+              checked={cleanupSelectedIds.size === cleanupPreview.candidates.length && cleanupPreview.candidates.length > 0}
+              onChange={(event) => setCleanupSelectedIds(event.currentTarget.checked ? new Set(cleanupPreview.candidates.map((candidate) => candidate.id)) : new Set())}
+            />
+            <span>{t('agents.sessions.cleanupSelectAll')}</span>
+          </label>
+          <div className="codex-session-cleanup-list">
+            {cleanupPreview.candidates.map((candidate) => (
+              <label key={candidate.id}>
+                <input
+                  type="checkbox"
+                  checked={cleanupSelectedIds.has(candidate.id)}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    setCleanupSelectedIds((current) => {
+                      const next = new Set(current);
+                      if (checked) next.add(candidate.id);
+                      else next.delete(candidate.id);
+                      return next;
+                    });
+                  }}
+                />
+                <span><strong>{candidate.threadName || t('agents.sessions.untitled')}</strong><code>{candidate.id}</code><small>{candidate.updatedAt}</small></span>
+              </label>
+            ))}
+          </div>
+          <div className="config-dialog-actions two-actions">
+            <button type="button" className="secondary-button" disabled={operation === 'cleanup'} onClick={() => setCleanupPreview(null)}>{t('common.cancel')}</button>
+            <button type="button" className="danger-button" disabled={operation === 'cleanup' || cleanupSelectedIds.size === 0} onClick={() => void applyCleanup()}>
+              {operation === 'cleanup' ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}
+              {t('agents.sessions.cleanupConfirm', { count: cleanupSelectedIds.size })}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
     </div>
   );

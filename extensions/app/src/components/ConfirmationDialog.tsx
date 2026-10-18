@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { AlertTriangle, X } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { usePrivacyMask } from '../privacy';
+import { Dialog } from './Dialog';
 
 export type ConfirmationOptions = {
   title: string;
   message: string;
   confirmText?: string;
+  cancelText?: string;
   warning?: string;
   details?: { label: string; value: string }[];
   variant?: 'primary' | 'danger';
@@ -15,66 +16,36 @@ export type ConfirmationOptions = {
 
 type ConfirmationDialogProps = ConfirmationOptions & { onDecision: (confirmed: boolean) => void };
 
-export function ConfirmationDialog({ title, message, confirmText, warning, details, variant = 'primary', onDecision }: ConfirmationDialogProps) {
+export function ConfirmationDialog({ title, message, confirmText, cancelText, warning, details, variant = 'primary', onDecision }: ConfirmationDialogProps) {
   const { t } = useI18n();
   const privacy = usePrivacyMask();
-  const titleId = useId();
   const descriptionId = useId();
-  const dialogRef = useRef<HTMLElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const previousFocus = document.activeElement;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    cancelRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        onDecision(false);
-      } else if (event.key === 'Tab') {
-        const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), [tabindex="0"]') ?? []);
-        const first = controls[0];
-        const last = controls[controls.length - 1];
-        if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
-          event.preventDefault();
-          last?.focus();
-        } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
-          event.preventDefault();
-          first?.focus();
-        }
-      }
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown, true);
-      document.body.style.overflow = previousOverflow;
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
-    };
-  }, [onDecision]);
-
-  const content = (
-    <div className="config-dialog-backdrop app-confirm-backdrop" onMouseDown={(event) => {
-      if (event.currentTarget !== event.target) return;
-      event.preventDefault();
-      onDecision(false);
-    }}>
-      <section ref={dialogRef} className="config-dialog app-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId}>
-        <div className="config-dialog-heading">
-          <div><AlertTriangle size={20} aria-hidden="true" /><h2 id={titleId}>{title}</h2></div>
-          <button type="button" className="icon-button quiet" onClick={() => onDecision(false)} title={t('common.close')} aria-label={t('common.close')}><X size={18} aria-hidden="true" /></button>
-        </div>
-        <p id={descriptionId}>{privacy.text(message)}</p>
-        {details?.length ? <dl className="app-confirm-details">{details.map((detail) => <div key={detail.label}><dt>{detail.label}</dt><dd>{privacy.text(detail.value)}</dd></div>)}</dl> : null}
-        {warning ? <p className="app-confirm-warning">{privacy.text(warning)}</p> : null}
-        <div className="config-dialog-actions two-actions">
-          <button ref={cancelRef} type="button" className="secondary-button" onClick={() => onDecision(false)}>{t('common.cancel')}</button>
-          <button type="button" className={variant === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmText ?? t('common.confirm')}</button>
-        </div>
-      </section>
-    </div>
+  const cancel = () => onDecision(false);
+  return (
+    <Dialog
+      alert
+      size="sm"
+      className="config-dialog app-confirm-dialog"
+      backdropClassName="app-confirm-backdrop"
+      tone={variant === 'danger' ? 'danger' : undefined}
+      title={title}
+      icon={<AlertTriangle size={20} aria-hidden="true" />}
+      describedBy={descriptionId}
+      initialFocusRef={cancelRef}
+      onClose={cancel}
+      dismissOnBackdrop
+      actionsClassName="two-actions"
+      actions={<>
+        <button ref={cancelRef} type="button" className="secondary-button" onClick={cancel}>{cancelText ?? t('common.cancel')}</button>
+        <button type="button" className={variant === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmText ?? t('common.confirm')}</button>
+      </>}
+    >
+      <p id={descriptionId}>{privacy.text(message)}</p>
+      {details?.length ? <dl className="app-confirm-details">{details.map((detail) => <div key={detail.label}><dt>{detail.label}</dt><dd>{privacy.text(detail.value)}</dd></div>)}</dl> : null}
+      {warning ? <p className="app-confirm-warning">{privacy.text(warning)}</p> : null}
+    </Dialog>
   );
-  return typeof document === 'undefined' ? content : createPortal(content, document.body);
 }
 
 type PendingConfirmation = { options: ConfirmationOptions; resolve: (confirmed: boolean) => void };

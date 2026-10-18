@@ -13,7 +13,7 @@
   background: var(--theme-workspace-background, #fff);
 }
 
-:root:not([data-theme='dark']) :is(.workspace, .config-dialog, dialog) {
+:root:not([data-theme='dark']) :is(.workspace, .config-dialog, .app-dialog:not(.core-health-dialog)) {
   --bg-primary: var(--theme-surface, #fff);
   --bg-secondary: var(--theme-workspace-background, #fff);
   --bg-card: var(--theme-surface, #fff);
@@ -41,7 +41,7 @@
   --text-quaternary: var(--theme-text-muted, #526174);
 }
 
-:root:not([data-theme='dark']) .workspace :is(
+:root:not([data-theme='dark']) :is(.workspace, .app-dialog) :is(
   .agent-model-section, .agent-auth-segmented, .routing-segmented,
   .plugin-tabs,
   .credential-quota, .usage-collector-state
@@ -60,7 +60,7 @@
   border-left: 1px solid var(--border-color);
 }
 
-:root:not([data-theme='dark']) .workspace :is(
+:root:not([data-theme='dark']) :is(.workspace, .app-dialog) :is(
   .secondary-button:not(.danger), .icon-button:not(.danger), .agent-auth-segmented-button,
   .routing-segmented button, .plugin-tabs button,
   .usage-refresh-btn, .usage-price-row-actions button
@@ -71,7 +71,7 @@
   box-shadow: none;
 }
 
-:root:not([data-theme='dark']) .workspace :is(
+:root:not([data-theme='dark']) :is(.workspace, .app-dialog) :is(
   .agent-list-items button.active,
   .routing-segmented button.active, .plugin-tabs button.active
 ) {
@@ -91,7 +91,7 @@
   box-shadow: none;
 }
 
-:root:not([data-theme='dark']) .workspace :is(
+:root:not([data-theme='dark']) :is(.workspace, .app-dialog) :is(
   .secondary-button:not(.danger), .icon-button:not(.danger), .agent-auth-segmented-button,
   .routing-segmented button, .plugin-tabs button,
   .agent-list-items button, .usage-refresh-btn, .usage-price-row-actions button
