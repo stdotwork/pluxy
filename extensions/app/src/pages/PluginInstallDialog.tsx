@@ -61,7 +61,7 @@ export function PluginInstallDialog({ entry, onClose, onInstalled }: {
         </>}
         {error && <p className="plugin-error" role="alert">{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</p>}
       </div>
-      <div className="plugin-dialog-actions"><button className="secondary-button" onClick={cancel}>{t('common.cancel')}</button><button className="primary-button" disabled={busy || !validVersion || !confirmed} onClick={() => void install()}>{busy ? t('common.loading') : action}</button></div>
+      <div className="plugin-dialog-actions"><button className="secondary-button compact-button" onClick={cancel}>{t('common.cancel')}</button><button className="primary-button compact-button" disabled={busy || !validVersion || !confirmed} onClick={() => void install()}>{busy ? t('common.loading') : action}</button></div>
     </Dialog>
   );
 }

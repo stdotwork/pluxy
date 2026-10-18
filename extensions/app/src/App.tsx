@@ -581,7 +581,7 @@ function AppContent() {
         >
           <button
             type="button"
-            className="close-dialog-dismiss"
+            className="icon-button quiet ghost small-button close-dialog-dismiss"
             aria-label={t('common.cancel')}
             title={t('common.cancel')}
             disabled={windowsClosePrompt.resolvingAction !== null}

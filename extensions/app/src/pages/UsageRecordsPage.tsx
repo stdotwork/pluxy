@@ -510,7 +510,7 @@ export function UsageRecordsPage() {
           </div>
           <button
             type="button"
-            className="icon-button usage-refresh-btn"
+            className="icon-button quiet usage-refresh-btn"
             onClick={() => void loadData(false)}
             disabled={loading}
             title={t('usage.refresh')}
@@ -1553,7 +1553,7 @@ function PricingView({
               placeholder={t('usage.pricing.search')}
               aria-label={t('usage.pricing.search')}
             />
-            <button type="button" className="secondary-button" onClick={() => setDraft(emptyPriceDraft())}>
+            <button type="button" className="secondary-button compact-button" onClick={() => setDraft(emptyPriceDraft())}>
               {t('usage.pricing.add')}
             </button>
           </div>
@@ -1562,7 +1562,7 @@ function PricingView({
               <option value="models-dev">Models.dev</option>
               <option value="litellm">LiteLLM</option>
             </Select>
-            <button type="button" className="primary-button" disabled={syncing} onClick={() => void previewPrices()}>
+            <button type="button" className="primary-button compact-button" disabled={syncing} onClick={() => void previewPrices()}>
               {syncing ? t('usage.pricing.syncing') : t('usage.pricing.sync')}
             </button>
           </div>
@@ -1671,11 +1671,11 @@ function PricingView({
             />
           </label>
           <div className="usage-price-editor-actions">
-            <button type="button" className="secondary-button" onClick={() => setDraft(null)}>
+            <button type="button" className="secondary-button compact-button" onClick={() => setDraft(null)}>
               <X size={14} />
               {t('common.cancel')}
             </button>
-            <button type="button" className="primary-button" disabled={saving} onClick={() => void savePrice()}>
+            <button type="button" className="primary-button compact-button" disabled={saving} onClick={() => void savePrice()}>
               {saving ? t('usage.pricing.saving') : t('common.save')}
             </button>
           </div>

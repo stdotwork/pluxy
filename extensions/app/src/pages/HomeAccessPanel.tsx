@@ -41,7 +41,7 @@ export function HomeAccessPanel({ profiles, apiKey, keyError, ready, copiedField
         <div className="home-field-label"><span>{t('easyMode.api.baseUrl')}</span><span>{profile.description}</span></div>
         <div className="home-copy-field">
           <code title={profile.baseUrl}>{profile.baseUrl}</code>
-          <button type="button" className={`icon-button quiet ${copiedUrl ? 'copied' : ''}`}
+          <button type="button" className={`icon-button quiet ghost small-button ${copiedUrl ? 'copied' : ''}`}
             onClick={() => void onCopy(profile.baseUrl, `${profile.id}:base`)}
             title={t(copiedUrl ? 'kernel.access.apiCopied' : 'kernel.access.copyApi', { name: profile.name })}
             aria-label={t(copiedUrl ? 'kernel.access.apiCopied' : 'kernel.access.copyApi', { name: profile.name })}
@@ -51,17 +51,17 @@ export function HomeAccessPanel({ profiles, apiKey, keyError, ready, copiedField
       <div className="home-access-key">
         <div className="home-field-label">
           <span>{t('home.access.key')}</span>
-          <button type="button" className="home-inline-link" onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'config' }))}>
+          <button type="button" className="link-button home-inline-link" onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'config' }))}>
             {t('home.access.manage')}<ArrowUpRight size={13} aria-hidden="true" />
           </button>
         </div>
         <div className="home-copy-field">
           {apiKey && !keyError ? <>
             <code className="home-key-value">{showKey ? apiKey : '••••••••••••••••••••'}</code>
-            <button type="button" className="icon-button quiet" onClick={() => setShowKey((value) => !value)}
+            <button type="button" className="icon-button quiet ghost small-button" onClick={() => setShowKey((value) => !value)}
               aria-label={t(showKey ? 'config.keys.hide' : 'config.keys.show')} title={t(showKey ? 'config.keys.hide' : 'config.keys.show')}
             >{showKey ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-            <button type="button" className={`icon-button quiet ${copiedKey ? 'copied' : ''}`} onClick={() => void onCopy(apiKey, 'home:apikey')}
+            <button type="button" className={`icon-button quiet ghost small-button ${copiedKey ? 'copied' : ''}`} onClick={() => void onCopy(apiKey, 'home:apikey')}
               aria-label={t(copiedKey ? 'config.notice.keyCopied' : 'config.keys.copy')} title={t(copiedKey ? 'config.notice.keyCopied' : 'config.keys.copy')}
             >{copiedKey ? <Check size={16} /> : <Copy size={16} />}</button>
           </> : <span className={keyError ? 'home-field-error' : 'home-field-empty'}>

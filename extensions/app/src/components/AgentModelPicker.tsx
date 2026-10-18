@@ -237,7 +237,7 @@ export function AgentModelPicker({
               setActiveIndex(0);
               setOpen(true);
             }} />
-          <button type="button" className="icon-button quiet" aria-label={editable.label}
+          <button type="button" className="icon-button quiet ghost tiny-button" aria-label={editable.label}
             aria-haspopup="listbox" aria-expanded={open} aria-controls={listboxId}
             disabled={disabled} onClick={() => { setSearch(''); setOpen((current) => !current); }}>
             <ChevronDown size={17} aria-hidden />

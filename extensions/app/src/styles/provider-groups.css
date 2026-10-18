@@ -30,7 +30,6 @@
   min-height: max(36px, calc(1.6em + 2px)); border: 1px solid var(--theme-e8e4dc); border-radius: 7px;
   background: var(--bg-primary); color: var(--text-primary); padding: 0 8px; font: inherit;
 }
-.api-provider-dialog .provider-group-key-main .icon-button { width: 32px; min-width: 32px; height: 32px; }
 .provider-row-title > span { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .config-dialog.management-dialog.api-provider-dialog { width: min(640px, 100%); }
 .api-provider-dialog .provider-dialog-section {
@@ -57,7 +56,7 @@
 .provider-dialog-secret > input { flex: 1; min-width: 0; }
 .provider-dialog-secret > label { flex: 1; min-width: 0; }
 .provider-dialog-secret > label > input { min-width: 0; width: 100%; }
-.api-provider-dialog .provider-dialog-secret > button { flex-shrink: 0; width: auto; height: 36px; white-space: nowrap; }
+.api-provider-dialog .provider-dialog-secret > button { flex-shrink: 0; width: auto; white-space: nowrap; }
 @media (max-width: 480px) {
   .provider-dialog-basic-grid { grid-template-columns: minmax(0, 1fr); }
   .provider-group-heading { align-items: flex-start; }

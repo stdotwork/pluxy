@@ -51,7 +51,7 @@ export function ProviderGroupKeysEditor({ keys, disabled, onChange }: Props) {
             onClick={() => setVisible((state) => ({ ...state, [draft.id]: !state[draft.id] }))}>
             {t(isVisible ? 'apiAccess.entries.hideKey' : 'apiAccess.entries.showKey')}
           </button>
-          <button type="button" className="icon-button quiet danger"
+          <button type="button" className="icon-button quiet danger small-button"
             aria-label={t('apiAccess.entries.removeKey', { number: index + 1 })}
             onClick={() => onChange(keys.filter((item) => item.id !== draft.id))}>
             <Trash2 size={15} />

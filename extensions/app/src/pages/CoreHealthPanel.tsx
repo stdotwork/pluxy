@@ -109,19 +109,19 @@ export function CoreHealthPanel({
   const summary = t('home.health.summary', { healthy, failed, unchecked: Math.max(0, models.length - healthy - failed) });
   const dialog = (
     <Dialog id={dialogId} className="core-health-panel core-health-dialog" backdropClassName="core-health-backdrop" labelledBy={`${dialogId}-title`} describedBy={`${dialogId}-description`} tabIndex={-1} onClose={close} dismissOnBackdrop>
-      <button type="button" className="icon-button quiet core-health-close" onClick={close} aria-label={t('common.close')} title={t('common.close')}><X size={18} aria-hidden="true" /></button>
+      <button type="button" className="icon-button quiet small-button core-health-close" onClick={close} aria-label={t('common.close')} title={t('common.close')}><X size={18} aria-hidden="true" /></button>
       <div className="core-health-heading">
         <div className="core-health-title">
           <span className="core-health-icon"><Activity size={19} aria-hidden="true" /></span>
           <div><h2 id={`${dialogId}-title`}>{t('home.health.title')}</h2><p id={`${dialogId}-description`}>{t('home.health.description')}</p></div>
         </div>
         <div className="core-health-actions">
-          <button className="secondary-button" onClick={onRefreshModels} disabled={!coreReady || modelsLoading || running}>
+          <button className="secondary-button compact-button" onClick={onRefreshModels} disabled={!coreReady || modelsLoading || running}>
             <RefreshCw size={14} className={modelsLoading ? 'spin' : undefined} aria-hidden="true" />{t('home.health.refresh')}
           </button>
-          {running ? <button className="secondary-button" onClick={stopChecks} disabled={stopped}>
+          {running ? <button className="secondary-button compact-button" onClick={stopChecks} disabled={stopped}>
             <Square size={13} aria-hidden="true" />{t('home.health.stop')}
-          </button> : <button className="primary-button" disabled={!canCheck} onClick={() => { void runChecks(models); }}>
+          </button> : <button className="primary-button compact-button" disabled={!canCheck} onClick={() => { void runChecks(models); }}>
             <Play size={13} aria-hidden="true" />{t('home.health.checkAll')}
           </button>}
         </div>
@@ -156,7 +156,7 @@ export function CoreHealthPanel({
                       <td><span className={`core-health-status ${status}`}>{checking ? <LoaderCircle size={12} className="spin" aria-hidden="true" /> : result?.success && !queued ? <Check size={12} aria-hidden="true" /> : result && !queued ? <X size={12} aria-hidden="true" /> : <Circle size={8} aria-hidden="true" />}{statusText}</span></td>
                       <td className="core-health-latency">{result?.success && !pending.has(model.name) ? <>{latency(result.firstTokenLatencyMs)}<span> / {latency(result.responseLatencyMs)}</span></> : '—'}</td>
                       <td className="core-health-time">{result ? <time dateTime={new Date(result.checkedAt).toISOString()} title={formatDate(result.checkedAt)}>{time(result.checkedAt)}</time> : '—'}</td>
-                      <td><button className="core-health-row-check" disabled={!canCheck || running} onClick={() => { void runChecks([model]); }} title={t('home.health.checkOne', { model: model.name })} aria-label={t('home.health.checkOne', { model: model.name })}><Play size={13} aria-hidden="true" /></button></td>
+                      <td><button className="icon-button quiet small-button" disabled={!canCheck || running} onClick={() => { void runChecks([model]); }} title={t('home.health.checkOne', { model: model.name })} aria-label={t('home.health.checkOne', { model: model.name })}><Play size={13} aria-hidden="true" /></button></td>
                     </tr>;
                   })}</tbody>
                 </table>
@@ -168,7 +168,7 @@ export function CoreHealthPanel({
   return (
     <>
       <div className={`core-health-entry${compact ? ' compact' : ''}`}>
-        <button type="button" className="secondary-button core-health-open" onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open} aria-controls={dialogId} aria-describedby={`${dialogId}-entry-status`} title={summary}>
+        <button type="button" className="secondary-button small-button core-health-open" onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open} aria-controls={dialogId} aria-describedby={`${dialogId}-entry-status`} title={summary}>
           <Activity size={16} aria-hidden="true" /><span>{t('home.health.title')}</span>{!compact && <ChevronRight size={14} aria-hidden="true" />}
         </button>
         <span id={`${dialogId}-entry-status`} className="core-health-entry-status" aria-live="polite">{!coreReady ? t('home.health.offline') : healthy + failed > 0 ? summary : t('home.health.idle')}</span>

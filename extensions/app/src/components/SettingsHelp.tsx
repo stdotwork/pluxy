@@ -59,7 +59,7 @@ export function SettingsHelp({ label, children }: { label: string; children: Rea
   }, [open]);
 
   return <span className="settings-help">
-    <button ref={trigger} type="button" className="settings-help-trigger" aria-label={`${label} · ${helpLabel}`} aria-expanded={open} aria-controls={id} aria-describedby={open ? id : undefined} onClick={() => { setPosition(null); setOpen(previous => !previous); }}>
+    <button ref={trigger} type="button" className="icon-button quiet ghost tiny-button settings-help-trigger" aria-label={`${label} · ${helpLabel}`} aria-expanded={open} aria-controls={id} aria-describedby={open ? id : undefined} onClick={() => { setPosition(null); setOpen(previous => !previous); }}>
       <CircleHelp size={14} aria-hidden="true" />
     </button>
     {open ? createPortal(<span ref={popover} id={id} role="tooltip" className="settings-help-popover" style={{ left: position?.left ?? 0, top: position?.top ?? 0, visibility: position ? 'visible' : 'hidden' }}>{children}</span>, document.body) : null}

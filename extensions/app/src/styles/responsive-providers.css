@@ -121,13 +121,9 @@
   grid-row: 1;
   width: 24px;
   min-width: 24px;
-  height: 32px;
   padding: 0;
   margin: 0;
   align-self: start;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
 }
 
 .api-access-page .provider-row-main {
@@ -214,9 +210,7 @@
 }
 
 .api-access-page .provider-row-actions .icon-button {
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
+  min-width: 30px;
 }
 
 /* Compact tabs keep icons and counts aligned above each category label. */

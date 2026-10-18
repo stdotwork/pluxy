@@ -149,7 +149,7 @@ function HealthStatus({ file, snapshot, nowMs, resetting = false, resetDisabled 
       </details> : <div className="auth-health-summary">{summary}</div>}
       {hasTimers && onReset ? <div className="auth-health-actions">
         <span className="auth-health-hint">{t('authFiles.cooldown.resetHint')}</span>
-        <button type="button" className="secondary-button compact-button auth-health-reset"
+        <button type="button" className="secondary-button small-button auth-health-reset"
           onClick={onReset} disabled={resetDisabled || resetting} aria-busy={resetting}
           title={t('authFiles.cooldown.resetHint')}>
           {resetting ? <LoaderCircle size={14} className="spin" aria-hidden="true" /> : <RotateCcw size={14} aria-hidden="true" />}

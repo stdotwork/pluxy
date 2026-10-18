@@ -54,9 +54,9 @@ export function AuthFileQuotaPanel({ quota, file, disabled, onRefresh, onReset, 
       {!compactLayout || showReset ? <div className="credential-quota-heading">
         {!compactLayout ? <strong>{t('authFiles.settings.quotaRemaining')}</strong> : null}
         {!compactLayout && quota.plan ? <span className="credential-quota-plan">{quota.plan}</span> : null}
-        {showReset ? <button type="button" className="secondary-button compact-button credential-quota-reset" onClick={onReset} disabled={disabled || !canResetQuota(file, quota)}
+        {showReset ? <button type="button" className="secondary-button tiny-button credential-quota-reset" onClick={onReset} disabled={disabled || !canResetQuota(file, quota)}
           title={t('quota.reset')}>{t(hasPendingClaudeReset(file) ? 'quota.claude.retry' : 'quota.reset')}</button> : null}
-        {!compactLayout ? <button type="button" className="credential-quota-refresh" disabled={disabled || loading} onClick={onRefresh}
+        {!compactLayout ? <button type="button" className="link-button muted credential-quota-refresh" disabled={disabled || loading} onClick={onRefresh}
           title={disabled ? t('quota.fileDisabled') : t('authFiles.quota.refresh')}>
           {loading ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}
           {t(loading ? 'authFiles.quota.querying' : quota.status === 'idle' ? 'authFiles.quota.fetch' : 'common.refresh')}

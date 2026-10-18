@@ -147,8 +147,8 @@
   padding: 8px 0;
   border-top: 1px solid var(--auth-border, var(--border-color));
 }
+.auth-file-health-compact .auth-health-reset { margin: 0; }
 .auth-file-health-compact .auth-health-actions .auth-health-hint { display: none; }
-.auth-file-health-compact .auth-health-reset { width: auto; min-height: 28px; margin: 0; padding: 4px 8px; border-radius: 6px; box-shadow: none; font-size: 11px; }
 
 @container credential-files (max-width: 700px) {
   .auth-file-health.auth-file-health-compact { gap: 0 8px; }

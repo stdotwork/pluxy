@@ -269,7 +269,7 @@ function usageResultDetail(record: UsageRecord) {
 
 function CopyErrorButton({ detail, onCopy }: { detail: string; onCopy: (detail: string) => void }) {
   const { t } = useI18n();
-  return <button type="button" className="icon-button quiet usage-error-copy"
+  return <button type="button" className="icon-button quiet tiny-button usage-error-copy"
     title={t('usage.events.copyError')} aria-label={t('usage.events.copyError')}
     onClick={() => onCopy(detail)}><Copy size={13} aria-hidden="true" /></button>;
 }
@@ -788,7 +788,7 @@ export function EventsView({
           <div className="usage-events-actions">
           <button
             type="button"
-            className="usage-col-settings-btn"
+            className="secondary-button small-button usage-col-settings-btn"
             onClick={openColumnSettings}
             title={t('usage.events.columnSettings')}
             aria-label={t('usage.events.columnSettings')}
@@ -801,7 +801,7 @@ export function EventsView({
           {isCustomized ? (
             <button
               type="button"
-              className="usage-col-reset-btn"
+              className="secondary-button small-button usage-col-reset-btn"
               onClick={resetAllWidths}
               title={t('usage.events.resetColumns')}
               aria-label={t('usage.events.resetColumns')}
@@ -810,7 +810,7 @@ export function EventsView({
               <span>{t('usage.events.resetColumns')}</span>
             </button>
           ) : null}
-          <button type="button" className="usage-events-export-btn" disabled={loading || exporting || events.total === 0} onClick={() => void exportFilteredEvents()} title={t('usage.events.exportDescription')}>
+          <button type="button" className="secondary-button small-button" disabled={loading || exporting || events.total === 0} onClick={() => void exportFilteredEvents()} title={t('usage.events.exportDescription')}>
             <Download size={14} aria-hidden="true" /><span>{exporting ? t('usage.events.exporting') : t('usage.events.exportPage')}</span>
           </button>
           </div>
@@ -820,9 +820,9 @@ export function EventsView({
             {[20, 50, 100, 200].map((size) => <option key={size} value={size}>{t('usage.events.pageSize', { size })}</option>)}
           </Select>
           <div className="usage-pagination-right">
-            <button type="button" className="usage-page-nav-btn" disabled={loading || events.page <= 1} onClick={() => onPage(events.page - 1)}><ChevronLeft size={14} aria-hidden="true" /><span>{t('usage.previous')}</span></button>
+            <button type="button" className="secondary-button small-button" disabled={loading || events.page <= 1} onClick={() => onPage(events.page - 1)}><ChevronLeft size={14} aria-hidden="true" /><span>{t('usage.previous')}</span></button>
             <span className="usage-pagination-info">{events.page} / {Math.max(1, events.totalPages)}</span>
-            <button type="button" className="usage-page-nav-btn" disabled={loading || events.page >= events.totalPages} onClick={() => onPage(events.page + 1)}><span>{t('usage.next')}</span><ChevronRight size={14} aria-hidden="true" /></button>
+            <button type="button" className="secondary-button small-button" disabled={loading || events.page >= events.totalPages} onClick={() => onPage(events.page + 1)}><span>{t('usage.next')}</span><ChevronRight size={14} aria-hidden="true" /></button>
           </div>
         </div>
       </div>
@@ -881,7 +881,7 @@ export function EventsView({
               </span>
               <button
                 type="button"
-                className="usage-column-select-all"
+                className="link-button muted usage-column-select-all"
                 onClick={resetVisibleColumns}
               >
                 {t('usage.events.selectAllColumns')}

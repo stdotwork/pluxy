@@ -107,7 +107,7 @@ export function AgentClientList<Id extends string>({
     <aside className="panel agent-client-list" aria-label={t('agents.localClients')}>
       <div className="agent-client-list-heading">
         <strong>{t('agents.localClients')}</strong>
-        <button type="button" className="icon-button quiet" onClick={onRefresh}
+        <button type="button" className="icon-button quiet small-button" onClick={onRefresh}
           disabled={loading || busy} title={t('agents.redetect')} aria-label={t('agents.redetect')}>
           <RefreshCw size={15} className={loading ? 'spin' : ''} aria-hidden="true" />
         </button>
@@ -124,11 +124,11 @@ export function AgentClientList<Id extends string>({
       </div>
       <div className="agent-client-list-footer">
         <nav className="agent-client-pagination" aria-label={t('agents.clients.pages')}>
-          <button type="button" className="icon-button quiet" disabled={busy || currentPage === 0}
+          <button type="button" className="icon-button quiet small-button" disabled={busy || currentPage === 0}
             aria-label={t('agents.clients.previous')} title={t('agents.clients.previous')}
             onClick={() => setPage(currentPage - 1)}><ChevronLeft size={16} aria-hidden="true" /></button>
           <span aria-live="polite">{t('agents.clients.page', { page: currentPage + 1, total: pageCount })}</span>
-          <button type="button" className="icon-button quiet" disabled={busy || currentPage + 1 === pageCount}
+          <button type="button" className="icon-button quiet small-button" disabled={busy || currentPage + 1 === pageCount}
             aria-label={t('agents.clients.next')} title={t('agents.clients.next')}
             onClick={() => setPage(currentPage + 1)}><ChevronRight size={16} aria-hidden="true" /></button>
         </nav>

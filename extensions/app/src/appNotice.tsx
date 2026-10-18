@@ -86,7 +86,7 @@ export function InlineNotice({
       {onDismiss ? (
         <button
           type="button"
-          className="action-feedback-dismiss"
+          className="icon-button quiet ghost tiny-button action-feedback-dismiss"
           onClick={onDismiss}
           aria-label={t('app.notice.dismiss')}
           title={t('app.notice.dismiss')}

@@ -753,6 +753,7 @@ export function VersionManagementPage() {
                   <span title={url}>{url}</span>
                   <button
                     type="button"
+                    className="icon-button danger ghost small-button"
                     disabled={versionSourceSaving}
                     title={t('kernel.versions.customMirrorRemove')}
                     aria-label={t('kernel.versions.customMirrorRemove')}

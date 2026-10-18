@@ -11,7 +11,7 @@
 .structured-label label { overflow-wrap: anywhere; }
 .structured-field small { font-size: 12px; color: var(--text-tertiary); line-height: 1.5; }
 .structured-field .text-input, .structured-field .select-input, .structured-map-add .text-input, .structured-any .select-input, .structured-list-item > .text-input { width: 100%; min-width: 0; }
-.structured-unset { justify-content: flex-start; color: var(--text-tertiary); white-space: normal; text-align: start; }
+.structured-unset { justify-content: flex-start; white-space: normal; text-align: start; }
 .structured-add { justify-self: start; }
 .structured-map-add { display: flex; gap: 8px; flex-wrap: wrap; }
 .structured-map-add .text-input { flex: 1 1 180px; width: auto; }

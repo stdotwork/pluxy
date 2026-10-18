@@ -41,11 +41,6 @@
   line-height: 1.4;
 }
 
-.credential-quota-compact .credential-quota-heading .credential-quota-reset {
-  min-height: 22px;
-  padding: 2px 6px;
-}
-
 .credential-quota-compact .credential-quota-footnotes {
   display: flex;
   flex-wrap: wrap;
@@ -167,12 +162,7 @@
 }
 
 .credential-quota-dense .credential-quota-heading .credential-quota-reset {
-  min-height: 26px;
-  padding: 3px 8px;
   margin: 0;
-  border-radius: 6px;
-  font-size: 12px;
-  line-height: 1.3;
 }
 
 .credential-quota-dense .credential-quota-reset-credits,

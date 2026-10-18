@@ -106,8 +106,8 @@
 .usage-model-bar-track { display: block; height: 6px; border-radius: 3px; background: var(--bg-tertiary); overflow: hidden; }
 .usage-model-bar-track > span { display: block; height: 100%; border-radius: inherit; background: var(--model-color); }
 .usage-model-share { text-align: right; font-variant-numeric: tabular-nums; }
-.usage-analysis-expand { display: flex; align-items: center; justify-content: center; gap: 5px; margin: 10px 0 0; padding: 5px 0 0; border: 0; border-top: 1px solid var(--border-secondary); background: transparent; color: var(--text-secondary); font-size: 12px; line-height: 1.35; }
-.usage-analysis-expand:hover { color: var(--ui-accent); }
+.usage-analysis-expand-row { font-size: 12px; display: flex; justify-content: center; margin: 10px 0 0; padding: 5px 0 0; border-top: 1px solid var(--border-secondary); }
+.usage-analysis-expand { line-height: 1.35; }
 .usage-analysis-total { padding-top: 3px; white-space: nowrap; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .usage-request-results { display: flex; flex-direction: column; }
 .usage-results-chart { display: grid; grid-template-columns: minmax(120px, 150px) minmax(100px, 1fr); align-items: center; gap: 18px; flex: 1; }

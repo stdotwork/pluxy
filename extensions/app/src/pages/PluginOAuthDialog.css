@@ -22,7 +22,7 @@
 .plugin-oauth-error { color: var(--theme-9f2d20); }
 .plugin-oauth-notice { color: var(--theme-4f825c); }
 .plugin-oauth-footer { flex-shrink: 0; padding: 16px 22px; border-top: 1px solid var(--theme-e3e1db); }
-.plugin-oauth-dialog button { min-height: 36px; }
+.plugin-oauth-dialog button { margin: 0; }
 .plugin-oauth-dialog .config-dialog-heading > div { min-width: 0; }
 .plugin-oauth-dialog .config-dialog-heading h2 { overflow-wrap: anywhere; }
 .plugin-oauth-dialog svg, .plugin-oauth-dialog .config-dialog-heading > button { flex-shrink: 0; }

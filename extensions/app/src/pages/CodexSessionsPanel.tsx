@@ -328,7 +328,7 @@ export function CodexSessionsPanel() {
           </div>
           <button
             type="button"
-            className="secondary-button compact-button"
+            className="secondary-button small-button"
             disabled={busy || loading}
             onClick={() => void loadPage(currentOffset)}
           >
@@ -361,7 +361,7 @@ export function CodexSessionsPanel() {
           <div className="codex-session-repair-actions">
             <button
               type="button"
-              className="secondary-button compact-button"
+              className="secondary-button small-button"
               disabled={busy || loading}
               onClick={() => void previewCleanup()}
             >
@@ -370,7 +370,7 @@ export function CodexSessionsPanel() {
             </button>
             <button
               type="button"
-              className="secondary-button compact-button"
+              className="secondary-button small-button"
               disabled={busy}
               onClick={() => void repairSessions()}
             >
@@ -416,14 +416,14 @@ export function CodexSessionsPanel() {
             {selectionMode ? <span>{t('agents.sessions.selected', { count: selectedSessions.length })}</span> : null}
             {selectionMode ? (
               <>
-                <button type="button" className="secondary-button compact-button" disabled={busy || allSelected} onClick={() => setSelectedIds(new Set(sessions.map((session) => session.id)))}>{t('agents.sessions.selectAll')}</button>
-                <button type="button" className="secondary-button compact-button" disabled={busy || selectedIds.size === 0} onClick={() => setSelectedIds(new Set())}>{t('agents.sessions.clearSelection')}</button>
-                <button type="button" className="danger-button compact-button" disabled={busy || selectedSessions.length === 0} onClick={() => requestDelete(selectedSessions)}><Trash2 size={14} />{t('agents.sessions.deleteSelected')}</button>
+                <button type="button" className="secondary-button small-button" disabled={busy || allSelected} onClick={() => setSelectedIds(new Set(sessions.map((session) => session.id)))}>{t('agents.sessions.selectAll')}</button>
+                <button type="button" className="secondary-button small-button" disabled={busy || selectedIds.size === 0} onClick={() => setSelectedIds(new Set())}>{t('agents.sessions.clearSelection')}</button>
+                <button type="button" className="danger-button small-button" disabled={busy || selectedSessions.length === 0} onClick={() => requestDelete(selectedSessions)}><Trash2 size={14} />{t('agents.sessions.deleteSelected')}</button>
               </>
             ) : null}
             <button
               type="button"
-              className="secondary-button compact-button"
+              className="secondary-button small-button"
               disabled={busy || sessions.length === 0}
               onClick={() => {
                 setSelectionMode((current) => !current);
@@ -461,7 +461,7 @@ export function CodexSessionsPanel() {
                 <div className="codex-session-actions">
                   <button
                     type="button"
-                    className="secondary-button compact-button codex-session-context-button"
+                    className="secondary-button small-button codex-session-context-button"
                     disabled={busy}
                     onClick={() => setEditingSessionId(session.id)}
                     title={t('agents.sessions.editContext')}
@@ -471,7 +471,7 @@ export function CodexSessionsPanel() {
                   </button>
                   <button
                     type="button"
-                    className="danger-button compact-button codex-session-delete-button"
+                    className="danger-button small-button codex-session-delete-button"
                     disabled={busy}
                     onClick={() => requestDelete([session])}
                   >
@@ -520,7 +520,7 @@ export function CodexSessionsPanel() {
         <Dialog className="config-dialog codex-session-cleanup-dialog" labelledBy="codex-session-cleanup-title" onClose={() => setCleanupPreview(null)} closeDisabled={operation === 'cleanup'}>
           <div className="config-dialog-heading">
             <div><TriangleAlert size={19} /><h2 id="codex-session-cleanup-title">{t('agents.sessions.cleanupTitle')}</h2></div>
-            <button type="button" className="codex-session-dialog-close" aria-label={t('common.close')} onClick={() => setCleanupPreview(null)}><X size={16} /></button>
+            <button type="button" className="icon-button quiet ghost tiny-button" aria-label={t('common.close')} onClick={() => setCleanupPreview(null)}><X size={16} /></button>
           </div>
           <p>{t('agents.sessions.cleanupDescription', { count: cleanupPreview.candidates.length })}</p>
           <label className="codex-session-cleanup-select-all">

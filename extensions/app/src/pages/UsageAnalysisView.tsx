@@ -96,11 +96,11 @@ function ModelComparison({ models }: { models: UsageCategory[] }) {
         })}
         {!models.length && <p className="usage-analysis-muted">{t('usage.empty')}</p>}
       </div>
-      {models.length > 6 && <button className="usage-analysis-expand" type="button" aria-expanded={expanded}
+      {models.length > 6 && <div className="usage-analysis-expand-row"><button className="link-button muted usage-analysis-expand" type="button" aria-expanded={expanded}
         onClick={() => setExpanded(value => !value)}>
         {t(expanded ? 'usage.analysis.showLess' : 'usage.analysis.showAll', { count: models.length })}
         {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-      </button>}
+      </button></div>}
     </section>
   );
 }

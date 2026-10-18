@@ -400,7 +400,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
         <div className={`codex-session-notice ${notice.kind}`}>
           {notice.kind === 'error' ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
           <span>{notice.message}</span>
-          <button type="button" onClick={() => setNotice(null)} aria-label={t('common.close')}>
+          <button type="button" className="icon-button quiet ghost tiny-button" onClick={() => setNotice(null)} aria-label={t('common.close')}>
             <X size={14} />
           </button>
         </div>
@@ -452,7 +452,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 {detail?.rolloutPath ? (
                   <button
                     type="button"
-                    className="icon-button"
+                    className="icon-button quiet ghost tiny-button"
                     onClick={() => copyToClipboard(detail.rolloutPath!, 'rollout')}
                     title={t('common.copy')}
                   >
@@ -526,7 +526,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
               {searchQuery ? (
-                <button type="button" onClick={() => setSearchQuery('')} aria-label={t('common.clear')}>
+                <button type="button" className="icon-button quiet ghost tiny-button" onClick={() => setSearchQuery('')} aria-label={t('common.clear')}>
                   <X size={13} />
                 </button>
               ) : null}
@@ -584,7 +584,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                         <div className="message-item-actions">
                           <button
                             type="button"
-                            className="icon-button"
+                            className="icon-button quiet ghost tiny-button"
                             onClick={() => copyToClipboard(edit.content, `msg-${msg.lineNumber}`)}
                             title={t('common.copy')}
                           >
@@ -676,7 +676,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                             {isModified ? (
                               <button
                                 type="button"
-                                className="text-button"
+                                className="link-button"
                                 disabled={saving}
                                 onClick={() => {
                                   setMessageEdits((prev) => ({

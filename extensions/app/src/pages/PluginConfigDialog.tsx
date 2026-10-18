@@ -177,10 +177,10 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
       </div>
       <footer className="plugin-config-footer">
         {error ? <p className="plugin-config-error" role="alert">{!draft && !loading ? `${pt('loadFailed')}: ` : ''}{error}</p> : null}
-        {discard ? <div className="plugin-config-discard" role="alert"><span>{pt('unsaved')}</span><div><button type="button" className="secondary-button" onClick={() => setDiscard(false)}>{pt('keepEditing')}</button><button type="button" className="danger-button" onClick={onClose}>{pt('discard')}</button></div></div> : null}
+        {discard ? <div className="plugin-config-discard" role="alert"><span>{pt('unsaved')}</span><div><button type="button" className="secondary-button compact-button" onClick={() => setDiscard(false)}>{pt('keepEditing')}</button><button type="button" className="danger-button compact-button" onClick={onClose}>{pt('discard')}</button></div></div> : null}
         <div className="plugin-config-actions">
-          <button type="button" className="secondary-button" disabled={saving} onClick={close}>{t('common.cancel')}</button>
-          {!loading && !draft ? <button type="button" className="primary-button" onClick={() => setAttempt(value => value + 1)}>{pt('retry')}</button> : <button type="submit" className="primary-button" disabled={loading || saving || !dirty}>{saving ? <LoaderCircle size={16} className="spin" /> : null}{t(saving ? 'common.saving' : 'common.save')}</button>}
+          <button type="button" className="secondary-button compact-button" disabled={saving} onClick={close}>{t('common.cancel')}</button>
+          {!loading && !draft ? <button type="button" className="primary-button compact-button" onClick={() => setAttempt(value => value + 1)}>{pt('retry')}</button> : <button type="submit" className="primary-button compact-button" disabled={loading || saving || !dirty}>{saving ? <LoaderCircle size={16} className="spin" /> : null}{t(saving ? 'common.saving' : 'common.save')}</button>}
         </div>
       </footer>
     </form>

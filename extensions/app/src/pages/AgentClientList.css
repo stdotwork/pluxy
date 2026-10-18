@@ -64,11 +64,6 @@
   color: var(--theme-8a847c);
 }
 
-.agent-client-pagination > button {
-  width: 30px;
-  height: 30px;
-}
-
 .agent-client-list-footer > .compact-button {
   width: auto;
 }

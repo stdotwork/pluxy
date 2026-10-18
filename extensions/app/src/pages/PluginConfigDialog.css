@@ -45,7 +45,7 @@
 .plugin-config-footer { flex-shrink: 0; padding: 16px 22px; border-top: 1px solid var(--theme-e3e1db); }
 .plugin-config-footer > p { margin: 0 0 12px; font-size: var(--font-size-meta); line-height: 1.6; }
 .plugin-config-actions, .plugin-config-discard > div { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
-.plugin-config-actions button, .plugin-config-discard button { min-height: 38px; }
+.plugin-config-actions button, .plugin-config-discard button { margin: 0; }
 .plugin-config-discard { display: grid; gap: 10px; margin-bottom: 14px; padding: 12px; border: 1px solid var(--theme-d5d2cb); border-radius: 6px; font-size: var(--font-size-meta); }
 .plugin-config-loading { display: flex; justify-content: center; align-items: center; gap: 10px; min-height: 140px; color: var(--theme-7a746c); }
 .plugin-config-dialog .config-dialog-heading > div { min-width: 0; }

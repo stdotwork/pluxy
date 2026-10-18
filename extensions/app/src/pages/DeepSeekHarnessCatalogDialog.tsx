@@ -38,7 +38,7 @@ function HarnessContextWindowInput({ label, value, inherited, onChange }: {
     </label>
     <div className="harness-context-source">
       <small>{t(`agents.harness.contextSource.${value !== undefined ? 'custom' : inherited.source}`)}</small>
-      {value !== undefined ? <button type="button" className="secondary-button" onClick={() => { setEditing(null); onChange(''); }}>{t('agents.harness.resetContext')}</button> : null}
+      {value !== undefined ? <button type="button" className="secondary-button small-button" onClick={() => { setEditing(null); onChange(''); }}>{t('agents.harness.resetContext')}</button> : null}
     </div>
   </div>;
 }

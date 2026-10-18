@@ -4,7 +4,7 @@
 .config-settings-search > svg { flex: none; }
 .config-settings-search input { width: 100%; min-width: 0; min-height: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px; }
 .config-settings-search input::-webkit-search-cancel-button { display: none; }
-.config-settings-search button { flex: none; width: 26px; height: 26px; }
+.config-settings-search button { flex: none; }
 .config-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; min-width: 0; }
 .config-settings-topnav { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 10; min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--border-color); background: var(--theme-sticky-background, var(--bg-secondary)); }
 .config-settings-navigation.config-subpage-tabs { display: flex; flex-wrap: nowrap; gap: 4px; flex: 1 1 0; min-width: 0; width: auto; max-width: 100%; padding: 0; margin: 0; border: 0; background: none; border-radius: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; scroll-padding-inline: 4px; }
@@ -103,10 +103,7 @@
 .config-settings-content .config-management-content > p { margin: 0; font-size: 12px; color: var(--text-secondary); }
 .config-settings-content .config-software-setting-row { min-height: 66px; padding: 14px 16px; gap: 16px; }
 .settings-help { display: inline-flex; flex: none; vertical-align: middle; }
-.settings-help-trigger { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-tertiary); cursor: pointer; }
-.settings-help-trigger:hover,
-.settings-help-trigger[aria-expanded="true"] { background: var(--bg-hover); color: var(--text-primary); }
-.settings-help-trigger:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+.settings-help-trigger { flex: none; }
 .settings-help-popover { position: fixed; z-index: 1000; display: block; width: min(320px, calc(100vw - 24px)); max-height: min(360px, calc(100vh - 24px)); overflow-y: auto; box-sizing: border-box; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-card); box-shadow: 0 8px 28px rgba(0, 0, 0, .14); color: var(--text-secondary); font-size: 12px; font-weight: 400; line-height: 1.7; overflow-wrap: anywhere; }
 
 @media (max-width: 1150px) {
@@ -331,7 +328,6 @@
 .config-page .config-settings-cards > section > :is(.config-panel-heading, .config-network-section-heading) { margin-bottom: 0; }
 .config-page .config-settings-content :is(.config-heading-title h2, .config-network-section-title h3, .template-config-heading h3) { font-size: 15px; font-weight: 600; line-height: 1.5; }
 .config-page .config-settings-content :is(.config-network-label, .config-field-label, .config-management-field > span) { font-size: 13px; font-weight: 500; }
-.config-page .config-settings-content .primary-button:disabled { background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-tertiary); opacity: 1; box-shadow: none; }
 .config-page .config-settings-content .config-proxy-heading { max-width: 420px; }
 .config-page .config-settings-content :is(.config-settings-save-row, .template-config-actions) { margin-top: 4px; }
 

@@ -2009,7 +2009,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                       <div className="agent-auth-method">
                         <div className="agent-signin-label">
                           <span id="agent-connection-method-label" className="agent-signin-label-title">{t('agents.modify.authMethod')}</span>
-                          <button type="button" className="agent-signin-help-toggle" aria-expanded={connectionHelpOpen} aria-controls="agent-signin-hint"
+                          <button type="button" className="link-button muted agent-signin-help-toggle" aria-expanded={connectionHelpOpen} aria-controls="agent-signin-hint"
                             onClick={() => updateViewState({ connectionHelpOpen: !connectionHelpOpen })}>
                             {t(connectionHelpOpen ? 'agents.modify.authHelpHide' : 'agents.modify.authHelpShow')}
                             <ChevronDown size={14} aria-hidden="true" />

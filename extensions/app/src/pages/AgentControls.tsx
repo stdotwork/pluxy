@@ -112,7 +112,7 @@ export function AgentConfigManagementPanel({
         <button type="button" className="secondary-button" onClick={onChooseExecutablePath} disabled={busy}>
           <FolderOpen size={16} />{t('agents.executablePath.choose')}
         </button>
-        {executablePath ? <button type="button" className="quiet-button" onClick={onClearExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
+        {executablePath ? <button type="button" className="secondary-button ghost" onClick={onClearExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
       </div>
     </section>
     {dualTargets ? <section className="agent-management-row">
@@ -122,7 +122,7 @@ export function AgentConfigManagementPanel({
         <button type="button" className="secondary-button" onClick={onChooseDesktopExecutablePath} disabled={busy}>
           <FolderOpen size={16} />{t('agents.executablePath.choose')}
         </button>
-        {desktopExecutablePath ? <button type="button" className="quiet-button" onClick={onClearDesktopExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
+        {desktopExecutablePath ? <button type="button" className="secondary-button ghost" onClick={onClearDesktopExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
       </div>
     </section> : null}
     {!pi ? <section className="agent-management-row">

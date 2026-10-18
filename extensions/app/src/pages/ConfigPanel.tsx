@@ -1063,7 +1063,7 @@ export function ConfigPanelPage() {
               const Icon = CATEGORY_ICONS[item.id];
               return { value: item.id, id: `config-subpage-tab-${item.id}`, panelId: 'config-subpage-panel', label: <><Icon size={17} aria-hidden="true" /><span>{templateText(item.title, locale)}</span>{categoryDirty(item.id) ? <span className="config-nav-dirty" title={st('dirty')}><span className="sr-only">{st('dirty')}</span></span> : null}</> };
             })} />
-          <div className="config-settings-search"><Search size={18} aria-hidden="true" /><input ref={searchRef} type="search" aria-label={st('search')} placeholder={st('searchHint')} value={settingsSearch} onChange={event => setSettingsSearch(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Escape') setSettingsSearch(''); }} />{searching ? <button type="button" className="icon-button quiet" aria-label={st('clearSearch')} onClick={() => { setSettingsSearch(''); searchRef.current?.focus(); }}><X size={16} /></button> : null}</div>
+          <div className="config-settings-search"><Search size={18} aria-hidden="true" /><input ref={searchRef} type="search" aria-label={st('search')} placeholder={st('searchHint')} value={settingsSearch} onChange={event => setSettingsSearch(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Escape') setSettingsSearch(''); }} />{searching ? <button type="button" className="icon-button quiet tiny-button" aria-label={st('clearSearch')} onClick={() => { setSettingsSearch(''); searchRef.current?.focus(); }}><X size={16} /></button> : null}</div>
         </div>
         <div className="config-settings-content" id="config-subpage-panel" role="tabpanel" aria-labelledby={`config-subpage-tab-${activeSubpage}`}>
           {searching ? <section className="config-search-results" aria-label={st('results')}><div className="config-search-heading"><h2>{st('results')}</h2><span role="status">{searchResults.length}</span></div>{searchResults.length ? <div className="config-search-result-list">{searchResults.map(entry => <button type="button" key={`${entry.target}-${entry.field ?? ''}`} onClick={() => navigateToSetting(entry)}><span className="config-search-result-copy"><strong>{entry.title}</strong><small>{templateText(settingsCategories.find(item => item.id === entry.category)!.title, locale)}{entry.context ? ` / ${entry.context}` : ''}</small></span><ChevronRight size={17} aria-hidden="true" /></button>)}</div> : <p className="config-search-empty">{st('noResults')}</p>}</section> : null}
@@ -1126,7 +1126,7 @@ export function ConfigPanelPage() {
                   <div className="config-key-actions">
                     <button
                       type="button"
-                      className="icon-button quiet"
+                      className="icon-button quiet small-button"
                       onClick={() => void copyApiKey(entry.apiKey, index)}
                       disabled={controlsDisabled}
                       title={copiedIndex === index ? t('config.notice.keyCopied') : t('config.keys.copy')}
@@ -1140,7 +1140,7 @@ export function ConfigPanelPage() {
                     </button>
                     <button
                       type="button"
-                      className="icon-button quiet"
+                      className="icon-button quiet small-button"
                       onClick={() => openEditDialog(entry)}
                       disabled={controlsDisabled}
                       title={t('config.keys.edit')}
@@ -1150,7 +1150,7 @@ export function ConfigPanelPage() {
                     </button>
                     <button
                       type="button"
-                      className="icon-button danger"
+                      className="icon-button danger small-button"
                       onClick={() => setDeleteIndex(index)}
                       disabled={controlsDisabled}
                       title={t('config.keys.delete')}

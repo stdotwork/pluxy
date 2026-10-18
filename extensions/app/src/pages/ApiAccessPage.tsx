@@ -196,7 +196,7 @@ function SortableProviderRow({
     >
       <button
         type="button"
-        className="icon-button quiet provider-drag-handle"
+        className="icon-button quiet ghost small-button provider-drag-handle"
         disabled={disabled}
         aria-label={dragLabel}
         title={dragLabel}
@@ -1684,7 +1684,7 @@ export function ApiAccessPage() {
                   <div className="provider-row-actions">
                     <button
                       type="button"
-                      className="secondary-button provider-health-button"
+                      className="secondary-button small-button provider-health-button"
                       onClick={() => setHealthDialogRow(row)}
                       disabled={busy}
                     >
@@ -1694,10 +1694,10 @@ export function ApiAccessPage() {
                       <span>{t(row.disabled ? 'apiAccess.status.disabled' : 'apiAccess.status.enabled')}</span>
                       <Switch checked={!row.disabled} onChange={() => void toggleProvider(row)} disabled={busy} aria-label={t('apiAccess.toggleAria', { remark: row.remark || row.name, action: row.disabled ? t('common.enable') : t('common.disable') })} />
                     </label>
-                    <button type="button" className="icon-button quiet" onClick={() => openEdit(row)} disabled={busy} title={t('common.edit')} aria-label={t('common.edit')}>
+                    <button type="button" className="icon-button quiet small-button" onClick={() => openEdit(row)} disabled={busy} title={t('common.edit')} aria-label={t('common.edit')}>
                       <Edit3 size={16} aria-hidden="true" />
                     </button>
-                    <button type="button" className="icon-button danger" onClick={() => void deleteRow(row)} disabled={busy} title={t('common.delete')} aria-label={t('common.delete')}>
+                    <button type="button" className="icon-button danger small-button" onClick={() => void deleteRow(row)} disabled={busy} title={t('common.delete')} aria-label={t('common.delete')}>
                       <Trash2 size={16} aria-hidden="true" />
                     </button>
                   </div>
@@ -2307,7 +2307,7 @@ export function ApiProviderDialog({
                 />
                 <button
                   type="button"
-                  className="icon-button quiet danger"
+                  className="icon-button quiet danger small-button"
                   onClick={() => removeModel(index)}
                   disabled={busy}
                   title={t('apiAccess.models.remove')}
