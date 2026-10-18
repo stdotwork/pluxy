@@ -83,14 +83,49 @@ pub(crate) fn detect_copilot_cli(
     None
 }
 
+// Code.exe is the Electron GUI entry point, not the code CLI. Probing it can
+// open restored editor windows, which the probe timeout then forcibly kills.
+// Fail closed when the installation's CLI cannot be found.
+fn vscode_probe_executable(executable: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let extension = executable.extension()?.to_str()?;
+        if extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat") {
+            return executable.is_file().then(|| executable.to_path_buf());
+        }
+        if !extension.eq_ignore_ascii_case("exe") {
+            return None;
+        }
+        let name = match executable.file_stem()?.to_str()?.to_ascii_lowercase().as_str() {
+            "code" => "code.cmd",
+            "code - insiders" => "code-insiders.cmd",
+            _ => return None,
+        };
+        let cli = executable.parent()?.join("bin").join(name);
+        cli.is_file().then_some(cli)
+    }
+    #[cfg(not(windows))]
+    {
+        Some(executable.to_path_buf())
+    }
+}
+
+pub(crate) fn read_vscode_version(executable: &Path, home: &Path) -> Option<String> {
+    let cli = vscode_probe_executable(executable)?;
+    copilot_probe_output(&cli, home, &["--version"])?
+        .lines()
+        .find_map(copilot_version_number)
+}
+
 pub(crate) fn read_vscode_copilot_version(executable: &Path, home: &Path) -> Option<String> {
+    let cli = vscode_probe_executable(executable)?;
     let external =
-        copilot_probe_output(executable, home, &["--list-extensions", "--show-versions"])
+        copilot_probe_output(&cli, home, &["--list-extensions", "--show-versions"])
             .and_then(|output| vscode_copilot_version_output(&output));
     if external.is_some() {
         return external;
     }
-    let version = copilot_probe_output(executable, home, &["--version"])?;
+    let version = copilot_probe_output(&cli, home, &["--version"])?;
     bundled_vscode_copilot_version(executable, &version)
 }
 
