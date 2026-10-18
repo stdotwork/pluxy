@@ -1,3 +1,16 @@
+import {
+  getThinkingAliases,
+  getModelAliasSources,
+  getThinkingAliasSources,
+  getSpeedAliases,
+  getSpeedAliasSources,
+  createThinkingAlias,
+  createSpeedAlias,
+  getModelAliasEditSource,
+  deleteThinkingAlias,
+  deleteSpeedAlias,
+} from '../services/modelAliases';
+import type { ThinkingAliasEntry, ThinkingAliasSource, SpeedAliasEntry, AliasListEntry } from '../services/modelAliases';
 import { MessageNotice } from '../appNotice';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import {
@@ -8,7 +21,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { usableModelAlias } from '../services/modelService';
 import {
   ArrowRight,
@@ -29,55 +41,9 @@ import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 
 type PresetThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-type ModelAliasPosition = {
-  section: string;
-  providerIndex: number | null;
-  modelIndex: number;
-};
-
-type ThinkingAliasEntry = {
-  position: ModelAliasPosition;
-  sourceModel: string;
-  alias: string;
-  effort: string | null;
-  provider: string;
-  kind: string;
-  oauthChannel?: string | null;
-};
-
-type SpeedAliasEntry = {
-  position: ModelAliasPosition;
-  sourceModel: string;
-  alias: string;
-  serviceTier: string;
-  provider: string;
-  kind: string;
-  oauthChannel?: string | null;
-};
-
-type AliasListEntry = ThinkingAliasEntry & {
-  serviceTier: string | null;
-};
-
-type ThinkingAliasSource = {
-  id: string;
-  model: string;
-  displayName: string | null;
-  provider: string;
-  kind: string;
-  protocol: string;
-  reasoningLevels: string[];
-};
-
 type ModelAliasSource = ThinkingAliasSource & {
   supportsReasoning: boolean;
   supportsFast: boolean;
-};
-
-type ModelAliasEditContext = {
-  source: ThinkingAliasSource;
-  effort: string | null;
-  fast: boolean;
 };
 
 const effortOptions = [
@@ -231,11 +197,11 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
         nextSpeedEntries,
         nextSpeedSources,
       ] = await Promise.all([
-        invoke<ThinkingAliasEntry[]>('get_thinking_aliases'),
-        invoke<ThinkingAliasSource[]>('get_model_alias_sources'),
-        invoke<ThinkingAliasSource[]>('get_thinking_alias_sources'),
-        invoke<SpeedAliasEntry[]>('get_speed_aliases'),
-        invoke<ThinkingAliasSource[]>('get_speed_alias_sources'),
+        getThinkingAliases(),
+        getModelAliasSources(),
+        getThinkingAliasSources(),
+        getSpeedAliases(),
+        getSpeedAliasSources(),
       ]);
       setThinkingEntries(nextThinkingEntries);
       setSpeedEntries(nextSpeedEntries);
@@ -425,14 +391,14 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
     setNotice('');
     try {
       if (editingEntry) {
-        await invoke('create_thinking_alias', {
+        await createThinkingAlias({
           sourceId: selectedSource.id, alias: normalizedAlias,
           effort: normalizedEffort, fast: fastEnabled, originalAlias: editingEntry.alias,
           originalEntry: editingEntry,
         });
         setNotice(t('aliases.updated', { alias: normalizedAlias }));
       } else if (normalizedEffort) {
-        await invoke<ThinkingAliasEntry[]>('create_thinking_alias', {
+        await createThinkingAlias({
           sourceId: selectedSource.id,
           alias: normalizedAlias,
           effort: normalizedEffort,
@@ -443,13 +409,13 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
           effort: normalizedEffort,
         }));
       } else if (fastEnabled) {
-        await invoke<SpeedAliasEntry[]>('create_speed_alias', {
+        await createSpeedAlias({
           sourceId: selectedSource.id,
           alias: normalizedAlias,
         });
         setNotice(t('speedAliases.created', { alias: normalizedAlias }));
       } else {
-        await invoke<ThinkingAliasEntry[]>('create_thinking_alias', {
+        await createThinkingAlias({
           sourceId: selectedSource.id,
           alias: normalizedAlias,
           effort: '',
@@ -510,7 +476,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
     setError('');
     setNotice('');
     try {
-      const context = await invoke<ModelAliasEditContext>('get_model_alias_edit_source', {
+      const context = await getModelAliasEditSource({
         alias: entry.alias, entry,
       });
       const source = context.source;
@@ -540,13 +506,13 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
     setNotice('');
     try {
       if (entry.effort || !entry.serviceTier) {
-        await invoke<ThinkingAliasEntry[]>('delete_thinking_alias', {
+        await deleteThinkingAlias({
           alias: entry.alias,
           oauthChannel: entry.oauthChannel,
           entry,
         });
       } else {
-        await invoke<SpeedAliasEntry[]>('delete_speed_alias', {
+        await deleteSpeedAlias({
           alias: entry.alias,
           oauthChannel: entry.oauthChannel,
           entry,

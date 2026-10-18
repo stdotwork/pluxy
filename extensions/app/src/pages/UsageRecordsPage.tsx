@@ -1,8 +1,33 @@
+import { onUsageRecordsUpdated } from '../services/events';
+import {
+  getUsageEvents,
+  getUsageCollectorStatus,
+  getUsageAnalysis,
+  getUsageOverview,
+  getUsagePricing,
+  getUsageStorageSettings,
+  saveUsageStorageSettings,
+  shrinkUsageDatabase,
+  repairUsageCacheRecords,
+  saveUsageModelPrice,
+  deleteUsageModelPrice,
+  previewUsageModelPrices,
+  applyUsageModelPrices,
+} from '../services/usage';
+import type {
+  CollectorStatus,
+  UsageQuery,
+  UsageOverview,
+  TimelinePoint,
+  UsagePricing,
+  ModelPrice,
+  UsageStorageSettings,
+  UsageRepairResult,
+  ModelPriceSyncPreview,
+} from '../services/usage';
 import { usagePreferences } from '../services/usagePreferences';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import {
   Activity,
   Database,
@@ -34,7 +59,6 @@ import {
   trendTimeAxisTicks,
   trendTimePosition,
   stackModelTokens,
-  type UsageTimelinePoint,
 } from '../services/usageTrend';
 import { createRefreshScheduler } from '../services/refreshScheduler';
 import { usageViewScopeKey } from '../services/usageViewScope';
@@ -47,98 +71,6 @@ type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
 
 const USAGE_TABS: readonly UsageTab[] = ['overview', 'analysis', 'events', 'pricing', 'data-management'];
 
-type CollectorStatus = {
-  state: 'waiting-core' | 'collecting' | 'error';
-  message: string;
-  lastCollectedAt: string | null;
-  totalRecords: number;
-};
-
-type TimelinePoint = UsageTimelinePoint;
-
-type UsageOverview = {
-  totalRequests: number;
-  successCount: number;
-  failureCount: number;
-  canceledCount: number;
-  successRate: number;
-  inputTokens: number;
-  outputTokens: number;
-  reasoningTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  totalTokens: number;
-  rpm: number;
-  tpm: number;
-  tps: number;
-  tpsSampleCount: number;
-  averageLatencyMs: number;
-  cacheHitRate: number;
-  estimatedCost: number;
-  pricedRequests: number;
-  timeline: TimelinePoint[];
-};
-
-type ModelPrice = {
-  model: string;
-  prompt: number;
-  completion: number;
-  cacheRead: number;
-  cacheCreation: number;
-  promptConfigured: boolean;
-  completionConfigured: boolean;
-  cacheReadConfigured: boolean;
-  cacheCreationConfigured: boolean;
-  source: string;
-  sourceModelId: string;
-  updatedAtMs: number;
-};
-
-type UsagePriceRow = {
-  model: string;
-  requests: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  totalTokens: number;
-  estimatedCost: number;
-  price: ModelPrice | null;
-};
-
-type UsagePricing = {
-  rows: UsagePriceRow[];
-  totalCost: number;
-  totalRequests: number;
-  pricedRequests: number;
-  savedPrices: number;
-};
-
-type UsageRepairResult = {
-  scanned: number;
-  repaired: number;
-  deleted: number;
-  backupPath: string | null;
-};
-
-type UsageStorageSettings = {
-  maxDatabaseSizeMb: number;
-  databaseSizeBytes: number;
-  totalRecords: number;
-  deletedRecords: number;
-};
-
-type ModelPriceSyncResult = {
-  imported: number;
-};
-
-type ModelPriceSyncPreview = {
-  source: string;
-  sourceUrl: string;
-  matches: ModelPrice[];
-  unmatched: string[];
-};
-
 type SyncPriceDraft = {
   selected: boolean;
   price: ModelPrice;
@@ -146,20 +78,6 @@ type SyncPriceDraft = {
   completion: string;
   cacheRead: string;
   cacheCreation: string;
-};
-
-type UsageQuery = {
-  start?: string;
-  end?: string;
-  model?: string;
-  provider?: string;
-  source?: string;
-  upstream?: string;
-  api_key_hash?: string;
-  failed?: boolean;
-  canceled?: boolean;
-  page?: number;
-  page_size?: number;
 };
 
 const TAB_KEY = 'cpa-gui.usage-records-tab.v1';
@@ -336,19 +254,19 @@ export function UsageRecordsPage() {
       const { timeQuery, query } = buildQueries();
       if (!quiet) setLoading(true);
       try {
-        const statusRequest = invoke<CollectorStatus>('get_usage_collector_status');
+        const statusRequest = getUsageCollectorStatus();
         const filtersChanged = loadedFilterScopeKeyRef.current !== filterScopeKey;
         // Refresh explicitly and periodically: a fixed time range can still gain
         // new keys, and configured remarks can change without new usage records.
         const refreshOptions = filtersChanged || !quiet || Date.now() - optionsLoadedAtRef.current >= 30_000;
         const optionsRequest = refreshOptions
-          ? invoke<UsageAnalysis>('get_usage_analysis', { query: timeQuery })
+          ? getUsageAnalysis({ query: timeQuery })
           : Promise.resolve(null);
         if (activeTab === 'overview') {
           const [nextStatus, nextOptions, nextOverview] = await Promise.all([
             statusRequest,
             optionsRequest,
-            invoke<UsageOverview>('get_usage_overview', { query }),
+            getUsageOverview({ query }),
           ]);
           if (requestId !== requestIdRef.current) return;
           setStatus(nextStatus);
@@ -359,9 +277,9 @@ export function UsageRecordsPage() {
           const [nextStatus, nextOptions, nextOverview, nextAnalysis] = await Promise.all([
             statusRequest,
             optionsRequest,
-            invoke<UsageOverview>('get_usage_overview', { query }),
+            getUsageOverview({ query }),
             model || source || apiKeyHash || result !== 'all' || !refreshOptions
-              ? invoke<UsageAnalysis>('get_usage_analysis', { query })
+              ? getUsageAnalysis({ query })
               : optionsRequest.then((analysis) => analysis ?? emptyAnalysis),
           ]);
           if (requestId !== requestIdRef.current) return;
@@ -374,7 +292,7 @@ export function UsageRecordsPage() {
           const [nextStatus, nextOptions, nextEvents] = await Promise.all([
             statusRequest,
             optionsRequest,
-            invoke<UsageEventPage>('get_usage_events', {
+            getUsageEvents({
               query: { ...query, page, page_size: pageSize },
             }),
           ]);
@@ -386,7 +304,7 @@ export function UsageRecordsPage() {
           const [nextStatus, nextOptions, nextPricing] = await Promise.all([
             statusRequest,
             optionsRequest,
-            invoke<UsagePricing>('get_usage_pricing', { query }),
+            getUsagePricing({ query }),
           ]);
           if (requestId !== requestIdRef.current) return;
           setStatus(nextStatus);
@@ -436,7 +354,7 @@ export function UsageRecordsPage() {
       // record events and the fallback poll continue to update the current view.
       if (!disposed) void loadData(true, true);
     };
-    listen('usage-records-updated', refresh)
+    onUsageRecordsUpdated(refresh)
       .then((stop) => {
         if (disposed) stop();
         else unlisten = stop;
@@ -724,7 +642,7 @@ function UsageDataManagementView() {
 
   useEffect(() => {
     let disposed = false;
-    invoke<UsageStorageSettings>('get_usage_storage_settings')
+    getUsageStorageSettings()
       .then((next) => {
         if (disposed) return;
         setStorage(next);
@@ -752,7 +670,7 @@ function UsageDataManagementView() {
     setError('');
     setStorageNotice('');
     try {
-      const next = await invoke<UsageStorageSettings>('save_usage_storage_settings', { maxDatabaseSizeMb });
+      const next = await saveUsageStorageSettings({ maxDatabaseSizeMb });
       setStorage(next);
       setLimitDraft(String(next.maxDatabaseSizeMb));
       setStorageNotice(t(
@@ -784,7 +702,7 @@ function UsageDataManagementView() {
     setError('');
     setStorageNotice('');
     try {
-      const next = await invoke<UsageStorageSettings>('shrink_usage_database', { targetDatabaseSizeMb });
+      const next = await shrinkUsageDatabase({ targetDatabaseSizeMb });
       setStorage(next);
       setStorageNotice(t(
         next.deletedRecords > 0
@@ -808,9 +726,9 @@ function UsageDataManagementView() {
     setError('');
     setResult(null);
     try {
-      const next = await invoke<UsageRepairResult>('repair_usage_cache_records');
+      const next = await repairUsageCacheRecords();
       setResult(next);
-      const nextStorage = await invoke<UsageStorageSettings>('get_usage_storage_settings');
+      const nextStorage = await getUsageStorageSettings();
       setStorage(nextStorage);
     } catch (requestError) {
       setError(String(requestError));
@@ -1563,7 +1481,6 @@ function PricingView({
   const syncDialog = useRef<HTMLDialogElement>(null);
   const { notice, revision, showNotice, clearNotice } = useAppNotice();
 
-
   const visibleRows = pricing.rows.filter((row) => {
     const keyword = search.trim().toLowerCase();
     return !keyword || row.model.toLowerCase().includes(keyword);
@@ -1577,7 +1494,7 @@ function PricingView({
     setSaving(true);
     clearNotice();
     try {
-      await invoke('save_usage_model_price', {
+      await saveUsageModelPrice({
         price: {
           model: draft.model.trim(),
           prompt: parsePrice(draft.prompt),
@@ -1607,7 +1524,7 @@ function PricingView({
     if (!await askConfirmation({ title: t('common.delete'), message: t('usage.pricing.deleteConfirm', { model }), confirmText: t('common.delete'), variant: 'danger' })) return;
     clearNotice();
     try {
-      await invoke('delete_usage_model_price', { model });
+      await deleteUsageModelPrice({ model });
       showNotice({ key: 'usage.pricing.deleted' });
       await onChanged();
     } catch (deleteError) {
@@ -1620,7 +1537,7 @@ function PricingView({
     setSyncError('');
     clearNotice();
     try {
-      const preview = await invoke<ModelPriceSyncPreview>('preview_usage_model_prices', { query, source: syncSource });
+      const preview = await previewUsageModelPrices({ query, source: syncSource });
       const existing = new Map(pricing.rows.map((row) => [row.model.toLowerCase(), row.price]));
       setSyncPreview(preview);
       setSyncDrafts(preview.matches.map((price) => ({
@@ -1662,7 +1579,7 @@ function PricingView({
     setSyncError('');
     clearNotice();
     try {
-      const result = await invoke<ModelPriceSyncResult>('apply_usage_model_prices', { prices });
+      const result = await applyUsageModelPrices({ prices });
       syncDialog.current?.close();
       showNotice({ key: 'usage.pricing.syncResult', variables: { imported: result.imported } });
       await onChanged();

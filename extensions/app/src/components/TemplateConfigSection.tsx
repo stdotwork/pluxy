@@ -1,16 +1,28 @@
+import { onConfigFilesChanged } from '../services/events';
+import {
+  getExtendedCoreConfig,
+  saveExtendedCoreConfig,
+  applyTemplateChanges,
+  draftTemplateField,
+  readTemplatePath,
+  templateFieldKey,
+  templateFieldValidation,
+  templateFieldSaveValue,
+  type TemplateConfigChange,
+  type TemplateConfigDraft,
+  type TemplateConfigField,
+  type TemplateConfigGroup,
+  type TemplateText,
+} from '../services/templateConfig';
+import { restartCoreProcess } from '../services/coreLifecycle';
+import { openExternalUrl } from '../services/appSettings';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open } from '../services/platform';
 import { ExternalLink, Eye, EyeOff, RotateCcw, Save } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { templateMessages, templateText } from '../i18n/templateConfig';
-import { useCoreRuntime, type CoreStatus } from '../coreRuntime';
+import { useCoreRuntime } from '../coreRuntime';
 import { SettingsHelp } from './SettingsHelp';
-import {
-  applyTemplateChanges, draftTemplateField, readTemplatePath, templateFieldKey, templateFieldValidation, templateFieldSaveValue,
-  type TemplateConfigChange, type TemplateConfigDraft, type TemplateConfigField, type TemplateConfigGroup, type TemplateConfigSaveResult, type TemplateText,
-} from '../services/templateConfig';
 import '../styles/template-config.css';
 
 const restartHint = { zh: '需重启内核', en: 'Core restart required', ja: 'コアの再起動が必要' } satisfies TemplateText;
@@ -47,7 +59,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
   const reload = useCallback(async () => {
     const request = ++revision.current;
     try {
-      const value = await invoke<Record<string, unknown>>('get_extended_core_config');
+      const value = await getExtendedCoreConfig();
       if (mounted.current && request === revision.current) { setConfig(value); setLoadError(''); }
     } catch (error) {
       if (mounted.current && request === revision.current) setLoadError(String(error));
@@ -59,7 +71,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
     let disposed = false;
     let stop: (() => void) | undefined;
     void reload();
-    void listen('config-files-changed', () => { if (!disposed) void reload(); }).then((unlisten) => {
+    void onConfigFilesChanged(() => { if (!disposed) void reload(); }).then((unlisten) => {
       if (!disposed) stop = unlisten;
       else unlisten();
     }).catch((error) => { if (!disposed) setLoadError(String(error)); });
@@ -109,7 +121,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
     setBusy(group.id);
     setGroupErrors((previous) => ({ ...previous, [group.id]: '' }));
     try {
-      const result = await invoke<TemplateConfigSaveResult>('save_extended_core_config', { changes });
+      const result = await saveExtendedCoreConfig({ changes });
       ++revision.current;
       setConfig(result.config);
       setLoadError('');
@@ -129,7 +141,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
 
   const restart = async () => {
     setBusy('restart');
-    try { publishStatus(await invoke<CoreStatus>('restart_core_process')); setRestartNeeded(false); setLoadError(''); }
+    try { publishStatus(await restartCoreProcess()); setRestartNeeded(false); setLoadError(''); }
     catch (error) { setLoadError(String(error)); await refreshStatus(); }
     finally { setBusy(null); }
   };
@@ -169,7 +181,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
       title={t(revealed[id] ? 'config.keys.hide' : 'config.keys.show')} aria-label={t(revealed[id] ? 'config.keys.hide' : 'config.keys.show')}>{revealed[id] ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}</button></div> : input;
     if (field.link) {
       const link = field.link;
-      return <div className="template-config-directory">{secret}<button type="button" className="secondary-button compact-button" onClick={() => void invoke('open_external_url', { url: link.url }).catch((error) => setGroupErrors((previous) => ({ ...previous, [group.id]: String(error) })))}><ExternalLink size={15} aria-hidden="true" />{templateText(link.label, locale)}</button></div>;
+      return <div className="template-config-directory">{secret}<button type="button" className="secondary-button compact-button" onClick={() => void openExternalUrl({ url: link.url }).catch((error) => setGroupErrors((previous) => ({ ...previous, [group.id]: String(error) })))}><ExternalLink size={15} aria-hidden="true" />{templateText(link.label, locale)}</button></div>;
     }
     return field.directory ? <div className="template-config-directory">{secret}<button type="button" className="secondary-button compact-button" disabled={disabled} onClick={() => void chooseDirectory(group, field)} aria-label={`${tr('chooseDirectory')}: ${templateText(field.label, locale)}`}>{tr('chooseDirectory')}</button></div> : secret;
   };

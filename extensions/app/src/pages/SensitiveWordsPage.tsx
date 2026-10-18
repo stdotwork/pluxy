@@ -1,13 +1,9 @@
+import { getCoreSensitiveWordsSettings, saveCoreSensitiveWordsSettings } from '../services/coreSettings';
+import type { SensitiveWordsSettings } from '../services/coreSettings';
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Check, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { useConfirmation } from '../components/ConfirmationDialog';
-
-type SensitiveWordsSettings = {
-  antigravitySensitiveWords: string[];
-  devinSensitiveWords: string[];
-};
 
 type Provider = 'antigravity' | 'devin';
 type WordEntry = { id: number; value: string };
@@ -121,7 +117,7 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
     setLoading(true);
     setError('');
     try {
-      const result = await invoke<SensitiveWordsSettings>('get_core_sensitive_words_settings');
+      const result = await getCoreSensitiveWordsSettings();
       setSaved(result);
       replaceDraft({
         ...result,
@@ -201,7 +197,7 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
     setSaving(true);
     setError('');
     try {
-      const result = await invoke<SensitiveWordsSettings>('save_core_sensitive_words_settings', {
+      const result = await saveCoreSensitiveWordsSettings({
         settings: words,
       });
       setSaved(result);

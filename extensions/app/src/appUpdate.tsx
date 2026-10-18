@@ -1,3 +1,6 @@
+import { onAppUpdateProgress } from './services/events';
+import { checkAppUpdate, getAppUpdateTask, startAppUpdate, cancelAppUpdate } from './services/appUpdates';
+import type { AppUpdateInfo, AppUpdateTask } from './services/appUpdates';
 import { MessageNotice } from './appNotice';
 import {
   createContext,
@@ -9,47 +12,15 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { Download, RefreshCw } from 'lucide-react';
-import { getCurrentLocale, translate, useI18n, type AppLocale } from './i18n';
+import { getCurrentLocale, translate, useI18n } from './i18n';
 import { useDialogFocusTrap } from './components/useDialogFocusTrap';
 
-export type AppUpdateInfo = {
-  currentVersion: string;
-  latestVersion: string;
-  updateAvailable: boolean;
-  releaseUrl: string;
-  releaseNotes: Partial<Record<AppLocale, string>> | null;
-  publishedAt: string;
-  autoUpdateSupported: boolean;
-  downloadSizeBytes: number | null;
-  unsupportedReason: string | null;
-};
+export type { AppUpdateInfo } from './services/appUpdates';
 
-export type AppUpdatePhase =
-  | 'idle'
-  | 'checking'
-  | 'available'
-  | 'downloading'
-  | 'verifying'
-  | 'staging'
-  | 'waitingForExit'
-  | 'restarting'
-  | 'completed'
-  | 'cancelled'
-  | 'failed';
+export type { AppUpdatePhase } from './services/appUpdates';
 
-export type AppUpdateTask = {
-  running: boolean;
-  cancellable: boolean;
-  phase: AppUpdatePhase;
-  targetVersion: string | null;
-  downloadedBytes: number;
-  totalBytes: number | null;
-  percent: number | null;
-  message: string | null;
-};
+export type { AppUpdateTask } from './services/appUpdates';
 
 type AppUpdateContextValue = {
   info: AppUpdateInfo | null;
@@ -91,7 +62,7 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
     setChecking(true);
     setError('');
     try {
-      const result = await invoke<AppUpdateInfo>('check_app_update');
+      const result = await checkAppUpdate();
       setInfo(result);
       setTask((current) => (
         current.running
@@ -115,13 +86,13 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
     let disposed = false;
     let stopListening: (() => void) | undefined;
 
-    void invoke<AppUpdateTask>('get_app_update_task')
+    void getAppUpdateTask()
       .then((current) => {
         if (!disposed) setTask(current);
       })
       .catch(() => undefined);
 
-    void listen<AppUpdateTask>('app-update-progress', (event) => {
+    void onAppUpdateProgress((event) => {
       if (disposed) return;
       setTask(event.payload);
       if (event.payload.phase === 'failed') {
@@ -148,7 +119,7 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
     setConfirmOpen(false);
     setError('');
     try {
-      await invoke('start_app_update');
+      await startAppUpdate();
     } catch (nextError) {
       setError(String(nextError));
     }
@@ -157,7 +128,7 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
   const cancel = useCallback(async () => {
     setError('');
     try {
-      await invoke('cancel_app_update');
+      await cancelAppUpdate();
     } catch (nextError) {
       setError(String(nextError));
     }

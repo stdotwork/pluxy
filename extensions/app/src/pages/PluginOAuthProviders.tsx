@@ -1,9 +1,8 @@
+import { getPluginSupport, pluginsApi, type PluginListEntry } from '../services/plugins';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { LogIn, Puzzle, RefreshCw } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { pluginOAuthText } from '../i18n/pluginOAuth';
-import { pluginsApi, type PluginListEntry } from '../services/plugins';
 import { collectPluginOAuthProviders } from '../services/pluginOAuthProviders';
 import { getPluginTitle, PLUGIN_RESOURCES_REFRESH_EVENT } from '../services/pluginResources';
 import { PluginOAuthDialog } from './PluginOAuthDialog';
@@ -32,7 +31,7 @@ export function PluginOAuthProviders({ builtInProviderIds, browser = 'default' }
     const refresh = async (attempt: number) => {
       try {
         if (attempt === 0) {
-          const supported = await invoke<boolean>('get_plugin_support');
+          const supported = await getPluginSupport();
           if (!active()) return;
           if (!supported) {
             setPlugins([]);

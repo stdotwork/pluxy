@@ -1,3 +1,5 @@
+import { resolveApiAccessRemarks, saveApiAccessRemark } from '../services/apiAccessRemarks';
+import type { ProviderSection, ApiAccessRemarkLocator } from '../services/apiAccessRemarks';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { AdvancedSettingsGroup } from '../components/api-access/AdvancedSettingsGroup';
 import { normalizeProviderModels } from '../services/providerModels';
@@ -14,7 +16,6 @@ import {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
 import {
   closestCenter,
   DndContext,
@@ -57,6 +58,7 @@ import {
   readBoolean,
   readNumber,
   readString,
+  providerGroupsApi,
 } from '../services/managementApi';
 import {
   DEEPSEEK_BASE_URL,
@@ -87,7 +89,6 @@ import {
   cleanProviderGroup, effectiveProviderKey, providerGroupIdentity, providerGroupKeys, providerGroupStatus,
   providerKeyDraft, providerKeyIsDisabled, serializeProviderKey, validateProviderGroupKeys, validateProviderTemplateRecord, type ProviderKeyDraft,
 } from '../services/providerGroups';
-import { providerGroupsApi } from '../services/managementApi';
 import {
   appendProviderEntry, locateProviderEntry, providerEntries, removeProviderEntry,
   reorderProviderEntries, updateProviderEntry, type ProviderEntrySource,
@@ -96,15 +97,7 @@ import { getCurrentLocale, translate, useI18n } from '../i18n';
 import type { MessageKey } from '../i18n/resources';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
 
-export type ProviderSection =
-  | 'gemini-api-key'
-  | 'interactions-api-key'
-  | 'vertex-api-key'
-  | 'xai-api-key'
-  | 'meta-api-key'
-  | 'codex-api-key'
-  | 'claude-api-key'
-  | 'openai-compatibility';
+export type { ProviderSection } from '../services/apiAccessRemarks';
 
 export type ProviderCategory = ProviderSection | 'deepseek';
 
@@ -138,12 +131,7 @@ type ProviderRow = {
   remark: string;
 };
 
-export type ApiAccessRemarkLocator = {
-  providerName: string;
-  baseUrl: string;
-  apiKeys: string[];
-  configIdentity?: string;
-};
+export type { ApiAccessRemarkLocator } from '../services/apiAccessRemarks';
 
 export const providerDragId = (
   row: Pick<ProviderRow, 'section' | 'index' | 'name' | 'apiKey' | 'baseUrl'>,
@@ -1291,7 +1279,7 @@ export function ApiAccessPage() {
       return;
     }
     let disposed = false;
-    void invoke<string[]>('resolve_api_access_remarks', {
+    void resolveApiAccessRemarks({
       queries: providerRows.flatMap((row) => [{
         providerSection: row.section,
         ...apiAccessRemarkLocatorFromRow(row),
@@ -1359,7 +1347,7 @@ export function ApiAccessPage() {
     const previousLocators = previousRows.flatMap((row) => [
       apiAccessRemarkLocatorFromRow(row), apiAccessRemarkLocatorFromRecord(section, row.source!.group),
     ]);
-    const resolved = await invoke<string[]>('resolve_api_access_remarks', {
+    const resolved = await resolveApiAccessRemarks({
       queries: previousLocators.map((locator) => ({ providerSection: section, ...locator })),
     });
     const previousRemarks = new Map(previousRows.map((row, index) => [
@@ -1378,7 +1366,7 @@ export function ApiAccessPage() {
     if (!byRemark.size) byRemark.set('', []);
     let first = true;
     for (const [remark, updatedRecords] of byRemark) {
-      await invoke('save_api_access_remark', { update: {
+      await saveApiAccessRemark({ update: {
         providerSection: section, previousRecords: first ? previousLocators : [],
         records: updatedRecords, allRecords, remark,
       } });

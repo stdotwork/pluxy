@@ -1,5 +1,6 @@
+import { getOAuthStatus, startOAuthLogin, openOAuthUrl, submitOAuthCallback, listOAuthBrowsers } from '../services/oauth';
+import type { OAuthBrowserOption } from '../services/oauth';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import {
   ChevronRight,
   Check,
@@ -57,26 +58,6 @@ type OAuthProviderState = {
   callbackStatus?: 'success' | 'error';
   callbackError?: string;
   refreshing?: boolean;
-};
-
-type OAuthStartResult = {
-  url: string;
-  state?: string | null;
-  userCode?: string | null;
-  flow?: string | null;
-  expiresIn?: number | null;
-  opened: boolean;
-  openError?: string | null;
-};
-
-type OAuthBrowserOption = {
-  id: string;
-  label: string;
-};
-
-type OAuthStatusResult = {
-  status: string;
-  error?: string | null;
 };
 
 const oauthProviders = [
@@ -214,7 +195,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
 
   useEffect(() => {
     let active = true;
-    void invoke<OAuthBrowserOption[]>('list_oauth_browsers')
+    void listOAuthBrowsers()
       .then((available) => {
         if (!active) return;
         setBrowsers(available);
@@ -327,7 +308,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
         if (pollingRequests.current[provider]) return;
         pollingRequests.current[provider] = true;
         try {
-          const result = await invoke<OAuthStatusResult>('get_oauth_status', { state });
+          const result = await getOAuthStatus({ state });
           if (!isCurrent()) return;
           const status = (result.status || '').toLowerCase();
           if (status === 'ok') {
@@ -407,7 +388,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
 
     try {
       await captureCredentialSnapshot(provider);
-      const result = await invoke<OAuthStartResult>('start_oauth_login', {
+      const result = await startOAuthLogin({
         provider,
         browser: selectedBrowser,
       });
@@ -478,7 +459,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
   const openAuthUrl = async (url?: string) => {
     if (!url) return;
     try {
-      await invoke('open_oauth_url', {
+      await openOAuthUrl({
         url,
         browser: selectedBrowser === NO_AUTO_OPEN_BROWSER_ID ? 'default' : selectedBrowser,
       });
@@ -542,7 +523,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
       callbackError: undefined,
     });
     try {
-      await invoke('submit_oauth_callback', { provider, redirectUrl });
+      await submitOAuthCallback({ provider, redirectUrl });
       updateProviderState(provider, {
         callbackSubmitting: false,
         callbackStatus: 'success',

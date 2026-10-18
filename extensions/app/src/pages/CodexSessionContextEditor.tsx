@@ -1,5 +1,5 @@
+import { getCodexSessionContext, saveCodexSessionContext, openCodexSessionRollout } from '../services/codexSessions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import {
   AlertCircle,
   ArrowLeft,
@@ -35,7 +35,6 @@ import type {
   CodexSessionContextDetail,
   CodexSessionNewMessage,
   SaveCodexSessionContextRequest,
-  SaveCodexSessionContextResult,
 } from '../services/codexSessionState';
 
 type Props = {
@@ -126,7 +125,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
     if (!silent) setNotice(null);
     const pending = pendingReadRef.current?.sessionId === sessionId
       ? pendingReadRef.current
-      : { sessionId, promise: invoke<CodexSessionContextDetail>('get_codex_session_context', { request: { sessionId } }) };
+      : { sessionId, promise: getCodexSessionContext({ request: { sessionId } }) };
     pendingReadRef.current = pending;
     try {
       const data = await pending.promise;
@@ -265,7 +264,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
         }
       }
 
-      const result = await invoke<SaveCodexSessionContextResult>('save_codex_session_context', {
+      const result = await saveCodexSessionContext({
         request: payload,
       });
 
@@ -492,7 +491,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 onClick={async () => {
                   setOpening(true);
                   try {
-                    await invoke('open_codex_session_rollout', { request: { sessionId } });
+                    await openCodexSessionRollout({ request: { sessionId } });
                   } catch (error) {
                     setNotice({ kind: 'error', message: t('agents.sessions.context.openFailed', { error: String(error) }) });
                   } finally {

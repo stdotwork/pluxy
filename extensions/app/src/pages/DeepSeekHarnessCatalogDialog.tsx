@@ -1,14 +1,25 @@
+import {
+  getDeepSeekHarnessModelCatalogEditor,
+  saveDeepSeekHarnessModelCatalogEditor,
+  harnessContextDefault,
+  harnessDraft,
+  harnessReasoningLevels,
+  harnessSchema,
+  isHarnessRecord,
+  parseHarnessDraft,
+  sameHarnessDraft,
+  updateHarnessDraft,
+  type HarnessContextDefault,
+  type HarnessDraft,
+  type HarnessEditorSnapshot,
+  type HarnessProfile,
+} from '../services/deepSeekHarnessCatalog';
 import { MessageNotice } from '../appNotice';
 import { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { LoaderCircle, RefreshCw, RotateCcw, Search, Settings2, X } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 import type { MessageKey } from '../i18n/resources';
-import {
-  harnessContextDefault, harnessDraft, harnessReasoningLevels, harnessSchema, isHarnessRecord, parseHarnessDraft, sameHarnessDraft, updateHarnessDraft,
-  type HarnessContextDefault, type HarnessDraft, type HarnessEditorSnapshot, type HarnessProfile,
-} from '../services/deepSeekHarnessCatalog';
 
 function HarnessContextWindowInput({ label, value, inherited, onChange }: {
   label: string; value?: string; inherited: HarnessContextDefault; onChange: (value: string) => void;
@@ -108,7 +119,7 @@ export function DeepSeekHarnessCatalogDialog({ onClose, onSaved }: { onClose: ()
   const load = useCallback(async () => {
     setLoading(true); setError(''); setNotice('');
     try {
-      const next = await invoke<HarnessEditorSnapshot>('get_deepseek_harness_model_catalog_editor');
+      const next = await getDeepSeekHarnessModelCatalogEditor();
       install(next);
       setSelected(current => current && next.models.some(m => m.id === current) ? current : next.defaultModel ?? next.models[0]?.id ?? null);
     } catch (e) { setError(String(e)); }
@@ -143,7 +154,7 @@ export function DeepSeekHarnessCatalogDialog({ onClose, onSaved }: { onClose: ()
     } catch (e) { setError(t('agents.harness.invalid', { field: String(e).replace(/^Error: /, '') })); return; }
     setSaving(true); setError(''); setNotice('');
     try {
-      const next = await invoke<HarnessEditorSnapshot>('save_deepseek_harness_model_catalog_editor', { request });
+      const next = await saveDeepSeekHarnessModelCatalogEditor({ request });
       install(next); setNotice(t(next.configured ? 'agents.harness.saved' : 'agents.harness.savedDraft'));
       await onSaved();
     } catch (e) { setError(String(e).includes('DSH_MODEL_CATALOG_CHANGED') ? t('agents.harness.changed') : String(e)); }

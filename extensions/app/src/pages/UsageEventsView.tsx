@@ -1,7 +1,8 @@
+import { getUsageEvents, saveUsageEventsExport } from '../services/usage';
+import type { UsageEventPage, UsageRecord, UsageEventQuery } from '../services/usage';
 import { usagePreferences } from '../services/usagePreferences';
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { save } from '@tauri-apps/plugin-dialog';
+import { save } from '../services/platform';
 import { ArrowDown, ArrowUp, Brain, ChevronLeft, ChevronRight, Columns3, Copy, Database, DatabaseZap, Download, RotateCcw, TriangleAlert, X } from 'lucide-react';
 import { FloatingNotice, useAppNotice } from '../appNotice';
 import { getCurrentLocale, useI18n } from '../i18n';
@@ -31,49 +32,9 @@ const formatEventDate = (value: string) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(getCurrentLocale(), { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 };
-export type UsageRecord = {
-  id: string;
-  row_id: string;
-  timestamp: string;
-  latency_ms: number;
-  ttft_ms: number | null;
-  source: string;
-  source_display: string;
-  failed: boolean;
-  canceled: boolean;
-  failure_status: number;
-  failure_body: string;
-  provider: string;
-  auth_type?: string;
-  model: string;
-  /** Model name reported by the upstream response, when available. */
-  response_model?: string;
-  cost?: { total: number; pricing_model: string } | null;
-  alias: string;
-  reasoning_effort: string;
-  service_tier?: string;
-  response_service_tier?: string;
-  endpoint: string;
-  api_key_hash: string;
-  api_key_display: string;
-  api_key_remark: string;
-  tokens: {
-    input_tokens: number;
-    output_tokens: number;
-    reasoning_tokens: number;
-    cache_read_tokens: number;
-    cache_creation_tokens: number;
-    total_tokens: number;
-  };
-};
+export type { UsageRecord } from '../services/usage';
 
-export type UsageEventPage = {
-  items: UsageRecord[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
+export type { UsageEventPage } from '../services/usage';
 
 type EventColumnKey =
   | 'time'
@@ -195,21 +156,6 @@ export const getInitialColumnWidths = (): Record<EventColumnKey, number> => {
   } catch {
   }
   return initial;
-};
-
-
-type UsageEventQuery = {
-  start?: string;
-  end?: string;
-  model?: string;
-  provider?: string;
-  source?: string;
-  upstream?: string;
-  api_key_hash?: string;
-  failed?: boolean;
-  canceled?: boolean;
-  page?: number;
-  page_size?: number;
 };
 
 function usageEventsExportName(date = new Date()) {
@@ -735,14 +681,14 @@ export function EventsView({
       const items: UsageRecord[] = [];
       const pageSize = 5000;
       for (let page = 1; ; page += 1) {
-        const exported = await invoke<UsageEventPage>('get_usage_events', {
+        const exported = await getUsageEvents({
           query: { ...query, page, page_size: pageSize },
         });
         if (exported.page !== page || exported.items.length === 0) break;
         items.push(...exported.items);
         if (items.length >= exported.total || page >= exported.totalPages) break;
       }
-      await invoke('save_usage_events_export', { path, contents: usageEventsCsv(items) });
+      await saveUsageEventsExport({ path, contents: usageEventsCsv(items) });
     } catch (error) {
       window.alert(String(error));
     } finally {

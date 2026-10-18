@@ -235,7 +235,7 @@ export function createPluginMock(host: PluginMockHost, extraPages = 0, onWebview
     const pluginRequest = command === 'management_request' && (
       path === '/plugins' || path.startsWith('/plugins/') || path === '/config/plugins' || path.startsWith('/config/plugins/')
     );
-    if (!pluginRequest && command !== 'get_plugin_support' && command !== 'get_plugin_latest_releases' && !WEBVIEW_COMMANDS.has(command)) return { handled: false };
+    if (!pluginRequest && command !== 'get_plugin_support' && command !== 'get_plugin_latest_releases' && command !== 'install_local_plugin' && !WEBVIEW_COMMANDS.has(command)) return { handled: false };
     if (host.scenario === 'error') throw new Error(`Browser Mock error scenario: ${command}`);
     if (!host.coreStatus.ready && (!WEBVIEW_COMMANDS.has(command) || command === 'show_plugin_webview')) {
       throw new Error('Browser Mock: the core is not ready');
@@ -243,6 +243,7 @@ export function createPluginMock(host: PluginMockHost, extraPages = 0, onWebview
     initialize();
     const result = (value: unknown): PluginMockResult => ({ handled: true, value: clone(value) });
     if (command === 'get_plugin_support') return result(true);
+    if (command === 'install_local_plugin') return result(`${directory()}/windows/amd64/${text(payload.source).split(/[\\/]/).pop()}`);
     if (WEBVIEW_COMMANDS.has(command)) return result(webviewCommand(command, payload));
     if (command === 'get_plugin_latest_releases') {
       const repositories = Array.isArray(payload.repositories) ? payload.repositories.map(text) : [];

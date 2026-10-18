@@ -1,12 +1,23 @@
+import { open } from '../services/platform';
+import { restartCoreProcess } from '../services/coreLifecycle';
+import { openExternalUrl } from '../services/appSettings';
+import { openCoreLogsDirectory } from '../services/coreSettings';
+import {
+  getPluginSupport,
+  installLocalPlugin,
+  pluginsApi,
+  pluginStoreApi,
+  type PluginListEntry,
+  type PluginListResponse,
+  type PluginStoreEntry,
+  type PluginStoreResponse,
+} from '../services/plugins';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
 import { Download, ExternalLink, Folder, LogIn, Puzzle, RefreshCw, Search, Settings2, Trash2, X } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { pluginText } from '../i18n/plugins';
 import { FloatingNotice, useAppNotice } from '../appNotice';
 import { useConfirmation } from '../components/ConfirmationDialog';
-import { pluginsApi, pluginStoreApi, type PluginListEntry, type PluginListResponse, type PluginStoreEntry, type PluginStoreResponse } from '../services/plugins';
 import { buildPluginResourceRoute, collectPluginResourceEntries, getPluginTitle, isDefaultPluginStoreSource, getPluginRepositorySlug, notifyPluginResourcesChanged, type PluginResourceEntry } from '../services/pluginResources';
 import { getPluginStatus, isPluginInstalled } from '../services/pluginStatus';
 import { refreshPluginReleaseVersions } from '../services/pluginReleaseVersions';
@@ -54,7 +65,7 @@ export function PluginsPage() {
     setLoading(true); setError('');
     if (target === 'installed') setLocalUpdates(null);
     try {
-      const support = await invoke<boolean>('get_plugin_support');
+      const support = await getPluginSupport();
       if (!mounted.current || revision !== requests.current) return;
       setSupported(support);
       if (!support) { setData(null); setStore(null); setLocalUpdates(null); return; }
@@ -161,11 +172,11 @@ export function PluginsPage() {
     if (pending.current) return;
     pending.current = true; setBusy(true);
     try {
-      const selected = await open({ multiple: false, directory: false, title: pt('localInstall'), filters: [{ name: pt('localBinary'), extensions: ['dll', 'so', 'dylib'] }] });
+      const selected = await open({ directory: false, title: pt('localInstall'), filters: [{ name: pt('localBinary'), extensions: ['dll', 'so', 'dylib'] }] });
       if (!selected || !mounted.current) return;
       const filename = selected.split(/[\\/]/).pop() || selected;
       if (!await askConfirmation({ title: pt('localInstall'), message: `${filename}\n\n${pt('localTrust')}`, confirmText: pt('install') }) || !mounted.current) return;
-      const path = await invoke<string>('install_local_plugin', { source: selected });
+      const path = await installLocalPlugin(selected);
       if (!mounted.current) return;
       setRestartRequired(true);
       setSearch(''); setFilter('all'); setTab('installed');
@@ -196,14 +207,14 @@ export function PluginsPage() {
         {tab === 'store' && <select aria-label={pt('store')} value={filter} onChange={e => setFilter(e.target.value)}>{['all', 'installed', 'updates'].map(value => <option key={value} value={value}>{pt(value as 'all' | 'installed' | 'updates')}</option>)}</select>}
         </>}
         {supported === true && <button type="button" className="secondary-button plugin-development-guide" disabled={locked} onClick={() => void installLocal()}><Download size={16} aria-hidden="true" />{pt('localInstall')}</button>}
-        <button type="button" className="secondary-button plugin-development-guide" onClick={() => void invoke('open_external_url', { url: 'https://help.router-for.me/cn/plugin/development.html' }).catch(reason => { if (mounted.current) setError(message(reason)); })}><ExternalLink size={16} aria-hidden="true" />{pt('developmentGuide')}</button>
+        <button type="button" className="secondary-button plugin-development-guide" onClick={() => void openExternalUrl({ url: 'https://help.router-for.me/cn/plugin/development.html' }).catch(reason => { if (mounted.current) setError(message(reason)); })}><ExternalLink size={16} aria-hidden="true" />{pt('developmentGuide')}</button>
         <button className="secondary-button plugin-refresh" disabled={locked} onClick={() => void load(tabRef.current, true)}><RefreshCw size={16} aria-hidden="true" />{t('common.refresh')}</button>
       </div>
     </div>
     {error && <div className="plugin-error plugin-banner" role="alert"><span>{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</span><button className="secondary-button" disabled={busy || loading} onClick={() => void load(tabRef.current, true)}>{pt('retry')}</button></div>}
     {supported === false ? <section className="plugin-empty"><Puzzle size={36} /><p>{pt('unsupported')}</p></section> : supported === null ? <section className="plugin-empty" role="status">{loading ? t('common.loading') : pt('retry')}</section> : <>
       {data && !data.pluginsEnabled && <p className="plugin-banner">{pt('disabledHint')}</p>}
-      {restartRequired && <div className="plugin-banner"><span>{pt('restart')}</span><button className="secondary-button" disabled={locked} onClick={async () => { if (await askConfirmation({ title: pt('restartButton'), message: pt('restartConfirm') })) void mutate(async () => { await invoke('restart_core_process'); if (mounted.current) setRestartRequired(false); }, pt('saved')); }}>{pt('restartButton')}</button></div>}
+      {restartRequired && <div className="plugin-banner"><span>{pt('restart')}</span><button className="secondary-button" disabled={locked} onClick={async () => { if (await askConfirmation({ title: pt('restartButton'), message: pt('restartConfirm') })) void mutate(async () => { await restartCoreProcess(); if (mounted.current) setRestartRequired(false); }, pt('saved')); }}>{pt('restartButton')}</button></div>}
       <>
         {tab === 'settings' ? <PluginSettingsPanel onSaved={() => { notice.showNotice(pt('saved')); void load(); }} globalControl={<label className="plugin-global-toggle"><input type="checkbox" checked={data?.pluginsEnabled ?? false} disabled={locked || !data} onChange={e => { const enabled = e.target.checked; void mutate(() => pluginsApi.updateSettings({ enabled }), pt('saved')); }} />{pt('global')}</label>} /> : <>
           {sourceErrors.length ? <details className="plugin-source-errors"><summary>{pt('sourceErrors')}</summary>{sourceErrors.map((entry, index) => <p key={index}>{entry.sourceName || entry.sourceId || entry.sourceUrl}: {entry.message}</p>)}{sourceErrors.some(entry => isGitHubRateLimit(entry.message)) ? <GitHubTokenHint /> : null}</details> : null}
@@ -225,7 +236,7 @@ export function PluginsPage() {
             {plugin.effectiveEnabled && plugin.supportsOAuth && plugin.oauthProvider && <button className="secondary-button" disabled={locked} onClick={() => setOAuthPlugin(plugin)}><LogIn size={15} />{pt('oauth')}</button>}
               {installed ? <button className="secondary-button" disabled={locked} onClick={() => void toggle(plugin)}>{pt(plugin.enabled ? 'disabled' : 'enabled')}</button> : <button className="secondary-button" disabled={locked} onClick={() => { setSearch(plugin.id); setFilter('all'); setTab('store'); }}><Download size={15} />{pt('findInStore')}</button>}
               <button className="secondary-button" disabled={locked} onClick={() => setConfigPlugin(plugin)}><Settings2 size={15} />{pt('configure')}</button>
-              {status === 'notLoaded' && <button className="secondary-button" disabled={locked} onClick={() => void invoke('open_core_logs_directory').catch(reason => { if (mounted.current) setError(message(reason)); })}><Folder size={15} />{pt('openLogs')}</button>}
+              {status === 'notLoaded' && <button className="secondary-button" disabled={locked} onClick={() => void openCoreLogsDirectory().catch(reason => { if (mounted.current) setError(message(reason)); })}><Folder size={15} />{pt('openLogs')}</button>}
               <button className="icon-button quiet plugin-delete" disabled={locked} aria-label={removeLabel} title={removeLabel} onClick={() => void remove(plugin)}><Trash2 size={16} /></button>
             </div>
           </article>; })}</div> : <>

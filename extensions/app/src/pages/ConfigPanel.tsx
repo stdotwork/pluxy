@@ -1,8 +1,28 @@
+import { onConfigFilesChanged } from '../services/events';
+import { restartCoreProcess } from '../services/coreLifecycle';
+import { openExternalUrl } from '../services/appSettings';
+import {
+  getCoreConfigSettings,
+  getSoftwareSettings,
+  getCoreTlsSettings,
+  setCoreManagementSecretKey,
+  clearCoreManagementSecretKey,
+  updateCoreApiKey,
+  addCoreApiKey,
+  saveCoreLoggingSettings as saveCoreLoggingSettingsCommand,
+  openCoreLogsDirectory,
+  deleteCoreApiKey,
+  saveCoreTlsSettings,
+  setCoreRoutingStrategy,
+  saveNetworkEndpointSettings as saveNetworkEndpointSettingsCommand,
+  saveRetrySettings as saveRetrySettingsCommand,
+  saveSessionRoutingSettings as saveSessionRoutingSettingsCommand,
+  saveSoftwareSettings as saveSoftwareSettingsCommand,
+} from '../services/coreSettings';
+import type { CoreConfigSettings, CoreApiKey, SoftwareSettings, CloseBehavior, CoreTlsSettings } from '../services/coreSettings';
 import { CoolingToggle } from '../components/settings/CoolingToggle';
 import { FormEvent, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open } from '../services/platform';
 import {
   AlertCircle,
   Search,
@@ -34,7 +54,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useCoreRuntime, type CoreStatus } from '../coreRuntime';
+import { useCoreRuntime } from '../coreRuntime';
 import { useI18n } from '../i18n';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
 import { webUiManagementUrl } from '../services/clientAccess';
@@ -50,36 +70,6 @@ import {
   settingsCategories, settingsTemplateGroups,
   allSettingsTemplateGroups, settingsMessages, takeRequestedSettingField, type SettingsCategory,
 } from '../services/settingsNavigation';
-
-type CoreConfigSettings = {
-  managementSecretConfigured: boolean;
-  apiKeys: CoreApiKey[];
-  debug: boolean;
-  commercialMode: boolean;
-  loggingToFile: boolean;
-  logsMaxTotalSizeMb: number;
-  errorLogsMaxFiles: number;
-  usageStatisticsEnabled: boolean;
-  redisUsageQueueRetentionSeconds: number;
-  host: string;
-  port: number;
-  allowLan: boolean;
-  routingStrategy: string;
-  proxyUrl: string;
-  proxyOverride: boolean;
-  routingSessionAffinity: boolean;
-  routingSessionAffinityTtl: string;
-  disableCooling: boolean;
-  requestRetry: number;
-  maxRetryCredentials: number;
-  maxRetryInterval: number;
-  streamingBootstrapRetries: number;
-};
-
-type CoreApiKey = {
-  apiKey: string;
-  remark: string;
-};
 
 type ConfigAction =
   | 'add-key'
@@ -100,7 +90,6 @@ const CATEGORY_ICONS = { general: ShieldCheck, aliases: Link2, routing: Route, r
 type SettingDestination = { category: ConfigSubpage; target: string; field?: string };
 type SettingSearchEntry = SettingDestination & { title: string; context: string; keywords: string };
 
-type CloseBehavior = 'ask' | 'exit' | 'minimize-to-tray';
 type NetworkDraftField =
   | 'port'
   | 'host'
@@ -116,26 +105,6 @@ type NetworkDraftField =
 type DraftRefreshMode = 'replace' | 'preserve';
 
 type NetworkDraftDirty = Record<NetworkDraftField, boolean>;
-
-type AgentTerminalOption = {
-  id: string;
-  label: string;
-};
-
-type SoftwareSettings = {
-  closeBehavior: CloseBehavior;
-  autostartEnabled: boolean;
-  startCoreOnLaunch: boolean;
-  silentStartEnabled: boolean;
-  defaultTerminal: string;
-  availableTerminals: AgentTerminalOption[];
-};
-
-type CoreTlsSettings = {
-  enabled: boolean;
-  cert: string;
-  key: string;
-};
 
 const cleanNetworkDraft = (): NetworkDraftDirty => ({
   port: false,
@@ -282,7 +251,7 @@ export function ConfigPanelPage() {
     void loadSettings();
     void loadSoftwareSettings();
     void loadTlsSettings();
-    void listen('config-files-changed', () => {
+    void onConfigFilesChanged(() => {
       if (!disposed) {
         void loadSettings('preserve');
         void loadSoftwareSettings('preserve');
@@ -372,7 +341,7 @@ export function ConfigPanelPage() {
     setLoading(true);
     setLoadError('');
     try {
-      const result = await invoke<CoreConfigSettings>('get_core_config_settings');
+      const result = await getCoreConfigSettings();
       applySettings(result, mode);
     } catch (error) {
       setSettings(null);
@@ -386,7 +355,7 @@ export function ConfigPanelPage() {
     setSoftwareSettingsLoading(true);
     setSoftwareSavedStatusVisible(false);
     try {
-      const result = await invoke<SoftwareSettings>('get_software_settings');
+      const result = await getSoftwareSettings();
       if (mode === 'preserve' && otherDraftDirtyRef.current.software) return;
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
@@ -405,7 +374,7 @@ export function ConfigPanelPage() {
   async function loadTlsSettings(mode: DraftRefreshMode = 'replace') {
     setTlsSettingsLoading(true);
     try {
-      const result = await invoke<CoreTlsSettings>('get_core_tls_settings');
+      const result = await getCoreTlsSettings();
       if (mode === 'preserve' && otherDraftDirtyRef.current.tls) return;
       setTlsSettings(result);
       setTlsEnabledDraft(result.enabled);
@@ -422,8 +391,7 @@ export function ConfigPanelPage() {
 
   const runMutation = async (
     action: Exclude<ConfigAction, null>,
-    command: string,
-    args: Record<string, unknown>,
+    mutation: () => Promise<CoreConfigSettings>,
     successMessage: string,
   ) => {
     setBusyAction(action);
@@ -432,7 +400,7 @@ export function ConfigPanelPage() {
       : action === 'routing' ? routingFeedback : keyFeedback;
     mutationFeedback.clearNotice();
     try {
-      const result = await invoke<CoreConfigSettings>(command, args);
+      const result = await mutation();
       setSettings(result);
       setLoadError('');
       if (action !== 'routing') mutationFeedback.showNotice(successMessage, 'success');
@@ -518,8 +486,7 @@ export function ConfigPanelPage() {
 
     const saved = await runMutation(
       'management-secret',
-      'set_core_management_secret_key',
-      { secretKey },
+      () => setCoreManagementSecretKey({ secretKey }),
       t('config.webuiKey.notice.updated'),
     );
     if (saved) {
@@ -538,7 +505,7 @@ export function ConfigPanelPage() {
       variant: 'danger',
     });
     if (!confirmed) return;
-    const saved = await runMutation('management-secret', 'clear_core_management_secret_key', {}, templateText(templateMessages.managementDisabled, locale));
+    const saved = await runMutation('management-secret', () => clearCoreManagementSecretKey(), templateText(templateMessages.managementDisabled, locale));
     if (saved) { setManagementSecretDraft(''); setManagementSecretConfirm(''); setShowManagementSecret(false); setManagementSecretError(''); }
   };
 
@@ -566,8 +533,9 @@ export function ConfigPanelPage() {
     const editing = editingApiKey !== null;
     const saved = await runMutation(
       editing ? 'update-key' : 'add-key',
-      editing ? 'update_core_api_key' : 'add_core_api_key',
-      editing ? { originalApiKey: editingApiKey, apiKey, remark } : { apiKey, remark },
+      () => editing
+        ? updateCoreApiKey({ originalApiKey: editingApiKey!, apiKey, remark })
+        : addCoreApiKey({ apiKey, remark }),
       editing ? t('config.notice.keyUpdated') : t('config.notice.keyAdded'),
     );
     if (saved) {
@@ -610,7 +578,7 @@ export function ConfigPanelPage() {
     setBusyAction('logging');
     setLoggingError('');
     try {
-      const result = await invoke<CoreConfigSettings>('save_core_logging_settings', {
+      const result = await saveCoreLoggingSettingsCommand({
         settings: {
           debug: debugDraft,
           commercialMode: commercialModeDraft,
@@ -624,7 +592,7 @@ export function ConfigPanelPage() {
       loggingDraftDirtyRef.current = false;
       applySettings(result, 'preserve');
       if (commercialModeChanged && coreStatus?.running) {
-        const status = await invoke<CoreStatus>('restart_core_process');
+        const status = await restartCoreProcess();
         publishStatus(status);
         loggingFeedback.showNotice({ key: 'config.diagnostics.notice.savedAndRestarted' }, 'success');
       } else {
@@ -644,7 +612,7 @@ export function ConfigPanelPage() {
     if (busyAction !== null) return;
     setBusyAction('open-logs');
     try {
-      await invoke<void>('open_core_logs_directory');
+      await openCoreLogsDirectory();
     } catch (error) {
       loggingFeedback.showNotice({ key: 'config.diagnostics.error.openLogs', variables: { error: String(error) } }, 'error');
     } finally {
@@ -658,8 +626,7 @@ export function ConfigPanelPage() {
     }
     const deleted = await runMutation(
       'delete-key',
-      'delete_core_api_key',
-      { apiKey: selectedDeleteKey },
+      () => deleteCoreApiKey({ apiKey: selectedDeleteKey }),
       t('config.notice.keyDeleted'),
     );
     if (deleted) {
@@ -687,8 +654,8 @@ export function ConfigPanelPage() {
   const openWebUi = async () => {
     try {
       const [latestSettings, latestTlsSettings] = await Promise.all([
-        invoke<CoreConfigSettings>('get_core_config_settings'),
-        invoke<CoreTlsSettings>('get_core_tls_settings'),
+        getCoreConfigSettings(),
+        getCoreTlsSettings(),
       ]);
       applySettings(latestSettings, 'preserve');
       setTlsSettings(latestTlsSettings);
@@ -697,7 +664,7 @@ export function ConfigPanelPage() {
         setTlsCertDraft(latestTlsSettings.cert);
         setTlsKeyDraft(latestTlsSettings.key);
       }
-      await invoke('open_external_url', {
+      await openExternalUrl({
         url: webUiManagementUrl(latestSettings.port, latestTlsSettings.enabled, latestSettings.host),
       });
     } catch (error) {
@@ -719,7 +686,7 @@ export function ConfigPanelPage() {
     setTlsError('');
     setTlsSavedStatusVisible(false);
     try {
-      const result = await invoke<CoreTlsSettings>('save_core_tls_settings', {
+      const result = await saveCoreTlsSettings({
         settings: { enabled: tlsEnabledDraft, cert, key },
       });
       setTlsSettings(result);
@@ -727,7 +694,7 @@ export function ConfigPanelPage() {
       setTlsCertDraft(result.cert);
       setTlsKeyDraft(result.key);
       if (coreStatus?.running) {
-        const status = await invoke<CoreStatus>('restart_core_process');
+        const status = await restartCoreProcess();
         publishStatus(status);
         tlsFeedback.showNotice({ key: 'config.tls.notice.savedAndRestarted' }, 'success');
       } else {
@@ -777,8 +744,7 @@ export function ConfigPanelPage() {
     }
     await runMutation(
       'routing',
-      'set_core_routing_strategy',
-      { strategy },
+      () => setCoreRoutingStrategy({ strategy }),
       t('config.notice.routingUpdated'),
     );
   };
@@ -800,7 +766,7 @@ export function ConfigPanelPage() {
     setPortError('');
     setBusyAction('network');
     try {
-      const result = await invoke<CoreConfigSettings>('save_network_endpoint_settings', {
+      const result = await saveNetworkEndpointSettingsCommand({
         settings: networkDraftDirtyRef.current.proxyUrl || networkDraftDirtyRef.current.proxyOverride
           ? { host, port, proxyUrl, proxyOverride: proxyOverrideDraft }
           : { host, port },
@@ -814,7 +780,7 @@ export function ConfigPanelPage() {
 
       if (networkChanged && coreStatus?.running) {
         try {
-          const status = await invoke<CoreStatus>('restart_core_process');
+          const status = await restartCoreProcess();
           publishStatus(status);
           networkFeedback.showNotice({ key: 'config.notice.networkRestarted' }, 'success');
         } catch (error) {
@@ -856,7 +822,7 @@ export function ConfigPanelPage() {
     setRetryError('');
     setBusyAction('retry');
     try {
-      const result = await invoke<CoreConfigSettings>('save_retry_settings', {
+      const result = await saveRetrySettingsCommand({
         settings: {
           disableCooling: disableCoolingDraft,
           requestRetry,
@@ -887,7 +853,7 @@ export function ConfigPanelPage() {
     const routingSessionAffinityTtl = sessionTtlDraft.trim();
     setBusyAction('routing');
     try {
-      const result = await invoke<CoreConfigSettings>('save_session_routing_settings', {
+      const result = await saveSessionRoutingSettingsCommand({
         settings: {
           routingSessionAffinity: sessionAffinityDraft,
           routingSessionAffinityTtl,
@@ -919,7 +885,7 @@ export function ConfigPanelPage() {
 
     setBusyAction('software');
     try {
-      const result = await invoke<SoftwareSettings>('save_software_settings', {
+      const result = await saveSoftwareSettingsCommand({
         settings: {
           closeBehavior: softwareCloseBehaviorDraft,
           autostartEnabled: softwareAutostartDraft,

@@ -80,10 +80,7 @@ describe('VersionManagement update triggers', () => {
   }
 
   it('only changes the saved download source from the source selector handler', () => {
-    const sourceWrites = findCalls('invoke').filter((call) => {
-      const command = call.arguments[0];
-      return command && ts.isStringLiteral(command) && command.text === 'set_download_source';
-    });
+    const sourceWrites = findCalls('setDownloadSource');
     expect(sourceWrites).toHaveLength(1);
     let ancestor: ts.Node | undefined = sourceWrites[0];
     while (ancestor && !(ts.isVariableDeclaration(ancestor)

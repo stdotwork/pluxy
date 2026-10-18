@@ -1,6 +1,6 @@
+import { getOAuthStatus, startOAuthLogin, openOAuthUrl, submitOAuthCallback } from '../services/oauth';
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
 import { CheckCircle2, Copy, ExternalLink, LoaderCircle, LogIn, X } from 'lucide-react';
 import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 import { useI18n } from '../i18n';
@@ -89,7 +89,7 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
     const poll = async () => {
       if (!current()) return;
       try {
-        const result = await invoke<OAuthStatus>('get_oauth_status', { state });
+        const result = await getOAuthStatus({ state });
         if (!current()) return;
         if (result.status === 'ok') {
           completed = true; terminal = true; clearTimers(); setPhase('success');
@@ -100,7 +100,7 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
         else fail(translate('failed'));
       } catch (reason) { fail(message(reason)); }
     };
-    void invoke<OAuthStart>('start_oauth_login', { provider, browser: 'none', pluginProvider: true }).then(result => {
+    void startOAuthLogin({ provider, browser: 'none', pluginProvider: true }).then(result => {
       const returnedState = result.state?.trim() ?? '';
       if (!current()) { cancel(returnedState); return; }
       state = returnedState;
@@ -129,7 +129,7 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
     if (!session || !activeSession() || openPending.current) return;
     const current = generation.current;
     openPending.current = true; setOpening(true); setError('');
-    try { await invoke('open_oauth_url', { url: session.url, browser }); }
+    try { await openOAuthUrl({ url: session.url, browser }); }
     catch (reason) { if (generation.current === current && phaseRef.current === 'waiting') setError(message(reason)); }
     finally { if (generation.current === current) { openPending.current = false; setOpening(false); } }
   };
@@ -143,7 +143,7 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
     const current = generation.current;
     callbackPending.current = true; setSubmitting(true); setCallbackInvalid(false); setError(''); setNotice('');
     try {
-      await invoke('submit_oauth_callback', { provider, redirectUrl, pluginProvider: true });
+      await submitOAuthCallback({ provider, redirectUrl, pluginProvider: true });
       if (generation.current === current && phaseRef.current === 'waiting') setNotice(text('submitted'));
     } catch (reason) { if (generation.current === current && phaseRef.current === 'waiting') setError(message(reason)); }
     finally { if (generation.current === current) { callbackPending.current = false; setSubmitting(false); } }

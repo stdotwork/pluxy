@@ -1,6 +1,6 @@
+import { openExternalUrl } from '../services/appSettings';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
 import { ExternalLink, X } from 'lucide-react';
 import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 import { useI18n } from '../i18n';
@@ -55,7 +55,7 @@ export function PluginInstallDialog({ entry, onClose, onInstalled }: {
     <section className="config-dialog plugin-install-dialog" aria-busy={busy} role="dialog" aria-modal="true" aria-labelledby="plugin-install-title" ref={ref} tabIndex={-1}>
       <div className="config-dialog-heading"><h2 id="plugin-install-title">{action} · {entry.name || entry.id}</h2><button className="icon-button quiet" aria-label={t('common.close')} onClick={cancel}><X size={18} /></button></div>
       <div className="plugin-install-body">
-        <dl className="plugin-install-origin"><dt>{pt('storeSource')}</dt><dd>{officialStore ? pt('officialStore') : entry.sourceName || entry.sourceId}{entry.sourceUrl && <details className="plugin-source-address"><summary>{pt('sourceAddress')}</summary><small>{entry.sourceUrl}</small></details>}</dd><dt>{pt('repository')}</dt><dd className="plugin-install-repository"><span>{entry.repository || '—'}</span>{repository && <button className="icon-button quiet" aria-label={pt('repository')} onClick={() => void invoke('open_external_url', { url: repository }).catch(e => setError(String(e)))}><ExternalLink size={15} /></button>}</dd></dl>
+        <dl className="plugin-install-origin"><dt>{pt('storeSource')}</dt><dd>{officialStore ? pt('officialStore') : entry.sourceName || entry.sourceId}{entry.sourceUrl && <details className="plugin-source-address"><summary>{pt('sourceAddress')}</summary><small>{entry.sourceUrl}</small></details>}</dd><dt>{pt('repository')}</dt><dd className="plugin-install-repository"><span>{entry.repository || '—'}</span>{repository && <button className="icon-button quiet" aria-label={pt('repository')} onClick={() => void openExternalUrl({ url: repository }).catch(e => setError(String(e)))}><ExternalLink size={15} /></button>}</dd></dl>
         {canSelectVersion && <label className="plugin-field">{pt('version')}<input value={version} onChange={e => setVersion(e.target.value)} disabled={busy} placeholder={entry.version || 'v1.0.0'} aria-invalid={!validVersion} />{!validVersion && <small role="alert">{pt('invalidVersion')}</small>}</label>}
         {!trusted && <>
           <p className="plugin-warning" id="plugin-trust-warning">{pt(externalRepository ? 'officialStoreThirdParty' : 'trustWarning')}</p>

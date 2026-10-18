@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+
 export type WebviewBounds = { x: number; y: number; width: number; height: number; viewportHeight: number };
 
 export const EMPTY_BOUNDS: WebviewBounds = { x: 0, y: 0, width: 0, height: 0, viewportHeight: 0 };
@@ -24,3 +26,15 @@ export const newWebviewToken = (): number => {
   lastToken = Math.max(lastToken + 1, Date.now() * 1000);
   return lastToken;
 };
+
+export const hidePluginWebview = (args: { token: number; }): Promise<void> =>
+  invoke<void>('hide_plugin_webview', args);
+
+export const showPluginWebview = (args: { pluginId: string; menuIndex: number; bounds: WebviewBounds; labels: { back: string; reload: string; openExternal: string; move: string; }; reload: boolean; token: number; }): Promise<string> =>
+  invoke<string>('show_plugin_webview', args);
+
+export const setPluginWebviewBounds = (args: { bounds: WebviewBounds; token: number; }): Promise<void> =>
+  invoke<void>('set_plugin_webview_bounds', args);
+
+export const closePluginWebview = (): Promise<void> =>
+  invoke<void>('close_plugin_webview');

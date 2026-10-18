@@ -1,3 +1,4 @@
+import type { UsageAnalysis, UsageCategory } from '../services/usage';
 import { useState, type CSSProperties } from 'react';
 import { BarChart3, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -7,21 +8,9 @@ import type { UsageTimelinePoint } from '../services/usageTrend';
 import { UsageActivityChart } from './UsageActivityChart';
 import './UsageAnalysisView.css';
 
-export type UsageCategory = {
-  key: string;
-  label: string;
-  requests: number;
-  failures: number;
-  tokens: number;
-};
+export type { UsageCategory } from '../services/usage';
 
-export type UsageAnalysis = {
-  models: UsageCategory[];
-  providers: UsageCategory[];
-  sources: UsageCategory[];
-  apiKeys: UsageCategory[];
-  upstreams?: (UsageCategory & { provider: string })[];
-};
+export type { UsageAnalysis } from '../services/usage';
 
 type AnalysisOverview = {
   totalRequests: number;

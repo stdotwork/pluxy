@@ -1,7 +1,25 @@
+import { onCoreInstallProgress, onConfigFilesChanged, onVersionDownloadSourceChanged } from '../services/events';
+import { openExternalUrl } from '../services/appSettings';
+import {
+  getVersionSourceSettings,
+  getCoreInstallTask,
+  setDownloadSource,
+  addCustomDownloadMirror,
+  removeCustomDownloadMirror,
+  installBundledCore,
+  installCoreVersion,
+  cancelCoreInstall,
+  detectBundledCore,
+} from '../services/coreVersions';
+import type {
+  VersionSourceSettings,
+  VersionDownloadSource,
+  CoreInstallTask,
+  CoreInstallResult,
+  BundledCoreInfo,
+} from '../services/coreVersions';
 import { useEffect, useRef, useState } from 'react';
-import { getVersion } from '@tauri-apps/api/app';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '../services/platform';
 import {
   Download,
   ExternalLink,
@@ -20,36 +38,13 @@ import { createVersionManagementVisitTracker } from '../services/versionManageme
 import { AppReleaseNotes } from '../components/AppReleaseNotes';
 import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 
-export type CoreInstallResult = {
-  version: string;
-  assetName: string;
-  installDir: string;
-  binaryPath: string | null;
-};
+export type { CoreInstallResult } from '../services/coreVersions';
 
-type BundledCoreInfo = {
-  version: string;
-  assetName: string;
-};
+export type { CoreInstallTask } from '../services/coreVersions';
 
-export type CoreInstallTask = {
-  running: boolean;
-  cancellable: boolean;
-  phase: string;
-  downloaded: number;
-  total: number | null;
-  percent: number | null;
-  message: string | null;
-  result: CoreInstallResult | null;
-};
+export type { VersionSourceSettings } from '../services/coreVersions';
 
-export type VersionSourceSettings = {
-  source: VersionDownloadSource;
-  gitcodeAvailable: boolean;
-  customMirrors: string[];
-};
-
-export type VersionDownloadSource = string;
+export type { VersionDownloadSource } from '../services/coreVersions';
 
 function downloadSourceLabel(source: VersionDownloadSource, t: ReturnType<typeof useI18n>['t']) {
   const keys: Record<string, Parameters<typeof t>[0]> = {
@@ -177,7 +172,7 @@ export function VersionManagementPage() {
 
   const loadVersionSourceSettings = async () => {
     try {
-      const settings = await invoke<VersionSourceSettings>('get_version_source_settings');
+      const settings = await getVersionSourceSettings();
       setVersionSource(settings);
       setVersionSourceError('');
     } catch (error) {
@@ -187,7 +182,7 @@ export function VersionManagementPage() {
 
   const loadInstallTask = async () => {
     try {
-      const task = await invoke<CoreInstallTask>('get_core_install_task');
+      const task = await getCoreInstallTask();
       applyInstallTask(task, false, false);
     } catch {}
   };
@@ -196,7 +191,7 @@ export function VersionManagementPage() {
     setVersionSourceSaving(true);
     setVersionSourceError('');
     try {
-      const settings = await invoke<VersionSourceSettings>('set_download_source', { source });
+      const settings = await setDownloadSource({ source });
       setVersionSource(settings);
       resetLatest();
       showNotice({ key: 'kernel.versions.sourceSwitched', variables: {
@@ -216,7 +211,7 @@ export function VersionManagementPage() {
     setVersionSourceSaving(true);
     setVersionSourceError('');
     try {
-      const settings = await invoke<VersionSourceSettings>('add_custom_download_mirror', { url });
+      const settings = await addCustomDownloadMirror({ url });
       setVersionSource(settings);
       setCustomMirrorDraft('');
       setCustomMirrorDialogOpen(false);
@@ -235,7 +230,7 @@ export function VersionManagementPage() {
     setVersionSourceSaving(true);
     setVersionSourceError('');
     try {
-      const settings = await invoke<VersionSourceSettings>('remove_custom_download_mirror', {
+      const settings = await removeCustomDownloadMirror({
         url,
       });
       setVersionSource(settings);
@@ -270,8 +265,8 @@ export function VersionManagementPage() {
 
     try {
       const result = target.kind === 'bundled'
-        ? await invoke<CoreInstallResult>('install_bundled_core')
-        : await invoke<CoreInstallResult>('install_core_version', { version: target.version });
+        ? await installBundledCore()
+        : await installCoreVersion({ version: target.version });
       const message = t(target.kind === 'bundled' ? 'kernel.install.bundledCompleted' : 'kernel.install.completed', { version: result.version });
       showInstallCompletedNotice(result, message);
       manualInstallInProgressRef.current = false;
@@ -316,7 +311,7 @@ export function VersionManagementPage() {
 
     setCancellingInstall(true);
     try {
-      await invoke('cancel_core_install');
+      await cancelCoreInstall();
     } catch (error) {
       setCancellingInstall(false);
       showNotice(String(error), 'error');
@@ -334,7 +329,7 @@ export function VersionManagementPage() {
 
   const openAppRelease = async (url = appUpdate?.releaseUrl || APP_RELEASE_URL) => {
     try {
-      await invoke('open_external_url', { url });
+      await openExternalUrl({ url });
     } catch (error) {
       showNotice({ key: 'kernel.error.openUpdate', variables: { error: String(error) } }, 'error');
     }
@@ -356,7 +351,7 @@ export function VersionManagementPage() {
     let unlistenConfig: (() => void) | null = null;
     let unlistenVersionSource: (() => void) | null = null;
 
-    listen<CoreInstallTask>('core-install-progress', (event) => {
+    onCoreInstallProgress((event) => {
       const showTaskUi = manualInstallInProgressRef.current;
       applyInstallTask(event.payload, showTaskUi, showTaskUi);
       if (!event.payload.running) {
@@ -369,7 +364,7 @@ export function VersionManagementPage() {
       })
       .catch(() => undefined);
 
-    void listen('config-files-changed', () => {
+    void onConfigFilesChanged(() => {
       if (disposed) return;
       void loadVersionSourceSettings();
       void refreshStatus();
@@ -378,7 +373,7 @@ export function VersionManagementPage() {
       else unlistenConfig = stop;
     });
 
-    void listen<VersionSourceSettings>('version-download-source-changed', (event) => {
+    void onVersionDownloadSourceChanged((event) => {
       if (disposed) return;
       setVersionSource(event.payload);
       setVersionSourceError('');
@@ -392,7 +387,7 @@ export function VersionManagementPage() {
 
     loadInstallTask();
     void loadVersionSourceSettings();
-    void invoke<BundledCoreInfo | null>('detect_bundled_core')
+    void detectBundledCore()
       .then((info) => {
         if (!disposed) setBundledCore(info);
       })

@@ -1,12 +1,15 @@
+import {
+  getThemeSelection,
+  saveThemeSelection,
+  detectCorePlatform,
+  getLinuxSystemTheme,
+} from './services/desktopTheme';
 import { useSyncExternalStore } from 'react';
-import { invoke, isTauri } from '@tauri-apps/api/core';
-import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { createThemeController, type AppTheme, type ThemePreference } from './themeController';
+import { isTauri, getCurrentWebview, getCurrentWindow } from './services/platform';
+import { createThemeController, type ThemePreference } from './themeController';
 import { ThemePreferences } from './services/themePreferences';
 import { createThemeApplicator } from './themes/applyTheme';
 import { cacheFirstPaint, firstPaint } from './themes/firstPaint';
-import type { ThemeSelection } from './themes/types';
 import { themeRegistry, type ThemeRegistry } from './themes/registry';
 
 export type { AppTheme, ThemePreference } from './themeController';
@@ -21,8 +24,8 @@ export function detectThemePreference(): ThemePreference {
 export async function initializeThemePreferences(): Promise<void> {
   if (!isTauri()) return;
   await preferences.initialize({
-    load: () => invoke<ThemeSelection | null>('get_theme_selection'),
-    save: (selection) => invoke('save_theme_selection', { selection }),
+    load: () => getThemeSelection(),
+    save: (selection) => saveThemeSelection({ selection }),
   });
 }
 
@@ -71,12 +74,12 @@ export function initializeTheme(registry: ThemeRegistry = themeRegistry) {
       if (!isTauri()) return null;
       const currentWindow = getCurrentWindow();
       const currentWebview = getCurrentWebview();
-      const { os } = await invoke<{ os: string }>('detect_core_platform');
+      const { os } = await detectCorePlatform();
       return {
         explicitSystemAppearance: os === 'linux',
         setTheme: (theme) => currentWindow.setTheme(theme),
         readTheme: () => os === 'linux'
-          ? invoke<AppTheme | null>('get_linux_system_theme')
+          ? getLinuxSystemTheme()
           : currentWindow.theme(),
         listen: (listener) => currentWindow.onThemeChanged(({ payload }) => listener(payload)),
         async setBackground(_appearance, definition) {

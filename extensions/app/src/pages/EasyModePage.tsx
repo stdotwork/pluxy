@@ -1,3 +1,4 @@
+import { getOAuthStatus, startOAuthLogin, openOAuthUrl } from '../services/oauth';
 import { ThemeSelector } from '../components/ThemeSelector';
 import {
   useCallback,
@@ -7,7 +8,6 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft,
   ArrowRight,
@@ -45,7 +45,6 @@ import { normalizeProviderProxyUrl } from "../services/providerProxy";
 import { normalizeOAuthProvider } from "../services/authFiles";
 import { type ThemePreference } from "../theme";
 import { AgentsPage } from "./AgentsPage";
-
 import codexIcon from "../assets/icons/codex.svg";
 import claudeIcon from "../assets/icons/claude.svg";
 import antigravityIcon from "../assets/icons/antigravity.svg";
@@ -279,15 +278,7 @@ export function EasyModePage({
     clearOAuthNotice();
 
     try {
-      const result = await invoke<{
-        url?: string;
-        state?: string;
-        userCode?: string | null;
-        flow?: string | null;
-        expiresIn?: number | null;
-        opened?: boolean;
-        openError?: string;
-      }>("start_oauth_login", {
+      const result = await startOAuthLogin({
         provider,
         browser: "default",
       });
@@ -327,10 +318,7 @@ export function EasyModePage({
           return;
         }
         try {
-          const pollRes = await invoke<{ status: string; error?: string }>(
-            "get_oauth_status",
-            { state: stateKey },
-          );
+          const pollRes = await getOAuthStatus({ state: stateKey });
           if (generation !== oauthGeneration.current) return;
           failures = 0;
           const status = (pollRes.status || "").toLowerCase();
@@ -394,7 +382,7 @@ export function EasyModePage({
 
   const openAuthorizationUrl = async (url: string) => {
     try {
-      await invoke("open_oauth_url", { url, browser: "default" });
+      await openOAuthUrl({ url, browser: "default" });
     } catch (error) {
       showOAuthNotice(String(error), "error");
     }

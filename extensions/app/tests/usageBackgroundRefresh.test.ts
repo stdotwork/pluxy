@@ -8,7 +8,7 @@ describe('usage records background refresh', () => {
       'utf8',
     );
     const refreshStart = source.indexOf('const refresh = () => {');
-    const refreshEnd = source.indexOf("listen('usage-records-updated'", refreshStart);
+    const refreshEnd = source.indexOf('onUsageRecordsUpdated(', refreshStart);
     const refreshBlock = source.slice(refreshStart, refreshEnd);
 
     expect(refreshStart).toBeGreaterThanOrEqual(0);

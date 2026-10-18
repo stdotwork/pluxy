@@ -1,3 +1,38 @@
+import { onConfigFilesChanged } from '../services/events';
+import {
+  refreshAgentConfigStatuses,
+  getAgentConfigStatuses,
+  getDeepSeekHarnessProcessStatus,
+  getAgentModels,
+  checkPiProviderUpdate,
+  restoreCodexOfficialConfig,
+  updateAgentConfig,
+  installPiProvider as installPiProviderCommand,
+  updatePiProvider as updatePiProviderCommand,
+  repairPiProvider as repairPiProviderCommand,
+  uninstallPiProvider as uninstallPiProviderCommand,
+  applyAgentConfigTemplate,
+  closeCodexConfigModification,
+  setAgentConfigEnabled,
+  clearCodexConfig,
+  launchAgent as launchAgentCommand,
+  stopDeepSeekHarnessProcess,
+  restartAgentApp,
+  getCodexCliDaemonRunning,
+  restartCodexCliDaemon,
+  restartDeepSeekHarnessProcess,
+  createAgentConfigBackup,
+  previewAgentConfigTemplate,
+} from '../services/agents';
+import type {
+  AgentConfigStatus,
+  AgentClientId,
+  AgentLaunchTarget,
+  ClaudeModelMappings,
+  DeepSeekHarnessProcessStatus,
+  PiProviderUpdateStatus,
+} from '../services/agents';
+import { checkCodexOAuthLogin } from '../services/oauth';
 import { CopilotPluginStatus } from '../components/copilot/CopilotPluginStatus';
 import type { MessageKey } from '../i18n/resources';
 import { ClaudeCodeRoleRows } from '../components/claude-code/ClaudeCodeRoleRows';
@@ -12,9 +47,7 @@ import {
   useState,
   type ComponentType,
 } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open } from '../services/platform';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -100,105 +133,9 @@ function copilotSetupErrorKey(error: string): MessageKey | undefined {
   return code ? setupErrors[code] : undefined;
 }
 
-type AgentClientId =
-  | 'claude-code'
-  | 'claude-desktop'
-  | 'codex'
-  | 'opencode'
-  | 'openclaw'
-  | 'hermes'
-  | 'deepseek-harness'
-  | 'zcode'
-  | 'workbuddy'
-  | 'antigravity-cli'
-  | 'copilot-cli'
-  | 'vscode-copilot'
-  | 'kimi-code'
-  | 'grok-build'
-  | 'omp'
-  | 'pi';
-
 type ClaudeModelMappingClientId = 'claude-code' | 'claude-desktop';
 
-type AgentModificationState = 'unconfigured' | 'applied' | 'invalid';
-
-type AgentConfigStatus = {
-  id: AgentClientId;
-  name: string;
-  supportedPlatform: boolean;
-  installed: boolean;
-  pluginInstalled: boolean;
-  launchTargets: AgentLaunchTarget[];
-  version: string | null;
-  cliVersion: string | null;
-  appVersion: string | null;
-  pluginVersion: string | null;
-  configExists: boolean;
-  configValid: boolean;
-  configured: boolean;
-  connectionState: 'configured' | 'not-configured' | 'needs-update' | 'invalid';
-  configurationSynchronized: boolean;
-  currentModel: string | null;
-  oauthConfiguration: boolean;
-  codexNativeOauth: boolean;
-  codexOpenaiProvider?: boolean;
-  codexRemoteCompaction?: boolean;
-  modificationEnabled: boolean;
-  modificationState: AgentModificationState;
-  backupAvailable: boolean;
-  appliedModel: string | null;
-  claudeCodeModelMappings: ClaudeModelMappings | null;
-  claudeDesktopModelMappings: ClaudeModelMappings | null;
-  warnings: string[];
-  error: string | null;
-};
-
-type AgentLaunchTarget = {
-  id: 'app' | 'cli';
-  label: string;
-  detail: string;
-};
-
-type DeepSeekHarnessProcessStatus = {
-  running: boolean;
-  pid: number | null;
-  mode: string | null;
-};
-
-type AgentConfigActionResult = {
-  outcome: 'applied' | 'default' | 'updated' | 'unchanged';
-  enabled: boolean;
-  model: string | null;
-  changedFiles: string[];
-  conflictFiles: string[];
-};
-
-type PiProviderUpdateStatus = {
-  installedVersion: string | null;
-  latestVersion: string | null;
-  updateAvailable: boolean;
-};
-
 type OAuthLoginRequiredAction = 'enable' | 'apply' | 'launch';
-
-type ClaudeModelMappings = {
-  desktopModels?: ClaudeDesktopModelMapping[];
-  opus: string;
-  sonnet: string;
-  haiku: string;
-  fable: string;
-  fable1m: boolean;
-  opus1m: boolean;
-  sonnet1m: boolean;
-  haiku1m: boolean;
-  maxContextTokens: number;
-  autoCompactPct: number;
-  disableAutoCompact: boolean;
-  manageDefaultModel: boolean;
-  manageSubagentModel: boolean;
-  startupModel: string;
-  subagentModel: string;
-};
 
 type AgentFormValues = {
   model: string;
@@ -747,10 +684,9 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const requestId = ++statusRequestRef.current;
-    const command = forceRefresh
-      ? 'refresh_agent_config_statuses'
-      : 'get_agent_config_statuses';
-    const nextStatuses = await invoke<AgentConfigStatus[]>(command, { executableOverrides: executablePaths });
+    const nextStatuses = await (forceRefresh
+      ? refreshAgentConfigStatuses({ executableOverrides: executablePaths })
+      : getAgentConfigStatuses({ executableOverrides: executablePaths }));
     if (requestId !== statusRequestRef.current) return;
     setStatuses(nextStatuses);
   }, [executablePaths]);
@@ -766,7 +702,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   }, []);
 
   const loadDeepSeekHarnessProcessStatus = useCallback(async () => {
-    const status = await invoke<DeepSeekHarnessProcessStatus>('get_deepseek_harness_process_status');
+    const status = await getDeepSeekHarnessProcessStatus();
     setDeepSeekHarnessProcessStatus(status);
   }, []);
 
@@ -776,7 +712,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setModelLoading(!background || agentModelsCache[client] === undefined);
     setModelError('');
     try {
-      const nextModels = await invoke<ModelOption[]>('get_agent_models', { client });
+      const nextModels = await getAgentModels({ client });
       if (modelRequestRef.current !== requestId) return;
       agentModelsCache[client] = nextModels;
       setModelData({ client, models: nextModels });
@@ -826,7 +762,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   useEffect(() => {
     let disposed = false;
     let stop: (() => void) | null = null;
-    void listen('config-files-changed', () => {
+    void onConfigFilesChanged(() => {
       if (disposed) return;
       setDetectionError('');
       void loadStatuses().catch((requestError) => {
@@ -914,7 +850,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     const requestId = piUpdateRequestRef.current + 1;
     piUpdateRequestRef.current = requestId;
     try {
-      const nextStatus = await invoke<PiProviderUpdateStatus>('check_pi_provider_update');
+      const nextStatus = await checkPiProviderUpdate();
       if (piUpdateRequestRef.current === requestId) setPiProviderUpdateStatus(nextStatus);
     } catch {
       if (piUpdateRequestRef.current === requestId) setPiProviderUpdateStatus(null);
@@ -1278,7 +1214,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setConfigurationNotice('');
     setClearNotice('');
     try {
-      await invoke('restore_codex_official_config');
+      await restoreCodexOfficialConfig();
       setModelError('');
       setModelSelectionError('');
       setStatuses((current) => current.map((status) => status.id === 'codex'
@@ -1324,7 +1260,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
 
     setBusyAction('oauth-check');
     try {
-      await invoke('check_codex_oauth_login');
+      await checkCodexOAuthLogin();
       trackFormEdit({ ...formValues, oauthConfiguration: true });
       setOauthConfigurationDraft(true);
     } catch (requestError) {
@@ -1347,7 +1283,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('apply');
     setConfigurationNotice('');
     try {
-      const result = await invoke<AgentConfigActionResult>('update_agent_config', {
+      const result = await updateAgentConfig({
         client: selected,
         model,
         oauthConfiguration,
@@ -1381,7 +1317,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setConfigurationNotice('');
     setClearNotice('');
     try {
-      await invoke<AgentConfigActionResult>('install_pi_provider', { model, executableOverrides: executablePaths });
+      await installPiProviderCommand({ model, executableOverrides: executablePaths });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t('agents.management.pluginInstalled'));
@@ -1402,7 +1338,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setClearNotice('');
     setPiProviderUpdateStatus(null);
     try {
-      await invoke<AgentConfigActionResult>('update_pi_provider', { model, executableOverrides: executablePaths });
+      await updatePiProviderCommand({ model, executableOverrides: executablePaths });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t('agents.management.pluginUpdated'));
@@ -1420,7 +1356,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('repair-pi');
     setConfigurationError('');
     try {
-      const result = await invoke<AgentConfigActionResult>('repair_pi_provider', { model });
+      const result = await repairPiProviderCommand({ model });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t(result.outcome === 'unchanged' ? 'agents.backup.unchanged' : 'agents.backup.updated'));
@@ -1439,7 +1375,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setClearNotice('');
     setPiProviderUpdateStatus(null);
     try {
-      await invoke<AgentConfigActionResult>('uninstall_pi_provider', { executableOverrides: executablePaths });
+      await uninstallPiProviderCommand({ executableOverrides: executablePaths });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t('agents.management.pluginUninstalled'));
@@ -1461,7 +1397,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('default');
     setDefaultError('');
     try {
-      await invoke<AgentConfigActionResult>('apply_agent_config_template', {
+      await applyAgentConfigTemplate({
         revision: templatePreview.revision,
         client: selected,
         model,
@@ -1474,7 +1410,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       if (isClaudeModelMappingClient) {
         claudeModelMappingsDirtyRef.current[selected] = false;
       }
-      const refreshed = await invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: executablePaths });
+      const refreshed = await refreshAgentConfigStatuses({ executableOverrides: executablePaths });
       setStatuses(refreshed);
       const current = refreshed.find((status) => status.id === selected)?.currentModel;
       setModelByClient((values) => { const next = { ...values, [selected]: current ?? '' }; writeAgentModelSelections(next); return next; });
@@ -1494,8 +1430,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   };
 
   const removeSelectedConfiguration = () => selected === 'codex'
-    ? invoke<AgentConfigActionResult>('close_codex_config_modification')
-    : invoke<AgentConfigActionResult>('set_agent_config_enabled', {
+    ? closeCodexConfigModification()
+    : setAgentConfigEnabled({
       client: selected, model: '', enabled: false, forceRestore: false,
       claudeCodeModelMappings: null, claudeDesktopModelMappings: null,
       executableOverrides: executablePaths,
@@ -1508,7 +1444,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setClearError('');
     setClearNotice('');
     try {
-      if (selected === 'codex') await invoke<string[]>('clear_codex_config');
+      if (selected === 'codex') await clearCodexConfig();
       else await removeSelectedConfiguration();
       clearPendingChanges();
       if (isClaudeModelMappingClient) claudeModelMappingsDirtyRef.current[selected] = false;
@@ -1564,7 +1500,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       const next = { ...executablePaths, [key]: selectedPath.trim() };
       setExecutablePaths(next);
       writeAgentExecutablePaths(next);
-      const refreshed = await invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: next });
+      const refreshed = await refreshAgentConfigStatuses({ executableOverrides: next });
       setStatuses(refreshed);
       setConfigurationNotice(t('agents.executablePath.saved'));
     } catch (requestError) {
@@ -1577,7 +1513,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     delete next[desktop ? `${selected}:app` as const : selected];
     setExecutablePaths(next);
     writeAgentExecutablePaths(next);
-    void invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: next }).then(setStatuses);
+    void refreshAgentConfigStatuses({ executableOverrides: next }).then(setStatuses);
   };
 
   const rememberLaunchDirectory = (client: AgentClientId, directory: string) => {
@@ -1599,7 +1535,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction(action);
     setLaunchError('');
     try {
-      await invoke('launch_agent', {
+      await launchAgentCommand({
         client: selected,
         target: target.id,
         executablePath: executablePaths[selected] ?? null,
@@ -1639,7 +1575,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('stop-deepseek');
     setLaunchError('');
     try {
-      const status = await invoke<DeepSeekHarnessProcessStatus>('stop_deepseek_harness_process');
+      const status = await stopDeepSeekHarnessProcess();
       setDeepSeekHarnessProcessStatus(status);
     } catch (requestError) {
       setLaunchError(String(requestError));
@@ -1653,7 +1589,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('restart-app');
     setLaunchError('');
     try {
-      await invoke('restart_agent_app', { client: selected,
+      await restartAgentApp({ client: selected,
         executablePath: executablePaths[hasIndependentCliAndApp ? `${selected}:app` as const : selected] ?? null });
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'launch')) {
@@ -1685,7 +1621,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setLaunchError('');
     setConfigurationNotice('');
     try {
-      if (!await invoke<boolean>('get_codex_cli_daemon_running', { executablePath })) {
+      if (!await getCodexCliDaemonRunning({ executablePath })) {
         setConfigurationNotice(t('agents.launch.cliServiceNotRunning'));
         return;
       }
@@ -1696,7 +1632,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         variant: 'danger',
       });
       if (!confirmed) return;
-      const restart = invoke<void>('restart_codex_cli_daemon', { executablePath })
+      const restart = restartCodexCliDaemon({ executablePath })
         .finally(() => { codexCliServiceRestart = null; });
       codexCliServiceRestart = restart;
       await restart;
@@ -1712,7 +1648,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('restart-deepseek');
     setLaunchError('');
     try {
-      setDeepSeekHarnessProcessStatus(await invoke<DeepSeekHarnessProcessStatus>('restart_deepseek_harness_process'));
+      setDeepSeekHarnessProcessStatus(await restartDeepSeekHarnessProcess());
     } catch (requestError) {
       setLaunchError(String(requestError));
       await loadDeepSeekHarnessProcessStatus().catch(() => undefined);
@@ -1750,7 +1686,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const createManualBackup = async () => {
     setBusyAction('backup'); setConfigurationError(''); setConfigurationNotice('');
     try {
-      await invoke('create_agent_config_backup', { client: selected });
+      await createAgentConfigBackup({ client: selected });
       setConfigurationNotice(t('agents.backup.created'));
     } catch (cause) { setConfigurationError(String(cause)); }
     finally { setBusyAction(null); }
@@ -1763,7 +1699,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     if (!model) return;
     setDefaultError(''); setConfigurationError(''); setTemplatePreview(null); setBusyAction('default');
     try {
-      const preview = await invoke<{ revision: string; files: string[] }>('preview_agent_config_template', {
+      const preview = await previewAgentConfigTemplate({
         client: selected, model, oauthConfiguration,
         claudeCodeModelMappings: selected === 'claude-code' ? mappings : null,
         claudeDesktopModelMappings: selected === 'claude-desktop' ? mappings : null,
@@ -2438,7 +2374,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         clearPendingChanges();
         if (selected === 'claude-code' || selected === 'claude-desktop') claudeModelMappingsDirtyRef.current[selected] = false;
         setOauthConfigurationDraft(null);
-        const refreshed = await invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: executablePaths });
+        const refreshed = await refreshAgentConfigStatuses({ executableOverrides: executablePaths });
         setStatuses(refreshed);
         const current = refreshed.find((status) => status.id === selected)?.currentModel;
         setModelByClient((values) => { const next = { ...values, [selected]: current ?? '' }; writeAgentModelSelections(next); return next; });

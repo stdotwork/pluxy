@@ -1,8 +1,14 @@
+import { onWindowsCloseRequested } from './services/events';
+import {
+  openExternalUrl,
+  getGuiSettings,
+  resolveWindowsCloseRequest as resolveWindowsCloseRequestCommand,
+} from './services/appSettings';
+import type { WindowsCloseAction } from './services/appSettings';
+import { closePluginWebview } from './services/pluginWebview';
 import { MessageNotice } from './appNotice';
 import { ThemeSelector } from './components/ThemeSelector';
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import {
   Bot,
   Check,
@@ -124,17 +130,11 @@ const pages = [
 
 type PageId = (typeof pages)[number]['id'];
 type AppPageId = PageId | `/plugin-pages/${string}`;
-type WindowsCloseAction = 'exit' | 'minimize-to-tray';
-type WindowsCloseBehavior = 'ask' | WindowsCloseAction;
 
 type WindowsClosePrompt = {
   resolvingAction: WindowsCloseAction | null;
   rememberChoice: boolean;
   error: string | null;
-};
-
-type GuiSettings = {
-  closeBehavior: WindowsCloseBehavior;
 };
 
 function HomePage() {
@@ -210,7 +210,7 @@ function AppContent() {
   }, [active, coreReady]);
 
   useEffect(() => {
-    if (!coreReady) void invoke('close_plugin_webview').catch(() => undefined);
+    if (!coreReady) void closePluginWebview().catch(() => undefined);
   }, [coreReady]);
 
   useEffect(() => {
@@ -245,7 +245,7 @@ function AppContent() {
 
     const handleWindowsCloseRequest = async () => {
       try {
-        const settings = await invoke<GuiSettings>('get_gui_settings');
+        const settings = await getGuiSettings();
         if (settings.closeBehavior !== 'ask') {
           await resolveWindowsCloseRequest(settings.closeBehavior, false);
           return;
@@ -263,7 +263,7 @@ function AppContent() {
       );
     };
 
-    void listen('windows-close-requested', () => {
+    void onWindowsCloseRequested(() => {
       void handleWindowsCloseRequest();
     })
       .then((stop) => {
@@ -320,7 +320,7 @@ function AppContent() {
 
   const openContact = async () => {
     try {
-      await invoke('open_external_url', {
+      await openExternalUrl({
         url: locale === 'zh-CN' ? QQ_CONTACT_URL : DISCORD_SERVER_URL,
       });
     } catch (error) {
@@ -343,7 +343,7 @@ function AppContent() {
     );
 
     try {
-      await invoke('resolve_windows_close_request', { action, remember });
+      await resolveWindowsCloseRequestCommand({ action, remember });
       setWindowsClosePrompt(null);
     } catch (error) {
       setWindowsClosePrompt((current) =>

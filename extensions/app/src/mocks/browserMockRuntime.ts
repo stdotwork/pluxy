@@ -1,3 +1,4 @@
+import { isThemeSelection, type ThemeSelection } from '../themes/types';
 import { applyTemplateChanges, readTemplatePath, sameTemplateValue, type TemplateConfigChange } from '../services/templateConfig';
 import { createPluginMock, type PluginWebviewMockState } from './pluginMock';
 import { createQuotaMock, createQuotaMockFiles } from './quotaMock';
@@ -952,6 +953,9 @@ export function createBrowserMockRuntime(
   onPluginWebview?: (state: PluginWebviewMockState) => void,
 ): BrowserMockRuntime {
   const state = createState(scenario);
+  let usageViewPreferences: Record<string, string> = {};
+  let privacyMode: boolean | null = null;
+  let themeSelection: ThemeSelection | null = null;
   if (scenario === 'empty') {
     state.usageEvents = [];
     state.usagePrices = [];
@@ -1026,6 +1030,28 @@ export function createBrowserMockRuntime(
         Object.assign(state.coreStatus, { running: true, ready: true, managed: true, starting: false, processId: 42818, message: 'Browser Mock core restarted' });
         emit('core-status-changed', state.coreStatus);
         return clone(state.coreStatus);
+      }
+      case 'get_usage_view_preferences': return clone(usageViewPreferences);
+      case 'save_usage_view_preferences': {
+        const values = asObject(payload.values);
+        if (!payload.values || typeof payload.values !== 'object' || Array.isArray(payload.values) || Object.keys(values).length > 100
+          || Object.entries(values).some(([key, value]) => typeof value !== 'string' || new TextEncoder().encode(key).length > 128 || new TextEncoder().encode(value as string).length > 16_384
+            || (!key.startsWith('cpa-gui.usage-') && key !== 'cpa-gui.pricing-sync-source.v1'))) throw new Error('Invalid usage preferences');
+        usageViewPreferences = clone(values) as Record<string, string>;
+        return null;
+      }
+      case 'get_privacy_mode': return privacyMode;
+      case 'save_privacy_mode': {
+        if (typeof payload.enabled !== 'boolean') throw new Error('Invalid privacy mode');
+        privacyMode = payload.enabled;
+        return null;
+      }
+      case 'get_theme_selection': return clone(themeSelection);
+      case 'save_theme_selection': {
+        if (!isThemeSelection(payload.selection)
+          || Object.keys(payload.selection).some(key => !['version', 'selectedId', 'lastLightId', 'lastDarkId'].includes(key))) throw new Error('Invalid theme selection');
+        themeSelection = clone(payload.selection);
+        return null;
       }
       case 'get_gui_settings': return clone(state.guiSettings);
       case 'get_core_config_settings': return clone(state.coreConfig);

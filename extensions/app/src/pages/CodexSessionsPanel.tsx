@@ -1,8 +1,14 @@
+import { onCodexSessionRepairProgress } from '../services/events';
+import {
+  listCodexSessions,
+  deleteCodexSessions,
+  repairCodexSessionMetadata,
+  previewCodexSessionIndexCleanup,
+  applyCodexSessionIndexCleanup,
+} from '../services/codexSessions';
 import { MessageNotice } from '../appNotice';
 import { CodexSessionContextEditor } from './CodexSessionContextEditor';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import {
   ArrowLeft,
   ArrowRight,
@@ -22,13 +28,10 @@ import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 import {
   codexSessionPageCounts,
   retainVisibleCodexSessionIds,
-  type CodexSessionDeleteBatchResult,
   type CodexSessionPage,
   type CodexSessionRepairProgress,
-  type CodexSessionRepairResult,
   type CodexSessionSummary,
   type SessionIndexCleanupPreview,
-  type SessionIndexCleanupResult,
 } from '../services/codexSessionState';
 
 type Notice = {
@@ -110,7 +113,7 @@ export function CodexSessionsPanel() {
       setNotice((current) => current?.kind === 'error' ? null : current);
     }
     try {
-      const result = await invoke<CodexSessionPage>('list_codex_sessions', {
+      const result = await listCodexSessions({
         request: { offset, limit: PAGE_SIZE },
       });
       if (!mountedRef.current || requestId !== loadRequestRef.current) return null;
@@ -139,7 +142,7 @@ export function CodexSessionsPanel() {
   useEffect(() => {
     let disposed = false;
     let stop: (() => void) | undefined;
-    void listen<CodexSessionRepairProgress>('codex-session-repair-progress', (event) => {
+    void onCodexSessionRepairProgress((event) => {
       if (!disposed) setRepairProgress(event.payload);
     }).then((unlisten) => {
       if (disposed) unlisten();
@@ -200,7 +203,7 @@ export function CodexSessionsPanel() {
     setOperation('delete');
     setNotice(null);
     try {
-      const result = await invoke<CodexSessionDeleteBatchResult>('delete_codex_sessions', {
+      const result = await deleteCodexSessions({
         request: { sessionIds: request.ids },
       });
       const failed = result.results.filter((item) => !['deleted', 'partial'].includes(item.status));
@@ -232,7 +235,7 @@ export function CodexSessionsPanel() {
     setNotice(null);
     setRepairProgress({ phase: 'scanning', percent: 4, processed: 0, total: 0 });
     try {
-      const result = await invoke<CodexSessionRepairResult>('repair_codex_session_metadata');
+      const result = await repairCodexSessionMetadata();
       const messages = [
         t('agents.sessions.repairResult', {
           provider: result.targetProvider,
@@ -260,7 +263,7 @@ export function CodexSessionsPanel() {
     setOperation('preview');
     setNotice(null);
     try {
-      const preview = await invoke<SessionIndexCleanupPreview>('preview_codex_session_index_cleanup');
+      const preview = await previewCodexSessionIndexCleanup();
       setCleanupSelectedIds(new Set());
       if (preview.candidates.length === 0) {
         setCleanupPreview(null);
@@ -283,7 +286,7 @@ export function CodexSessionsPanel() {
     setOperation('cleanup');
     setNotice(null);
     try {
-      const result = await invoke<SessionIndexCleanupResult>('apply_codex_session_index_cleanup', {
+      const result = await applyCodexSessionIndexCleanup({
         request: {
           snapshotSha256: cleanupPreview.snapshotSha256,
           threadIds: Array.from(cleanupSelectedIds),

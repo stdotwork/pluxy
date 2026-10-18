@@ -1,10 +1,6 @@
-import { MessageNotice } from '../appNotice';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Check, LoaderCircle, RefreshCw, Search, X } from 'lucide-react';
-import { useI18n } from '../i18n';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 import {
+  getCodexModelCatalogEditor,
+  saveCodexModelCatalogEditor,
   cloneCodexModelConfiguration,
   codexContextSourceHint,
   codexReasoningEfforts,
@@ -12,11 +8,15 @@ import {
   toggleCodexReasoningLevel,
   validateCodexModelConfiguration,
   type CodexCatalogEditorModel,
-  type CodexCatalogEditorSaveResult,
   type CodexCatalogEditorSnapshot,
   type CodexModelConfiguration,
   type CodexReasoningEffort,
 } from '../services/codexModelCatalog';
+import { MessageNotice } from '../appNotice';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Check, LoaderCircle, RefreshCw, Search, X } from 'lucide-react';
+import { useI18n } from '../i18n';
+import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
 
 type CodexModelCatalogDialogProps = {
   onClose: () => void;
@@ -49,7 +49,7 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
     setError('');
     setNotice('');
     try {
-      const next = await invoke<CodexCatalogEditorSnapshot>('get_codex_model_catalog_editor');
+      const next = await getCodexModelCatalogEditor();
       setSnapshot(next);
       setModels(cloneModels(next).map((model) => restoreDefaults
         ? { ...model, configuration: cloneCodexModelConfiguration(model.defaults) }
@@ -153,7 +153,7 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
     setError('');
     setNotice('');
     try {
-      const result = await invoke<CodexCatalogEditorSaveResult>('save_codex_model_catalog_editor', {
+      const result = await saveCodexModelCatalogEditor({
         request: {
           revision: snapshot.revision,
           models: models.map((model) => ({
