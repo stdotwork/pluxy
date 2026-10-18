@@ -87,7 +87,7 @@ export function AgentModelPicker({
     if (!root) return;
 
     const rect = root.getBoundingClientRect();
-    const dialog = root.closest('dialog');
+    const dialog = root.closest('[role="dialog"], [role="alertdialog"]');
     const footer = dialog?.querySelector('.credential-settings-footer');
     const heading = dialog?.querySelector('.credential-settings-heading');
     const frame = dialog?.getBoundingClientRect();
@@ -131,7 +131,7 @@ export function AgentModelPicker({
       setDialogOverlay(false);
       return undefined;
     }
-    const inDialog = Boolean(rootRef.current?.closest('dialog'));
+    const inDialog = Boolean(rootRef.current?.closest('[role="dialog"], [role="alertdialog"]'));
     if (inDialog !== dialogOverlay) {
       setDialogOverlay(inDialog);
       return undefined;
@@ -158,8 +158,18 @@ export function AgentModelPicker({
       const target = event.target as Node;
       if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || !rootRef.current?.contains(event.target as Node)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
     document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
+    window.addEventListener('keydown', escape, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', escape, true);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -199,9 +209,6 @@ export function AgentModelPicker({
     } else if (event.key === 'Enter' && open && choices[activeIndex]) {
       event.preventDefault();
       choose(choices[activeIndex].name);
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      setOpen(false);
     }
   };
 

@@ -7290,6 +7290,13 @@ textarea:focus-visible {
   box-shadow: 0 14px 34px rgba(45, 42, 38, 0.2);
 }
 
+.agent-model-dropdown[popover] {
+  inset: auto;
+  margin: 0;
+  overflow: visible;
+  color: inherit;
+}
+
 .agent-model-dropdown-editable {
   grid-template-rows: minmax(0, 1fr) 28px;
 }
