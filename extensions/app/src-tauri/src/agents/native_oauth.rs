@@ -47,6 +47,131 @@ struct NativeOAuthState {
     original_auth: Option<String>,
     #[serde(default)]
     restore_full_routing: bool,
+    #[serde(default)]
+    original_openai_override: Option<String>,
+}
+
+// This is CPA routing under the built-in provider ID, not official direct access.
+pub(crate) fn codex_uses_openai_proxy(document: &toml_edit::Document) -> bool {
+    document.get("model_provider").and_then(toml_edit::Item::as_str) == Some("openai")
+        && codex_provider_table(document).is_some_and(|provider| {
+            provider.get("name").and_then(toml_edit::Item::as_str) == Some("EasyCLIProxyAPI")
+                && document.get("openai_base_url").and_then(toml_edit::Item::as_str).is_some_and(|base| {
+                    provider.get("base_url").and_then(toml_edit::Item::as_str) == Some(base)
+                })
+        })
+}
+
+pub(crate) fn codex_openai_proxy_enabled(home: &Path) -> Result<bool, String> {
+    let content = read_optional_text(&codex_configuration_directory(home).join("config.toml"))?;
+    Ok(codex_uses_openai_proxy(&parse_codex_document(content.as_deref(), "Codex config.toml")?))
+}
+
+fn restore_cpa_provider_identity(document: &mut toml_edit::Document, state: &mut NativeOAuthState) -> Result<(), String> {
+    if !codex_uses_openai_proxy(document) { return Ok(()); }
+    let saved = parse_codex_document(state.original_openai_override.as_deref(), "Saved OpenAI provider")?;
+    restore_codex_table_item(document.as_table_mut(), Some(saved.as_table()), "openai_base_url");
+    document["model_provider"] = toml_edit::value(MANAGED_AGENT_PROVIDER_ID);
+    state.original_openai_override = None;
+    Ok(())
+}
+
+pub(crate) fn restore_codex_proxy_identity_for_removal(document: &mut toml_edit::Document, config_path: &Path) -> Result<(), String> {
+    if !codex_uses_openai_proxy(document) { return Ok(()); }
+    let mut state = parse_state(read_agent_bytes(&config_path.with_file_name(CODEX_NATIVE_OAUTH_STATE_FILE))?.as_deref())?;
+    restore_cpa_provider_identity(document, &mut state)
+}
+
+pub(crate) fn switch_codex_openai_provider(home: &Path, enabled: bool) -> Result<AgentConfigActionResult, String> {
+    let directory = codex_configuration_directory(home);
+    let paths = vec![directory.join(CODEX_NATIVE_OAUTH_STATE_FILE), directory.join("config.toml")];
+    let before = config_images(&paths)?;
+    let mut state = parse_state(before[0].1.as_deref())?;
+    let mut document = parse_codex_document(text(before[1].1.as_deref())?, "Codex config.toml")?;
+    let currently_enabled = codex_uses_openai_proxy(&document);
+    if native_selected(&document, &state) || (!currently_enabled
+        && document.get("model_provider").and_then(toml_edit::Item::as_str) != Some(MANAGED_AGENT_PROVIDER_ID)) {
+        return Err("Apply the CPA configuration before changing the provider identity".into());
+    }
+    if document.get("profile").and_then(toml_edit::Item::as_str).is_some_and(|p| !p.trim().is_empty()) {
+        return Err("An active Codex profile can override the provider. Remove the profile selection before switching".into());
+    }
+    if enabled != currently_enabled {
+        if enabled {
+            let provider = codex_provider_table(&document).ok_or("Missing CPA provider configuration")?.clone();
+            if provider.get("name").and_then(toml_edit::Item::as_str) != Some("EasyCLIProxyAPI")
+                || !provider.get("base_url").and_then(toml_edit::Item::as_str).is_some_and(is_managed_agent_base_url) {
+                return Err("Apply the CPA configuration before changing the provider identity".into());
+            }
+            let mut saved = toml_edit::Document::new();
+            restore_codex_table_item(saved.as_table_mut(), Some(document.as_table()), "openai_base_url");
+            state.original_openai_override = Some(saved.to_string());
+            document["openai_base_url"] = provider.get("base_url").cloned().ok_or("Missing CPA endpoint")?;
+            document["model_provider"] = toml_edit::value("openai");
+        } else {
+            restore_cpa_provider_identity(&mut document, &mut state)?;
+        }
+    }
+    let after = vec![
+        (paths[0].clone(), Some(serde_json::to_vec_pretty(&state).map_err(|_| "Failed to save provider switch record")?)),
+        (paths[1].clone(), Some(document.to_string().into_bytes())),
+    ];
+    commit_config("codex", &paths, &before, &after, "provider-identity", None)
+}
+
+// The built-in provider ignores model_providers.openai overrides. It uses
+// auth.json and the top-level openai_base_url, so validate that auth at CPA first.
+async fn validate_codex_openai_proxy_auth(config: &str, auth: &str) -> Result<(), String> {
+    let document = parse_codex_document(Some(config), "Codex config.toml")?;
+    let provider = codex_provider_table(&document).ok_or("Missing CPA provider configuration")?;
+    let base = provider.get("base_url").and_then(toml_edit::Item::as_str).ok_or("Missing CPA endpoint")?;
+    if !is_managed_agent_base_url(base) {
+        return Err("Apply the CPA configuration before changing the provider identity".into());
+    }
+    let auth = parse_agent_json_object(Some(auth), "Codex auth.json")?;
+    let oauth = provider.get("requires_openai_auth").and_then(toml_edit::Item::as_bool) == Some(true);
+    let token = if oauth {
+        auth.get("tokens").and_then(|tokens| tokens.get("access_token")).and_then(serde_json::Value::as_str)
+    } else {
+        auth.get("OPENAI_API_KEY").and_then(serde_json::Value::as_str)
+    }.filter(|token| !token.trim().is_empty()).ok_or("Missing Codex credentials")?;
+    let client = reqwest::Client::builder().no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10)).build()
+        .map_err(|_| "Failed to create CPA authentication check")?;
+    let mut request = client.get(format!("{}/models", base.trim_end_matches('/'))).bearer_auth(token);
+    if oauth {
+        if let Some(account) = auth.get("tokens").and_then(|tokens| tokens.get("account_id")).and_then(serde_json::Value::as_str) {
+            request = request.header("ChatGPT-Account-ID", account);
+        }
+    }
+    let status = request.send().await.map_err(|_| "Unable to check CPA authentication. Ensure the core is running")?.status();
+    if status.is_success() { return Ok(()); }
+    if oauth && matches!(status.as_u16(), 401 | 403) {
+        return Err("CPA_CODEX_OAUTH_AUTH_UNSUPPORTED".into());
+    }
+    Err(format!("CPA authentication check failed (HTTP {})", status.as_u16()))
+}
+
+#[tauri::command]
+pub(crate) async fn set_codex_openai_provider(app: tauri::AppHandle, enabled: bool) -> Result<AgentConfigActionResult, String> {
+    let home = app.path().home_dir().map_err(|_| "Failed to get user directory")?;
+    let directory = codex_configuration_directory(&home);
+    let paths = vec![directory.join("config.toml"), directory.join("auth.json")];
+    let before = config_images(&paths)?;
+    if enabled {
+        validate_codex_openai_proxy_auth(
+            text(before[0].1.as_deref())?.ok_or("Missing Codex configuration")?,
+            text(before[1].1.as_deref())?.ok_or("Missing Codex credentials")?,
+        ).await?;
+    }
+    let _guard = AGENT_CONFIG_FILE_LOCK.lock().map_err(|_| "Agent configuration file lock is poisoned")?;
+    if before != config_images(&paths)? {
+        return Err("Codex configuration or credentials changed. Refresh and try again".into());
+    }
+    let result = switch_codex_openai_provider(&home, enabled)?;
+    app.state::<AgentConfigStatusCache>().clear()?;
+    Ok(result)
 }
 
 fn parse_state(bytes: Option<&[u8]>) -> Result<NativeOAuthState, String> {
@@ -218,7 +343,8 @@ pub(crate) fn close_codex_configuration(home: &Path) -> Result<AgentConfigAction
     ];
     let before = config_images(&paths)?;
     let mut state = parse_state(before[0].1.as_deref())?;
-    let current = parse_codex_document(text(before[2].1.as_deref())?, "Codex config.toml")?;
+    let mut current = parse_codex_document(text(before[2].1.as_deref())?, "Codex config.toml")?;
+    restore_cpa_provider_identity(&mut current, &mut state)?;
     if current
         .get("model_provider")
         .and_then(toml_edit::Item::as_str)
@@ -233,7 +359,7 @@ pub(crate) fn close_codex_configuration(home: &Path) -> Result<AgentConfigAction
         ));
     }
     let original = state.original_settings.as_deref();
-    let restored = build_restored_codex_agent_config(text(before[2].1.as_deref())?, original)?;
+    let restored = build_restored_codex_agent_config(Some(&current.to_string()), original)?;
     let mut document = parse_codex_document(restored.as_deref(), "Codex restored config.toml")?;
     if let Some(original) = original {
         let saved = parse_codex_document(Some(original), "Codex saved settings")?;
@@ -426,7 +552,7 @@ pub(crate) fn apply_codex_cpa_configuration(
     let current_document =
         parse_codex_document(text(native_before[2].1.as_deref())?, "Codex config.toml")?;
     let auth = text(native_before[1].1.as_deref())?;
-    if current_document
+    if !codex_uses_openai_proxy(&current_document) && current_document
         .get("model_provider")
         .and_then(toml_edit::Item::as_str)
         != Some(MANAGED_AGENT_PROVIDER_ID)
