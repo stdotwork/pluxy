@@ -7,19 +7,18 @@ export function handleHorizontalTabKey<T extends string>(
   tabs: readonly T[],
   current: T,
   activate: (tab: T) => void,
-  focusTab: (tab: T) => HTMLElement | null,
+  key = event.key,
 ) {
-  if (!horizontalKeys.has(event.key) || tabs.length === 0) return;
+  if (!horizontalKeys.has(key) || tabs.length === 0) return;
   const index = Math.max(0, tabs.indexOf(current));
-  const nextIndex = event.key === 'Home'
+  const nextIndex = key === 'Home'
     ? 0
-    : event.key === 'End'
+    : key === 'End'
       ? tabs.length - 1
-      : event.key === 'ArrowRight'
+      : key === 'ArrowRight'
         ? (index + 1) % tabs.length
         : (index - 1 + tabs.length) % tabs.length;
   const next = tabs[nextIndex];
   event.preventDefault();
   activate(next);
-  window.requestAnimationFrame(() => focusTab(next)?.focus());
 }

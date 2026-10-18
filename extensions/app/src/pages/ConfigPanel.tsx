@@ -22,7 +22,7 @@ import {
 } from '../services/coreSettings';
 import type { CoreConfigSettings, CoreApiKey, SoftwareSettings, CloseBehavior, CoreTlsSettings } from '../services/coreSettings';
 import { CoolingToggle } from '../components/settings/CoolingToggle';
-import { FormEvent, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { open } from '../services/platform';
 import {
   AlertCircle,
@@ -61,7 +61,8 @@ import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
 import { webUiManagementUrl } from '../services/clientAccess';
 import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 import { SensitiveWordsPage } from './SensitiveWordsPage';
-import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
+import { Tabs } from '../components/Tabs';
+import { SegmentedControl } from '../components/SegmentedControl';
 import { Dialog } from '../components/Dialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { TemplateConfigSection } from '../components/TemplateConfigSection';
@@ -86,7 +87,6 @@ type ConfigAction =
   | 'software'
   | null;
 type ConfigSubpage = SettingsCategory;
-const CONFIG_SUBPAGES = settingsCategories.map(category => category.id);
 const CATEGORY_ICONS = { general: ShieldCheck, aliases: Link2, routing: Route, requests: SlidersHorizontal, oauth: KeyRound, diagnostics: FileText, software: Settings2 };
 type SettingDestination = { category: ConfigSubpage; target: string; field?: string };
 type SettingSearchEntry = SettingDestination & { title: string; context: string; keywords: string };
@@ -999,10 +999,6 @@ export function ConfigPanelPage() {
     }
     if (subpage === 'aliases') setAliasesVisited(true);
   };
-  const handleConfigTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, subpage: ConfigSubpage) => {
-    handleHorizontalTabKey(event, CONFIG_SUBPAGES, subpage, activateConfigSubpage,
-      next => document.getElementById(`config-subpage-tab-${next}`));
-  };
   const navigateToSetting = (destination: SettingDestination) => {
     activateConfigSubpage(destination.category);
     setPendingDestination(destination);
@@ -1061,13 +1057,11 @@ export function ConfigPanelPage() {
       {confirmationDialog}
       <div className="config-settings-layout">
         <div className="config-settings-topnav">
-          <div ref={categoryNavigationRef} className="config-subpage-tabs config-settings-navigation" role="tablist" aria-orientation="horizontal" aria-label={t('config.tabs.label')}>
-            {settingsCategories.map(item => {
+          <Tabs ref={categoryNavigationRef} className="config-subpage-tabs config-settings-navigation" aria-label={t('config.tabs.label')} value={activeSubpage} onChange={activateConfigSubpage}
+            items={settingsCategories.map(item => {
               const Icon = CATEGORY_ICONS[item.id];
-              const dirty = categoryDirty(item.id);
-              return <button type="button" key={item.id} id={`config-subpage-tab-${item.id}`} role="tab" className={activeSubpage === item.id ? 'active' : ''} aria-selected={activeSubpage === item.id} aria-controls="config-subpage-panel" tabIndex={activeSubpage === item.id ? 0 : -1} onClick={() => activateConfigSubpage(item.id)} onKeyDown={event => handleConfigTabKeyDown(event, item.id)}><Icon size={17} aria-hidden="true" /><span>{templateText(item.title, locale)}</span>{dirty ? <span className="config-nav-dirty" title={st('dirty')}><span className="sr-only">{st('dirty')}</span></span> : null}</button>;
-            })}
-          </div>
+              return { value: item.id, id: `config-subpage-tab-${item.id}`, panelId: 'config-subpage-panel', label: <><Icon size={17} aria-hidden="true" /><span>{templateText(item.title, locale)}</span>{categoryDirty(item.id) ? <span className="config-nav-dirty" title={st('dirty')}><span className="sr-only">{st('dirty')}</span></span> : null}</> };
+            })} />
           <div className="config-settings-search"><Search size={18} aria-hidden="true" /><input ref={searchRef} type="search" aria-label={st('search')} placeholder={st('searchHint')} value={settingsSearch} onChange={event => setSettingsSearch(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Escape') setSettingsSearch(''); }} />{searching ? <button type="button" className="icon-button quiet" aria-label={st('clearSearch')} onClick={() => { setSettingsSearch(''); searchRef.current?.focus(); }}><X size={16} /></button> : null}</div>
         </div>
         <div className="config-settings-content" id="config-subpage-panel" role="tabpanel" aria-labelledby={`config-subpage-tab-${activeSubpage}`}>
@@ -1578,21 +1572,9 @@ export function ConfigPanelPage() {
                   {t('config.routing.title')}
                   <span className="config-inline-status">{st('automatic')}</span>
                 </span>
-                <div className="routing-segmented" role="group" aria-label={t('config.routing.title')}>
-                  {ROUTING_OPTIONS.map((option) => (
-                    <button
-                      type="button"
-                      key={option.value}
-                      className={settings?.routingStrategy === option.value ? 'active' : ''}
-                      aria-pressed={settings?.routingStrategy === option.value}
-                      disabled={controlsDisabled}
-                      onClick={() => void changeRoutingStrategy(option.value)}
-                      title={option.value}
-                    >
-                      {option.value === 'weighted-round-robin' ? templateText(templateMessages.weighted, locale) : t(option.labelKey)}
-                    </button>
-                  ))}
-                </div>
+                <SegmentedControl className="routing-segmented" aria-label={t('config.routing.title')} value={settings?.routingStrategy ?? ''}
+                  disabled={controlsDisabled} onChange={value => void changeRoutingStrategy(value)}
+                  items={ROUTING_OPTIONS.map(option => ({ value: option.value, title: option.value, label: option.value === 'weighted-round-robin' ? templateText(templateMessages.weighted, locale) : t(option.labelKey) }))} />
                 <small className="sr-only" title={settings?.routingStrategy || undefined}>
                   {loading
                     ? t('common.loading')

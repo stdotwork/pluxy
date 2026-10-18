@@ -1,6 +1,6 @@
 import { getOAuthStatus, startOAuthLogin, openOAuthUrl, submitOAuthCallback, listOAuthBrowsers } from '../services/oauth';
 import type { OAuthBrowserOption } from '../services/oauth';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronRight,
   Check,
@@ -38,7 +38,7 @@ import { managementApi, responseList } from '../services/managementApi';
 import { createOAuthLoginSuccessCache } from '../services/oauthLoginState';
 import { AuthFileManagementPage } from './AuthFileManagementPage';
 import { validateDevinCallback } from '../services/devinOAuth';
-import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
+import { Tabs } from '../components/Tabs';
 import { PluginOAuthProviders } from './PluginOAuthProviders';
 import { notifyPluginResourcesChanged, PLUGIN_RESOURCES_REFRESH_EVENT } from '../services/pluginResources';
 import { VertexLoginCard } from './VertexLoginCard';
@@ -119,47 +119,12 @@ export function OAuthManagementPage() {
     setAuthFilesProvider(provider);
     setActiveSubpage('authFiles');
   }, []);
-  const subpageIds = oauthSubpages.map((subpage) => subpage.id);
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, subpage: OAuthSubpage) => {
-    handleHorizontalTabKey(
-      event,
-      subpageIds,
-      subpage,
-      setActiveSubpage,
-      (next) => document.getElementById(`oauth-subpage-tab-${next}`),
-    );
-  };
 
   return (
     <section className="page oauth-management-page">
-      <div
-        className="agent-subpage-tabs oauth-subpage-tabs"
-        role="tablist"
-        aria-label={t('oauth.tabs.label')}
-      >
-        {oauthSubpages.map((subpage) => {
-          const active = activeSubpage === subpage.id;
-          return (
-            <button
-              type="button"
-              id={`oauth-subpage-tab-${subpage.id}`}
-              key={subpage.id}
-              role="tab"
-              className={active ? 'active' : ''}
-              aria-selected={active}
-              aria-controls="oauth-subpage-panel"
-              tabIndex={active ? 0 : -1}
-              onClick={() => {
-                setAuthFilesProvider(undefined);
-                setActiveSubpage(subpage.id);
-              }}
-              onKeyDown={(event) => handleTabKeyDown(event, subpage.id)}
-            >
-              {t(subpage.labelKey)}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs className="agent-subpage-tabs oauth-subpage-tabs" aria-label={t('oauth.tabs.label')} value={activeSubpage}
+        onChange={subpage => { setAuthFilesProvider(undefined); setActiveSubpage(subpage); }}
+        items={oauthSubpages.map(subpage => ({ value: subpage.id, id: `oauth-subpage-tab-${subpage.id}`, panelId: 'oauth-subpage-panel', label: t(subpage.labelKey) }))} />
 
       <div
         className="oauth-subpage-panel"

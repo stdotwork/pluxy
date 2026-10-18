@@ -1,7 +1,8 @@
+import { SegmentedControl } from '../components/SegmentedControl';
 import { commitFetchedQuota } from '../services/quotaEnrichment';
 import { ResetCreditExpiries } from '../components/ResetCreditExpiries';
 import { MessageNotice } from '../appNotice';
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Gauge, ListRestart, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { OAuthPageToolbar } from '../components/OAuthPageToolbar';
@@ -142,20 +143,6 @@ export function QuotaPage() {
   const activeCategory = category !== 'all' && grouped.some(([provider]) => provider === category) ? category : 'all';
   const visibleItems = (activeCategory === 'all' ? grouped : grouped.filter(([provider]) => provider === activeCategory))
     .flatMap(([provider, items]) => items.map((item) => ({ provider, ...item })));
-  const moveCategory = (event: KeyboardEvent<HTMLDivElement>) => {
-    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
-    if (!buttons.length) return;
-    const current = Math.max(0, buttons.findIndex((button) => button === document.activeElement));
-    let next = current;
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (current + 1) % buttons.length;
-    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (current - 1 + buttons.length) % buttons.length;
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = buttons.length - 1;
-    else return;
-    event.preventDefault();
-    buttons[next]?.focus();
-    buttons[next]?.click();
-  };
 
   return (
     <section className="page management-page quota-page" aria-label={t('quota.title')}>
@@ -178,21 +165,14 @@ export function QuotaPage() {
         <div className="management-empty"><AlertCircle size={24} /><strong>{t('quota.empty.title')}</strong><span>{t('quota.empty.description')}</span></div>
       ) : (
         <>
-          <div className="quota-category-filter" role="radiogroup" aria-label={t('quota.filter.label')} onKeyDown={moveCategory}>
-            {([['all', files.length] as const, ...grouped.map(([provider, items]) => [provider, items.length] as const)]).map(([provider, count]) => {
-              const selected = activeCategory === provider;
+          <SegmentedControl className="quota-category-filter" aria-label={t('quota.filter.label')} value={activeCategory} onChange={setCategory}
+            items={([['all', files.length] as const, ...grouped.map(([provider, items]) => [provider, items.length] as const)]).map(([provider, count]) => {
               const label = provider === 'all' ? t('quota.filter.all') : providerMeta[provider].label;
-              return (
-                <button key={provider} type="button" role="radio" aria-checked={selected} tabIndex={selected ? 0 : -1}
-                  aria-label={`${label}, ${t(count === 1 ? 'quota.credentials.one' : 'quota.credentials.other', { count })}`}
-                  onClick={() => setCategory(provider)}>
-                  {provider === 'all' ? null : <img src={providerMeta[provider].icon} alt="" className={provider === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} />}
-                  <span>{label}</span>
-                  <span className="quota-filter-count">{count}</span>
-                </button>
-              );
-            })}
-          </div>
+              return { value: provider, 'aria-label': `${label}, ${t(count === 1 ? 'quota.credentials.one' : 'quota.credentials.other', { count })}`, label: <>
+                {provider === 'all' ? null : <img src={providerMeta[provider].icon} alt="" className={provider === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} />}
+                <span>{label}</span><span className="quota-filter-count">{count}</span>
+              </> };
+            })} />
           <div className="real-quota-grid">{visibleItems.map(({ provider, file, quota }) => <QuotaCard key={quotaKey(file)} file={file} quota={quota} onRefresh={() => void refreshOne(file)} onReset={provider === 'codex' || provider === 'claude' ? () => void resetQuota(file, quota) : undefined} />)}</div>
         </>
       )}

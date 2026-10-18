@@ -3,7 +3,7 @@ import { ArrowUpRight, Check, Copy, Eye, EyeOff } from 'lucide-react';
 import openaiIcon from '../assets/icons/openai-light.svg';
 import claudeIcon from '../assets/icons/claude.svg';
 import geminiIcon from '../assets/icons/gemini.svg';
-import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
+import { Tabs } from '../components/Tabs';
 import type { ClientApiProfile } from '../services/clientAccess';
 import { useI18n } from '../i18n';
 
@@ -35,17 +35,8 @@ export function HomeAccessPanel({ profiles, apiKey, keyError, ready, copiedField
           <span aria-hidden="true" />{t(ready ? 'kernel.access.connectable' : 'kernel.access.waiting')}
         </span>
       </div>
-      <div className="home-protocol-tabs" role="tablist" aria-label={t('home.access.protocol')}>
-        {profiles.map((item) => (
-          <button
-            key={item.id} id={`home-protocol-${item.id}`} type="button" role="tab"
-            aria-selected={active === item.id} aria-controls="home-protocol-panel"
-            tabIndex={active === item.id ? 0 : -1} className={active === item.id ? 'active' : ''}
-            onClick={() => setActive(item.id)}
-            onKeyDown={(event) => handleHorizontalTabKey(event, profiles.map((value) => value.id), item.id, setActive, (id) => document.getElementById(`home-protocol-${id}`))}
-          ><img src={icons[item.id]} alt="" />{item.name}</button>
-        ))}
-      </div>
+      <Tabs className="home-protocol-tabs" aria-label={t('home.access.protocol')} value={profile.id} onChange={setActive}
+        items={profiles.map(item => ({ value: item.id, id: `home-protocol-${item.id}`, panelId: 'home-protocol-panel', label: <><img src={icons[item.id]} alt="" />{item.name}</> }))} />
       <div id="home-protocol-panel" className={`home-connection-details client-api-card ${profile.id}`} role="tabpanel" aria-labelledby={`home-protocol-${profile.id}`}>
         <div className="home-field-label"><span>{t('easyMode.api.baseUrl')}</span><span>{profile.description}</span></div>
         <div className="home-copy-field">

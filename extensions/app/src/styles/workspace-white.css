@@ -110,8 +110,8 @@
   box-shadow: none;
 }
 
-:root:not([data-theme='dark']) .workspace .usage-analysis-metric button[aria-pressed='true'],
-:root:not([data-theme='dark']) .workspace .usage-analysis-metric button[aria-pressed='true']:hover {
+:root:not([data-theme='dark']) .workspace .usage-analysis-metric button[aria-checked='true'],
+:root:not([data-theme='dark']) .workspace .usage-analysis-metric button[aria-checked='true']:hover {
   background: color-mix(in srgb, var(--ui-accent) 10%, var(--bg-card));
   border-color: transparent;
   color: var(--ui-accent);

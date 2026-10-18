@@ -1,3 +1,4 @@
+import { SegmentedControl } from './SegmentedControl';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, FolderOpen, Monitor, Moon, RefreshCw, Sun, SunMoon } from 'lucide-react';
@@ -92,7 +93,7 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
   }, [open]);
 
   useEffect(() => {
-    if (open && layout) menu.current?.querySelector<HTMLButtonElement>('.theme-selector-mode[aria-pressed="true"]')?.focus({ preventScroll: true });
+    if (open && layout) menu.current?.querySelector<HTMLButtonElement>('.theme-selector-mode[aria-checked="true"]')?.focus({ preventScroll: true });
   }, [open, layout === undefined]);
 
   useEffect(() => {
@@ -147,14 +148,9 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
               {t('app.theme.retrySave')}
             </button> : null}
           </div> : null}
-          <div className="theme-selector-modes" role="group" aria-label={t('app.theme.label')}>
-            {modes.map(({ id, label: modeLabel, Icon }) => (
-              <button key={id} type="button" data-mode={id} aria-pressed={mode === id}
-                className={`theme-selector-mode${mode === id ? ' selected' : ''}`} onClick={() => chooseMode(id)}>
-                <Icon size={14} aria-hidden="true" />{modeLabel}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl className="theme-selector-modes" aria-label={t('app.theme.label')} value={mode} onChange={chooseMode}
+            buttonClassName="theme-selector-mode" selectedClassName="selected"
+            items={modes.map(({ id, label: modeLabel, Icon }) => ({ value: id, label: <><Icon size={14} aria-hidden="true" />{modeLabel}</> }))} />
           {(['light', 'dark'] as const).map((appearance) => {
             const chosen = slot(appearance);
             const group = t(appearance === 'light' ? 'app.theme.lightGroup' : 'app.theme.darkGroup');

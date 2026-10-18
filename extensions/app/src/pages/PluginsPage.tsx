@@ -1,3 +1,4 @@
+import { Tabs } from '../components/Tabs';
 import { Switch } from '../components/Switch';
 import { open } from '../services/platform';
 import { restartCoreProcess } from '../services/coreLifecycle';
@@ -196,7 +197,9 @@ export function PluginsPage() {
 
   return <div className="plugins-page" role="region" aria-label={pt('title')}>
     <div className="plugin-navigation">
-      {supported === true && <nav className="plugin-tabs" aria-label={pt('title')}>{(['installed', 'store', 'settings'] as const).map(value => <button key={value} className={tab === value ? 'active' : ''} aria-current={tab === value ? 'page' : undefined} disabled={busy} onClick={() => { setTab(value); setSearch(''); setFilter('all'); }}>{pt(value === 'installed' ? 'local' : value)}</button>)}</nav>}
+      {supported === true && <Tabs activation="manual" className="plugin-tabs" aria-label={pt('title')} value={tab} disabled={busy}
+        onChange={value => { setTab(value); setSearch(''); setFilter('all'); }}
+        items={(['installed', 'store', 'settings'] as const).map(value => ({ value, id: `plugin-tab-${value}`, panelId: 'plugin-tab-panel', label: pt(value === 'installed' ? 'local' : value) }))} />}
       <div className="plugin-toolbar">
         {supported === true && tab !== 'settings' && <>
         <div className="plugin-search">
@@ -212,6 +215,7 @@ export function PluginsPage() {
         <button className="secondary-button plugin-refresh" disabled={locked} onClick={() => void load(tabRef.current, true)}><RefreshCw size={16} aria-hidden="true" />{t('common.refresh')}</button>
       </div>
     </div>
+    <div className="plugin-tab-panel" id="plugin-tab-panel" role={supported === true ? "tabpanel" : undefined} aria-labelledby={supported === true ? `plugin-tab-${tab}` : undefined}>
     {error && <div className="plugin-error plugin-banner" role="alert"><span>{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</span><button className="secondary-button" disabled={busy || loading} onClick={() => void load(tabRef.current, true)}>{pt('retry')}</button></div>}
     {supported === false ? <section className="plugin-empty"><Puzzle size={36} /><p>{pt('unsupported')}</p></section> : supported === null ? <section className="plugin-empty" role="status">{loading ? t('common.loading') : pt('retry')}</section> : <>
       {data && !data.pluginsEnabled && <p className="plugin-banner">{pt('disabledHint')}</p>}
@@ -253,6 +257,7 @@ export function PluginsPage() {
         </>}
       </>
     </>}
+    </div>
     {configPlugin && <PluginConfigDialog plugin={configPlugin} onClose={() => setConfigPlugin(null)} onSaved={() => { notice.showNotice(pt('saved')); void load(); }} />}
     {installEntry && <PluginInstallDialog key={installEntry.storeId} entry={installEntry} onClose={() => setInstallEntry(null)} onInstalled={installed} />}
     {oauthPlugin && <PluginOAuthDialog plugin={oauthPlugin} onClose={() => setOAuthPlugin(null)} onCompleted={() => { notice.showNotice(pt('authorized')); void load(); }} />}

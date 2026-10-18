@@ -79,6 +79,7 @@ const path = require('node:path');
     await configTabs.first().focus();
     await page.keyboard.press('ArrowRight');
     assert.equal(await page.locator('#config-subpage-tab-aliases').getAttribute('aria-selected'), 'true');
+    await page.waitForFunction(() => document.activeElement?.id === 'config-subpage-tab-aliases');
     await page.keyboard.press('ArrowLeft');
     assert.equal(await configTabs.first().getAttribute('aria-selected'), 'true');
     await page.keyboard.press('End');

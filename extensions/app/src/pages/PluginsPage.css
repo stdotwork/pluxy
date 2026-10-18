@@ -1,3 +1,4 @@
+.plugin-tab-panel { display: flex; flex-direction: column; gap: 20px; }
 .plugins-page { display: flex; flex-direction: column; gap: 20px; min-width: 0; max-width: 1500px; margin: 0 auto; padding: 0 0 24px; }
 .plugin-global-toggle { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
 .plugin-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; margin: 0; border-radius: 8px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }

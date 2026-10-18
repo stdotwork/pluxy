@@ -46,7 +46,7 @@ import { usePrivacyMask } from '../privacy';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
 import { calculateTokenComposition } from '../services/usageMetrics';
 import { formatDuration, formatUsageNumber } from '../services/usageNumber';
-import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
+import { Tabs } from '../components/Tabs';
 import {
   OTHER_TREND_MODEL_KEY,
   buildUsageTrendSeries,
@@ -71,7 +71,13 @@ import { UsageAnalysisView, type UsageAnalysis, type UsageCategory } from './Usa
 type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing' | 'data-management';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
 
-const USAGE_TABS: readonly UsageTab[] = ['overview', 'analysis', 'events', 'pricing', 'data-management'];
+const USAGE_TABS = [
+  { value: 'overview', labelKey: 'usage.tab.overview' },
+  { value: 'analysis', labelKey: 'usage.tab.analysis' },
+  { value: 'events', labelKey: 'usage.tab.events' },
+  { value: 'pricing', labelKey: 'usage.tab.pricing' },
+  { value: 'data-management', labelKey: 'usage.tab.dataManagement' },
+] as const;
 
 type SyncPriceDraft = {
   selected: boolean;
@@ -392,16 +398,6 @@ export function UsageRecordsPage() {
       (activeTab === 'events' && !events) ||
       (activeTab === 'pricing' && !pricing));
 
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: UsageTab) => {
-    handleHorizontalTabKey(
-      event,
-      USAGE_TABS,
-      tab,
-      setActiveTab,
-      (next) => document.getElementById(`usage-tab-${next}`),
-    );
-  };
-
   const modelOptions = filterOptions(optionsAnalysis.models);
   const sourceOptions = [...(optionsAnalysis.upstreams ?? [])].sort((a, b) => a.label.localeCompare(b.label));
   const keyOptions = filterOptions(optionsAnalysis.apiKeys);
@@ -495,73 +491,8 @@ export function UsageRecordsPage() {
       <div className="usage-topbar">
         <div className="usage-page-navigation">
           <h1 className="sr-only">{t('usage.title')}</h1>
-          <div className="usage-tabs" role="tablist" aria-label={t('usage.pageLabel')}>
-          <button
-            type="button"
-            id="usage-tab-overview"
-            role="tab"
-            className={activeTab === 'overview' ? 'active' : ''}
-            aria-selected={activeTab === 'overview'}
-            aria-controls="usage-tab-panel"
-            tabIndex={activeTab === 'overview' ? 0 : -1}
-            onClick={() => setActiveTab('overview')}
-            onKeyDown={(event) => handleTabKeyDown(event, 'overview')}
-          >
-            <span>{t('usage.tab.overview')}</span>
-          </button>
-          <button
-            type="button"
-            id="usage-tab-analysis"
-            role="tab"
-            className={activeTab === 'analysis' ? 'active' : ''}
-            aria-selected={activeTab === 'analysis'}
-            aria-controls="usage-tab-panel"
-            tabIndex={activeTab === 'analysis' ? 0 : -1}
-            onClick={() => setActiveTab('analysis')}
-            onKeyDown={(event) => handleTabKeyDown(event, 'analysis')}
-          >
-            <span>{t('usage.tab.analysis')}</span>
-          </button>
-          <button
-            type="button"
-            id="usage-tab-events"
-            role="tab"
-            className={activeTab === 'events' ? 'active' : ''}
-            aria-selected={activeTab === 'events'}
-            aria-controls="usage-tab-panel"
-            tabIndex={activeTab === 'events' ? 0 : -1}
-            onClick={() => setActiveTab('events')}
-            onKeyDown={(event) => handleTabKeyDown(event, 'events')}
-          >
-            <span>{t('usage.tab.events')}</span>
-          </button>
-          <button
-            type="button"
-            id="usage-tab-pricing"
-            role="tab"
-            className={activeTab === 'pricing' ? 'active' : ''}
-            aria-selected={activeTab === 'pricing'}
-            aria-controls="usage-tab-panel"
-            tabIndex={activeTab === 'pricing' ? 0 : -1}
-            onClick={() => setActiveTab('pricing')}
-            onKeyDown={(event) => handleTabKeyDown(event, 'pricing')}
-          >
-            <span>{t('usage.tab.pricing')}</span>
-          </button>
-          <button
-            type="button"
-            id="usage-tab-data-management"
-            role="tab"
-            className={activeTab === 'data-management' ? 'active' : ''}
-            aria-selected={activeTab === 'data-management'}
-            aria-controls="usage-tab-panel"
-            tabIndex={activeTab === 'data-management' ? 0 : -1}
-            onClick={() => setActiveTab('data-management')}
-            onKeyDown={(event) => handleTabKeyDown(event, 'data-management')}
-          >
-            <span>{t('usage.tab.dataManagement')}</span>
-          </button>
-          </div>
+          <Tabs className="usage-tabs" aria-label={t('usage.pageLabel')} value={activeTab} onChange={setActiveTab}
+            items={USAGE_TABS.map(({ value, labelKey }) => ({ value, id: `usage-tab-${value}`, panelId: 'usage-tab-panel', label: <span>{t(labelKey)}</span> }))} />
         </div>
 
         <div className="usage-topbar-actions">

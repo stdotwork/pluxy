@@ -245,7 +245,7 @@ const capturedPaint = {
       await page.screenshot({ path: path.join(shots, `after-${id}.png`), fullPage: true });
     }
     await page.goto(`${base}/tests/fixtures/plugins.html`);
-    await page.locator('.plugin-tabs').getByRole('button', { name: 'Plugin settings', exact: true }).click();
+    await page.locator('.plugin-tabs').getByRole('tab', { name: 'Plugin settings', exact: true }).click();
     const plugin = page.getByRole('switch', { name: 'Enable plugins', exact: true });
     await plugin.waitFor();
     assert.deepEqual(await plugin.evaluate(input => {

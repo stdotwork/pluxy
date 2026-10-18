@@ -1,3 +1,5 @@
+import { Tabs } from '../components/Tabs';
+import { SegmentedControl } from '../components/SegmentedControl';
 import { Switch } from '../components/Switch';
 import { onConfigFilesChanged } from '../services/events';
 import {
@@ -1857,34 +1859,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
 
         <section className="panel agent-config-panel">
           {availableSubpages.length > 1 ? (
-            <div className="agent-subpage-tabs" role="tablist" aria-label={t('agents.tabs.label')}>
-            {availableSubpages.map((subpage) => (
-              <button
-                type="button"
-                id={`agent-subpage-tab-${subpage.id}`}
-                role="tab"
-                className={activeSubpage === subpage.id ? 'active' : ''}
-                aria-selected={activeSubpage === subpage.id}
-                aria-controls={`agent-subpage-panel-${subpage.id}`}
-                tabIndex={activeSubpage === subpage.id ? 0 : -1}
-                key={subpage.id}
-                disabled={busy}
-                onClick={() => setActiveSubpage(subpage.id)}
-                onKeyDown={(event) => {
-                  const index = availableSubpages.findIndex((item) => item.id === subpage.id);
-                  const next = event.key === 'Home' ? 0 : event.key === 'End' ? availableSubpages.length - 1
-                    : event.key === 'ArrowRight' ? (index + 1) % availableSubpages.length
-                    : event.key === 'ArrowLeft' ? (index - 1 + availableSubpages.length) % availableSubpages.length : -1;
-                  if (next < 0) return;
-                  event.preventDefault();
-                  setActiveSubpage(availableSubpages[next].id);
-                  document.getElementById('agent-subpage-tab-' + availableSubpages[next].id)?.focus();
-                }}
-              >
-                {t(subpage.labelKey)}
-              </button>
-            ))}
-          </div>
+            <Tabs className="agent-subpage-tabs" aria-label={t('agents.tabs.label')} value={activeSubpage} onChange={setActiveSubpage} disabled={busy}
+              items={availableSubpages.map(subpage => ({ value: subpage.id, id: `agent-subpage-tab-${subpage.id}`, panelId: `agent-subpage-panel-${subpage.id}`, label: t(subpage.labelKey) }))} />
           ) : null}
           <div className="agent-config-scroll-region">
           {embedded && selected === 'vscode-copilot' && activeSubpage === 'core' && activeStatus ? (
@@ -2038,57 +2014,14 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                             <ChevronDown size={14} aria-hidden="true" />
                           </button>
                         </div>
-                        <div
-                          id="agent-connection-method"
-                          className="agent-auth-segmented"
-                          role="radiogroup"
-                          aria-labelledby="agent-connection-method-label"
-                          aria-describedby={connectionHelpOpen ? "agent-signin-hint" : undefined}
-                          onKeyDown={(event) => {
-                            if (busy || loading || modelLoading || activeStatus?.codexOpenaiProvider) return;
-                            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-                              event.preventDefault();
-                              if (!oauthConfiguration) void changeOauthConfiguration(true);
-                            } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-                              event.preventDefault();
-                              if (oauthConfiguration) void changeOauthConfiguration(false);
-                            }
-                          }}
-                        >
-                          <button
-                            type="button"
-                            role="radio"
-                            className={`agent-auth-segmented-button${!oauthConfiguration ? ' active' : ''}`}
-                            aria-checked={!oauthConfiguration}
-                            tabIndex={!oauthConfiguration ? 0 : -1}
-                            disabled={busy || loading || modelLoading || activeStatus?.codexOpenaiProvider}
-                            data-value="apikey"
-                            onClick={() => {
-                              if (oauthConfiguration) {
-                                void changeOauthConfiguration(false);
-                              }
-                            }}
-                          >
-                            {t('agents.modify.authApiKey')}
-                          </button>
-                          <button
-                            type="button"
-                            role="radio"
-                            className={`agent-auth-segmented-button${oauthConfiguration ? ' active' : ''}`}
-                            aria-checked={Boolean(oauthConfiguration)}
-                            tabIndex={oauthConfiguration ? 0 : -1}
-                            disabled={busy || loading || modelLoading || activeStatus?.codexOpenaiProvider}
-                            data-value="oauth"
-                            onClick={() => {
-                              if (!oauthConfiguration) {
-                                void changeOauthConfiguration(true);
-                              }
-                            }}
-                          >
-                            {busyAction === 'oauth-check' ? <LoaderCircle size={14} className="spin" /> : null}
-                            {t('agents.modify.authOAuth')}
-                          </button>
-                        </div>
+                        <SegmentedControl id="agent-connection-method" className="agent-auth-segmented" aria-labelledby="agent-connection-method-label"
+                          aria-describedby={connectionHelpOpen ? "agent-signin-hint" : undefined} value={oauthConfiguration ? 'oauth' : 'apikey'}
+                          disabled={busy || loading || modelLoading || activeStatus?.codexOpenaiProvider} buttonClassName="agent-auth-segmented-button"
+                          onChange={value => { if ((value === 'oauth') !== Boolean(oauthConfiguration)) void changeOauthConfiguration(value === 'oauth'); }}
+                          items={[
+                            { value: 'apikey', label: t('agents.modify.authApiKey') },
+                            { value: 'oauth', label: <>{busyAction === 'oauth-check' ? <LoaderCircle size={14} className="spin" /> : null}{t('agents.modify.authOAuth')}</> },
+                          ]} />
                       </div>
 
                       {codexCatalogButton}

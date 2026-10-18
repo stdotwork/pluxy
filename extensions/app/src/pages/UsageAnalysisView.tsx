@@ -1,3 +1,4 @@
+import { SegmentedControl } from '../components/SegmentedControl';
 import type { UsageAnalysis, UsageCategory } from '../services/usage';
 import { useState, type CSSProperties } from 'react';
 import { BarChart3, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
@@ -70,12 +71,8 @@ function ModelComparison({ models }: { models: UsageCategory[] }) {
     <section className="usage-analysis-card usage-model-comparison">
       <header className="usage-analysis-heading">
         <div><h2>{t('usage.analysis.modelTitle')}</h2><p>{t('usage.analysis.modelHint')}</p></div>
-        <div className="usage-analysis-metric" role="group" aria-label={t('usage.analysis.metricLabel')}>
-          {(['tokens', 'requests'] as const).map(value => <button key={value} type="button"
-            aria-pressed={metric === value} onClick={() => setMetric(value)}>
-            {t(value === 'tokens' ? 'usage.analysis.metricTokens' : 'usage.analysis.metricRequests')}
-          </button>)}
-        </div>
+        <SegmentedControl className="usage-analysis-metric" aria-label={t('usage.analysis.metricLabel')} value={metric} onChange={setMetric}
+          items={(['tokens', 'requests'] as const).map(value => ({ value, label: t(value === 'tokens' ? 'usage.analysis.metricTokens' : 'usage.analysis.metricRequests') }))} />
       </header>
       <div className="usage-model-bars">
         {visible.map(item => {

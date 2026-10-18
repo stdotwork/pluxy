@@ -80,8 +80,8 @@
   background: color-mix(in srgb, var(--ui-accent) 5%, var(--bg-card));
 }
 
-.usage-analysis-metric button[aria-pressed='true'],
-.usage-analysis-metric button[aria-pressed='true']:hover {
+.usage-analysis-metric button[aria-checked='true'],
+.usage-analysis-metric button[aria-checked='true']:hover {
   border-color: transparent;
   background: color-mix(in srgb, var(--ui-accent) 10%, var(--bg-card));
   color: var(--ui-accent);
