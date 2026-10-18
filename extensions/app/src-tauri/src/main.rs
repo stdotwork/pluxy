@@ -344,8 +344,10 @@ struct SavedWindowSize {
     height: u32,
 }
 
-struct MainWindowSizeState {
+struct MainWindowState {
     inner: Mutex<Option<SavedWindowSize>>,
+    position: Mutex<Option<tauri::PhysicalPosition<i32>>>,
+    position_tracking: AtomicBool,
 }
 
 #[derive(Default)]
@@ -620,6 +622,8 @@ struct GuiConfigFile {
     default_terminal: String,
     window_width: Option<u32>,
     window_height: Option<u32>,
+    window_x: Option<i32>,
+    window_y: Option<i32>,
     auth_dir: String,
     auth_dir_user_selected: bool,
     image_generation_user_selected: bool,
@@ -930,6 +934,8 @@ impl Default for GuiConfigFile {
             default_terminal: DEFAULT_AGENT_TERMINAL.to_string(),
             window_width: Some(DEFAULT_MAIN_WINDOW_WIDTH),
             window_height: Some(DEFAULT_MAIN_WINDOW_HEIGHT),
+            window_x: None,
+            window_y: None,
             auth_dir: DEFAULT_AUTH_DIR.to_string(),
             auth_dir_user_selected: false,
             image_generation_user_selected: false,
@@ -2028,11 +2034,29 @@ impl CoreProcessState {
     }
 }
 
-impl MainWindowSizeState {
-    fn new(size: Option<SavedWindowSize>) -> Self {
+impl MainWindowState {
+    fn new(size: Option<SavedWindowSize>, position: Option<tauri::PhysicalPosition<i32>>) -> Self {
         Self {
             inner: Mutex::new(size),
+            position: Mutex::new(position),
+            position_tracking: AtomicBool::new(false),
         }
+    }
+
+    fn position(&self) -> Result<Option<tauri::PhysicalPosition<i32>>, String> {
+        self.position
+            .lock()
+            .map(|position| *position)
+            .map_err(|_| "Main window position status lock is poisoned".to_string())
+    }
+
+    fn replace_position(&self, position: tauri::PhysicalPosition<i32>) -> Result<(), String> {
+        *self
+            .position
+            .lock()
+            .map_err(|_| "Main window position status lock is poisoned".to_string())? =
+            Some(position);
+        Ok(())
     }
 
     fn snapshot(&self) -> Result<Option<SavedWindowSize>, String> {
@@ -2239,10 +2263,16 @@ impl GuiConfigState {
         Ok(Some(config))
     }
 
-    fn set_window_size(&self, size: SavedWindowSize) -> Result<GuiConfigFile, String> {
+    fn set_window_geometry(
+        &self,
+        size: SavedWindowSize,
+        position: Option<tauri::PhysicalPosition<i32>>,
+    ) -> Result<GuiConfigFile, String> {
         self.update(|config| {
             config.window_width = Some(size.width);
             config.window_height = Some(size.height);
+            config.window_x = position.map(|position| position.x);
+            config.window_y = position.map(|position| position.y);
             Ok(())
         })
     }
@@ -2505,6 +2535,7 @@ fn main() {
         }
     };
     let initial_window_size = configured_window_size(&gui_config);
+    let initial_window_position = configured_window_position(&gui_config);
     let start_hidden = should_start_hidden(&gui_config);
 
     let app = tauri::Builder::default()
@@ -2525,12 +2556,28 @@ fn main() {
         .manage(usage::UsageCollectorState::default())
         .manage(GuiConfigState::new(gui_config))
         .manage(plugin_webview::PluginWebviewState::default())
-        .manage(MainWindowSizeState::new(initial_window_size))
+        .manage(MainWindowState::new(
+            initial_window_size,
+            initial_window_position,
+        ))
         .manage(AgentConfigStatusCache::default());
 
     let app = app.on_window_event(|window, event| {
         if window.label() != "main" {
             return;
+        }
+
+        if let tauri::WindowEvent::Moved(position) = event {
+            let state = window.state::<MainWindowState>();
+            // Ignore startup placement and the OS's minimized/maximized coordinates.
+            if state.position_tracking.load(Ordering::Acquire)
+                && !window.is_minimized().unwrap_or(true)
+                && !window.is_maximized().unwrap_or(true)
+            {
+                if let Err(error) = state.replace_position(*position) {
+                    eprintln!("Failed to record main window position: {error}");
+                }
+            }
         }
 
         let observed_size = match event {
@@ -2548,7 +2595,7 @@ fn main() {
         };
 
         if let Some(observed_size) = observed_size {
-            let window_size_state = window.state::<MainWindowSizeState>();
+            let window_size_state = window.state::<MainWindowState>();
             if let Err(error) = window_size_state.replace(observed_size) {
                 eprintln!("Failed to record main window size: {error}");
             }
@@ -2605,9 +2652,12 @@ fn main() {
             if let Err(error) = load_codex_model_customizations(app.handle()) {
                 eprintln!("Failed to load Codex custom model configuration: {error}");
             }
-            if let Err(error) = restore_main_window_size(app.handle()) {
+            if let Err(error) = restore_main_window_geometry(app.handle()) {
                 eprintln!("{error}");
             }
+            app.state::<MainWindowState>()
+                .position_tracking
+                .store(true, Ordering::Release);
 
             #[cfg(target_os = "macos")]
             setup_macos_tray(app)?;
@@ -2896,8 +2946,8 @@ fn main() {
                 return;
             }
             process_state.recovery.cancel();
-            if let Err(error) = persist_main_window_size(app_handle) {
-                eprintln!("Failed to save main window size: {error}");
+            if let Err(error) = persist_main_window_geometry(app_handle) {
+                eprintln!("Failed to save main window geometry: {error}");
             }
             app_handle.state::<CoreDownloadState>().cancel();
             let app_handle = app_handle.clone();

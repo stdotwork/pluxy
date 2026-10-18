@@ -1999,6 +1999,8 @@ fn startup_preserves_all_user_owned_yaml_and_only_applies_gui_managed_values() {
         default_terminal: DEFAULT_AGENT_TERMINAL.to_string(),
         window_width: None,
         window_height: None,
+        window_x: None,
+        window_y: None,
         auth_dir: path_to_string(&fixed_oauth_dir().unwrap()),
         auth_dir_user_selected: false,
         api_keys: vec![

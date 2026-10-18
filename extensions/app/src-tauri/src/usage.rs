@@ -5629,6 +5629,8 @@ mod tests {
             default_terminal: crate::DEFAULT_AGENT_TERMINAL.to_string(),
             window_width: None,
             window_height: None,
+            window_x: None,
+            window_y: None,
             auth_dir: String::new(),
             auth_dir_user_selected: false,
             image_generation_user_selected: false,

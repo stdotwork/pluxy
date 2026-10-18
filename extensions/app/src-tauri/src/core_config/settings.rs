@@ -1754,6 +1754,42 @@ pub(crate) fn configured_window_size(config: &GuiConfigFile) -> Option<SavedWind
     }
 }
 
+pub(crate) fn configured_window_position(
+    config: &GuiConfigFile,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    config
+        .window_x
+        .zip(config.window_y)
+        .map(|(x, y)| tauri::PhysicalPosition::new(x, y))
+}
+
+// Use physical coordinates for monitor layouts, including displays left of the primary.
+pub(crate) fn fit_window_position_to_work_area(
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    work_area: &tauri::PhysicalRect<i32, u32>,
+) -> tauri::PhysicalPosition<i32> {
+    let clamp = |coordinate: i32, origin: i32, available: u32, length: u32| {
+        let min = i64::from(origin);
+        let max = (min + i64::from(available) - i64::from(length)).max(min);
+        i64::from(coordinate).clamp(min, max) as i32
+    };
+    tauri::PhysicalPosition::new(
+        clamp(
+            position.x,
+            work_area.position.x,
+            work_area.size.width,
+            size.width,
+        ),
+        clamp(
+            position.y,
+            work_area.position.y,
+            work_area.size.height,
+            size.height,
+        ),
+    )
+}
+
 pub(crate) fn logical_window_size_from_physical(
     physical_size: &tauri::PhysicalSize<u32>,
     scale_factor: f64,
@@ -1771,15 +1807,11 @@ pub(crate) fn logical_window_size_from_physical(
     Some(normalized_saved_window_size(width, height))
 }
 
-pub(crate) fn fit_window_size_to_current_monitor<R: tauri::Runtime>(
+pub(crate) fn fit_window_size_to_monitor<R: tauri::Runtime>(
     window: &tauri::Window<R>,
     saved_size: SavedWindowSize,
+    monitor: Option<&tauri::Monitor>,
 ) -> SavedWindowSize {
-    let monitor = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| window.primary_monitor().ok().flatten());
     let Some(monitor) = monitor else {
         return saved_size;
     };
@@ -1814,26 +1846,82 @@ pub(crate) fn fit_window_size_to_current_monitor<R: tauri::Runtime>(
     }
 }
 
-pub(crate) fn restore_main_window_size(app: &tauri::AppHandle) -> Result<(), String> {
-    let window_size_state = app.state::<MainWindowSizeState>();
-    let Some(saved_size) = window_size_state.snapshot()? else {
-        return Ok(());
-    };
+pub(crate) fn restore_main_window_geometry(app: &tauri::AppHandle) -> Result<(), String> {
+    let window_size_state = app.state::<MainWindowState>();
+    let saved_position = window_size_state.position()?;
     let window = main_window(app)
-        .ok_or_else(|| "Main window does not exist; cannot restore window size".to_string())?;
-    let restored_size = fit_window_size_to_current_monitor(&window, saved_size);
+        .ok_or_else(|| "Main window does not exist; cannot restore window geometry".to_string())?;
+    let monitor = saved_position
+        .and_then(|position| {
+            window
+                .monitor_from_point(f64::from(position.x), f64::from(position.y))
+                .ok()
+                .flatten()
+        })
+        .or_else(|| {
+            if saved_position.is_some() {
+                window.primary_monitor().ok().flatten()
+            } else {
+                window.current_monitor().ok().flatten()
+            }
+        })
+        .or_else(|| window.primary_monitor().ok().flatten());
 
-    window
-        .set_size(LogicalSize::new(
-            f64::from(restored_size.width),
-            f64::from(restored_size.height),
-        ))
-        .map_err(|error| format!("Failed to restore main window size: {error}"))?;
-    window_size_state.replace(restored_size)
+    // Move before resizing so logical dimensions use the destination display's scale.
+    if let (Some(position), Some(monitor)) = (saved_position, monitor.as_ref()) {
+        let position = fit_window_position_to_work_area(
+            position,
+            window.outer_size().map_err(|e| e.to_string())?,
+            monitor.work_area(),
+        );
+        window
+            .set_position(position)
+            .map_err(|e| format!("Failed to restore main window position: {e}"))?;
+    }
+
+    if let Some(saved_size) = window_size_state.snapshot()? {
+        let restored_size = fit_window_size_to_monitor(&window, saved_size, monitor.as_ref());
+        window
+            .set_size(LogicalSize::new(
+                f64::from(restored_size.width),
+                f64::from(restored_size.height),
+            ))
+            .map_err(|error| format!("Failed to restore main window size: {error}"))?;
+        window_size_state.replace(restored_size)?;
+    }
+    // Resizing (and a DPI change) can alter the outer bounds; clamp the final rectangle.
+    if let (Some(position), Some(monitor)) = (saved_position, monitor.as_ref()) {
+        let position = fit_window_position_to_work_area(
+            position,
+            window.outer_size().map_err(|e| e.to_string())?,
+            monitor.work_area(),
+        );
+        window
+            .set_position(position)
+            .map_err(|e| format!("Failed to restore main window position: {e}"))?;
+        window_size_state.replace_position(position)?;
+    }
+    // Also remember the first launch's default position if the user later exits from the tray.
+    if let Ok(position) = window.outer_position() {
+        window_size_state.replace_position(position)?;
+    }
+    Ok(())
 }
 
-pub(crate) fn persist_main_window_size(app: &tauri::AppHandle) -> Result<(), String> {
-    let window_size_state = app.state::<MainWindowSizeState>();
+pub(crate) fn persist_main_window_geometry(app: &tauri::AppHandle) -> Result<(), String> {
+    let window_size_state = app.state::<MainWindowState>();
+    let window = main_window(app);
+    let position = match window.as_ref() {
+        Some(window)
+            if !window.is_minimized().unwrap_or(true) && !window.is_maximized().unwrap_or(true) =>
+        {
+            window
+                .outer_position()
+                .ok()
+                .or(window_size_state.position()?)
+        }
+        _ => window_size_state.position()?,
+    };
     let saved_size = match window_size_state.snapshot()? {
         Some(size) => size,
         None => {
@@ -1851,7 +1939,7 @@ pub(crate) fn persist_main_window_size(app: &tauri::AppHandle) -> Result<(), Str
     };
 
     app.state::<GuiConfigState>()
-        .set_window_size(saved_size)
+        .set_window_geometry(saved_size, position)
         .map(|_| ())
 }
 
@@ -2000,6 +2088,11 @@ pub(crate) fn sanitize_gui_config_at(
         config.window_height = normalized_height;
         changed = true;
     }
+    if config.window_x.is_some() != config.window_y.is_some() {
+        config.window_x = None;
+        config.window_y = None;
+        changed = true;
+    }
     Ok(changed)
 }
 
@@ -2116,6 +2209,13 @@ pub(crate) fn write_gui_config_to_path(
     ] {
         if let Some(dimension) = dimension {
             set_codex_table_item(root, key, value(i64::from(dimension)));
+        } else {
+            root.remove(key);
+        }
+    }
+    for (key, coordinate) in [("window-x", config.window_x), ("window-y", config.window_y)] {
+        if let Some(coordinate) = coordinate {
+            set_codex_table_item(root, key, value(i64::from(coordinate)));
         } else {
             root.remove(key);
         }
