@@ -338,8 +338,7 @@ body.table-col-resizing .usage-records-page .usage-request-log .usage-events-tab
   margin-top: 2px;
 }
 
-.usage-records-page .usage-request-log.usage-events-compact .usage-cache-write,
-.usage-records-page .usage-request-log.usage-events-compact .tone-reasoning {
+.usage-records-page .usage-request-log.usage-events-compact .usage-cache-write {
   display: none;
 }
 
