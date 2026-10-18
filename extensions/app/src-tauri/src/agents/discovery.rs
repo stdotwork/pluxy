@@ -1134,7 +1134,7 @@ pub(crate) fn inspect_agent_config_with_executables(
             .or_else(|| find_deepseek_harness_desktop_application(home)))
         .flatten();
     let app_version = match client {
-        AgentClient::VscodeCopilot => executable.as_deref().and_then(|path| read_agent_version(path, home)),
+        AgentClient::VscodeCopilot => executable.as_deref().and_then(|path| read_vscode_version(path, home)),
         AgentClient::ClaudeDesktop => read_claude_desktop_version(home),
         AgentClient::Codex => codex_app_installation
             .as_ref()

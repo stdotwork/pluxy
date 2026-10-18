@@ -344,6 +344,48 @@ fn copilot_builtin_detection_uses_active_editor_package() {
     assert_eq!(bundled_vscode_copilot_version(&executable, commit), None);
 }
 
+#[cfg(windows)]
+#[test]
+fn copilot_status_probes_cli_when_user_selects_gui_executable() {
+    let home = Home::new();
+    let executable = home.0.join("Microsoft VS Code/Code.exe");
+    let cli = home.0.join("Microsoft VS Code/bin/code.cmd");
+    fs::create_dir_all(cli.parent().unwrap()).unwrap();
+    // Deliberately not executable: detection must never try to run this file.
+    fs::write(&executable, "GUI entry point must not run").unwrap();
+    fs::write(&cli, "@echo off\r\nif \"%1\"==\"--version\" (echo 1.142.0) else (echo github.copilot-chat@0.69.0)\r\nexit /b 0\r\n").unwrap();
+    for _ in 0..2 {
+        let status = inspect_agent_config_with_executables(
+            AgentClient::VscodeCopilot, &home.0, 8317, "fixture",
+            Some(&executable), None,
+        );
+        assert!(status.installed);
+        assert_eq!(status.app_version.as_deref(), Some("1.142.0"));
+        assert_eq!(status.plugin_version.as_deref(), Some("0.69.0"));
+        assert_eq!(status.launch_targets.len(), 1);
+    }
+    fs::remove_file(cli).unwrap();
+    assert!(vscode_probe_executable(&executable).is_none());
+    assert!(read_vscode_version(&executable, &home.0).is_none());
+    assert!(read_vscode_copilot_version(&executable, &home.0).is_none());
+}
+
+#[cfg(windows)]
+#[test]
+fn copilot_probe_resolves_only_matching_editor_cli() {
+    let home = Home::new();
+    let stable = home.0.join("bin/code.cmd");
+    let insiders = home.0.join("bin/code-insiders.cmd");
+    fs::create_dir_all(stable.parent().unwrap()).unwrap();
+    fs::write(&stable, "fixture").unwrap();
+    assert_eq!(vscode_probe_executable(&home.0.join("CODE.EXE")), Some(stable.clone()));
+    assert!(vscode_probe_executable(&home.0.join("Code - Insiders.exe")).is_none());
+    fs::write(&insiders, "fixture").unwrap();
+    assert_eq!(vscode_probe_executable(&home.0.join("Code - Insiders.exe")), Some(insiders));
+    assert_eq!(vscode_probe_executable(&stable), Some(stable));
+    assert!(vscode_probe_executable(&home.0.join("other.exe")).is_none());
+}
+
 #[test]
 fn copilot_native_credential_rotation_and_template_preserve_user_models() {
     let home = Home::new();
