@@ -292,7 +292,7 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --wait
           # Apple's ticket delivery can briefly fail even after notarization is accepted.
-          # Retry stapling only, without rebuilding or resubmitting the accepted DMG.
+          # Retry stapling and validation independently, without rebuilding or resubmitting the accepted DMG.
           # Each attempt makes a fresh request immediately, with no added delay.
           max_attempts=10000
           for ((attempt = 1; attempt <= max_attempts; attempt++)); do
@@ -307,7 +307,18 @@ jobs:
             fi
             echo "::warning::DMG stapling failed (exit $staple_status); requesting again immediately (attempt $((attempt + 1))/$max_attempts)."
           done
-          xcrun stapler validate "$output_dmg"
+          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            if xcrun stapler validate "$output_dmg"; then
+              break
+            else
+              validate_status=$?
+            fi
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              echo "::error::DMG validation failed after $attempt attempts (exit $validate_status)."
+              exit "$validate_status"
+            fi
+            echo "::warning::DMG validation failed (exit $validate_status); requesting again immediately (attempt $((attempt + 1))/$max_attempts)."
+          done
       - name: Build macOS PR DMG without Apple notarization
         if: github.event_name == 'pull_request' && matrix.os == 'darwin'
         shell: bash

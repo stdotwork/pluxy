@@ -71,6 +71,7 @@ import { AgentModelPicker } from '../components/AgentModelPicker';
 import { claudeDesktopAliasSuggestions, claudeDesktopDefaultAliases, createDefaultDesktopModels, desktopAliasNotice, desktopEntryValidation, desktopModelEntries, desktopModelId, desktopModelValidation, isClaudeDesktopModel, selectedDesktopModelEntries, suffixCollidingDesktopAliases, type ClaudeDesktopModelMapping } from '../services/claudeDesktopModels';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import { CodexSessionsPanel } from './CodexSessionsPanel';
+import { CodexProviderSwitch } from './CodexProviderSwitch';
 import { CodexModelCatalogDialog } from './CodexModelCatalogDialog';
 import { DeepSeekHarnessCatalogDialog } from './DeepSeekHarnessCatalogDialog';
 import { AgentConfigBackupDialog } from './AgentConfigBackupDialog';
@@ -138,6 +139,7 @@ type AgentConfigStatus = {
   currentModel: string | null;
   oauthConfiguration: boolean;
   codexNativeOauth: boolean;
+  codexOpenaiProvider?: boolean;
   modificationEnabled: boolean;
   modificationState: AgentModificationState;
   backupAvailable: boolean;
@@ -2153,7 +2155,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                           aria-labelledby="agent-connection-method-label"
                           aria-describedby={connectionHelpOpen ? "agent-signin-hint" : undefined}
                           onKeyDown={(event) => {
-                            if (busy || loading || modelLoading) return;
+                            if (busy || loading || modelLoading || activeStatus?.codexOpenaiProvider) return;
                             if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
                               event.preventDefault();
                               if (!oauthConfiguration) void changeOauthConfiguration(true);
@@ -2169,7 +2171,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                             className={`agent-auth-segmented-button${!oauthConfiguration ? ' active' : ''}`}
                             aria-checked={!oauthConfiguration}
                             tabIndex={!oauthConfiguration ? 0 : -1}
-                            disabled={busy || loading || modelLoading}
+                            disabled={busy || loading || modelLoading || activeStatus?.codexOpenaiProvider}
                             data-value="apikey"
                             onClick={() => {
                               if (oauthConfiguration) {
@@ -2185,7 +2187,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                             className={`agent-auth-segmented-button${oauthConfiguration ? ' active' : ''}`}
                             aria-checked={Boolean(oauthConfiguration)}
                             tabIndex={oauthConfiguration ? 0 : -1}
-                            disabled={busy || loading || modelLoading}
+                            disabled={busy || loading || modelLoading || activeStatus?.codexOpenaiProvider}
                             data-value="oauth"
                             onClick={() => {
                               if (!oauthConfiguration) {
@@ -2368,6 +2370,16 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
           {activeSubpage === 'management' ? (
             <div id="agent-subpage-panel-management" role="tabpanel" aria-labelledby="agent-subpage-tab-management">
               <AgentConfigManagementPanel pi={isPiClient} codex={selected === 'codex'} busyAction={busyAction}
+                codexProviderControl={selected === 'codex' ? <CodexProviderSwitch
+                  enabled={Boolean(activeStatus?.codexOpenaiProvider)}
+                  disabled={busy || loading || hasPendingChanges || (!activeStatus?.configured && !activeStatus?.codexOpenaiProvider)}
+                  onBusyChange={(value) => setBusyAction(value ? 'native-oauth' : null)}
+                  onChanged={async (enabled) => {
+                    setStatuses((current) => current.map((status) => status.id === 'codex'
+                      ? { ...status, codexOpenaiProvider: enabled } : status));
+                    await reloadStatusesAfterAction();
+                  }}
+                /> : null}
                 executablePath={executablePaths[selected] ?? ''} onChooseExecutablePath={() => void chooseExecutablePath()}
                 onClearExecutablePath={() => clearExecutablePath()}
                 dualTargets={hasIndependentCliAndApp} desktopExecutablePath={executablePaths[`${selected}:app`] ?? ''}
