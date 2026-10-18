@@ -1,3 +1,4 @@
+import { Switch } from '../components/Switch';
 import { onConfigFilesChanged } from '../services/events';
 import {
   refreshAgentConfigStatuses,
@@ -1752,15 +1753,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
             title={t('agents.claudeDesktopMapping.customMappingHint')}
           >
             <span>{t('agents.claudeDesktopMapping.customMapping')}</span>
-            <span className="switch-control">
-              <input
-                type="checkbox"
-                checked={claudeCustomMapping}
-                onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)}
-                disabled={busy || loading || modelLoading}
-              />
-              <span className="switch-track" />
-            </span>
+            <Switch checked={claudeCustomMapping} onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)} disabled={busy || loading || modelLoading} />
           </label>
           <button type="button" className="secondary-button compact-button" onClick={() => setDesktopHelpOpen(true)}>
             {t('agents.claudeDesktopMapping.help')}
@@ -1801,9 +1794,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               <div className="agent-section-heading-actions agent-desktop-model-actions">
                 <label className="agent-claude-context-toggle" title={t('agents.claudeMapping.context1mHint')}>
                   <span>{t('agents.claudeMapping.context1m')}</span>
-                  <span className="switch-control"><input type="checkbox" checked={entry.context1m}
-                    onChange={(event) => updateDesktopEntry(index, { context1m: event.currentTarget.checked })}
-                    disabled={busy || loading} /><span className="switch-track" /></span>
+                  <Switch checked={entry.context1m} onChange={(event) => updateDesktopEntry(index, { context1m: event.currentTarget.checked })} disabled={busy || loading} />
                 </label>
                 <button type="button" className="icon-button quiet" aria-label={t('agents.claudeDesktopMapping.remove')}
                   title={t('agents.claudeDesktopMapping.remove')} disabled={busy || loading}
@@ -2128,15 +2119,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                         title={t('agents.claudeDesktopMapping.customMappingHint')}
                       >
                         <span>{t('agents.claudeDesktopMapping.customMapping')}</span>
-                        <span className="switch-control">
-                          <input
-                            type="checkbox"
-                            checked={claudeCustomMapping}
-                            onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)}
-                            disabled={busy || loading || modelLoading}
-                          />
-                          <span className="switch-track" />
-                        </span>
+                        <Switch checked={claudeCustomMapping} onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)} disabled={busy || loading || modelLoading} />
                       </label>
                     </div>
                   </div>
@@ -2223,17 +2206,9 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                           <strong>{t('agents.claudeCodeRuntime.disableAutoCompact')}</strong>
                           <small>{t('agents.claudeCodeRuntime.disableAutoCompactHint')}</small>
                         </span>
-                        <span className="switch-control">
-                          <input
-                            type="checkbox"
-                            checked={claudeModelMappingsDraft.disableAutoCompact}
-                            onChange={(event) => changeClaudeCodeAutoCompactDisabled(
+                        <Switch checked={claudeModelMappingsDraft.disableAutoCompact} onChange={(event) => changeClaudeCodeAutoCompactDisabled(
                               event.currentTarget.checked,
-                            )}
-                            disabled={busy || loading || modelLoading}
-                          />
-                          <span className="switch-track" />
-                        </span>
+                            )} disabled={busy || loading || modelLoading} />
                       </label>
                     </div>
                   </details>
@@ -2427,12 +2402,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                     </label>
                   </div>
                   <label className="deepseek-harness-launch-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={deepSeekHarnessLaunchDraft.openBrowser}
-                      onChange={(event) => updateDeepSeekHarnessLaunchDraft({ openBrowser: event.currentTarget.checked })}
-                      disabled={busy}
-                    />
+                    <Switch checked={deepSeekHarnessLaunchDraft.openBrowser} onChange={(event) => updateDeepSeekHarnessLaunchDraft({ openBrowser: event.currentTarget.checked })} disabled={busy} />
                     <span>
                       <strong>{t('agents.deepseekLaunch.web.openBrowser')}</strong>
                       <small>{t('agents.deepseekLaunch.web.openBrowserDescription')}</small>

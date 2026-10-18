@@ -1,3 +1,4 @@
+import { Checkbox } from './Checkbox';
 import type { ReactNode } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -29,7 +30,7 @@ export function ProviderField({ value, onChange, field, label, kind = 'boolean',
       <select aria-label={p(label)} value={enabled ? String(current) : ''} onChange={(event) => set(event.currentTarget.value === '' ? undefined : event.currentTarget.value === 'true')}>
         <option value="">{p('inherit')}</option><option value="true">{p('enabled')}</option><option value="false">{p('disabled')}</option>
       </select></label> : <>
-      <label className="provider-template-toggle"><input type="checkbox" checked={enabled} onChange={(event) => set(event.currentTarget.checked
+      <label className="provider-template-toggle"><Checkbox checked={enabled} onChange={(event) => set(event.currentTarget.checked
         ? structuredClone(initial ?? (kind === 'number' ? 0 : kind === 'lines' ? [] : '')) : undefined)} /><span>{p(label)}</span></label>
       {enabled ? kind === 'lines' ? <textarea aria-label={p(label)} rows={3} value={lines(current)} onChange={(event) => set(event.currentTarget.value.split(/\r?\n/))} onBlur={(event) => set(event.currentTarget.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))} />
         : kind === 'select' ? <select aria-label={p(label)} value={String(current)} onChange={(event) => set(event.currentTarget.value)}>
@@ -51,8 +52,7 @@ export function ProviderErrorRules({ value, onChange, inherited }: { value: Valu
   return <details className="provider-template-section">
     <summary>{p('errors')}{value[field] != null ? ` · ${rules.length}` : ''}</summary>
     <p className="provider-group-hint">{p('errorsHint')}</p>
-    <label className="provider-template-toggle"><input type="checkbox" checked={value[field] != null}
-      onChange={(event) => set(event.currentTarget.checked ? structuredClone(inherited ?? []) : undefined)} /><span>{p('configure')}</span></label>
+    <label className="provider-template-toggle"><Checkbox checked={value[field] != null} onChange={(event) => set(event.currentTarget.checked ? structuredClone(inherited ?? []) : undefined)} /><span>{p('configure')}</span></label>
     {value[field] != null ? <div className="provider-template-rules">
       {rules.map((raw, index) => {
         const rule = isRecord(raw) ? raw : {};
@@ -123,7 +123,7 @@ export function ProviderModelFields({ value, onChange, section, children }: { va
         <ProviderField value={value} onChange={onChange} field="use-max-completion-tokens" label="completion" />
       </> : null}
     </div>
-    <label className="provider-template-toggle"><input type="checkbox" checked={value.thinking != null} onChange={(event) => onChange(changed(value, 'thinking', event.currentTarget.checked ? {} : undefined))} /><span>{providerText('thinking', locale)}</span></label>
+    <label className="provider-template-toggle"><Checkbox checked={value.thinking != null} onChange={(event) => onChange(changed(value, 'thinking', event.currentTarget.checked ? {} : undefined))} /><span>{providerText('thinking', locale)}</span></label>
     {value.thinking != null ? <div className="provider-template-grid">
       <ProviderField value={thinking} onChange={setThinking} field="levels" label="levels" kind="lines" hint="linesHint" />
       <ProviderField value={thinking} onChange={setThinking} field="min" label="min" kind="number" />

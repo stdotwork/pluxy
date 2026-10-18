@@ -1,3 +1,4 @@
+import { Switch } from '../components/Switch';
 import {
   getThinkingAliases,
   getModelAliasSources,
@@ -719,16 +720,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
               <span className="thinking-fast-option-copy">
                 <span><Zap size={15} /> Fast</span>
               </span>
-              <span className="switch-control thinking-fast-switch">
-                <input
-                  type="checkbox"
-                  checked={fastEnabled}
-                  onChange={(event) => setFastEnabled(event.currentTarget.checked)}
-                  disabled={Boolean(busyAlias) || !fastAvailable}
-                  aria-label={t('aliases.fast.title')}
-                />
-                <span className="switch-track" />
-              </span>
+              <Switch size="sm" className="thinking-fast-switch" checked={fastEnabled} onChange={(event) => setFastEnabled(event.currentTarget.checked)} disabled={Boolean(busyAlias) || !fastAvailable} aria-label={t('aliases.fast.title')} />
             </label>
             {selectedSource && !selectedSource.supportsFast ? (
               <small className="thinking-model-hint">{t('aliases.fast.unsupported')}</small>

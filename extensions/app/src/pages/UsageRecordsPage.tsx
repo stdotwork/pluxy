@@ -1,3 +1,4 @@
+import { Checkbox } from '../components/Checkbox';
 import { onUsageRecordsUpdated } from '../services/events';
 import {
   getUsageEvents,
@@ -1656,7 +1657,7 @@ function PricingView({
           {syncDrafts.map((item, index) => (
             <div className="usage-price-sync-row" key={item.price.model}>
               <label className="usage-price-sync-identity">
-                <input type="checkbox" checked={item.selected} disabled={applyingSync} onChange={(event) => updateSyncDraft(index, { selected: event.currentTarget.checked })} />
+                <Checkbox checked={item.selected} disabled={applyingSync} onChange={(event) => updateSyncDraft(index, { selected: event.currentTarget.checked })} />
                 <span><strong>{item.price.model}</strong><small>{item.price.sourceModelId}</small></span>
               </label>
               {(['prompt', 'completion', 'cacheRead', 'cacheCreation'] as const).map((field) => (

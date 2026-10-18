@@ -1,3 +1,5 @@
+import { Checkbox } from '../components/Checkbox';
+import { Switch } from '../components/Switch';
 import { getUsageEvents, saveUsageEventsExport } from '../services/usage';
 import type { UsageEventPage, UsageRecord, UsageEventQuery } from '../services/usage';
 import { usagePreferences } from '../services/usagePreferences';
@@ -855,28 +857,14 @@ export function EventsView({
               <strong>{t('usage.events.collapseErrors')}</strong>
               <small>{t('usage.events.collapseErrorsHint')}</small>
             </span>
-            <span className="switch-control">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={draftCollapseErrors}
-                aria-label={t('usage.events.collapseErrors')}
-                onChange={(event) => setDraftCollapseErrors(event.currentTarget.checked)}
-              />
-              <span className="switch-track" aria-hidden="true" />
-            </span>
+            <Switch checked={draftCollapseErrors} aria-label={t('usage.events.collapseErrors')} onChange={(event) => setDraftCollapseErrors(event.currentTarget.checked)} />
           </label>
           <div className="usage-column-options">
             {EVENT_COLUMNS.map((column) => {
               const checked = draftVisibleColumnKeys.includes(column.key);
               return (
                 <label key={column.key} className="usage-column-option">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={checked && draftVisibleColumnKeys.length === 1}
-                    onChange={() => toggleDraftColumn(column.key)}
-                  />
+                  <Checkbox checked={checked} disabled={checked && draftVisibleColumnKeys.length === 1} onChange={() => toggleDraftColumn(column.key)} />
                   <span>{t(column.labelKey)}</span>
                 </label>
               );

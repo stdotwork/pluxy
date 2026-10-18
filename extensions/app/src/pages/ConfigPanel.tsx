@@ -1,3 +1,4 @@
+import { Switch } from '../components/Switch';
 import { onConfigFilesChanged } from '../services/events';
 import { restartCoreProcess } from '../services/coreLifecycle';
 import { openExternalUrl } from '../services/appSettings';
@@ -1365,18 +1366,10 @@ export function ConfigPanelPage() {
                   <SettingsHelp label={t('config.network.proxyUrl')}>{t('config.network.proxyHint')} {t('config.network.systemProxyHint')}</SettingsHelp>
                   <label className="config-proxy-system-toggle" title={t('config.network.systemProxyHint')}>
                     <span>{t('config.network.systemProxy')}</span>
-                    <span className="switch-control">
-                      <input
-                        type="checkbox"
-                        checked={!proxyOverrideDraft}
-                        disabled={controlsDisabled}
-                        onChange={(event) => {
+                    <Switch checked={!proxyOverrideDraft} disabled={controlsDisabled} onChange={(event) => {
                           markDraftDirty('proxyOverride');
                           setProxyOverrideDraft(!event.currentTarget.checked);
-                        }}
-                      />
-                      <span className="switch-track" />
-                    </span>
+                        }} />
                   </label>
                 </div>
                 <input
@@ -1442,21 +1435,11 @@ export function ConfigPanelPage() {
 
                 </div>
               </div>
-              <label className="switch-control" title={t('config.tls.enable')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  aria-label={t('config.tls.enable')}
-                  checked={tlsEnabledDraft}
-                  disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null}
-                  onChange={(event) => {
+              <Switch title={t('config.tls.enable')} aria-label={t('config.tls.enable')} checked={tlsEnabledDraft} disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null} onChange={(event) => {
                     setTlsSavedStatusVisible(false);
                     setTlsError('');
                     setTlsEnabledDraft(event.currentTarget.checked);
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
 
             {tlsEnabledDraft ? (
@@ -1556,19 +1539,10 @@ export function ConfigPanelPage() {
                   <span className="config-field-label"><span>{t('config.network.sessionAffinity')}</span><SettingsHelp label={t('config.network.sessionAffinity')}>{t('config.network.sessionAffinityHint')}</SettingsHelp></span>
 
                 </div>
-                <label className="switch-control" title={t('config.network.sessionAffinity')}>
-                  <input
-                    type="checkbox"
-                    aria-label={t('config.network.sessionAffinity')}
-                    checked={sessionAffinityDraft}
-                    disabled={controlsDisabled}
-                    onChange={(event) => {
+                <Switch title={t('config.network.sessionAffinity')} aria-label={t('config.network.sessionAffinity')} checked={sessionAffinityDraft} disabled={controlsDisabled} onChange={(event) => {
                       markDraftDirty('sessionAffinity');
                       setSessionAffinityDraft(event.currentTarget.checked);
-                    }}
-                  />
-                  <span className="switch-track" />
-                </label>
+                    }} />
               </div>
 
               <div className="config-network-field">
@@ -1802,20 +1776,10 @@ export function ConfigPanelPage() {
                 <span className="config-field-label"><strong>{t('config.diagnostics.debug.title')}</strong><SettingsHelp label={t('config.diagnostics.debug.title')}>{t('config.diagnostics.debug.description')}</SettingsHelp></span>
 
               </div>
-              <label className="switch-control" title={t('config.diagnostics.debug.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={debugDraft}
-                  aria-label={t('config.diagnostics.debug.title')}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
+              <Switch title={t('config.diagnostics.debug.title')} checked={debugDraft} aria-label={t('config.diagnostics.debug.title')} disabled={controlsDisabled} onChange={(event) => {
                     setDebugDraft(event.currentTarget.checked);
                     markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
 
             <div className="config-diagnostics-setting">
@@ -1824,20 +1788,10 @@ export function ConfigPanelPage() {
                 <span className="config-field-label"><strong>{t('config.diagnostics.commercial.title')}</strong><SettingsHelp label={t('config.diagnostics.commercial.title')}>{t('config.diagnostics.commercial.description')} {t('config.diagnostics.commercial.warning')}</SettingsHelp></span>
 
               </div>
-              <label className="switch-control" title={t('config.diagnostics.commercial.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={commercialModeDraft}
-                  aria-label={t('config.diagnostics.commercial.title')}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
+              <Switch title={t('config.diagnostics.commercial.title')} checked={commercialModeDraft} aria-label={t('config.diagnostics.commercial.title')} disabled={controlsDisabled} onChange={(event) => {
                     setCommercialModeDraft(event.currentTarget.checked);
                     markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
 
             <div className="config-diagnostics-setting">
@@ -1846,20 +1800,10 @@ export function ConfigPanelPage() {
                 <span className="config-field-label"><strong>{t('config.diagnostics.fileLogging.title')}</strong><SettingsHelp label={t('config.diagnostics.fileLogging.title')}>{t('config.diagnostics.fileLogging.description')}</SettingsHelp></span>
 
               </div>
-              <label className="switch-control" title={t('config.diagnostics.fileLogging.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={loggingToFileDraft}
-                  aria-label={t('config.diagnostics.fileLogging.title')}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
+              <Switch title={t('config.diagnostics.fileLogging.title')} checked={loggingToFileDraft} aria-label={t('config.diagnostics.fileLogging.title')} disabled={controlsDisabled} onChange={(event) => {
                     setLoggingToFileDraft(event.currentTarget.checked);
                     markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
 
             <div className="config-diagnostics-setting">
@@ -1868,20 +1812,10 @@ export function ConfigPanelPage() {
                 <span className="config-field-label"><strong>{t('config.diagnostics.usage.title')}</strong><SettingsHelp label={t('config.diagnostics.usage.title')}>{t('config.diagnostics.usage.description')}</SettingsHelp></span>
 
               </div>
-              <label className="switch-control" title={t('config.diagnostics.usage.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={usageStatisticsDraft}
-                  aria-label={t('config.diagnostics.usage.title')}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
+              <Switch title={t('config.diagnostics.usage.title')} checked={usageStatisticsDraft} aria-label={t('config.diagnostics.usage.title')} disabled={controlsDisabled} onChange={(event) => {
                     setUsageStatisticsDraft(event.currentTarget.checked);
                     markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
           </div>
 
@@ -2001,20 +1935,10 @@ export function ConfigPanelPage() {
                       <strong>{t('config.software.autostart')}</strong>
                     </div>
                   </div>
-                  <label className="switch-control" title={t('config.software.autostart')}>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label={t('config.software.autostart')}
-                      checked={softwareAutostartDraft}
-                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
-                      onChange={(event) => {
+                  <Switch title={t('config.software.autostart')} aria-label={t('config.software.autostart')} checked={softwareAutostartDraft} disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null} onChange={(event) => {
                         setSoftwareSavedStatusVisible(false);
                         setSoftwareAutostartDraft(event.currentTarget.checked);
-                      }}
-                    />
-                    <span className="switch-track" />
-                  </label>
+                      }} />
                 </div>
                 <div className="config-software-setting-row">
                   <div className="config-software-setting-copy">
@@ -2025,20 +1949,10 @@ export function ConfigPanelPage() {
                       <strong>{t('config.software.startCoreOnLaunch')}</strong>
                     </div>
                   </div>
-                  <label className="switch-control" title={t('config.software.startCoreOnLaunch')}>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label={t('config.software.startCoreOnLaunch')}
-                      checked={softwareStartCoreDraft}
-                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
-                      onChange={(event) => {
+                  <Switch title={t('config.software.startCoreOnLaunch')} aria-label={t('config.software.startCoreOnLaunch')} checked={softwareStartCoreDraft} disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null} onChange={(event) => {
                         setSoftwareSavedStatusVisible(false);
                         setSoftwareStartCoreDraft(event.currentTarget.checked);
-                      }}
-                    />
-                    <span className="switch-track" />
-                  </label>
+                      }} />
                 </div>
                 <div className="config-software-setting-row">
                   <div className="config-software-setting-copy">
@@ -2050,20 +1964,10 @@ export function ConfigPanelPage() {
 
                     </div>
                   </div>
-                  <label className="switch-control" title={t('config.software.silentStart')}>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label={t('config.software.silentStart')}
-                      checked={softwareSilentStartDraft}
-                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
-                      onChange={(event) => {
+                  <Switch title={t('config.software.silentStart')} aria-label={t('config.software.silentStart')} checked={softwareSilentStartDraft} disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null} onChange={(event) => {
                         setSoftwareSavedStatusVisible(false);
                         setSoftwareSilentStartDraft(event.currentTarget.checked);
-                      }}
-                    />
-                    <span className="switch-track" />
-                  </label>
+                      }} />
                 </div>
                 <div className="config-software-setting-row config-software-close-row">
                   <div className="config-software-setting-copy">

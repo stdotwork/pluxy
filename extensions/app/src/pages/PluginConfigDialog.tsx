@@ -1,3 +1,4 @@
+import { Switch } from '../components/Switch';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, Settings2, X } from 'lucide-react';
 import { Dialog } from '../components/Dialog';
@@ -156,7 +157,7 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
       <div className="plugin-config-body">
         {loading ? <p className="plugin-config-loading" role="status"><LoaderCircle size={20} className="spin" />{t('common.loading')}</p> : draft ? <fieldset disabled={saving}>
           <div className="plugin-config-common">
-            <label className="plugin-config-toggle"><input type="checkbox" checked={draft.enabled} onChange={event => { const checked = event.currentTarget.checked; changeDraft(current => ({ ...current, enabled: checked, enabledTouched: true })); }} /><span>{pt('enabled')}</span></label>
+            <label className="plugin-config-toggle"><Switch checked={draft.enabled} onChange={event => { const checked = event.currentTarget.checked; changeDraft(current => ({ ...current, enabled: checked, enabledTouched: true })); }} /><span>{pt('enabled')}</span></label>
             <small>{pt('enabledHint')}</small>
             <div className="plugin-config-field">
               <label htmlFor={`${id}-priority`}>{pt('priority')}</label>

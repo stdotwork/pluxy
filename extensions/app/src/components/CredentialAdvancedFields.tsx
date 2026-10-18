@@ -1,3 +1,4 @@
+import { Switch } from './Switch';
 import { useState } from 'react';
 import { ChevronDown, Plus, Undo2, X } from 'lucide-react';
 import { AgentModelPicker } from './AgentModelPicker';
@@ -124,8 +125,8 @@ export function CredentialAdvancedFields({
                 <input value={textValue(row['display-name'])} disabled={disabled} autoComplete="off" spellCheck={false} onChange={(event) => updateAlias(index, { 'display-name': event.currentTarget.value.trim() ? event.currentTarget.value : undefined })} />
               </label>
               <div className="credential-alias-checks">
-                <label><input type="checkbox" checked={row.fork === true} disabled={disabled} onChange={(event) => updateAlias(index, { fork: event.currentTarget.checked })} />{t('authFiles.settings.aliasFork')}</label>
-                <label><input type="checkbox" checked={row['force-mapping'] === true} disabled={disabled} onChange={(event) => updateAlias(index, { 'force-mapping': event.currentTarget.checked })} />{t('authFiles.settings.aliasForce')}</label>
+                <label><Switch checked={row.fork === true} disabled={disabled} onChange={(event) => updateAlias(index, { fork: event.currentTarget.checked })} />{t('authFiles.settings.aliasFork')}</label>
+                <label><Switch checked={row['force-mapping'] === true} disabled={disabled} onChange={(event) => updateAlias(index, { 'force-mapping': event.currentTarget.checked })} />{t('authFiles.settings.aliasForce')}</label>
               </div>
             </div> : null}
           </div>;

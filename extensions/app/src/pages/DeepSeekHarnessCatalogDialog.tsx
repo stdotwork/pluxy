@@ -1,3 +1,4 @@
+import { Checkbox } from '../components/Checkbox';
 import {
   getDeepSeekHarnessModelCatalogEditor,
   saveDeepSeekHarnessModelCatalogEditor,
@@ -76,7 +77,7 @@ function HarnessFields({ group, draft, defaults = {}, prefix = '', api, contextD
           <option value="">{automatic}</option><option value="false">{t('agents.harness.reasoningDisabled')}</option><option value="custom">{t('agents.harness.reasoningCustom')}</option>
         </select></label>
         {value && value !== 'false' ? <div className="harness-reasoning-levels">{harnessReasoningLevels.map(level => <div key={level}>
-          <label><input type="checkbox" checked={Object.prototype.hasOwnProperty.call(mapping, level)} onChange={e => {
+          <label><Checkbox checked={Object.prototype.hasOwnProperty.call(mapping, level)} onChange={e => {
             const next = { ...mapping }; if (e.currentTarget.checked) next[level] = level === 'off' ? null : level; else delete next[level]; set(JSON.stringify(next));
           }} />{level}</label>
           {Object.prototype.hasOwnProperty.call(mapping, level) ? <input aria-label={`${level} reasoning_effort`} value={String(mapping[level] ?? '')} placeholder={level === 'off' ? t('agents.harness.noWireValue') : level}

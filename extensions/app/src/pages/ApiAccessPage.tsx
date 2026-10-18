@@ -1,3 +1,4 @@
+import { Switch } from '../components/Switch';
 import { resolveApiAccessRemarks, saveApiAccessRemark } from '../services/apiAccessRemarks';
 import type { ProviderSection, ApiAccessRemarkLocator } from '../services/apiAccessRemarks';
 import { useConfirmation } from '../components/ConfirmationDialog';
@@ -1690,16 +1691,7 @@ export function ApiAccessPage() {
                     </button>
                     <label className="provider-enabled-control">
                       <span>{t(row.disabled ? 'apiAccess.status.disabled' : 'apiAccess.status.enabled')}</span>
-                      <span className="switch-control">
-                        <input
-                          type="checkbox"
-                          checked={!row.disabled}
-                          onChange={() => void toggleProvider(row)}
-                          disabled={busy}
-                          aria-label={t('apiAccess.toggleAria', { remark: row.remark || row.name, action: row.disabled ? t('common.enable') : t('common.disable') })}
-                        />
-                        <span className="switch-track" />
-                      </span>
+                      <Switch checked={!row.disabled} onChange={() => void toggleProvider(row)} disabled={busy} aria-label={t('apiAccess.toggleAria', { remark: row.remark || row.name, action: row.disabled ? t('common.enable') : t('common.disable') })} />
                     </label>
                     <button type="button" className="icon-button quiet" onClick={() => openEdit(row)} disabled={busy} title={t('common.edit')} aria-label={t('common.edit')}>
                       <Edit3 size={16} aria-hidden="true" />
@@ -2412,7 +2404,7 @@ export function ApiProviderDialog({
                 </label>
                 <div className="provider-advanced-toggle">
                   <div><strong>{t('apiAccess.cloak.strict')}</strong><span>{t('apiAccess.cloak.strictDescription')}</span></div>
-                  <label className="switch-control" title={t('apiAccess.cloak.enableStrict')}><input type="checkbox" checked={Boolean(draft.cloakStrictMode)} onChange={(event) => updateBooleanField('cloakStrictMode', event.currentTarget.checked)} /><span className="switch-track" /></label>
+                  <Switch title={t('apiAccess.cloak.enableStrict')} checked={Boolean(draft.cloakStrictMode)} onChange={(event) => updateBooleanField('cloakStrictMode', event.currentTarget.checked)} />
                 </div>
                 <div className="provider-advanced-toggle">
                   <div><strong>{t('apiAccess.cloak.cacheUser')}</strong><span>{t('apiAccess.cloak.cacheUserDescription')}</span></div>
@@ -2427,7 +2419,7 @@ export function ApiProviderDialog({
             {!grouped && (activeSection === 'codex-api-key' || activeSection === 'xai-api-key') ? (
               <div className="provider-advanced-toggle">
                 <div><strong>WebSocket</strong><span>{t('apiAccess.websocket.description')}</span></div>
-                <label className="switch-control" title={t('apiAccess.websocket.enable')}><input type="checkbox" checked={Boolean(draft.websockets)} onChange={(event) => updateBooleanField('websockets', event.currentTarget.checked)} /><span className="switch-track" /></label>
+                <Switch title={t('apiAccess.websocket.enable')} checked={Boolean(draft.websockets)} onChange={(event) => updateBooleanField('websockets', event.currentTarget.checked)} />
               </div>
             ) : null}
             <div className="provider-advanced-toggle">

@@ -1,3 +1,4 @@
+import { Switch } from '../Switch';
 import { claudeCodeModelBase, claudeCodeRoles, claudeCodeModelPreview, isKnownClaudeCodeModel, type ClaudeCodeRoutes } from '../../services/claudeCodeModels';
 import { useI18n } from '../../i18n';
 import { AgentModelPicker } from '../AgentModelPicker';
@@ -44,10 +45,7 @@ export function ClaudeCodeModelInputs({ startupModel, subagentModel, models, rou
               placeholder: t(`agents.claudeCodeRuntime.${field}Placeholder`), maxLength: 240 }}
           />
           <label className="claude-inline-context">
-            <span className="switch-control"><input type="checkbox" role="switch" aria-label={`${t(`agents.claudeCodeRuntime.${field}`)} 1M`}
-              checked={preview.context1m} disabled={disabled || !value.trim() || Boolean(preview.role)}
-              onChange={event => onChange(field, claudeCodeModelBase(value) + (event.currentTarget.checked ? '[1m]' : ''))} />
-            <span className="switch-track" aria-hidden="true" /></span><span>{t('agents.claudeMapping.context1m')}</span>
+            <Switch aria-label={`${t(`agents.claudeCodeRuntime.${field}`)} 1M`} checked={preview.context1m} disabled={disabled || !value.trim() || Boolean(preview.role)} onChange={event => onChange(field, claudeCodeModelBase(value) + (event.currentTarget.checked ? '[1m]' : ''))} /><span>{t('agents.claudeMapping.context1m')}</span>
           </label>
           </div>
           {!loading && !isKnownClaudeCodeModel(value, models) ? (

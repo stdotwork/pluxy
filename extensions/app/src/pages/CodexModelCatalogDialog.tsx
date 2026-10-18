@@ -1,3 +1,5 @@
+import { Switch } from '../components/Switch';
+import { Checkbox } from '../components/Checkbox';
 import {
   getCodexModelCatalogEditor,
   saveCodexModelCatalogEditor,
@@ -254,7 +256,7 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
                   <div className="codex-catalog-chips">
                     {codexReasoningEfforts.map((effort) => {
                       const checked = activeModel.configuration.supported_reasoning_levels.some((level) => level.effort === effort);
-                      return <label key={effort} className={checked ? 'selected' : ''}><input type="checkbox" checked={checked} onChange={(event) => toggleReasoning(effort, event.currentTarget.checked, activeModel.defaults.supported_reasoning_levels)} /><span>{checked ? <Check size={13} /> : null}{effort}</span></label>;
+                      return <label key={effort} className={checked ? 'selected' : ''}><Checkbox checked={checked} onChange={(event) => toggleReasoning(effort, event.currentTarget.checked, activeModel.defaults.supported_reasoning_levels)} /><span>{checked ? <Check size={13} /> : null}{effort}</span></label>;
                     })}
                   </div>
                 </fieldset>
@@ -264,13 +266,13 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
                 <fieldset className="codex-catalog-choice-group">
                   <legend>{t('agents.catalog.modalities')}</legend>
                   <div className="codex-catalog-checkboxes">
-                    {(['text', 'image'] as const).map((modality) => <label key={modality}><input type="checkbox" checked={activeModel.configuration.input_modalities.includes(modality)} onChange={(event) => toggleModality(modality, event.currentTarget.checked)} />{t(`agents.catalog.${modality}`)}</label>)}
+                    {(['text', 'image'] as const).map((modality) => <label key={modality}><Checkbox checked={activeModel.configuration.input_modalities.includes(modality)} onChange={(event) => toggleModality(modality, event.currentTarget.checked)} />{t(`agents.catalog.${modality}`)}</label>)}
                   </div>
                 </fieldset>
 
-                <label className="codex-catalog-switch"><input type="checkbox" checked={activeModel.configuration.visibility === 'list'} onChange={(event) => updateField('visibility', event.currentTarget.checked ? 'list' : 'hide')} /><span>{t('agents.catalog.visible')}</span></label>
-                <label className="codex-catalog-switch"><input type="checkbox" checked={activeModel.configuration.supports_parallel_tool_calls} onChange={(event) => updateField('supports_parallel_tool_calls', event.currentTarget.checked)} /><span>{t('agents.catalog.parallel')}</span></label>
-                <label className="codex-catalog-switch"><input type="checkbox" checked={activeModel.configuration.supports_search_tool} onChange={(event) => updateField('supports_search_tool', event.currentTarget.checked)} /><span>{t('agents.catalog.toolSearch')}</span></label>
+                <label className="codex-catalog-option"><Switch checked={activeModel.configuration.visibility === 'list'} onChange={(event) => updateField('visibility', event.currentTarget.checked ? 'list' : 'hide')} /><span>{t('agents.catalog.visible')}</span></label>
+                <label className="codex-catalog-option"><Checkbox checked={activeModel.configuration.supports_parallel_tool_calls} onChange={(event) => updateField('supports_parallel_tool_calls', event.currentTarget.checked)} /><span>{t('agents.catalog.parallel')}</span></label>
+                <label className="codex-catalog-option"><Checkbox checked={activeModel.configuration.supports_search_tool} onChange={(event) => updateField('supports_search_tool', event.currentTarget.checked)} /><span>{t('agents.catalog.toolSearch')}</span></label>
                 <label className="wide"><span>{t('agents.catalog.systemPrompt')}</span><textarea className="codex-catalog-system-prompt" rows={12} spellCheck={false} value={activeModel.configuration.base_instructions} onChange={(event) => updateField('base_instructions', event.currentTarget.value)} aria-describedby="codex-catalog-prompt-hint" /><small id="codex-catalog-prompt-hint">{t('agents.catalog.systemPromptHint')}</small></label>
               </div>
               <p className="codex-catalog-hint" role="note">{t(codexContextSourceHint(activeModel))}</p>

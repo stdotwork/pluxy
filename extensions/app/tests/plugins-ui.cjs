@@ -114,7 +114,7 @@ const fs = require('node:fs');
     assert.equal(await page.evaluate(() => window.pluginsFixture.commands.some(call => call.command.includes('webview') || call.command.includes('resource_url'))), false);
 
     await page.locator('.plugin-tabs button').nth(2).click();
-    const globalSwitch = page.getByRole('checkbox', { name: 'Enable plugins', exact: true });
+    const globalSwitch = page.getByRole('switch', { name: 'Enable plugins', exact: true });
     await globalSwitch.uncheck();
     await page.getByText('Plugins are globally disabled.', { exact: false }).waitFor();
     await page.locator('.plugin-tabs button').nth(0).click();

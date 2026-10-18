@@ -1,3 +1,4 @@
+import { Checkbox } from '../components/Checkbox';
 import { onCodexSessionRepairProgress } from '../services/events';
 import {
   listCodexSessions,
@@ -444,12 +445,7 @@ export function CodexSessionsPanel() {
               <article className={`codex-session-row ${selectedIds.has(session.id) ? 'selected' : ''}`} key={session.id}>
                 {selectionMode ? (
                   <label className="codex-session-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(session.id)}
-                      aria-label={t('agents.sessions.selectSession', { title: session.title || session.id })}
-                      onChange={(event) => toggleSelected(session.id, event.currentTarget.checked)}
-                    />
+                    <Checkbox checked={selectedIds.has(session.id)} aria-label={t('agents.sessions.selectSession', { title: session.title || session.id })} onChange={(event) => toggleSelected(session.id, event.currentTarget.checked)} />
                   </label>
                 ) : null}
                 <div className="codex-session-main">
@@ -528,20 +524,13 @@ export function CodexSessionsPanel() {
           </div>
           <p>{t('agents.sessions.cleanupDescription', { count: cleanupPreview.candidates.length })}</p>
           <label className="codex-session-cleanup-select-all">
-            <input
-              type="checkbox"
-              checked={cleanupSelectedIds.size === cleanupPreview.candidates.length && cleanupPreview.candidates.length > 0}
-              onChange={(event) => setCleanupSelectedIds(event.currentTarget.checked ? new Set(cleanupPreview.candidates.map((candidate) => candidate.id)) : new Set())}
-            />
+            <Checkbox checked={cleanupSelectedIds.size === cleanupPreview.candidates.length && cleanupPreview.candidates.length > 0} indeterminate={cleanupSelectedIds.size > 0 && cleanupSelectedIds.size < cleanupPreview.candidates.length} onChange={(event) => setCleanupSelectedIds(event.currentTarget.checked ? new Set(cleanupPreview.candidates.map((candidate) => candidate.id)) : new Set())} />
             <span>{t('agents.sessions.cleanupSelectAll')}</span>
           </label>
           <div className="codex-session-cleanup-list">
             {cleanupPreview.candidates.map((candidate) => (
               <label key={candidate.id}>
-                <input
-                  type="checkbox"
-                  checked={cleanupSelectedIds.has(candidate.id)}
-                  onChange={(event) => {
+                <Checkbox checked={cleanupSelectedIds.has(candidate.id)} onChange={(event) => {
                     const checked = event.currentTarget.checked;
                     setCleanupSelectedIds((current) => {
                       const next = new Set(current);
@@ -549,8 +538,7 @@ export function CodexSessionsPanel() {
                       else next.delete(candidate.id);
                       return next;
                     });
-                  }}
-                />
+                  }} />
                 <span><strong>{candidate.threadName || t('agents.sessions.untitled')}</strong><code>{candidate.id}</code><small>{candidate.updatedAt}</small></span>
               </label>
             ))}

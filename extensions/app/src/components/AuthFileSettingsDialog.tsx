@@ -1,3 +1,4 @@
+import { Checkbox } from './Checkbox';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Check, LoaderCircle, Settings2, X } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -136,8 +137,7 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
                     {candidates.map((model) => {
                       const wildcard = rules.some((rule) => rule.includes('*') && modelMatchesRule(model.id, rule));
                       return <label key={model.id} title={wildcard ? t('authFiles.settings.wildcard') : model.displayName}>
-                        <input type="checkbox" checked={rules.some((rule) => modelMatchesRule(model.id, rule))} disabled={wildcard}
-                          onChange={(event) => update('excluded_models', setOAuthModelsExcluded(rules, [model], event.currentTarget.checked).join('\n'))} />
+                        <Checkbox checked={rules.some((rule) => modelMatchesRule(model.id, rule))} disabled={wildcard} onChange={(event) => update('excluded_models', setOAuthModelsExcluded(rules, [model], event.currentTarget.checked).join('\n'))} />
                         <span>{model.id}{wildcard ? <small>{t('authFiles.settings.wildcard')}</small> : null}</span>
                       </label>;
                     })}

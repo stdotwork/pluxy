@@ -90,7 +90,7 @@ const settlePaint = locator => locator.evaluate(async element => {
     await page.keyboard.press('Escape');
 
     await page.getByRole('button', { name: '高级功能', exact: true }).click();
-    const remote = page.getByRole('checkbox', { name: '允许远程管理', exact: true });
+    const remote = page.getByRole('switch', { name: '允许远程管理', exact: true });
     await remote.waitFor();
     for (const activeThumb of [null, '#6A3554']) {
       await remote.uncheck();

@@ -1,3 +1,4 @@
+import { Switch } from '../Switch';
 import { useI18n } from '../../i18n';
 import { SettingsHelp } from '../SettingsHelp';
 
@@ -16,12 +17,7 @@ export function CoolingToggle({ disabledCooling, disabled, onChange }: {
           <SettingsHelp label={label}>{t('config.network.enableCoolingHint')}</SettingsHelp>
         </span>
       </div>
-      <label className="switch-control" title={label}>
-        <input id="config-enable-cooling" type="checkbox" role="switch" aria-label={label}
-          checked={!disabledCooling} disabled={disabled}
-          onChange={(event) => onChange(!event.currentTarget.checked)} />
-        <span className="switch-track" />
-      </label>
+      <Switch title={label} id="config-enable-cooling" aria-label={label} checked={!disabledCooling} disabled={disabled} onChange={(event) => onChange(!event.currentTarget.checked)} />
     </div>
   );
 }

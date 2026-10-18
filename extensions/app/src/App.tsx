@@ -1,3 +1,4 @@
+import { Switch } from './components/Switch';
 import { onWindowsCloseRequested } from './services/events';
 import {
   openExternalUrl,
@@ -598,17 +599,12 @@ function AppContent() {
             <MessageNotice message={windowsClosePrompt.error} onDismiss={() => setWindowsClosePrompt(current => current ? { ...current, error: null } : current)} />
           ) : null}
           <label className="close-dialog-remember">
-            <input
-              type="checkbox"
-              checked={windowsClosePrompt.rememberChoice}
-              disabled={windowsClosePrompt.resolvingAction !== null}
-              onChange={(event) => {
+            <Switch checked={windowsClosePrompt.rememberChoice} disabled={windowsClosePrompt.resolvingAction !== null} onChange={(event) => {
                 const rememberChoice = event.currentTarget.checked;
                 setWindowsClosePrompt((current) =>
                   current ? { ...current, rememberChoice } : current,
                 );
-              }}
-            />
+              }} />
             <span>{t('app.close.remember')}</span>
           </label>
           <div className="close-dialog-actions">

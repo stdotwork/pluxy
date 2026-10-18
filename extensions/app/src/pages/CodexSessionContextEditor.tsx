@@ -1,3 +1,4 @@
+import { Switch } from '../components/Switch';
 import { getCodexSessionContext, saveCodexSessionContext, openCodexSessionRollout } from '../services/codexSessions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -466,12 +467,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
               </div>
 
               <label className="context-archived-checkbox">
-                <input
-                  type="checkbox"
-                  checked={archived}
-                  disabled={loading || saving || !detail?.rolloutPath}
-                  onChange={(event) => setArchived(event.target.checked)}
-                />
+                <Switch checked={archived} disabled={loading || saving || !detail?.rolloutPath} onChange={(event) => setArchived(event.target.checked)} />
                 <span>{t('agents.sessions.context.archived')}</span>
               </label>
             </div>

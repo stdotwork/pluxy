@@ -22,7 +22,6 @@
 .plugin-config-parameters h3 { font-size: var(--font-size-body); }
 .plugin-config-dialog small, .plugin-config-parameters p { color: var(--theme-7a746c); font-size: var(--font-size-caption); line-height: 1.6; overflow-wrap: anywhere; }
 .plugin-config-toggle { display: flex; align-items: center; gap: 10px; font-size: var(--font-size-body); font-weight: var(--font-weight-semibold); }
-.plugin-config-toggle input { width: 16px; height: 16px; accent-color: var(--theme-4f825c); }
 .plugin-config-field { display: grid; gap: 7px; min-width: 0; }
 .plugin-config-field > label { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; font-size: var(--font-size-body); overflow-wrap: anywhere; }
 .plugin-config-field code { font-size: var(--font-size-caption); color: var(--theme-7a746c); }

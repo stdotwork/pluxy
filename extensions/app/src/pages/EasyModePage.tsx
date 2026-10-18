@@ -1,3 +1,4 @@
+import { Checkbox } from '../components/Checkbox';
 import { getOAuthStatus, startOAuthLogin, openOAuthUrl } from '../services/oauth';
 import { ThemeSelector } from '../components/ThemeSelector';
 import {
@@ -1114,12 +1115,7 @@ export function EasyModePage({
                                 className={`simple-mode-api-model-option${selected ? " selected" : ""}`}
                                 key={model.name}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={selected}
-                                  disabled={apiTesting}
-                                  onChange={() => handleToggleApiModel(model)}
-                                />
+                                <Checkbox checked={selected} disabled={apiTesting} onChange={() => handleToggleApiModel(model)} />
                                 <span title={model.name}>{model.name}</span>
                               </label>
                             );

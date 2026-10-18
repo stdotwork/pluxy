@@ -1,3 +1,4 @@
+import { Checkbox } from '../components/Checkbox';
 import { useEffect, useLayoutEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { MessageNotice } from '../appNotice';
@@ -154,8 +155,7 @@ export function AgentClientList<Id extends string>({
       </div>
       <div className="agent-client-catalog">
         {matches.map((client) => <label key={client.id} className="agent-client-option">
-          <input type="checkbox" aria-label={client.name} checked={draftSelection.includes(client.id)}
-            onChange={(event) => setDraftIds(event.currentTarget.checked
+          <Checkbox aria-label={client.name} checked={draftSelection.includes(client.id)} onChange={(event) => setDraftIds(event.currentTarget.checked
               ? [...draftSelection, client.id] : draftSelection.filter((id) => id !== client.id))} />
           <span className="agent-client-icon">{client.icon}</span>
           <span className="agent-client-option-copy"><strong>{client.name}</strong><small title={client.summary}>{client.summary}</small></span>
