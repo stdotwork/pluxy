@@ -30,11 +30,6 @@
   --usage-page-border: var(--theme-border, #414d60);
 }
 
-.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) :is(
-  .usage-analysis-card, .usage-analysis-context, .usage-pricing-panel,
-  .usage-data-management-panel, .usage-data-management-action,
-  .usage-data-management-result > div, .usage-price-editor
-),
 .usage-price-sync-dialog {
   background: var(--bg-card);
   border-color: var(--usage-page-border);

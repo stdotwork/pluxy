@@ -405,7 +405,7 @@ export function UsageRecordsPage() {
   const sourceOptions = [...(optionsAnalysis.upstreams ?? [])].sort((a, b) => a.label.localeCompare(b.label));
   const keyOptions = filterOptions(optionsAnalysis.apiKeys);
   const filterPanel = (
-    <section className="panel usage-filter-panel">
+    <section className="panel surface-bare usage-filter-panel">
       <div className="usage-filter-row">
         <div className="usage-filter-group">
           <div className="usage-filter-item">
@@ -671,7 +671,7 @@ function UsageDataManagementView() {
   };
 
   return (
-    <section className="panel usage-data-management-panel">
+    <section className="panel surface-card usage-data-management-panel">
       {confirmationDialog}
       <div className="usage-data-management-heading">
         <div>
@@ -681,7 +681,7 @@ function UsageDataManagementView() {
         <span className="usage-data-management-badge">{t('usage.dataManagement.manualBadge')}</span>
       </div>
 
-      <div className="usage-data-management-action usage-storage-limit-action">
+      <div className="surface-card usage-data-management-action usage-storage-limit-action">
         <div>
           <strong>{t('usage.dataManagement.storageTitle')}</strong>
           <span>{t('usage.dataManagement.storageDescription')}</span>
@@ -721,7 +721,7 @@ function UsageDataManagementView() {
         </div>
       </div>
 
-      <div className="usage-data-management-action">
+      <div className="surface-card usage-data-management-action">
         <div>
           <strong>{t('usage.dataManagement.shrinkTitle')}</strong>
           <span>{t('usage.dataManagement.shrinkDescription')}</span>
@@ -755,7 +755,7 @@ function UsageDataManagementView() {
 
       {storageNotice ? <MessageNotice tone="success" message={storageNotice} onDismiss={() => setStorageNotice('')} /> : null}
 
-      <div className="usage-data-management-action">
+      <div className="surface-card usage-data-management-action">
         <div>
           <strong>{t('usage.dataManagement.actionTitle')}</strong>
           <span>{t('usage.dataManagement.actionDescription')}</span>
@@ -770,10 +770,10 @@ function UsageDataManagementView() {
         <>
           <MessageNotice tone="success" message={t('usage.dataManagement.success', { repaired: result.repaired, deleted: result.deleted })} />
           <div className="usage-data-management-result">
-          <div><span>{t('usage.dataManagement.scanned')}</span><strong>{result.scanned.toLocaleString()}</strong></div>
-          <div><span>{t('usage.dataManagement.repaired')}</span><strong>{result.repaired.toLocaleString()}</strong></div>
-          <div><span>{t('usage.dataManagement.deleted')}</span><strong>{result.deleted.toLocaleString()}</strong></div>
-          <div><span>{t('usage.dataManagement.backup')}</span><strong title={result.backupPath ?? undefined}>{result.backupPath ?? '—'}</strong></div>
+          <div className="surface-card usage-data-management-result-item"><span>{t('usage.dataManagement.scanned')}</span><strong>{result.scanned.toLocaleString()}</strong></div>
+          <div className="surface-card usage-data-management-result-item"><span>{t('usage.dataManagement.repaired')}</span><strong>{result.repaired.toLocaleString()}</strong></div>
+          <div className="surface-card usage-data-management-result-item"><span>{t('usage.dataManagement.deleted')}</span><strong>{result.deleted.toLocaleString()}</strong></div>
+          <div className="surface-card usage-data-management-result-item"><span>{t('usage.dataManagement.backup')}</span><strong title={result.backupPath ?? undefined}>{result.backupPath ?? '—'}</strong></div>
           </div>
         </>
       ) : null}
@@ -857,7 +857,7 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
 
   return (
     <div className="usage-overview-layout">
-      <div className="usage-stat-grid">
+      <div className="surface-card usage-stat-grid">
         {cards.map(({ key, tone, label, value, metaTitle }) => (
           <article className={`panel usage-stat-card tone-${tone}`} key={key} title={metaTitle}>
             <span className="usage-stat-card-label">{label}</span>
@@ -866,7 +866,7 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
         ))}
       </div>
       <UsageOverviewPanels>
-        <section className="panel usage-trend-panel">
+        <section className="panel surface-card usage-trend-panel">
           <div className="usage-section-heading">
             <div>
               <strong>{t('usage.trend.title')}</strong>
@@ -1275,7 +1275,7 @@ function TokenComposition({ overview }: { overview: UsageOverview }) {
     output: t('usage.token.output'),
   };
   return (
-    <section className="panel usage-health-panel" aria-labelledby="usage-token-title">
+    <section className="panel surface-card usage-health-panel" aria-labelledby="usage-token-title">
       <div className="usage-section-heading">
         <strong id="usage-token-title">{t('usage.token.title')}</strong>
       </div>
@@ -1531,7 +1531,7 @@ function PricingView({
   };
 
   return (
-    <section className="panel usage-pricing-panel">
+    <section className="panel surface-card usage-pricing-panel">
       {confirmationDialog}
       <div className="usage-pricing-toolbar">
         <div className="usage-pricing-summary">
@@ -1618,7 +1618,7 @@ function PricingView({
       </Dialog> : null}
 
       {draft ? (
-        <div className="usage-price-editor">
+        <div className="surface-section usage-price-editor">
           <label>
             <span>{t('usage.pricing.model')}</span>
             <input

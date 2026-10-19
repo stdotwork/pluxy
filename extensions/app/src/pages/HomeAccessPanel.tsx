@@ -28,7 +28,7 @@ export function HomeAccessPanel({ profiles, apiKey, keyError, ready, copiedField
   const copiedKey = copiedField === 'home:apikey';
 
   return (
-    <section className="panel home-access-panel" aria-labelledby="home-access-title">
+    <section className="panel surface-panel home-access-panel" aria-labelledby="home-access-title">
       <div className="home-panel-heading">
         <div><h2 id="home-access-title">{t('home.access.title')}</h2><p>{t('home.access.description')}</p></div>
         <span className={`home-connection-state ${ready ? 'ready' : ''}`}>
@@ -37,7 +37,7 @@ export function HomeAccessPanel({ profiles, apiKey, keyError, ready, copiedField
       </div>
       <Tabs className="home-protocol-tabs" aria-label={t('home.access.protocol')} value={profile.id} onChange={setActive}
         items={profiles.map(item => ({ value: item.id, id: `home-protocol-${item.id}`, panelId: 'home-protocol-panel', label: <><img src={icons[item.id]} alt="" />{item.name}</> }))} />
-      <div id="home-protocol-panel" className={`home-connection-details client-api-card ${profile.id}`} role="tabpanel" aria-labelledby={`home-protocol-${profile.id}`}>
+      <div id="home-protocol-panel" className={`surface-bare home-connection-details client-api-card ${profile.id}`} role="tabpanel" aria-labelledby={`home-protocol-${profile.id}`}>
         <div className="home-field-label"><span>{t('easyMode.api.baseUrl')}</span><span>{profile.description}</span></div>
         <div className="home-copy-field">
           <code title={profile.baseUrl}>{profile.baseUrl}</code>

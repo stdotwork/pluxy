@@ -1295,29 +1295,7 @@ textarea:focus-visible {
   height: 100%;
   min-height: 56px;
   padding: 0 14px;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 10px;
-  background: var(--theme-ffffff);
   box-sizing: border-box;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
-  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
-}
-
-.client-api-card:hover {
-  border-color: var(--theme-d5d2cb);
-  background: var(--theme-ffffff);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
-}
-
-:root[data-theme='dark'] .client-api-card {
-  border-color: var(--border-primary);
-  background: var(--bg-card);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-}
-
-:root[data-theme='dark'] .client-api-card:hover {
-  border-color: var(--border-hover);
-  background: var(--bg-hover);
 }
 
 .client-api-card-heading {
@@ -7777,9 +7755,6 @@ textarea:focus-visible {
   display: grid;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-primary);
 }
 
 .usage-filter-row {
@@ -7947,6 +7922,9 @@ textarea:focus-visible {
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
   padding: 16px;
+}
+
+.usage-events-panel {
   border: 1px solid var(--theme-e3e1db);
   border-radius: 9px;
   background: var(--theme-fffdf8);
@@ -9250,9 +9228,6 @@ body.table-col-resizing * {
   overflow: hidden;
   gap: 14px;
   padding: 16px;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 9px;
-  background: var(--theme-fffdf8);
 }
 
 .usage-data-management-panel {
@@ -9300,9 +9275,6 @@ body.table-col-resizing * {
 .usage-data-management-action {
   margin-top: 22px;
   padding: 16px;
-  border: 1px solid var(--theme-d8d4cc);
-  border-radius: 12px;
-  background: var(--theme-f8f5ee);
 }
 
 .usage-data-management-action + .usage-data-management-action {
@@ -9357,15 +9329,13 @@ body.table-col-resizing * {
   margin-top: 26px;
 }
 
-.usage-data-management-result > div {
+.usage-data-management-result-item {
   display: flex;
   flex: 1;
   min-width: 0;
   flex-direction: column;
   gap: 5px;
   padding: 12px;
-  border: 1px solid var(--theme-d8d4cc);
-  border-radius: 10px;
 }
 
 .usage-data-management-result span {
@@ -9502,9 +9472,6 @@ body.table-col-resizing * {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
   padding: 14px;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 8px;
-  background: var(--theme-f8f5ee);
 }
 
 .usage-price-editor label {

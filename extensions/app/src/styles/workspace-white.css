@@ -50,16 +50,6 @@
   border: 1px solid var(--border-color);
 }
 
-:root:not([data-theme='dark']) .workspace .usage-stat-grid {
-  background: var(--theme-surface, #fff);
-  border: 1px solid var(--border-color);
-  box-shadow: none;
-}
-
-:root:not([data-theme='dark']) .workspace .usage-stat-card + .usage-stat-card {
-  border-left: 1px solid var(--border-color);
-}
-
 :root:not([data-theme='dark']) :is(.workspace, .app-dialog) :is(
   .secondary-button:not(.danger, .ghost), .icon-button:not(.danger, .ghost), .agent-auth-segmented-button,
   .routing-segmented button, .plugin-tabs button,
@@ -124,17 +114,12 @@
 
 :root:not([data-theme='dark']) .workspace :is(
   .usage-records-page,
-  .usage-tab-panel,
-  .usage-filter-panel
+  .usage-tab-panel
 ) {
   background: transparent;
 }
 
-:root:not([data-theme='dark']) .workspace .usage-records-page :is(
-  .usage-trend-panel,
-  .usage-health-panel,
-  .usage-events-panel
-) {
+:root:not([data-theme='dark']) .workspace .usage-records-page .usage-events-panel {
   background: var(--theme-surface, #fff);
   border: 1px solid var(--border-color);
   box-shadow: none;

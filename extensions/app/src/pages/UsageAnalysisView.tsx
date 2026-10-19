@@ -42,7 +42,7 @@ export function UsageAnalysisView({ analysis, overview, range }: {
         <RequestResults overview={overview} models={analysis.models} />
       </div>
       <UsageActivityChart timeline={overview.timeline} range={range} />
-      <section className="usage-analysis-context">
+      <section className="surface-card usage-analysis-context">
         <CategorySummary title={t('usage.analysis.sources')} items={analysis.upstreams ?? []} />
         <CategorySummary title={t('usage.analysis.keys')} items={analysis.apiKeys} />
       </section>
@@ -67,7 +67,7 @@ function ModelComparison({ models }: { models: UsageCategory[] }) {
     : ranked;
   const colorOrder = [...models].sort((a, b) => b.tokens - a.tokens || a.key.localeCompare(b.key));
   return (
-    <section className="usage-analysis-card usage-model-comparison">
+    <section className="surface-card usage-analysis-card usage-model-comparison">
       <header className="usage-analysis-heading">
         <div><h2>{t('usage.analysis.modelTitle')}</h2><p>{t('usage.analysis.modelHint')}</p></div>
         <SegmentedControl className="usage-analysis-metric" aria-label={t('usage.analysis.metricLabel')} value={metric} onChange={setMetric}
@@ -118,7 +118,7 @@ function RequestResults({ overview, models }: { overview: AnalysisOverview; mode
   const circumference = 2 * Math.PI * 46;
   let offset = 0;
   return (
-    <section className="usage-analysis-card usage-request-results">
+    <section className="surface-card usage-analysis-card usage-request-results">
       <header className="usage-analysis-heading">
         <div><h2>{t('usage.analysis.resultsTitle')}</h2><p>{t('usage.analysis.resultsHint')}</p></div>
         <span className="usage-analysis-total">{t('usage.analysis.requestCount', { count: formatUsageNumber(overview.totalRequests, locale) })}</span>

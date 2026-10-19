@@ -41,13 +41,34 @@ const migrated: Record<string, string[]> = {
   'context-meta-card': ['surface-section'],
   'context-add-message-card': ['surface-section'],
   'context-message-card': ['surface-section'],
+  'control-panel': ['surface-panel'],
+  'home-access-panel': ['surface-panel'],
+  'home-stat-grid': ['surface-card'],
+  'home-connection-details': ['surface-bare'],
+  'client-api-card': ['surface-bare'],
+  'usage-filter-panel': ['surface-bare'],
+  'usage-stat-grid': ['surface-card'],
+  'usage-trend-panel': ['surface-card'],
+  'usage-health-panel': ['surface-card'],
+  'usage-analysis-card': ['surface-card'],
+  'usage-analysis-context': ['surface-card'],
+  'usage-activity-card': ['surface-card'],
+  'usage-pricing-panel': ['surface-card'],
+  'usage-data-management-panel': ['surface-card'],
+  'usage-data-management-action': ['surface-card'],
+  'usage-price-editor': ['surface-section'],
+  'usage-data-management-result-item': ['surface-card'],
 };
 const ids = new Set(['config-native-aliases', 'config-native-sensitive-words']);
 const stateSelectors: Record<string, Record<string, RegExp>> = {
+  'styles/config-settings.css': {
+    '.config-settings-cards > section:focus-visible, .config-settings-content .template-config-card:focus-visible': /^outline(?:-offset)?$/,
+  },
   'styles/template-config.css': {
     '.template-config-field-dirty .config-network-input, .template-config-field-dirty .template-config-custom': /^border-color$/,
   },
   'styles/ui-refinements.css': {
+    '.usage-stat-card': /^outline$/,
     '.oauth-card.is-waiting': /^border-color$/,
     '.oauth-card:hover': /^(?:border-color|box-shadow)$/,
   },
@@ -59,7 +80,7 @@ const stateSelectors: Record<string, Record<string, RegExp>> = {
     '.context-message-card.new-item': /^border-style$/,
   },
 };
-const appearance = /^(?:background(?:-|$)|border(?:-|$)|box-shadow$)/;
+const appearance = /^(?:background(?:-|$)|border(?:-|$)|outline(?:-|$)|box-shadow$)/;
 const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
   const path = join(dir, entry.name);
   return entry.isDirectory() ? walk(path) : [path];
@@ -118,7 +139,9 @@ const cssViolations = (text: string, file: string) => {
   const violations: string[] = [];
   postcss.parse(text).walkRules(rule => {
     if (/\.quiet-panel(?![\w-])/.test(rule.selector)) violations.push(`${file} uses retired quiet-panel`);
-    if (!containerSelector(rule.selector)) return;
+    const container = containerSelector(rule.selector);
+    const statCard = subjects(rule.selector).some(subject => tokens(subject).includes('usage-stat-card'));
+    if (!container && !statCard) return;
     if (file === 'styles/surfaces.css' && [
       '.panel, .surface-panel', '.panel:hover, .surface-panel:hover',
       ':where(.surface-card), .panel.surface-card', ':where(.surface-section)',
@@ -126,7 +149,7 @@ const cssViolations = (text: string, file: string) => {
     ].includes(normalize(rule.selector))) return;
     const allowed = stateSelectors[file]?.[normalize(rule.selector)];
     for (const declaration of rule.nodes) {
-      if (declaration.type === 'decl' && appearance.test(declaration.prop)) {
+      if (declaration.type === 'decl' && (container ? appearance.test(declaration.prop) : statCard && /^outline(?:-|$)/.test(declaration.prop))) {
         if (allowed && allowed.test(declaration.prop)) continue;
         violations.push(`${file}:${rule.source?.start?.line} ${normalize(rule.selector)} ${declaration.prop}`);
       }
@@ -223,7 +246,7 @@ describe('shared container surfaces', () => {
     expect(hover['box-shadow']).toContain('0 2px 6px');
   });
   it('rejects appearance mutations including logical properties and pseudo-elements', () => {
-    for (const prop of ['border', 'background', 'border-radius', 'box-shadow', 'border-inline-start-color', 'border-start-start-radius', 'background-image']) {
+    for (const prop of ['border', 'background', 'border-radius', 'box-shadow', 'outline', 'outline-color', 'outline-offset', 'border-inline-start-color', 'border-start-start-radius', 'background-image']) {
       for (const selector of ['.plugin-card', ':is(.page .plugin-card, .other)', ':where(.plugin-card)', '.plugin-card:not(.selected)', '.plugin-card:has(input:checked)', '.plugin-card::before', '#config-native-aliases', '.config-settings-cards > section', '.page:has(.x) > :is(.plugin-card)']) {
         expect(cssViolations(`${selector} { ${prop}: initial }`, 'pages/Example.css')).toHaveLength(1);
       }
@@ -249,6 +272,25 @@ describe('shared container surfaces', () => {
     expect(cssViolations('.agent-claude-desktop-mapping-row:hover { border-color: red }', 'styles.css')).toHaveLength(1);
     expect(cssViolations('.context-message-card { background: red; border-radius: 14px; box-shadow: 0 0 0 4px red }', 'styles.css')).toHaveLength(3);
     expect(cssViolations('.oauth-card:hover { background: red; border-radius: 2px }', 'styles/ui-refinements.css')).toHaveLength(2);
+    expect(cssViolations('.control-panel { border-radius: 20px }', 'pages/HomeDashboard.css')).toHaveLength(1);
+    expect(cssViolations('.home-stat-grid { background: red }', 'pages/HomeDashboard.css')).toHaveLength(1);
+    expect(cssViolations('.usage-trend-panel { border-radius: 18px }', 'styles/ui-refinements.css')).toHaveLength(1);
+    expect(cssViolations('.usage-analysis-card { box-shadow: 0 2px 6px red }', 'pages/UsageAnalysisView.css')).toHaveLength(1);
+    expect(cssViolations('.home-dashboard .home-top-grid > :is(.control-panel, .home-access-panel) { border-radius: 20px; box-shadow: var(--home-shadow) }', 'pages/HomeDashboard.css')).toHaveLength(2);
+    expect(cssViolations('.usage-data-management-result-item { border-radius: 10px; box-shadow: 0 1px 3px red }', 'styles.css')).toHaveLength(2);
+    expect(cssViolations('.usage-records-page .usage-stat-grid { background: var(--border-color) }', 'styles/ui-refinements.css')).toHaveLength(1);
+    expect(cssViolations('.usage-stat-card { outline: 1px solid var(--border-color) }', 'styles/ui-refinements.css')).toEqual([]);
+    expect(cssViolations('.usage-stat-card { outline: 1px solid red }', 'styles.css')).toHaveLength(1);
+    expect(cssViolations('.usage-stat-card:hover { outline: none }', 'styles/ui-refinements.css')).toHaveLength(1);
+    expect(cssViolations('.usage-stat-card { outline-offset: 2px }', 'styles/ui-refinements.css')).toHaveLength(1);
+    expect(cssViolations('.usage-stat-grid { outline: 0 }', 'styles/ui-refinements.css')).toHaveLength(1);
+    expect(cssViolations('.config-settings-cards > section:focus-visible, .config-settings-content .template-config-card:focus-visible { outline: 2px solid red; outline-offset: 2px }', 'styles/config-settings.css')).toEqual([]);
+    expect(cssViolations('.config-settings-cards > section:focus-visible { outline: 0 }', 'styles/config-settings.css')).toHaveLength(1);
+    expect(cssViolations('.config-settings-cards > section:focus-visible, .config-settings-content .template-config-card:focus-visible { outline-color: red }', 'styles/config-settings.css')).toHaveLength(1);
+    expect(cssViolations('.usage-records-page .usage-stat-grid { background: red }', 'styles.css')).toHaveLength(1);
+    expect(cssViolations('.usage-records-page .usage-stat-grid:hover { background: red }', 'styles/ui-refinements.css')).toHaveLength(1);
+    expect(cssViolations('.usage-records-page .usage-stat-grid { border: 0; background-image: none }', 'styles/ui-refinements.css')).toHaveLength(2);
+    expect(cssViolations('.usage-price-editor { background: red }', 'styles.css')).toHaveLength(1);
   });
   it('detects missing surface classes in literals, arrays, conditional and template classes', () => {
     for (const jsx of ['<article className="plugin-card" />', '<div className={["structured-map-item"].join(" ")} />', '<section className={`plugin-card ${dirty ? "selected" : ""}`} />', '<div id="config-native-aliases" />']) expect(jsxViolations(jsx, 'Example.tsx')).toHaveLength(1);
@@ -260,5 +302,11 @@ describe('shared container surfaces', () => {
     expect(jsxViolations('<section className="panel auth-files-panel" />', 'Example.tsx')).toHaveLength(1);
     expect(jsxViolations('<section className="panel surface-panel oauth-card" />', 'Example.tsx')).toEqual([]);
     expect(jsxViolations('<section className="surface-section surface-muted model-config-card" />', 'tests/fixtures/Example.tsx')).toEqual([]);
+    expect(jsxViolations('<div className="usage-data-management-result-item" />', 'UsageRecordsPage.tsx')).toHaveLength(1);
+    expect(jsxViolations('<div className="control-panel" />', 'Kernel.tsx')).toHaveLength(1);
+    expect(jsxViolations('<div className="home-stat-grid" />', 'HomeOverviewCards.tsx')).toHaveLength(1);
+    expect(jsxViolations('<section className="usage-trend-panel" />', 'UsageRecordsPage.tsx')).toHaveLength(1);
+    expect(jsxViolations('<div className="surface-card home-stat-grid" />', 'HomeOverviewCards.tsx')).toEqual([]);
+    expect(jsxViolations('<section className="panel surface-card usage-trend-panel" />', 'UsageRecordsPage.tsx')).toEqual([]);
   });
 });

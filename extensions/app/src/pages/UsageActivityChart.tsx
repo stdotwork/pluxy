@@ -136,7 +136,7 @@ export function UsageActivityChart({ timeline, range }: UsageActivityChartProps)
   };
 
   return (
-    <section className="usage-activity-card" aria-labelledby={titleId}>
+    <section className="surface-card usage-activity-card" aria-labelledby={titleId}>
       <div className="usage-activity-heading">
         <div className="usage-activity-title">
           <h3 id={titleId}>{t('usage.analysis.activityTitle')}</h3>

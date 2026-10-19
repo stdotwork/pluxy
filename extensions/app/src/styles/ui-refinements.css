@@ -151,20 +151,6 @@ body, html, #root {
   flex-shrink: 0;
 }
 
-.client-api-card {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 12px 14px;
-  transition: all 0.15s ease;
-}
-
-.client-api-card:hover {
-  background: var(--theme-hover-background, #ffffff);
-  border-color: var(--border-primary);
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-}
-
 .client-api-card-heading {
   min-width: 144px;
   width: auto;
@@ -503,8 +489,6 @@ button.oauth-account-count:focus-visible {
   border-color: color-mix(in srgb, var(--primary-color) 45%, var(--border-color));
 }
 
-
-
 .oauth-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
@@ -622,8 +606,6 @@ button.oauth-account-count:focus-visible {
   color: var(--text-secondary);
 }
 
-.usage-records-page .usage-trend-panel,
-.usage-records-page .usage-health-panel,
 .usage-records-page .usage-events-panel {
   border: 0;
   border-radius: 18px;
@@ -635,10 +617,6 @@ button.oauth-account-count:focus-visible {
   display: grid;
   gap: 8px;
   padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
 }
 
 .usage-records-page .usage-filter-row,
@@ -733,13 +711,11 @@ button.oauth-account-count:focus-visible {
   gap: 1px;
   overflow: hidden;
   padding: 0;
-  border-radius: 18px;
-  background: var(--theme-border, #d8d8de);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 28px rgba(0, 0, 0, 0.045);
 }
 
 .usage-stat-card {
   --usage-tone: var(--theme-text-primary, #1d1d1f);
+  outline: 1px solid var(--border-color);
   position: relative;
   justify-content: flex-start;
   gap: 8px;
@@ -1000,11 +976,6 @@ button.oauth-account-count:focus-visible {
   color: var(--theme-text-primary, #f5f5f7);
 }
 
-:root[data-theme='dark'] .usage-records-page .panel.usage-filter-panel {
-  background: transparent;
-  box-shadow: none;
-}
-
 :root[data-theme='dark'] .usage-records-page .usage-collector-state {
   background: var(--theme-surface, #2c2c2e);
   color: var(--theme-text-primary, #f5f5f7);
@@ -1017,17 +988,10 @@ button.oauth-account-count:focus-visible {
   color: var(--text-primary);
 }
 
-:root[data-theme='dark'] .usage-records-page .usage-trend-panel,
-:root[data-theme='dark'] .usage-records-page .usage-health-panel,
 :root[data-theme='dark'] .usage-records-page .usage-events-panel,
 :root[data-theme='dark'] .usage-stat-card {
   background: var(--theme-surface, #1c1c1e);
   border-color: transparent;
-  box-shadow: none;
-}
-
-:root[data-theme='dark'] .usage-records-page .usage-stat-grid {
-  background: var(--theme-border, #3a3a3c);
   box-shadow: none;
 }
 
@@ -1040,9 +1004,6 @@ button.oauth-account-count:focus-visible {
 }
 
 :root[data-theme='dark'] .usage-stat-card,
-:root[data-theme='dark'] .usage-filter-panel,
-:root[data-theme='dark'] .usage-trend-panel,
-:root[data-theme='dark'] .usage-health-panel,
 :root[data-theme='dark'] .usage-events-panel,
 :root[data-theme='dark'] .usage-collector-state {
   background: var(--bg-card);

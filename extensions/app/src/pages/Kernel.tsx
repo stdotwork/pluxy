@@ -215,7 +215,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
         onRefreshModels={overview.refresh} contextKey={healthContext}
       />} />
       <div className="home-top-grid">
-        <div className="panel control-panel">
+        <div className="panel surface-panel control-panel">
           <div className="panel-heading home-panel-heading">
             <div>
               <h2>{t('kernel.control.title')}</h2>
