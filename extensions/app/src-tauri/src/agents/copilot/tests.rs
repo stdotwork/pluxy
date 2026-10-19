@@ -208,18 +208,6 @@ fn copilot_detection_requires_product_identity_and_actual_chat_extension() {
     for output in ["1.141.0", "Cannot find GitHub Copilot CLI (https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli)\nInstall GitHub Copilot CLI? (y/N):", "GitHub Copilot CLI is not installed", "GitHub Copilot CLI 1.0.96. Install now?"] {
         assert_eq!(copilot_cli_version_output(output), None);
     }
-    for output in [
-        "1.141.0",
-        "github.copilot@1.400.0",
-        "openai.chatgpt@26.1007.21434",
-        "github.copilot-chat-other@1.2.3",
-    ] {
-        assert_eq!(vscode_copilot_version_output(output), None);
-    }
-    assert_eq!(
-        vscode_copilot_version_output("github.copilot@1.400.0\nGitHub.copilot-chat@0.40.2"),
-        Some("0.40.2".into())
-    );
     for client in [AgentClient::CopilotCli] {
         assert!(!agent_installation_detected(client, None, true, true));
         assert!(!agent_installation_detected(
@@ -279,38 +267,6 @@ fn copilot_detection_separates_vscode_installation_from_chat_plugin() {
 }
 
 #[test]
-fn copilot_builtin_detection_uses_active_editor_package() {
-    let home = Home::new();
-    let executable = home.0.join("bin/code");
-    fs::create_dir_all(executable.parent().unwrap()).unwrap();
-    fs::write(&executable, "fixture").unwrap();
-    let commit = "2a59476c9bfcb90b3ddc372c36762471b7dfad1c";
-    let app = home.0.join("2a59476c9b/resources/app");
-    home.save(&app.join("product.json"), &json!({}));
-    let package = app.join("extensions/copilot/package.json");
-    home.save(
-        &package,
-        &json!({"publisher":"GitHub","name":"copilot-chat","version":"0.69.0"}),
-    );
-    assert_eq!(
-        bundled_vscode_copilot_version(&executable, &format!("1.141.0\n{commit}\nx64")),
-        Some("0.69.0".into())
-    );
-    assert_eq!(
-        bundled_vscode_copilot_version(
-            &executable,
-            "1.141.0\n0000000000000000000000000000000000000000\nx64"
-        ),
-        None
-    );
-    home.save(
-        &package,
-        &json!({"publisher":"Other","name":"copilot-chat","version":"0.69.0"}),
-    );
-    assert_eq!(bundled_vscode_copilot_version(&executable, commit), None);
-}
-
-#[test]
 fn copilot_native_credential_rotation_and_template_preserve_user_models() {
     let home = Home::new();
     let path = copilot_config_paths(AgentClient::VscodeCopilot, &home.0).remove(0);
@@ -365,6 +321,70 @@ fn copilot_windows_status_never_executes_wrappers_even_on_repeated_failure() {
         assert!(read_vscode_copilot_version(&cli, &home.0).is_none());
     }
     assert!(!marker.exists(), "status detection executed the wrapper");
+}
+
+#[test]
+fn copilot_metadata_reads_macos_and_linux_layouts_without_executing() {
+    let home = Home::new();
+    for (directory, gui_path, cli_path, app_path) in [
+        ("mac/Visual Studio Code.app", "Contents/MacOS/Electron", "Contents/Resources/app/bin/code", "Contents/Resources/app"),
+        ("linux/usr/share/code", "code", "bin/code", "resources/app"),
+        ("linux-tar/VSCode-linux-x64", "code", "bin/code", "resources/app"),
+    ] {
+        let root = home.0.join(directory);
+        let app = root.join(app_path);
+        let marker = home.0.join("unexpected-unix-launch");
+        let script = format!("#!/bin/sh\nprintf launched > '{}'\n", marker.display());
+        let gui = root.join(gui_path);
+        let cli = root.join(cli_path);
+        for path in [&gui, &cli] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, &script).unwrap();
+            #[cfg(unix)] {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        home.save(&app.join("product.json"), &json!({"applicationName":"code"}));
+        home.save(&app.join("package.json"), &json!({"version":"1.142.0"}));
+        home.save(&app.join("extensions/copilot/package.json"),
+            &json!({"publisher":"GitHub","name":"copilot-chat","version":"0.70.0"}));
+        for path in [&gui, &cli] {
+            for _ in 0..2 {
+                assert_eq!(read_vscode_version(path, &home.0).as_deref(), Some("1.142.0"));
+                assert_eq!(read_vscode_copilot_version(path, &home.0).as_deref(), Some("0.70.0"));
+            }
+        }
+        #[cfg(unix)] {
+            let link = root.join("code-link");
+            std::os::unix::fs::symlink(&cli, &link).unwrap();
+            assert_eq!(read_vscode_version(&link, &home.0).as_deref(), Some("1.142.0"));
+        }
+        fs::write(app.join("product.json"), "invalid JSON").unwrap();
+        for _ in 0..2 {
+            assert!(read_vscode_version(&cli, &home.0).is_none());
+            assert!(read_vscode_copilot_version(&gui, &home.0).is_none());
+        }
+        assert!(!marker.exists());
+    }
+}
+
+#[test]
+fn copilot_macos_insiders_uses_adjacent_portable_extensions() {
+    let home = Home::new();
+    let bundle = home.0.join("Applications/Visual Studio Code - Insiders.app");
+    let exe = bundle.join("Contents/MacOS/Electron");
+    fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    fs::write(&exe, "must not execute").unwrap();
+    home.save(&bundle.join("Contents/Resources/app/product.json"), &json!({"applicationName":"code-insiders"}));
+    let extensions = home.0.join("Applications/code-insiders-portable-data/extensions");
+    home.save(&extensions.join("extensions.json"), &json!([{
+        "identifier":{"id":"github.copilot-chat"}, "version":"0.71.0",
+        "relativeLocation":"github.copilot-chat-0.71.0"
+    }]));
+    home.save(&extensions.join("github.copilot-chat-0.71.0/package.json"),
+        &json!({"publisher":"GitHub","name":"copilot-chat","version":"0.71.0"}));
+    assert_eq!(read_vscode_copilot_version(&exe, &home.0).as_deref(), Some("0.71.0"));
 }
 
 #[cfg(windows)]

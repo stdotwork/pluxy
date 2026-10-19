@@ -1,6 +1,6 @@
 use super::*;
 
-// Status detection must never execute Code.exe or a shell wrapper. Even a
+// Status detection must never execute an editor binary or a shell wrapper. Even a
 // wrapper can start Electron; the generic probe timeout then kills its tree.
 fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
@@ -8,6 +8,16 @@ fn read_json(path: &Path) -> Option<Value> {
 
 fn installation(executable: &Path) -> Option<(PathBuf, PathBuf, Value)> {
     let executable = fs::canonicalize(executable).ok()?;
+    // macOS GUI: *.app/Contents/MacOS/Electron
+    // macOS CLI: *.app/Contents/Resources/app/bin/code (also via symlinks).
+    for contents in executable.ancestors().skip(1).take(5) {
+        if contents.file_name().and_then(|name| name.to_str()) == Some("Contents") {
+            let bundle = contents.parent()?;
+            if bundle.extension().and_then(|name| name.to_str()) == Some("app") {
+                return installation_at(bundle, contents.join("Resources/app"));
+            }
+        }
+    }
     let parent = executable.parent()?;
     let root = if parent.file_name()?.to_str()?.eq_ignore_ascii_case("bin") {
         parent.parent()?
@@ -35,6 +45,12 @@ fn installation(executable: &Path) -> Option<(PathBuf, PathBuf, Value)> {
         Some(captures) => root.join(&captures[1]).join("resources/app"),
         None => root.join("resources/app"),
     };
+    // Linux deb/rpm/tar installations resolve to <root>/bin/code or
+    // <root>/code. Unknown launchers (e.g. /usr/bin/snap) fail closed.
+    installation_at(root, app)
+}
+
+fn installation_at(root: &Path, app: PathBuf) -> Option<(PathBuf, PathBuf, Value)> {
     let product = read_json(&app.join("product.json"))?;
     if !matches!(
         product.get("applicationName").and_then(Value::as_str),
@@ -93,9 +109,20 @@ fn external_version(directory: &Path) -> Option<String> {
 
 pub(crate) fn read_vscode_copilot_version(executable: &Path, home: &Path) -> Option<String> {
     let (root, app, product) = installation(executable)?;
+    let insiders = product["applicationName"] == "code-insiders";
+    // macOS portable data lives beside the .app; Linux and Windows use data/.
+    let default_portable = if root.extension().and_then(|name| name.to_str()) == Some("app") {
+        root.parent()?.join(if insiders {
+            "code-insiders-portable-data"
+        } else {
+            "code-portable-data"
+        })
+    } else {
+        root.join("data")
+    };
     let portable = agent_configuration_environment("VSCODE_PORTABLE")
         .filter(|path| path.is_absolute())
-        .unwrap_or_else(|| root.join("data"));
+        .unwrap_or(default_portable);
     let extensions = if portable.is_dir() {
         portable.join("extensions")
     } else if let Some(directory) =

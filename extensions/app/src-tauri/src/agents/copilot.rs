@@ -1,10 +1,8 @@
 use super::*;
 use serde_json::{json, Value};
 mod setup;
-#[cfg(windows)]
-mod windows_detection;
-#[cfg(windows)]
-pub(crate) use windows_detection::{read_vscode_copilot_version, read_vscode_version};
+mod detection;
+pub(crate) use detection::{read_vscode_copilot_version, read_vscode_version};
 pub(crate) use setup::prepare_vscode_copilot_connection;
 
 #[cfg(test)]
@@ -29,16 +27,6 @@ fn copilot_cli_version_output(output: &str) -> Option<String> {
     output
         .lines()
         .find_map(|line| copilot_version_number(line.trim().strip_prefix("GitHub Copilot CLI ")?))
-}
-
-#[cfg(any(not(windows), test))]
-fn vscode_copilot_version_output(output: &str) -> Option<String> {
-    output.lines().find_map(|line| {
-        let (id, version) = line.trim().split_once('@')?;
-        id.eq_ignore_ascii_case("github.copilot-chat")
-            .then(|| copilot_version_number(version))
-            .flatten()
-    })
 }
 
 fn copilot_probe_output(executable: &Path, home: &Path, args: &[&str]) -> Option<String> {
@@ -82,78 +70,6 @@ pub(crate) fn detect_copilot_cli(
         for name in names {
             if let Some(found) = probe(&directory.join(name)) {
                 return Some(found);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(not(windows))]
-fn vscode_probe_executable(executable: &Path) -> Option<PathBuf> {
-    Some(executable.to_path_buf())
-}
-
-#[cfg(not(windows))]
-pub(crate) fn read_vscode_version(executable: &Path, home: &Path) -> Option<String> {
-    let cli = vscode_probe_executable(executable)?;
-    copilot_probe_output(&cli, home, &["--version"])?
-        .lines()
-        .find_map(copilot_version_number)
-}
-
-#[cfg(not(windows))]
-pub(crate) fn read_vscode_copilot_version(executable: &Path, home: &Path) -> Option<String> {
-    let cli = vscode_probe_executable(executable)?;
-    let external =
-        copilot_probe_output(&cli, home, &["--list-extensions", "--show-versions"])
-            .and_then(|output| vscode_copilot_version_output(&output));
-    if external.is_some() {
-        return external;
-    }
-    let version = copilot_probe_output(&cli, home, &["--version"])?;
-    bundled_vscode_copilot_version(executable, &version)
-}
-
-#[cfg(any(not(windows), test))]
-fn bundled_vscode_copilot_version(executable: &Path, version_output: &str) -> Option<String> {
-    let resolved = fs::canonicalize(executable).ok()?;
-    let commit = version_output
-        .lines()
-        .map(str::trim)
-        .find(|line| line.len() == 40 && line.bytes().all(|b| b.is_ascii_hexdigit()));
-    // Resolve only this editor's installation, including the active Windows
-    // update directory. Never scan arbitrary old installations for a version.
-    for parent in resolved.ancestors().skip(1).take(4) {
-        let mut apps = vec![parent.join("resources/app"), parent.join("Resources/app")];
-        if let Some(commit) = commit {
-            apps.insert(0, parent.join(&commit[..10]).join("resources/app"));
-        }
-        for app in apps {
-            if !app.join("product.json").is_file() {
-                continue;
-            }
-            for directory in ["copilot", "github.copilot-chat"] {
-                let package = app.join("extensions").join(directory).join("package.json");
-                let Some(value) = fs::read_to_string(package)
-                    .ok()
-                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                else {
-                    continue;
-                };
-                if value
-                    .get("publisher")
-                    .and_then(Value::as_str)
-                    .is_some_and(|s| s.eq_ignore_ascii_case("github"))
-                    && value.get("name").and_then(Value::as_str) == Some("copilot-chat")
-                {
-                    if let Some(version) = value
-                        .get("version")
-                        .and_then(Value::as_str)
-                        .and_then(copilot_version_number)
-                    {
-                        return Some(version);
-                    }
-                }
             }
         }
     }
