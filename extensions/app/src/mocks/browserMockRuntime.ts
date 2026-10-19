@@ -598,6 +598,7 @@ function createState(scenario: BrowserMockScenario) {
       { id: 'claude:claude-sonnet-4-6', model: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', provider: 'Claude OAuth', kind: 'claude-oauth', protocol: 'anthropic', reasoningLevels: ['low', 'medium', 'high'] },
     ],
     codexCatalog: {
+      defaultAutoReviewModel: null as string | null,
       revision: 'mock-catalog-r1',
       models: ['gpt-5.2-codex', 'gpt-5.1-codex'].map((slug) => {
         const configuration = {
@@ -1478,6 +1479,7 @@ export function createBrowserMockRuntime(
       case 'get_codex_model_catalog_editor': return clone(state.codexCatalog);
       case 'save_codex_model_catalog_editor': {
         const request = asObject(payload.request);
+        if (request.review_model !== undefined) state.codexCatalog.defaultAutoReviewModel = readString(asObject(request.review_model).model) || null;
         const models = asArray(request.models).map(asObject);
         state.codexCatalog.models = state.codexCatalog.models.map((model) => {
           const update = models.find((item) => item.slug === model.slug);

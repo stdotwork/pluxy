@@ -126,5 +126,5 @@ export function validateCodexModelConfiguration(configuration: CodexModelConfigu
 export const getCodexModelCatalogEditor = (): Promise<CodexCatalogEditorSnapshot> =>
   invoke<CodexCatalogEditorSnapshot>('get_codex_model_catalog_editor');
 
-export const saveCodexModelCatalogEditor = (args: { request: { revision: string; models: { slug: string; configuration: CodexModelConfiguration; }[]; }; }): Promise<CodexCatalogEditorSaveResult> =>
+export const saveCodexModelCatalogEditor = (args: { request: { revision: string; review_model?: { model: string | null }; models: { slug: string; configuration: CodexModelConfiguration; }[]; }; }): Promise<CodexCatalogEditorSaveResult> =>
   invoke<CodexCatalogEditorSaveResult>('save_codex_model_catalog_editor', args);
