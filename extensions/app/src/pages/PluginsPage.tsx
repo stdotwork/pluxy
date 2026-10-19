@@ -238,7 +238,7 @@ export function PluginsPage() {
             {meta && <p className="plugin-meta">{meta}</p>}{plugin.path && <p className="plugin-path" title={plugin.path}>{plugin.path}</p>}
             {status === 'missingFile' && <p className="plugin-card-description">{pt('missingFileHint')}</p>}
             {status === 'notLoaded' && <p className="plugin-card-description">{pt('notLoadedHint')}</p>}
-            {collectPluginResourceEntries([plugin]).length > 0 && <div className="plugin-menus">{collectPluginResourceEntries([plugin]).map(entry => <button key={entry.menuIndex} title={entry.description} className="secondary-button compact-button" disabled={locked} onClick={() => openResource(entry)}><ExternalLink size={14} />{entry.label}</button>)}</div>}
+            {collectPluginResourceEntries([plugin]).length > 0 && <div className="plugin-menus">{collectPluginResourceEntries([plugin]).map(entry => <button key={entry.menuIndex} title={entry.description} className="secondary-button small-button" disabled={locked} onClick={() => openResource(entry)}><ExternalLink size={14} />{entry.label}</button>)}</div>}
             <div className="plugin-card-actions">
               {installed && update && <button className="primary-button compact-button" disabled={locked || (update.authRequired && !update.authConfigured)} onClick={() => setInstallEntry(update)}><Download size={15} />{pt(update.authRequired && !update.authConfigured ? 'authMissing' : 'update')}</button>}
             {plugin.effectiveEnabled && plugin.supportsOAuth && plugin.oauthProvider && <button className="secondary-button compact-button" disabled={locked} onClick={() => setOAuthPlugin(plugin)}><LogIn size={15} />{pt('oauth')}</button>}
