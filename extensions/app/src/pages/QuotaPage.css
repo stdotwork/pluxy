@@ -103,7 +103,7 @@
 .quota-page .quota-reset-credit-summary span { white-space: normal; overflow-wrap: anywhere; }
 .quota-page .quota-reset-footer { order: 3; align-self: flex-end; margin: auto 0 0; }
 .quota-page .quota-card-message, .quota-page .quota-card-error { min-height: 36px; flex-wrap: wrap; }
-.quota-page .quota-card-error > span { display: grid; gap: 4px; min-width: 0; }
+.quota-page .quota-card-error .notice-body { display: grid; gap: 4px; min-width: 0; }
 .quota-page .quota-card-error small { overflow-wrap: anywhere; font-size: 11px; }
 
 /* Compact grouped quota layout, shared by light and dark themes. */
