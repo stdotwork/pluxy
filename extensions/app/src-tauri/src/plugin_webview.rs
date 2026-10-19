@@ -108,46 +108,73 @@ enum EntryAction {
     Reload,
 }
 
-fn place_bounds(bounds: Bounds, window_height: f64) -> Result<Option<PlacedBounds>, String> {
+// `main` is the actual webview client rectangle in physical pixels, relative to
+// the window. CSS pixels can differ from OS logical pixels (zoom/DPI changes).
+fn place_bounds(bounds: Bounds, main: PlacedBounds) -> Result<Option<PlacedBounds>, String> {
     let values = [
         bounds.x,
         bounds.y,
         bounds.width,
         bounds.height,
         bounds.viewport_height,
-        window_height,
+        main.x,
+        main.y,
+        main.width,
+        main.height,
     ];
     if values.iter().any(|value| !value.is_finite()) {
         return Err("Plugin page bounds must be finite numbers".to_string());
     }
-    let [x, y, width, height, viewport_height, window_height] =
-        values.map(|value| value.max(0.0).round());
-    let inset = if viewport_height > 0.0 {
-        (window_height - viewport_height).max(0.0)
-    } else {
-        0.0
-    };
-    Ok((width > 0.0 && height > 0.0).then_some(PlacedBounds {
-        x,
-        y: y + inset,
-        width,
-        height,
+    if bounds.width <= 0.0
+        || bounds.height <= 0.0
+        || bounds.viewport_height <= 0.0
+        || main.width <= 0.0
+        || main.height <= 0.0
+    {
+        return Ok(None);
+    }
+    // Browser zoom is uniform. Derive its physical scale from the webview,
+    // never infer a titlebar inset from a difference in differently scaled heights.
+    let scale = main.height / bounds.viewport_height;
+    let left = (bounds.x.max(0.0) * scale).round().min(main.width);
+    let top = (bounds.y.max(0.0) * scale).round().min(main.height);
+    let right = ((bounds.x.max(0.0) + bounds.width) * scale)
+        .round()
+        .min(main.width);
+    let bottom = ((bounds.y.max(0.0) + bounds.height) * scale)
+        .round()
+        .min(main.height);
+    Ok((right > left && bottom > top).then_some(PlacedBounds {
+        x: main.x + left,
+        y: main.y + top,
+        width: right - left,
+        height: bottom - top,
     }))
 }
 
-fn window_height(app: &AppHandle) -> Result<f64, String> {
-    let window = app
-        .get_window(MAIN_WINDOW)
-        .ok_or_else(|| "Main window is unavailable".to_string())?;
-    let scale = window.scale_factor().map_err(|error| error.to_string())?;
-    let size = window.inner_size().map_err(|error| error.to_string())?;
-    Ok(size.to_logical::<f64>(scale).height)
+fn main_webview_bounds(app: &AppHandle) -> Result<PlacedBounds, String> {
+    let webview = app
+        .get_webview(MAIN_WINDOW)
+        .ok_or_else(|| "Main webview is unavailable".to_string())?;
+    let scale = webview
+        .window()
+        .scale_factor()
+        .map_err(|error| error.to_string())?;
+    let rect = webview.bounds().map_err(|error| error.to_string())?;
+    let position = rect.position.to_physical::<i32>(scale);
+    let size = rect.size.to_physical::<u32>(scale);
+    Ok(PlacedBounds {
+        x: position.x as f64,
+        y: position.y as f64,
+        width: size.width as f64,
+        height: size.height as f64,
+    })
 }
 
 fn to_rect(placed: PlacedBounds) -> Rect {
     Rect {
-        position: tauri::LogicalPosition::new(placed.x, placed.y).into(),
-        size: tauri::LogicalSize::new(placed.width, placed.height).into(),
+        position: tauri::PhysicalPosition::new(placed.x as i32, placed.y as i32).into(),
+        size: tauri::PhysicalSize::new(placed.width as u32, placed.height as u32).into(),
     }
 }
 
@@ -253,8 +280,8 @@ fn build_webview(
     let webview = window
         .add_child(
             builder,
-            tauri::LogicalPosition::new(initial.x, initial.y),
-            tauri::LogicalSize::new(initial.width, initial.height),
+            tauri::PhysicalPosition::new(initial.x as i32, initial.y as i32),
+            tauri::PhysicalSize::new(initial.width as u32, initial.height as u32),
         )
         .map_err(|error| error.to_string())?;
     if placed.is_none() {
@@ -276,7 +303,7 @@ pub(crate) async fn show_plugin_webview(
     reload: bool,
     token: u64,
 ) -> Result<String, String> {
-    let placed = window_height(&app).and_then(|height| place_bounds(bounds, height));
+    let placed = main_webview_bounds(&app).and_then(|main| place_bounds(bounds, main));
     if !state.lock()?.begin(token, placed.clone().unwrap_or(None)) {
         return Err(SUPERSEDED.to_string());
     }
@@ -381,7 +408,7 @@ pub(crate) async fn set_plugin_webview_bounds(
     bounds: Bounds,
     token: u64,
 ) -> Result<(), String> {
-    let placed = place_bounds(bounds, window_height(&app)?)?;
+    let placed = place_bounds(bounds, main_webview_bounds(&app)?)?;
     let mut inner = state.lock()?;
     if !inner.place(token, placed) {
         return Ok(());
@@ -435,33 +462,73 @@ mod tests {
         }
     }
 
+    fn main_bounds(height: f64) -> PlacedBounds {
+        PlacedBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1280.0,
+            height,
+        }
+    }
+
     #[test]
-    fn bounds_shift_below_a_title_bar_the_page_viewport_does_not_cover() {
-        let placed = place_bounds(bounds(264.0, 47.0, 1016.0, 721.0), 800.0).unwrap();
+    fn zoom_and_dpi_scale_the_entire_rectangle_without_a_fake_titlebar() {
+        for scale in [0.8_f64, 1.0, 1.2, 1.25, 1.5, 2.0] {
+            let main = PlacedBounds {
+                x: 0.0,
+                y: 0.0,
+                width: (1280.0 * scale).round(),
+                height: (768.0 * scale).round(),
+            };
+            let placed = place_bounds(bounds(264.0, 0.0, 1016.0, 768.0), main)
+                .unwrap()
+                .unwrap();
+            assert_eq!(placed.x, (264.0 * scale).round());
+            assert_eq!(placed.y, 0.0, "zoom must not create top whitespace");
+            // Integer viewport/physical dimensions can differ by one rounded pixel.
+            assert!((placed.x + placed.width - main.width).abs() <= 1.0);
+            assert_eq!(placed.y + placed.height, main.height);
+        }
+    }
+
+    #[test]
+    fn actual_main_webview_offset_is_added_once_and_content_is_clipped() {
+        let main = PlacedBounds {
+            x: 12.0,
+            y: 32.0,
+            width: 1600.0,
+            height: 960.0,
+        };
         assert_eq!(
-            placed,
+            place_bounds(bounds(264.0, 48.0, 1016.0, 720.0), main).unwrap(),
             Some(PlacedBounds {
-                x: 264.0,
-                y: 79.0,
-                width: 1016.0,
-                height: 721.0
+                x: 342.0,
+                y: 92.0,
+                width: 1270.0,
+                height: 900.0
             })
+        );
+        assert_eq!(
+            place_bounds(bounds(1200.0, 700.0, 300.0, 200.0), main).unwrap(),
+            Some(PlacedBounds {
+                x: 1512.0,
+                y: 907.0,
+                width: 100.0,
+                height: 85.0
+            })
+        );
+        assert_eq!(
+            place_bounds(bounds(1400.0, 0.0, 10.0, 10.0), main).unwrap(),
+            None
         );
         let mut unmeasured = bounds(10.0, 20.0, 30.0, 40.0);
         unmeasured.viewport_height = 0.0;
+        assert_eq!(place_bounds(unmeasured, main).unwrap(), None);
         assert_eq!(
-            place_bounds(unmeasured, 800.0)
-                .unwrap()
-                .map(|placed| placed.y),
-            Some(20.0)
+            place_bounds(bounds(0.0, 0.0, 10.0, 10.0), main_bounds(0.0)).unwrap(),
+            None
         );
-        assert_eq!(
-            place_bounds(bounds(10.0, 20.0, 30.0, 40.0), 700.0)
-                .unwrap()
-                .map(|placed| placed.y),
-            Some(20.0)
-        );
-        assert!(place_bounds(bounds(10.0, 20.0, 30.0, 40.0), f64::NAN).is_err());
+        assert!(place_bounds(bounds(10.0, 20.0, 30.0, 40.0), main_bounds(f64::NAN)).is_err());
     }
 
     #[test]
@@ -561,7 +628,7 @@ mod tests {
     #[test]
     fn bounds_are_rounded_clamped_and_empty_means_hidden() {
         assert_eq!(
-            place_bounds(bounds(10.4, 20.6, 300.5, 200.2), 768.0).unwrap(),
+            place_bounds(bounds(10.4, 20.6, 300.5, 200.2), main_bounds(768.0)).unwrap(),
             Some(PlacedBounds {
                 x: 10.0,
                 y: 21.0,
@@ -570,7 +637,7 @@ mod tests {
             })
         );
         assert_eq!(
-            place_bounds(bounds(-5.0, -0.4, 100.0, 50.0), 768.0).unwrap(),
+            place_bounds(bounds(-5.0, -0.4, 100.0, 50.0), main_bounds(768.0)).unwrap(),
             Some(PlacedBounds {
                 x: 0.0,
                 y: 0.0,
@@ -584,13 +651,13 @@ mod tests {
             bounds(0.0, 0.0, 0.4, 50.0),
             bounds(0.0, 0.0, -10.0, 50.0),
         ] {
-            assert_eq!(place_bounds(hidden, 768.0).unwrap(), None);
+            assert_eq!(place_bounds(hidden, main_bounds(768.0)).unwrap(), None);
         }
         for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(place_bounds(bounds(invalid, 0.0, 10.0, 10.0), 768.0).is_err());
-            assert!(place_bounds(bounds(0.0, invalid, 10.0, 10.0), 768.0).is_err());
-            assert!(place_bounds(bounds(0.0, 0.0, invalid, 10.0), 768.0).is_err());
-            assert!(place_bounds(bounds(0.0, 0.0, 10.0, invalid), 768.0).is_err());
+            assert!(place_bounds(bounds(invalid, 0.0, 10.0, 10.0), main_bounds(768.0)).is_err());
+            assert!(place_bounds(bounds(0.0, invalid, 10.0, 10.0), main_bounds(768.0)).is_err());
+            assert!(place_bounds(bounds(0.0, 0.0, invalid, 10.0), main_bounds(768.0)).is_err());
+            assert!(place_bounds(bounds(0.0, 0.0, 10.0, invalid), main_bounds(768.0)).is_err());
         }
     }
 

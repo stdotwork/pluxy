@@ -17,6 +17,14 @@ const path = require('node:path');
     const errors = [];
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'zh-CN' });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      const matchMedia = window.matchMedia.bind(window);
+      window.matchMedia = (query) => {
+        const result = matchMedia(query);
+        if (query.startsWith('(resolution:')) window.__resolutionQuery = result;
+        return result;
+      };
+    });
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto(`${base}?mock=running`, { waitUntil: 'commit' });
     await page.locator('.app-shell').waitFor();
@@ -50,6 +58,28 @@ const path = require('node:path');
     assert.match(await hole.innerText(), /injected into the page/);
     assert.equal(await hole.getAttribute('data-mock-url'), 'http://127.0.0.1:8317/v0/resource/plugins/request-inspector/status');
     assert.match(await hole.innerText(), /browser preview/);
+
+    // Moving between monitors can change DPI without changing the CSS rectangle.
+    await page.evaluate(() => {
+      window.__boundsUpdates = 0;
+      const invoke = window.__TAURI_INTERNALS__.invoke;
+      window.__TAURI_INTERNALS__.invoke = (command, args, options) => {
+        if (command === 'set_plugin_webview_bounds') window.__boundsUpdates++;
+        return invoke(command, args, options);
+      };
+    });
+    for (const event of ['resize', 'resolution', 'resolution']) {
+      const previous = await page.evaluate(() => window.__boundsUpdates);
+      await page.evaluate((event) => {
+        if (event === 'resize') window.dispatchEvent(new Event('resize'));
+        else window.__resolutionQuery.dispatchEvent(new Event('change'));
+      }, event);
+      await page.waitForFunction((previous) => window.__boundsUpdates > previous, previous);
+      await aligned();
+      assert.deepEqual(await page.locator('main.content').boundingBox(), content,
+        'DPI changes reapply native bounds even when CSS geometry stays the same');
+    }
+    console.log('resize and repeated resolution notifications reapply unchanged CSS bounds');
 
     for (const [label, open, close] of [
       ['language menu', () => page.locator('.sidebar-language-trigger').click(), () => page.keyboard.press('Escape')],
@@ -135,7 +165,7 @@ const path = require('node:path');
     await aligned();
 
     await page.locator('.nav-plugin-parent > button:not(.nav-plugin-toggle)').click();
-    await page.getByRole('heading', { level: 1, name: '插件' }).waitFor();
+    await page.locator('.plugins-page').waitFor();
     await hidden();
     await page.locator('.plugin-menus button', { hasText: 'Inspector status' }).first().click();
     await pluginPage.waitFor();

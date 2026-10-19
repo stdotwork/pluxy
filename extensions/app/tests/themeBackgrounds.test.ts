@@ -5,8 +5,6 @@ import { themeTokenProperties } from '../src/themes/types';
 
 const semanticPaint = new Set([
   'components/AuthFileUsageSummary.css|.auth-file-usage-metric.rate svg',
-  'components/WindowFrame.css|.window-controls .window-close:hover',
-  'components/WindowFrame.css|.window-controls .window-close:active',
   'pages/QuotaPage.css|.quota-page .quota-status-badge.ready',
   'pages/QuotaPage.css|.quota-page .quota-status-badge.error',
   'pages/QuotaPage.css|.quota-page .real-quota-track span',

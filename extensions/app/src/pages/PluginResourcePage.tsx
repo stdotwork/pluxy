@@ -4,7 +4,7 @@ import { useI18n } from '../i18n';
 import { pluginText } from '../i18n/plugins';
 import { useOverlayOpen } from '../components/useOverlayOpen';
 import type { PluginNavEntry } from '../services/pluginNavigation';
-import { EMPTY_BOUNDS, effectiveBounds, newWebviewToken, roundBounds, sameBounds, type WebviewBounds } from '../services/pluginWebview';
+import { EMPTY_BOUNDS, effectiveBounds, newWebviewToken, roundBounds, type WebviewBounds } from '../services/pluginWebview';
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -26,7 +26,8 @@ export function PluginResourcePage({ entry, reloadToken }: { entry: PluginNavEnt
   const measure = useCallback(() => {
     if (!host.current) return;
     const next = roundBounds(host.current.getBoundingClientRect(), window.innerHeight);
-    setBounds((previous) => sameBounds(previous, next) ? previous : next);
+    // Reapply even when CSS bounds are unchanged: the native DPI may have changed.
+    setBounds(next);
   }, []);
 
   useLayoutEffect(() => {
@@ -35,9 +36,18 @@ export function PluginResourcePage({ entry, reloadToken }: { entry: PluginNavEnt
     if (host.current) observer.observe(host.current);
     observer.observe(document.documentElement);
     window.addEventListener('resize', measure);
+    let resolution = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    const onResolutionChange = () => {
+      resolution.removeEventListener('change', onResolutionChange);
+      resolution = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      resolution.addEventListener('change', onResolutionChange);
+      measure();
+    };
+    resolution.addEventListener('change', onResolutionChange);
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', measure);
+      resolution.removeEventListener('change', onResolutionChange);
     };
   }, [measure]);
 
@@ -66,7 +76,7 @@ export function PluginResourcePage({ entry, reloadToken }: { entry: PluginNavEnt
 
   useEffect(() => {
     void invoke('set_plugin_webview_bounds', { bounds: wanted, token: token.current }).catch((reason) => setError(message(reason)));
-  }, [ready, wanted.x, wanted.y, wanted.width, wanted.height, wanted.viewportHeight]);
+  }, [ready, wanted]);
 
   return <section className="page plugin-resource-page">
     <h1 className="sr-only">{entry.label}</h1>
