@@ -276,40 +276,6 @@ fn copilot_detection_separates_vscode_installation_from_chat_plugin() {
     assert!(status.installed);
     assert_eq!(status.version.as_deref(), Some("1.0.96"));
     assert_eq!(status.launch_targets.len(), 1);
-    let code = home.0.join("code.cmd");
-    fs::write(&code, "@echo off\r\nif \"%1\"==\"--version\" (echo 1.141.0) else (echo openai.chatgpt@26.1007.21434)\r\nexit /b 0\r\n").unwrap();
-    let status = inspect_agent_config_with_executables(
-        AgentClient::VscodeCopilot,
-        &home.0,
-        8317,
-        "fixture",
-        Some(&code),
-        None,
-    );
-    assert!(status.installed);
-    assert!(!status.plugin_installed);
-    assert_eq!(status.version.as_deref(), Some("1.141.0"));
-    assert_eq!(status.app_version.as_deref(), Some("1.141.0"));
-    assert!(status.plugin_version.is_none());
-    assert_eq!(status.launch_targets.len(), 1);
-    fs::write(
-        &code,
-        "@echo off\r\nif \"%1\"==\"--version\" (echo 1.141.0) else (echo github.copilot-chat@0.40.2)\r\nexit /b 0\r\n",
-    )
-    .unwrap();
-    let status = inspect_agent_config_with_executables(
-        AgentClient::VscodeCopilot,
-        &home.0,
-        8317,
-        "fixture",
-        Some(&code),
-        None,
-    );
-    assert!(status.installed);
-    assert!(status.plugin_installed);
-    assert_eq!(status.version.as_deref(), Some("1.141.0"));
-    assert_eq!(status.plugin_version.as_deref(), Some("0.40.2"));
-    assert_eq!(status.launch_targets.len(), 1);
 }
 
 #[test]
@@ -344,48 +310,6 @@ fn copilot_builtin_detection_uses_active_editor_package() {
     assert_eq!(bundled_vscode_copilot_version(&executable, commit), None);
 }
 
-#[cfg(windows)]
-#[test]
-fn copilot_status_probes_cli_when_user_selects_gui_executable() {
-    let home = Home::new();
-    let executable = home.0.join("Microsoft VS Code/Code.exe");
-    let cli = home.0.join("Microsoft VS Code/bin/code.cmd");
-    fs::create_dir_all(cli.parent().unwrap()).unwrap();
-    // Deliberately not executable: detection must never try to run this file.
-    fs::write(&executable, "GUI entry point must not run").unwrap();
-    fs::write(&cli, "@echo off\r\nif \"%1\"==\"--version\" (echo 1.142.0) else (echo github.copilot-chat@0.69.0)\r\nexit /b 0\r\n").unwrap();
-    for _ in 0..2 {
-        let status = inspect_agent_config_with_executables(
-            AgentClient::VscodeCopilot, &home.0, 8317, "fixture",
-            Some(&executable), None,
-        );
-        assert!(status.installed);
-        assert_eq!(status.app_version.as_deref(), Some("1.142.0"));
-        assert_eq!(status.plugin_version.as_deref(), Some("0.69.0"));
-        assert_eq!(status.launch_targets.len(), 1);
-    }
-    fs::remove_file(cli).unwrap();
-    assert!(vscode_probe_executable(&executable).is_none());
-    assert!(read_vscode_version(&executable, &home.0).is_none());
-    assert!(read_vscode_copilot_version(&executable, &home.0).is_none());
-}
-
-#[cfg(windows)]
-#[test]
-fn copilot_probe_resolves_only_matching_editor_cli() {
-    let home = Home::new();
-    let stable = home.0.join("bin/code.cmd");
-    let insiders = home.0.join("bin/code-insiders.cmd");
-    fs::create_dir_all(stable.parent().unwrap()).unwrap();
-    fs::write(&stable, "fixture").unwrap();
-    assert_eq!(vscode_probe_executable(&home.0.join("CODE.EXE")), Some(stable.clone()));
-    assert!(vscode_probe_executable(&home.0.join("Code - Insiders.exe")).is_none());
-    fs::write(&insiders, "fixture").unwrap();
-    assert_eq!(vscode_probe_executable(&home.0.join("Code - Insiders.exe")), Some(insiders));
-    assert_eq!(vscode_probe_executable(&stable), Some(stable));
-    assert!(vscode_probe_executable(&home.0.join("other.exe")).is_none());
-}
-
 #[test]
 fn copilot_native_credential_rotation_and_template_preserve_user_models() {
     let home = Home::new();
@@ -408,6 +332,81 @@ fn copilot_native_credential_rotation_and_template_preserve_user_models() {
     assert_eq!(updated[0], root[0]);
     assert_eq!(updated[1]["apiKey"], reference);
     assert_eq!(updated[1]["models"][0]["id"], "new-model");
+}
+
+#[cfg(windows)]
+#[test]
+fn copilot_windows_status_never_executes_wrappers_even_on_repeated_failure() {
+    let home = Home::new();
+    let root = home.0.join("Microsoft VS Code");
+    let cli = root.join("bin/code.cmd");
+    let exe = root.join("Code.exe");
+    fs::create_dir_all(cli.parent().unwrap()).unwrap();
+    let marker = home.0.join("unexpected-launch");
+    fs::write(&cli, format!("@echo off\r\necho launched>\"{}\"\r\n", marker.display())).unwrap();
+    fs::write(&exe, "not executable").unwrap();
+    let app = root.join("resources/app");
+    home.save(&app.join("product.json"), &json!({"applicationName":"code"}));
+    home.save(&app.join("package.json"), &json!({"version":"1.142.0"}));
+    let package = app.join("extensions/copilot/package.json");
+    home.save(&package, &json!({"publisher":"GitHub","name":"copilot-chat","version":"0.69.0"}));
+    for path in [&exe, &cli] {
+        for _ in 0..2 {
+            let status = inspect_agent_config_with_executables(
+                AgentClient::VscodeCopilot, &home.0, 8317, "fixture", Some(path), None);
+            assert_eq!(status.app_version.as_deref(), Some("1.142.0"));
+            assert_eq!(status.plugin_version.as_deref(), Some("0.69.0"));
+            assert!(status.installed);
+        }
+    }
+    fs::remove_file(app.join("product.json")).unwrap();
+    for _ in 0..2 {
+        assert!(read_vscode_version(&cli, &home.0).is_none());
+        assert!(read_vscode_copilot_version(&cli, &home.0).is_none());
+    }
+    assert!(!marker.exists(), "status detection executed the wrapper");
+}
+
+#[cfg(windows)]
+#[test]
+fn copilot_windows_metadata_selects_active_update_and_extension_registry() {
+    let home = Home::new();
+    let root = home.0.join("VS Code Insiders");
+    let exe = root.join("Code - Insiders.exe");
+    let cli = root.join("bin/code-insiders.cmd");
+    fs::create_dir_all(cli.parent().unwrap()).unwrap();
+    fs::write(&exe, "not executable").unwrap();
+    fs::write(&cli, "@echo off\r\n\"%~dp0..\\Code - Insiders.exe\" \"%~dp0..\\0123456789\\resources\\app\\out\\cli.js\" %*\r\n").unwrap();
+    let app = root.join("0123456789/resources/app");
+    for path in [&app, &root.join("resources/app")] {
+        home.save(&path.join("product.json"), &json!({"applicationName":"code-insiders"}));
+        home.save(&path.join("package.json"), &json!({"version":"1.143.0"}));
+    }
+    assert_eq!(read_vscode_version(&exe, &home.0).as_deref(), Some("1.143.0"));
+    let extensions = home.0.join(".vscode-insiders/extensions");
+    let package = extensions.join("github.copilot-chat-0.70.0/package.json");
+    home.save(&package, &json!({"publisher":"GitHub","name":"copilot-chat","version":"0.70.0"}));
+    assert!(read_vscode_copilot_version(&exe, &home.0).is_none());
+    home.save(&extensions.join("extensions.json"), &json!([{
+        "identifier":{"id":"GitHub.copilot-chat"}, "version":"0.70.0",
+        "relativeLocation":"github.copilot-chat-0.70.0"
+    }]));
+    assert_eq!(read_vscode_copilot_version(&exe, &home.0).as_deref(), Some("0.70.0"));
+    // Portable installations must not borrow extensions from the user's profile.
+    fs::create_dir_all(root.join("data/extensions")).unwrap();
+    assert!(read_vscode_copilot_version(&exe, &home.0).is_none());
+    let portable = root.join("data/extensions");
+    home.save(&portable.join("extensions.json"), &json!([{
+        "identifier":{"id":"github.copilot-chat"}, "version":"0.71.0",
+        "relativeLocation":"github.copilot-chat-0.71.0"
+    }]));
+    let portable_package = portable.join("github.copilot-chat-0.71.0/package.json");
+    home.save(&portable_package, &json!({"publisher":"GitHub","name":"copilot-chat","version":"0.71.0"}));
+    assert_eq!(read_vscode_copilot_version(&exe, &home.0).as_deref(), Some("0.71.0"));
+    fs::remove_file(portable_package).unwrap();
+    assert!(read_vscode_copilot_version(&exe, &home.0).is_none());
+    fs::remove_file(app.join("product.json")).unwrap();
+    assert!(read_vscode_version(&exe, &home.0).is_none(), "must not use stale root metadata");
 }
 
 #[test]

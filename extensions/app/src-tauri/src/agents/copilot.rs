@@ -1,6 +1,10 @@
 use super::*;
 use serde_json::{json, Value};
 mod setup;
+#[cfg(windows)]
+mod windows_detection;
+#[cfg(windows)]
+pub(crate) use windows_detection::{read_vscode_copilot_version, read_vscode_version};
 pub(crate) use setup::prepare_vscode_copilot_connection;
 
 #[cfg(test)]
@@ -27,6 +31,7 @@ fn copilot_cli_version_output(output: &str) -> Option<String> {
         .find_map(|line| copilot_version_number(line.trim().strip_prefix("GitHub Copilot CLI ")?))
 }
 
+#[cfg(any(not(windows), test))]
 fn vscode_copilot_version_output(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         let (id, version) = line.trim().split_once('@')?;
@@ -83,33 +88,12 @@ pub(crate) fn detect_copilot_cli(
     None
 }
 
-// Code.exe is the Electron GUI entry point, not the code CLI. Probing it can
-// open restored editor windows, which the probe timeout then forcibly kills.
-// Fail closed when the installation's CLI cannot be found.
+#[cfg(not(windows))]
 fn vscode_probe_executable(executable: &Path) -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        let extension = executable.extension()?.to_str()?;
-        if extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat") {
-            return executable.is_file().then(|| executable.to_path_buf());
-        }
-        if !extension.eq_ignore_ascii_case("exe") {
-            return None;
-        }
-        let name = match executable.file_stem()?.to_str()?.to_ascii_lowercase().as_str() {
-            "code" => "code.cmd",
-            "code - insiders" => "code-insiders.cmd",
-            _ => return None,
-        };
-        let cli = executable.parent()?.join("bin").join(name);
-        cli.is_file().then_some(cli)
-    }
-    #[cfg(not(windows))]
-    {
-        Some(executable.to_path_buf())
-    }
+    Some(executable.to_path_buf())
 }
 
+#[cfg(not(windows))]
 pub(crate) fn read_vscode_version(executable: &Path, home: &Path) -> Option<String> {
     let cli = vscode_probe_executable(executable)?;
     copilot_probe_output(&cli, home, &["--version"])?
@@ -117,6 +101,7 @@ pub(crate) fn read_vscode_version(executable: &Path, home: &Path) -> Option<Stri
         .find_map(copilot_version_number)
 }
 
+#[cfg(not(windows))]
 pub(crate) fn read_vscode_copilot_version(executable: &Path, home: &Path) -> Option<String> {
     let cli = vscode_probe_executable(executable)?;
     let external =
@@ -129,6 +114,7 @@ pub(crate) fn read_vscode_copilot_version(executable: &Path, home: &Path) -> Opt
     bundled_vscode_copilot_version(executable, &version)
 }
 
+#[cfg(any(not(windows), test))]
 fn bundled_vscode_copilot_version(executable: &Path, version_output: &str) -> Option<String> {
     let resolved = fs::canonicalize(executable).ok()?;
     let commit = version_output
