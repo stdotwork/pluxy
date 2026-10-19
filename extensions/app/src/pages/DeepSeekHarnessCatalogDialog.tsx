@@ -166,7 +166,7 @@ export function DeepSeekHarnessCatalogDialog({ onClose, onSaved }: { onClose: ()
   return <Dialog className="config-dialog codex-catalog-dialog harness-catalog-dialog" backdropClassName="codex-catalog-backdrop" labelledBy="harness-catalog-title"
     onClose={() => void close()} closeDisabled={saving} dismissOnBackdrop>
     <header className="config-dialog-heading codex-catalog-heading"><div><h2 id="harness-catalog-title">{t('agents.harness.title')}</h2><p>{t('agents.harness.subtitle')}</p></div><button className="icon-button quiet" onClick={() => void close()} disabled={saving} aria-label={t('common.close')}><X size={18} /></button></header>
-    <div className="codex-catalog-body">
+    <div className="surface-section codex-catalog-body">
       <aside className="codex-catalog-sidebar">
         <button className={`secondary-button harness-provider-button${selected === null ? ' active' : ''}`} onClick={() => setSelected(null)}><Settings2 size={16} />{t('agents.harness.provider')}</button>
         <div className="codex-catalog-search"><Search size={15} /><input aria-label={t('agents.catalog.search')} value={search} placeholder={t('agents.catalog.search')} onChange={e => setSearch(e.currentTarget.value)} /></div>

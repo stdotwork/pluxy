@@ -1776,7 +1776,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
           const aliasSuffixed = desktopEntries[index].alias.trim().toLowerCase() !== entry.alias.trim().toLowerCase();
           const isClaude = isClaudeDesktopModel(entry.model);
           return (
-          <div className="agent-claude-desktop-mapping-row agent-desktop-model-row" key={index}>
+          <div className="surface-section agent-claude-desktop-mapping-row agent-desktop-model-row" key={index}>
             <div className="agent-desktop-model-fields">
               <div className="agent-desktop-model-field">
                 <span>{t('agents.claudeDesktopMapping.model')}</span>
@@ -1859,7 +1859,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         }} onRefresh={() => void refresh()}
           loading={loading} busy={busy} error={detectionError} onDismissError={() => setDetectionError('')} />
 
-        <section className="panel agent-config-panel">
+        <section className="panel surface-panel agent-config-panel">
           {availableSubpages.length > 1 ? (
             <Tabs className="agent-subpage-tabs" aria-label={t('agents.tabs.label')} value={activeSubpage} onChange={setActiveSubpage} disabled={busy}
               items={availableSubpages.map(subpage => ({ value: subpage.id, id: `agent-subpage-tab-${subpage.id}`, panelId: `agent-subpage-panel-${subpage.id}`, label: t(subpage.labelKey) }))} />
@@ -2083,7 +2083,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                     onRefresh={refreshModels} />
                   <details className="claude-code-context-settings">
                     <summary>{t('agents.claudeCodeRuntime.advancedContext')}</summary>
-                    <div className="agent-claude-code-runtime-settings">
+                    <div className="surface-section surface-muted agent-claude-code-runtime-settings">
                       <div className="agent-claude-code-number-field">
                         <span>{t('agents.claudeCodeRuntime.maxContextTokens')}</span>
                         <input

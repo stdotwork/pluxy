@@ -5,9 +5,6 @@
 
 .provider-settings-group {
   min-width: 0;
-  border: 1px solid var(--theme-e2ddd3);
-  border-radius: 8px;
-  background: var(--theme-fffdf8);
 }
 
 .provider-settings-group > h3 {

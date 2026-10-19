@@ -3559,9 +3559,6 @@ textarea:focus-visible {
   gap: 10px;
   min-width: 0;
   padding: 12px;
-  border: 1px solid var(--theme-e2ddd3);
-  border-radius: 7px;
-  background: var(--theme-faf9f5);
 }
 
 .model-config-heading {
@@ -3742,9 +3739,6 @@ textarea:focus-visible {
 .model-discovery-content {
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--theme-e2ddd3);
-  border-radius: 7px;
-  background: var(--theme-ffffff);
 }
 
 .model-discovery-list {
@@ -3882,9 +3876,6 @@ textarea:focus-visible {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--theme-e2ddd3);
-  border-radius: 8px;
-  background: var(--theme-ffffff);
 }
 
 .model-transfer-panel-heading {
@@ -5882,9 +5873,6 @@ textarea:focus-visible {
   min-width: 0;
   gap: 12px;
   padding: 16px;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 8px;
-  background: var(--theme-faf9f5);
 }
 
 .codex-session-overview-head,
@@ -5963,9 +5951,6 @@ textarea:focus-visible {
   align-items: center;
   gap: 12px 18px;
   padding: 12px;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 8px;
-  background: var(--theme-fffdf8);
 }
 
 .codex-session-repair-copy,
@@ -6038,10 +6023,6 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
-.codex-session-list-section {
-  background: var(--theme-fffdf8);
-}
-
 .codex-session-selection-actions {
   min-width: 0;
   justify-content: flex-end;
@@ -6063,9 +6044,6 @@ textarea:focus-visible {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 7px;
-  background: var(--theme-fff);
 }
 
 .codex-session-row {
@@ -6255,9 +6233,6 @@ textarea:focus-visible {
   min-height: 120px;
   max-height: 360px;
   overflow-y: auto;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 7px;
-  background: var(--theme-fff);
 }
 
 .codex-session-cleanup-list > label {
@@ -6655,9 +6630,6 @@ textarea:focus-visible {
   grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(240px, 1.2fr);
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 9px;
-  background: var(--theme-faf9f5);
 }
 
 .agent-claude-code-number-field {
@@ -6748,10 +6720,6 @@ textarea:focus-visible {
   align-content: start;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--theme-e3e1db);
-  border-radius: 9px;
-  background: var(--theme-fff);
-  box-shadow: 0 1px 2px rgba(45, 42, 38, 0.04);
 }
 
 .agent-desktop-models {
@@ -6772,8 +6740,6 @@ textarea:focus-visible {
 
 .agent-desktop-model-row {
   padding: 10px;
-  border-radius: 7px;
-  box-shadow: none;
 }
 
 .agent-desktop-model-fields {
@@ -7224,9 +7190,6 @@ textarea:focus-visible {
   grid-template-columns: 250px minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--theme-d5d2cb);
-  border-radius: 9px;
-  background: var(--theme-ffffff);
 }
 
 .codex-catalog-sidebar {
@@ -11319,9 +11282,6 @@ body.table-col-resizing * {
 .context-meta-card,
 .context-message-card,
 .context-add-message-card {
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-primary);
   overflow: hidden;
 }
 

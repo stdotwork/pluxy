@@ -515,10 +515,6 @@ button.oauth-account-count:focus-visible {
   display: flex;
   flex-direction: column;
   padding: 22px;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-card);
-  box-shadow: var(--ui-panel-shadow);
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 

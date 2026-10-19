@@ -321,7 +321,7 @@ export function CodexSessionsPanel() {
 
   return (
     <div className="codex-sessions-page">
-      <section className="codex-session-overview">
+      <section className="surface-section surface-muted codex-session-overview">
         <div className="codex-session-overview-head">
           <div>
             <strong>{t('agents.sessions.title')}</strong>
@@ -351,7 +351,7 @@ export function CodexSessionsPanel() {
           </div>
         </div>
 
-        <div className="codex-session-repair-panel">
+        <div className="surface-section codex-session-repair-panel">
           <div className="codex-session-repair-copy">
             <ShieldCheck size={18} />
             <div>
@@ -407,7 +407,7 @@ export function CodexSessionsPanel() {
 
       <MessageNotice message={notice?.message} tone={notice?.kind === 'warning' ? 'info' : notice?.kind ?? 'info'} onDismiss={() => setNotice(null)} />
 
-      <section className="codex-session-list-section">
+      <section className="surface-section codex-session-list-section">
         <div className="codex-session-list-head">
           <div>
             <strong>{t('agents.sessions.localSessions')}</strong>
@@ -441,7 +441,7 @@ export function CodexSessionsPanel() {
         ) : sessions.length === 0 ? (
           <EmptyState variant="box" className="codex-session-empty" icon={<Archive size={22} />}>{t('agents.sessions.empty')}</EmptyState>
         ) : (
-          <div className="codex-session-list">
+          <div className="surface-section codex-session-list">
             {sessions.map((session) => (
               <article className={`codex-session-row ${selectedIds.has(session.id) ? 'selected' : ''}`} key={session.id}>
                 {selectionMode ? (
@@ -528,7 +528,7 @@ export function CodexSessionsPanel() {
             <Checkbox checked={cleanupSelectedIds.size === cleanupPreview.candidates.length && cleanupPreview.candidates.length > 0} indeterminate={cleanupSelectedIds.size > 0 && cleanupSelectedIds.size < cleanupPreview.candidates.length} onChange={(event) => setCleanupSelectedIds(event.currentTarget.checked ? new Set(cleanupPreview.candidates.map((candidate) => candidate.id)) : new Set())} />
             <span>{t('agents.sessions.cleanupSelectAll')}</span>
           </label>
-          <div className="codex-session-cleanup-list">
+          <div className="surface-section codex-session-cleanup-list">
             {cleanupPreview.candidates.map((candidate) => (
               <label key={candidate.id}>
                 <Checkbox checked={cleanupSelectedIds.has(candidate.id)} onChange={(event) => {

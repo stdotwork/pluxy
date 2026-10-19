@@ -559,7 +559,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
           const LoginIcon = hasAccounts || state.status === 'success' ? Plus : LogIn;
 
           return (
-            <section className={`panel oauth-card${state.polling ? ' is-waiting' : ''}`} key={provider.id}>
+            <section className={`panel surface-panel oauth-card${state.polling ? ' is-waiting' : ''}`} key={provider.id}>
               <div className="provider-title-row">
                 <img src={provider.icon} alt="" className={provider.id === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} />
                 <div>

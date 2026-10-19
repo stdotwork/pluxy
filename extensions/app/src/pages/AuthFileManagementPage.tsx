@@ -495,7 +495,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
       {error ? <MessageNotice message={error} onDismiss={() => setError('')} /> : null}
       <FloatingNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />
 
-      <section className="panel auth-files-panel real-auth-files-panel">
+      <section className="panel surface-bare auth-files-panel real-auth-files-panel">
         <div className="auth-files-toolbar">
           <div className="auth-files-search"><Search size={16} aria-hidden="true" />
           <input value={filter} onChange={(event) => setFilter(event.currentTarget.value)} placeholder={t('authFiles.searchPlaceholder')} aria-label={t('authFiles.searchPlaceholder')} />
@@ -668,7 +668,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
             </div>
           </div>
 
-          <div className="model-discovery-content">
+          <div className="surface-section model-discovery-content">
             {oauthModelLoading ? (
               <div className="model-discovery-message"><LoaderCircle size={20} className="spin" />{t('authFiles.models.loading')}</div>
             ) : oauthModelError && !oauthModelSettings ? (

@@ -404,7 +404,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
         </Notice>
       ) : null}
 
-      <section className="context-meta-card">
+      <section className="surface-section context-meta-card">
         <button type="button" className="context-meta-head" onClick={() => setMetaExpanded((prev) => !prev)}
           aria-expanded={metaExpanded} aria-controls="context-metadata" aria-label={t('agents.sessions.context.toggleMetadata')}>
           <span className="context-meta-head-title">
@@ -549,7 +549,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 return (
                   <article
                     key={msg.id}
-                    className={`context-message-card ${msg.role} ${edit.isDeleted ? 'deleted' : ''} ${isModified ? 'modified' : ''}`}
+                    className={`surface-section context-message-card ${msg.role} ${edit.isDeleted ? 'deleted' : ''} ${isModified ? 'modified' : ''}`}
                   >
                     <div className="message-card-header">
                       <div className="message-role-badge">
@@ -695,7 +695,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
               })}
 
               {newMessages.map((newMsg, index) => (
-                <article key={`new-${index}`} className={`context-message-card ${newMsg.role} new-item`}>
+                <article key={`new-${index}`} className={`surface-section context-message-card ${newMsg.role} new-item`}>
                   <div className="message-card-header">
                     <div className="message-role-badge">
                       {newMsg.role === 'user' ? <User size={13} /> : <Bot size={13} />}
@@ -721,7 +721,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
               ))}
 
               {addingMessage ? (
-                <div className="context-add-message-card">
+                <div className="surface-section context-add-message-card">
                   <div className="add-message-head">
                     <strong>{t('agents.sessions.context.addMessage')}</strong>
                     <div className="add-message-role-select">

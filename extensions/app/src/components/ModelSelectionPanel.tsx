@@ -23,7 +23,7 @@ export function ModelSelectionPanel({ models, selected, loading, onMove }: Model
   const searchLabel = t(selected ? 'apiAccess.modelDialog.searchSelected' : 'apiAccess.modelDialog.searchUnselected');
 
   return (
-    <section className="model-transfer-panel" aria-labelledby={titleId} aria-busy={loading}>
+    <section className="surface-section model-transfer-panel" aria-labelledby={titleId} aria-busy={loading}>
       <div className="model-transfer-panel-heading">
         <h3 id={titleId}>{t(selected ? 'apiAccess.modelDialog.selected' : 'apiAccess.modelDialog.unselected')}</h3>
         <span className="model-transfer-count">{query ? `${visibleModels.length} / ${models.length}` : models.length}</span>

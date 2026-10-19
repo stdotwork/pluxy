@@ -14,7 +14,7 @@ export function VertexLoginCard() {
 
   return (
     <>
-      <section className="panel oauth-card vertex-login-card">
+      <section className="panel surface-panel oauth-card vertex-login-card">
         <div className="provider-title-row">
           <img src={vertexIcon} alt="" className="provider-logo" />
           <h2>{t('oauth.vertex.title')}</h2>

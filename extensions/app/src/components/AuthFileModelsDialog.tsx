@@ -60,7 +60,7 @@ export function AuthFileModelsDialog({ name, displayName = name, onClose }: Auth
         <Search size={16} aria-hidden="true" />
         <input autoFocus value={search} onChange={(event) => setSearch(event.currentTarget.value)} placeholder={t('authFiles.models.search')} />
       </div>
-      <div className="model-discovery-content">
+      <div className="surface-section model-discovery-content">
         {loading ? (
           <div className="model-discovery-message"><LoaderCircle size={20} className="spin" />{t('authFiles.models.loading')}</div>
         ) : (

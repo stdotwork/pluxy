@@ -2132,7 +2132,6 @@
   display: block;
   overflow: visible;
   padding: 0;
-  background: var(--theme-fffdf8);
 }
 
 .agents-page-embedded .agent-minimal-config {

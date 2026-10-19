@@ -2272,7 +2272,7 @@ export function ApiProviderDialog({
             setDraft((current) => ({ ...current, groupKeys }));
           }} /> : null}
         </section>
-        <div className="model-config-card" ref={modelCardRef}>
+        <div className="surface-section surface-muted model-config-card" ref={modelCardRef}>
           <div className="model-config-heading">
             <div><span>{t('apiAccess.models.title')}</span><small>{t('apiAccess.models.description')}</small></div>
             <button type="button" className="secondary-button compact-button" onClick={openModelDiscovery} disabled={busy}>

@@ -92,7 +92,7 @@ export function PluginOAuthProviders({ builtInProviderIds, browser = 'default' }
     {plugins.map(plugin => {
       const provider = plugin.oauthProvider!;
       const authorized = completed.has(provider);
-      return <section className="panel oauth-card" key={provider}>
+      return <section className="panel surface-panel oauth-card" key={provider}>
         <div className="provider-title-row">
           <Puzzle className="provider-logo" size={40} aria-hidden="true" />
           <div>

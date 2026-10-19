@@ -195,7 +195,7 @@ export function CodexModelCatalogDialog({ onClose, onSaved }: CodexModelCatalogD
         </button>
       </header>
 
-      <div className="codex-catalog-body">
+      <div className="surface-section codex-catalog-body">
         <aside className="codex-catalog-sidebar">
           <div className="codex-catalog-search">
             <Search size={15} aria-hidden />

@@ -22,18 +22,52 @@ const migrated: Record<string, string[]> = {
   'thinking-alias-list-panel': ['surface-bare'],
   'version-list': ['surface-bare'],
   'version-metric-tile': ['surface-section', 'surface-muted'],
+  'oauth-card': ['surface-panel'],
+  'agent-config-panel': ['surface-panel'],
+  'auth-files-panel': ['surface-bare'],
+  'model-discovery-content': ['surface-section'],
+  'model-transfer-panel': ['surface-section'],
+  'provider-settings-group': ['surface-section'],
+  'model-config-card': ['surface-section', 'surface-muted'],
+  'agent-claude-desktop-mapping-row': ['surface-section'],
+  'agent-desktop-model-row': ['surface-section'],
+  'agent-claude-code-runtime-settings': ['surface-section', 'surface-muted'],
+  'codex-session-overview': ['surface-section', 'surface-muted'],
+  'codex-session-list-section': ['surface-section'],
+  'codex-session-repair-panel': ['surface-section'],
+  'codex-session-list': ['surface-section'],
+  'codex-session-cleanup-list': ['surface-section'],
+  'codex-catalog-body': ['surface-section'],
+  'context-meta-card': ['surface-section'],
+  'context-add-message-card': ['surface-section'],
+  'context-message-card': ['surface-section'],
 };
 const ids = new Set(['config-native-aliases', 'config-native-sensitive-words']);
-const stateSelectors: Record<string, string[]> = {
-  'styles/template-config.css': [
-    '.template-config-field-dirty .config-network-input, .template-config-field-dirty .template-config-custom',
-  ],
+const stateSelectors: Record<string, Record<string, RegExp>> = {
+  'styles/template-config.css': {
+    '.template-config-field-dirty .config-network-input, .template-config-field-dirty .template-config-custom': /^border-color$/,
+  },
+  'styles/ui-refinements.css': {
+    '.oauth-card.is-waiting': /^border-color$/,
+    '.oauth-card:hover': /^(?:border-color|box-shadow)$/,
+  },
+  'styles.css': {
+    '.agent-claude-desktop-mapping-row:has(.agent-claude-context-toggle input:checked)': /^(?:border-color|box-shadow)$/,
+    '.context-message-card': /^border-left(?:-|$)/,
+    '.context-message-card.deleted': /^(?:background|border-style)$/,
+    '.context-message-card.modified': /^border-color$/,
+    '.context-message-card.new-item': /^border-style$/,
+  },
 };
 const appearance = /^(?:background(?:-|$)|border(?:-|$)|box-shadow$)/;
 const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
   const path = join(dir, entry.name);
   return entry.isDirectory() ? walk(path) : [path];
 });
+const markupFiles = () => [
+  ...walk(root).filter(path => path.endsWith('.tsx')),
+  ...walk(join(import.meta.dir, 'fixtures')).filter(path => path.endsWith('.tsx')),
+];
 const normalize = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 const split = (text: string, comma = false) => {
@@ -90,9 +124,12 @@ const cssViolations = (text: string, file: string) => {
       ':where(.surface-card), .panel.surface-card', ':where(.surface-section)',
       ':where(.surface-muted)', ':where(.surface-bare), .panel.surface-bare',
     ].includes(normalize(rule.selector))) return;
-    if (stateSelectors[file]?.includes(normalize(rule.selector))) return;
+    const allowed = stateSelectors[file]?.[normalize(rule.selector)];
     for (const declaration of rule.nodes) {
-      if (declaration.type === 'decl' && appearance.test(declaration.prop)) violations.push(`${file}:${rule.source?.start?.line} ${normalize(rule.selector)} ${declaration.prop}`);
+      if (declaration.type === 'decl' && appearance.test(declaration.prop)) {
+        if (allowed && allowed.test(declaration.prop)) continue;
+        violations.push(`${file}:${rule.source?.start?.line} ${normalize(rule.selector)} ${declaration.prop}`);
+      }
     }
   });
   return violations;
@@ -155,7 +192,9 @@ describe('shared container surfaces', () => {
     expect(violations).toEqual([]);
   });
   it('requires shared classes at migrated markup and region IDs', () => {
-    const violations = walk(root).filter(path => path.endsWith('.tsx')).flatMap(path => jsxViolations(readFileSync(path, 'utf8'), relative(root, path)));
+    const tsxFiles = markupFiles();
+    expect(tsxFiles).toContain(join(import.meta.dir, 'fixtures/themeExtensions.tsx'));
+    const violations = tsxFiles.flatMap(path => jsxViolations(readFileSync(path, 'utf8'), relative(join(root, '..'), path).replaceAll('\\', '/')));
     expect(violations).toEqual([]);
   });
   it('keeps surface definitions before theme overrides without padding or material rules', () => {
@@ -199,10 +238,27 @@ describe('shared container surfaces', () => {
     expect(cssViolations('.quiet-panel { gap: 1px }', 'pages/Example.css')).toHaveLength(1);
     expect(cssViolations('.plugin-card { background: red }', 'styles/surfaces.css')).toHaveLength(1);
     expect(cssViolations('.template-config-field-dirty .template-config-custom:hover { background: red }', 'styles/template-config.css')).toHaveLength(1);
+    expect(cssViolations('.oauth-card { border: 1px solid red }', 'pages/Example.css')).toHaveLength(1);
+    expect(cssViolations('.model-discovery-content { background: red }', 'pages/Example.css')).toHaveLength(1);
+    expect(cssViolations('.codex-session-list { border-radius: 12px }', 'pages/Example.css')).toHaveLength(1);
+    expect(cssViolations('.context-meta-card { box-shadow: 0 1px 3px black }', 'pages/Example.css')).toHaveLength(1);
+    expect(cssViolations('.oauth-card.is-waiting { border-color: red }', 'styles/ui-refinements.css')).toEqual([]);
+    expect(cssViolations('.oauth-card.unauthorized { border-color: red }', 'styles/ui-refinements.css')).toHaveLength(1);
+    expect(cssViolations('.context-message-card.deleted { border-color: red }', 'styles.css')).toHaveLength(1);
+    expect(cssViolations('.context-message-card:hover { background: red }', 'styles.css')).toHaveLength(1);
+    expect(cssViolations('.agent-claude-desktop-mapping-row:hover { border-color: red }', 'styles.css')).toHaveLength(1);
+    expect(cssViolations('.context-message-card { background: red; border-radius: 14px; box-shadow: 0 0 0 4px red }', 'styles.css')).toHaveLength(3);
+    expect(cssViolations('.oauth-card:hover { background: red; border-radius: 2px }', 'styles/ui-refinements.css')).toHaveLength(2);
   });
   it('detects missing surface classes in literals, arrays, conditional and template classes', () => {
     for (const jsx of ['<article className="plugin-card" />', '<div className={["structured-map-item"].join(" ")} />', '<section className={`plugin-card ${dirty ? "selected" : ""}`} />', '<div id="config-native-aliases" />']) expect(jsxViolations(jsx, 'Example.tsx')).toHaveLength(1);
     expect(jsxViolations('<article className="surface-card plugin-card" />', 'Example.tsx')).toEqual([]);
     expect(jsxViolations('<div className={["surface-card", "structured-map-item"].join(" ")} />', 'Example.tsx')).toEqual([]);
+    expect(jsxViolations('<section className="oauth-card" />', 'Example.tsx')).toHaveLength(1);
+    expect(jsxViolations('<div className="model-discovery-content" />', 'Example.tsx')).toHaveLength(1);
+    expect(jsxViolations('<article className="context-message-card user" />', 'Example.tsx')).toHaveLength(1);
+    expect(jsxViolations('<section className="panel auth-files-panel" />', 'Example.tsx')).toHaveLength(1);
+    expect(jsxViolations('<section className="panel surface-panel oauth-card" />', 'Example.tsx')).toEqual([]);
+    expect(jsxViolations('<section className="surface-section surface-muted model-config-card" />', 'tests/fixtures/Example.tsx')).toEqual([]);
   });
 });

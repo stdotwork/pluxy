@@ -24,10 +24,6 @@
 .auth-files-page .auth-files-panel {
   padding: 0;
   min-height: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
 }
 .auth-files-page .auth-files-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 36px; margin-bottom: 4px; padding: 0; }
 .auth-files-search { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; max-width: 380px; color: var(--auth-text); background: var(--bg-card); border: 1px solid var(--auth-control); border-radius: 8px; padding: 0 10px; }
