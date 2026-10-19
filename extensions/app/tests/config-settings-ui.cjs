@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const categories = ['general', 'aliases', 'routing', 'requests', 'oauth', 'diagnostics', 'software'];
-const viewports = [{ width: 640, height: 600 }, { width: 964, height: 700 }, { width: 1280, height: 800 }, { width: 1600, height: 1000 }];
+const viewports = [{ width: 1920, height: 1080 }, { width: 2560, height: 1440 }, { width: 640, height: 600 }, { width: 964, height: 700 }, { width: 1280, height: 800 }, { width: 1600, height: 1000 }];
 
 (async () => {
   let server;
@@ -71,6 +71,16 @@ const viewports = [{ width: 640, height: 600 }, { width: 964, height: 700 }, { w
           ].filter(Boolean).filter(element => element.scrollWidth > element.clientWidth + 1)
             .map(element => ({ element: element.className || element.tagName, width: element.clientWidth, scroll: element.scrollWidth })));
           assert.deepEqual(overflowing, [], `${label} ${context}: settings must fit without horizontal overflow`);
+          const crampedLabels = await page.locator('.template-config-field:not(.template-config-field-wide):not(.template-config-toggle)').evaluateAll(fields =>
+            fields.filter(field => field.getBoundingClientRect().width > 0).flatMap(field => {
+              const row = field.getBoundingClientRect();
+              const caption = field.querySelector('.template-config-label').getBoundingClientRect();
+              const control = field.querySelector('.template-config-control').getBoundingClientRect();
+              return caption.width < Math.min(180, row.width) - 1
+                || (caption.top < control.bottom && control.top < caption.bottom && caption.right > control.left + 1)
+                ? [{ id: field.id, row: row.width, label: caption.width, control: control.width }] : [];
+            }));
+          assert.deepEqual(crampedLabels, [], `${label} ${context}: scalar field labels need readable space without overlapping controls`);
           const narrowLists = await page.evaluate(() => {
             const width = document.querySelector('.config-settings-content').getBoundingClientRect().width;
             return [...document.querySelectorAll('#config-native-keys, #config-native-aliases, #config-native-sensitive-words, .template-config-card:has([data-field-type="custom"], [data-field-type="json"], [data-field-type="string-list"])')]

@@ -425,7 +425,9 @@
   gap: 16px 28px;
 }
 .config-page .config-settings-content .template-config-field:not(.template-config-field-wide) {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 200px);
+  /* A card can contain multiple fields per row. Size from the field itself so
+     the control cannot consume the label column in a wide, multi-column card. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
   align-items: center;
   align-content: center;
   min-height: 48px;
@@ -433,8 +435,9 @@
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
 }
-.config-page .config-settings-content .template-config-field:not(.template-config-field-wide) > .template-config-control {
-  justify-self: end;
+.config-page .config-settings-content .template-config-field:not(.template-config-field-wide):not(.template-config-toggle) > .template-config-control {
+  justify-self: start;
+  width: min(100%, 200px);
 }
 .config-page .config-settings-content .template-config-field.template-config-toggle {
   grid-template-columns: minmax(0, 1fr) auto;
@@ -486,11 +489,6 @@
     gap: 12px;
   }
 }
-@container settings-card (max-width: 620px) {
-  .config-page .config-settings-content .template-config-field:not(.template-config-field-wide):not(.template-config-toggle) {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 160px);
-  }
-}
 @container settings-card (max-width: 420px) {
   .config-page .config-settings-content .config-diagnostics-field { grid-template-columns: minmax(0, 1fr); }
   .config-page .config-settings-content .template-config-field:not(.template-config-field-wide):not(.template-config-toggle) {
@@ -506,7 +504,7 @@
   grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr);
 }
 .config-page #config-group-management .template-config-field:not(.template-config-toggle) > .template-config-control,
-.config-page #config-group-oauth-common .template-config-field:has(.template-config-directory) > .template-config-control { max-width: none; }
+.config-page #config-group-oauth-common .template-config-field:has(.template-config-directory) > .template-config-control { max-width: none; width: 100%; }
 @container settings-card (max-width: 620px) {
   .config-page #config-group-management .template-config-field:not(.template-config-toggle),
   .config-page #config-group-oauth-common .template-config-field:has(.template-config-directory) { grid-template-columns: minmax(0, 1fr); }
