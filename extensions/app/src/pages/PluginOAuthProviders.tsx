@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { getPluginSupport, pluginsApi, type PluginListEntry } from '../services/plugins';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LogIn, Puzzle, RefreshCw } from 'lucide-react';
@@ -83,12 +84,11 @@ export function PluginOAuthProviders({ builtInProviderIds, browser = 'default' }
 
   const selectedPlugin = plugins.find(plugin => plugin.oauthProvider === selectedProvider);
   return <>
-    {error && <div className="plugin-oauth-provider-status" role="alert">
-      <span>{pluginOAuthText('loadFailed', locale)}</span>
+    {error && <Notice tone="error" icon={false} className="plugin-oauth-provider-status" action={
       <button type="button" className="secondary-button" disabled={loading} onClick={() => void load()}>
         <RefreshCw size={16} aria-hidden="true" />{t('common.refresh')}
       </button>
-    </div>}
+    }>{pluginOAuthText('loadFailed', locale)}</Notice>}
     {plugins.map(plugin => {
       const provider = plugin.oauthProvider!;
       const authorized = completed.has(provider);

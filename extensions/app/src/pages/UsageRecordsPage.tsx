@@ -1,3 +1,5 @@
+import { Notice } from '../components/Notice';
+import { EmptyState } from '../components/EmptyState';
 import { Checkbox } from '../components/Checkbox';
 import { onUsageRecordsUpdated } from '../services/events';
 import {
@@ -530,10 +532,7 @@ export function UsageRecordsPage() {
       {activeTab !== 'data-management' ? filterPanel : null}
 
       {showInitialLoading && activeTab !== 'events' ? (
-        <div className="usage-initial-loading">
-          <Database size={22} />
-          <span>{t('usage.loading')}</span>
-        </div>
+        <EmptyState className="usage-initial-loading" icon={<Database size={22} />}>{t('usage.loading')}</EmptyState>
       ) : null}
 
       {activeTab === 'overview' && overview ? <OverviewView overview={overview} range={overviewRange} /> : null}
@@ -1609,7 +1608,7 @@ function PricingView({
             <p>{syncPreview?.unmatched.join(', ')}</p>
           </details>
         )}
-        {syncError && <p className="usage-price-sync-error" role="alert">{syncError}</p>}
+        {syncError && <Notice tone="error" variant="text">{syncError}</Notice>}
         <div className="usage-price-sync-footer">
           <button type="button" className="secondary-button" disabled={applyingSync} onClick={() => setSyncPreview(null)}>{t('common.cancel')}</button>
           <button type="button" className="primary-button" disabled={applyingSync || !syncDrafts.some((item) => item.selected)} onClick={() => void applySyncPrices()}>
@@ -1752,9 +1751,6 @@ function PricingView({
 function UsageEmpty() {
   const { t } = useI18n();
   return (
-    <div className="usage-empty">
-      <TriangleAlert size={18} />
-      <span>{t('usage.empty')}</span>
-    </div>
+    <EmptyState className="usage-empty" icon={<TriangleAlert size={18} />}>{t('usage.empty')}</EmptyState>
   );
 }

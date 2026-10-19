@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { useRef, useState } from 'react';
 import { Check, LoaderCircle, Upload, X } from 'lucide-react';
 import vertexIcon from '../assets/icons/vertex.svg';
@@ -92,7 +93,7 @@ function VertexImportDialog({ onClose }: { onClose: () => void }) {
             onChange={event => { setLocation(event.currentTarget.value); setError(''); setResult(null); }} />
           <small>{t('oauth.vertex.locationHint')}</small>
         </label>
-        {error ? <p role="alert" className="vertex-login-error">{privacy.text(error)}</p> : null}
+        {error ? <Notice tone="error" variant="text">{privacy.text(error)}</Notice> : null}
         {result ? <div role="status" className="vertex-login-result">
           <p><Check size={16} aria-hidden="true" />{t('oauth.vertex.success')}</p>
           <dl>

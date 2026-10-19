@@ -1,3 +1,5 @@
+import { Notice } from '../components/Notice';
+import { EmptyState } from '../components/EmptyState';
 import { Switch } from '../components/Switch';
 import { getCodexSessionContext, saveCodexSessionContext, openCodexSessionRollout } from '../services/codexSessions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -7,7 +9,6 @@ import {
   Bot,
   Brain,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -397,13 +398,10 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
       <p className="context-edit-safety" role="note">{t('agents.sessions.context.editSafety')}</p>
 
       {notice ? (
-        <div className={`codex-session-notice ${notice.kind}`}>
-          {notice.kind === 'error' ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
-          <span>{notice.message}</span>
-          <button type="button" className="icon-button quiet ghost tiny-button" onClick={() => setNotice(null)} aria-label={t('common.close')}>
-            <X size={14} />
-          </button>
-        </div>
+        <Notice tone={notice.kind === 'warning' ? 'warn' : notice.kind} className="codex-session-notice" bodyClassName="codex-session-notice-message"
+          onDismiss={() => setNotice(null)} dismissLabel={t('common.close')}>
+          {notice.message}
+        </Notice>
       ) : null}
 
       <section className="context-meta-card">
@@ -534,17 +532,11 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
           </div>
 
           {loading ? (
-            <div className="codex-session-empty">
-              <LoaderCircle size={22} className="spin" />
-              <span>{t('agents.sessions.loading')}</span>
-            </div>
+            <EmptyState variant="box" className="codex-session-empty" icon={<LoaderCircle size={22} className="spin" />}>{t('agents.sessions.loading')}</EmptyState>
           ) : (
             <div className="context-message-list">
               {filteredMessages.length === 0 && newMessages.length === 0 ? (
-                <div className="codex-session-empty">
-                  <FileText size={22} />
-                  <span>{t('agents.sessions.context.emptyMessages')}</span>
-                </div>
+                <EmptyState variant="box" className="codex-session-empty" icon={<FileText size={22} />}>{t('agents.sessions.context.emptyMessages')}</EmptyState>
               ) : null}
               {filteredMessages.map((msg) => {
                 const edit = messageEdits[msg.lineNumber] || {
@@ -650,10 +642,9 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                       ) : edit.isEditing && msg.role !== 'tool' ? (
                         <div className="message-editor-wrapper">
                           {msg.role === 'reasoning' ? (
-                            <div className="reasoning-edit-warning">
-                              <ShieldAlert size={13} />
-                              <span>{t('agents.sessions.context.reasoningEditNotice')}</span>
-                            </div>
+                            <Notice tone="warn" variant="text" icon={<ShieldAlert size={13} />}>
+                              {t('agents.sessions.context.reasoningEditNotice')}
+                            </Notice>
                           ) : null}
                           <textarea
                             className="message-textarea"

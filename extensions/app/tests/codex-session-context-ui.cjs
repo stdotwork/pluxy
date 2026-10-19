@@ -97,7 +97,7 @@ mkdirSync(screenshots, { recursive: true });
     await page.getByRole('option', { name: 'English', exact: true }).click();
     assert.equal(await userCard.locator('.message-textarea').inputValue(), 'Mock persistence check');
     await page.getByRole('button', { name: 'Save Changes', exact: true }).click();
-    await page.locator('.codex-session-notice.success').waitFor();
+    await page.locator('.codex-session-notice.notice-success').waitFor();
 
     await page.getByRole('button', { name: 'Back to Sessions', exact: true }).click();
     await page.locator('.codex-sessions-page').waitFor();
@@ -125,19 +125,19 @@ mkdirSync(screenshots, { recursive: true });
     assert.deepEqual(await page.evaluate(() => window.rolloutOpenRequests), [{ request: { sessionId } }]);
     await page.evaluate(() => { window.failRolloutOpen = true; });
     await openRaw.click();
-    await page.locator('.codex-session-notice.error', { hasText: 'No default application is configured' }).waitFor();
+    await page.locator('.codex-session-notice.notice-error', { hasText: 'No default application is configured' }).waitFor();
     assert.equal(await openRaw.isEnabled(), true);
     await page.evaluate(() => { window.failRolloutOpen = false; });
     assert.equal(await page.getByRole('button', { name: 'Save Changes', exact: true }).isEnabled(), false);
     await page.getByLabel('Session Title', { exact: true }).fill('Structured metadata title');
     assert.equal(await openRaw.isEnabled(), false);
     await page.getByRole('button', { name: 'Save Changes', exact: true }).click();
-    await page.locator('.codex-session-notice.success').waitFor();
+    await page.locator('.codex-session-notice.notice-success').waitFor();
     assert.equal(await openRaw.isEnabled(), true);
     await page.locator('.context-message-card.tool').first().getByRole('button', { name: 'Remove Message', exact: true }).click();
     assert.equal(await page.locator('.context-message-card.tool.deleted').count(), 1);
     await page.keyboard.press('Control+s');
-    await page.locator('.codex-session-notice.success').waitFor();
+    await page.locator('.codex-session-notice.notice-success').waitFor();
     assert.equal(await page.locator('.context-message-card.tool').count(), 0);
 
     await page.getByRole('button', { name: 'Add Message', exact: true }).click();
@@ -145,19 +145,19 @@ mkdirSync(screenshots, { recursive: true });
     await page.getByRole('button', { name: 'Back to Sessions', exact: true }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.keyboard.press('Control+s');
-    await page.locator('.codex-session-notice.success').waitFor();
+    await page.locator('.codex-session-notice.notice-success').waitFor();
     await page.locator('.context-message-card.user', { hasText: 'Unstaged draft can be saved' }).waitFor();
 
     for (const message of await page.locator('.context-message-card').all()) {
       await message.getByRole('button', { name: 'Remove Message', exact: true }).click();
     }
     await page.getByRole('button', { name: 'Save Changes', exact: true }).click();
-    await page.locator('.codex-session-notice.success').waitFor();
+    await page.locator('.codex-session-notice.notice-success').waitFor();
     assert.equal(await page.locator('.context-message-card').count(), 0);
     await page.getByRole('button', { name: 'Add Message', exact: true }).click();
     await page.locator('.add-message-textarea').fill('Add to an empty session');
     await page.getByRole('button', { name: 'Save Changes', exact: true }).click();
-    await page.locator('.codex-session-notice.success').waitFor();
+    await page.locator('.codex-session-notice.notice-success').waitFor();
     await page.locator('.context-message-card.user', { hasText: 'Add to an empty session' }).waitFor();
 
     for (const theme of ['dark', 'light']) {

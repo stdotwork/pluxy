@@ -1,3 +1,4 @@
+import { EmptyState } from './EmptyState';
 import {
   useCallback,
   useEffect,
@@ -314,16 +315,15 @@ export function AgentModelPicker({
 
           <div className="agent-model-list" id={listboxId} role="listbox">
             {loading && models.length === 0 && choices.length === 0 ? (
-              <div className="agent-model-empty"><LoaderCircle size={18} className="spin" />{t('agents.model.fetching')}</div>
+              <EmptyState variant="compact" className="agent-model-empty" icon={<LoaderCircle size={18} className="spin" />}>{t('agents.model.fetching')}</EmptyState>
             ) : error && models.length === 0 && choices.length === 0 ? (
-              <div className="agent-model-empty error"><strong>{t('agents.model.loadFailed')}</strong><span>{error}</span></div>
+              <EmptyState variant="compact" tone="error" className="agent-model-empty" title={t('agents.model.loadFailed')}>{error}</EmptyState>
             ) : choices.length === 0 ? (
-              <div className="agent-model-empty">
-                {editable ? <span>{t('agents.claudeDesktopMapping.customAliasHint')}</span> : <>
-                  <strong>{search.trim() ? t('agents.model.noMatch') : t('agents.model.unavailable')}</strong>
-                  <span>{search.trim() ? t('agents.model.tryKeywords') : t('agents.model.connectFirst')}</span>
-                </>}
-              </div>
+              editable
+                ? <EmptyState variant="compact" className="agent-model-empty">{t('agents.claudeDesktopMapping.customAliasHint')}</EmptyState>
+                : <EmptyState variant="compact" className="agent-model-empty" title={search.trim() ? t('agents.model.noMatch') : t('agents.model.unavailable')}>
+                  {search.trim() ? t('agents.model.tryKeywords') : t('agents.model.connectFirst')}
+                </EmptyState>
             ) : choices.map((choice, index) => {
               const selected = choice.name.toLocaleLowerCase() === value.trim().toLocaleLowerCase();
               return (

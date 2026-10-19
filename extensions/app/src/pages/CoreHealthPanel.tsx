@@ -1,3 +1,4 @@
+import { EmptyState } from '../components/EmptyState';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Activity, Check, ChevronRight, Circle, LoaderCircle, Play, RefreshCw, Search, Square, X } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -137,10 +138,10 @@ export function CoreHealthPanel({
       </div>
       {running && !stopped && <div className="core-health-progress" role="progressbar" aria-label={t('home.health.title')} aria-valuenow={progress.done} aria-valuemax={progress.total}><span style={{ width: `${progress.total ? progress.done / progress.total * 100 : 0}%` }} /></div>}
 
-      {!coreReady ? <div className="core-health-empty"><Activity size={22} aria-hidden="true" /><p>{t('home.health.offline')}</p></div>
-        : modelsLoading && models.length === 0 ? <div className="core-health-empty"><LoaderCircle size={22} className="spin" aria-hidden="true" /><p>{t('apiAccess.health.loadingModels')}</p></div>
-          : modelsError ? <div className="core-health-empty core-health-error" role="alert"><p>{t('home.health.loadError', { error: modelsError })}</p></div>
-            : filtered.length === 0 ? <div className="core-health-empty"><p>{t(models.length ? 'apiAccess.health.noMatch' : 'home.health.empty')}</p></div>
+      {!coreReady ? <EmptyState className="core-health-empty" icon={<Activity size={22} />}>{t('home.health.offline')}</EmptyState>
+        : modelsLoading && models.length === 0 ? <EmptyState className="core-health-empty" role="status" icon={<LoaderCircle size={22} className="spin" />}>{t('apiAccess.health.loadingModels')}</EmptyState>
+          : modelsError ? <EmptyState className="core-health-empty core-health-error" tone="error" role="alert">{t('home.health.loadError', { error: modelsError })}</EmptyState>
+            : filtered.length === 0 ? <EmptyState className="core-health-empty">{t(models.length ? 'apiAccess.health.noMatch' : 'home.health.empty')}</EmptyState>
               : <div className="core-health-table-wrap">
                 <table className="core-health-table">
                   <thead><tr><th>{t('home.health.model')}</th><th>{t('home.health.status')}</th><th>{t('home.health.latency')}</th><th>{t('home.health.checkedAt')}</th><th><span className="core-health-sr-only">{t('home.health.checkAll')}</span></th></tr></thead>

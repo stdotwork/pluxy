@@ -507,41 +507,6 @@ button.oauth-account-count:focus-visible {
   color: var(--text-tertiary);
 }
 
-.oauth-flow-status {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  font-size: var(--font-size-meta);
-  line-height: 1.5;
-}
-
-.oauth-flow-status > svg {
-  flex: none;
-  margin-top: 2px;
-}
-
-.oauth-flow-status.waiting {
-  border-color: color-mix(in srgb, var(--primary-color) 30%, var(--border-color));
-  background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-card));
-  color: var(--primary-color);
-}
-
-.oauth-flow-status.success {
-  border-color: var(--success-badge-border);
-  background: var(--success-badge-bg);
-  color: var(--success-badge-text);
-}
-
-.oauth-flow-status.error {
-  border-color: color-mix(in srgb, var(--danger-color) 35%, var(--border-color));
-  background: color-mix(in srgb, var(--danger-color) 8%, var(--bg-card));
-  color: var(--danger-color);
-  overflow-wrap: anywhere;
-}
-
 .oauth-card.is-waiting {
   border-color: color-mix(in srgb, var(--primary-color) 45%, var(--border-color));
 }

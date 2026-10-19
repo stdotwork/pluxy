@@ -1,3 +1,4 @@
+import { EmptyState } from '../components/EmptyState';
 import { Checkbox } from '../components/Checkbox';
 import { commitFetchedQuota } from '../services/quotaEnrichment';
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -516,7 +517,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
         {loading ? (
           <div className="management-loading"><LoaderCircle size={20} className="spin" />{t('authFiles.loading')}</div>
         ) : visibleFiles.length === 0 ? (
-          <div className="management-empty"><FileDown size={24} /><strong>{files.length ? t('authFiles.empty.filtered') : t('authFiles.empty.none')}</strong><span>{files.length ? t('authFiles.empty.tryFilter') : t('authFiles.empty.upload')}</span></div>
+          <EmptyState className="management-empty" icon={<FileDown size={24} />} title={files.length ? t('authFiles.empty.filtered') : t('authFiles.empty.none')}>{files.length ? t('authFiles.empty.tryFilter') : t('authFiles.empty.upload')}</EmptyState>
         ) : (
           <div className="auth-file-table-scroll">
           <div className="auth-file-list-head" aria-hidden="true">

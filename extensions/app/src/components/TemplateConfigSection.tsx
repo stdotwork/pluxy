@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { Switch } from './Switch';
 import { onConfigFilesChanged } from '../services/events';
 import {
@@ -190,9 +191,9 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
 
   const visible = groups.filter((group) => !visibleGroups || visibleGroups.includes(group.id));
   return <div className="template-config-section" hidden={visible.length === 0}>
-    {loadError ? <div className="template-config-notice template-config-error" role="alert"><span>{loadError}</span><button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void reload()}>{tr('reload')}</button></div> : null}
+    {loadError ? <Notice tone="error" icon={false} className="template-config-notice" action={<button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void reload()}>{tr('reload')}</button>}>{loadError}</Notice> : null}
     {!config && !loadError ? <p role="status">{tr('loading')}</p> : null}
-    {restartNeeded ? <div className="template-config-notice" role="status"><span>{tr('restart')}</span>{status?.running ? <button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void restart()}>{tr('restartNow')}</button> : null}</div> : null}
+    {restartNeeded ? <Notice tone="info" icon={false} className="template-config-notice" action={status?.running ? <button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void restart()}>{tr('restartNow')}</button> : undefined}>{tr('restart')}</Notice> : null}
     {groups.map((group) => {
       const dirty = group.fields.some((field) => drafts[templateFieldKey(field.path)]);
       const needsRestart = group.fields.some((field) => field.restart);
@@ -215,7 +216,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
             {validation ? <small id={`${id}-error`} className="template-config-error" role="alert">{templateText(validation, locale)}</small> : null}
           </div>;
         })}</div>
-        {groupErrors[group.id] ? <p className="template-config-error" role="alert">{groupErrors[group.id]}</p> : null}
+        {groupErrors[group.id] ? <Notice tone="error" variant="text">{groupErrors[group.id]}</Notice> : null}
         <div className="template-config-actions"><span className={dirty ? 'template-config-action-status-dirty' : saved[group.id] ? 'template-config-action-status-saved' : undefined} role="status">{dirty ? tr('dirty') : saved[group.id] ? tr('saved') : ''}</span><div>{dirty ? <button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => discardGroup(group)}>{tr('discard')}</button> : null}<button type="button" className="primary-button compact-button" disabled={!dirty || busy !== null || !config} onClick={() => void saveGroup(group)}><Save size={15} aria-hidden="true" />{busy === group.id ? tr('saving') : tr('save')}</button></div></div>
       </section>;
     })}

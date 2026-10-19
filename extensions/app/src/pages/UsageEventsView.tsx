@@ -1,3 +1,4 @@
+import { EmptyState } from '../components/EmptyState';
 import { Checkbox } from '../components/Checkbox';
 import { Switch } from '../components/Switch';
 import { getUsageEvents, saveUsageEventsExport } from '../services/usage';
@@ -698,7 +699,7 @@ export function EventsView({
   return (
     <section className={`panel usage-events-panel usage-request-log${isCompactDefault ? ' usage-events-compact' : ''}${collapseErrors ? '' : ' usage-events-errors-expanded'}`} aria-label={t('usage.events.title')} aria-busy={loading}>
       <FloatingNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />
-      {loading && events.items.length === 0 ? <div className="usage-empty" role="status"><Database size={20} aria-hidden="true" /><span>{t('usage.loading')}</span></div> : events.items.length ? (
+      {loading && events.items.length === 0 ? <EmptyState className="usage-empty" role="status" icon={<Database size={20} />}>{t('usage.loading')}</EmptyState> : events.items.length ? (
         <div ref={tableWrapRef} className="usage-table-wrap" tabIndex={0} role="region" aria-label={t('usage.events.title')}>
           <table
             className="usage-events-table"
@@ -912,5 +913,5 @@ export function EventsView({
 
 function UsageEmpty() {
   const { t } = useI18n();
-  return <div className="usage-empty"><TriangleAlert size={18} /><span>{t('usage.empty')}</span></div>;
+  return <EmptyState className="usage-empty" icon={<TriangleAlert size={18} />}>{t('usage.empty')}</EmptyState>;
 }

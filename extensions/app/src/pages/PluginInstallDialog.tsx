@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { openExternalUrl } from '../services/appSettings';
 import { useEffect, useRef, useState } from 'react';
 import { ExternalLink, X } from 'lucide-react';
@@ -56,10 +57,10 @@ export function PluginInstallDialog({ entry, onClose, onInstalled }: {
         <dl className="plugin-install-origin"><dt>{pt('storeSource')}</dt><dd>{officialStore ? pt('officialStore') : entry.sourceName || entry.sourceId}{entry.sourceUrl && <details className="plugin-source-address"><summary>{pt('sourceAddress')}</summary><small>{entry.sourceUrl}</small></details>}</dd><dt>{pt('repository')}</dt><dd className="plugin-install-repository"><span>{entry.repository || '—'}</span>{repository && <button className="icon-button quiet" aria-label={pt('repository')} onClick={() => void openExternalUrl({ url: repository }).catch(e => setError(String(e)))}><ExternalLink size={15} /></button>}</dd></dl>
         {canSelectVersion && <label className="plugin-field">{pt('version')}<input value={version} onChange={e => setVersion(e.target.value)} disabled={busy} placeholder={entry.version || 'v1.0.0'} aria-invalid={!validVersion} />{!validVersion && <small role="alert">{pt('invalidVersion')}</small>}</label>}
         {!trusted && <>
-          <p className="plugin-warning" id="plugin-trust-warning">{pt(externalRepository ? 'officialStoreThirdParty' : 'trustWarning')}</p>
+          <Notice tone="warn" icon={false} live={false} id="plugin-trust-warning" className="plugin-warning">{pt(externalRepository ? 'officialStoreThirdParty' : 'trustWarning')}</Notice>
           <label className="plugin-field">{pt(entry.installed ? 'trustTypeUpdate' : 'trustType')}<code>{confirmToken}</code><input value={confirmation} onChange={event => setConfirmation(event.target.value)} disabled={busy} autoComplete="off" spellCheck={false} aria-describedby="plugin-trust-warning" /></label>
         </>}
-        {error && <p className="plugin-error" role="alert">{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</p>}
+        {error && <Notice tone="error" variant="text">{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</Notice>}
       </div>
       <div className="plugin-dialog-actions"><button className="secondary-button compact-button" onClick={cancel}>{t('common.cancel')}</button><button className="primary-button compact-button" disabled={busy || !validVersion || !confirmed} onClick={() => void install()}>{busy ? t('common.loading') : action}</button></div>
     </Dialog>

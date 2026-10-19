@@ -21,7 +21,6 @@
 .vertex-file-picker button { flex-shrink: 0; }
 .vertex-file-picker span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vertex-login-field small { color: var(--text-secondary); }
-.vertex-login-error { color: var(--danger-color); overflow-wrap: anywhere; }
 .vertex-login-result { overflow-wrap: anywhere; padding: 14px; border: 1px solid var(--theme-e8e4dc);
   border-radius: 8px; background: var(--theme-f4f2ec); }
 .vertex-login-result > p { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-weight: 600; }

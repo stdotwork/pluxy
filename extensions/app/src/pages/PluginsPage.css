@@ -1,7 +1,6 @@
 .plugin-tab-panel { display: flex; flex-direction: column; gap: 20px; }
 .plugins-page { display: flex; flex-direction: column; gap: 20px; min-width: 0; max-width: 1500px; margin: 0 auto; padding: 0 0 24px; }
 .plugin-global-toggle { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
-.plugin-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; margin: 0; border-radius: 8px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .plugin-navigation { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding-bottom: 4px; border-bottom: 1px solid var(--border-color); }
 .plugin-navigation > .plugin-toolbar { margin-left: auto; justify-content: flex-end; min-width: 0; }
 .plugin-tabs { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
@@ -44,11 +43,9 @@
 .plugin-delete { margin-left: auto; }
 .plugin-menus { display: flex; flex-wrap: wrap; gap: 8px; }
 .plugin-menus button { margin: 0; }
-.plugin-empty { display: flex; flex-direction: column; gap: 14px; justify-content: center; align-items: center; min-height: 250px; text-align: center; color: var(--text-tertiary); }
-.plugin-empty h2 { margin: 0; font-size: 16px; color: var(--text-primary); }
-.plugin-empty p { max-width: 600px; font-size: 13px; line-height: 1.8; margin: 0; }
+.plugin-empty { min-height: 250px; }
+.plugin-empty .empty-state-description { max-width: 600px; }
 .plugin-loading { margin: 0; color: var(--text-tertiary); font-size: 13px; }
-.plugin-error { color: var(--error-color); overflow-wrap: anywhere; line-height: 1.7; }
 .plugin-rate-limit-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; color: var(--text-secondary); }
 .plugin-source-errors { border: 1px solid var(--border-color); padding: 14px; border-radius: 8px; color: var(--amber-text); font-size: 13px; overflow-wrap: anywhere; }
 .plugin-field { display: grid; gap: 9px; font-size: 13px; font-weight: 550; min-width: 0; }
@@ -69,8 +66,6 @@
 .plugin-install-repository span { min-width: 0; }
 .plugin-install-repository button { flex-shrink: 0; }
 .plugin-install-origin small { display: block; color: var(--text-tertiary); }
-.plugin-warning { display: flex; gap: 10px; padding: 14px 16px; background: var(--theme-fff7e9); border: 1px solid color-mix(in srgb, var(--amber-text) 22%, transparent); border-radius: 8px; color: var(--amber-text); font-weight: normal; line-height: 1.8; }
-.plugin-warning svg { flex-shrink: 0; }
 .plugin-dialog-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 18px 20px; border-top: 1px solid var(--border-color); }
 .plugins-page .primary-button, .plugins-page .secondary-button, .plugin-install-dialog .primary-button, .plugin-install-dialog .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .plugins-page button svg { flex-shrink: 0; }
@@ -81,7 +76,7 @@
 @media (max-width: 900px) { .app-shell:has(.plugin-resource-page) { grid-template-rows: max-content minmax(0, 1fr); } }
 .plugin-resource-status { margin: 24px; }
 .plugin-resource-host > .plugin-banner { margin: 16px; }
-@media (max-width: 700px) { .plugin-card { padding: 16px; } .plugin-banner { flex-wrap: wrap; } .plugin-navigation > .plugin-toolbar { flex: 1 1 100%; } .plugin-search { flex: 1 1 160px; width: auto; } }
+@media (max-width: 700px) { .plugin-card { padding: 16px; } .plugin-navigation > .plugin-toolbar { flex: 1 1 100%; } .plugin-search { flex: 1 1 160px; width: auto; } }
 @media (max-width: 420px) { .plugin-card-title { grid-template-columns: 40px minmax(0, 1fr); } .plugin-card-title > .plugin-badge { grid-column: 2; justify-self: start; } .plugin-tabs button { padding-inline: 10px; } }
 
 /* Keep technical metadata subordinate to the plugin name and available actions. */
@@ -125,3 +120,5 @@
   .plugin-settings-columns { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .plugin-settings .plugin-settings-card { padding: 16px; }
 }
+.plugin-banner { gap: 16px; padding: 14px 18px; }
+.plugin-warning { padding: 14px 16px; }

@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import {
   hidePluginWebview,
   showPluginWebview,
@@ -89,7 +90,7 @@ export function PluginResourcePage({ entry, reloadToken }: { entry: PluginNavEnt
   return <section className="page plugin-resource-page">
     <h1 className="sr-only">{entry.label}</h1>
     <div ref={host} className="plugin-resource-host">
-      {error ? <div className="plugin-error plugin-banner" role="alert"><span>{error}</span><button type="button" className="secondary-button" onClick={() => setAttempt((value) => value + 1)}>{pt('retry')}</button></div>
+      {error ? <Notice tone="error" icon={false} className="plugin-error plugin-banner" action={<button type="button" className="secondary-button" onClick={() => setAttempt((value) => value + 1)}>{pt('retry')}</button>}>{error}</Notice>
         : !ready && <p className="plugin-resource-status" role="status">{t('common.loading')}</p>}
     </div>
   </section>;

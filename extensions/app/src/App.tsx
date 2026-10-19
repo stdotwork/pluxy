@@ -62,6 +62,7 @@ import { canOpenAppPage, requestAppNavigation } from './navigation';
 import { useThemePreference } from './theme';
 import { usePrivacyMode } from './privacy';
 import { Dialog } from './components/Dialog';
+import { EmptyState } from './components/EmptyState';
 
 const QQ_CONTACT_URL = 'https://qm.qq.com/q/3queDaIG';
 const DISCORD_SERVER_URL = 'https://discord.gg/PxvX4D9kgs';
@@ -645,11 +646,9 @@ function CoreLockedPage() {
   const { t } = useI18n();
   return (
     <section className="page core-locked-page">
-      <div className="empty-state core-locked-panel">
-        <ServerCog size={26} aria-hidden="true" />
-        <strong>{t('app.coreRequired.title')}</strong>
-        <span>{t('app.coreRequired.description')}</span>
-      </div>
+      <EmptyState variant="box" icon={<ServerCog size={26} />} title={t('app.coreRequired.title')}>
+        {t('app.coreRequired.description')}
+      </EmptyState>
     </section>
   );
 }

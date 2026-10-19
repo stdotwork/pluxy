@@ -1,3 +1,4 @@
+import { EmptyState } from '../components/EmptyState';
 import { SegmentedControl } from '../components/SegmentedControl';
 import type { UsageAnalysis, UsageCategory } from '../services/usage';
 import { useState, type CSSProperties } from 'react';
@@ -32,9 +33,7 @@ export function UsageAnalysisView({ analysis, overview, range }: {
 }) {
   const { t } = useI18n();
   if (!overview?.totalRequests) {
-    return <div className="usage-analysis-grid usage-analysis-view usage-analysis-empty">
-      <BarChart3 size={32} aria-hidden="true" /><p>{t('usage.empty')}</p>
-    </div>;
+    return <EmptyState className="usage-analysis-empty" icon={<BarChart3 size={32} />}>{t('usage.empty')}</EmptyState>;
   }
   return (
     <div className="usage-analysis-grid usage-analysis-view">

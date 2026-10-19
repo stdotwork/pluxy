@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { getCoreSensitiveWordsSettings, saveCoreSensitiveWordsSettings } from '../services/coreSettings';
 import type { SensitiveWordsSettings } from '../services/coreSettings';
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
@@ -240,7 +241,7 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
           </button>
         </div>
       </div>
-      {error ? <div className="config-form-message error" role="alert">{error}</div> : null}
+      {error ? <Notice tone="error" variant="text">{error}</Notice> : null}
       {loading ? <p>{t('common.loading')}</p> : saved === null ? (
         <button type="button" className="secondary-button compact-button" onClick={() => void load()}>{t('common.retry')}</button>
       ) : (

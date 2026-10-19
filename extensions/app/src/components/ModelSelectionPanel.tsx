@@ -1,3 +1,4 @@
+import { EmptyState } from './EmptyState';
 import { useId, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Search, X } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -67,9 +68,9 @@ export function ModelSelectionPanel({ models, selected, loading, onMove }: Model
             {selected ? <X size={16} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
           </button>
         )) : (
-          <div className="model-transfer-empty">
+          <EmptyState variant="compact" className="model-transfer-empty">
             {t(query ? 'apiAccess.modelDialog.noMatch' : loading ? 'apiAccess.modelDialog.fetching' : selected ? 'apiAccess.modelDialog.emptySelected' : 'apiAccess.modelDialog.emptyUnselected')}
-          </div>
+          </EmptyState>
         )}
       </div>
     </section>

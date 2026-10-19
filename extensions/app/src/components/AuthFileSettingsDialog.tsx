@@ -1,3 +1,4 @@
+import { Notice } from './Notice';
 import { Checkbox } from './Checkbox';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Check, LoaderCircle, Settings2, X } from 'lucide-react';
@@ -132,7 +133,7 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
                 <details className="credential-settings-catalog">
                   <summary>{t('authFiles.settings.catalog', { count: models.length })}</summary>
                   {catalogLoading ? <p role="status">{t('common.loading')}</p> : null}
-                  {catalogError ? <p className="credential-settings-warning">{t('authFiles.settings.catalogError')}<small>{catalogError}</small></p> : null}
+                  {catalogError ? <Notice tone="warn" variant="text" live={false}>{t('authFiles.settings.catalogError')}<small>{catalogError}</small></Notice> : null}
                   <input aria-label={t('authFiles.settings.searchModels')} placeholder={t('authFiles.settings.searchModels')} value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
                   <div className="credential-settings-models">
                     {candidates.map((model) => {
@@ -159,7 +160,7 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
           ) : null}
         </div>
         <footer className="credential-settings-footer">
-          {error ? <p className="credential-settings-error" role="alert">{error}</p> : null}
+          {error ? <Notice tone="error" variant="text" className="credential-settings-error">{error}</Notice> : null}
           <div className="credential-settings-actions">
             <button type="button" className="secondary-button" disabled={saving} onClick={close}>{t('common.cancel')}</button>
             {!loading && !draft ? <button type="button" className="primary-button" onClick={() => setAttempt((value) => value + 1)}>{t('common.refresh')}</button> : <button type="submit" className="primary-button" disabled={!draft || loading || saving || !dirty}>{saving ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{t(saving ? 'common.saving' : 'common.save')}</button>}

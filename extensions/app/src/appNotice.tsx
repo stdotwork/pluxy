@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useReducer, useRef, useState } from 'react';
 import { NoticePortal } from './components/NoticePortal';
-import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
+import { Notice } from './components/Notice';
 import { useI18n } from './i18n';
 import { usePrivacyMask } from './privacy';
 import type { MessageKey } from './i18n/resources';
@@ -66,35 +66,18 @@ export function InlineNotice({
     return null;
   }
 
-  const Icon = notice.tone === 'error' ? AlertCircle : notice.tone === 'success' ? CheckCircle2 : Info;
-  const isError = notice.tone === 'error';
-
   return (
-    <div
+    <Notice
+      tone={notice.tone}
       className={('action-feedback inline-notice ' + notice.tone + (className ? ' ' + className : '')).trim()}
-      role={isError ? 'alert' : 'status'}
-      aria-live={isError ? 'assertive' : 'polite'}
-      aria-atomic="true"
+      bodyClassName="action-feedback-text"
+      bodyTabIndex={0}
+      dismissClassName="action-feedback-dismiss"
+      onDismiss={onDismiss}
     >
-      <div className="action-feedback-main">
-        <Icon size={16} className="action-feedback-icon" aria-hidden="true" />
-        <div className="action-feedback-text" tabIndex={0}>
-          {notice.source ? <strong className="action-feedback-source">{t(notice.source)}: </strong> : null}
-          <span className="action-feedback-message">{message}</span>
-        </div>
-      </div>
-      {onDismiss ? (
-        <button
-          type="button"
-          className="icon-button quiet ghost tiny-button action-feedback-dismiss"
-          onClick={onDismiss}
-          aria-label={t('app.notice.dismiss')}
-          title={t('app.notice.dismiss')}
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
-      ) : null}
-    </div>
+      {notice.source ? <strong className="action-feedback-source">{t(notice.source)}: </strong> : null}
+      <span className="action-feedback-message">{message}</span>
+    </Notice>
   );
 }
 

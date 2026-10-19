@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { Tabs } from '../components/Tabs';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Switch } from '../components/Switch';
@@ -1807,26 +1808,26 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               </div>
             </div>
             {aliasSuffixed
-              ? <p className="agent-desktop-model-notice" role="status">{t('agents.claudeDesktopMapping.aliasSuffixed', { alias: entry.alias.trim() })}</p>
+              ? <Notice tone="info" variant="text">{t('agents.claudeDesktopMapping.aliasSuffixed', { alias: entry.alias.trim() })}</Notice>
               : entryError && hasPendingChanges && !modelLoading
-              ? <p className="agent-inline-message warning agent-desktop-model-notice" role="status">{t(`agents.claudeDesktopMapping.error.${entryError}`)}</p>
+              ? <Notice tone="warn" variant="text">{t(`agents.claudeDesktopMapping.error.${entryError}`)}</Notice>
               : aliasNotice === 'aliasExists'
-                ? <p className="agent-inline-message warning agent-desktop-model-notice" role="status">{t(
+                ? <Notice tone="warn" variant="text">{t(
                   claudeDesktopDefaultAliases.includes(entry.alias.trim().toLowerCase())
                     ? 'agents.claudeDesktopMapping.defaultAliasExists' : 'agents.claudeDesktopMapping.error.aliasExists',
                   { alias: entry.alias.trim() },
-                )}</p>
+                )}</Notice>
                 : aliasNotice === 'sameModel'
-                  ? <p className="agent-desktop-model-notice" role="status">{t('agents.claudeDesktopMapping.sameModel')}</p>
+                  ? <Notice tone="info" variant="text">{t('agents.claudeDesktopMapping.sameModel')}</Notice>
                   : isClaude
-                    ? <p className="agent-desktop-model-notice" role="status">{t('agents.claudeDesktopMapping.claudeDefault')}</p>
+                    ? <Notice tone="info" variant="text">{t('agents.claudeDesktopMapping.claudeDefault')}</Notice>
                     : null}
           </div>
           );
         })}
       </div>
       {desktopValidation === 'duplicate' && !modelLoading && hasPendingChanges
-        ? <p className="agent-inline-message warning" role="status">{t(`agents.claudeDesktopMapping.error.${desktopValidation}`)}</p> : null}
+        ? <Notice tone="warn" variant="text">{t(`agents.claudeDesktopMapping.error.${desktopValidation}`)}</Notice> : null}
     </section>
   );
 
@@ -1881,10 +1882,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               </div>
 
                 <MessageNotice message={activeStatus?.error || activeStatus?.warnings.join('；')} tone={activeStatus?.error ? 'error' : 'info'} />
-                {activeStatus && !activeStatus.installed ? <div className="agent-detection-help" role="status">
-                  <span>{t('agents.executablePath.notDetected')}</span>
-                  <button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>
-                </div> : null}
+                {activeStatus && !activeStatus.installed ? <Notice tone="warn" variant="text" className="agent-detection-help" action={<button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>}>{t('agents.executablePath.notDetected')}</Notice> : null}
               {selected === 'claude-desktop' ? desktopModelEditor : <div className="agent-minimal-field">
                 <label htmlFor="embedded-agent-model">{t(isDeepSeekHarnessClient ? 'agents.harness.defaultModel' : 'agents.useModel')}</label>
                 <AgentModelPicker
@@ -1980,10 +1978,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               </div>
 
               <MessageNotice message={activeStatus?.error || activeStatus?.warnings.join('；')} tone={activeStatus?.error ? 'error' : 'info'} />
-              {activeStatus && !activeStatus.installed ? <div className="agent-detection-help" role="status">
-                <span>{t('agents.executablePath.notDetected')}</span>
-                <button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>
-              </div> : null}
+              {activeStatus && !activeStatus.installed ? <Notice tone="warn" variant="text" className="agent-detection-help" action={<button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>}>{t('agents.executablePath.notDetected')}</Notice> : null}
 
               {!isClaudeModelMappingClient ? (
                 <section className="agent-core-setting-section agent-model-section">
@@ -2075,12 +2070,11 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                         ))}
                       />
                   {modelError ? (
-                    <div className="claude-code-model-error" role="status">
-                      <div><strong>{t('agents.model.loadFailed')}</strong><p>{t('agents.claudeCodeRuntime.connectionHint')}</p></div>
+                    <Notice tone="error" icon={false} className="claude-code-model-error" title={t('agents.model.loadFailed')} action={
                       <button type="button" className="secondary-button" onClick={refreshModels} disabled={modelLoading}>
                         {t('agents.model.refresh')}
                       </button>
-                    </div>
+                    }>{t('agents.claudeCodeRuntime.connectionHint')}</Notice>
                   ) : null}
                   <ClaudeCodeRoleRows routes={claudeModelMappingsDraft} models={claudeMappingModels}
                     loading={modelLoading} error={modelError}

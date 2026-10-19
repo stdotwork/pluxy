@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { Switch } from '../components/Switch';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, Settings2, X } from 'lucide-react';
@@ -176,7 +177,7 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
         </fieldset> : null}
       </div>
       <footer className="plugin-config-footer">
-        {error ? <p className="plugin-config-error" role="alert">{!draft && !loading ? `${pt('loadFailed')}: ` : ''}{error}</p> : null}
+        {error ? <Notice tone="error" variant="text">{!draft && !loading ? `${pt('loadFailed')}: ` : ''}{error}</Notice> : null}
         {discard ? <div className="plugin-config-discard" role="alert"><span>{pt('unsaved')}</span><div><button type="button" className="secondary-button compact-button" onClick={() => setDiscard(false)}>{pt('keepEditing')}</button><button type="button" className="danger-button compact-button" onClick={onClose}>{pt('discard')}</button></div></div> : null}
         <div className="plugin-config-actions">
           <button type="button" className="secondary-button compact-button" disabled={saving} onClick={close}>{t('common.cancel')}</button>

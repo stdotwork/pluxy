@@ -448,7 +448,6 @@
 
 .usage-request-log > .usage-empty {
   min-height: 220px;
-  color: var(--usage-log-muted);
 }
 
 :root[data-theme='dark'] .usage-records-page .usage-request-log {

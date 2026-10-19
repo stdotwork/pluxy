@@ -1,3 +1,5 @@
+import { Notice } from '../components/Notice';
+import { EmptyState } from '../components/EmptyState';
 import { Tabs } from '../components/Tabs';
 import { Switch } from '../components/Switch';
 import { open } from '../services/platform';
@@ -217,10 +219,10 @@ export function PluginsPage() {
       </div>
     </div>
     <div className="plugin-tab-panel" id="plugin-tab-panel" role={supported === true ? "tabpanel" : undefined} aria-labelledby={supported === true ? `plugin-tab-${tab}` : undefined}>
-    {error && <div className="plugin-error plugin-banner" role="alert"><span>{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</span><button className="secondary-button" disabled={busy || loading} onClick={() => void load(tabRef.current, true)}>{pt('retry')}</button></div>}
-    {supported === false ? <section className="plugin-empty"><Puzzle size={36} /><p>{pt('unsupported')}</p></section> : supported === null ? <section className="plugin-empty" role="status">{loading ? t('common.loading') : pt('retry')}</section> : <>
-      {data && !data.pluginsEnabled && <p className="plugin-banner">{pt('disabledHint')}</p>}
-      {restartRequired && <div className="plugin-banner"><span>{pt('restart')}</span><button className="secondary-button" disabled={locked} onClick={async () => { if (await askConfirmation({ title: pt('restartButton'), message: pt('restartConfirm') })) void mutate(async () => { await restartCoreProcess(); if (mounted.current) setRestartRequired(false); }, pt('saved')); }}>{pt('restartButton')}</button></div>}
+    {error && <Notice tone="error" icon={false} className="plugin-banner" action={<button className="secondary-button" disabled={busy || loading} onClick={() => void load(tabRef.current, true)}>{pt('retry')}</button>}>{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</Notice>}
+    {supported === false ? <EmptyState className="plugin-empty" icon={<Puzzle size={36} />}>{pt('unsupported')}</EmptyState> : supported === null ? <EmptyState className="plugin-empty" role="status">{loading ? t('common.loading') : pt('retry')}</EmptyState> : <>
+      {data && !data.pluginsEnabled && <Notice tone="info" icon={false} className="plugin-banner">{pt('disabledHint')}</Notice>}
+      {restartRequired && <Notice tone="info" icon={false} className="plugin-banner" action={<button className="secondary-button" disabled={locked} onClick={async () => { if (await askConfirmation({ title: pt('restartButton'), message: pt('restartConfirm') })) void mutate(async () => { await restartCoreProcess(); if (mounted.current) setRestartRequired(false); }, pt('saved')); }}>{pt('restartButton')}</button>}>{pt('restart')}</Notice>}
       <>
         {tab === 'settings' ? <PluginSettingsPanel onSaved={() => { notice.showNotice(pt('saved')); void load(); }} globalControl={<label className="plugin-global-toggle"><Switch checked={data?.pluginsEnabled ?? false} disabled={locked || !data} onChange={e => { const enabled = e.target.checked; void mutate(() => pluginsApi.updateSettings({ enabled }), pt('saved')); }} />{pt('global')}</label>} /> : <>
           {sourceErrors.length ? <details className="plugin-source-errors"><summary>{pt('sourceErrors')}</summary>{sourceErrors.map((entry, index) => <p key={index}>{entry.sourceName || entry.sourceId || entry.sourceUrl}: {entry.message}</p>)}{sourceErrors.some(entry => isGitHubRateLimit(entry.message)) ? <GitHubTokenHint /> : null}</details> : null}
@@ -254,7 +256,7 @@ export function PluginsPage() {
               <div className="plugin-card-actions">{entry.installed && <span className="plugin-badge">{pt(entry.updateAvailable ? 'updates' : 'installed')}</span>}<button className="primary-button compact-button" disabled={locked || (entry.authRequired && !entry.authConfigured)} onClick={() => setInstallEntry(entry)}><Download size={15} />{pt(entry.authRequired && !entry.authConfigured ? 'authMissing' : !entry.installed ? 'install' : entry.updateAvailable ? 'update' : 'reinstall')}</button></div>
             </article>)}</div>
           </>}
-          {!loading && !error && (tab === 'installed' ? !plugins.length : !storePlugins.length) && <section className="plugin-empty"><Puzzle size={36} /><h2>{pt(search || filter !== 'all' ? 'noMatches' : 'empty')}</h2>{tab === 'installed' && !search && <><p>{pt('emptyHint')}</p><button className="primary-button" onClick={() => setTab('store')}>{pt('store')}</button></>}</section>}
+          {!loading && !error && (tab === 'installed' ? !plugins.length : !storePlugins.length) && <EmptyState className="plugin-empty" icon={<Puzzle size={36} />} title={pt(search || filter !== 'all' ? 'noMatches' : 'empty')} action={tab === 'installed' && !search ? <button className="primary-button" onClick={() => setTab('store')}>{pt('store')}</button> : undefined}>{tab === 'installed' && !search ? pt('emptyHint') : null}</EmptyState>}
         </>}
       </>
     </>}

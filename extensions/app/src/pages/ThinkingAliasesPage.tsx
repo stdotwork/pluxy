@@ -1,3 +1,4 @@
+import { EmptyState } from '../components/EmptyState';
 import { Switch } from '../components/Switch';
 import {
   getThinkingAliases,
@@ -628,9 +629,9 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
                 aria-label={t('aliases.availableModels')}
               >
                 {filteredSources.length === 0 ? (
-                  <div className="thinking-model-empty">
+                  <EmptyState variant="compact" className="thinking-model-empty">
                     {sources.length ? t('aliases.noMatch') : t('aliases.noModels')}
-                  </div>
+                  </EmptyState>
                 ) : filteredSources.map((source, index) => {
                   const selected = source.id === selectedSourceId;
                   return (
@@ -782,11 +783,9 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
             {loading ? (
               <div className="management-loading"><LoaderCircle size={20} className="spin" />{t('aliases.loadingConfig')}</div>
             ) : entries.length === 0 ? (
-              <div className="management-empty">
-                <GitFork size={25} />
-                <strong>{t('aliases.empty.title')}</strong>
-                <span>{t('aliases.empty.description')}</span>
-              </div>
+              <EmptyState className="management-empty" icon={<GitFork size={25} />} title={t('aliases.empty.title')}>
+                {t('aliases.empty.description')}
+              </EmptyState>
             ) : entries.map((entry) => (
               <article className="thinking-alias-row" key={JSON.stringify([entry.position, entry.oauthChannel])}>
                 <div className="thinking-alias-route">

@@ -1,3 +1,4 @@
+import { EmptyState } from '../components/EmptyState';
 import { Switch } from '../components/Switch';
 import { resolveApiAccessRemarks, saveApiAccessRemark } from '../services/apiAccessRemarks';
 import type { ProviderSection, ApiAccessRemarkLocator } from '../services/apiAccessRemarks';
@@ -1634,13 +1635,11 @@ export function ApiAccessPage() {
           {loading ? (
             <div className="management-loading"><LoaderCircle size={20} className="spin" />{t('apiAccess.loading')}</div>
           ) : rows.length === 0 ? (
-            <div className="management-empty">
-              <Filter size={24} aria-hidden="true" />
-              <strong>{filter ? t('apiAccess.empty.filtered') : t('apiAccess.empty.none')}</strong>
-              <span>{filter ? t('apiAccess.empty.tryKeyword') : t('apiAccess.empty.addFirst', {
+            <EmptyState className="management-empty" icon={<Filter size={24} />} title={filter ? t('apiAccess.empty.filtered') : t('apiAccess.empty.none')}>
+              {filter ? t('apiAccess.empty.tryKeyword') : t('apiAccess.empty.addFirst', {
                 action: t(activeDefinition.openAi ? 'apiAccess.entries.addProvider' : 'apiAccess.entries.addKey'),
-              })}</span>
-            </div>
+              })}
+            </EmptyState>
           ) : (
             <DndContext
               sensors={dragSensors}

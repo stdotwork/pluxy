@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { getOAuthStatus, startOAuthLogin, openOAuthUrl, submitOAuthCallback } from '../services/oauth';
 import { useEffect, useId, useRef, useState } from 'react';
 import { CheckCircle2, Copy, ExternalLink, LoaderCircle, LogIn, X } from 'lucide-react';
@@ -150,7 +151,7 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
   return <Dialog className="config-dialog plugin-oauth-dialog" labelledBy={`${id}-title`} onClose={close} dismissOnBackdrop>
     <header className="config-dialog-heading"><div><h2 id={`${id}-title`}><LogIn size={20} />{text('title')}</h2><p>{plugin.metadata?.name || plugin.id}</p></div><button type="button" className="icon-button quiet" onClick={close} aria-label={t('common.close')}><X size={18} /></button></header>
     <div className="plugin-oauth-body">
-      <p className={`plugin-oauth-status ${phase}`} role="status">{phase === 'starting' || phase === 'waiting' ? <LoaderCircle size={18} className="spin" /> : phase === 'success' ? <CheckCircle2 size={18} /> : null}{text(phase === 'error' ? 'failed' : phase)}</p>
+      <Notice tone={phase === 'error' ? 'error' : phase === 'success' ? 'success' : 'info'} className="plugin-oauth-status" icon={phase === 'starting' || phase === 'waiting' ? <LoaderCircle size={18} className="spin" /> : phase === 'success' ? <CheckCircle2 size={18} /> : undefined}>{text(phase === 'error' ? 'failed' : phase)}</Notice>
       {session && phase === 'waiting' ? <>
         <div className="plugin-oauth-field"><label htmlFor={`${id}-link`}>{text('link')}</label><textarea id={`${id}-link`} rows={3} readOnly value={session.url} spellCheck={false} /></div>
         <div className="plugin-oauth-link-actions"><button type="button" className="primary-button compact-button" disabled={opening} onClick={() => void open()}>{opening ? <LoaderCircle className="spin" size={16} /> : <ExternalLink size={16} />}{text('open')}</button><button type="button" className="secondary-button compact-button" onClick={() => void copy(session.url)}><Copy size={16} />{text('copy')}</button></div>
@@ -161,8 +162,8 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
         </form> : null}
         <p className="plugin-oauth-expiry">{text('expires')} {formatDate(session.expires, { hour: '2-digit', minute: '2-digit' })}</p>
       </> : null}
-      {error ? <p className="plugin-oauth-error" role="alert">{error}</p> : null}
-      {notice ? <p className="plugin-oauth-notice" role="status">{notice}</p> : null}
+      {error ? <Notice tone="error" variant="text">{error}</Notice> : null}
+      {notice ? <Notice tone="success" variant="text">{notice}</Notice> : null}
     </div>
     <footer className="plugin-oauth-footer"><button type="button" className="secondary-button compact-button" onClick={close}>{t(phase === 'success' ? 'common.close' : 'common.cancel')}</button>{phase === 'error' ? <button type="button" className="primary-button compact-button" onClick={() => setAttempt(value => value + 1)}>{text('retry')}</button> : null}</footer>
   </Dialog>;

@@ -150,8 +150,12 @@
 .usage-context-detail li { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; }
 .usage-context-detail li > span { overflow-wrap: anywhere; min-width: 0; }
 .usage-context-detail li > strong { flex: none; color: var(--text-secondary); font-weight: 500; }
-.usage-analysis-view.usage-analysis-empty { align-items: center; justify-content: center; min-height: 200px; color: var(--text-tertiary); }
-.usage-analysis-empty p, .usage-analysis-muted { font-size: 13px; color: var(--text-tertiary); }
+.usage-analysis-empty {
+  min-height: 200px;
+  flex: 1 1 auto; }
+.usage-analysis-muted {
+  font-size: 13px;
+  color: var(--text-tertiary); }
 
 :root[data-theme='dark'] .usage-analysis-view {
   --analysis-success: #49b7a1;

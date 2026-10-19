@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { getOAuthStatus, startOAuthLogin, openOAuthUrl, submitOAuthCallback, listOAuthBrowsers } from '../services/oauth';
 import type { OAuthBrowserOption } from '../services/oauth';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -600,20 +601,11 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
                   </ul>
                 ) : null}
                 {state.polling ? (
-                  <div className="oauth-flow-status waiting" role="status">
-                    <LoaderCircle size={15} className="spin" aria-hidden="true" />
-                    <span>{t('oauth.flow.waiting')}</span>
-                  </div>
+                  <Notice tone="info" icon={<LoaderCircle size={15} className="spin" />}>{t('oauth.flow.waiting')}</Notice>
                 ) : state.status === 'success' ? (
-                  <div className="oauth-flow-status success" role="status">
-                    <CircleCheck size={15} aria-hidden="true" />
-                    <span>{t('oauth.flow.success')}</span>
-                  </div>
+                  <Notice tone="success" icon={<CircleCheck size={15} />}>{t('oauth.flow.success')}</Notice>
                 ) : state.status === 'error' ? (
-                  <div className="oauth-flow-status error" role="alert">
-                    <CircleAlert size={15} aria-hidden="true" />
-                    <span>{t('oauth.flow.error', { error: privacy.text(state.error || t('oauth.authFailed')) })}</span>
-                  </div>
+                  <Notice tone="error" icon={<CircleAlert size={15} />}>{t('oauth.flow.error', { error: privacy.text(state.error || t('oauth.authFailed')) })}</Notice>
                 ) : null}
                 <p className="oauth-hint">{t(provider.id === 'devin' ? 'oauth.devinHint' : provider.id === 'meta' ? 'oauth.metaHint' : 'oauth.hint')}</p>
                 {state.url ? (

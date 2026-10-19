@@ -1,3 +1,5 @@
+import { Notice } from '../components/Notice';
+import { EmptyState } from '../components/EmptyState';
 import { Switch } from '../components/Switch';
 import { onConfigFilesChanged } from '../services/events';
 import { restartCoreProcess } from '../services/coreLifecycle';
@@ -1066,7 +1068,7 @@ export function ConfigPanelPage() {
           <div className="config-settings-search"><Search size={18} aria-hidden="true" /><input ref={searchRef} type="search" aria-label={st('search')} placeholder={st('searchHint')} value={settingsSearch} onChange={event => setSettingsSearch(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Escape') setSettingsSearch(''); }} />{searching ? <button type="button" className="icon-button quiet tiny-button" aria-label={st('clearSearch')} onClick={() => { setSettingsSearch(''); searchRef.current?.focus(); }}><X size={16} /></button> : null}</div>
         </div>
         <div className="config-settings-content" id="config-subpage-panel" role="tabpanel" aria-labelledby={`config-subpage-tab-${activeSubpage}`}>
-          {searching ? <section className="config-search-results" aria-label={st('results')}><div className="config-search-heading"><h2>{st('results')}</h2><span role="status">{searchResults.length}</span></div>{searchResults.length ? <div className="config-search-result-list">{searchResults.map(entry => <button type="button" key={`${entry.target}-${entry.field ?? ''}`} onClick={() => navigateToSetting(entry)}><span className="config-search-result-copy"><strong>{entry.title}</strong><small>{templateText(settingsCategories.find(item => item.id === entry.category)!.title, locale)}{entry.context ? ` / ${entry.context}` : ''}</small></span><ChevronRight size={17} aria-hidden="true" /></button>)}</div> : <p className="config-search-empty">{st('noResults')}</p>}</section> : null}
+          {searching ? <section className="config-search-results" aria-label={st('results')}><div className="config-search-heading"><h2>{st('results')}</h2><span role="status">{searchResults.length}</span></div>{searchResults.length ? <div className="config-search-result-list">{searchResults.map(entry => <button type="button" key={`${entry.target}-${entry.field ?? ''}`} onClick={() => navigateToSetting(entry)}><span className="config-search-result-copy"><strong>{entry.title}</strong><small>{templateText(settingsCategories.find(item => item.id === entry.category)!.title, locale)}{entry.context ? ` / ${entry.context}` : ''}</small></span><ChevronRight size={17} aria-hidden="true" /></button>)}</div> : <EmptyState variant="box" className="config-search-empty">{st('noResults')}</EmptyState>}</section> : null}
           <div className="config-settings-cards">
 <section id="config-native-keys" tabIndex={-1} hidden={searching || activeSubpage !== 'general'} className="panel config-keys-panel">
           <div className="config-panel-heading">
@@ -1100,15 +1102,13 @@ export function ConfigPanelPage() {
                 </div>
               ))
             ) : loadError ? (
-              <div className="config-unavailable">
-                <AlertCircle size={24} aria-hidden="true" />
-                <strong>{t('config.unavailable')}</strong>
-                <span title={loadError}>{loadError}</span>
-                <button type="button" className="secondary-button compact-button" onClick={() => void loadSettings()}>
+              <EmptyState className="config-unavailable" tone="error" icon={<AlertCircle size={24} />} title={t('config.unavailable')}
+                action={<button type="button" className="secondary-button compact-button" onClick={() => void loadSettings()}>
                   <RefreshCw size={16} aria-hidden="true" />
                   {t('common.retry')}
-                </button>
-              </div>
+                </button>}>
+                <span title={loadError}>{loadError}</span>
+              </EmptyState>
             ) : settings && settings.apiKeys.length > 0 ? (
               settings.apiKeys.map((entry, index) => (
                 <div className="config-key-row" key={`${index}-${entry.apiKey}`}>
@@ -1162,10 +1162,7 @@ export function ConfigPanelPage() {
                 </div>
               ))
             ) : (
-              <div className="config-empty-list">
-                <KeyRound size={26} aria-hidden="true" />
-                <strong>{t('config.keys.empty')}</strong>
-              </div>
+              <EmptyState className="config-empty-list" icon={<KeyRound size={26} />} title={t('config.keys.empty')} />
             )}
           </div>
           {!addDialogOpen && deleteIndex === null ? renderFeedback(keyFeedback) : null}
@@ -1858,10 +1855,7 @@ export function ConfigPanelPage() {
           </div>
 
           {settings && commercialModeDraft !== settings.commercialMode ? (
-            <div className="config-diagnostics-commercial-note">
-              <AlertCircle size={16} aria-hidden="true" />
-              <span>{st('restart')}</span>
-            </div>
+            <Notice tone="warn" icon={<AlertCircle size={16} />}>{st('restart')}</Notice>
           ) : null}
 
           <div className="config-diagnostics-footer">
@@ -2145,10 +2139,7 @@ export function ConfigPanelPage() {
           <code className="config-delete-key">{maskApiKey(selectedDeleteKey)}</code>
           {renderFeedback(keyFeedback)}
           {deletingLastKey ? (
-            <div className="config-delete-warning">
-              <AlertCircle size={17} aria-hidden="true" />
-              <span>{t('config.keys.deleteAllWarning')}</span>
-            </div>
+            <Notice tone="error" icon={<AlertCircle size={17} />}>{t('config.keys.deleteAllWarning')}</Notice>
           ) : null}
           <div className="config-dialog-actions two-actions">
             <button

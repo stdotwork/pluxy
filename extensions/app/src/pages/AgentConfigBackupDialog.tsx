@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import {
   listAgentConfigBackups,
   previewAgentConfigBackup,
@@ -80,7 +81,7 @@ export function AgentConfigBackupDialog({ client, onClose, onRestored }: {
         {!selected && !busy && <p>{t('agents.backup.select')}</p>}
         {selected && <>
           <strong>{t('agents.backup.location')}</strong><p className="agent-backup-path"><code>{selected.location}</code></p>
-          {selected.error && <p className="agent-inline-message warning">{selected.error}</p>}
+          {selected.error && <Notice tone="warn" variant="text">{selected.error}</Notice>}
           <ul className="agent-backup-files">{selected.files.map((file) => <li key={file.path}>
             <code>{file.path}</code><small>{file.exists === null ? t('agents.backup.invalid') : file.exists ? `${t('agents.backup.present')} · ${file.size ?? 0} B` : t('agents.backup.missing')}</small>
           </li>)}</ul>

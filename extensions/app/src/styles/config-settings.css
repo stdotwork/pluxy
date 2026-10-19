@@ -88,7 +88,7 @@
 .config-search-result-copy strong { font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .config-search-result-copy small { font-size: 11px; color: var(--text-tertiary); }
 .config-search-result-list > button > svg { flex: none; }
-.config-search-empty { padding: 40px 20px; border: 1px dashed var(--border-color); border-radius: 12px; color: var(--text-secondary); font-size: 13px; text-align: center; }
+.config-search-empty { padding: 40px 20px; }
 
 .config-field-label { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 1.5; }
 .config-field-label > label { display: flex; align-items: center; gap: 7px; min-width: 0; }

@@ -1,3 +1,4 @@
+import { EmptyState } from '../components/EmptyState';
 import { Checkbox } from '../components/Checkbox';
 import { onCodexSessionRepairProgress } from '../services/events';
 import {
@@ -436,9 +437,9 @@ export function CodexSessionsPanel() {
         </div>
 
         {loading ? (
-          <div className="codex-session-empty"><LoaderCircle size={22} className="spin" /><span>{t('agents.sessions.loading')}</span></div>
+          <EmptyState variant="box" className="codex-session-empty" icon={<LoaderCircle size={22} className="spin" />}>{t('agents.sessions.loading')}</EmptyState>
         ) : sessions.length === 0 ? (
-          <div className="codex-session-empty"><Archive size={22} /><span>{t('agents.sessions.empty')}</span></div>
+          <EmptyState variant="box" className="codex-session-empty" icon={<Archive size={22} />}>{t('agents.sessions.empty')}</EmptyState>
         ) : (
           <div className="codex-session-list">
             {sessions.map((session) => (

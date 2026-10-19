@@ -132,7 +132,7 @@ const fs = require('node:fs');
     await card('Sample provider').getByRole('button', { name: 'Enable', exact: true }).click();
     const search = page.getByRole('searchbox');
     await search.fill('does-not-exist');
-    await page.getByRole('heading', { name: 'No matching plugins' }).waitFor();
+    await page.locator('.plugin-empty .empty-state-title', { hasText: 'No matching plugins' }).waitFor();
     await search.fill('');
 
     await tab('Plugin store').click();

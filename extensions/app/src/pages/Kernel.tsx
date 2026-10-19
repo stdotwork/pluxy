@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { onConfigFilesChanged } from '../services/events';
 import { restartCoreProcess, startCoreProcess, stopCoreProcess } from '../services/coreLifecycle';
 import { getCoreConfigSettings, getCoreTlsSettings } from '../services/coreSettings';
@@ -256,11 +257,11 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
               <dd><span className="mono-tag">{customPort}</span></dd>
             </div>
           </dl>
-          {statusError && <p className="home-runtime-error" role="alert">{statusError}</p>}
-          {recovery && <div role={recovery.phase === 'failed' ? 'alert' : 'status'}>
+          {statusError && <Notice tone="error" variant="text">{statusError}</Notice>}
+          {recovery && <Notice tone={recovery.phase === 'failed' ? 'error' : 'warn'} variant="text">
             <p>{t(recovery.phase === 'failed' ? 'kernel.recovery.failedHint' : recovery.phase === 'waiting' ? 'kernel.recovery.waitingHint' : 'kernel.recovery.restartingHint', { attempt: recovery.attempt, seconds: recovery.delaySeconds })}</p>
-            {recovery.detail && <details><summary>{t('kernel.recovery.details')}</summary><p className="home-runtime-error">{recovery.detail}</p></details>}
-          </div>}
+            {recovery.detail && <details><summary>{t('kernel.recovery.details')}</summary><p>{recovery.detail}</p></details>}
+          </Notice>}
 
           <div className="button-row panel-action-row control-action-row">
             <button
