@@ -157,6 +157,9 @@ export const uninstallPiProvider = (args: { executableOverrides: AgentExecutable
 export const applyAgentConfigTemplate = (args: { revision: string; client: AgentClientId; model: string; oauthConfiguration: boolean; claudeCodeModelMappings: ClaudeModelMappings | null; claudeDesktopModelMappings: ClaudeModelMappings | null; }): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('apply_agent_config_template', args);
 
+export const setCodexOpenaiProvider = (args: { enabled: boolean; }): Promise<AgentConfigActionResult> =>
+  invoke<AgentConfigActionResult>('set_codex_openai_provider', args);
+
 export const closeCodexConfigModification = (): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('close_codex_config_modification');
 

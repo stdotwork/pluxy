@@ -16,8 +16,8 @@ export const listCodexSessions = (args: { request: { offset: number; limit: numb
 export const deleteCodexSessions = (args: { request: { sessionIds: string[]; }; }): Promise<CodexSessionDeleteBatchResult> =>
   invoke<CodexSessionDeleteBatchResult>('delete_codex_sessions', args);
 
-export const repairCodexSessionMetadata = (): Promise<CodexSessionRepairResult> =>
-  invoke<CodexSessionRepairResult>('repair_codex_session_metadata');
+export const repairCodexSessionMetadata = (args?: { expectedProvider: string; }): Promise<CodexSessionRepairResult> =>
+  invoke<CodexSessionRepairResult>('repair_codex_session_metadata', args);
 
 export const previewCodexSessionIndexCleanup = (): Promise<SessionIndexCleanupPreview> =>
   invoke<SessionIndexCleanupPreview>('preview_codex_session_index_cleanup');

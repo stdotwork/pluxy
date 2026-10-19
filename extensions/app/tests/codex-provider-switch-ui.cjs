@@ -9,7 +9,7 @@ const base = process.env.AGENT_CLIENT_TEST_URL || 'http://127.0.0.1:1421';
     await page.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
     const errors = [];
     page.on('pageerror', error => errors.push(String(error)));
-    const toggle = () => page.getByRole('checkbox', { name: '使用 openai 提供商标识', exact: true });
+    const toggle = () => page.getByRole('switch', { name: '使用 openai 提供商标识', exact: true });
     const open = async (query = '') => {
       await page.goto(`${base}/tests/fixtures/agent-backups.html?reset-selections&client=codex&${query}`, { waitUntil: 'domcontentloaded' });
       await page.getByRole('tab', { name: '基础配置', exact: true }).click();
