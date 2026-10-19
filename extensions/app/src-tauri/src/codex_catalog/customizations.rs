@@ -4,7 +4,11 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub(super) type ModelCustomizations = BTreeMap<String, Map<String, Value>>;
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub(super) struct ModelCustomizations {
+    default_auto_review_model: Option<String>,
+    models: BTreeMap<String, Map<String, Value>>,
+}
 
 pub(super) const EDITABLE_FIELDS: [&str; 13] = [
     "display_name",
@@ -26,12 +30,15 @@ pub(super) const EDITABLE_FIELDS: [&str; 13] = [
 #[serde(deny_unknown_fields)]
 struct SavedCustomizations {
     version: u32,
-    models: ModelCustomizations,
+    #[serde(default)]
+    default_auto_review_model: Option<String>,
+    models: BTreeMap<String, Map<String, Value>>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CatalogEditorSnapshot {
+    default_auto_review_model: Option<String>,
     revision: String,
     models: Vec<CatalogEditorModel>,
 }
@@ -50,6 +57,8 @@ struct CatalogEditorModel {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CatalogEditorRequest {
+    #[serde(default)]
+    review_model: Option<ReviewModelSelection>,
     revision: String,
     models: Vec<CatalogEditorModelRequest>,
 }
@@ -59,6 +68,19 @@ pub(crate) struct CatalogEditorRequest {
 struct CatalogEditorModelRequest {
     slug: String,
     configuration: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewModelSelection {
+    model: Option<String>,
+}
+
+fn validate_review_model(model: Option<&str>) -> Result<(), String> {
+    if model.is_some_and(|id| id.is_empty() || id.len() > 4000 || id.trim() != id || id.chars().any(char::is_control)) {
+        return Err("Invalid approval model ID".to_string());
+    }
+    Ok(())
 }
 
 fn editable_configuration(model: &Map<String, Value>) -> Map<String, Value> {
@@ -206,8 +228,13 @@ pub(super) fn apply_customizations(
     model: &mut Map<String, Value>,
     customizations: &ModelCustomizations,
 ) -> Result<(), String> {
+    // Codex default must omit even an override inherited from a source template.
+    model.remove("auto_review_model_override");
+    if let Some(id) = &customizations.default_auto_review_model {
+        model.insert("auto_review_model_override".to_string(), Value::String(id.clone()));
+    }
     let slug = string_value(model, "slug");
-    if let Some(customization) = customizations.get(&normalize_id(&slug)) {
+    if let Some(customization) = customizations.models.get(&normalize_id(&slug)) {
         model.extend(customization.clone());
         // Codex clients can prefer the message template over base_instructions.
         // Keep both paths consistent when the user replaces the system prompt.
@@ -255,7 +282,7 @@ pub(super) fn snapshot_for_state(
                 .iter()
                 .find(|runtime| normalize_id(&runtime.slug) == key)
                 .map_or("template", |runtime| runtime.context_source),
-            customized: state.customizations.contains_key(&key),
+            customized: state.customizations.models.contains_key(&key),
             configuration: editable_configuration(&model),
             defaults,
         });
@@ -264,6 +291,7 @@ pub(super) fn snapshot_for_state(
     digest.update(baseline.as_bytes());
     digest.update(serde_json::to_vec(&state.customizations).map_err(|error| error.to_string())?);
     Ok(CatalogEditorSnapshot {
+        default_auto_review_model: state.customizations.default_auto_review_model.clone(),
         revision: format!("{:x}", digest.finalize()),
         models,
     })
@@ -289,7 +317,10 @@ fn customizations_from_request(
         return Err("Model list has changed. Reload it before editing".to_string());
     }
     let mut seen = HashSet::new();
-    let mut customizations = BTreeMap::new();
+    let default_auto_review_model = request.review_model.map_or_else(
+        || snapshot.default_auto_review_model.clone(), |selection| selection.model);
+    validate_review_model(default_auto_review_model.as_deref())?;
+    let mut customizations = ModelCustomizations { default_auto_review_model, models: BTreeMap::new() };
     for requested in request.models {
         let key = normalize_id(&requested.slug);
         let current = snapshot
@@ -327,7 +358,7 @@ fn customizations_from_request(
             }
         }
         if !changes.is_empty() {
-            customizations.insert(key, changes);
+            customizations.models.insert(key, changes);
         }
     }
     Ok(customizations)
@@ -351,7 +382,8 @@ fn decode_customizations(content: &[u8]) -> Result<ModelCustomizations, String> 
         validate_configuration(&model)?;
         normalized.insert(key, model);
     }
-    Ok(normalized)
+    validate_review_model(saved.default_auto_review_model.as_deref())?;
+    Ok(ModelCustomizations { default_auto_review_model: saved.default_auto_review_model, models: normalized })
 }
 
 pub(crate) fn load_customizations(path: &Path) -> Result<(), String> {
@@ -380,21 +412,22 @@ fn save_for_state(
     let visible: HashSet<String> = snapshot.models.iter()
         .map(|model| normalize_id(&model.slug))
         .collect();
-    for (slug, configuration) in &state.customizations {
+    for (slug, configuration) in &state.customizations.models {
         if !visible.contains(slug) {
-            customizations.insert(slug.clone(), configuration.clone());
+            customizations.models.insert(slug.clone(), configuration.clone());
         }
     }
     let saved = SavedCustomizations {
         version: 1,
-        models: customizations,
+        default_auto_review_model: customizations.default_auto_review_model.clone(),
+        models: customizations.models.clone(),
     };
     let content = serde_json::to_vec_pretty(&saved).map_err(|error| error.to_string())?;
     if content.len() > crate::MAX_CODEX_MODEL_CATALOG_BYTES {
         return Err("Codex custom model configuration exceeds the size limit".to_string());
     }
     crate::write_bytes_atomically(path, &content)?;
-    state.customizations = saved.models;
+    state.customizations = customizations;
     snapshot_for_state(runtime_models, state)
 }
 
@@ -438,6 +471,70 @@ mod tests {
     }
 
     #[test]
+    fn approval_model_persists_inherits_and_resets_without_template_override() {
+        let mut state = CatalogState {
+            sources: parse_sources(MODEL_CATALOG_JSON).unwrap(),
+            json: MODEL_CATALOG_JSON.to_string(),
+            customizations: Default::default(),
+        };
+        let runtime = vec![runtime_model("primary")];
+        let path = temporary_path();
+        let initial = snapshot_for_state(&runtime, &state).unwrap();
+        let request = |snapshot: &CatalogEditorSnapshot, selection| CatalogEditorRequest {
+            revision: snapshot.revision.clone(),
+            review_model: selection,
+            models: snapshot.models.iter().map(|model| CatalogEditorModelRequest {
+                slug: model.slug.clone(), configuration: model.configuration.clone(),
+            }).collect(),
+        };
+        let saved = save_for_state(&path, &runtime, request(&initial,
+            Some(ReviewModelSelection { model: Some("review-alias".into()) })), &mut state).unwrap();
+        assert_eq!(saved.default_auto_review_model.as_deref(), Some("review-alias"));
+        assert_eq!(decode_customizations(&std::fs::read(&path).unwrap()).unwrap(), state.customizations);
+        // A catalog-only edit preserves the global selection.
+        let saved = save_for_state(&path, &runtime, request(&saved, None), &mut state).unwrap();
+        assert_eq!(saved.default_auto_review_model.as_deref(), Some("review-alias"));
+        let catalog = prepare_catalog_with_customizations(
+            &[runtime_model("new-model")], &state.sources, &state.customizations).unwrap();
+        let catalog: Value = serde_json::from_str(&catalog.json).unwrap();
+        assert_eq!(catalog["models"][0]["auto_review_model_override"], "review-alias");
+        assert!(save_for_state(&path, &runtime, request(&initial,
+            Some(ReviewModelSelection { model: None })), &mut state).is_err());
+        let saved = save_for_state(&path, &runtime, request(&saved,
+            Some(ReviewModelSelection { model: None })), &mut state).unwrap();
+        assert_eq!(saved.default_auto_review_model, None);
+        let mut template = serde_json::json!({"slug": "primary", "auto_review_model_override": "template-review"})
+            .as_object().unwrap().clone();
+        apply_customizations(&mut template, &state.customizations).unwrap();
+        assert!(!template.contains_key("auto_review_model_override"));
+        assert_eq!(decode_customizations(br#"{"version":1,"models":{}}"#).unwrap(), ModelCustomizations::default());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn approval_model_validation_and_failed_write_preserve_state() {
+        for id in ["", " padded", "line\nbreak"] {
+            assert!(validate_review_model(Some(id)).is_err());
+        }
+        let mut state = CatalogState {
+            sources: parse_sources(MODEL_CATALOG_JSON).unwrap(),
+            json: MODEL_CATALOG_JSON.to_string(),
+            customizations: Default::default(),
+        };
+        let snapshot = snapshot_for_state(&[], &state).unwrap();
+        let directory = temporary_path();
+        std::fs::create_dir(&directory).unwrap();
+        let result = save_for_state(&directory, &[], CatalogEditorRequest {
+            revision: snapshot.revision,
+            models: vec![],
+            review_model: Some(ReviewModelSelection { model: Some("review".into()) }),
+        }, &mut state);
+        assert!(result.is_err());
+        assert_eq!(state.customizations, ModelCustomizations::default());
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
     fn tool_search_overrides_survive_regeneration_and_restart_for_prefixed_and_unknown_models() {
         for (slug, enabled) in [("Fy/gpt-6.1-sol", false), ("provider/custom-model", true)] {
             let mut state = CatalogState {
@@ -453,6 +550,7 @@ mod tests {
             configuration.insert("supports_search_tool".into(), Value::Bool(enabled));
             let path = temporary_path();
             save_for_state(&path, &runtime, CatalogEditorRequest {
+                review_model: None,
                 revision: snapshot.revision,
                 models: vec![CatalogEditorModelRequest { slug: slug.into(), configuration }],
             }, &mut state).unwrap();
@@ -479,6 +577,7 @@ mod tests {
             assert!(snapshot.models[0].customized);
             let mut restored = restarted.clone();
             save_for_state(&path, &runtime, CatalogEditorRequest {
+                review_model: None,
                 revision: snapshot.revision,
                 models: vec![CatalogEditorModelRequest {
                     slug: slug.into(), configuration: snapshot.models[0].defaults.clone(),
@@ -511,7 +610,8 @@ mod tests {
         configuration.insert("base_instructions".into(), serde_json::json!("User instructions"));
         let path = temporary_path();
         save_for_state(&path, &runtime, CatalogEditorRequest {
-            revision: snapshot.revision,
+                review_model: None,
+                revision: snapshot.revision,
             models: vec![CatalogEditorModelRequest {
                 slug: "gpt-6.1-sol".into(), configuration,
             }],
@@ -560,34 +660,37 @@ mod tests {
             "context_window": 131_072,
             "max_context_window": 262_144,
         }).as_object().unwrap().clone();
-        state.customizations.insert("model-a".to_string(), hidden.clone());
+        state.customizations.models.insert("model-a".to_string(), hidden.clone());
         let runtime = vec![runtime_model("model-b")];
         let snapshot = snapshot_for_state(&runtime, &state).unwrap();
         let mut configuration = snapshot.models[0].configuration.clone();
         configuration.insert("display_name".to_string(), Value::String("Edited B".to_string()));
         let path = temporary_path();
         let saved = save_for_state(&path, &runtime, CatalogEditorRequest {
-            revision: snapshot.revision,
+                review_model: None,
+                revision: snapshot.revision,
             models: vec![CatalogEditorModelRequest { slug: "model-b".to_string(), configuration }],
         }, &mut state).unwrap();
         let persisted = decode_customizations(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted.get("model-a"), Some(&hidden));
-        assert_eq!(persisted["model-b"]["display_name"], "Edited B");
+        assert_eq!(persisted.models.get("model-a"), Some(&hidden));
+        assert_eq!(persisted.models["model-b"]["display_name"], "Edited B");
 
         save_for_state(&path, &runtime, CatalogEditorRequest {
-            revision: saved.revision,
+                review_model: None,
+                revision: saved.revision,
             models: vec![CatalogEditorModelRequest {
                 slug: "model-b".to_string(), configuration: saved.models[0].defaults.clone(),
             }],
         }, &mut state).unwrap();
-        assert!(!state.customizations.contains_key("model-b"));
-        assert_eq!(state.customizations.get("model-a"), Some(&hidden));
+        assert!(!state.customizations.models.contains_key("model-b"));
+        assert_eq!(state.customizations.models.get("model-a"), Some(&hidden));
 
         let empty = snapshot_for_state(&[], &state).unwrap();
         save_for_state(&path, &[], CatalogEditorRequest {
-            revision: empty.revision, models: vec![],
+                review_model: None,
+                revision: empty.revision, models: vec![],
         }, &mut state).unwrap();
-        assert_eq!(decode_customizations(&std::fs::read(&path).unwrap()).unwrap().get("model-a"), Some(&hidden));
+        assert_eq!(decode_customizations(&std::fs::read(&path).unwrap()).unwrap().models.get("model-a"), Some(&hidden));
         let restored = snapshot_for_state(&[runtime_model("model-a")], &state).unwrap();
         assert_eq!(restored.models[0].configuration["base_instructions"], hidden["base_instructions"]);
         assert_eq!(restored.models[0].configuration["context_window"], 131_072);
@@ -617,6 +720,7 @@ mod tests {
             &path,
             &runtime_models,
             CatalogEditorRequest {
+                review_model: None,
                 revision: snapshot.revision,
                 models: vec![CatalogEditorModelRequest {
                     slug: "third-party-model".to_string(),
@@ -650,6 +754,7 @@ mod tests {
             &path,
             &runtime_models,
             CatalogEditorRequest {
+                review_model: None,
                 revision: saved.revision,
                 models: vec![CatalogEditorModelRequest {
                     slug: "third-party-model".to_string(),
@@ -662,7 +767,7 @@ mod tests {
         assert!(!restored.models[0].customized);
         assert_eq!(restored.models[0].configuration["supports_parallel_tool_calls"], true);
         assert_eq!(restored.models[0].configuration["base_instructions"], restored.models[0].defaults["base_instructions"]);
-        assert!(state.customizations.is_empty());
+        assert!(state.customizations.models.is_empty());
         let persisted: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted["models"], serde_json::json!({}));
 
@@ -691,6 +796,7 @@ mod tests {
         state.customizations = customizations_from_request(
             &snapshot,
             CatalogEditorRequest {
+                review_model: None,
                 revision: snapshot.revision.clone(),
                 models: vec![CatalogEditorModelRequest {
                     slug: runtime.slug.clone(),
@@ -715,6 +821,7 @@ mod tests {
         state.customizations = customizations_from_request(
             &updated,
             CatalogEditorRequest {
+                review_model: None,
                 revision: updated.revision.clone(),
                 models: vec![CatalogEditorModelRequest {
                     slug: runtime.slug.clone(),
@@ -723,7 +830,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(state.customizations.is_empty());
+        assert!(state.customizations.models.is_empty());
         let generated =
             prepare_catalog_with_customizations(&[runtime], &state.sources, &state.customizations)
                 .unwrap();
@@ -747,6 +854,7 @@ mod tests {
             &path,
             &runtime_models,
             CatalogEditorRequest {
+                review_model: None,
                 revision: "stale".to_string(),
                 models: vec![CatalogEditorModelRequest {
                     slug: "third-party-model".to_string(),
@@ -758,7 +866,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, "CODEX_MODEL_CATALOG_CHANGED");
-        assert!(state.customizations.is_empty());
+        assert!(state.customizations.models.is_empty());
         assert!(!path.exists());
     }
 }

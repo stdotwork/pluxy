@@ -4,6 +4,12 @@ import { homeEn } from '../home';
 import { authFileListEn } from '../authFileList';
 
 export const en: Record<MessageKey, string> = {
+  'agents.approvalModel.label': "Approval model",
+  'agents.approvalModel.hint': "Used for Codex automatic approval requests. Codex default restores built-in selection; a selected model must be callable through the current proxy.",
+  'agents.approvalModel.default': "Codex default",
+  'agents.approvalModel.save': "Save approval model",
+  'agents.approvalModel.missing': "This model is no longer listed. The setting is preserved; verify that the proxy supports it.",
+
   "agents.remoteCompaction.label": "Remote compaction (experimental)",
   "agents.remoteCompaction.hint": "Off by default. Compact context on the server; requires a compatible upstream route. Turn off if compaction fails. Toggling this changes the provider name and may hide historical sessions. Go to Session management to resync session history. Restart Codex after saving.",
   "agents.remoteCompaction.builtinHint": "The openai provider identity already enables remote compaction capability. Turn off the provider identity switch below to control this separately.",

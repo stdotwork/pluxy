@@ -34,6 +34,7 @@ export type CodexCatalogEditorModel = {
 };
 
 export type CodexCatalogEditorSnapshot = {
+  defaultAutoReviewModel?: string | null;
   revision: string;
   models: CodexCatalogEditorModel[];
 };

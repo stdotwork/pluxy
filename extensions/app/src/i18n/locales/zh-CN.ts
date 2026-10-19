@@ -3,6 +3,12 @@ import { homeZhCN } from '../home';
 import { authFileListZhCN } from '../authFileList';
 
 export const zhCN = {
+  'agents.approvalModel.label': "自动审批模型",
+  'agents.approvalModel.hint': "用于 Codex 自动审批请求。选择 Codex 默认可恢复内置选择逻辑；指定模型必须能通过当前代理调用。",
+  'agents.approvalModel.default': "Codex 默认",
+  'agents.approvalModel.save': "保存审批模型",
+  'agents.approvalModel.missing': "当前模型已不在目录中，仍保留此设置。请确认代理支持该模型。",
+
   'app.nav.plugins': '插件',
   'app.nav.pluginPages': '插件页面',
   'oauth.vertex.title': 'Vertex JSON 登录',

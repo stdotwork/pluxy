@@ -4,6 +4,12 @@ import { homeJa } from './home';
 import { authFileListJa } from './authFileList';
 
 export const jaOverrides = {
+  'agents.approvalModel.label': "自動承認モデル",
+  'agents.approvalModel.hint': "Codex の自動承認に使用します。Codex デフォルトで組み込みの選択に戻ります。指定モデルは現在のプロキシで呼び出せる必要があります。",
+  'agents.approvalModel.default': "Codex デフォルト",
+  'agents.approvalModel.save': "承認モデルを保存",
+  'agents.approvalModel.missing': "このモデルは一覧にありません。設定は保持されています。プロキシの対応を確認してください。",
+
   "agents.remoteCompaction.label": "リモート圧縮（実験的）",
   "agents.remoteCompaction.hint": "既定ではオフです。サーバー側でコンテキストを圧縮します。対応する接続先が必要です。失敗する場合はオフにしてください。切り替えるとプロバイダー名が変更され、過去のセッションが非表示になる場合があります。「セッション管理」で履歴を再同期してください。保存後に Codex を再起動してください。",
   "agents.remoteCompaction.builtinHint": "openai プロバイダー識別子によりリモート圧縮が有効です。個別に設定するには、下の識別子スイッチをオフにしてください。",

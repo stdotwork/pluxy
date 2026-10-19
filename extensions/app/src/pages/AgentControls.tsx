@@ -85,13 +85,14 @@ export function AgentConfigurationFeedback({ pending, description, status = '' }
 }
 
 export function AgentConfigManagementPanel({
-  codexProviderControl, codexRemoteCompactionControl,
+  codexProviderControl, codexRemoteCompactionControl, codexApprovalModelControl,
   pi, codex, busyAction, canTemplate, canUpdatePi, canUninstallPi, pluginInstalled, pluginVersion, updateLabel,
   executablePath, onChooseExecutablePath, onClearExecutablePath, onBackup, onRestore, onTemplate, onClear, onUpdatePi, onUninstallPi, canClearIntegration, onClearIntegration,
   dualTargets, desktopExecutablePath, onChooseDesktopExecutablePath, onClearDesktopExecutablePath,
 }: {
   codexProviderControl?: ReactNode;
   codexRemoteCompactionControl?: ReactNode;
+  codexApprovalModelControl?: ReactNode;
   pi: boolean; codex: boolean; busyAction: string | null; canTemplate: boolean;
   canUpdatePi: boolean; canUninstallPi: boolean; pluginInstalled: boolean; pluginVersion: string | null; updateLabel: string;
   executablePath: string; onChooseExecutablePath: () => void; onClearExecutablePath: () => void;
@@ -138,6 +139,9 @@ export function AgentConfigManagementPanel({
       <div className="agent-management-actions">
         <button type="button" className="secondary-button" onClick={onTemplate} disabled={busy || !canTemplate}>{t('agents.modify.default')}</button>
       </div>
+    </section> : null}
+    {codex && codexApprovalModelControl ? <section className="agent-management-row agent-management-provider">
+      <div>{codexApprovalModelControl}</div>
     </section> : null}
     {codex && codexRemoteCompactionControl ? <section className="agent-management-row agent-management-provider">
       <div>{codexRemoteCompactionControl}</div>

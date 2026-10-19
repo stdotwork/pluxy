@@ -1652,7 +1652,6 @@ mod tests {
             "guardian": null,
             "node_repl_auto_review_required": false,
             "node_repl_disabled": false,
-            "auto_review_model_override": null,
             "model_specialty": null,
             "tool_mode": null,
             "multi_agent_version": null,
