@@ -2580,6 +2580,9 @@ pub(crate) fn find_agent_executable(client: AgentClient, home: &Path) -> Option<
     if client == AgentClient::OpenCode {
         return find_opencode_executable(home);
     }
+    if client == AgentClient::DeepSeekHarness {
+        return find_deepseek_harness_executable(home);
+    }
     find_named_agent_executable(home, client.executable_names())
 }
 
@@ -2604,6 +2607,41 @@ pub(crate) fn find_opencode_managed_executable(home: &Path) -> Option<PathBuf> {
     {
         find_named_agent_executable_in_directories(&[home.join(".opencode/bin")], &["opencode"])
     }
+}
+
+pub(crate) fn find_deepseek_harness_executable(home: &Path) -> Option<PathBuf> {
+    find_named_agent_executable(home, &["dsh"])
+        .or_else(|| find_deepseek_harness_managed_executable(home))
+}
+
+pub(crate) fn find_deepseek_harness_managed_executable(home: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let roots = [home.join("Applications"), PathBuf::from("/Applications")];
+        find_deepseek_harness_managed_executable_in_roots(home, &roots)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let dsh_home = deepseek_harness_home(home);
+        find_named_agent_executable_in_directories(&[dsh_home.join("bin"), home.join(".dsh/bin")], &["dsh"])
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn find_deepseek_harness_managed_executable_in_roots(
+    home: &Path,
+    app_roots: &[PathBuf],
+) -> Option<PathBuf> {
+    let dsh_home_bin = deepseek_harness_home(home).join("bin/dsh");
+    let mut candidates = vec![dsh_home_bin, home.join(".dsh/bin/dsh")];
+    candidates.extend(
+        app_roots
+            .iter()
+            .map(|root| root.join("DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh")),
+    );
+    candidates
+        .into_iter()
+        .find(|path| agent_cli_executable(path))
 }
 
 pub(crate) fn find_kimi_code_executable(home: &Path) -> Option<PathBuf> {
