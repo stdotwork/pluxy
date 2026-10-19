@@ -241,7 +241,7 @@ export function QuotaCard({ file, quota, onRefresh, onReset }: { file: AuthFile;
         })}
       </section>)}</div> : null}
       <div className="quota-card-actions">
-        <button type="button" className="secondary-button compact-button" onClick={onRefresh} disabled={disabled || quota.status === 'loading'} title={disabled ? t('quota.fileDisabled') : t('quota.refresh')}><RefreshCw size={12} className={quota.status === 'loading' ? 'spin' : ''} aria-hidden="true" />{t('authFiles.quota.refresh')}</button>
+        <button type="button" className="secondary-button tiny-button" onClick={onRefresh} disabled={disabled || quota.status === 'loading'} title={disabled ? t('quota.fileDisabled') : t('quota.refresh')}><RefreshCw size={12} className={quota.status === 'loading' ? 'spin' : ''} aria-hidden="true" />{t('authFiles.quota.refresh')}</button>
       </div>
       {onReset && ((quota.resetCredits ?? 0) > 0 || hasPendingClaudeReset(file)) ? <button type="button" className="secondary-button compact-button quota-reset-footer" onClick={onReset} disabled={!canResetQuota(file, quota)} title={t('quota.reset')}>{t(hasPendingClaudeReset(file) ? 'quota.claude.retry' : 'quota.reset')}</button> : null}
     </article>
