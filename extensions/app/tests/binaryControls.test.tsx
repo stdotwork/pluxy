@@ -25,6 +25,7 @@ const staticAttributeValue = (attribute: ts.JsxAttribute) => {
   return value && ts.isStringLiteralLike(value) ? value.text : undefined;
 };
 const binaryControlViolations = (text: string, name: string) => {
+  name = name.replaceAll('\\', '/');
   const source = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const violations: string[] = [];
   const visit = (node: ts.Node) => {
@@ -91,6 +92,11 @@ describe('shared binary controls', () => {
     }
   });
 
+  it('classifies Windows role exceptions like POSIX paths', () => {
+    expect(binaryControlViolations('<button className="auth-card-toggle" role="switch" onClick={() => toggleStatus(file)} />', 'pages\\AuthFileManagementPage.tsx')).toEqual([]);
+    expect(binaryControlViolations('<button role="switch" />', 'pages\\Example.tsx')).toEqual(['pages/Example.tsx: handwritten switch role']);
+  });
+
   it('recognizes all static JSX role values', () => {
     for (const role of ['"switch"', '{"switch"}', '{`switch`}']) {
       expect(binaryControlViolations(`<button role=${role} />`, 'pages/Example.tsx')).toEqual(['pages/Example.tsx: handwritten switch role']);
@@ -101,7 +107,7 @@ describe('shared binary controls', () => {
     const directory = join(import.meta.dir, '../src');
     const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(join(dir, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(dir, entry.name)] : []);
     const violations = files(directory).flatMap(file => {
-      const name = relative(directory, file);
+      const name = relative(directory, file).replaceAll('\\', '/');
       return name.startsWith('mocks/') || ['components/Switch.tsx', 'components/Checkbox.tsx'].includes(name)
         ? [] : binaryControlViolations(readFileSync(file, 'utf8'), name);
     });

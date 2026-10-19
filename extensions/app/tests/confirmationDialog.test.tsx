@@ -48,7 +48,22 @@ describe('application confirmation and quota feedback', () => {
   });
 });
 
+const dialogOwner = (name: string) => {
+  name = name.replaceAll('\\', '/');
+  return {
+    modal: name.startsWith('mocks/') || name === 'components/Dialog.tsx',
+    trap: name === 'components/useDialogFocusTrap.ts',
+  };
+};
+
 describe('shared dialog', () => {
+  it('classifies Windows dialog owner paths like POSIX paths', () => {
+    expect(dialogOwner('components\\Dialog.tsx').modal).toBe(true);
+    expect(dialogOwner('components\\useDialogFocusTrap.ts').trap).toBe(true);
+    expect(dialogOwner('mocks\\browserMockRuntime.ts').modal).toBe(true);
+    expect(dialogOwner('pages\\Example.tsx')).toEqual({ modal: false, trap: false });
+  });
+
   it('defaults to a modal dialog with the A surface and no close control', () => {
     const html = render(<Dialog labelledBy="custom-title"><h2 id="custom-title">Custom</h2></Dialog>);
     expect(html).toBe('<div class="config-dialog-backdrop"><section class="app-dialog config-dialog" role="dialog" aria-modal="true" aria-labelledby="custom-title"><h2 id="custom-title">Custom</h2></section></div>');
@@ -65,13 +80,13 @@ describe('shared dialog', () => {
   it('builds every modal through the shared dialog', () => {
     const violations: string[] = [];
     for (const path of files(join(root, 'src'))) {
-      const name = relative(join(root, 'src'), path);
-      if (name.startsWith('mocks/') || name === 'components/Dialog.tsx') continue;
+      const name = relative(join(root, 'src'), path).replaceAll('\\', '/');
+      if (dialogOwner(name).modal) continue;
       walk(ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true), node => {
         if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText() === 'dialog') violations.push(`${name}: <dialog>`);
         if (ts.isPropertyAccessExpression(node) && ['showModal', 'alert'].includes(node.name.text)) violations.push(`${name}: ${node.getText()}`);
         if (ts.isJsxAttribute(node) && node.name.getText() === 'aria-modal') violations.push(`${name}: aria-modal`);
-        if (ts.isIdentifier(node) && node.text === 'useDialogFocusTrap' && name !== 'components/useDialogFocusTrap.ts') violations.push(`${name}: useDialogFocusTrap`);
+        if (ts.isIdentifier(node) && node.text === 'useDialogFocusTrap' && !dialogOwner(name).trap) violations.push(`${name}: useDialogFocusTrap`);
         if ((ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node))
           && node.text.includes('config-dialog-backdrop')) violations.push(`${name}: ${node.text}`);
         if (ts.isStringLiteral(node) && /\b(install-dialog|model-discovery|close-dialog)-backdrop\b/.test(node.text)

@@ -14,11 +14,22 @@ const walk = (node: ts.Node, visit: (node: ts.Node) => void) => {
   ts.forEachChild(node, child => walk(child, visit));
 };
 
+const isPlatformOwner = (name: string) => {
+  name = name.replaceAll('\\', '/');
+  return name.startsWith('services/') || name.startsWith('mocks/');
+};
+
+test('classifies Windows platform owner paths like POSIX paths', () => {
+  expect(isPlatformOwner('services\\platform.ts')).toBe(true);
+  expect(isPlatformOwner('mocks\\browserMockRuntime.ts')).toBe(true);
+  expect(isPlatformOwner('pages\\HomePage.tsx')).toBe(false);
+});
+
 test('Tauri APIs stay inside services and browser mocks', () => {
   const violations: string[] = [];
   for (const path of files(join(root, 'src'))) {
-    const name = relative(join(root, 'src'), path);
-    if (name.startsWith('services/') || name.startsWith('mocks/')) continue;
+    const name = relative(join(root, 'src'), path).replaceAll('\\', '/');
+    if (isPlatformOwner(name)) continue;
     walk(source(path), node => {
       if (ts.isStringLiteral(node) && node.text.startsWith('@tauri-apps/')) violations.push(name);
     });

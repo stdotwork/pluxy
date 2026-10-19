@@ -9,6 +9,7 @@ import { Tabs } from '../src/components/Tabs';
 import { SegmentedControl } from '../src/components/SegmentedControl';
 
 const items = ['one', 'two'].map(value => ({ value, id: `tab-${value}`, panelId: 'panel', label: value }));
+const isChoiceOwner = (name: string) => ['components/Tabs.tsx', 'components/SegmentedControl.tsx'].includes(name.replaceAll('\\', '/'));
 const violations = (text: string, name: string) => {
   const source = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const found: string[] = [];
@@ -30,6 +31,12 @@ const violations = (text: string, name: string) => {
 };
 
 describe('shared choice controls', () => {
+  it('classifies Windows choice owner paths like POSIX paths', () => {
+    expect(isChoiceOwner('components\\Tabs.tsx')).toBe(true);
+    expect(isChoiceOwner('components\\SegmentedControl.tsx')).toBe(true);
+    expect(isChoiceOwner('pages\\Example.tsx')).toBe(false);
+  });
+
   it('links tabs to panels and keeps one selected tab stop', () => {
     const html = renderToStaticMarkup(<Tabs items={items} value="two" onChange={() => {}} aria-label="Tabs" />);
     for (const fragment of ['role="tablist"', 'aria-orientation="horizontal"', 'id="tab-two"', 'aria-controls="panel"', 'aria-label="Tabs"']) expect(html).toContain(fragment);
@@ -81,8 +88,8 @@ describe('shared choice controls', () => {
     const root = join(import.meta.dir, '../src');
     const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? files(join(dir, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(dir, entry.name)] : []);
     expect(files(root).flatMap(file => {
-      const name = relative(root, file);
-      return ['components/Tabs.tsx', 'components/SegmentedControl.tsx'].includes(name) ? [] : violations(readFileSync(file, 'utf8'), name).map(role => `${name}: ${role}`);
+      const name = relative(root, file).replaceAll('\\', '/');
+      return isChoiceOwner(name) ? [] : violations(readFileSync(file, 'utf8'), name).map(role => `${name}: ${role}`);
     })).toEqual([]);
   });
 });
