@@ -3497,23 +3497,8 @@ fn find_model_price<'a>(
     prices: &'a HashMap<String, ModelPrice>,
     model: &str,
 ) -> Option<&'a ModelPrice> {
-    if let Some(price) = prices.get(model) {
+    if let Some(price) = find_exact_model_price(prices, model, |_| true) {
         return Some(price);
-    }
-    let case_insensitive = prices
-        .iter()
-        .filter(|(key, _)| key.eq_ignore_ascii_case(model))
-        .collect::<Vec<_>>();
-    if case_insensitive.len() == 1 {
-        return Some(case_insensitive[0].1);
-    }
-    let tail = canonical_model_tail(model);
-    let exact_tail = prices
-        .iter()
-        .filter(|(key, _)| canonical_model_tail(key) == tail)
-        .collect::<Vec<_>>();
-    if exact_tail.len() == 1 {
-        return Some(exact_tail[0].1);
     }
     let normalized_tail = normalized_model_tail(model);
     prices
@@ -3528,16 +3513,52 @@ fn find_model_price<'a>(
         .map(|(_, price)| price)
 }
 
+fn find_exact_model_price<'a>(
+    prices: &'a HashMap<String, ModelPrice>,
+    model: &str,
+    accepts: impl Fn(&ModelPrice) -> bool,
+) -> Option<&'a ModelPrice> {
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    if let Some(price) = prices.get(model).filter(|price| accepts(price)) {
+        return Some(price);
+    }
+    let case_insensitive = prices
+        .iter()
+        .filter(|(key, price)| key.eq_ignore_ascii_case(model) && accepts(price))
+        .collect::<Vec<_>>();
+    if case_insensitive.len() == 1 {
+        return Some(case_insensitive[0].1);
+    }
+    let tail = canonical_model_tail(model);
+    let exact_tail = prices
+        .iter()
+        .filter(|(key, price)| canonical_model_tail(key) == tail && accepts(price))
+        .collect::<Vec<_>>();
+    if exact_tail.len() == 1 {
+        return Some(exact_tail[0].1);
+    }
+    None
+}
+
 fn resolve_model_price<'a>(
     model: &'a str,
     alias: &'a str,
     prices: &HashMap<String, ModelPrice>,
 ) -> Option<(&'a str, ModelPrice)> {
+    // Price the routed model first. Manual entries remain editable in the merged
+    // catalog, but must not hide an automatic price from the bundled catalog.
+    let automatic = find_exact_model_price(prices, model, |price| price.source != "manual")
+        .or_else(|| {
+            find_exact_model_price(cached_bundled_model_prices().ok()?, model, |_| true)
+        });
+    if let Some(price) = automatic {
+        return Some((model, price.clone()));
+    }
     for candidate in [model, alias] {
-        if candidate.trim().is_empty() {
-            continue;
-        }
-        if let Some(price) = find_model_price(prices, candidate) {
+        if let Some(price) = find_exact_model_price(prices, candidate, |price| price.source == "manual") {
             return Some((model, price.clone()));
         }
     }
@@ -7395,6 +7416,60 @@ mod tests {
         .unwrap();
         assert_eq!(content, "{}");
         server.await.unwrap();
+    }
+
+    #[test]
+    fn pricing_uses_original_model_then_manual_fallback_without_prefix_guessing() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        initialize_usage_schema(&connection).unwrap();
+        for model in ["gpt-6-sol", "my-alias", "claude-sonnet-5-5"] {
+            upsert_model_price(&connection, &ModelPrice {
+                model: model.into(),
+                prompt: 99.0,
+                completion: 99.0,
+                prompt_configured: true,
+                completion_configured: true,
+                source: "manual".into(),
+                ..ModelPrice::default()
+            }).unwrap();
+        }
+        let prices = load_model_prices(&connection).unwrap();
+        let (_, original) = resolve_model_price("openai/GPT-6-SOL", "my-alias", &prices).unwrap();
+        assert_eq!(original.source, "builtin");
+        assert_eq!(original.prompt, 2.0);
+        let (_, manual) = resolve_model_price("unknown-model", "my-alias", &prices).unwrap();
+        assert_eq!(manual.source, "manual");
+        assert_eq!(manual.model, "my-alias");
+        let (_, manual_original) = resolve_model_price("claude-sonnet-5-5", "my-alias", &prices).unwrap();
+        assert_eq!(manual_original.model, "claude-sonnet-5-5");
+        assert_eq!(manual_original.prompt, 99.0);
+        assert!(resolve_model_price("unknown-model", "gpt-6-astra", &prices).is_none());
+        assert!(resolve_model_price("claude-sonnet-5-unknown", "", &prices).is_none());
+        assert!(resolve_model_price("unknown-model", "my-alias-extra", &prices).is_none());
+
+        let mut records = Vec::new();
+        for (id, model, alias) in [
+            ("original", "gpt-6-sol", "my-alias"),
+            ("manual", "unknown-model", "my-alias"),
+            ("unpriced", "unknown-model", "gpt-6-astra"),
+        ] {
+            let mut record = sample_record(id, "2026-10-04T00:00:00Z", model);
+            record.alias = alias.into();
+            records.push(record);
+        }
+        insert_usage_records(&mut connection, &records).unwrap();
+        let query = UsageQuery::default();
+        let page = load_usage_events(&connection, &query, &GuiConfigFile::default()).unwrap();
+        assert_eq!(page.items.iter().find(|r| r.id == "original").unwrap().cost.as_ref().unwrap().pricing_model, "gpt-6-sol");
+        assert_eq!(page.items.iter().find(|r| r.id == "manual").unwrap().cost.as_ref().unwrap().pricing_model, "my-alias");
+        assert!(page.items.iter().find(|r| r.id == "unpriced").unwrap().cost.is_none());
+        let total: f64 = page.items.iter().filter_map(|r| r.cost.as_ref().map(|c| c.total)).sum();
+        let overview = load_usage_overview(&connection, &query).unwrap();
+        let pricing = load_usage_pricing(&connection, &query).unwrap();
+        assert_eq!(overview.priced_requests, 2);
+        assert_eq!(pricing.priced_requests, 2);
+        assert!((overview.estimated_cost - total).abs() < 1e-9);
+        assert!((pricing.total_cost - total).abs() < 1e-9);
     }
 
     #[test]
