@@ -10,10 +10,11 @@ const path = require('node:path');
     configFile: false, root: path.resolve(__dirname, '..'),
     cacheDir: 'node_modules/.vite-plugin-oauth-providers-test', plugins: [react()],
     logLevel: 'error', optimizeDeps: { entries: ['tests/fixtures/plugin-oauth-providers.html'] },
-    server: { host: '127.0.0.1', port: 1436, strictPort: false, watch: null },
+    server: { host: '127.0.0.1', port: 0, strictPort: true, watch: null },
   });
   let browser;
   try {
+    assert.equal(server.config.server.port, 0, 'Use an ephemeral port outside the reserved UI test range');
     await server.listen();
     const base = `http://127.0.0.1:${server.httpServer.address().port}`;
     const channel = process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'win32' ? 'msedge' : undefined);
