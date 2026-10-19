@@ -192,3 +192,6 @@ export const createAgentConfigBackup = (args: { client: AgentClientId; }): Promi
 
 export const previewAgentConfigTemplate = (args: { client: AgentClientId; model: string; oauthConfiguration: boolean; claudeCodeModelMappings: ClaudeModelMappings | null; claudeDesktopModelMappings: ClaudeModelMappings | null; }): Promise<{ revision: string; files: string[] }> =>
   invoke<{ revision: string; files: string[] }>('preview_agent_config_template', args);
+
+export const setCodexRemoteCompaction = (args: { enabled: boolean }) =>
+  invoke<void>('set_codex_remote_compaction', args);

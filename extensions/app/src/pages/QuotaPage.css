@@ -131,4 +131,3 @@
 .quota-page .quota-window-status small { color: var(--text-tertiary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .quota-page .real-quota-track span { background: #10b981; }
 .quota-page .quota-card-actions { display: flex; order: 4; justify-content: flex-end; margin-top: 0; }
-.quota-page .quota-card-actions button { min-height: 26px; padding: 3px 10px; border-radius: 999px; color: var(--text-secondary); font-size: 11px; gap: 4px; }

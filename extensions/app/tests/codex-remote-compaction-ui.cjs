@@ -7,7 +7,7 @@ const base = process.env.AGENT_CLIENT_TEST_URL || 'http://127.0.0.1:1421';
     const page = await browser.newPage();
     page.setDefaultTimeout(15000);
     await page.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
-    const toggle = () => page.getByRole('checkbox', { name: '远程压缩（实验性）', exact: true });
+    const toggle = () => page.getByRole('switch', { name: '远程压缩（实验性）', exact: true });
     const open = async (query = '') => {
       await page.goto(`${base}/tests/fixtures/agent-backups.html?reset-selections&client=codex&${query}`);
       await page.getByRole('tab', { name: '基础配置', exact: true }).click();
@@ -29,7 +29,7 @@ const base = process.env.AGENT_CLIENT_TEST_URL || 'http://127.0.0.1:1421';
       await page.waitForFunction(() => !document.querySelector('.agent-remote-compaction input').checked && !document.querySelector('.agent-remote-compaction input').disabled);
       const calls = await page.evaluate(() => window.fixtureCalls.filter(c => c.cmd === 'set_codex_remote_compaction'));
       assert.deepEqual(calls.map(c => c.args.enabled), [true, false]);
-      await page.getByRole('checkbox', { name: '使用 openai 提供商标识', exact: true }).click();
+      await page.getByRole('switch', { name: '使用 openai 提供商标识', exact: true }).click();
       await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click();
       await page.waitForFunction(() => document.querySelector('.agent-remote-compaction input').disabled);
       assert.equal(await toggle().isChecked(), true);
