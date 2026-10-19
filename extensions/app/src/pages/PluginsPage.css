@@ -20,7 +20,7 @@
 .plugin-search-clear:disabled { visibility: hidden; }
 .plugin-toolbar select { border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-primary); background: var(--bg-card); padding: 10px 12px; }
 .plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 16px; }
-.plugin-card { min-width: 0; display: flex; flex-direction: column; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; gap: 12px; }
+.plugin-card { min-width: 0; display: flex; flex-direction: column; padding: 16px; gap: 12px; }
 .plugin-card-title { display: grid; grid-template-columns: 40px minmax(0, 1fr) fit-content(38%); align-items: center; gap: 8px 12px; min-width: 0; }
 .plugin-card-title > div { min-width: 0; }
 .plugin-card-title > .plugin-badge { justify-self: end; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
@@ -108,7 +108,7 @@
 }
 
 .plugin-settings { display: grid; gap: 20px; width: 100%; min-width: 0; margin: 0; padding: 0; }
-.plugin-settings .plugin-settings-card { min-width: 0; margin: 0; padding: 20px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-card); }
+.plugin-settings .plugin-settings-card { min-width: 0; margin: 0; padding: 20px; }
 .plugin-settings legend { padding: 0 8px; font-size: 15px; font-weight: 650; color: var(--text-primary); }
 .plugin-settings-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .plugin-settings .plugin-field { align-content: start; gap: 8px; }

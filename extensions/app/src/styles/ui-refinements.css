@@ -60,15 +60,7 @@ body, html, #root {
 
 /* 3. Refined Panels & Cards on Pure White */
 .panel {
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-card);
-  box-shadow: var(--ui-panel-shadow);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.panel:hover {
-  border-color: var(--border-primary);
 }
 
 /* 5. Home Page Layout & Quick Navigation */

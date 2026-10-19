@@ -25,6 +25,8 @@
 .config-page #config-native-aliases > .thinking-alias-page > .thinking-alias-list-panel {
   margin: 0;
   padding: 20px 0;
+}
+.config-page #config-template-panel > .template-config-section > .template-config-card {
   border: 0;
   border-bottom: 1px solid var(--border-color);
   border-radius: 0;
@@ -52,7 +54,7 @@
 }
 .config-settings-cards { display: grid; gap: 16px; min-width: 0; }
 .config-settings-cards > [hidden], .config-settings-content > [hidden] { display: none; }
-.config-settings-cards > section, .config-settings-content .template-config-card { scroll-margin-top: 80px; border-radius: 12px; }
+.config-settings-cards > section, .config-settings-content .template-config-card { scroll-margin-top: 80px; }
 .config-settings-content :is(input, select, textarea, button, .template-config-field) { scroll-margin-top: 80px; }
 .config-settings-cards > section:focus-visible, .config-settings-content .template-config-card:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 4px; }
 .config-settings-content .config-keys-panel { height: auto; min-height: 225px; max-height: 370px; grid-template-rows: auto minmax(0, 1fr); }
@@ -79,7 +81,7 @@
 .config-search-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .config-search-heading h2 { margin: 0; font-size: 19px; }
 .config-search-heading > span { padding: 3px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 11px; color: var(--text-secondary); }
-.config-search-result-list { display: grid; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: var(--bg-card); }
+.config-search-result-list { display: grid; overflow: hidden; }
 .config-search-result-list > button { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; padding: 16px 18px; border: 0; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
 .config-search-result-list > button + button { border-top: 1px solid var(--border-color); }
 .config-search-result-list > button:hover { background: var(--bg-hover); }
@@ -351,6 +353,8 @@
   min-width: 0;
   margin: 0;
   padding: 20px;
+}
+.config-page #config-template-panel > .template-config-section > .template-config-card:not([hidden]) {
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: var(--bg-card);
@@ -358,7 +362,7 @@
 }
 .config-page #config-native-aliases > .thinking-alias-page { padding-top: 0; }
 .config-page #config-native-aliases > .thinking-alias-page > .thinking-alias-list-panel,
-.config-page #config-native-sensitive-words > .config-sensitive-words-panel { padding: 0; border: 0; }
+.config-page #config-native-sensitive-words > .config-sensitive-words-panel { padding: 0; }
 .config-page .config-settings-content .config-keys-panel { max-height: none; }
 .config-page .config-settings-content .config-key-list { max-height: 300px; overflow-y: auto; border-top: 0; }
 .config-page .config-settings-content > .config-search-results,

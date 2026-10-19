@@ -56,7 +56,7 @@ export function StructuredConfigEditor({ shape, value, onChange, disabled = fals
       onChange(next);
     };
     return <div className="structured-list">
-      {rows.map((row, index) => <div className="structured-list-item" key={index}>
+      {rows.map((row, index) => <div className="surface-card structured-list-item" key={index}>
         <div className="structured-list-toolbar"><span>{index + 1}</span><div>
           <button type="button" className="icon-button quiet" disabled={disabled || index === 0} onClick={() => move(index, -1)} aria-label={tx({ zh: '上移', en: 'Move up', ja: '上へ' })}><ArrowUp size={14} /></button>
           <button type="button" className="icon-button quiet" disabled={disabled || index === rows.length - 1} onClick={() => move(index, 1)} aria-label={tx({ zh: '下移', en: 'Move down', ja: '下へ' })}><ArrowDown size={14} /></button>
@@ -89,7 +89,7 @@ export function StructuredConfigEditor({ shape, value, onChange, disabled = fals
     const record = configRecord(value) ? value : {};
     const item = shape.item ?? { type: 'any' };
     return <div className="structured-map">
-      {Object.entries(record).map(([key, entry]) => <div className="structured-map-item" key={key}>
+      {Object.entries(record).map(([key, entry]) => <div className="surface-card structured-map-item" key={key}>
         <div className="structured-map-key"><strong>{key}</strong><button type="button" className="icon-button quiet" disabled={disabled} aria-label={`${removeText} ${key}`} onClick={() => {
           const next = { ...record }; delete next[key]; onChange(next);
         }}><Trash2 size={14} /></button></div>

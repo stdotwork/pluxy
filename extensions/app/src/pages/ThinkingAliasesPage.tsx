@@ -778,7 +778,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
         </Dialog>
       ) : null}
 
-        <section className="panel thinking-alias-list-panel">
+        <section className={`panel${embedded ? ' surface-bare' : ''} thinking-alias-list-panel`}>
           <div className="thinking-alias-list">
             {loading ? (
               <div className="management-loading"><LoaderCircle size={20} className="spin" />{t('aliases.loadingConfig')}</div>

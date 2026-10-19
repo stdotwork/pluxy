@@ -25,7 +25,7 @@
 .template-config-directory > button { flex: 0 1 auto; white-space: normal; }
 .template-config-directory > .template-config-secret { flex: 1 1 180px; min-width: 0; }
 .template-config-secret > input.config-network-input { height: 38px; padding: 0 11px; }
-.template-config-custom { width: 100%; min-width: 0; border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 12px; background: var(--bg-card); box-sizing: border-box; }
+.template-config-custom { width: 100%; min-width: 0; padding: 10px 12px; box-sizing: border-box; }
 .template-config-custom > summary { cursor: pointer; color: var(--primary-color); font-size: 12px; }
 .template-config-custom[open] > summary { margin-bottom: 14px; }
 .template-config-control > input, .template-config-control > select, .template-config-control > textarea { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }

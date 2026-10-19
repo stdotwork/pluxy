@@ -221,7 +221,7 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
   };
 
   return (
-    <section className="panel config-sensitive-words-panel">
+    <section className="panel surface-bare config-sensitive-words-panel">
       <div className="config-panel-heading">
         <div className="config-heading-title">
           <ShieldAlert size={18} aria-hidden="true" />

@@ -9,7 +9,7 @@ type OAuthPageToolbarProps = {
 
 export function OAuthPageToolbar({ icon, summary, children }: OAuthPageToolbarProps) {
   return (
-    <header className="oauth-page-toolbar">
+    <header className="surface-card oauth-page-toolbar">
       <div className="oauth-page-toolbar-summary">
         <span className="oauth-page-toolbar-icon" aria-hidden="true">{icon}</span>
         <span>{summary}</span>

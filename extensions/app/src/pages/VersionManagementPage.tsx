@@ -508,7 +508,7 @@ export function VersionManagementPage() {
   return (
     <section className="page management-page version-management-page">
       <MessageNotice message={versionSourceError} onDismiss={() => setVersionSourceError('')} />
-      <section className="version-list">
+      <section className="surface-bare version-list">
         <div className="version-source-row" aria-label={t('kernel.versions.downloadSource')}>
           <div className="version-source-copy">
             <strong>{t('kernel.versions.downloadSource')}</strong>
@@ -572,11 +572,11 @@ export function VersionManagementPage() {
             </div>
 
             <dl className="version-metrics-comparison">
-              <div className="version-metric-tile">
+              <div className="surface-section surface-muted version-metric-tile">
                 <dt className="version-metric-label">{t('appUpdate.current')}</dt>
                 <dd className="version-metric-value">{currentAppVersion}</dd>
               </div>
-              <div className={`version-metric-tile ${appHasUpdate ? 'has-update' : ''}`}>
+              <div className={`surface-section surface-muted version-metric-tile ${appHasUpdate ? 'has-update' : ''}`}>
                 <dt className="version-metric-label">{t('appUpdate.latest')}</dt>
                 <dd className="version-metric-value">
                   {appUpdate ? (latestAppVersion || currentAppVersion) : (checkingAppUpdate ? t('appUpdate.checking') : t('common.detecting'))}
@@ -639,13 +639,13 @@ export function VersionManagementPage() {
             </div>
 
             <dl className="version-metrics-comparison">
-              <div className="version-metric-tile">
+              <div className="surface-section surface-muted version-metric-tile">
                 <dt className="version-metric-label">{t('kernel.versions.current')}</dt>
                 <dd className="version-metric-value" title={currentVersion || t('kernel.status.notInstalled')}>
                   {currentVersion || t('kernel.status.notInstalled')}
                 </dd>
               </div>
-              <div className={`version-metric-tile ${coreHasUpdate ? 'has-update' : ''}`}>
+              <div className={`surface-section surface-muted version-metric-tile ${coreHasUpdate ? 'has-update' : ''}`}>
                 <dt className="version-metric-label">{t('kernel.versions.latest')}</dt>
                 <dd className="version-metric-value" title={latestVersion || latestError || t('kernel.update.notChecked')}>
                   {checkingLatest ? t('kernel.update.checking') : (latestVersion || (latestError ? t('common.detectionFailed') : t('kernel.update.notChecked')))}
