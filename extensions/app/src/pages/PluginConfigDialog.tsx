@@ -3,6 +3,7 @@ import { Switch } from '../components/Switch';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, Settings2, X } from 'lucide-react';
 import { Dialog } from '../components/Dialog';
+import { useConfirmation } from '../components/ConfirmationDialog';
 import { useI18n } from '../i18n';
 import { pluginConfigText, type PluginConfigMessage } from '../i18n/pluginConfig';
 import { pluginsApi, type PluginConfigField, type PluginConfigObject, type PluginListEntry } from '../services/plugins';
@@ -37,7 +38,7 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [discard, setDiscard] = useState(false);
+  const { askConfirmation, confirmationDialog } = useConfirmation();
   const [attempt, setAttempt] = useState(0);
   const request = useRef(0);
   const pending = useRef(false);
@@ -46,7 +47,7 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
 
   useEffect(() => {
     const generation = ++request.current;
-    setLoading(true); setDraft(null); setError(''); setRawError(''); setDiscard(false);
+    setLoading(true); setDraft(null); setError(''); setRawError('');
     setRawTouched(false);
     void pluginsApi.getConfig(plugin.id).then(config => {
       if (request.current !== generation) return;
@@ -63,14 +64,16 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
   }, [plugin.id, plugin.enabled, fields, attempt]);
 
   const dirty = Boolean(draft && (draft.enabledTouched || draft.priorityTouched || Object.values(draft.touchedFields).some(Boolean) || rawTouched));
-  const close = () => {
-    if (pending.current) return;
-    if (dirty) setDiscard(true);
-    else onClose();
+  const close = async () => {
+    if (pending.current || confirmationDialog) return;
+    if (dirty && !await askConfirmation({
+      title: pt('discard'), message: pt('unsaved'), confirmText: pt('discard'), cancelText: pt('keepEditing'), variant: 'danger',
+    })) return;
+    onClose();
   };
   const changeDraft = (updater: (current: PluginConfigDraft) => PluginConfigDraft) => {
     setDraft(current => current ? updater(current) : current);
-    setError(''); setDiscard(false);
+    setError('');
   };
   const changeField = (name: string, value: PluginDraftValue) => changeDraft(current => ({
     ...current,
@@ -149,15 +152,15 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
     </div>;
   };
 
-  return <Dialog className="config-dialog plugin-config-dialog" backdropClassName="plugin-config-backdrop" labelledBy={`${id}-title`} busy={loading || saving}
-    onClose={discard ? () => setDiscard(false) : close} onBackdropClose={close} closeDisabled={saving} dismissOnBackdrop>
+  return <><Dialog className="config-dialog plugin-config-dialog" backdropClassName="plugin-config-backdrop" labelledBy={`${id}-title`} busy={loading || saving}
+    onClose={close} onBackdropClose={close} closeDisabled={saving} dismissOnBackdrop>
     <header className="config-dialog-heading">
       <div><h2 id={`${id}-title`}><Settings2 size={20} aria-hidden="true" />{pt('title')}</h2><p>{plugin.metadata?.name || plugin.id}</p></div>
       <button type="button" className="icon-button quiet" disabled={saving} onClick={close} aria-label={t('common.close')}><X size={18} /></button>
     </header>
     <form ref={formRef} onSubmit={event => { event.preventDefault(); void save(); }} noValidate>
       <div className="plugin-config-body">
-        {loading ? <p className="plugin-config-loading" role="status"><LoaderCircle size={20} className="spin" />{t('common.loading')}</p> : draft ? <fieldset disabled={saving}>
+        {loading ? <Notice className="plugin-config-loading" tone="info" variant="text" icon={false}><LoaderCircle size={20} className="spin" />{t('common.loading')}</Notice> : draft ? <fieldset disabled={saving}>
           <div className="plugin-config-common">
             <label className="plugin-config-toggle"><Switch checked={draft.enabled} onChange={event => { const checked = event.currentTarget.checked; changeDraft(current => ({ ...current, enabled: checked, enabledTouched: true })); }} /><span>{pt('enabled')}</span></label>
             <small>{pt('enabledHint')}</small>
@@ -171,19 +174,18 @@ export function PluginConfigDialog({ plugin, onClose, onSaved }: {
           {fields.length ? <section className="plugin-config-parameters"><h3>{pt('fields')}</h3><p>{pt('fieldsHint')}</p>{fields.map(renderField)}</section> : <div className="plugin-config-field plugin-config-parameters">
             <label htmlFor={`${id}-raw`}>{pt('raw')}</label>
             <small id={`${id}-raw-hint`}>{pt('rawHint')}</small>
-            <textarea id={`${id}-raw`} rows={10} value={raw} spellCheck={false} autoComplete="off" aria-invalid={Boolean(rawError)} aria-describedby={`${id}-raw-hint${rawError ? ` ${id}-raw-error` : ''}`} onChange={event => { setRaw(event.currentTarget.value); setRawTouched(true); setRawError(''); setError(''); setDiscard(false); }} />
+            <textarea id={`${id}-raw`} rows={10} value={raw} spellCheck={false} autoComplete="off" aria-invalid={Boolean(rawError)} aria-describedby={`${id}-raw-hint${rawError ? ` ${id}-raw-error` : ''}`} onChange={event => { setRaw(event.currentTarget.value); setRawTouched(true); setRawError(''); setError(''); }} />
             {rawError ? <small className="plugin-config-error" id={`${id}-raw-error`}>{rawError}</small> : null}
           </div>}
         </fieldset> : null}
       </div>
       <footer className="plugin-config-footer">
         {error ? <Notice tone="error" variant="text">{!draft && !loading ? `${pt('loadFailed')}: ` : ''}{error}</Notice> : null}
-        {discard ? <div className="plugin-config-discard" role="alert"><span>{pt('unsaved')}</span><div><button type="button" className="secondary-button compact-button" onClick={() => setDiscard(false)}>{pt('keepEditing')}</button><button type="button" className="danger-button compact-button" onClick={onClose}>{pt('discard')}</button></div></div> : null}
         <div className="plugin-config-actions">
           <button type="button" className="secondary-button compact-button" disabled={saving} onClick={close}>{t('common.cancel')}</button>
           {!loading && !draft ? <button type="button" className="primary-button compact-button" onClick={() => setAttempt(value => value + 1)}>{pt('retry')}</button> : <button type="submit" className="primary-button compact-button" disabled={loading || saving || !dirty}>{saving ? <LoaderCircle size={16} className="spin" /> : null}{t(saving ? 'common.saving' : 'common.save')}</button>}
         </div>
       </footer>
     </form>
-  </Dialog>;
+  </Dialog>{confirmationDialog}</>;
 }
