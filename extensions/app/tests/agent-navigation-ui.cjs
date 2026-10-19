@@ -76,7 +76,7 @@ const assert = require('node:assert/strict');
       await notice.waitFor();
       await tab('配置管理').press('Home');
       await active('基础配置');
-      assert.equal(await tab('基础配置').evaluate(el => el === document.activeElement), true);
+      await page.waitForFunction(() => document.activeElement === document.getElementById('agent-subpage-tab-core'));
       assert.equal(await page.locator('.agent-model-trigger strong').textContent(), 'gpt-two');
       if (!embedded) assert.equal(await page.locator('.agent-signin-help-toggle').getAttribute('aria-expanded'), 'true');
       await client('OpenCode').click();

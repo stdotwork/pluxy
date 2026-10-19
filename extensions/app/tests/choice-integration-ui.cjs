@@ -77,6 +77,18 @@ const base = process.env.CHOICE_TEST_URL || 'http://127.0.0.1:1437';
  assert.equal(await page.locator('.theme-selector-menu').evaluate(element => { const color=getComputedStyle(element).backgroundColor; return color.startsWith('rgba') ? Number(color.match(/([\d.]+)\)$/)[1]) : 1; }),1);
  const modes=page.locator('.theme-selector-modes');await modes.getByRole('radio').first().focus();await page.keyboard.press('End');
  assert.equal(await modes.getByRole('radio').last().getAttribute('aria-checked'),'true');scenarios++;
+ for (const embedded of [false, true]) {
+  await page.goto(`${base}/tests/fixtures/agent-backups.html?client=codex&reset-selections${embedded ? '&embedded' : ''}`);
+  const tabs = page.locator('.agent-subpage-tabs');
+  const last = tabs.getByRole('tab').last();
+  await last.click();
+  await last.focus();await page.keyboard.press('Home');
+  await page.waitForFunction(()=>document.activeElement===document.getElementById('agent-subpage-tab-core'));
+  assert.equal(await tabs.getByRole('tab').first().getAttribute('aria-selected'),'true');scenarios++;
+  await page.keyboard.press('End');
+  await page.waitForFunction(()=>document.activeElement===document.querySelector('.agent-subpage-tabs [role=tab]:last-child'));
+  assert.equal(await last.getAttribute('aria-selected'),'true');scenarios++;
+ }
  await page.goto(`${base}/tests/fixtures/agent-backups.html?client=codex&no-oauth-login`);
  const auth=page.locator('.agent-auth-segmented');
  await auth.getByRole('radio').first().focus();await page.keyboard.press('ArrowRight');
