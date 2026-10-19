@@ -55,7 +55,7 @@ struct NativeOAuthState {
 pub(crate) fn codex_uses_openai_proxy(document: &toml_edit::Document) -> bool {
     document.get("model_provider").and_then(toml_edit::Item::as_str) == Some("openai")
         && codex_provider_table(document).is_some_and(|provider| {
-            provider.get("name").and_then(toml_edit::Item::as_str) == Some("EasyCLIProxyAPI")
+            provider.get("name").and_then(toml_edit::Item::as_str).is_some_and(is_codex_managed_provider_name)
                 && document.get("openai_base_url").and_then(toml_edit::Item::as_str).is_some_and(|base| {
                     provider.get("base_url").and_then(toml_edit::Item::as_str) == Some(base)
                 })
@@ -99,7 +99,7 @@ pub(crate) fn switch_codex_openai_provider(home: &Path, enabled: bool) -> Result
     if enabled != currently_enabled {
         if enabled {
             let provider = codex_provider_table(&document).ok_or("Missing CPA provider configuration")?.clone();
-            if provider.get("name").and_then(toml_edit::Item::as_str) != Some("EasyCLIProxyAPI")
+            if !provider.get("name").and_then(toml_edit::Item::as_str).is_some_and(is_codex_managed_provider_name)
                 || !provider.get("base_url").and_then(toml_edit::Item::as_str).is_some_and(is_managed_agent_base_url) {
                 return Err("Apply the CPA configuration before changing the provider identity".into());
             }
@@ -649,6 +649,48 @@ pub(crate) fn restore_codex_official_config(
         .lock()
         .map_err(|_| "Agent configuration file lock is poisoned")?;
     let result = switch_codex_native_oauth(&home, true)?;
+    app.state::<AgentConfigStatusCache>().clear()?;
+    Ok(result)
+}
+
+
+pub(crate) fn is_codex_managed_provider_name(name: &str) -> bool {
+    matches!(name, "EasyCLIProxyAPI" | "OpenAI")
+}
+
+pub(crate) fn codex_remote_compaction_enabled(home: &Path) -> Result<bool, String> {
+    let content = read_optional_text(&codex_configuration_directory(home).join("config.toml"))?;
+    let document = parse_codex_document(content.as_deref(), "Codex config.toml")?;
+    Ok(codex_provider_table(&document)
+        .and_then(|p| p.get("name")).and_then(toml_edit::Item::as_str) == Some("OpenAI"))
+}
+
+pub(crate) fn switch_codex_remote_compaction(home: &Path, enabled: bool) -> Result<AgentConfigActionResult, String> {
+    let paths = vec![codex_configuration_directory(home).join("config.toml")];
+    let before = config_images(&paths)?;
+    let mut document = parse_codex_document(text(before[0].1.as_deref())?, "Codex config.toml")?;
+    if document.get("model_provider").and_then(toml_edit::Item::as_str) != Some(MANAGED_AGENT_PROVIDER_ID) {
+        return Err("Apply the CPA configuration and turn off the openai provider identity before changing remote compaction".into());
+    }
+    if document.get("profile").and_then(toml_edit::Item::as_str).is_some_and(|p| !p.trim().is_empty()) {
+        return Err("Remove the active Codex profile before changing remote compaction".into());
+    }
+    let provider = codex_provider_table(&document).ok_or("Missing CPA provider configuration")?;
+    if !provider.get("name").and_then(toml_edit::Item::as_str).is_some_and(is_codex_managed_provider_name)
+        || !provider.get("base_url").and_then(toml_edit::Item::as_str).is_some_and(is_managed_agent_base_url) {
+        return Err("Apply the CPA configuration before changing remote compaction".into());
+    }
+    set_codex_table_item(ensure_codex_provider_table(&mut document)?, "name",
+        toml_edit::value(if enabled { "OpenAI" } else { "EasyCLIProxyAPI" }));
+    let after = vec![(paths[0].clone(), Some(document.to_string().into_bytes()))];
+    commit_config("codex", &paths, &before, &after, "remote-compaction", None)
+}
+
+#[tauri::command]
+pub(crate) fn set_codex_remote_compaction(app: tauri::AppHandle, enabled: bool) -> Result<AgentConfigActionResult, String> {
+    let _guard = AGENT_CONFIG_FILE_LOCK.lock().map_err(|_| "Agent configuration file lock is poisoned")?;
+    let home = app.path().home_dir().map_err(|_| "Failed to get user directory")?;
+    let result = switch_codex_remote_compaction(&home, enabled)?;
     app.state::<AgentConfigStatusCache>().clear()?;
     Ok(result)
 }

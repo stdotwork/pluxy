@@ -517,6 +517,7 @@ pub(crate) fn inspect_pi_provider_status_with_executable(
         oauth_configuration: false,
         codex_native_oauth: false,
         codex_openai_provider: false,
+        codex_remote_compaction: false,
         modification_enabled: configured,
         modification_state: modification_state.to_string(),
         backup_available: false,
@@ -1212,6 +1213,8 @@ pub(crate) fn inspect_agent_config_with_executables(
             && codex_native_oauth_enabled(home).unwrap_or(false),
         codex_openai_provider: client == AgentClient::Codex
             && codex_openai_proxy_enabled(home).unwrap_or(false),
+        codex_remote_compaction: client == AgentClient::Codex
+            && codex_remote_compaction_enabled(home).unwrap_or(false),
         modification_enabled: configured,
         modification_state: if !config_valid {
             "invalid"
@@ -3484,7 +3487,7 @@ pub(crate) fn read_agent_json5_or_empty(
 fn codex_managed_provider_id(root: &toml::Value) -> &'static str {
     if root.get("model_provider").and_then(toml::Value::as_str) == Some("openai")
         && root.get("model_providers").and_then(|p| p.get(MANAGED_AGENT_PROVIDER_ID))
-            .is_some_and(|p| p.get("name").and_then(toml::Value::as_str) == Some("EasyCLIProxyAPI")
+            .is_some_and(|p| p.get("name").and_then(toml::Value::as_str).is_some_and(is_codex_managed_provider_name)
                 && root.get("openai_base_url").and_then(toml::Value::as_str)
                     .is_some_and(|base| p.get("base_url").and_then(toml::Value::as_str) == Some(base))) {
         "openai"
@@ -3533,7 +3536,7 @@ pub(crate) fn inspect_codex_agent_config(
         && provider
             .and_then(|provider| provider.get("name"))
             .and_then(toml::Value::as_str)
-            == Some("EasyCLIProxyAPI")
+            .is_some_and(is_codex_managed_provider_name)
         && provider
             .and_then(|provider| provider.get("base_url"))
             .and_then(toml::Value::as_str)

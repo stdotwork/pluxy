@@ -4,6 +4,10 @@ import { homeEn } from '../home';
 import { authFileListEn } from '../authFileList';
 
 export const en: Record<MessageKey, string> = {
+  "agents.remoteCompaction.label": "Remote compaction (experimental)",
+  "agents.remoteCompaction.hint": "Off by default. Compact context on the server; requires a compatible upstream route. Turn off if compaction fails. Toggling this changes the provider name and may hide historical sessions. Go to Session management to resync session history. Restart Codex after saving.",
+  "agents.remoteCompaction.builtinHint": "The openai provider identity already enables remote compaction capability. Turn off the provider identity switch below to control this separately.",
+  "agents.remoteCompaction.saved": "Saved. Restart Codex to apply the configuration. The provider name has changed; if historical sessions are hidden, go to Session management to resync session history.",
   'agents.provider.label': 'Use the openai provider identity',
   'agents.provider.oauthUnsupported': 'CPA did not accept the current Codex OAuth credentials. Configuration is unchanged. The built-in openai provider does not use the custom provider CPA key; use a CPA authentication extension that accepts these credentials, or API Key sign-in.',
   'agents.provider.hint': 'Requests still use CPA; when off, the provider is cpa-gui. CPA authentication is checked before enabling. Predictions still depend on your account and client. Apply pending changes first; turn this off before changing the sign-in method.',

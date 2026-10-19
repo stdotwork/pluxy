@@ -4,6 +4,10 @@ import { homeJa } from './home';
 import { authFileListJa } from './authFileList';
 
 export const jaOverrides = {
+  "agents.remoteCompaction.label": "リモート圧縮（実験的）",
+  "agents.remoteCompaction.hint": "既定ではオフです。サーバー側でコンテキストを圧縮します。対応する接続先が必要です。失敗する場合はオフにしてください。切り替えるとプロバイダー名が変更され、過去のセッションが非表示になる場合があります。「セッション管理」で履歴を再同期してください。保存後に Codex を再起動してください。",
+  "agents.remoteCompaction.builtinHint": "openai プロバイダー識別子によりリモート圧縮が有効です。個別に設定するには、下の識別子スイッチをオフにしてください。",
+  "agents.remoteCompaction.saved": "保存しました。Codex を再起動してください。プロバイダー名が変更されました。過去のセッションが非表示になった場合は、「セッション管理」で履歴を再同期してください。",
   'agents.provider.label': 'openai プロバイダー識別子を使用',
   'agents.provider.hint': '通信は引き続き CPA を経由し、オフでは cpa-gui を使用します。有効化前に CPA 認証を確認します。予測機能はアカウントとクライアントに依存します。他の変更は先に適用し、ログイン方式を変更する前にオフにしてください。',
   'agents.provider.title': '{provider} に切り替え',

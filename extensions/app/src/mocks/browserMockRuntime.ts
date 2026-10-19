@@ -251,6 +251,7 @@ function createAgentStatuses() {
     oauthConfiguration: id === 'codex',
     codexNativeOauth: false,
     codexOpenaiProvider: false,
+    codexRemoteCompaction: false,
     modificationEnabled: id !== 'openclaw',
     modificationState: id === 'openclaw' ? 'unconfigured' : 'applied',
     backupAvailable: true,
@@ -1545,6 +1546,11 @@ export function createBrowserMockRuntime(
           deletedCount: ids.length,
           failedCount: 0,
         };
+      }
+      case 'set_codex_remote_compaction': {
+        const codex = state.agentStatuses.find((status) => status.id === 'codex');
+        if (codex) codex.codexRemoteCompaction = Boolean(payload.enabled);
+        return {};
       }
       case 'set_codex_openai_provider': {
         const codex = state.agentStatuses.find((status) => status.id === 'codex');

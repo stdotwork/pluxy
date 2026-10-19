@@ -71,6 +71,7 @@ import { AgentModelPicker } from '../components/AgentModelPicker';
 import { claudeDesktopAliasSuggestions, claudeDesktopDefaultAliases, createDefaultDesktopModels, desktopAliasNotice, desktopEntryValidation, desktopModelEntries, desktopModelId, desktopModelValidation, isClaudeDesktopModel, selectedDesktopModelEntries, suffixCollidingDesktopAliases, type ClaudeDesktopModelMapping } from '../services/claudeDesktopModels';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import { CodexSessionsPanel } from './CodexSessionsPanel';
+import { CodexRemoteCompactionSwitch } from './CodexRemoteCompactionSwitch';
 import { CodexProviderSwitch } from './CodexProviderSwitch';
 import { CodexModelCatalogDialog } from './CodexModelCatalogDialog';
 import { DeepSeekHarnessCatalogDialog } from './DeepSeekHarnessCatalogDialog';
@@ -140,6 +141,7 @@ type AgentConfigStatus = {
   oauthConfiguration: boolean;
   codexNativeOauth: boolean;
   codexOpenaiProvider?: boolean;
+  codexRemoteCompaction?: boolean;
   modificationEnabled: boolean;
   modificationState: AgentModificationState;
   backupAvailable: boolean;
@@ -645,7 +647,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const [loading, setLoading] = useState(() => agentStatusesCache === null);
   const [modelLoading, setModelLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<
-    'backup' | 'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'oauth-check' | 'native-oauth' | 'directory' | 'launch' | 'launch-cli' | 'launch-app' | 'restart-app' | 'stop-deepseek' | 'restart-deepseek' | null
+    'backup' | 'apply' | 'close-config' | 'default' | 'clear' | 'install-pi' | 'update-pi' | 'repair-pi' | 'uninstall-pi' | 'oauth-check' | 'remote-compaction' | 'native-oauth' | 'directory' | 'launch' | 'launch-cli' | 'launch-app' | 'restart-app' | 'stop-deepseek' | 'restart-deepseek' | null
   >(null);
   const busy = busyAction !== null;
   // Codex drains running turns before restarting its daemon, which can take about a minute, so the
@@ -2370,6 +2372,17 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
           {activeSubpage === 'management' ? (
             <div id="agent-subpage-panel-management" role="tabpanel" aria-labelledby="agent-subpage-tab-management">
               <AgentConfigManagementPanel pi={isPiClient} codex={selected === 'codex'} busyAction={busyAction}
+                codexRemoteCompactionControl={selected === 'codex' ? <CodexRemoteCompactionSwitch
+                  enabled={Boolean(activeStatus?.codexRemoteCompaction)}
+                  builtinProvider={Boolean(activeStatus?.codexOpenaiProvider)}
+                  disabled={busy || loading || hasPendingChanges || !activeStatus?.configured || Boolean(activeStatus?.codexNativeOauth)}
+                  onBusyChange={(value) => setBusyAction(value ? 'remote-compaction' : null)}
+                  onChanged={async (enabled) => {
+                    setStatuses((current) => current.map((status) => status.id === 'codex'
+                      ? { ...status, codexRemoteCompaction: enabled } : status));
+                    await reloadStatusesAfterAction();
+                  }}
+                /> : null}
                 codexProviderControl={selected === 'codex' ? <CodexProviderSwitch
                   enabled={Boolean(activeStatus?.codexOpenaiProvider)}
                   disabled={busy || loading || hasPendingChanges || (!activeStatus?.configured && !activeStatus?.codexOpenaiProvider)}

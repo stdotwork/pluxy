@@ -657,3 +657,40 @@ fn failed_cpa_update_preserves_official_routing_and_login() {
     assert!(codex_native_oauth_enabled(&home.0).unwrap());
     assert!(home.config().get("model_catalog_json").is_none());
 }
+
+
+#[test]
+fn remote_compaction_defaults_off_preserves_settings_and_survives_apply() {
+    let home = TestHome::new();
+    apply_cpa(&home, false).unwrap();
+    assert!(!codex_remote_compaction_enabled(&home.0).unwrap());
+    let before = home.config();
+    let auth = home.read("auth.json");
+    switch_codex_remote_compaction(&home.0, true).unwrap();
+    assert!(codex_remote_compaction_enabled(&home.0).unwrap());
+    let mut expected = before.clone();
+    expected["model_providers"]["cpa-gui"]["name"] = toml::Value::String("OpenAI".into());
+    assert_eq!(home.config(), expected);
+    assert_eq!(home.read("auth.json"), auth);
+    assert!(inspect_codex_agent_config(&home.path("config.toml"), 8317, "test-api-key").unwrap().0);
+    apply_cpa(&home, false).unwrap();
+    assert!(codex_remote_compaction_enabled(&home.0).unwrap());
+    switch_codex_openai_provider(&home.0, true).unwrap();
+    assert!(codex_openai_proxy_enabled(&home.0).unwrap());
+    assert!(inspect_codex_agent_config(&home.path("config.toml"), 8317, "test-api-key").unwrap().0);
+    assert!(switch_codex_remote_compaction(&home.0, false).is_err());
+    switch_codex_openai_provider(&home.0, false).unwrap();
+    switch_codex_remote_compaction(&home.0, false).unwrap();
+    assert!(!codex_remote_compaction_enabled(&home.0).unwrap());
+    assert_eq!(home.config(), before);
+}
+
+#[test]
+fn remote_compaction_rejects_unmanaged_invalid_and_profile_configs_without_writing() {
+    let home = TestHome::new();
+    for config in ["", "invalid = [", "model_provider = \"openai\"", CPA_CONFIG] {
+        home.write("config.toml", config);
+        assert!(switch_codex_remote_compaction(&home.0, true).is_err());
+        assert_eq!(home.read("config.toml"), config);
+    }
+}
