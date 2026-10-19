@@ -41,7 +41,8 @@ const violations = (text: string, name: string) => {
   const menus = localNames('SelectMenu');
   const insideDialog = (node: ts.Node) => {
     for (let parent = node.parent; parent; parent = parent.parent) {
-      if (ts.isJsxElement(parent) && dialogs.has(tagName(parent.openingElement))) return true;
+      if (ts.isJsxElement(parent) && dialogs.has(tagName(parent.openingElement))
+        || ts.isJsxSelfClosingElement(parent) && dialogs.has(tagName(parent))) return true;
     }
     return false;
   };
@@ -89,6 +90,21 @@ describe('shared select controls', () => {
       '<Select value={value} />', '<SelectMenu value="" options={[]} onChange={f} ariaLabel="x" />', '<Dialog><Select /></Dialog>',
       `<div role="option"/>`, `<div role="dialog"/>`, `const props = { title: 'listbox' };`, '<input type="search" />',
       `import { Dialog as Modal } from './Dialog';\n<Modal><Select /></Modal>`, `import { SelectMenu as FilterMenu } from './SelectMenu';\n<section><FilterMenu /></section>`,
+    ]) expect(violations(source, 'example.tsx')).toEqual([]);
+  });
+  it('checks self-closing Dialog attributes without treating sibling menus as dialog contents', () => {
+    for (const source of [
+      '<Dialog actions={<SelectMenu />} />',
+      '<Dialog title={<section><SelectMenu /></section>} />',
+      `import { Dialog as Modal } from './Dialog';\nimport { SelectMenu as FilterMenu } from './SelectMenu';\n<Modal actions={<FilterMenu />} />`,
+      '<Dialog actions={<SelectMenu />}></Dialog>',
+    ]) expect(violations(source, 'example.tsx')).toEqual(['SelectMenu in Dialog']);
+    for (const source of [
+      '<Dialog actions={<Select />} />',
+      '<><Dialog /><SelectMenu /></>',
+      '<section><SelectMenu /><Dialog /></section>',
+      '<Panel actions={<SelectMenu />} />',
+      `import { Dialog as Modal } from './Dialog';\nimport { SelectMenu as FilterMenu } from './SelectMenu';\n<><Modal actions={<Select />} /><FilterMenu /></>`,
     ]) expect(violations(source, 'example.tsx')).toEqual([]);
   });
   it('keeps native selects in Select and popup roles in the listed owners', () => {
