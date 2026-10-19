@@ -29,6 +29,9 @@ export type QuotaRow = {
   label: string;
   remainingPercent: number | null;
   quotaAvailable?: boolean;
+  groupLabel?: string;
+  groupDescription?: string;
+  windowLabel?: string;
   reset?: string;
   resetAtMs?: number;
   detail?: string;
@@ -631,6 +634,9 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
           : groupLabel;
         return {
           label: label || quotaText('quota.service.quota.numbered', { index: index + 1 }),
+          groupLabel,
+          groupDescription,
+          windowLabel: bucketLabel,
           remainingPercent: remaining * 100,
           quotaAvailable: remaining === 1
             && !(antigravityWindow(rawBucketLabel, window) === '5h' && weeklyExhausted),

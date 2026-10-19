@@ -517,6 +517,7 @@ export const en: Record<MessageKey, string> = {
   'quota.filter.label': 'Filter by category',
   'quota.filter.all': 'All',
   'quota.readList': 'Refresh List',
+  'quota.planLabel': 'Plan',
   'quota.refreshAll': 'Refresh Quota',
   'quota.loadingFiles': 'Loading authentication files',
   'quota.empty.title': 'No quota data available',

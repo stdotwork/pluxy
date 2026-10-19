@@ -530,6 +530,7 @@ export const jaOverrides = {
   'quota.filter.label': 'カテゴリで絞り込む',
   'quota.filter.all': 'すべて',
   'quota.readList': '一覧を更新',
+  'quota.planLabel': 'プラン',
   'quota.refreshAll': 'クォータを更新',
   'quota.loadingFiles': '認証ファイルを読み込んでいます',
   'quota.empty.title': '照会可能なクォータがありません',

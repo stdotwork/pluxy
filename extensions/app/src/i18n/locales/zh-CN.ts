@@ -516,6 +516,7 @@ export const zhCN = {
   'quota.filter.label': '按类别筛选',
   'quota.filter.all': '全部',
   'quota.readList': '刷新列表',
+  'quota.planLabel': '套餐',
   'quota.refreshAll': '刷新额度',
   'quota.loadingFiles': '读取凭证文件中',
   'quota.empty.title': '暂无可查询配额',

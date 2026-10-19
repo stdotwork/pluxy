@@ -24,6 +24,19 @@ createRoot(document.getElementById('root')!).render(
           {[1, 2, 3, 4, 5, 6].map((id) => <QuotaCard key={id} file={{ name: `kimi-${id}-long-credential-name@example.com.json`, provider: 'kimi' }} quota={{ status: 'success', rows }} onRefresh={() => {}} />)}
         </div>
         <div className="real-quota-grid">
+          <QuotaCard file={{ name: 'antigravity-example@gmail.com.json', provider: 'antigravity' }} quota={{ status: 'success', plan: 'Pro', rows: quotaRowsFor('antigravity', { groups: [
+            { displayName: 'Gemini Models', description: 'Models within this group: Gemini Flash, Gemini Pro, Gemini Argon', buckets: [
+              { displayName: 'Five Hour Limit Remaining', remainingFraction: 1, resetTime: new Date(Date.now() + 17640000).toISOString() },
+              { displayName: 'Weekly Limit Remaining', remainingFraction: 0.98, resetTime: new Date(Date.now() + 460800000).toISOString() },
+            ] },
+            { displayName: 'Claude and GPT Models', description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS', buckets: [
+              { displayName: 'Five Hour Limit Remaining', remainingFraction: 1, resetTime: new Date(Date.now() + 17640000).toISOString() },
+              { displayName: 'Weekly Limit Remaining', remainingFraction: 1, resetTime: new Date(Date.now() + 601200000).toISOString() },
+            ] },
+            { displayName: 'Gemini 4 Argon', description: 'For paid Pro plans, Argon quota is separate. Higher Argon quota (included as part of the larger Gemini quota bucket) is available on Ultra plans.', buckets: [
+              { displayName: 'Weekly Limit Remaining', remainingFraction: 1, resetTime: new Date(Date.now() + 601200000).toISOString() },
+            ] },
+          ] }) }} onRefresh={() => {}} />
           <QuotaCard file={{ name: 'codex.json', provider: 'codex' }} quota={{ status: 'success', rows, resetCredits: 2, resetCreditsApplicable: 2, plan: 'team', subscriptionActiveUntil: '2030-10-17T13:58:00Z', resetCreditExpiries: ['2030-10-23T05:10:00Z', '2030-11-23T05:10:00Z'] }} onRefresh={() => {}} onReset={() => {}} />
           <QuotaCard file={claudeFile} quota={claudeQuota} onRefresh={() => {}} onReset={() => {}} />
           <QuotaCard file={{ name: 'failed.json', provider: 'kimi' }} quota={{ status: 'error', rows: [], error: 'Quota request failed' }} onRefresh={() => {}} />

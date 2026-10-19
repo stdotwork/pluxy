@@ -33,7 +33,7 @@ import {
   updateQuotaCache,
   useQuotaCache,
 } from '../services/quotaCache';
-import { dedupeAuthFiles, parseAuthFilePriority, sortAuthFilesByPriority } from '../services/authFiles';
+import { dedupeAuthFiles, sortAuthFilesByPriority } from '../services/authFiles';
 import { useI18n } from '../i18n';
 import { usePrivacyMask } from '../privacy';
 import './QuotaPage.css';
@@ -207,19 +207,31 @@ export function QuotaCard({ file, quota, onRefresh, onReset }: { file: AuthFile;
   const privacy = usePrivacyMask();
   const name = privacy.credentialName(file);
   const disabled = readBoolean(file, 'disabled');
-  const priority = parseAuthFilePriority(file.priority) ?? 0;
+  const groups = quota.rows.reduce<{ label?: string; description?: string; rows: QuotaState['rows'] }[]>((result, row) => {
+    const previous = result[result.length - 1];
+    if (previous && previous.label === row.groupLabel) previous.rows.push(row);
+    else result.push({ label: row.groupLabel, description: row.groupDescription, rows: [row] });
+    return result;
+  }, []);
+  const countdown = (row: QuotaState['rows'][number]) => {
+    if (row.resetAtMs === undefined || !Number.isFinite(row.resetAtMs)) return row.reset || '';
+    const minutes = Math.max(0, Math.ceil((row.resetAtMs - now) / 60000));
+    if (!minutes) return t('quota.resetPassed');
+    if (minutes >= 1440) return t('quota.service.relative.daysHours', { days: Math.floor(minutes / 1440), hours: Math.floor(minutes % 1440 / 60) });
+    if (minutes >= 60) return t('quota.service.relative.hoursMinutes', { hours: Math.floor(minutes / 60), minutes: minutes % 60 });
+    return t('quota.service.relative.minutes', { minutes });
+  };
   return (
     <article className="panel real-quota-card">
       <div className="real-quota-card-header">
         <div className="quota-identity">
           <img src={provider ? providerMeta[provider].icon : ''} alt="" className="quota-account-icon" />
-          <div><strong title={name}>{name}</strong><span>{provider ? providerMeta[provider].label : t('quota.unknownProvider')}</span></div>
+          <div><strong title={name}>{name}</strong></div>
         </div>
-        <div className="quota-plan"><strong>{quota.plan || '—'}</strong><span>{quota.subscriptionActiveUntil ? t('quota.expiresAt', { time: formatQuotaTimestamp(quota.subscriptionActiveUntil, locale) }) : ''}</span></div>
-        <div className="quota-status"><span className={quota.status === 'success' ? 'quota-status-badge ready' : quota.status === 'error' ? 'quota-status-badge error' : 'quota-status-badge'}>{quota.status === 'success' ? t('common.enabled') : quota.status === 'loading' ? t('quota.querying') : quota.status === 'error' ? t('common.unavailable') : t('quota.notFetched')}</span><small>{t('authFiles.settings.priority')} {priority}</small></div>
-        <div className="quota-card-actions">
-          <button type="button" className="icon-button quiet" onClick={onRefresh} disabled={disabled || quota.status === 'loading'} title={disabled ? t('quota.fileDisabled') : t('quota.refresh')} aria-label={disabled ? t('quota.fileDisabled') : t('quota.refresh')}><RefreshCw size={16} className={quota.status === 'loading' ? 'spin' : ''} aria-hidden="true" /></button>
-        </div>
+        {quota.plan || quota.subscriptionActiveUntil ? <div className="quota-plan">
+          {quota.plan ? <span>{t('quota.planLabel')} <strong>{quota.plan}</strong></span> : null}
+          {quota.subscriptionActiveUntil ? <span>{t('quota.expiresAt', { time: formatQuotaTimestamp(quota.subscriptionActiveUntil, locale) })}</span> : null}
+        </div> : null}
       </div>
       <QuotaActionFeedback quota={quota} name={name} />
       {quota.status === 'idle' ? <div className="quota-card-message"><span>{disabled ? t('quota.fileDisabled') : t('quota.notFetched')}</span><button type="button" className="secondary-button compact-button" onClick={onRefresh} disabled={disabled}>{disabled ? t('quota.disabled') : t('quota.fetch')}</button></div> : null}
@@ -232,14 +244,23 @@ export function QuotaCard({ file, quota, onRefresh, onReset }: { file: AuthFile;
         <ResetCreditExpiries quota={quota} />
         <MessageNotice message={quota.resetCreditsError ? name + ': ' + t('quota.resetCreditsWarning', { error: quota.resetCreditsError }) : null} />
       </div> : null}
-      {quota.status === 'success' ? <div className="quota-row-list">{quota.rows.map((row, index) => {
-        const reset = formatQuotaReset(row.resetAtMs, row.reset, locale, now);
-        return <div className="real-quota-row" key={`${row.label}-${index}`}>
-          <div><span>{row.label}</span><strong>{row.quotaAvailable ? t('quota.service.antigravity.available') : row.remainingPercent === null ? '—' : t('quota.remaining', { percent: Math.round(row.remainingPercent) })}</strong></div>
-          {row.remainingPercent !== null ? <div className="real-quota-track"><span style={{ width: `${Math.max(0, Math.min(100, row.remainingPercent))}%` }} /></div> : null}
-          <small>{[row.detail, reset].filter(Boolean).join(' · ')}</small>
-        </div>;
-      })}</div> : null}
+      {quota.status === 'success' ? <div className="quota-row-list">{groups.map((group, groupIndex) => <section className="quota-model-group" key={groupIndex}>
+        {group.label ? <div className="quota-model-heading"><h3>{group.label}</h3>{group.description ? <p>{group.description}</p> : null}</div> : null}
+        {group.rows.map((row, index) => {
+          const reset = countdown(row);
+          return <div className="real-quota-row" key={index} title={group.label ? row.detail : undefined}>
+            <div className="quota-window-summary"><span>{row.windowLabel || row.label}</span><div className="quota-window-status">
+              <strong>{row.quotaAvailable ? t('quota.service.antigravity.available') : row.remainingPercent === null ? '—' : t('quota.remaining', { percent: Math.round(row.remainingPercent) })}</strong>
+              {reset ? <small title={formatQuotaReset(row.resetAtMs, row.reset, locale, now)}>{reset}</small> : null}
+            </div></div>
+            {row.remainingPercent !== null ? <div className="real-quota-track" role="progressbar" aria-label={row.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(0, Math.min(100, row.remainingPercent))}><span style={{ width: Math.max(0, Math.min(100, row.remainingPercent)) + '%' }} /></div> : null}
+            {!group.label && row.detail ? <small>{row.detail}</small> : null}
+          </div>;
+        })}
+      </section>)}</div> : null}
+      <div className="quota-card-actions">
+        <button type="button" className="secondary-button compact-button" onClick={onRefresh} disabled={disabled || quota.status === 'loading'} title={disabled ? t('quota.fileDisabled') : t('quota.refresh')}><RefreshCw size={12} className={quota.status === 'loading' ? 'spin' : ''} aria-hidden="true" />{t('authFiles.quota.refresh')}</button>
+      </div>
       {onReset && ((quota.resetCredits ?? 0) > 0 || hasPendingClaudeReset(file)) ? <button type="button" className="secondary-button compact-button quota-reset-footer" onClick={onReset} disabled={!canResetQuota(file, quota)} title={t('quota.reset')}>{t(hasPendingClaudeReset(file) ? 'quota.claude.retry' : 'quota.reset')}</button> : null}
     </article>
   );
