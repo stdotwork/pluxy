@@ -1,4 +1,3 @@
-#[cfg(target_os = "windows")]
 use super::support::agent_test_home;
 use super::*;
 
@@ -102,4 +101,76 @@ fn deepseek_desktop_installed_host_probe() {
         .expect("installed Desktop should be detected");
     let version = read_deepseek_harness_desktop_version(&app).expect("Desktop version");
     println!("DeepSeek Harness Desktop: {} ({version})", app.display());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn deepseek_desktop_macos_finds_default_and_user_installations() {
+    let home = agent_test_home("deepseek-desktop-macos");
+    let system_root = home.join("Applications");
+    let user_root = home.join("user/Applications");
+    let roots = [system_root.clone(), user_root.clone()];
+
+    assert_eq!(find_macos_deepseek_harness_desktop_in_roots(&roots), None);
+
+    let user_app = user_root.join("DeepSeek Harness.app");
+    fs::create_dir_all(&user_app).unwrap();
+    assert_eq!(
+        find_macos_deepseek_harness_desktop_in_roots(&roots),
+        Some(user_app.clone())
+    );
+
+    let system_app = system_root.join("DeepSeek Harness.app");
+    fs::create_dir_all(&system_app).unwrap();
+    assert_eq!(
+        find_macos_deepseek_harness_desktop_in_roots(&roots),
+        Some(system_app)
+    );
+
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn deepseek_harness_managed_executable_finds_bundled_and_home_cli() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = agent_test_home("deepseek-cli-macos");
+    let app_roots = [home.join("Applications")];
+    let user_dsh = home.join(".dsh/bin/dsh");
+    fs::create_dir_all(user_dsh.parent().unwrap()).unwrap();
+    fs::write(&user_dsh, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&user_dsh, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        find_deepseek_harness_managed_executable_in_roots(&home, &app_roots),
+        Some(user_dsh.clone())
+    );
+
+    let user_app_dsh = home.join("Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh");
+    fs::create_dir_all(user_app_dsh.parent().unwrap()).unwrap();
+    fs::write(&user_app_dsh, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&user_app_dsh, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_file(&user_dsh).unwrap();
+    assert_eq!(
+        find_deepseek_harness_managed_executable_in_roots(&home, &app_roots),
+        Some(user_app_dsh)
+    );
+
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn deepseek_desktop_macos_host_app_is_detected() {
+    if !Path::new("/Applications/DeepSeek Harness.app").is_dir() {
+        return;
+    }
+    let home = agent_test_home("deepseek-desktop-macos-host");
+    let found = find_deepseek_harness_desktop_application(&home);
+    assert_eq!(found, Some(PathBuf::from("/Applications/DeepSeek Harness.app")));
+    let version = read_deepseek_harness_desktop_version(Path::new("/Applications/DeepSeek Harness.app"));
+    assert!(version.is_some());
+    let executable = find_deepseek_harness_executable(&home);
+    assert!(executable.is_some());
+    fs::remove_dir_all(home).unwrap();
 }

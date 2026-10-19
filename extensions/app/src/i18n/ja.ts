@@ -4,6 +4,16 @@ import { homeJa } from './home';
 import { authFileListJa } from './authFileList';
 
 export const jaOverrides = {
+  'agents.provider.label': 'openai プロバイダー識別子を使用',
+  'agents.provider.hint': '通信は引き続き CPA を経由し、オフでは cpa-gui を使用します。有効化前に CPA 認証を確認します。予測機能はアカウントとクライアントに依存します。他の変更は先に適用し、ログイン方式を変更する前にオフにしてください。',
+  'agents.provider.title': '{provider} に切り替え',
+  'agents.provider.description': '現在のプロキシ接続先とログイン方式を保持します。Codex を再起動し、新しい会話で確認してください。既存の会話は以前のプロバイダーに属する場合があります。',
+  'agents.provider.sync': '会話も同期する',
+  'agents.provider.syncHint': 'ローカルの過去の会話をバックアップし、選択したプロバイダーに更新します（クラウド同期ではありません）。未選択なら履歴は変更されず、後から会話管理で同期できます。別アカウントの暗号化内容は利用できない場合があります。',
+  'agents.provider.switched': '{provider} に切り替えました。通信は引き続き CPA を経由します。Codex を再起動してください。',
+  'agents.provider.syncFailed': 'プロバイダーは切り替わりましたが、会話の同期に失敗しました：{error}。会話管理で再試行できます。',
+  'agents.provider.refreshFailed': 'プロバイダーは切り替わりましたが、状態の更新に失敗しました：{error}',
+  'agents.provider.oauthUnsupported': 'CPA が現在の Codex OAuth 認証情報を受け付けませんでした。設定は変更されていません。内蔵 openai はカスタムプロバイダーの CPA key を使用しないため、対応する CPA 認証拡張か API Key ログインが必要です。',
   'app.nav.plugins': 'プラグイン',
   'app.nav.pluginPages': 'プラグインページ',
   'oauth.vertex.title': 'Vertex JSON ログイン',

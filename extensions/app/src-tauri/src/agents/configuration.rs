@@ -1341,6 +1341,7 @@ pub(crate) fn prepare_codex_managed_removal(paths: &[PathBuf]) -> Result<Images,
     let mut document = content
         .parse::<Document>()
         .map_err(|error| format!("Failed to parse Codex configuration: {error}"))?;
+    restore_codex_proxy_identity_for_removal(&mut document, path)?;
     let managed_selected =
         document.get("model_provider").and_then(Item::as_str) == Some(MANAGED_AGENT_PROVIDER_ID);
     let managed_catalog =
@@ -2917,10 +2918,19 @@ pub(crate) fn build_codex_agent_config_with_oauth(
             .map_err(|error| format!("Invalid Codex config.toml format: {error}"))?,
         None => Document::new(),
     };
+    let provider_id = if codex_uses_openai_proxy(&document) { "openai" } else { MANAGED_AGENT_PROVIDER_ID };
+    if provider_id == "openai" {
+        let previous_oauth = codex_provider_table(&document)
+            .and_then(|p| p.get("requires_openai_auth")).and_then(Item::as_bool) == Some(true);
+        if previous_oauth != oauth_configuration {
+            return Err("Turn off the openai provider identity before changing the sign-in method".into());
+        }
+        set_codex_table_item(document.as_table_mut(), "openai_base_url", value(base_url));
+    }
     set_codex_table_item(
         document.as_table_mut(),
         "model_provider",
-        value(MANAGED_AGENT_PROVIDER_ID),
+        value(provider_id),
     );
     set_codex_table_item(document.as_table_mut(), "model", value(model));
     set_codex_table_item(

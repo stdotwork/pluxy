@@ -1,4 +1,5 @@
 import { MessageNotice } from '../appNotice';
+import type { ReactNode } from 'react';
 import { AppWindow, FolderOpen, LoaderCircle, Play, RefreshCw, Square, Terminal, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 
@@ -84,10 +85,12 @@ export function AgentConfigurationFeedback({ pending, description, status = '' }
 }
 
 export function AgentConfigManagementPanel({
+  codexProviderControl,
   pi, codex, busyAction, canTemplate, canUpdatePi, canUninstallPi, pluginInstalled, pluginVersion, updateLabel,
   executablePath, onChooseExecutablePath, onClearExecutablePath, onBackup, onRestore, onTemplate, onClear, onUpdatePi, onUninstallPi, canClearIntegration, onClearIntegration,
   dualTargets, desktopExecutablePath, onChooseDesktopExecutablePath, onClearDesktopExecutablePath,
 }: {
+  codexProviderControl?: ReactNode;
   pi: boolean; codex: boolean; busyAction: string | null; canTemplate: boolean;
   canUpdatePi: boolean; canUninstallPi: boolean; pluginInstalled: boolean; pluginVersion: string | null; updateLabel: string;
   executablePath: string; onChooseExecutablePath: () => void; onClearExecutablePath: () => void;
@@ -134,6 +137,9 @@ export function AgentConfigManagementPanel({
       <div className="agent-management-actions">
         <button type="button" className="secondary-button" onClick={onTemplate} disabled={busy || !canTemplate}>{t('agents.modify.default')}</button>
       </div>
+    </section> : null}
+    {codex && codexProviderControl ? <section className="agent-management-row agent-management-provider">
+      <div>{codexProviderControl}</div>
     </section> : null}
     {codex ? <section className="agent-management-row agent-management-clear-integration">
       <div><h3>{t('agents.nativeOAuth.restoreTitle')}</h3><p>{t('agents.nativeOAuth.restoreHint')}</p></div>

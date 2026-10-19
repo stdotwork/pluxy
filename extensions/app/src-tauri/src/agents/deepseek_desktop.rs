@@ -19,7 +19,11 @@ pub(crate) fn find_deepseek_harness_desktop_application(home: &Path) -> Option<P
         );
         find_windows_deepseek_harness_desktop(&local, &roots, &registrations)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        find_macos_deepseek_harness_desktop(home)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = home;
         None
@@ -63,9 +67,27 @@ pub(crate) fn read_deepseek_harness_desktop_version(application: &Path) -> Optio
         read_codex_asar_version(&application.parent()?.join("resources/app.asar"))
             .or_else(|| read_windows_executable_version(application))
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        read_macos_app_version(application)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = application;
         None
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn find_macos_deepseek_harness_desktop_in_roots(roots: &[PathBuf]) -> Option<PathBuf> {
+    roots
+        .iter()
+        .map(|root| root.join("DeepSeek Harness.app"))
+        .find(|path| path.is_dir())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn find_macos_deepseek_harness_desktop(home: &Path) -> Option<PathBuf> {
+    let roots = [PathBuf::from("/Applications"), home.join("Applications")];
+    find_macos_deepseek_harness_desktop_in_roots(&roots)
 }
