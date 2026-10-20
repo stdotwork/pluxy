@@ -3079,6 +3079,9 @@ pub(crate) fn configure_initial_main_window(
             .unminimize()
             .map_err(|error| format!("Failed to restore main window: {error}"))?;
     }
+    if let Err(error) = sync_main_webview_bounds(app_handle) {
+        eprintln!("Failed to synchronize the main webview bounds: {error}");
+    }
     window
         .set_focus()
         .map_err(|error| format!("Failed to focus main window: {error}"))
