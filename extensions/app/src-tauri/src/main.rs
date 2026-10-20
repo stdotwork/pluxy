@@ -35,6 +35,7 @@ mod provider_health;
 ))]
 mod tray;
 mod usage;
+mod window_material;
 
 #[cfg(test)]
 use configuration_watcher::nearest_existing_watch_directory;
@@ -2630,6 +2631,9 @@ fn main() {
 
     let app = app
         .setup(move |app| {
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_background_color(Some(tauri::window::Color(255, 255, 255, 255)))?;
+            }
             if let Err(error) = network_proxy::refresh(app.state::<GuiConfigState>().inner()) {
                 eprintln!("Failed to read startup proxy settings: {error}");
             }
@@ -2766,8 +2770,12 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             desktop_theme::get_linux_system_theme,
+            desktop_theme::list_custom_themes,
+            desktop_theme::open_custom_themes_directory,
             desktop_theme::get_theme_selection,
             desktop_theme::save_theme_selection,
+            window_material::detect_window_material,
+            window_material::set_window_material,
             privacy_mode::get_privacy_mode,
             privacy_mode::save_privacy_mode,
             health_check,

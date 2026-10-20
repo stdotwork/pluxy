@@ -81,6 +81,93 @@ pub(crate) fn save_theme_selection(selection: ThemeSelection) -> Result<(), Stri
     )
 }
 
+const CUSTOM_THEME_LIMIT: usize = 64;
+const CUSTOM_THEME_MAX_BYTES: u64 = 64 * 1024;
+
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CustomThemeFile {
+    file_name: String,
+    content: Option<String>,
+}
+
+#[derive(Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CustomThemeList {
+    files: Vec<CustomThemeFile>,
+    omitted: usize,
+}
+
+fn read_custom_theme(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut content = String::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(CUSTOM_THEME_MAX_BYTES + 1)
+        .read_to_string(&mut content)
+        .ok()?;
+    (content.len() as u64 <= CUSTOM_THEME_MAX_BYTES).then_some(content)
+}
+
+fn list_theme_files(directory: &std::path::Path) -> Result<CustomThemeList, String> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CustomThemeList::default())
+        }
+        Err(_) => return Err("Failed to read custom themes directory".to_string()),
+    };
+    let mut files = std::collections::BinaryHeap::with_capacity(CUSTOM_THEME_LIMIT + 1);
+    let mut omitted = 0;
+    for entry in entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+    {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if !std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
+        files.push((name, entry.path()));
+        if files.len() > CUSTOM_THEME_LIMIT {
+            files.pop();
+            omitted += 1;
+        }
+    }
+    Ok(CustomThemeList {
+        files: files
+            .into_sorted_vec()
+            .into_iter()
+            .map(|(file_name, path)| CustomThemeFile {
+                content: read_custom_theme(&path),
+                file_name,
+            })
+            .collect(),
+        omitted,
+    })
+}
+
+fn custom_themes_dir() -> Result<std::path::PathBuf, String> {
+    Ok(super::core_base_dir()?.join("themes"))
+}
+
+#[tauri::command]
+pub(crate) fn list_custom_themes() -> Result<CustomThemeList, String> {
+    list_theme_files(&custom_themes_dir()?)
+}
+
+#[tauri::command]
+pub(crate) fn open_custom_themes_directory() -> Result<(), String> {
+    let directory = custom_themes_dir()?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("Failed to create custom themes directory: {error}"))?;
+    super::management_api::open_directory_in_file_manager(&directory)
+}
+
 #[tauri::command]
 pub(crate) async fn get_linux_system_theme() -> Option<tauri::Theme> {
     #[cfg(target_os = "linux")]
@@ -238,6 +325,77 @@ mod tests {
         };
         write_selection(&directory.join("theme-selection.json"), &selection).unwrap();
         assert_eq!(load_selection(&directory).unwrap(), Some(selection));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn lists_custom_theme_files_sorted_with_limits() {
+        let directory = std::env::temp_dir().join(format!(
+            "ezcpa-custom-themes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert_eq!(
+            list_theme_files(&directory).unwrap(),
+            CustomThemeList::default()
+        );
+        std::fs::create_dir_all(directory.join("folder.json")).unwrap();
+        std::fs::write(directory.join("b.json"), "{\"id\":\"b\"}").unwrap();
+        std::fs::write(directory.join("A.JSON"), "{}").unwrap();
+        std::fs::write(directory.join("notes.txt"), "ignored").unwrap();
+        std::fs::write(
+            directory.join("c-large.json"),
+            vec![b' '; CUSTOM_THEME_MAX_BYTES as usize + 1],
+        )
+        .unwrap();
+        std::fs::write(directory.join("d-binary.json"), [0xff, 0xfe]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(directory.join("b.json"), directory.join("link.json")).unwrap();
+        let list = list_theme_files(&directory).unwrap();
+        assert_eq!(list.omitted, 0);
+        assert_eq!(
+            list.files,
+            vec![
+                CustomThemeFile {
+                    file_name: "A.JSON".to_string(),
+                    content: Some("{}".to_string())
+                },
+                CustomThemeFile {
+                    file_name: "b.json".to_string(),
+                    content: Some("{\"id\":\"b\"}".to_string())
+                },
+                CustomThemeFile {
+                    file_name: "c-large.json".to_string(),
+                    content: None
+                },
+                CustomThemeFile {
+                    file_name: "d-binary.json".to_string(),
+                    content: None
+                },
+            ]
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+        std::fs::create_dir_all(&directory).unwrap();
+        for index in (0..CUSTOM_THEME_LIMIT + 2).rev() {
+            std::fs::write(directory.join(format!("theme-{index:03}.json")), "{}").unwrap();
+        }
+        std::fs::write(directory.join("0-first.json"), "{}").unwrap();
+        std::fs::write(directory.join("notes.txt"), "ignored").unwrap();
+        let list = list_theme_files(&directory).unwrap();
+        let mut expected = vec!["0-first.json".to_string()];
+        expected.extend((0..CUSTOM_THEME_LIMIT - 1).map(|index| format!("theme-{index:03}.json")));
+        assert_eq!(list.omitted, 3);
+        assert_eq!(
+            list.files
+                .iter()
+                .map(|file| file.file_name.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(list.files.iter().all(|file| file.content.is_some()));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

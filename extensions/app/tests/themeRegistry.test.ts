@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { createThemeRegistry, themeRegistry, themePreview } from '../src/themes/registry';
+import { builtinThemes, createThemeRegistry, normalizeTheme, themeRegistry, themePreview } from '../src/themes/registry';
 import { createThemeApplicator } from '../src/themes/applyTheme';
 import { en, zhCN, zhTW, ja } from '../src/i18n/resources';
-import type { ThemeBackdrop, ThemeDefinition } from '../src/themes/types';
+import { localizeThemeLabel, type PlatformWindowMaterial, type ThemeBackdrop, type ThemeDefinition } from '../src/themes/types';
 import { warmSand } from '../src/themes/warmSand';
 import { graphite } from '../src/themes/graphite';
 import { midnight } from '../src/themes/midnight';
@@ -201,6 +201,57 @@ describe('theme registry and application', () => {
     createThemeApplicator(document)(themeRegistry.resolve('light'));
     expect([...properties]).toEqual([['--unrelated', 'keep']]);
     expect(styles.size).toBe(0);
+  });
+  test('inline labels replace message keys and localize with fallbacks', () => {
+    const { nameKey: _, ...unlabeled } = custom;
+    const labeled = { ...unlabeled, name: { en: 'Forest', 'zh-CN': '森林' }, description: 'Deep green' };
+    const registry = createThemeRegistry([...builtinThemes, labeled]);
+    expect(registry.get(custom.id)!.name).toEqual(labeled.name);
+    expect(normalizeTheme(labeled).description).toBe('Deep green');
+    expect(localizeThemeLabel(labeled.name, 'zh-CN')).toBe('森林');
+    expect(localizeThemeLabel(labeled.name, 'zh-TW')).toBe('森林');
+    expect(localizeThemeLabel(labeled.name, 'ja')).toBe('Forest');
+    expect(localizeThemeLabel({ ja: '森' }, 'en')).toBe('森');
+    expect(localizeThemeLabel('Plain', 'ja')).toBe('Plain');
+    const name: Partial<Record<'en' | 'ja', string>> = { en: 'Forest' };
+    const description: Partial<Record<'en', string>> = { en: 'Deep green' };
+    const isolated = createThemeRegistry([...builtinThemes, { ...unlabeled, name, description }]).get(custom.id)!;
+    delete name.en;
+    delete description.en;
+    expect(isolated.name).toEqual({ en: 'Forest' });
+    expect(isolated.description).toEqual({ en: 'Deep green' });
+    expect(Object.isFrozen(isolated.name)).toBe(true);
+    expect(Object.isFrozen(isolated.description)).toBe(true);
+    for (const theme of [unlabeled, { ...unlabeled, name: '' }, { ...unlabeled, name: '   ' }, { ...unlabeled, name: {} },
+      { ...unlabeled, name: { fr: 'Forêt' } }, { ...unlabeled, name: ['Forest'] }, { ...unlabeled, name: 'x'.repeat(81) },
+      { ...custom, name: { en: '' } }, { ...custom, description: { en: 1 } },
+    ]) expect(() => normalizeTheme(theme as ThemeDefinition)).toThrow('Invalid theme metadata');
+  });
+  test('window material is validated and only exposed when the platform supports it', () => {
+    for (const windowMaterial of ['glass', 'mica', null, 1]) {
+      expect(() => normalizeTheme({ ...custom, windowMaterial } as unknown as ThemeDefinition)).toThrow('Invalid theme metadata');
+    }
+    const root = { dataset: {} as Record<string, string>, style: { setProperty() {}, removeProperty() {} } };
+    const document = { documentElement: root, body: { style: {} }, head: { append() {} }, querySelector: () => null,
+      createElement: () => ({ dataset: {}, textContent: '', remove() {} }) } as unknown as Document;
+    const translucent = normalizeTheme({ ...custom, windowMaterial: 'translucent' });
+    const solid = normalizeTheme({ ...custom, windowMaterial: 'solid' });
+    createThemeApplicator(document)(translucent);
+    expect(root.dataset.windowMaterial).toBeUndefined();
+    let platform: PlatformWindowMaterial | null = 'mica';
+    const apply = createThemeApplicator(document, () => platform);
+    apply(translucent);
+    expect(root.dataset.windowMaterial).toBe('mica');
+    apply(solid);
+    expect(root.dataset.windowMaterial).toBeUndefined();
+    apply(translucent);
+    platform = null;
+    apply(translucent);
+    expect(root.dataset.windowMaterial).toBeUndefined();
+    platform = 'liquid-glass';
+    apply(translucent);
+    apply(themeRegistry.resolve('light'));
+    expect(root.dataset.windowMaterial).toBeUndefined();
   });
   test.each(additionalThemes)('$id overlay controls stay opaque and readable', (theme) => {
     const surface = themeOverlaySurface(theme);

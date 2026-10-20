@@ -27,7 +27,7 @@ serde_norway = "0.9"
 serde_yaml = "0.9"
 sha2 = "0.10"
 tar = "0.4"
-tauri = { version = "~2.11", features = ["tray-icon", "unstable"] }
+tauri = { version = "~2.12", features = ["macos-private-api", "tray-icon", "unstable"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-opener = "2"
@@ -40,7 +40,7 @@ yaml-edit = "0.2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-tauri = { version = "~2.11", features = ["test"] }
+tauri = { version = "~2.12", features = ["test"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -52,8 +52,10 @@ dbus = "0.9"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent", "NSRunningApplication", "NSStatusItem"] }
 objc2-foundation = "0.3"
+window-vibrancy = "0.8.1"
 
 [target.'cfg(windows)'.dependencies]
+window-vibrancy = "0.8.1"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_Networking_WinHttp",

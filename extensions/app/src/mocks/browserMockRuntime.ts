@@ -21,6 +21,19 @@ export type BrowserMockRuntime = {
 
 const SCENARIOS = new Set<BrowserMockScenario>(['running', 'stopped', 'empty', 'error']);
 const BUNDLED_CORE = { version: '7.3.15', assetName: 'CLIProxyAPI_7.3.15_windows_amd64.zip' };
+const MOCK_CUSTOM_THEME = {
+  id: 'harbor-dark',
+  name: { en: 'Harbor', 'zh-CN': '港湾', ja: 'ハーバー' },
+  description: { en: 'Deep teal surfaces with a sea-glass accent', 'zh-CN': '深青底色与海玻璃色点缀', ja: '深い青緑とシーグラスのアクセント' },
+  appearance: 'dark',
+  windowBackground: '#0E1A1F',
+  tokens: {
+    workspaceBackground: '#0E1A1F', surface: '#14242B', softSurface: '#1A2E36', hoverBackground: '#213842',
+    textPrimary: '#E6F1F2', textSecondary: '#B7CACD', textTertiary: '#8FA7AB', textMuted: '#7D959A',
+    border: '#2A434C', borderSubtle: '#1F353D', accent: '#6FD3C1', accentStrong: '#8FE0D1',
+    accentSoft: '#1D3B3A', accentContrast: '#0E1A1F', sidebarBackground: '#0B151A', popoverBackground: '#14242B',
+  },
+};
 const PROVIDER_SECTIONS = [
   'gemini-api-key',
   'interactions-api-key',
@@ -995,12 +1008,16 @@ export function createBrowserMockRuntime(
       case 'save_usage_events_export': return null;
       case 'detect_core_platform': return { os: 'windows', arch: 'x86_64', assetOs: 'windows', assetArch: 'amd64', archiveKind: 'zip' };
       case 'get_linux_system_theme': return 'light';
+      case 'detect_window_material': return null;
+      case 'list_custom_themes': return { files: [{ fileName: 'harbor-dark.json', content: JSON.stringify(MOCK_CUSTOM_THEME) }], omitted: 0 };
       case 'set_app_locale':
       case 'open_external_url':
       case 'open_oauth_url':
       case 'resolve_windows_close_request':
       case 'open_auth_files_directory':
       case 'open_core_logs_directory':
+      case 'open_custom_themes_directory':
+      case 'set_window_material':
       case 'restart_agent_app':
       case 'restart_codex_app':
       case 'restart_opencode_app':

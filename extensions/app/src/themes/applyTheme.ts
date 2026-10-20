@@ -1,8 +1,11 @@
-import { themeTokenProperties, type ThemeDefinition } from './types';
+import { themeTokenProperties, type PlatformWindowMaterial, type ThemeDefinition } from './types';
 import { backdropImage } from './backdrop';
 import { themeMaterialTokens, themeOverlayRules, themeOverlayPalette } from './materials';
 
-export function createThemeApplicator(document: Document) {
+export const themeWindowMaterial = (theme: ThemeDefinition, platform: PlatformWindowMaterial | null) =>
+  theme.windowMaterial === 'translucent' ? platform : null;
+
+export function createThemeApplicator(document: Document, platformMaterial: () => PlatformWindowMaterial | null = () => null) {
   const ownedProperties = [...Object.values(themeTokenProperties).flat(),
     '--theme-backdrop-image', '--theme-backdrop-color', '--theme-backdrop-sidebar',
     '--theme-backdrop-panel', '--theme-sticky-background', '--theme-sticky-hover-background'];
@@ -11,9 +14,12 @@ export function createThemeApplicator(document: Document) {
     const root = document.documentElement;
     for (const property of ownedProperties) root.style.removeProperty(property);
     delete root.dataset.themeBackdrop;
+    delete root.dataset.windowMaterial;
     root.dataset.theme = theme.appearance;
     root.dataset.themeId = theme.id;
     root.style.colorScheme = theme.appearance;
+    const material = themeWindowMaterial(theme, platformMaterial());
+    if (material) root.dataset.windowMaterial = material;
     for (const [key, value] of Object.entries(themeMaterialTokens(theme))) {
       for (const property of themeTokenProperties[key as keyof typeof themeTokenProperties]) {
         root.style.setProperty(property, value);

@@ -1,9 +1,16 @@
+import type { AppLocale } from '../i18n';
 import type { MessageKey } from '../i18n/resources';
 
 export type ThemeAppearance = 'light' | 'dark';
 export type ThemePreference = string;
 
+export const themeOpacityTokenProperties = {
+  windowMaterialWorkspaceOpacity: ['--theme-window-material-workspace-opacity'],
+  windowMaterialSidebarOpacity: ['--theme-window-material-sidebar-opacity'],
+} as const;
+
 export const themeTokenProperties = {
+  ...themeOpacityTokenProperties,
   workspaceBackground: ['--theme-workspace-background', '--bg-secondary'],
   surface: ['--theme-surface', '--bg-primary', '--bg-card', '--theme-fff', '--theme-ffffff', '--theme-fffdf8'],
   softSurface: [
@@ -65,13 +72,19 @@ export type ThemeBackdrop = Readonly<{
   hover?: string;
 }>;
 export type ThemePreview = { background: string; sidebar: string; surface: string; accent: string };
+export type ThemeWindowMaterial = 'solid' | 'translucent';
+export type PlatformWindowMaterial = 'liquid-glass' | 'vibrancy' | 'mica' | 'acrylic';
+export type ThemeLabel = string | Readonly<Partial<Record<AppLocale, string>>>;
 export type ThemeDefinition = {
   id: string;
-  nameKey: MessageKey;
+  nameKey?: MessageKey;
   descriptionKey?: MessageKey;
+  name?: ThemeLabel;
+  description?: ThemeLabel;
   appearance: ThemeAppearance;
   order: number;
   windowBackground: string;
+  windowMaterial?: ThemeWindowMaterial;
   tokens: Readonly<ThemeTokens>;
   backdrop?: ThemeBackdrop;
 };
@@ -85,6 +98,23 @@ export type ThemeSelection = {
 };
 export const isThemeId = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
+
+const themeLabelLocales: readonly AppLocale[] = ['zh-CN', 'zh-TW', 'ja', 'en'];
+const isLabelText = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0 && value.length <= 80;
+
+export function isThemeLabel(value: unknown): value is ThemeLabel {
+  if (isLabelText(value)) return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  return entries.length > 0 && entries.every(([locale, text]) =>
+    themeLabelLocales.includes(locale as AppLocale) && isLabelText(text));
+}
+
+export function localizeThemeLabel(label: ThemeLabel, locale: AppLocale): string {
+  if (typeof label === 'string') return label;
+  return label[locale] ?? (locale === 'zh-TW' ? label['zh-CN'] : undefined) ?? label.en ?? Object.values(label)[0]!;
+}
 
 export function isThemeSelection(value: unknown): value is ThemeSelection {
   if (!value || typeof value !== 'object') return false;

@@ -233,6 +233,14 @@ fn join_registry_path(prefix: &str, suffix: &str) -> String {
     format!("{prefix}\\{suffix}")
 }
 
+pub(crate) fn windows_build_number() -> Option<u32> {
+    RegistryKey::open(HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows NT\CurrentVersion")?
+        .string("CurrentBuildNumber")?
+        .trim()
+        .parse()
+        .ok()
+}
+
 pub(crate) fn windows_app_path_executable(file_name: &str) -> Option<PathBuf> {
     for root in current_version_roots() {
         let Some(key) = RegistryKey::open(
