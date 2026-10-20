@@ -4,6 +4,11 @@ import { homeJa } from './home';
 import { authFileListJa } from './authFileList';
 
 export const jaOverrides = {
+  'app.window.minimize': '最小化',
+  'app.window.maximize': '最大化',
+  'app.window.restore': '元のサイズに戻す',
+  'app.window.close': '閉じる',
+  'app.window.error': 'ウィンドウ操作に失敗しました。再試行してください。',
   'agents.approvalModel.label': "自動承認モデル",
   'agents.approvalModel.hint': "Codex の自動承認に使用します。Codex デフォルトで組み込みの選択に戻ります。指定モデルは現在のプロキシで呼び出せる必要があります。",
   'agents.approvalModel.default': "Codex デフォルト",

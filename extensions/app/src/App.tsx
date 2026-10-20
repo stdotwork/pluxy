@@ -7,6 +7,7 @@ import {
 } from './services/appSettings';
 import type { WindowsCloseAction } from './services/appSettings';
 import { closePluginWebview } from './services/pluginWebview';
+import { WindowFrame } from './components/WindowFrame';
 import { MessageNotice } from './appNotice';
 import { ThemeSelector } from './components/ThemeSelector';
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
@@ -152,7 +153,7 @@ function App() {
     <AppUpdateProvider>
       <CoreRuntimeProvider>
         <CoreUpdateProvider>
-          <AppContent />
+          <WindowFrame><AppContent /></WindowFrame>
         </CoreUpdateProvider>
       </CoreRuntimeProvider>
     </AppUpdateProvider>

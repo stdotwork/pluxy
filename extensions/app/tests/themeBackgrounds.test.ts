@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { themeTokenProperties } from '../src/themes/types';
 
 const semanticPaint = new Set([
+  'components/WindowFrame.css|.window-controls .window-close:hover',
+  'components/WindowFrame.css|.window-controls .window-close:active',
   'components/AuthFileUsageSummary.css|.auth-file-usage-metric.rate svg',
   'pages/QuotaPage.css|.quota-page .quota-status-badge.ready',
   'pages/QuotaPage.css|.quota-page .quota-status-badge.error',
@@ -60,7 +62,8 @@ test('component backgrounds use shared roles; literal paint is limited to semant
   const violations: string[] = [];
   const themeRoles = new Set<string>(Object.values(themeTokenProperties).flat());
   const adaptiveLegacyColors = new Set(['--theme-8a847c', '--theme-7a746c']);
-  for await (const path of new Bun.Glob('**/*.css').scan(source)) {
+  for await (const entry of new Bun.Glob('**/*.css').scan(source)) {
+    const path = entry.replaceAll('\\', '/');
     if (path.startsWith('mocks/')) continue;
     const css = (await readFile(`${source}${path}`, 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '');
     for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {

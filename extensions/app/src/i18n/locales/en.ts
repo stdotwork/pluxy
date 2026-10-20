@@ -4,6 +4,11 @@ import { homeEn } from '../home';
 import { authFileListEn } from '../authFileList';
 
 export const en: Record<MessageKey, string> = {
+  'app.window.minimize': 'Minimize',
+  'app.window.maximize': 'Maximize',
+  'app.window.restore': 'Restore window',
+  'app.window.close': 'Close',
+  'app.window.error': 'Window action failed. Please retry.',
   'agents.approvalModel.label': "Approval model",
   'agents.approvalModel.hint': "Used for Codex automatic approval requests. Codex default restores built-in selection; a selected model must be callable through the current proxy.",
   'agents.approvalModel.default': "Codex default",

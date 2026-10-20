@@ -1,8 +1,9 @@
 :root[data-window-material],
-:root[data-window-material] :is(body, #root, .app-shell) {
+:root[data-window-material] :is(body, #root, .immersive-window, .app-shell) {
   background: transparent !important;
 }
 
+:root[data-window-material] .immersive-window .window-titlebar,
 :root[data-window-material] .workspace {
   background: color-mix(in srgb, var(--theme-faf9f5) var(--theme-window-material-workspace-opacity, 72%), transparent);
 }

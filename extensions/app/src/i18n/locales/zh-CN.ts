@@ -3,6 +3,11 @@ import { homeZhCN } from '../home';
 import { authFileListZhCN } from '../authFileList';
 
 export const zhCN = {
+  'app.window.minimize': '最小化',
+  'app.window.maximize': '最大化',
+  'app.window.restore': '还原窗口',
+  'app.window.close': '关闭',
+  'app.window.error': '窗口操作失败，请重试',
   'agents.approvalModel.label': "自动审批模型",
   'agents.approvalModel.hint': "用于 Codex 自动审批请求。选择 Codex 默认可恢复内置选择逻辑；指定模型必须能通过当前代理调用。",
   'agents.approvalModel.default': "Codex 默认",

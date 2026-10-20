@@ -15,6 +15,7 @@ const allowedSelectors: Record<string, string> = {
   '.usage-records-page .usage-tab-panel .usage-price-row-actions button:hover': 'Keeps the page-token hover on the price table actions that the usage panel recolors above.',
 };
 const rowButtons: Record<string, [number, string]> = {
+  'components/WindowFrame.tsx': [2, 'Native window chrome uses caption button dimensions.'],
   'App.tsx': [2, 'Sidebar navigation items and language list rows (.nav-section, .sidebar-language-list).'],
   'components/ThemeSelector.tsx': [3, 'Sidebar theme trigger, theme cards and menu actions (.theme-selector-*).'],
   'pages/EasyModePage.tsx': [1, 'Language menu items (.simple-mode-lang-menu).'],
@@ -32,6 +33,7 @@ const removed = [
   'quiet-button', 'text-button', 'simple-mode-highlight-button', 'codex-session-dialog-close', 'plugin-search-clear-button',
 ];
 const exceptions: Record<string, string[]> = {
+  'Native window caption controls use OS-sized chrome': ['window-controls', 'window-close'],
   'Tabs and SegmentedControl choices (1.3)': [
     'routing-segmented', 'agent-subpage-tabs', 'oauth-subpage-tabs', 'config-subpage-tabs', 'usage-tabs', 'plugin-tabs', 'home-protocol-tabs', 'usage-analysis-metric',
     'quota-category-filter', 'thinking-effort-options', 'agent-auth-segmented', 'agent-auth-segmented-button', 'simple-mode-api-platforms', 'simple-mode-api-platform',

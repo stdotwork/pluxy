@@ -35,6 +35,8 @@ mod provider_health;
 ))]
 mod tray;
 mod usage;
+#[cfg(target_os = "windows")]
+mod windows_frame;
 mod window_material;
 
 #[cfg(test)]
@@ -2631,6 +2633,12 @@ fn main() {
 
     let app = app
         .setup(move |app| {
+            // Match WindowFrame's Windows-only shell before showing the main window.
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                windows_frame::install(&window)?;
+                window.set_decorations(false)?;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 window.set_background_color(Some(tauri::window::Color(255, 255, 255, 255)))?;
             }
