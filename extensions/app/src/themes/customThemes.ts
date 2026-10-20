@@ -14,7 +14,7 @@ function parseCustomTheme(content: string, order: number): ThemeDefinition {
   if (!isRecord(record) || Object.keys(record).some((key) => !allowedKeys.has(key))
     || record.name === undefined || typeof record.windowBackground !== 'string'
     || (record.$schema !== undefined && typeof record.$schema !== 'string')
-    || !isRecord(record.tokens) || Object.values(record.tokens).some((value) => typeof value !== 'string')) {
+    || !isRecord(record.tokens)) {
     throw new Error('Invalid custom theme');
   }
   const { $schema: _schema, ...definition } = record;

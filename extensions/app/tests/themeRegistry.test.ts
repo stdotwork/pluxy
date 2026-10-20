@@ -94,11 +94,10 @@ describe('theme registry and application', () => {
       expect(themeRegistry.resolveSystem('dark', { ...remembered, dark: id }).id).toBe('dark');
     }
   });
-  test('rejects collisions, reserved IDs, unsupported slots and invalid native colors', () => {
+  test('rejects collisions, reserved IDs, invalid native colors', () => {
     for (const theme of [
       { ...custom, id: 'dark' }, { ...custom, id: 'system' }, { ...custom, id: '../bad' },
       { ...custom, windowBackground: '#11223344' }, { ...custom, tokens: { surface: 'url(bad)' } },
-      { ...custom, tokens: { arbitraryCss: '#ffffff' } },
     ]) expect(() => createThemeRegistry([...themeRegistry.themes, theme as ThemeDefinition])).toThrow();
   });
   test('removed themes leave the picker and safely fall back for saved selections', () => {

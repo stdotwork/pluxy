@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { parseCustomThemes } from '../src/themes/customThemes';
 import { builtinThemes, createThemeRegistry } from '../src/themes/registry';
+import { createThemeApplicator } from '../src/themes/applyTheme';
 
 const theme = (fields: Record<string, unknown> = {}) => JSON.stringify({
   $schema: './theme.schema.json', id: 'harbor-dark', name: { en: 'Harbor', 'zh-CN': '港湾' }, appearance: 'dark',
@@ -33,6 +34,31 @@ describe('custom themes', () => {
     expect(themes.map(({ windowMaterial }) => windowMaterial)).toEqual(['translucent', 'solid']);
   });
 
+  test('drops tokens that no longer exist instead of rejecting the theme', () => {
+    const { themes, skipped } = parseCustomThemes([
+      file('legacy.json', theme({ id: 'legacy-dark', tokens: { accent: '#6FD3C1', windowMaterialTitlebarOpacity: '72%', futureToken: { value: 'ignored' }, toString: 'ignored' } })),
+    ]);
+    expect(skipped).toEqual([]);
+    expect(themes.map(({ id }) => id)).toEqual(['legacy-dark']);
+    expect(themes[0].tokens).toEqual({ accent: '#6FD3C1' });
+    const applied: Record<string, string> = {};
+    const root = { dataset: {} as Record<string, string>, style: { setProperty(key: string, value: string) { applied[key] = value; }, removeProperty() {} } };
+    const document = { documentElement: root, body: { style: {} }, head: { append() {} }, querySelector: () => null,
+      createElement: () => ({ dataset: {}, textContent: '', remove() {} }) } as unknown as Document;
+    expect(() => createThemeApplicator(document)(themes[0])).not.toThrow();
+  });
+
+  test('applying an unvalidated theme ignores tokens without properties', () => {
+    const applied: Record<string, string> = {};
+    const root = { dataset: {} as Record<string, string>, style: { setProperty(key: string, value: string) { applied[key] = value; }, removeProperty() {} } };
+    const document = { documentElement: root, body: { style: {} }, head: { append() {} }, querySelector: () => null,
+      createElement: () => ({ dataset: {}, textContent: '', remove() {} }) } as unknown as Document;
+    const theme = { ...builtinThemes[0], tokens: { accent: '#6FD3C1', windowMaterialTitlebarOpacity: '72%', toString: 'ignored' } };
+    expect(() => createThemeApplicator(document)(theme)).not.toThrow();
+    expect(applied['--ui-accent']).toBe('#6FD3C1');
+    expect(Object.keys(applied).some(key => /Titlebar|toString/.test(key))).toBe(false);
+  });
+
   test('skips only the invalid file and records its name', () => {
     const { themes, skipped } = parseCustomThemes([
       file('broken.json', '{'),
@@ -43,7 +69,7 @@ describe('custom themes', () => {
       file('extra.json', theme({ id: 'extra-dark', order: 1 })),
       file('key.json', theme({ id: 'key-dark', nameKey: 'app.theme.dark' })),
       file('material.json', theme({ id: 'glass-dark', windowMaterial: 'glass' })),
-      file('token.json', theme({ id: 'token-dark', tokens: { unknownToken: '#ffffff' } })),
+      file('token-value.json', theme({ id: 'token-value-dark', tokens: { accent: 'blue' } })),
       file('token-type.json', theme({ id: 'token-type-dark', tokens: { accent: ['#ffffff'] } })),
       file('background.json', theme({ id: 'background-dark', windowBackground: ['#ffffff'] })),
       file('backdrop.json', theme({ id: 'backdrop-dark', backdrop: { layers: [] } })),
@@ -53,7 +79,7 @@ describe('custom themes', () => {
     expect(themes.map(({ id }) => id)).toEqual(['harbor-dark']);
     expect(skipped).toEqual([
       'broken.json', 'unreadable.json', 'array.json', 'nameless.json', 'builtin.json', 'extra.json', 'key.json',
-      'material.json', 'token.json', 'token-type.json', 'background.json', 'backdrop.json', 'duplicate.json',
+      'material.json', 'token-value.json', 'token-type.json', 'background.json', 'backdrop.json', 'duplicate.json',
     ]);
   });
 });

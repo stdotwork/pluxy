@@ -18,19 +18,20 @@ export function normalizeTheme(definition: ThemeDefinition): ThemeDefinition {
   }
   if (!/^#[\da-f]{6}$/i.test(definition.windowBackground)) throw new Error(`Invalid window background: ${definition.id}`);
   if (!definition.tokens || typeof definition.tokens !== 'object') throw new Error(`Invalid theme tokens: ${definition.id}`);
+  const tokens: Record<string, string> = {};
   for (const [key, value] of Object.entries(definition.tokens)) {
+    if (!Object.prototype.hasOwnProperty.call(themeTokenProperties, key)) continue;
     const valid = typeof value === 'string' && (Object.prototype.hasOwnProperty.call(themeOpacityTokenProperties, key)
       ? /^(?:\d+(?:\.\d+)?)%$/.test(value) && Number(value.slice(0, -1)) <= 100
       : /^#(?:[\da-f]{6}|[\da-f]{8})$/i.test(value));
-    if (!Object.prototype.hasOwnProperty.call(themeTokenProperties, key) || !valid) {
-      throw new Error(`Invalid theme color: ${definition.id}.${key}`);
-    }
+    if (!valid) throw new Error(`Invalid theme color: ${definition.id}.${key}`);
+    tokens[key] = value;
   }
   const label = (value: ThemeLabel) => typeof value === 'string' ? value : Object.freeze({ ...value });
   return Object.freeze({ ...definition,
     ...(definition.name === undefined ? {} : { name: label(definition.name) }),
     ...(definition.description === undefined ? {} : { description: label(definition.description) }),
-    tokens: Object.freeze({ ...definition.tokens }),
+    tokens: Object.freeze(tokens),
     ...(definition.backdrop === undefined ? {} : { backdrop: normalizeBackdrop(definition.backdrop, definition.id) }),
   });
 }

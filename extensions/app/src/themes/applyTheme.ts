@@ -21,7 +21,9 @@ export function createThemeApplicator(document: Document, platformMaterial: () =
     const material = themeWindowMaterial(theme, platformMaterial());
     if (material) root.dataset.windowMaterial = material;
     for (const [key, value] of Object.entries(themeMaterialTokens(theme))) {
-      for (const property of themeTokenProperties[key as keyof typeof themeTokenProperties]) {
+      if (!Object.prototype.hasOwnProperty.call(themeTokenProperties, key)) continue;
+      const properties = themeTokenProperties[key as keyof typeof themeTokenProperties];
+      for (const property of properties) {
         root.style.setProperty(property, value);
       }
     }

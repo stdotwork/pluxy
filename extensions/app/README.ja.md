@@ -165,7 +165,7 @@ Codex の **セッション管理 → コンテキスト編集（実験的）** 
 - `name`（必須）と `description`：文字列、または `en`・`zh-CN`・`zh-TW`・`ja` をキーとするオブジェクト。
 - `appearance`（必須）：`light` または `dark`。テーマが表示されるグループを決めます。
 - `windowBackground`（必須）：`#RRGGBB`。ページ描画前にネイティブウィンドウに表示される色です。
-- `tokens`（必須、空オブジェクト可）：色 token は `#RRGGBB` または `#RRGGBBAA`。省略した色は既定のライトまたはダークの値になります。以下の不透明度 token はパーセントで指定します。
+- `tokens`（必須、空オブジェクト可）：色 token は `#RRGGBB` または `#RRGGBBAA`。省略した色は既定のライトまたはダークの値になります。以下の不透明度 token はパーセントで指定します。未知または削除済みの token キーは無視されます。
 - `backdrop`：任意のグラデーション背景。構造は組み込みのミッドナイトブルー、桜ピンクと同じです。
 - `windowMaterial`：`solid`（既定）または `translucent`。半透明テーマではサイドバーとワークスペースの背後にネイティブのウィンドウマテリアルが表示されます。macOS 26 以降は Liquid Glass、それ以前の macOS は vibrancy、Windows 11 は Mica、Windows 10 1809 以降は Acrylic です。Linux と古い Windows ではマテリアルがなく、不透明テーマとまったく同じ表示になるため、`windowBackground` とトークンは省略せずに指定してください。マテリアル表示中は `backdrop` は使われません。
 - `tokens` の任意の不透明度キー：`windowMaterialWorkspaceOpacity`（ワークスペース、既定 `"72%"`）、`windowMaterialSidebarOpacity`（サイドバー、既定 `"40%"`）。値は `"0%"`（完全に透明）から `"100%"`（不透明）のパーセント文字列で、`"37.5%"` のような小数も使えます。対応する OS で `windowMaterial` が `translucent` の場合のみ有効です。ルート、body、シェルはネイティブマテリアルを表示するため透明になります。不正な値を含むファイルはスキップされます。マテリアルはテーマの設定であり、独立した設定項目はありません。組み込みテーマは不透明のままです。
