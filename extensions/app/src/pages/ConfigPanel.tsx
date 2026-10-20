@@ -1,8 +1,31 @@
+import { Notice } from '../components/Notice';
+import { EmptyState } from '../components/EmptyState';
+import { Switch } from '../components/Switch';
+import { onConfigFilesChanged } from '../services/events';
+import { restartCoreProcess } from '../services/coreLifecycle';
+import { openExternalUrl } from '../services/appSettings';
+import {
+  getCoreConfigSettings,
+  getSoftwareSettings,
+  getCoreTlsSettings,
+  setCoreManagementSecretKey,
+  clearCoreManagementSecretKey,
+  updateCoreApiKey,
+  addCoreApiKey,
+  saveCoreLoggingSettings as saveCoreLoggingSettingsCommand,
+  openCoreLogsDirectory,
+  deleteCoreApiKey,
+  saveCoreTlsSettings,
+  setCoreRoutingStrategy,
+  saveNetworkEndpointSettings as saveNetworkEndpointSettingsCommand,
+  saveRetrySettings as saveRetrySettingsCommand,
+  saveSessionRoutingSettings as saveSessionRoutingSettingsCommand,
+  saveSoftwareSettings as saveSoftwareSettingsCommand,
+} from '../services/coreSettings';
+import type { CoreConfigSettings, CoreApiKey, SoftwareSettings, CloseBehavior, CoreTlsSettings } from '../services/coreSettings';
 import { CoolingToggle } from '../components/settings/CoolingToggle';
-import { FormEvent, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { open } from '../services/platform';
 import {
   AlertCircle,
   Search,
@@ -34,14 +57,15 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useCoreRuntime, type CoreStatus } from '../coreRuntime';
+import { useCoreRuntime } from '../coreRuntime';
 import { useI18n } from '../i18n';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
 import { webUiManagementUrl } from '../services/clientAccess';
 import { ThinkingAliasesPage } from './ThinkingAliasesPage';
 import { SensitiveWordsPage } from './SensitiveWordsPage';
-import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Tabs } from '../components/Tabs';
+import { SegmentedControl } from '../components/SegmentedControl';
+import { Dialog } from '../components/Dialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { TemplateConfigSection } from '../components/TemplateConfigSection';
 import { SettingsHelp } from '../components/SettingsHelp';
@@ -50,36 +74,7 @@ import {
   settingsCategories, settingsTemplateGroups,
   allSettingsTemplateGroups, settingsMessages, takeRequestedSettingField, type SettingsCategory,
 } from '../services/settingsNavigation';
-
-type CoreConfigSettings = {
-  managementSecretConfigured: boolean;
-  apiKeys: CoreApiKey[];
-  debug: boolean;
-  commercialMode: boolean;
-  loggingToFile: boolean;
-  logsMaxTotalSizeMb: number;
-  errorLogsMaxFiles: number;
-  usageStatisticsEnabled: boolean;
-  redisUsageQueueRetentionSeconds: number;
-  host: string;
-  port: number;
-  allowLan: boolean;
-  routingStrategy: string;
-  proxyUrl: string;
-  proxyOverride: boolean;
-  routingSessionAffinity: boolean;
-  routingSessionAffinityTtl: string;
-  disableCooling: boolean;
-  requestRetry: number;
-  maxRetryCredentials: number;
-  maxRetryInterval: number;
-  streamingBootstrapRetries: number;
-};
-
-type CoreApiKey = {
-  apiKey: string;
-  remark: string;
-};
+import { Select } from '../components/Select';
 
 type ConfigAction =
   | 'add-key'
@@ -95,12 +90,10 @@ type ConfigAction =
   | 'software'
   | null;
 type ConfigSubpage = SettingsCategory;
-const CONFIG_SUBPAGES = settingsCategories.map(category => category.id);
 const CATEGORY_ICONS = { general: ShieldCheck, aliases: Link2, routing: Route, requests: SlidersHorizontal, oauth: KeyRound, diagnostics: FileText, software: Settings2 };
 type SettingDestination = { category: ConfigSubpage; target: string; field?: string };
 type SettingSearchEntry = SettingDestination & { title: string; context: string; keywords: string };
 
-type CloseBehavior = 'ask' | 'exit' | 'minimize-to-tray';
 type NetworkDraftField =
   | 'port'
   | 'host'
@@ -116,26 +109,6 @@ type NetworkDraftField =
 type DraftRefreshMode = 'replace' | 'preserve';
 
 type NetworkDraftDirty = Record<NetworkDraftField, boolean>;
-
-type AgentTerminalOption = {
-  id: string;
-  label: string;
-};
-
-type SoftwareSettings = {
-  closeBehavior: CloseBehavior;
-  autostartEnabled: boolean;
-  startCoreOnLaunch: boolean;
-  silentStartEnabled: boolean;
-  defaultTerminal: string;
-  availableTerminals: AgentTerminalOption[];
-};
-
-type CoreTlsSettings = {
-  enabled: boolean;
-  cert: string;
-  key: string;
-};
 
 const cleanNetworkDraft = (): NetworkDraftDirty => ({
   port: false,
@@ -282,7 +255,7 @@ export function ConfigPanelPage() {
     void loadSettings();
     void loadSoftwareSettings();
     void loadTlsSettings();
-    void listen('config-files-changed', () => {
+    void onConfigFilesChanged(() => {
       if (!disposed) {
         void loadSettings('preserve');
         void loadSoftwareSettings('preserve');
@@ -372,7 +345,7 @@ export function ConfigPanelPage() {
     setLoading(true);
     setLoadError('');
     try {
-      const result = await invoke<CoreConfigSettings>('get_core_config_settings');
+      const result = await getCoreConfigSettings();
       applySettings(result, mode);
     } catch (error) {
       setSettings(null);
@@ -386,7 +359,7 @@ export function ConfigPanelPage() {
     setSoftwareSettingsLoading(true);
     setSoftwareSavedStatusVisible(false);
     try {
-      const result = await invoke<SoftwareSettings>('get_software_settings');
+      const result = await getSoftwareSettings();
       if (mode === 'preserve' && otherDraftDirtyRef.current.software) return;
       setSoftwareSettings(result);
       setSoftwareCloseBehaviorDraft(result.closeBehavior);
@@ -405,7 +378,7 @@ export function ConfigPanelPage() {
   async function loadTlsSettings(mode: DraftRefreshMode = 'replace') {
     setTlsSettingsLoading(true);
     try {
-      const result = await invoke<CoreTlsSettings>('get_core_tls_settings');
+      const result = await getCoreTlsSettings();
       if (mode === 'preserve' && otherDraftDirtyRef.current.tls) return;
       setTlsSettings(result);
       setTlsEnabledDraft(result.enabled);
@@ -422,8 +395,7 @@ export function ConfigPanelPage() {
 
   const runMutation = async (
     action: Exclude<ConfigAction, null>,
-    command: string,
-    args: Record<string, unknown>,
+    mutation: () => Promise<CoreConfigSettings>,
     successMessage: string,
   ) => {
     setBusyAction(action);
@@ -432,7 +404,7 @@ export function ConfigPanelPage() {
       : action === 'routing' ? routingFeedback : keyFeedback;
     mutationFeedback.clearNotice();
     try {
-      const result = await invoke<CoreConfigSettings>(command, args);
+      const result = await mutation();
       setSettings(result);
       setLoadError('');
       if (action !== 'routing') mutationFeedback.showNotice(successMessage, 'success');
@@ -518,8 +490,7 @@ export function ConfigPanelPage() {
 
     const saved = await runMutation(
       'management-secret',
-      'set_core_management_secret_key',
-      { secretKey },
+      () => setCoreManagementSecretKey({ secretKey }),
       t('config.webuiKey.notice.updated'),
     );
     if (saved) {
@@ -538,7 +509,7 @@ export function ConfigPanelPage() {
       variant: 'danger',
     });
     if (!confirmed) return;
-    const saved = await runMutation('management-secret', 'clear_core_management_secret_key', {}, templateText(templateMessages.managementDisabled, locale));
+    const saved = await runMutation('management-secret', () => clearCoreManagementSecretKey(), templateText(templateMessages.managementDisabled, locale));
     if (saved) { setManagementSecretDraft(''); setManagementSecretConfirm(''); setShowManagementSecret(false); setManagementSecretError(''); }
   };
 
@@ -566,8 +537,9 @@ export function ConfigPanelPage() {
     const editing = editingApiKey !== null;
     const saved = await runMutation(
       editing ? 'update-key' : 'add-key',
-      editing ? 'update_core_api_key' : 'add_core_api_key',
-      editing ? { originalApiKey: editingApiKey, apiKey, remark } : { apiKey, remark },
+      () => editing
+        ? updateCoreApiKey({ originalApiKey: editingApiKey!, apiKey, remark })
+        : addCoreApiKey({ apiKey, remark }),
       editing ? t('config.notice.keyUpdated') : t('config.notice.keyAdded'),
     );
     if (saved) {
@@ -610,7 +582,7 @@ export function ConfigPanelPage() {
     setBusyAction('logging');
     setLoggingError('');
     try {
-      const result = await invoke<CoreConfigSettings>('save_core_logging_settings', {
+      const result = await saveCoreLoggingSettingsCommand({
         settings: {
           debug: debugDraft,
           commercialMode: commercialModeDraft,
@@ -624,7 +596,7 @@ export function ConfigPanelPage() {
       loggingDraftDirtyRef.current = false;
       applySettings(result, 'preserve');
       if (commercialModeChanged && coreStatus?.running) {
-        const status = await invoke<CoreStatus>('restart_core_process');
+        const status = await restartCoreProcess();
         publishStatus(status);
         loggingFeedback.showNotice({ key: 'config.diagnostics.notice.savedAndRestarted' }, 'success');
       } else {
@@ -644,7 +616,7 @@ export function ConfigPanelPage() {
     if (busyAction !== null) return;
     setBusyAction('open-logs');
     try {
-      await invoke<void>('open_core_logs_directory');
+      await openCoreLogsDirectory();
     } catch (error) {
       loggingFeedback.showNotice({ key: 'config.diagnostics.error.openLogs', variables: { error: String(error) } }, 'error');
     } finally {
@@ -658,8 +630,7 @@ export function ConfigPanelPage() {
     }
     const deleted = await runMutation(
       'delete-key',
-      'delete_core_api_key',
-      { apiKey: selectedDeleteKey },
+      () => deleteCoreApiKey({ apiKey: selectedDeleteKey }),
       t('config.notice.keyDeleted'),
     );
     if (deleted) {
@@ -687,8 +658,8 @@ export function ConfigPanelPage() {
   const openWebUi = async () => {
     try {
       const [latestSettings, latestTlsSettings] = await Promise.all([
-        invoke<CoreConfigSettings>('get_core_config_settings'),
-        invoke<CoreTlsSettings>('get_core_tls_settings'),
+        getCoreConfigSettings(),
+        getCoreTlsSettings(),
       ]);
       applySettings(latestSettings, 'preserve');
       setTlsSettings(latestTlsSettings);
@@ -697,7 +668,7 @@ export function ConfigPanelPage() {
         setTlsCertDraft(latestTlsSettings.cert);
         setTlsKeyDraft(latestTlsSettings.key);
       }
-      await invoke('open_external_url', {
+      await openExternalUrl({
         url: webUiManagementUrl(latestSettings.port, latestTlsSettings.enabled, latestSettings.host),
       });
     } catch (error) {
@@ -719,7 +690,7 @@ export function ConfigPanelPage() {
     setTlsError('');
     setTlsSavedStatusVisible(false);
     try {
-      const result = await invoke<CoreTlsSettings>('save_core_tls_settings', {
+      const result = await saveCoreTlsSettings({
         settings: { enabled: tlsEnabledDraft, cert, key },
       });
       setTlsSettings(result);
@@ -727,7 +698,7 @@ export function ConfigPanelPage() {
       setTlsCertDraft(result.cert);
       setTlsKeyDraft(result.key);
       if (coreStatus?.running) {
-        const status = await invoke<CoreStatus>('restart_core_process');
+        const status = await restartCoreProcess();
         publishStatus(status);
         tlsFeedback.showNotice({ key: 'config.tls.notice.savedAndRestarted' }, 'success');
       } else {
@@ -777,8 +748,7 @@ export function ConfigPanelPage() {
     }
     await runMutation(
       'routing',
-      'set_core_routing_strategy',
-      { strategy },
+      () => setCoreRoutingStrategy({ strategy }),
       t('config.notice.routingUpdated'),
     );
   };
@@ -800,7 +770,7 @@ export function ConfigPanelPage() {
     setPortError('');
     setBusyAction('network');
     try {
-      const result = await invoke<CoreConfigSettings>('save_network_endpoint_settings', {
+      const result = await saveNetworkEndpointSettingsCommand({
         settings: networkDraftDirtyRef.current.proxyUrl || networkDraftDirtyRef.current.proxyOverride
           ? { host, port, proxyUrl, proxyOverride: proxyOverrideDraft }
           : { host, port },
@@ -814,7 +784,7 @@ export function ConfigPanelPage() {
 
       if (networkChanged && coreStatus?.running) {
         try {
-          const status = await invoke<CoreStatus>('restart_core_process');
+          const status = await restartCoreProcess();
           publishStatus(status);
           networkFeedback.showNotice({ key: 'config.notice.networkRestarted' }, 'success');
         } catch (error) {
@@ -856,7 +826,7 @@ export function ConfigPanelPage() {
     setRetryError('');
     setBusyAction('retry');
     try {
-      const result = await invoke<CoreConfigSettings>('save_retry_settings', {
+      const result = await saveRetrySettingsCommand({
         settings: {
           disableCooling: disableCoolingDraft,
           requestRetry,
@@ -887,7 +857,7 @@ export function ConfigPanelPage() {
     const routingSessionAffinityTtl = sessionTtlDraft.trim();
     setBusyAction('routing');
     try {
-      const result = await invoke<CoreConfigSettings>('save_session_routing_settings', {
+      const result = await saveSessionRoutingSettingsCommand({
         settings: {
           routingSessionAffinity: sessionAffinityDraft,
           routingSessionAffinityTtl,
@@ -919,7 +889,7 @@ export function ConfigPanelPage() {
 
     setBusyAction('software');
     try {
-      const result = await invoke<SoftwareSettings>('save_software_settings', {
+      const result = await saveSoftwareSettingsCommand({
         settings: {
           closeBehavior: softwareCloseBehaviorDraft,
           autostartEnabled: softwareAutostartDraft,
@@ -1024,16 +994,6 @@ export function ConfigPanelPage() {
   const keyMutationBusy = busyAction === 'add-key' || busyAction === 'update-key';
   const managementSecretBusy = busyAction === 'management-secret';
   const loggingSettingsBusy = busyAction === 'logging';
-  const addDialogRef = useDialogFocusTrap<HTMLFormElement>({
-    active: addDialogOpen,
-    onEscape: keyMutationBusy ? undefined : closeAddDialog,
-    preventEscape: keyMutationBusy,
-  });
-  const deleteDialogRef = useDialogFocusTrap<HTMLDivElement>({
-    active: deleteIndex !== null,
-    onEscape: busyAction === 'delete-key' ? undefined : () => setDeleteIndex(null),
-    preventEscape: busyAction === 'delete-key',
-  });
   const activateConfigSubpage = (subpage: ConfigSubpage) => {
     setSettingsSearch('');
     setActiveSubpage(subpage);
@@ -1041,10 +1001,6 @@ export function ConfigPanelPage() {
       setSensitiveWordsVisited(true);
     }
     if (subpage === 'aliases') setAliasesVisited(true);
-  };
-  const handleConfigTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, subpage: ConfigSubpage) => {
-    handleHorizontalTabKey(event, CONFIG_SUBPAGES, subpage, activateConfigSubpage,
-      next => document.getElementById(`config-subpage-tab-${next}`));
   };
   const navigateToSetting = (destination: SettingDestination) => {
     activateConfigSubpage(destination.category);
@@ -1104,19 +1060,17 @@ export function ConfigPanelPage() {
       {confirmationDialog}
       <div className="config-settings-layout">
         <div className="config-settings-topnav">
-          <div ref={categoryNavigationRef} className="config-subpage-tabs config-settings-navigation" role="tablist" aria-orientation="horizontal" aria-label={t('config.tabs.label')}>
-            {settingsCategories.map(item => {
+          <Tabs ref={categoryNavigationRef} className="config-subpage-tabs config-settings-navigation" aria-label={t('config.tabs.label')} value={activeSubpage} onChange={activateConfigSubpage}
+            items={settingsCategories.map(item => {
               const Icon = CATEGORY_ICONS[item.id];
-              const dirty = categoryDirty(item.id);
-              return <button type="button" key={item.id} id={`config-subpage-tab-${item.id}`} role="tab" className={activeSubpage === item.id ? 'active' : ''} aria-selected={activeSubpage === item.id} aria-controls="config-subpage-panel" tabIndex={activeSubpage === item.id ? 0 : -1} onClick={() => activateConfigSubpage(item.id)} onKeyDown={event => handleConfigTabKeyDown(event, item.id)}><Icon size={17} aria-hidden="true" /><span>{templateText(item.title, locale)}</span>{dirty ? <span className="config-nav-dirty" title={st('dirty')}><span className="sr-only">{st('dirty')}</span></span> : null}</button>;
-            })}
-          </div>
-          <div className="config-settings-search"><Search size={18} aria-hidden="true" /><input ref={searchRef} type="search" aria-label={st('search')} placeholder={st('searchHint')} value={settingsSearch} onChange={event => setSettingsSearch(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Escape') setSettingsSearch(''); }} />{searching ? <button type="button" className="icon-button quiet" aria-label={st('clearSearch')} onClick={() => { setSettingsSearch(''); searchRef.current?.focus(); }}><X size={16} /></button> : null}</div>
+              return { value: item.id, id: `config-subpage-tab-${item.id}`, panelId: 'config-subpage-panel', label: <><Icon size={17} aria-hidden="true" /><span>{templateText(item.title, locale)}</span>{categoryDirty(item.id) ? <span className="config-nav-dirty" title={st('dirty')}><span className="sr-only">{st('dirty')}</span></span> : null}</> };
+            })} />
+          <div className="config-settings-search"><Search size={18} aria-hidden="true" /><input ref={searchRef} type="search" aria-label={st('search')} placeholder={st('searchHint')} value={settingsSearch} onChange={event => setSettingsSearch(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Escape') setSettingsSearch(''); }} />{searching ? <button type="button" className="icon-button quiet tiny-button" aria-label={st('clearSearch')} onClick={() => { setSettingsSearch(''); searchRef.current?.focus(); }}><X size={16} /></button> : null}</div>
         </div>
         <div className="config-settings-content" id="config-subpage-panel" role="tabpanel" aria-labelledby={`config-subpage-tab-${activeSubpage}`}>
-          {searching ? <section className="config-search-results" aria-label={st('results')}><div className="config-search-heading"><h2>{st('results')}</h2><span role="status">{searchResults.length}</span></div>{searchResults.length ? <div className="config-search-result-list">{searchResults.map(entry => <button type="button" key={`${entry.target}-${entry.field ?? ''}`} onClick={() => navigateToSetting(entry)}><span className="config-search-result-copy"><strong>{entry.title}</strong><small>{templateText(settingsCategories.find(item => item.id === entry.category)!.title, locale)}{entry.context ? ` / ${entry.context}` : ''}</small></span><ChevronRight size={17} aria-hidden="true" /></button>)}</div> : <p className="config-search-empty">{st('noResults')}</p>}</section> : null}
+          {searching ? <section className="config-search-results" aria-label={st('results')}><div className="config-search-heading"><h2>{st('results')}</h2><span role="status">{searchResults.length}</span></div>{searchResults.length ? <div className="surface-card config-search-result-list">{searchResults.map(entry => <button type="button" key={`${entry.target}-${entry.field ?? ''}`} onClick={() => navigateToSetting(entry)}><span className="config-search-result-copy"><strong>{entry.title}</strong><small>{templateText(settingsCategories.find(item => item.id === entry.category)!.title, locale)}{entry.context ? ` / ${entry.context}` : ''}</small></span><ChevronRight size={17} aria-hidden="true" /></button>)}</div> : <EmptyState variant="box" className="config-search-empty">{st('noResults')}</EmptyState>}</section> : null}
           <div className="config-settings-cards">
-<section id="config-native-keys" tabIndex={-1} hidden={searching || activeSubpage !== 'general'} className="panel config-keys-panel">
+<section id="config-native-keys" tabIndex={-1} hidden={searching || activeSubpage !== 'general'} className="panel surface-card config-keys-panel">
           <div className="config-panel-heading">
             <div className="config-heading-title">
               <KeyRound size={18} aria-hidden="true" />
@@ -1148,15 +1102,13 @@ export function ConfigPanelPage() {
                 </div>
               ))
             ) : loadError ? (
-              <div className="config-unavailable">
-                <AlertCircle size={24} aria-hidden="true" />
-                <strong>{t('config.unavailable')}</strong>
-                <span title={loadError}>{loadError}</span>
-                <button type="button" className="secondary-button compact-button" onClick={() => void loadSettings()}>
+              <EmptyState className="config-unavailable" tone="error" icon={<AlertCircle size={24} />} title={t('config.unavailable')}
+                action={<button type="button" className="secondary-button compact-button" onClick={() => void loadSettings()}>
                   <RefreshCw size={16} aria-hidden="true" />
                   {t('common.retry')}
-                </button>
-              </div>
+                </button>}>
+                <span title={loadError}>{loadError}</span>
+              </EmptyState>
             ) : settings && settings.apiKeys.length > 0 ? (
               settings.apiKeys.map((entry, index) => (
                 <div className="config-key-row" key={`${index}-${entry.apiKey}`}>
@@ -1174,7 +1126,7 @@ export function ConfigPanelPage() {
                   <div className="config-key-actions">
                     <button
                       type="button"
-                      className="icon-button quiet"
+                      className="icon-button quiet small-button"
                       onClick={() => void copyApiKey(entry.apiKey, index)}
                       disabled={controlsDisabled}
                       title={copiedIndex === index ? t('config.notice.keyCopied') : t('config.keys.copy')}
@@ -1188,7 +1140,7 @@ export function ConfigPanelPage() {
                     </button>
                     <button
                       type="button"
-                      className="icon-button quiet"
+                      className="icon-button quiet small-button"
                       onClick={() => openEditDialog(entry)}
                       disabled={controlsDisabled}
                       title={t('config.keys.edit')}
@@ -1198,7 +1150,7 @@ export function ConfigPanelPage() {
                     </button>
                     <button
                       type="button"
-                      className="icon-button danger"
+                      className="icon-button danger small-button"
                       onClick={() => setDeleteIndex(index)}
                       disabled={controlsDisabled}
                       title={t('config.keys.delete')}
@@ -1210,15 +1162,12 @@ export function ConfigPanelPage() {
                 </div>
               ))
             ) : (
-              <div className="config-empty-list">
-                <KeyRound size={26} aria-hidden="true" />
-                <strong>{t('config.keys.empty')}</strong>
-              </div>
+              <EmptyState className="config-empty-list" icon={<KeyRound size={26} />} title={t('config.keys.empty')} />
             )}
           </div>
           {!addDialogOpen && deleteIndex === null ? renderFeedback(keyFeedback) : null}
         </section>
-<section id="config-native-management" tabIndex={-1} hidden={searching || activeSubpage !== 'general'} className="panel config-management-panel">
+<section id="config-native-management" tabIndex={-1} hidden={searching || activeSubpage !== 'general'} className="panel surface-card config-management-panel">
           <div className="config-panel-heading">
             <div className="config-heading-title">
               <ShieldCheck size={18} aria-hidden="true" />
@@ -1329,7 +1278,7 @@ export function ConfigPanelPage() {
           </div>
         </section>
 <section id="config-native-network" tabIndex={-1} hidden={searching || activeSubpage !== 'general'}
-            className="config-network-section"
+            className="surface-card config-network-section"
             aria-labelledby="config-network-section-title"
           >
             <div className="config-network-section-heading config-section-heading-with-actions">
@@ -1409,18 +1358,10 @@ export function ConfigPanelPage() {
                   <SettingsHelp label={t('config.network.proxyUrl')}>{t('config.network.proxyHint')} {t('config.network.systemProxyHint')}</SettingsHelp>
                   <label className="config-proxy-system-toggle" title={t('config.network.systemProxyHint')}>
                     <span>{t('config.network.systemProxy')}</span>
-                    <span className="switch-control">
-                      <input
-                        type="checkbox"
-                        checked={!proxyOverrideDraft}
-                        disabled={controlsDisabled}
-                        onChange={(event) => {
+                    <Switch checked={!proxyOverrideDraft} disabled={controlsDisabled} onChange={(event) => {
                           markDraftDirty('proxyOverride');
                           setProxyOverrideDraft(!event.currentTarget.checked);
-                        }}
-                      />
-                      <span className="switch-track" />
-                    </span>
+                        }} />
                   </label>
                 </div>
                 <input
@@ -1457,7 +1398,7 @@ export function ConfigPanelPage() {
               </button></div>
         </section>
 <section id="config-native-tls" tabIndex={-1} hidden={searching || activeSubpage !== 'general'}
-            className="config-network-section"
+            className="surface-card config-network-section"
             aria-labelledby="config-tls-section-title"
           >
           <div className="config-network-section-heading config-tls-section-heading">
@@ -1486,21 +1427,11 @@ export function ConfigPanelPage() {
 
                 </div>
               </div>
-              <label className="switch-control" title={t('config.tls.enable')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  aria-label={t('config.tls.enable')}
-                  checked={tlsEnabledDraft}
-                  disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null}
-                  onChange={(event) => {
+              <Switch title={t('config.tls.enable')} aria-label={t('config.tls.enable')} checked={tlsEnabledDraft} disabled={tlsSettingsLoading || tlsSettings === null || busyAction !== null} onChange={(event) => {
                     setTlsSavedStatusVisible(false);
                     setTlsError('');
                     setTlsEnabledDraft(event.currentTarget.checked);
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
 
             {tlsEnabledDraft ? (
@@ -1582,7 +1513,7 @@ export function ConfigPanelPage() {
               </button></div>
         </section>
 <section id="config-native-routing" tabIndex={-1} hidden={searching || activeSubpage !== 'routing'}
-            className="config-network-section"
+            className="surface-card config-network-section"
             aria-labelledby="config-routing-section-title"
           >
             <div className="config-network-section-heading config-section-heading-with-actions">
@@ -1600,19 +1531,10 @@ export function ConfigPanelPage() {
                   <span className="config-field-label"><span>{t('config.network.sessionAffinity')}</span><SettingsHelp label={t('config.network.sessionAffinity')}>{t('config.network.sessionAffinityHint')}</SettingsHelp></span>
 
                 </div>
-                <label className="switch-control" title={t('config.network.sessionAffinity')}>
-                  <input
-                    type="checkbox"
-                    aria-label={t('config.network.sessionAffinity')}
-                    checked={sessionAffinityDraft}
-                    disabled={controlsDisabled}
-                    onChange={(event) => {
+                <Switch title={t('config.network.sessionAffinity')} aria-label={t('config.network.sessionAffinity')} checked={sessionAffinityDraft} disabled={controlsDisabled} onChange={(event) => {
                       markDraftDirty('sessionAffinity');
                       setSessionAffinityDraft(event.currentTarget.checked);
-                    }}
-                  />
-                  <span className="switch-track" />
-                </label>
+                    }} />
               </div>
 
               <div className="config-network-field">
@@ -1648,21 +1570,9 @@ export function ConfigPanelPage() {
                   {t('config.routing.title')}
                   <span className="config-inline-status">{st('automatic')}</span>
                 </span>
-                <div className="routing-segmented" role="group" aria-label={t('config.routing.title')}>
-                  {ROUTING_OPTIONS.map((option) => (
-                    <button
-                      type="button"
-                      key={option.value}
-                      className={settings?.routingStrategy === option.value ? 'active' : ''}
-                      aria-pressed={settings?.routingStrategy === option.value}
-                      disabled={controlsDisabled}
-                      onClick={() => void changeRoutingStrategy(option.value)}
-                      title={option.value}
-                    >
-                      {option.value === 'weighted-round-robin' ? templateText(templateMessages.weighted, locale) : t(option.labelKey)}
-                    </button>
-                  ))}
-                </div>
+                <SegmentedControl className="routing-segmented" aria-label={t('config.routing.title')} value={settings?.routingStrategy ?? ''}
+                  disabled={controlsDisabled} onChange={value => void changeRoutingStrategy(value)}
+                  items={ROUTING_OPTIONS.map(option => ({ value: option.value, title: option.value, label: option.value === 'weighted-round-robin' ? templateText(templateMessages.weighted, locale) : t(option.labelKey) }))} />
                 <small className="sr-only" title={settings?.routingStrategy || undefined}>
                   {loading
                     ? t('common.loading')
@@ -1684,7 +1594,7 @@ export function ConfigPanelPage() {
               </button></div>
         </section>
 <section id="config-native-retry" tabIndex={-1} hidden={searching || activeSubpage !== 'requests'}
-            className="config-network-section"
+            className="surface-card config-network-section"
             aria-labelledby="config-retry-section-title"
           >
             <div className="config-network-section-heading config-section-heading-with-actions">
@@ -1831,7 +1741,7 @@ export function ConfigPanelPage() {
                 {busyAction === 'retry' ? t('common.saving') : t('common.save')}
               </button></div>
         </section>
-<section id="config-native-logging" tabIndex={-1} hidden={searching || activeSubpage !== 'diagnostics'} className="panel config-diagnostics-panel">
+<section id="config-native-logging" tabIndex={-1} hidden={searching || activeSubpage !== 'diagnostics'} className="panel surface-card config-diagnostics-panel">
           <div className="config-panel-heading">
             <div className="config-heading-title">
               <FileText size={18} aria-hidden="true" />
@@ -1846,20 +1756,10 @@ export function ConfigPanelPage() {
                 <span className="config-field-label"><strong>{t('config.diagnostics.debug.title')}</strong><SettingsHelp label={t('config.diagnostics.debug.title')}>{t('config.diagnostics.debug.description')}</SettingsHelp></span>
 
               </div>
-              <label className="switch-control" title={t('config.diagnostics.debug.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={debugDraft}
-                  aria-label={t('config.diagnostics.debug.title')}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
+              <Switch title={t('config.diagnostics.debug.title')} checked={debugDraft} aria-label={t('config.diagnostics.debug.title')} disabled={controlsDisabled} onChange={(event) => {
                     setDebugDraft(event.currentTarget.checked);
                     markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
 
             <div className="config-diagnostics-setting">
@@ -1868,20 +1768,10 @@ export function ConfigPanelPage() {
                 <span className="config-field-label"><strong>{t('config.diagnostics.commercial.title')}</strong><SettingsHelp label={t('config.diagnostics.commercial.title')}>{t('config.diagnostics.commercial.description')} {t('config.diagnostics.commercial.warning')}</SettingsHelp></span>
 
               </div>
-              <label className="switch-control" title={t('config.diagnostics.commercial.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={commercialModeDraft}
-                  aria-label={t('config.diagnostics.commercial.title')}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
+              <Switch title={t('config.diagnostics.commercial.title')} checked={commercialModeDraft} aria-label={t('config.diagnostics.commercial.title')} disabled={controlsDisabled} onChange={(event) => {
                     setCommercialModeDraft(event.currentTarget.checked);
                     markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
 
             <div className="config-diagnostics-setting">
@@ -1890,20 +1780,10 @@ export function ConfigPanelPage() {
                 <span className="config-field-label"><strong>{t('config.diagnostics.fileLogging.title')}</strong><SettingsHelp label={t('config.diagnostics.fileLogging.title')}>{t('config.diagnostics.fileLogging.description')}</SettingsHelp></span>
 
               </div>
-              <label className="switch-control" title={t('config.diagnostics.fileLogging.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={loggingToFileDraft}
-                  aria-label={t('config.diagnostics.fileLogging.title')}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
+              <Switch title={t('config.diagnostics.fileLogging.title')} checked={loggingToFileDraft} aria-label={t('config.diagnostics.fileLogging.title')} disabled={controlsDisabled} onChange={(event) => {
                     setLoggingToFileDraft(event.currentTarget.checked);
                     markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
 
             <div className="config-diagnostics-setting">
@@ -1912,20 +1792,10 @@ export function ConfigPanelPage() {
                 <span className="config-field-label"><strong>{t('config.diagnostics.usage.title')}</strong><SettingsHelp label={t('config.diagnostics.usage.title')}>{t('config.diagnostics.usage.description')}</SettingsHelp></span>
 
               </div>
-              <label className="switch-control" title={t('config.diagnostics.usage.title')}>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={usageStatisticsDraft}
-                  aria-label={t('config.diagnostics.usage.title')}
-                  disabled={controlsDisabled}
-                  onChange={(event) => {
+              <Switch title={t('config.diagnostics.usage.title')} checked={usageStatisticsDraft} aria-label={t('config.diagnostics.usage.title')} disabled={controlsDisabled} onChange={(event) => {
                     setUsageStatisticsDraft(event.currentTarget.checked);
                     markLoggingDraftDirty();
-                  }}
-                />
-                <span className="switch-track" />
-              </label>
+                  }} />
             </div>
           </div>
 
@@ -1985,10 +1855,7 @@ export function ConfigPanelPage() {
           </div>
 
           {settings && commercialModeDraft !== settings.commercialMode ? (
-            <div className="config-diagnostics-commercial-note">
-              <AlertCircle size={16} aria-hidden="true" />
-              <span>{st('restart')}</span>
-            </div>
+            <Notice tone="warn" icon={<AlertCircle size={16} />}>{st('restart')}</Notice>
           ) : null}
 
           <div className="config-diagnostics-footer">
@@ -2018,7 +1885,7 @@ export function ConfigPanelPage() {
             {renderFeedback(loggingFeedback)}
           </div>
         </section>
-<section id="config-native-software" tabIndex={-1} hidden={searching || activeSubpage !== 'software'} className="panel config-software-panel">
+<section id="config-native-software" tabIndex={-1} hidden={searching || activeSubpage !== 'software'} className="panel surface-card config-software-panel">
             <div className="config-panel-heading">
               <div className="config-heading-title">
                 <Settings2 size={18} aria-hidden="true" />
@@ -2045,20 +1912,10 @@ export function ConfigPanelPage() {
                       <strong>{t('config.software.autostart')}</strong>
                     </div>
                   </div>
-                  <label className="switch-control" title={t('config.software.autostart')}>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label={t('config.software.autostart')}
-                      checked={softwareAutostartDraft}
-                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
-                      onChange={(event) => {
+                  <Switch title={t('config.software.autostart')} aria-label={t('config.software.autostart')} checked={softwareAutostartDraft} disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null} onChange={(event) => {
                         setSoftwareSavedStatusVisible(false);
                         setSoftwareAutostartDraft(event.currentTarget.checked);
-                      }}
-                    />
-                    <span className="switch-track" />
-                  </label>
+                      }} />
                 </div>
                 <div className="config-software-setting-row">
                   <div className="config-software-setting-copy">
@@ -2069,20 +1926,10 @@ export function ConfigPanelPage() {
                       <strong>{t('config.software.startCoreOnLaunch')}</strong>
                     </div>
                   </div>
-                  <label className="switch-control" title={t('config.software.startCoreOnLaunch')}>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label={t('config.software.startCoreOnLaunch')}
-                      checked={softwareStartCoreDraft}
-                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
-                      onChange={(event) => {
+                  <Switch title={t('config.software.startCoreOnLaunch')} aria-label={t('config.software.startCoreOnLaunch')} checked={softwareStartCoreDraft} disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null} onChange={(event) => {
                         setSoftwareSavedStatusVisible(false);
                         setSoftwareStartCoreDraft(event.currentTarget.checked);
-                      }}
-                    />
-                    <span className="switch-track" />
-                  </label>
+                      }} />
                 </div>
                 <div className="config-software-setting-row">
                   <div className="config-software-setting-copy">
@@ -2094,20 +1941,10 @@ export function ConfigPanelPage() {
 
                     </div>
                   </div>
-                  <label className="switch-control" title={t('config.software.silentStart')}>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label={t('config.software.silentStart')}
-                      checked={softwareSilentStartDraft}
-                      disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
-                      onChange={(event) => {
+                  <Switch title={t('config.software.silentStart')} aria-label={t('config.software.silentStart')} checked={softwareSilentStartDraft} disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null} onChange={(event) => {
                         setSoftwareSavedStatusVisible(false);
                         setSoftwareSilentStartDraft(event.currentTarget.checked);
-                      }}
-                    />
-                    <span className="switch-track" />
-                  </label>
+                      }} />
                 </div>
                 <div className="config-software-setting-row config-software-close-row">
                   <div className="config-software-setting-copy">
@@ -2120,7 +1957,7 @@ export function ConfigPanelPage() {
                   </div>
                   <label className="config-software-select">
                     <span className="sr-only">{t('config.software.defaultTerminal')}</span>
-                    <select
+                    <Select
                       className="config-network-input"
                       value={softwareDefaultTerminalDraft}
                       disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
@@ -2134,7 +1971,7 @@ export function ConfigPanelPage() {
                           {terminal.id === 'auto' ? t('config.software.terminal.auto') : terminal.label}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 </div>
                 <div className="config-software-setting-row config-software-close-row">
@@ -2148,7 +1985,7 @@ export function ConfigPanelPage() {
                   </div>
                   <label className="config-software-select">
                     <span className="sr-only">{t('config.software.closeBehavior')}</span>
-                    <select
+                    <Select
                       className="config-network-input"
                       value={softwareCloseBehaviorDraft}
                       disabled={softwareSettingsLoading || softwareSettings === null || busyAction !== null}
@@ -2160,7 +1997,7 @@ export function ConfigPanelPage() {
                       <option value="ask">{t('config.software.behavior.ask')}</option>
                       <option value="minimize-to-tray">{t('config.software.behavior.minimize')}</option>
                       <option value="exit">{t('config.software.behavior.exit')}</option>
-                    </select>
+                    </Select>
                   </label>
                 </div>
               </div>
@@ -2178,163 +2015,152 @@ export function ConfigPanelPage() {
         </section>
           </div>
           <div id="config-template-panel" hidden={searching || templateGroups.length === 0}><TemplateConfigSection groups={allSettingsTemplateGroups} visibleGroups={templateGroups.map(group => group.id)} onDirtyGroupsChange={setDirtyTemplateGroups} /></div>
-          <div id="config-native-aliases" tabIndex={-1} role="region" aria-label={t('app.nav.thinkingAliases')} hidden={searching || activeSubpage !== 'aliases'}>{aliasesVisited ? <ThinkingAliasesPage embedded /> : null}</div>
-          <div id="config-native-sensitive-words" tabIndex={-1} role="region" aria-label={t('config.sensitiveWords.title')} hidden={searching || activeSubpage !== 'requests'}>{sensitiveWordsVisited ? <SensitiveWordsPage onDirtyChange={setSensitiveWordsDirty} /> : null}</div>
+          <div className="surface-card" id="config-native-aliases" tabIndex={-1} role="region" aria-label={t('app.nav.thinkingAliases')} hidden={searching || activeSubpage !== 'aliases'}>{aliasesVisited ? <ThinkingAliasesPage embedded /> : null}</div>
+          <div className="surface-card" id="config-native-sensitive-words" tabIndex={-1} role="region" aria-label={t('config.sensitiveWords.title')} hidden={searching || activeSubpage !== 'requests'}>{sensitiveWordsVisited ? <SensitiveWordsPage onDirtyChange={setSensitiveWordsDirty} /> : null}</div>
         </div>
       </div>
 
       {addDialogOpen ? (
-        <div className="config-dialog-backdrop" onMouseDown={(event) => {
-          if (event.currentTarget === event.target) closeAddDialog();
-        }}>
-          <form
-            ref={addDialogRef}
-            className="config-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="add-api-key-title"
-            onSubmit={(event) => void submitApiKey(event)}
-          >
-            <div className="config-dialog-heading">
-              <div>
-                <KeyRound size={19} aria-hidden="true" />
-                <h2 id="add-api-key-title">
-                  {editingApiKey === null ? t('config.keys.addTitle') : t('config.keys.editTitle')}
-                </h2>
-              </div>
-              <button
-                type="button"
-                className="icon-button quiet"
-                onClick={closeAddDialog}
-                disabled={keyMutationBusy}
-                title={t('common.close')}
-                aria-label={t('common.close')}
-              >
-                <X size={18} aria-hidden="true" />
-              </button>
+        <Dialog
+          as="form"
+          labelledBy="add-api-key-title"
+          onSubmit={(event) => void submitApiKey(event)}
+          onClose={closeAddDialog}
+          closeDisabled={keyMutationBusy}
+          dismissOnBackdrop
+        >
+          <div className="config-dialog-heading">
+            <div>
+              <KeyRound size={19} aria-hidden="true" />
+              <h2 id="add-api-key-title">
+                {editingApiKey === null ? t('config.keys.addTitle') : t('config.keys.editTitle')}
+              </h2>
             </div>
+            <button
+              type="button"
+              className="icon-button quiet"
+              onClick={closeAddDialog}
+              disabled={keyMutationBusy}
+              title={t('common.close')}
+              aria-label={t('common.close')}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
 
-            <label className="config-dialog-field">
-              <span>{t('config.keys.label')}</span>
-              <div className="config-secret-input">
-                <input
-                  autoFocus
-                  type={showApiKey ? 'text' : 'password'}
-                  value={newApiKey}
-                  onChange={(event) => {
-                    setNewApiKey(event.currentTarget.value);
-                    setFormError('');
-                  }}
-                  disabled={keyMutationBusy}
-                  aria-invalid={Boolean(formError)}
-                  placeholder="sk-..."
-                />
-                <button
-                  type="button"
-                  className="icon-button quiet"
-                  onClick={() => setShowApiKey((visible) => !visible)}
-                  disabled={keyMutationBusy}
-                  title={showApiKey ? t('config.keys.hide') : t('config.keys.show')}
-                  aria-label={showApiKey ? t('config.keys.hide') : t('config.keys.show')}
-                >
-                  {showApiKey ? (
-                    <EyeOff size={17} aria-hidden="true" />
-                  ) : (
-                    <Eye size={17} aria-hidden="true" />
-                  )}
-                </button>
-              </div>
-            </label>
-
-            <label className="config-dialog-field">
-              <span>{t('config.keys.remark')}</span>
+          <label className="config-dialog-field">
+            <span>{t('config.keys.label')}</span>
+            <div className="config-secret-input">
               <input
-                className="config-dialog-text-input"
-                type="text"
-                value={newApiKeyRemark}
-                maxLength={80}
+                autoFocus
+                type={showApiKey ? 'text' : 'password'}
+                value={newApiKey}
                 onChange={(event) => {
-                  setNewApiKeyRemark(event.currentTarget.value);
+                  setNewApiKey(event.currentTarget.value);
                   setFormError('');
                 }}
                 disabled={keyMutationBusy}
-                placeholder={t('config.keys.remarkPlaceholder')}
+                aria-invalid={Boolean(formError)}
+                placeholder="sk-..."
               />
-            </label>
-
-            <div className={`config-form-message ${formError ? 'error' : ''}`}>
-              {formError || ' '}
-            </div>
-            {renderFeedback(keyFeedback)}
-
-            <div className="config-dialog-actions">
               <button
                 type="button"
-                className="secondary-button"
-                onClick={generateApiKey}
+                className="icon-button quiet"
+                onClick={() => setShowApiKey((visible) => !visible)}
                 disabled={keyMutationBusy}
+                title={showApiKey ? t('config.keys.hide') : t('config.keys.show')}
+                aria-label={showApiKey ? t('config.keys.hide') : t('config.keys.show')}
               >
-                {t('config.keys.generate')}
-              </button>
-              <button type="submit" className="primary-button" disabled={keyMutationBusy}>
-                {editingApiKey === null ? <Plus size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
-                {keyMutationBusy
-                  ? editingApiKey === null ? t('config.keys.adding') : t('common.saving')
-                  : editingApiKey === null ? t('common.add') : t('common.save')}
+                {showApiKey ? (
+                  <EyeOff size={17} aria-hidden="true" />
+                ) : (
+                  <Eye size={17} aria-hidden="true" />
+                )}
               </button>
             </div>
-          </form>
-        </div>
+          </label>
+
+          <label className="config-dialog-field">
+            <span>{t('config.keys.remark')}</span>
+            <input
+              className="config-dialog-text-input"
+              type="text"
+              value={newApiKeyRemark}
+              maxLength={80}
+              onChange={(event) => {
+                setNewApiKeyRemark(event.currentTarget.value);
+                setFormError('');
+              }}
+              disabled={keyMutationBusy}
+              placeholder={t('config.keys.remarkPlaceholder')}
+            />
+          </label>
+
+          <div className={`config-form-message ${formError ? 'error' : ''}`}>
+            {formError || ' '}
+          </div>
+          {renderFeedback(keyFeedback)}
+
+          <div className="config-dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={generateApiKey}
+              disabled={keyMutationBusy}
+            >
+              {t('config.keys.generate')}
+            </button>
+            <button type="submit" className="primary-button" disabled={keyMutationBusy}>
+              {editingApiKey === null ? <Plus size={16} aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
+              {keyMutationBusy
+                ? editingApiKey === null ? t('config.keys.adding') : t('common.saving')
+                : editingApiKey === null ? t('common.add') : t('common.save')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {deleteIndex !== null ? (
-        <div className="config-dialog-backdrop" onMouseDown={(event) => {
-          if (event.currentTarget === event.target && busyAction !== 'delete-key') {
-            setDeleteIndex(null);
-          }
-        }}>
-          <div
-            ref={deleteDialogRef}
-            className={`config-dialog config-delete-dialog ${deletingLastKey ? 'has-warning' : ''}`}
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="delete-api-key-title"
-          >
-            <div className="config-dialog-heading">
-              <div>
-                <Trash2 size={19} aria-hidden="true" />
-                <h2 id="delete-api-key-title">{t('config.keys.deleteTitle')}</h2>
-              </div>
-            </div>
-            <code className="config-delete-key">{maskApiKey(selectedDeleteKey)}</code>
-            {renderFeedback(keyFeedback)}
-            {deletingLastKey ? (
-              <div className="config-delete-warning">
-                <AlertCircle size={17} aria-hidden="true" />
-                <span>{t('config.keys.deleteAllWarning')}</span>
-              </div>
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setDeleteIndex(null)}
-                disabled={busyAction === 'delete-key'}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => void confirmDelete()}
-                disabled={busyAction === 'delete-key'}
-              >
-                <Trash2 size={16} aria-hidden="true" />
-                {busyAction === 'delete-key' ? t('common.deleting') : t('common.delete')}
-              </button>
+        <Dialog
+          as="div"
+          alert
+          className={`config-dialog config-delete-dialog ${deletingLastKey ? 'has-warning' : ''}`}
+          labelledBy="delete-api-key-title"
+          onClose={() => setDeleteIndex(null)}
+          closeDisabled={busyAction === 'delete-key'}
+          dismissOnBackdrop
+        >
+          <div className="config-dialog-heading">
+            <div>
+              <Trash2 size={19} aria-hidden="true" />
+              <h2 id="delete-api-key-title">{t('config.keys.deleteTitle')}</h2>
             </div>
           </div>
-        </div>
+          <code className="config-delete-key">{maskApiKey(selectedDeleteKey)}</code>
+          {renderFeedback(keyFeedback)}
+          {deletingLastKey ? (
+            <Notice tone="error" icon={<AlertCircle size={17} />}>{t('config.keys.deleteAllWarning')}</Notice>
+          ) : null}
+          <div className="config-dialog-actions two-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setDeleteIndex(null)}
+              disabled={busyAction === 'delete-key'}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => void confirmDelete()}
+              disabled={busyAction === 'delete-key'}
+            >
+              <Trash2 size={16} aria-hidden="true" />
+              {busyAction === 'delete-key' ? t('common.deleting') : t('common.delete')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
     </section>

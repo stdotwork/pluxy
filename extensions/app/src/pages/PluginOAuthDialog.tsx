@@ -1,8 +1,8 @@
+import { Notice } from '../components/Notice';
+import { getOAuthStatus, startOAuthLogin, openOAuthUrl, submitOAuthCallback } from '../services/oauth';
 import { useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
 import { CheckCircle2, Copy, ExternalLink, LoaderCircle, LogIn, X } from 'lucide-react';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { useI18n } from '../i18n';
 import { pluginOAuthText, type PluginOAuthMessage } from '../i18n/pluginOAuth';
 import { managementApi } from '../services/managementApi';
@@ -46,7 +46,6 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
   localeRef.current = locale;
   const setPhase = (value: Phase) => { phaseRef.current = value; setPhaseState(value); };
   const close = () => { dismiss.current(); onClose(); };
-  const dialogRef = useDialogFocusTrap<HTMLElement>({ onEscape: close });
   const provider = plugin.oauthProvider?.trim() ?? '';
 
   useEffect(() => {
@@ -89,7 +88,7 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
     const poll = async () => {
       if (!current()) return;
       try {
-        const result = await invoke<OAuthStatus>('get_oauth_status', { state });
+        const result = await getOAuthStatus({ state });
         if (!current()) return;
         if (result.status === 'ok') {
           completed = true; terminal = true; clearTimers(); setPhase('success');
@@ -100,7 +99,7 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
         else fail(translate('failed'));
       } catch (reason) { fail(message(reason)); }
     };
-    void invoke<OAuthStart>('start_oauth_login', { provider, browser: 'none', pluginProvider: true }).then(result => {
+    void startOAuthLogin({ provider, browser: 'none', pluginProvider: true }).then(result => {
       const returnedState = result.state?.trim() ?? '';
       if (!current()) { cancel(returnedState); return; }
       state = returnedState;
@@ -129,7 +128,7 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
     if (!session || !activeSession() || openPending.current) return;
     const current = generation.current;
     openPending.current = true; setOpening(true); setError('');
-    try { await invoke('open_oauth_url', { url: session.url, browser }); }
+    try { await openOAuthUrl({ url: session.url, browser }); }
     catch (reason) { if (generation.current === current && phaseRef.current === 'waiting') setError(message(reason)); }
     finally { if (generation.current === current) { openPending.current = false; setOpening(false); } }
   };
@@ -143,32 +142,29 @@ export function PluginOAuthDialog({ plugin, browser = 'default', onClose, onComp
     const current = generation.current;
     callbackPending.current = true; setSubmitting(true); setCallbackInvalid(false); setError(''); setNotice('');
     try {
-      await invoke('submit_oauth_callback', { provider, redirectUrl, pluginProvider: true });
+      await submitOAuthCallback({ provider, redirectUrl, pluginProvider: true });
       if (generation.current === current && phaseRef.current === 'waiting') setNotice(text('submitted'));
     } catch (reason) { if (generation.current === current && phaseRef.current === 'waiting') setError(message(reason)); }
     finally { if (generation.current === current) { callbackPending.current = false; setSubmitting(false); } }
   };
 
-  const content = <div className="config-dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
-    <section ref={dialogRef} className="config-dialog plugin-oauth-dialog" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}>
-      <header className="config-dialog-heading"><div><h2 id={`${id}-title`}><LogIn size={20} />{text('title')}</h2><p>{plugin.metadata?.name || plugin.id}</p></div><button type="button" className="icon-button quiet" onClick={close} aria-label={t('common.close')}><X size={18} /></button></header>
-      <div className="plugin-oauth-body">
-        <p className={`plugin-oauth-status ${phase}`} role="status">{phase === 'starting' || phase === 'waiting' ? <LoaderCircle size={18} className="spin" /> : phase === 'success' ? <CheckCircle2 size={18} /> : null}{text(phase === 'error' ? 'failed' : phase)}</p>
-        {session && phase === 'waiting' ? <>
-          <div className="plugin-oauth-field"><label htmlFor={`${id}-link`}>{text('link')}</label><textarea id={`${id}-link`} rows={3} readOnly value={session.url} spellCheck={false} /></div>
-          <div className="plugin-oauth-link-actions"><button type="button" className="primary-button" disabled={opening} onClick={() => void open()}>{opening ? <LoaderCircle className="spin" size={16} /> : <ExternalLink size={16} />}{text('open')}</button><button type="button" className="secondary-button" onClick={() => void copy(session.url)}><Copy size={16} />{text('copy')}</button></div>
-          {session.code ? <div className="plugin-oauth-code"><span>{text('code')}</span><strong>{session.code}</strong><p>{text('deviceHint')}</p><button type="button" className="secondary-button" onClick={() => void copy(session.code)}><Copy size={16} />{text('copyCode')}</button></div> : null}
-          {!session.device ? <form onSubmit={event => { event.preventDefault(); void submit(); }} noValidate>
-            <div className="plugin-oauth-field"><label htmlFor={`${id}-callback`}>{text('callback')}</label><input id={`${id}-callback`} type="url" value={callback} disabled={submitting} autoComplete="off" spellCheck={false} aria-invalid={callbackInvalid} aria-describedby={`${id}-callback-hint`} onChange={event => { setCallback(event.currentTarget.value); setCallbackInvalid(false); setError(''); setNotice(''); }} /><small id={`${id}-callback-hint`}>{text('callbackHint')}</small></div>
-            <button type="submit" className="secondary-button" disabled={submitting || !callback.trim()}>{submitting ? <LoaderCircle className="spin" size={16} /> : null}{text(submitting ? 'submitting' : 'submit')}</button>
-          </form> : null}
-          <p className="plugin-oauth-expiry">{text('expires')} {formatDate(session.expires, { hour: '2-digit', minute: '2-digit' })}</p>
-        </> : null}
-        {error ? <p className="plugin-oauth-error" role="alert">{error}</p> : null}
-        {notice ? <p className="plugin-oauth-notice" role="status">{notice}</p> : null}
-      </div>
-      <footer className="plugin-oauth-footer"><button type="button" className="secondary-button" onClick={close}>{t(phase === 'success' ? 'common.close' : 'common.cancel')}</button>{phase === 'error' ? <button type="button" className="primary-button" onClick={() => setAttempt(value => value + 1)}>{text('retry')}</button> : null}</footer>
-    </section>
-  </div>;
-  return typeof document === 'undefined' ? content : createPortal(content, document.body);
+  return <Dialog className="config-dialog plugin-oauth-dialog" labelledBy={`${id}-title`} onClose={close} dismissOnBackdrop>
+    <header className="config-dialog-heading"><div><h2 id={`${id}-title`}><LogIn size={20} />{text('title')}</h2><p>{plugin.metadata?.name || plugin.id}</p></div><button type="button" className="icon-button quiet" onClick={close} aria-label={t('common.close')}><X size={18} /></button></header>
+    <div className="plugin-oauth-body">
+      <Notice tone={phase === 'error' ? 'error' : phase === 'success' ? 'success' : 'info'} className="plugin-oauth-status" icon={phase === 'starting' || phase === 'waiting' ? <LoaderCircle size={18} className="spin" /> : phase === 'success' ? <CheckCircle2 size={18} /> : undefined}>{text(phase === 'error' ? 'failed' : phase)}</Notice>
+      {session && phase === 'waiting' ? <>
+        <div className="plugin-oauth-field"><label htmlFor={`${id}-link`}>{text('link')}</label><textarea id={`${id}-link`} rows={3} readOnly value={session.url} spellCheck={false} /></div>
+        <div className="plugin-oauth-link-actions"><button type="button" className="primary-button compact-button" disabled={opening} onClick={() => void open()}>{opening ? <LoaderCircle className="spin" size={16} /> : <ExternalLink size={16} />}{text('open')}</button><button type="button" className="secondary-button compact-button" onClick={() => void copy(session.url)}><Copy size={16} />{text('copy')}</button></div>
+        {session.code ? <div className="plugin-oauth-code"><span>{text('code')}</span><strong>{session.code}</strong><p>{text('deviceHint')}</p><button type="button" className="secondary-button compact-button" onClick={() => void copy(session.code)}><Copy size={16} />{text('copyCode')}</button></div> : null}
+        {!session.device ? <form onSubmit={event => { event.preventDefault(); void submit(); }} noValidate>
+          <div className="plugin-oauth-field"><label htmlFor={`${id}-callback`}>{text('callback')}</label><input id={`${id}-callback`} type="url" value={callback} disabled={submitting} autoComplete="off" spellCheck={false} aria-invalid={callbackInvalid} aria-describedby={`${id}-callback-hint`} onChange={event => { setCallback(event.currentTarget.value); setCallbackInvalid(false); setError(''); setNotice(''); }} /><small id={`${id}-callback-hint`}>{text('callbackHint')}</small></div>
+          <button type="submit" className="secondary-button compact-button" disabled={submitting || !callback.trim()}>{submitting ? <LoaderCircle className="spin" size={16} /> : null}{text(submitting ? 'submitting' : 'submit')}</button>
+        </form> : null}
+        <p className="plugin-oauth-expiry">{text('expires')} {formatDate(session.expires, { hour: '2-digit', minute: '2-digit' })}</p>
+      </> : null}
+      {error ? <Notice tone="error" variant="text">{error}</Notice> : null}
+      {notice ? <Notice tone="success" variant="text">{notice}</Notice> : null}
+    </div>
+    <footer className="plugin-oauth-footer"><button type="button" className="secondary-button compact-button" onClick={close}>{t(phase === 'success' ? 'common.close' : 'common.cancel')}</button>{phase === 'error' ? <button type="button" className="primary-button compact-button" onClick={() => setAttempt(value => value + 1)}>{text('retry')}</button> : null}</footer>
+  </Dialog>;
 }

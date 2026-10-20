@@ -1,7 +1,11 @@
+import { EmptyState } from '../components/EmptyState';
+import { Checkbox } from '../components/Checkbox';
+import { Switch } from '../components/Switch';
+import { getUsageEvents, saveUsageEventsExport } from '../services/usage';
+import type { UsageEventPage, UsageRecord, UsageEventQuery } from '../services/usage';
 import { usagePreferences } from '../services/usagePreferences';
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { save } from '@tauri-apps/plugin-dialog';
+import { save } from '../services/platform';
 import { ArrowDown, ArrowUp, Brain, ChevronLeft, ChevronRight, Columns3, Copy, Database, DatabaseZap, Download, RotateCcw, TriangleAlert, X } from 'lucide-react';
 import { FloatingNotice, useAppNotice } from '../appNotice';
 import { getCurrentLocale, useI18n } from '../i18n';
@@ -9,9 +13,10 @@ import { usePrivacyMask } from '../privacy';
 import type { MessageKey } from '../i18n/resources';
 import { formatCacheReadRate, formatGenerationSpeed } from '../services/usageMetrics';
 import { formatDuration, formatUsageNumber } from '../services/usageNumber';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { usageProviderDetails } from '../services/usageProvider';
 import { usageModelDetails } from '../services/usageModel';
+import { Select } from '../components/Select';
 
 const compactNumber = (value: number) => formatUsageNumber(value, getCurrentLocale());
 const compactDuration = (value: number) => formatDuration(value, getCurrentLocale());
@@ -31,49 +36,9 @@ const formatEventDate = (value: string) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(getCurrentLocale(), { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 };
-export type UsageRecord = {
-  id: string;
-  row_id: string;
-  timestamp: string;
-  latency_ms: number;
-  ttft_ms: number | null;
-  source: string;
-  source_display: string;
-  failed: boolean;
-  canceled: boolean;
-  failure_status: number;
-  failure_body: string;
-  provider: string;
-  auth_type?: string;
-  model: string;
-  /** Model name reported by the upstream response, when available. */
-  response_model?: string;
-  cost?: { total: number; pricing_model: string } | null;
-  alias: string;
-  reasoning_effort: string;
-  service_tier?: string;
-  response_service_tier?: string;
-  endpoint: string;
-  api_key_hash: string;
-  api_key_display: string;
-  api_key_remark: string;
-  tokens: {
-    input_tokens: number;
-    output_tokens: number;
-    reasoning_tokens: number;
-    cache_read_tokens: number;
-    cache_creation_tokens: number;
-    total_tokens: number;
-  };
-};
+export type { UsageRecord } from '../services/usage';
 
-export type UsageEventPage = {
-  items: UsageRecord[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
+export type { UsageEventPage } from '../services/usage';
 
 type EventColumnKey =
   | 'time'
@@ -197,21 +162,6 @@ export const getInitialColumnWidths = (): Record<EventColumnKey, number> => {
   return initial;
 };
 
-
-type UsageEventQuery = {
-  start?: string;
-  end?: string;
-  model?: string;
-  provider?: string;
-  source?: string;
-  upstream?: string;
-  api_key_hash?: string;
-  failed?: boolean;
-  canceled?: boolean;
-  page?: number;
-  page_size?: number;
-};
-
 function usageEventsExportName(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -320,7 +270,7 @@ function usageResultDetail(record: UsageRecord) {
 
 function CopyErrorButton({ detail, onCopy }: { detail: string; onCopy: (detail: string) => void }) {
   const { t } = useI18n();
-  return <button type="button" className="icon-button quiet usage-error-copy"
+  return <button type="button" className="icon-button quiet tiny-button usage-error-copy"
     title={t('usage.events.copyError')} aria-label={t('usage.events.copyError')}
     onClick={() => onCopy(detail)}><Copy size={13} aria-hidden="true" /></button>;
 }
@@ -534,20 +484,16 @@ export function EventsView({
   const [draftVisibleColumnKeys, setDraftVisibleColumnKeys] = useState<EventColumnKey[]>(visibleColumnKeys);
   const [resizingCol, setResizingCol] = useState<EventColumnKey | null>(null);
   const [exporting, setExporting] = useState(false);
-  const copyFeedback = useAppNotice();
+  const feedback = useAppNotice();
   const copyError = async (detail: string) => {
     try {
       await navigator.clipboard.writeText(detail);
-      copyFeedback.showNotice({ key: 'usage.events.errorCopied' });
+      feedback.showNotice({ key: 'usage.events.errorCopied' });
     } catch {
-      copyFeedback.showNotice({ key: 'common.copyFailed' }, 'error');
+      feedback.showNotice({ key: 'common.copyFailed' }, 'error');
     }
   };
 
-  const columnDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: columnSettingsOpen,
-    onEscape: () => setColumnSettingsOpen(false),
-  });
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   useEffect(() => () => resizeCleanupRef.current?.(), []);
@@ -735,16 +681,16 @@ export function EventsView({
       const items: UsageRecord[] = [];
       const pageSize = 5000;
       for (let page = 1; ; page += 1) {
-        const exported = await invoke<UsageEventPage>('get_usage_events', {
+        const exported = await getUsageEvents({
           query: { ...query, page, page_size: pageSize },
         });
         if (exported.page !== page || exported.items.length === 0) break;
         items.push(...exported.items);
         if (items.length >= exported.total || page >= exported.totalPages) break;
       }
-      await invoke('save_usage_events_export', { path, contents: usageEventsCsv(items) });
+      await saveUsageEventsExport({ path, contents: usageEventsCsv(items) });
     } catch (error) {
-      window.alert(String(error));
+      feedback.showNotice(String(error), 'error');
     } finally {
       setExporting(false);
     }
@@ -752,8 +698,8 @@ export function EventsView({
 
   return (
     <section className={`panel usage-events-panel usage-request-log${isCompactDefault ? ' usage-events-compact' : ''}${collapseErrors ? '' : ' usage-events-errors-expanded'}`} aria-label={t('usage.events.title')} aria-busy={loading}>
-      <FloatingNotice key={copyFeedback.revision} notice={copyFeedback.notice} onDismiss={copyFeedback.clearNotice} />
-      {loading && events.items.length === 0 ? <div className="usage-empty" role="status"><Database size={20} aria-hidden="true" /><span>{t('usage.loading')}</span></div> : events.items.length ? (
+      <FloatingNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />
+      {loading && events.items.length === 0 ? <EmptyState className="usage-empty" role="status" icon={<Database size={20} />}>{t('usage.loading')}</EmptyState> : events.items.length ? (
         <div ref={tableWrapRef} className="usage-table-wrap" tabIndex={0} role="region" aria-label={t('usage.events.title')}>
           <table
             className="usage-events-table"
@@ -843,7 +789,7 @@ export function EventsView({
           <div className="usage-events-actions">
           <button
             type="button"
-            className="usage-col-settings-btn"
+            className="secondary-button small-button usage-col-settings-btn"
             onClick={openColumnSettings}
             title={t('usage.events.columnSettings')}
             aria-label={t('usage.events.columnSettings')}
@@ -856,7 +802,7 @@ export function EventsView({
           {isCustomized ? (
             <button
               type="button"
-              className="usage-col-reset-btn"
+              className="secondary-button small-button usage-col-reset-btn"
               onClick={resetAllWidths}
               title={t('usage.events.resetColumns')}
               aria-label={t('usage.events.resetColumns')}
@@ -865,126 +811,101 @@ export function EventsView({
               <span>{t('usage.events.resetColumns')}</span>
             </button>
           ) : null}
-          <button type="button" className="usage-events-export-btn" disabled={loading || exporting || events.total === 0} onClick={() => void exportFilteredEvents()} title={t('usage.events.exportDescription')}>
+          <button type="button" className="secondary-button small-button" disabled={loading || exporting || events.total === 0} onClick={() => void exportFilteredEvents()} title={t('usage.events.exportDescription')}>
             <Download size={14} aria-hidden="true" /><span>{exporting ? t('usage.events.exporting') : t('usage.events.exportPage')}</span>
           </button>
           </div>
         </div>
         <div className="usage-pagination-controls">
-          <select className="usage-page-size-select" value={pageSize} disabled={loading} onChange={(event) => onPageSizeChange(Number(event.currentTarget.value))} aria-label={t('usage.events.pageSize', { size: pageSize })}>
+          <Select className="usage-page-size-select" value={pageSize} disabled={loading} onChange={(event) => onPageSizeChange(Number(event.currentTarget.value))} aria-label={t('usage.events.pageSize', { size: pageSize })}>
             {[20, 50, 100, 200].map((size) => <option key={size} value={size}>{t('usage.events.pageSize', { size })}</option>)}
-          </select>
+          </Select>
           <div className="usage-pagination-right">
-            <button type="button" className="usage-page-nav-btn" disabled={loading || events.page <= 1} onClick={() => onPage(events.page - 1)}><ChevronLeft size={14} aria-hidden="true" /><span>{t('usage.previous')}</span></button>
+            <button type="button" className="secondary-button small-button" disabled={loading || events.page <= 1} onClick={() => onPage(events.page - 1)}><ChevronLeft size={14} aria-hidden="true" /><span>{t('usage.previous')}</span></button>
             <span className="usage-pagination-info">{events.page} / {Math.max(1, events.totalPages)}</span>
-            <button type="button" className="usage-page-nav-btn" disabled={loading || events.page >= events.totalPages} onClick={() => onPage(events.page + 1)}><span>{t('usage.next')}</span><ChevronRight size={14} aria-hidden="true" /></button>
+            <button type="button" className="secondary-button small-button" disabled={loading || events.page >= events.totalPages} onClick={() => onPage(events.page + 1)}><span>{t('usage.next')}</span><ChevronRight size={14} aria-hidden="true" /></button>
           </div>
         </div>
       </div>
 
       {columnSettingsOpen ? (
-        <div
-          className="config-dialog-backdrop"
-          onMouseDown={(event) =>
-            event.currentTarget === event.target && setColumnSettingsOpen(false)
-          }
+        <Dialog
+          className="config-dialog usage-column-dialog"
+          tabIndex={-1}
+          labelledBy="usage-column-dialog-title"
+          onClose={() => setColumnSettingsOpen(false)}
+          dismissOnBackdrop
         >
-          <section
-            ref={columnDialogRef}
-            className="config-dialog usage-column-dialog"
-            role="dialog"
-            tabIndex={-1}
-            aria-modal="true"
-            aria-labelledby="usage-column-dialog-title"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') setColumnSettingsOpen(false);
-            }}
-          >
-            <div className="usage-column-dialog-heading">
-              <div>
-                <Columns3 size={19} aria-hidden="true" />
-                <h2 id="usage-column-dialog-title">{t('usage.events.columnSettings')}</h2>
-              </div>
+          <div className="usage-column-dialog-heading">
+            <div>
+              <Columns3 size={19} aria-hidden="true" />
+              <h2 id="usage-column-dialog-title">{t('usage.events.columnSettings')}</h2>
+            </div>
+            <button
+              type="button"
+              className="icon-button quiet"
+              onClick={() => setColumnSettingsOpen(false)}
+              title={t('common.close')}
+              aria-label={t('common.close')}
+            >
+              <X size={17} />
+            </button>
+          </div>
+          <p className="usage-column-dialog-description">
+            {t('usage.events.columnSettingsDescription')}
+          </p>
+          <label className="usage-error-collapse-setting">
+            <span>
+              <strong>{t('usage.events.collapseErrors')}</strong>
+              <small>{t('usage.events.collapseErrorsHint')}</small>
+            </span>
+            <Switch checked={draftCollapseErrors} aria-label={t('usage.events.collapseErrors')} onChange={(event) => setDraftCollapseErrors(event.currentTarget.checked)} />
+          </label>
+          <div className="usage-column-options">
+            {EVENT_COLUMNS.map((column) => {
+              const checked = draftVisibleColumnKeys.includes(column.key);
+              return (
+                <label key={column.key} className="usage-column-option">
+                  <Checkbox checked={checked} disabled={checked && draftVisibleColumnKeys.length === 1} onChange={() => toggleDraftColumn(column.key)} />
+                  <span>{t(column.labelKey)}</span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="usage-column-dialog-footer">
+            <div className="usage-column-dialog-meta">
+              <span>
+                {t('usage.events.columnsSelected', {
+                  selected: draftVisibleColumnKeys.length,
+                  total: EVENT_COLUMNS.length,
+                })}
+              </span>
               <button
                 type="button"
-                className="icon-button quiet"
-                onClick={() => setColumnSettingsOpen(false)}
-                title={t('common.close')}
-                aria-label={t('common.close')}
+                className="link-button muted usage-column-select-all"
+                onClick={resetVisibleColumns}
               >
-                <X size={17} />
+                {t('usage.events.selectAllColumns')}
               </button>
             </div>
-            <p className="usage-column-dialog-description">
-              {t('usage.events.columnSettingsDescription')}
-            </p>
-            <label className="usage-error-collapse-setting">
-              <span>
-                <strong>{t('usage.events.collapseErrors')}</strong>
-                <small>{t('usage.events.collapseErrorsHint')}</small>
-              </span>
-              <span className="switch-control">
-                <input
-                  type="checkbox"
-                  role="switch"
-                  checked={draftCollapseErrors}
-                  aria-label={t('usage.events.collapseErrors')}
-                  onChange={(event) => setDraftCollapseErrors(event.currentTarget.checked)}
-                />
-                <span className="switch-track" aria-hidden="true" />
-              </span>
-            </label>
-            <div className="usage-column-options">
-              {EVENT_COLUMNS.map((column) => {
-                const checked = draftVisibleColumnKeys.includes(column.key);
-                return (
-                  <label key={column.key} className="usage-column-option">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={checked && draftVisibleColumnKeys.length === 1}
-                      onChange={() => toggleDraftColumn(column.key)}
-                    />
-                    <span>{t(column.labelKey)}</span>
-                  </label>
-                );
-              })}
+            <div className="usage-column-dialog-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setColumnSettingsOpen(false)}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={applyColumnSettings}
+              >
+                {t('usage.events.applyColumns')}
+              </button>
             </div>
-            <div className="usage-column-dialog-footer">
-              <div className="usage-column-dialog-meta">
-                <span>
-                  {t('usage.events.columnsSelected', {
-                    selected: draftVisibleColumnKeys.length,
-                    total: EVENT_COLUMNS.length,
-                  })}
-                </span>
-                <button
-                  type="button"
-                  className="usage-column-select-all"
-                  onClick={resetVisibleColumns}
-                >
-                  {t('usage.events.selectAllColumns')}
-                </button>
-              </div>
-              <div className="usage-column-dialog-actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => setColumnSettingsOpen(false)}
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={applyColumnSettings}
-                >
-                  {t('usage.events.applyColumns')}
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
+          </div>
+        </Dialog>
       ) : null}
     </section>
   );
@@ -992,5 +913,5 @@ export function EventsView({
 
 function UsageEmpty() {
   const { t } = useI18n();
-  return <div className="usage-empty"><TriangleAlert size={18} /><span>{t('usage.empty')}</span></div>;
+  return <EmptyState className="usage-empty" icon={<TriangleAlert size={18} />}>{t('usage.empty')}</EmptyState>;
 }

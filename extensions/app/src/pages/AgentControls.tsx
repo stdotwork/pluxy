@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { MessageNotice } from '../appNotice';
 import type { ReactNode } from 'react';
 import { AppWindow, FolderOpen, LoaderCircle, Play, RefreshCw, Square, Terminal, Trash2 } from 'lucide-react';
@@ -112,7 +113,7 @@ export function AgentConfigManagementPanel({
         <button type="button" className="secondary-button" onClick={onChooseExecutablePath} disabled={busy}>
           <FolderOpen size={16} />{t('agents.executablePath.choose')}
         </button>
-        {executablePath ? <button type="button" className="quiet-button" onClick={onClearExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
+        {executablePath ? <button type="button" className="secondary-button ghost" onClick={onClearExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
       </div>
     </section>
     {dualTargets ? <section className="agent-management-row">
@@ -122,7 +123,7 @@ export function AgentConfigManagementPanel({
         <button type="button" className="secondary-button" onClick={onChooseDesktopExecutablePath} disabled={busy}>
           <FolderOpen size={16} />{t('agents.executablePath.choose')}
         </button>
-        {desktopExecutablePath ? <button type="button" className="quiet-button" onClick={onClearDesktopExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
+        {desktopExecutablePath ? <button type="button" className="secondary-button ghost" onClick={onClearDesktopExecutablePath} disabled={busy}>{t('agents.executablePath.clear')}</button> : null}
       </div>
     </section> : null}
     {!pi ? <section className="agent-management-row">
@@ -168,7 +169,7 @@ export function AgentConfigManagementPanel({
     {pi ? <section className="agent-management-row">
       <div><h3>{t('agents.management.plugin')}</h3><p>{pluginInstalled
         ? t('agents.management.pluginVersion', { version: pluginVersion ?? t('agents.notFetched') })
-        : t('agents.management.pluginMissing')}</p>{updateLabel ? <small className="agent-inline-message">{updateLabel}</small> : null}</div>
+        : t('agents.management.pluginMissing')}</p>{updateLabel ? <Notice tone="info" variant="text" live={false}>{updateLabel}</Notice> : null}</div>
       {pluginInstalled ? <div className="agent-management-actions">
         <button type="button" className="secondary-button" onClick={onUpdatePi} disabled={busy || !canUpdatePi}>
           {busyAction === 'update-pi' ? <LoaderCircle size={16} className="spin" /> : <RefreshCw size={16} />}

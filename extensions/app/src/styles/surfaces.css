@@ -1,0 +1,39 @@
+.panel,
+.surface-panel {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-card);
+  box-shadow: var(--ui-panel-shadow);
+}
+
+.panel:hover,
+.surface-panel:hover {
+  border-color: var(--border-primary);
+}
+
+:where(.surface-card),
+.panel.surface-card {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-card);
+  box-shadow: none;
+}
+
+:where(.surface-section) {
+  border: 1px solid var(--theme-e3e1db);
+  border-radius: 8px;
+  background: var(--theme-fffdf8);
+  box-shadow: none;
+}
+
+:where(.surface-muted) {
+  background: var(--theme-faf9f5);
+}
+
+:where(.surface-bare),
+.panel.surface-bare {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}

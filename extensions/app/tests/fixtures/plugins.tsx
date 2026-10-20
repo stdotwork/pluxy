@@ -104,7 +104,7 @@ mockIPC(async (command, args) => {
     if (state.failNextList) { state.failNextList = false; throw new Error('Fixture list temporarily unavailable'); }
     return {
       plugins_enabled: state.settings.enabled, plugins_dir: state.settings.dir,
-      plugins: pluginEntries.map(entry => ({ ...entry,
+      plugins: (params.has('empty-installed') ? [] : pluginEntries).map(entry => ({ ...entry,
         enabled: state.settings.configs[String(entry.id)]?.enabled === true,
         effective_enabled: entry.registered === true && state.settings.enabled && state.settings.configs[String(entry.id)]?.enabled === true,
       })),

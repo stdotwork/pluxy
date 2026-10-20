@@ -150,6 +150,7 @@ export function createThemeController(environment: ThemeEnvironment, registry: T
     getPreference: () => preference,
     getSystemThemes: () => systemThemes,
     getResolvedThemeId: () => resolvedThemeId,
+    getRegistry: () => registry,
     subscribe(listener: Unlisten) {
       subscribers.add(listener);
       return () => { subscribers.delete(listener); };
@@ -181,6 +182,16 @@ export function createThemeController(environment: ThemeEnvironment, registry: T
         configureNative();
       }
       subscribers.forEach((listener) => listener());
+    },
+    setRegistry(next: ThemeRegistry) {
+      if (disposed) return;
+      const previous = resolvedThemeId;
+      registry = next;
+      ++generation;
+      ++observation;
+      apply(preference === 'system' ? systemAppearance : manualAppearance());
+      configureNative();
+      if (resolvedThemeId === previous) subscribers.forEach((listener) => listener());
     },
     dispose() {
       disposed = true;

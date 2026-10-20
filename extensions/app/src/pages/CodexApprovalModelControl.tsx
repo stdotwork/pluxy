@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { MessageNotice } from '../appNotice';
 import { AgentModelPicker } from '../components/AgentModelPicker';
 import { useI18n } from '../i18n';
-import type { CodexCatalogEditorSnapshot, CodexCatalogEditorSaveResult } from '../services/codexModelCatalog';
+import { getCodexModelCatalogEditor, saveCodexModelCatalogEditor, type CodexCatalogEditorSnapshot } from '../services/codexModelCatalog';
 
 export function CodexApprovalModelControl({ disabled, onBusyChange }: {
   disabled: boolean; onBusyChange: (busy: boolean) => void;
@@ -18,7 +17,7 @@ export function CodexApprovalModelControl({ disabled, onBusyChange }: {
   const load = useCallback(async () => {
     setLoading(true); setError(''); setNotice('');
     try {
-      const next = await invoke<CodexCatalogEditorSnapshot>('get_codex_model_catalog_editor');
+      const next = await getCodexModelCatalogEditor();
       setSnapshot(next); setValue(next.defaultAutoReviewModel ?? '');
     } catch (cause) { setError(String(cause)); }
     finally { setLoading(false); }
@@ -28,7 +27,7 @@ export function CodexApprovalModelControl({ disabled, onBusyChange }: {
     if (!snapshot || disabled || saving || loading) return;
     setSaving(true); onBusyChange(true); setError(''); setNotice('');
     try {
-      const result = await invoke<CodexCatalogEditorSaveResult>('save_codex_model_catalog_editor', {
+      const result = await saveCodexModelCatalogEditor({
         request: {
           revision: snapshot.revision,
           models: snapshot.models.map(({ slug, configuration }) => ({ slug, configuration })),
@@ -60,7 +59,7 @@ export function CodexApprovalModelControl({ disabled, onBusyChange }: {
     </div>
     {snapshot && value && !models.some((model) => model.name === value)
       ? <p className="agent-model-hint">{t('agents.approvalModel.missing')}</p> : null}
-    {!snapshot && !loading ? <button type="button" className="quiet-button" disabled={disabled || saving}
+    {!snapshot && !loading ? <button type="button" className="secondary-button ghost" disabled={disabled || saving}
       onClick={() => void load()}>{t('common.refresh')}</button> : null}
     <MessageNotice message={error} />
     <MessageNotice message={notice} tone="success" />

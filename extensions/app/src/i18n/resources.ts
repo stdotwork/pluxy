@@ -12,6 +12,11 @@ export const zhTW: Record<MessageKey, string> = {
   "app.theme.lightGroup": "淺色主題",
   "app.theme.darkGroup": "深色主題",
   'app.theme.triggerLabel': '外觀',
+  'app.theme.custom.openFolder': '開啟主題資料夾',
+  'app.theme.custom.openFailed': '無法開啟主題資料夾。',
+  'app.theme.custom.loadFailed': '無法讀取自訂主題，已保留目前的主題列表。',
+  'app.theme.custom.skipped': '已略過無效的主題檔案：{files}',
+  'app.theme.custom.omitted': '另有 {count} 個主題檔案超出 64 個的上限，未讀取。',
 
   'app.theme.triggerHint': '切換日夜模式與主題外觀',
 

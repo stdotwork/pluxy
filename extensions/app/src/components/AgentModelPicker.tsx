@@ -1,3 +1,4 @@
+import { EmptyState } from './EmptyState';
 import {
   useCallback,
   useEffect,
@@ -87,7 +88,7 @@ export function AgentModelPicker({
     if (!root) return;
 
     const rect = root.getBoundingClientRect();
-    const dialog = root.closest('dialog');
+    const dialog = root.closest('[role="dialog"], [role="alertdialog"]');
     const footer = dialog?.querySelector('.credential-settings-footer');
     const heading = dialog?.querySelector('.credential-settings-heading');
     const frame = dialog?.getBoundingClientRect();
@@ -131,7 +132,7 @@ export function AgentModelPicker({
       setDialogOverlay(false);
       return undefined;
     }
-    const inDialog = Boolean(rootRef.current?.closest('dialog'));
+    const inDialog = Boolean(rootRef.current?.closest('[role="dialog"], [role="alertdialog"]'));
     if (inDialog !== dialogOverlay) {
       setDialogOverlay(inDialog);
       return undefined;
@@ -158,8 +159,18 @@ export function AgentModelPicker({
       const target = event.target as Node;
       if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || !rootRef.current?.contains(event.target as Node)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
     document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
+    window.addEventListener('keydown', escape, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', escape, true);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -199,9 +210,6 @@ export function AgentModelPicker({
     } else if (event.key === 'Enter' && open && choices[activeIndex]) {
       event.preventDefault();
       choose(choices[activeIndex].name);
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      setOpen(false);
     }
   };
 
@@ -230,7 +238,7 @@ export function AgentModelPicker({
               setActiveIndex(0);
               setOpen(true);
             }} />
-          <button type="button" className="icon-button quiet" aria-label={editable.label}
+          <button type="button" className="icon-button quiet ghost tiny-button" aria-label={editable.label}
             aria-haspopup="listbox" aria-expanded={open} aria-controls={listboxId}
             disabled={disabled} onClick={() => { setSearch(''); setOpen((current) => !current); }}>
             <ChevronDown size={17} aria-hidden />
@@ -307,16 +315,15 @@ export function AgentModelPicker({
 
           <div className="agent-model-list" id={listboxId} role="listbox">
             {loading && models.length === 0 && choices.length === 0 ? (
-              <div className="agent-model-empty"><LoaderCircle size={18} className="spin" />{t('agents.model.fetching')}</div>
+              <EmptyState variant="compact" className="agent-model-empty" icon={<LoaderCircle size={18} className="spin" />}>{t('agents.model.fetching')}</EmptyState>
             ) : error && models.length === 0 && choices.length === 0 ? (
-              <div className="agent-model-empty error"><strong>{t('agents.model.loadFailed')}</strong><span>{error}</span></div>
+              <EmptyState variant="compact" tone="error" className="agent-model-empty" title={t('agents.model.loadFailed')}>{error}</EmptyState>
             ) : choices.length === 0 ? (
-              <div className="agent-model-empty">
-                {editable ? <span>{t('agents.claudeDesktopMapping.customAliasHint')}</span> : <>
-                  <strong>{search.trim() ? t('agents.model.noMatch') : t('agents.model.unavailable')}</strong>
-                  <span>{search.trim() ? t('agents.model.tryKeywords') : t('agents.model.connectFirst')}</span>
-                </>}
-              </div>
+              editable
+                ? <EmptyState variant="compact" className="agent-model-empty">{t('agents.claudeDesktopMapping.customAliasHint')}</EmptyState>
+                : <EmptyState variant="compact" className="agent-model-empty" title={search.trim() ? t('agents.model.noMatch') : t('agents.model.unavailable')}>
+                  {search.trim() ? t('agents.model.tryKeywords') : t('agents.model.connectFirst')}
+                </EmptyState>
             ) : choices.map((choice, index) => {
               const selected = choice.name.toLocaleLowerCase() === value.trim().toLocaleLowerCase();
               return (

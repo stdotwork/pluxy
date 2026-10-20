@@ -1,8 +1,15 @@
+import { Switch } from './components/Switch';
+import { onWindowsCloseRequested } from './services/events';
+import {
+  openExternalUrl,
+  getGuiSettings,
+  resolveWindowsCloseRequest as resolveWindowsCloseRequestCommand,
+} from './services/appSettings';
+import type { WindowsCloseAction } from './services/appSettings';
+import { closePluginWebview } from './services/pluginWebview';
 import { MessageNotice } from './appNotice';
 import { ThemeSelector } from './components/ThemeSelector';
 import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import {
   Bot,
   Check,
@@ -54,7 +61,8 @@ import { appUpdateIndicatorState } from './appUpdateModel';
 import { canOpenAppPage, requestAppNavigation } from './navigation';
 import { useThemePreference } from './theme';
 import { usePrivacyMode } from './privacy';
-import { useDialogFocusTrap } from './components/useDialogFocusTrap';
+import { Dialog } from './components/Dialog';
+import { EmptyState } from './components/EmptyState';
 
 const QQ_CONTACT_URL = 'https://qm.qq.com/q/3queDaIG';
 const DISCORD_SERVER_URL = 'https://discord.gg/PxvX4D9kgs';
@@ -124,17 +132,11 @@ const pages = [
 
 type PageId = (typeof pages)[number]['id'];
 type AppPageId = PageId | `/plugin-pages/${string}`;
-type WindowsCloseAction = 'exit' | 'minimize-to-tray';
-type WindowsCloseBehavior = 'ask' | WindowsCloseAction;
 
 type WindowsClosePrompt = {
   resolvingAction: WindowsCloseAction | null;
   rememberChoice: boolean;
   error: string | null;
-};
-
-type GuiSettings = {
-  closeBehavior: WindowsCloseBehavior;
 };
 
 function HomePage() {
@@ -167,13 +169,6 @@ function AppContent() {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [privacyMode, setPrivacyMode] = usePrivacyMode();
   const [windowsClosePrompt, setWindowsClosePrompt] = useState<WindowsClosePrompt | null>(null);
-  const closeDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: Boolean(windowsClosePrompt),
-    onEscape: windowsClosePrompt?.resolvingAction
-      ? undefined
-      : () => setWindowsClosePrompt(null),
-    preventEscape: Boolean(windowsClosePrompt?.resolvingAction),
-  });
   const languageMenuRef = useRef<HTMLDivElement>(null);
   const languageButtonRef = useRef<HTMLButtonElement>(null);
   const { status } = useCoreRuntime();
@@ -210,7 +205,7 @@ function AppContent() {
   }, [active, coreReady]);
 
   useEffect(() => {
-    if (!coreReady) void invoke('close_plugin_webview').catch(() => undefined);
+    if (!coreReady) void closePluginWebview().catch(() => undefined);
   }, [coreReady]);
 
   useEffect(() => {
@@ -245,7 +240,7 @@ function AppContent() {
 
     const handleWindowsCloseRequest = async () => {
       try {
-        const settings = await invoke<GuiSettings>('get_gui_settings');
+        const settings = await getGuiSettings();
         if (settings.closeBehavior !== 'ask') {
           await resolveWindowsCloseRequest(settings.closeBehavior, false);
           return;
@@ -263,7 +258,7 @@ function AppContent() {
       );
     };
 
-    void listen('windows-close-requested', () => {
+    void onWindowsCloseRequested(() => {
       void handleWindowsCloseRequest();
     })
       .then((stop) => {
@@ -320,7 +315,7 @@ function AppContent() {
 
   const openContact = async () => {
     try {
-      await invoke('open_external_url', {
+      await openExternalUrl({
         url: locale === 'zh-CN' ? QQ_CONTACT_URL : DISCORD_SERVER_URL,
       });
     } catch (error) {
@@ -343,7 +338,7 @@ function AppContent() {
     );
 
     try {
-      await invoke('resolve_windows_close_request', { action, remember });
+      await resolveWindowsCloseRequestCommand({ action, remember });
       setWindowsClosePrompt(null);
     } catch (error) {
       setWindowsClosePrompt((current) =>
@@ -575,77 +570,71 @@ function AppContent() {
       </div>
 
       {windowsClosePrompt ? (
-        <div className="close-dialog-backdrop">
-          <section
-            ref={closeDialogRef}
-            className="close-dialog"
-            role="alertdialog"
-            tabIndex={-1}
-            aria-modal="true"
-            aria-labelledby="close-dialog-title"
-            aria-describedby="close-dialog-description"
+        <Dialog
+          alert
+          className="close-dialog"
+          backdropClassName="close-dialog-backdrop"
+          tabIndex={-1}
+          labelledBy="close-dialog-title"
+          describedBy="close-dialog-description"
+          onClose={() => setWindowsClosePrompt(null)}
+          closeDisabled={Boolean(windowsClosePrompt.resolvingAction)}
+        >
+          <button
+            type="button"
+            className="icon-button quiet ghost small-button close-dialog-dismiss"
+            aria-label={t('common.cancel')}
+            title={t('common.cancel')}
+            disabled={windowsClosePrompt.resolvingAction !== null}
+            onClick={() => setWindowsClosePrompt(null)}
           >
+            <X size={17} aria-hidden="true" />
+          </button>
+          <div className="close-dialog-heading">
+            <h2 id="close-dialog-title">{t('app.close.title')}</h2>
+          </div>
+          <p id="close-dialog-description">
+            {t('app.close.description')}
+          </p>
+          {windowsClosePrompt.error ? (
+            <MessageNotice message={windowsClosePrompt.error} onDismiss={() => setWindowsClosePrompt(current => current ? { ...current, error: null } : current)} />
+          ) : null}
+          <label className="close-dialog-remember">
+            <Switch checked={windowsClosePrompt.rememberChoice} disabled={windowsClosePrompt.resolvingAction !== null} onChange={(event) => {
+                const rememberChoice = event.currentTarget.checked;
+                setWindowsClosePrompt((current) =>
+                  current ? { ...current, rememberChoice } : current,
+                );
+              }} />
+            <span>{t('app.close.remember')}</span>
+          </label>
+          <div className="close-dialog-actions">
             <button
               type="button"
-              className="close-dialog-dismiss"
-              aria-label={t('common.cancel')}
-              title={t('common.cancel')}
+              className="close-choice-button primary-button"
               disabled={windowsClosePrompt.resolvingAction !== null}
-              onClick={() => setWindowsClosePrompt(null)}
+              onClick={() => void resolveWindowsCloseRequest('minimize-to-tray')}
             >
-              <X size={17} aria-hidden="true" />
+              <span>
+                {windowsClosePrompt.resolvingAction === 'minimize-to-tray'
+                  ? t('app.close.minimizing')
+                  : t('app.close.minimize')}
+              </span>
             </button>
-            <div className="close-dialog-heading">
-              <h2 id="close-dialog-title">{t('app.close.title')}</h2>
-            </div>
-            <p id="close-dialog-description">
-              {t('app.close.description')}
-            </p>
-            {windowsClosePrompt.error ? (
-              <MessageNotice message={windowsClosePrompt.error} onDismiss={() => setWindowsClosePrompt(current => current ? { ...current, error: null } : current)} />
-            ) : null}
-            <label className="close-dialog-remember">
-              <input
-                type="checkbox"
-                checked={windowsClosePrompt.rememberChoice}
-                disabled={windowsClosePrompt.resolvingAction !== null}
-                onChange={(event) => {
-                  const rememberChoice = event.currentTarget.checked;
-                  setWindowsClosePrompt((current) =>
-                    current ? { ...current, rememberChoice } : current,
-                  );
-                }}
-              />
-              <span>{t('app.close.remember')}</span>
-            </label>
-            <div className="close-dialog-actions">
-              <button
-                type="button"
-                className="close-choice-button primary-button"
-                disabled={windowsClosePrompt.resolvingAction !== null}
-                onClick={() => void resolveWindowsCloseRequest('minimize-to-tray')}
-              >
-                <span>
-                  {windowsClosePrompt.resolvingAction === 'minimize-to-tray'
-                    ? t('app.close.minimizing')
-                    : t('app.close.minimize')}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="close-choice-button danger-button"
-                disabled={windowsClosePrompt.resolvingAction !== null}
-                onClick={() => void resolveWindowsCloseRequest('exit')}
-              >
-                <span>
-                  {windowsClosePrompt.resolvingAction === 'exit'
-                    ? t('app.close.exiting')
-                    : t('app.close.exit')}
-                </span>
-              </button>
-            </div>
-          </section>
-        </div>
+            <button
+              type="button"
+              className="close-choice-button danger-button"
+              disabled={windowsClosePrompt.resolvingAction !== null}
+              onClick={() => void resolveWindowsCloseRequest('exit')}
+            >
+              <span>
+                {windowsClosePrompt.resolvingAction === 'exit'
+                  ? t('app.close.exiting')
+                  : t('app.close.exit')}
+              </span>
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       <AppUpdateDialog />
@@ -657,11 +646,9 @@ function CoreLockedPage() {
   const { t } = useI18n();
   return (
     <section className="page core-locked-page">
-      <div className="empty-state core-locked-panel">
-        <ServerCog size={26} aria-hidden="true" />
-        <strong>{t('app.coreRequired.title')}</strong>
-        <span>{t('app.coreRequired.description')}</span>
-      </div>
+      <EmptyState variant="box" icon={<ServerCog size={26} />} title={t('app.coreRequired.title')}>
+        {t('app.coreRequired.description')}
+      </EmptyState>
     </section>
   );
 }

@@ -64,11 +64,6 @@
   color: var(--theme-8a847c);
 }
 
-.agent-client-pagination > button {
-  width: 30px;
-  height: 30px;
-}
-
 .agent-client-list-footer > .compact-button {
   width: auto;
 }
@@ -93,16 +88,9 @@
   color: var(--theme-2d2a26);
   box-shadow: 0 24px 80px #0005;
   overflow: auto;
-}
-
-.agent-client-manager[open] {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.agent-client-manager::backdrop {
-  background: var(--theme-scrim);
 }
 
 .agent-client-manager header,

@@ -1,3 +1,4 @@
+import { Switch } from './Switch';
 import { useState } from 'react';
 import { ChevronDown, Plus, Undo2, X } from 'lucide-react';
 import { AgentModelPicker } from './AgentModelPicker';
@@ -6,6 +7,7 @@ import { useI18n } from '../i18n';
 import type { MessageKey } from '../i18n/resources';
 import { isRecord } from '../services/managementApi';
 import { normalizeOAuthProvider } from '../services/authFiles';
+import { Select } from './Select';
 
 type Advanced = Record<string, unknown>;
 type AliasRow = Record<string, unknown>;
@@ -69,21 +71,21 @@ export function CredentialAdvancedFields({
     return (
       <label className="credential-settings-field">
         <span>{t(label)}</span>
-        <select value={options.some((option) => option.value === current) ? current : ''} disabled={disabled} onChange={(event) => setField(key, event.currentTarget.value || undefined)}>
+        <Select value={options.some((option) => option.value === current) ? current : ''} disabled={disabled} onChange={(event) => setField(key, event.currentTarget.value || undefined)}>
           <option value="">{t('authFiles.settings.inherit')}</option>
           {options.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}
-        </select>
+        </Select>
       </label>
     );
   };
   const boolChoice = (label: MessageKey, key: 'cloak_strict_mode' | 'cloak_cache_user_id') => (
     <label className="credential-settings-field">
       <span>{t(label)}</span>
-      <select value={tri(advanced[key])} disabled={disabled} onChange={(event) => setField(key, event.currentTarget.value === '' ? undefined : event.currentTarget.value === 'true')}>
+      <Select value={tri(advanced[key])} disabled={disabled} onChange={(event) => setField(key, event.currentTarget.value === '' ? undefined : event.currentTarget.value === 'true')}>
         <option value="">{t('authFiles.settings.inherit')}</option>
         <option value="true">{t('common.enable')}</option>
         <option value="false">{t('common.disable')}</option>
-      </select>
+      </Select>
     </label>
   );
   const updateAlias = (index: number, patch: AliasRow) => {
@@ -124,8 +126,8 @@ export function CredentialAdvancedFields({
                 <input value={textValue(row['display-name'])} disabled={disabled} autoComplete="off" spellCheck={false} onChange={(event) => updateAlias(index, { 'display-name': event.currentTarget.value.trim() ? event.currentTarget.value : undefined })} />
               </label>
               <div className="credential-alias-checks">
-                <label><input type="checkbox" checked={row.fork === true} disabled={disabled} onChange={(event) => updateAlias(index, { fork: event.currentTarget.checked })} />{t('authFiles.settings.aliasFork')}</label>
-                <label><input type="checkbox" checked={row['force-mapping'] === true} disabled={disabled} onChange={(event) => updateAlias(index, { 'force-mapping': event.currentTarget.checked })} />{t('authFiles.settings.aliasForce')}</label>
+                <label><Switch checked={row.fork === true} disabled={disabled} onChange={(event) => updateAlias(index, { fork: event.currentTarget.checked })} />{t('authFiles.settings.aliasFork')}</label>
+                <label><Switch checked={row['force-mapping'] === true} disabled={disabled} onChange={(event) => updateAlias(index, { 'force-mapping': event.currentTarget.checked })} />{t('authFiles.settings.aliasForce')}</label>
               </div>
             </div> : null}
           </div>;

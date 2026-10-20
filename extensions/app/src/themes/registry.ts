@@ -1,4 +1,4 @@
-import { isThemeId, themeTokenProperties, type SystemThemes, type ThemeAppearance, type ThemeDefinition, type ThemePreview } from './types';
+import { isThemeId, isThemeLabel, themeOpacityTokenProperties, themeTokenProperties, type SystemThemes, type ThemeAppearance, type ThemeDefinition, type ThemeLabel, type ThemePreview } from './types';
 import { warmSand } from './warmSand';
 import { graphite } from './graphite';
 import { midnight } from './midnight';
@@ -7,25 +7,40 @@ import { dark } from './dark';
 import { sakura } from './sakura';
 import { backdropImage, normalizeBackdrop } from './backdrop';
 
+export function normalizeTheme(definition: ThemeDefinition): ThemeDefinition {
+  if (!isThemeId(definition.id) || definition.id === 'system') throw new Error(`Invalid theme ID: ${definition.id}`);
+  if (!['light', 'dark'].includes(definition.appearance) || !Number.isFinite(definition.order)
+    || !(definition.nameKey || isThemeLabel(definition.name))
+    || (definition.name !== undefined && !isThemeLabel(definition.name))
+    || (definition.description !== undefined && !isThemeLabel(definition.description))
+    || (definition.windowMaterial !== undefined && !['solid', 'translucent'].includes(definition.windowMaterial))) {
+    throw new Error(`Invalid theme metadata: ${definition.id}`);
+  }
+  if (!/^#[\da-f]{6}$/i.test(definition.windowBackground)) throw new Error(`Invalid window background: ${definition.id}`);
+  if (!definition.tokens || typeof definition.tokens !== 'object') throw new Error(`Invalid theme tokens: ${definition.id}`);
+  const tokens: Record<string, string> = {};
+  for (const [key, value] of Object.entries(definition.tokens)) {
+    if (!Object.prototype.hasOwnProperty.call(themeTokenProperties, key)) continue;
+    const valid = typeof value === 'string' && (Object.prototype.hasOwnProperty.call(themeOpacityTokenProperties, key)
+      ? /^(?:\d+(?:\.\d+)?)%$/.test(value) && Number(value.slice(0, -1)) <= 100
+      : /^#(?:[\da-f]{6}|[\da-f]{8})$/i.test(value));
+    if (!valid) throw new Error(`Invalid theme color: ${definition.id}.${key}`);
+    tokens[key] = value;
+  }
+  const label = (value: ThemeLabel) => typeof value === 'string' ? value : Object.freeze({ ...value });
+  return Object.freeze({ ...definition,
+    ...(definition.name === undefined ? {} : { name: label(definition.name) }),
+    ...(definition.description === undefined ? {} : { description: label(definition.description) }),
+    tokens: Object.freeze(tokens),
+    ...(definition.backdrop === undefined ? {} : { backdrop: normalizeBackdrop(definition.backdrop, definition.id) }),
+  });
+}
+
 export function createThemeRegistry(definitions: readonly ThemeDefinition[]) {
   const byId = new Map<string, ThemeDefinition>();
   for (const definition of definitions) {
-    if (!isThemeId(definition.id) || definition.id === 'system' || byId.has(definition.id)) {
-      throw new Error(`Invalid or duplicate theme ID: ${definition.id}`);
-    }
-    if (!['light', 'dark'].includes(definition.appearance) || !definition.nameKey || !Number.isFinite(definition.order)) {
-      throw new Error(`Invalid theme metadata: ${definition.id}`);
-    }
-    if (!/^#[\da-f]{6}$/i.test(definition.windowBackground)) throw new Error(`Invalid window background: ${definition.id}`);
-    for (const [key, value] of Object.entries(definition.tokens)) {
-      if (!Object.prototype.hasOwnProperty.call(themeTokenProperties, key) || !/^#(?:[\da-f]{6}|[\da-f]{8})$/i.test(value)) {
-        throw new Error(`Invalid theme color: ${definition.id}.${key}`);
-      }
-    }
-    byId.set(definition.id, Object.freeze({ ...definition,
-      tokens: Object.freeze({ ...definition.tokens }),
-      ...(definition.backdrop === undefined ? {} : { backdrop: normalizeBackdrop(definition.backdrop, definition.id) }),
-    }));
+    if (byId.has(definition.id)) throw new Error(`Invalid or duplicate theme ID: ${definition.id}`);
+    byId.set(definition.id, normalizeTheme(definition));
   }
   for (const appearance of ['light', 'dark'] as const) {
     if (byId.get(appearance)?.appearance !== appearance) throw new Error(`Missing default ${appearance} theme`);
@@ -44,7 +59,8 @@ export function createThemeRegistry(definitions: readonly ThemeDefinition[]) {
   };
 }
 
-export const themeRegistry = createThemeRegistry([light, dark, warmSand, graphite, midnight, sakura]);
+export const builtinThemes: readonly ThemeDefinition[] = [light, dark, warmSand, graphite, midnight, sakura];
+export const themeRegistry = createThemeRegistry(builtinThemes);
 export type ThemeRegistry = ReturnType<typeof createThemeRegistry>;
 
 export function themePreview(theme: ThemeDefinition): ThemePreview {

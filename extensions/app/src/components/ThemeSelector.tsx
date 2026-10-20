@@ -1,10 +1,14 @@
+import { SegmentedControl } from './SegmentedControl';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Monitor, Moon, Sun, SunMoon } from 'lucide-react';
+import { Check, FolderOpen, Monitor, Moon, RefreshCw, Sun, SunMoon } from 'lucide-react';
 import { useI18n } from '../i18n';
-import { retryThemeSave, setSystemTheme, useResolvedThemeId, useSystemThemes, useThemePreferenceIssue } from '../theme';
-import { themePreview, themeRegistry, type ThemeRegistry } from '../themes/registry';
-import type { ThemeAppearance, ThemeDefinition } from '../themes/types';
+import {
+  openCustomThemesDirectory, reloadCustomThemes, retryThemeSave, setSystemTheme, useCustomThemeStatus,
+  useResolvedThemeId, useSystemThemes, useThemePreferenceIssue, useThemeRegistry,
+} from '../theme';
+import { themePreview, type ThemeRegistry } from '../themes/registry';
+import { localizeThemeLabel, type ThemeAppearance, type ThemeDefinition } from '../themes/types';
 import './ThemeSelector.css';
 
 function ThemeThumbnail({ theme }: { theme: ThemeDefinition }) {
@@ -22,17 +26,21 @@ function ThemeThumbnail({ theme }: { theme: ThemeDefinition }) {
 
 type Mode = ThemeAppearance | 'system';
 
-export function ThemeSelector({ value, onChange, open, onOpenChange, registry = themeRegistry }: {
+export function ThemeSelector({ value, onChange, open, onOpenChange, registry: override }: {
   value: string;
   onChange: (id: string) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   registry?: ThemeRegistry;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const activeRegistry = useThemeRegistry();
+  const registry = override ?? activeRegistry;
   const issue = useThemePreferenceIssue();
   const systemThemes = useSystemThemes();
   const resolvedId = useResolvedThemeId();
+  const custom = useCustomThemeStatus();
+  const [openFailed, setOpenFailed] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<CSSProperties>();
@@ -42,10 +50,26 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry = 
   const slot = (appearance: ThemeAppearance) =>
     fixed?.appearance === appearance ? fixed.id : registry.resolveSystem(appearance, systemThemes).id;
   const current = registry.get(resolvedId) ?? registry.get('light')!;
-  const name = unavailable ? t('app.theme.unavailable') : t(current.nameKey);
+  const themeName = (theme: ThemeDefinition) => theme.name ? localizeThemeLabel(theme.name, locale) : t(theme.nameKey!);
+  const themeTitle = (theme: ThemeDefinition) => {
+    const description = theme.description ? localizeThemeLabel(theme.description, locale)
+      : theme.descriptionKey ? t(theme.descriptionKey) : '';
+    return description ? `${themeName(theme)}\n${description}` : themeName(theme);
+  };
+  const name = unavailable ? t('app.theme.unavailable') : themeName(current);
   const issueText = issue === 'read' ? t('app.theme.readFailed') : issue === 'save' ? t('app.theme.saveFailed')
     : unavailable ? t('app.theme.unavailableHint') : '';
   const label = `${t('app.theme.triggerHint')} — ${t('app.theme.current', { name })}`;
+  const customText = [
+    openFailed ? t('app.theme.custom.openFailed') : '',
+    custom.failed ? t('app.theme.custom.loadFailed') : '',
+    custom.skipped.length ? t('app.theme.custom.skipped', { files: custom.skipped.join(', ') }) : '',
+    custom.omitted ? t('app.theme.custom.omitted', { count: custom.omitted }) : '',
+  ].filter(Boolean).join(' ');
+  const openDirectory = () => {
+    setOpenFailed(false);
+    openCustomThemesDirectory().catch(() => setOpenFailed(true));
+  };
 
   useLayoutEffect(() => {
     if (!open) { setLayout(undefined); return; }
@@ -69,7 +93,7 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry = 
   }, [open]);
 
   useEffect(() => {
-    if (open && layout) menu.current?.querySelector<HTMLButtonElement>('.theme-selector-mode[aria-pressed="true"]')?.focus({ preventScroll: true });
+    if (open && layout) menu.current?.querySelector<HTMLButtonElement>('.theme-selector-mode[aria-checked="true"]')?.focus({ preventScroll: true });
   }, [open, layout === undefined]);
 
   useEffect(() => {
@@ -124,14 +148,9 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry = 
               {t('app.theme.retrySave')}
             </button> : null}
           </div> : null}
-          <div className="theme-selector-modes" role="group" aria-label={t('app.theme.label')}>
-            {modes.map(({ id, label: modeLabel, Icon }) => (
-              <button key={id} type="button" data-mode={id} aria-pressed={mode === id}
-                className={`theme-selector-mode${mode === id ? ' selected' : ''}`} onClick={() => chooseMode(id)}>
-                <Icon size={14} aria-hidden="true" />{modeLabel}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl className="theme-selector-modes" aria-label={t('app.theme.label')} value={mode} onChange={chooseMode}
+            buttonClassName="theme-selector-mode" selectedClassName="selected"
+            items={modes.map(({ id, label: modeLabel, Icon }) => ({ value: id, label: <><Icon size={14} aria-hidden="true" />{modeLabel}</> }))} />
           {(['light', 'dark'] as const).map((appearance) => {
             const chosen = slot(appearance);
             const group = t(appearance === 'light' ? 'app.theme.lightGroup' : 'app.theme.darkGroup');
@@ -142,11 +161,11 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry = 
                 <div className="theme-selector-grid">
                   {registry.themes.filter((theme) => theme.appearance === appearance).map((theme) => (
                     <button key={theme.id} type="button" data-theme-id={theme.id} aria-pressed={chosen === theme.id}
-                      title={theme.descriptionKey ? `${t(theme.nameKey)}\n${t(theme.descriptionKey)}` : t(theme.nameKey)}
+                      title={themeTitle(theme)}
                       className={`theme-selector-card${chosen === theme.id ? ' selected' : ''}`}
                       onClick={() => chooseTheme(theme)}>
                       <ThemeThumbnail theme={theme} />
-                      <span className="theme-selector-name">{t(theme.nameKey)}</span>
+                      <span className="theme-selector-name">{themeName(theme)}</span>
                       {chosen === theme.id ? <Check className="theme-selector-check" size={12} aria-hidden="true" /> : null}
                     </button>
                   ))}
@@ -154,6 +173,16 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry = 
               </div>
             );
           })}
+          {customText ? <div className="theme-selector-notice theme-selector-custom-notice" role="status">{customText}</div> : null}
+          <div className="theme-selector-actions">
+            <button type="button" data-action="open-themes" onClick={openDirectory}>
+              <FolderOpen size={13} aria-hidden="true" />{t('app.theme.custom.openFolder')}
+            </button>
+            <button type="button" data-action="reload-themes" disabled={custom.loading}
+              onClick={() => { setOpenFailed(false); void reloadCustomThemes(); }}>
+              <RefreshCw size={13} aria-hidden="true" />{t('app.theme.custom.reload')}
+            </button>
+          </div>
         </div>, document.body,
       ) : null}
     </div>

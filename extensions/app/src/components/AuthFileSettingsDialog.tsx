@@ -1,13 +1,16 @@
+import { Notice } from './Notice';
+import { Checkbox } from './Checkbox';
 import { useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Check, LoaderCircle, Settings2, X } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { managementApi } from '../services/managementApi';
 import { loadAuthFileSettings, saveAuthFileSettings, type AuthFileSettingsDraft, type BooleanOverride } from '../services/authFileSettings';
 import { modelMatchesRule, normalizeOAuthExcludedRules, oauthModelCandidates, oauthModelsFromPayload, setOAuthModelsExcluded, type OAuthModelDefinition } from '../services/oauthModels';
 import './AuthFileSettingsDialog.css';
+import { Dialog } from './Dialog';
 import { CredentialAdvancedFields, CredentialHeadersEditor, credentialProviderKey } from './CredentialAdvancedFields';
 import { modelSearchText, type ModelOption } from '../services/modelService';
+import { Select } from './Select';
 
 export function AuthFileSettingsDialog({ name, displayName = name, provider = '', onClose, onSaved }: {
   name: string;
@@ -19,7 +22,6 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
 }) {
   const { t } = useI18n();
   const id = useId();
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const savingRef = useRef(false);
   const [original, setOriginal] = useState<AuthFileSettingsDraft | null>(null);
   const [draft, setDraft] = useState<AuthFileSettingsDraft | null>(null);
@@ -33,19 +35,6 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const dirty = draft !== null && (Boolean(draft.normalizeCloakMetadata?.length) || JSON.stringify(draft) !== JSON.stringify(original));
-
-  useEffect(() => {
-    const previousFocus = document.activeElement;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const dialog = dialogRef.current;
-    dialog?.showModal();
-    return () => {
-      dialog?.close();
-      document.body.style.overflow = previousOverflow;
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
-    };
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -111,31 +100,17 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
   const booleanField = (key: 'disable_cooling' | 'websockets') => (
     <label className="credential-settings-field">
       <span>{t(`authFiles.settings.${key}`)} <code>{key}</code></span>
-      <select value={draft?.[key] ?? ''} onChange={(event) => update(key, event.currentTarget.value as BooleanOverride)}>
+      <Select value={draft?.[key] ?? ''} onChange={(event) => update(key, event.currentTarget.value as BooleanOverride)}>
         <option value="">{t('authFiles.settings.inherit')}</option>
         <option value="true">{t('common.enable')}</option>
         <option value="false">{t('common.disable')}</option>
-      </select>
+      </Select>
       <small>{t(`authFiles.settings.${key}Hint`)}</small>
     </label>
   );
 
-  const content = (
-    <dialog ref={dialogRef} className="credential-settings-dialog" aria-labelledby={`${id}-title`}
-      onCancel={(event) => { event.preventDefault(); close(); }} onKeyDown={(event) => {
-        if (event.key !== 'Tab') return;
-        const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button, input, select, textarea, summary'))
-          .filter((element) => !element.matches(':disabled') && element.getClientRects().length > 0);
-        const first = controls[0];
-        const last = controls[controls.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last?.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first?.focus();
-        }
-      }}>
+  return (
+    <Dialog className="credential-settings-dialog" labelledBy={`${id}-title`} onClose={close} closeDisabled={saving}>
       <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <header className="credential-settings-heading">
           <div><h2 id={`${id}-title`}><Settings2 size={20} />{t('authFiles.settings.title')}</h2><p>{displayName}</p></div>
@@ -158,14 +133,13 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
                 <details className="credential-settings-catalog">
                   <summary>{t('authFiles.settings.catalog', { count: models.length })}</summary>
                   {catalogLoading ? <p role="status">{t('common.loading')}</p> : null}
-                  {catalogError ? <p className="credential-settings-warning">{t('authFiles.settings.catalogError')}<small>{catalogError}</small></p> : null}
+                  {catalogError ? <Notice tone="warn" variant="text" live={false}>{t('authFiles.settings.catalogError')}<small>{catalogError}</small></Notice> : null}
                   <input aria-label={t('authFiles.settings.searchModels')} placeholder={t('authFiles.settings.searchModels')} value={search} onChange={(event) => setSearch(event.currentTarget.value)} />
                   <div className="credential-settings-models">
                     {candidates.map((model) => {
                       const wildcard = rules.some((rule) => rule.includes('*') && modelMatchesRule(model.id, rule));
                       return <label key={model.id} title={wildcard ? t('authFiles.settings.wildcard') : model.displayName}>
-                        <input type="checkbox" checked={rules.some((rule) => modelMatchesRule(model.id, rule))} disabled={wildcard}
-                          onChange={(event) => update('excluded_models', setOAuthModelsExcluded(rules, [model], event.currentTarget.checked).join('\n'))} />
+                        <Checkbox checked={rules.some((rule) => modelMatchesRule(model.id, rule))} disabled={wildcard} onChange={(event) => update('excluded_models', setOAuthModelsExcluded(rules, [model], event.currentTarget.checked).join('\n'))} />
                         <span>{model.id}{wildcard ? <small>{t('authFiles.settings.wildcard')}</small> : null}</span>
                       </label>;
                     })}
@@ -186,14 +160,13 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
           ) : null}
         </div>
         <footer className="credential-settings-footer">
-          {error ? <p className="credential-settings-error" role="alert">{error}</p> : null}
+          {error ? <Notice tone="error" variant="text" className="credential-settings-error">{error}</Notice> : null}
           <div className="credential-settings-actions">
             <button type="button" className="secondary-button" disabled={saving} onClick={close}>{t('common.cancel')}</button>
             {!loading && !draft ? <button type="button" className="primary-button" onClick={() => setAttempt((value) => value + 1)}>{t('common.refresh')}</button> : <button type="submit" className="primary-button" disabled={!draft || loading || saving || !dirty}>{saving ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{t(saving ? 'common.saving' : 'common.save')}</button>}
           </div>
         </footer>
       </form>
-    </dialog>
+    </Dialog>
   );
-  return typeof document === 'undefined' ? content : createPortal(content, document.body);
 }

@@ -1,10 +1,10 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { isTauri } from '@tauri-apps/api/core';
+import { isTauri } from './services/platform';
 import { AppErrorBoundary } from './AppErrorBoundary';
 import App from './App';
 import { I18nProvider } from './i18n';
-import { initializeTheme, initializeThemePreferences } from './theme';
+import { initializeTheme, initializeThemePreferences, reloadCustomThemes } from './theme';
 import { initializeUsagePreferences } from './services/usagePreferences';
 import { initializePrivacyMode } from './privacy';
 import './styles/index.css';
@@ -14,6 +14,7 @@ async function bootstrap() {
   if (import.meta.env.DEV && !isTauri()) {
     const { installBrowserMock } = await import('./mocks/browserMock');
     installBrowserMock();
+    void reloadCustomThemes();
   }
 
   initializeTheme();

@@ -31,13 +31,13 @@ export function ThemeExtensionFixture() {
     <div className="workspace"><main className="content">
       <section className="panel"><div className="panel-heading"><h2>Surface</h2><p>Secondary text</p></div></section>
       <div className="usage-records-page"><div className="usage-tab-panel" aria-labelledby="usage-tab-events">
-        <section className="usage-analysis-card">Usage surface</section>
+        <section className="surface-card usage-analysis-card">Usage surface</section>
       </div></div>
       <div className="config-dialog"><div className="config-dialog-heading"><h2>Dialog</h2></div></div>
-      <div className="version-metric-tile"><span className="version-metric-label">Current version</span><strong className="version-metric-value">v1.0.0</strong></div>
+      <div className="surface-section surface-muted version-metric-tile"><span className="version-metric-label">Current version</span><strong className="version-metric-value">v1.0.0</strong></div>
       <footer className="app-release-notes-footer">Release notes footer</footer>
       <section className="agent-core-setting-section agent-model-section">Model settings</section>
-      <section className="model-config-card">Model configuration</section>
+      <section className="surface-section surface-muted model-config-card">Model configuration</section>
     </main></div>
   </div>;
 }

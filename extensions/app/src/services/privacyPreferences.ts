@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 const STORAGE_KEY = 'easy-cli-proxy-api.privacy-mode';
 type Backend = {
   load(): Promise<boolean | null>;
@@ -60,3 +61,9 @@ export class PrivacyPreferences {
 
   flush() { return this.pending; }
 }
+
+export const getPrivacyMode = (): Promise<boolean | null> =>
+  invoke<boolean | null>('get_privacy_mode');
+
+export const savePrivacyMode = (args: { enabled: boolean; }): Promise<void> =>
+  invoke<void>('save_privacy_mode', args);

@@ -1,7 +1,8 @@
+import { Checkbox } from '../components/Checkbox';
 import { useEffect, useLayoutEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react';
 import { MessageNotice } from '../appNotice';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { useI18n } from '../i18n';
 
 const VISIBLE_CLIENTS_KEY = 'cpa-gui.agent-visible-clients.v1';
@@ -61,11 +62,6 @@ export function AgentClientList<Id extends string>({
   const searchRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
   const descriptionId = useId();
-  const dialogRef = useDialogFocusTrap<HTMLDialogElement>({
-    active: managing,
-    onEscape: close,
-    initialFocusRef: searchRef,
-  });
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -89,10 +85,6 @@ export function AgentClientList<Id extends string>({
     }
   }, [busy, onSelect, selected, visibleIds]);
 
-  useEffect(() => {
-    if (managing) dialogRef.current?.showModal();
-  }, [dialogRef, managing]);
-
   const save = () => {
     if (!draftSelection.length) return;
     try {
@@ -115,7 +107,7 @@ export function AgentClientList<Id extends string>({
     <aside className="panel agent-client-list" aria-label={t('agents.localClients')}>
       <div className="agent-client-list-heading">
         <strong>{t('agents.localClients')}</strong>
-        <button type="button" className="icon-button quiet" onClick={onRefresh}
+        <button type="button" className="icon-button quiet small-button" onClick={onRefresh}
           disabled={loading || busy} title={t('agents.redetect')} aria-label={t('agents.redetect')}>
           <RefreshCw size={15} className={loading ? 'spin' : ''} aria-hidden="true" />
         </button>
@@ -132,11 +124,11 @@ export function AgentClientList<Id extends string>({
       </div>
       <div className="agent-client-list-footer">
         <nav className="agent-client-pagination" aria-label={t('agents.clients.pages')}>
-          <button type="button" className="icon-button quiet" disabled={busy || currentPage === 0}
+          <button type="button" className="icon-button quiet small-button" disabled={busy || currentPage === 0}
             aria-label={t('agents.clients.previous')} title={t('agents.clients.previous')}
             onClick={() => setPage(currentPage - 1)}><ChevronLeft size={16} aria-hidden="true" /></button>
           <span aria-live="polite">{t('agents.clients.page', { page: currentPage + 1, total: pageCount })}</span>
-          <button type="button" className="icon-button quiet" disabled={busy || currentPage + 1 === pageCount}
+          <button type="button" className="icon-button quiet small-button" disabled={busy || currentPage + 1 === pageCount}
             aria-label={t('agents.clients.next')} title={t('agents.clients.next')}
             onClick={() => setPage(currentPage + 1)}><ChevronRight size={16} aria-hidden="true" /></button>
         </nav>
@@ -147,8 +139,8 @@ export function AgentClientList<Id extends string>({
         </button>
       </div>
     </aside>
-    {managing ? <dialog className="agent-client-manager" ref={dialogRef} aria-labelledby={titleId}
-      aria-describedby={descriptionId} onCancel={(event) => { event.preventDefault(); close(); }}>
+    {managing ? <Dialog className="agent-client-manager" labelledBy={titleId} describedBy={descriptionId}
+      initialFocusRef={searchRef} onClose={close}>
       <header>
         <h2 id={titleId}>{t('agents.clients.manage')}</h2>
         <button type="button" className="icon-button quiet" aria-label={t('common.close')} onClick={close}>
@@ -163,8 +155,7 @@ export function AgentClientList<Id extends string>({
       </div>
       <div className="agent-client-catalog">
         {matches.map((client) => <label key={client.id} className="agent-client-option">
-          <input type="checkbox" aria-label={client.name} checked={draftSelection.includes(client.id)}
-            onChange={(event) => setDraftIds(event.currentTarget.checked
+          <Checkbox aria-label={client.name} checked={draftSelection.includes(client.id)} onChange={(event) => setDraftIds(event.currentTarget.checked
               ? [...draftSelection, client.id] : draftSelection.filter((id) => id !== client.id))} />
           <span className="agent-client-icon">{client.icon}</span>
           <span className="agent-client-option-copy"><strong>{client.name}</strong><small title={client.summary}>{client.summary}</small></span>
@@ -184,6 +175,6 @@ export function AgentClientList<Id extends string>({
           <button type="button" className="primary-button" onClick={save} disabled={!draftSelection.length}>{t('common.save')}</button>
         </div>
       </footer>
-    </dialog> : null}
+    </Dialog> : null}
   </>;
 }

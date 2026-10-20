@@ -1,3 +1,4 @@
+import { Notice } from '../components/Notice';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useI18n } from '../i18n';
 import { pluginText } from '../i18n/plugins';
@@ -47,14 +48,14 @@ export function PluginSettingsPanel({ onSaved, globalControl }: { onSaved: () =>
     finally { pending.current = false; if (current === generation.current) setBusy(false); }
   };
   return <form className="plugin-settings" onSubmit={e => { e.preventDefault(); void save(); }}>
-    {error && <p className="plugin-error" role="alert">{error}</p>}
+    {error && <Notice tone="error" variant="text">{error}</Notice>}
     {!original ? (error ? <button className="secondary-button" type="button" onClick={() => setAttempt(n => n + 1)}>{pt('retry')}</button> : <p className="plugin-loading" role="status">{t('common.loading')}</p>) : <>
-      <fieldset className="plugin-settings-card" disabled={busy}>
+      <fieldset className="surface-card plugin-settings-card" disabled={busy}>
         <legend>{pt('storageSettings')}</legend>
         <div className="plugin-settings-columns plugin-settings-basics">{globalControl}
         <label className="plugin-field">{pt('directory')}<input value={directory} onChange={e => setDirectory(e.target.value)} /></label></div>
       </fieldset>
-      <fieldset className="plugin-settings-card" disabled={busy}>
+      <fieldset className="surface-card plugin-settings-card" disabled={busy}>
         <legend>{pt('registrySettings')}</legend>
         <div className="plugin-settings-columns">
         <label className="plugin-field">{pt('sources')}<textarea rows={5} value={sources} onChange={e => setSources(e.target.value)} spellCheck={false} /><small>{pt('sourcesHint')}</small></label>

@@ -153,8 +153,7 @@
 
 .codex-catalog-model-heading,
 .codex-catalog-footer,
-.codex-catalog-footer > div:last-child,
-.codex-catalog-confirm > div > div {
+.codex-catalog-footer > div:last-child {
   flex-wrap: wrap;
 }
 

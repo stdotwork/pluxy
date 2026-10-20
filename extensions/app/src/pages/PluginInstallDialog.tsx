@@ -1,8 +1,8 @@
+import { Notice } from '../components/Notice';
+import { openExternalUrl } from '../services/appSettings';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
 import { ExternalLink, X } from 'lucide-react';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { useI18n } from '../i18n';
 import { pluginText } from '../i18n/plugins';
 import { pluginStoreApi, type PluginStoreEntry, type PluginStoreInstallResult } from '../services/plugins';
@@ -34,7 +34,6 @@ export function PluginInstallDialog({ entry, onClose, onInstalled }: {
     controller.current?.abort();
     onClose();
   };
-  const ref = useDialogFocusTrap<HTMLElement>({ onEscape: cancel });
   const canSelectVersion = supportsPluginVersionSelection(entry.installType);
   const validVersion = !version.trim() || isValidManualReleaseTag(version);
   const repository = buildRepositoryURL(entry.repository);
@@ -51,19 +50,19 @@ export function PluginInstallDialog({ entry, onClose, onInstalled }: {
       if (mounted.current && !request.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
     } finally { controller.current = null; pending.current = false; if (mounted.current) setBusy(false); }
   };
-  return createPortal(<div className="config-dialog-backdrop">
-    <section className="config-dialog plugin-install-dialog" aria-busy={busy} role="dialog" aria-modal="true" aria-labelledby="plugin-install-title" ref={ref} tabIndex={-1}>
+  return (
+    <Dialog className="config-dialog plugin-install-dialog" busy={busy} labelledBy="plugin-install-title" tabIndex={-1} onClose={cancel}>
       <div className="config-dialog-heading"><h2 id="plugin-install-title">{action} · {entry.name || entry.id}</h2><button className="icon-button quiet" aria-label={t('common.close')} onClick={cancel}><X size={18} /></button></div>
       <div className="plugin-install-body">
-        <dl className="plugin-install-origin"><dt>{pt('storeSource')}</dt><dd>{officialStore ? pt('officialStore') : entry.sourceName || entry.sourceId}{entry.sourceUrl && <details className="plugin-source-address"><summary>{pt('sourceAddress')}</summary><small>{entry.sourceUrl}</small></details>}</dd><dt>{pt('repository')}</dt><dd className="plugin-install-repository"><span>{entry.repository || '—'}</span>{repository && <button className="icon-button quiet" aria-label={pt('repository')} onClick={() => void invoke('open_external_url', { url: repository }).catch(e => setError(String(e)))}><ExternalLink size={15} /></button>}</dd></dl>
+        <dl className="plugin-install-origin"><dt>{pt('storeSource')}</dt><dd>{officialStore ? pt('officialStore') : entry.sourceName || entry.sourceId}{entry.sourceUrl && <details className="plugin-source-address"><summary>{pt('sourceAddress')}</summary><small>{entry.sourceUrl}</small></details>}</dd><dt>{pt('repository')}</dt><dd className="plugin-install-repository"><span>{entry.repository || '—'}</span>{repository && <button className="icon-button quiet" aria-label={pt('repository')} onClick={() => void openExternalUrl({ url: repository }).catch(e => setError(String(e)))}><ExternalLink size={15} /></button>}</dd></dl>
         {canSelectVersion && <label className="plugin-field">{pt('version')}<input value={version} onChange={e => setVersion(e.target.value)} disabled={busy} placeholder={entry.version || 'v1.0.0'} aria-invalid={!validVersion} />{!validVersion && <small role="alert">{pt('invalidVersion')}</small>}</label>}
         {!trusted && <>
-          <p className="plugin-warning" id="plugin-trust-warning">{pt(externalRepository ? 'officialStoreThirdParty' : 'trustWarning')}</p>
+          <Notice tone="warn" icon={false} live={false} id="plugin-trust-warning" className="plugin-warning">{pt(externalRepository ? 'officialStoreThirdParty' : 'trustWarning')}</Notice>
           <label className="plugin-field">{pt(entry.installed ? 'trustTypeUpdate' : 'trustType')}<code>{confirmToken}</code><input value={confirmation} onChange={event => setConfirmation(event.target.value)} disabled={busy} autoComplete="off" spellCheck={false} aria-describedby="plugin-trust-warning" /></label>
         </>}
-        {error && <p className="plugin-error" role="alert">{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</p>}
+        {error && <Notice tone="error" variant="text">{error}{isGitHubRateLimit(error) ? <GitHubTokenHint /> : null}</Notice>}
       </div>
-      <div className="plugin-dialog-actions"><button className="secondary-button" onClick={cancel}>{t('common.cancel')}</button><button className="primary-button" disabled={busy || !validVersion || !confirmed} onClick={() => void install()}>{busy ? t('common.loading') : action}</button></div>
-    </section>
-  </div>, document.body);
+      <div className="plugin-dialog-actions"><button className="secondary-button compact-button" onClick={cancel}>{t('common.cancel')}</button><button className="primary-button compact-button" disabled={busy || !validVersion || !confirmed} onClick={() => void install()}>{busy ? t('common.loading') : action}</button></div>
+    </Dialog>
+  );
 }

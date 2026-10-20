@@ -301,6 +301,55 @@ fn saved_window_position_recovers_from_disconnected_displays_and_oversized_windo
 }
 
 #[test]
+fn restore_window_position_uses_target_display_scale_factor_on_mixed_dpi_displays() {
+    let external_work_area = tauri::PhysicalRect {
+        position: tauri::PhysicalPosition::new(1512, -458),
+        size: tauri::PhysicalSize::new(2560, 1440),
+    };
+    let external_window_size = tauri::PhysicalSize::new(2081, 1170);
+    let (fitted, target) = restore_window_position_for_monitor(
+        tauri::PhysicalPosition::new(1688, -330),
+        external_window_size,
+        &external_work_area,
+        1.0,
+    );
+    assert_eq!(fitted, tauri::PhysicalPosition::new(1688, -330));
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        target,
+        tauri::Position::Logical(tauri::LogicalPosition::new(1688.0, -330.0))
+    );
+    #[cfg(not(target_os = "macos"))]
+    assert_eq!(
+        target,
+        tauri::Position::Physical(tauri::PhysicalPosition::new(1688, -330))
+    );
+
+    let retina_work_area = tauri::PhysicalRect {
+        position: tauri::PhysicalPosition::new(0, 0),
+        size: tauri::PhysicalSize::new(3024, 1964),
+    };
+    let retina_window_size = tauri::PhysicalSize::new(2400, 1600);
+    let (fitted_retina, target_retina) = restore_window_position_for_monitor(
+        tauri::PhysicalPosition::new(300, 160),
+        retina_window_size,
+        &retina_work_area,
+        2.0,
+    );
+    assert_eq!(fitted_retina, tauri::PhysicalPosition::new(300, 160));
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        target_retina,
+        tauri::Position::Logical(tauri::LogicalPosition::new(150.0, 80.0))
+    );
+    #[cfg(not(target_os = "macos"))]
+    assert_eq!(
+        target_retina,
+        tauri::Position::Physical(tauri::PhysicalPosition::new(300, 160))
+    );
+}
+
+#[test]
 fn core_start_on_launch_defaults_on_and_can_be_disabled() {
     let legacy = toml::from_str::<GuiConfigFile>("port = 8317\n").unwrap();
     assert!(should_start_core_on_launch(&legacy));

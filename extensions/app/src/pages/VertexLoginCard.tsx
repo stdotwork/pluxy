@@ -1,11 +1,11 @@
+import { Notice } from '../components/Notice';
 import { useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Check, LoaderCircle, Upload, X } from 'lucide-react';
 import vertexIcon from '../assets/icons/vertex.svg';
 import { useI18n } from '../i18n';
 import { usePrivacyMask } from '../privacy';
 import { importVertexCredential, type VertexImportResult } from '../services/vertexImport';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import './VertexLoginCard.css';
 
 export function VertexLoginCard() {
@@ -14,7 +14,7 @@ export function VertexLoginCard() {
 
   return (
     <>
-      <section className="panel oauth-card vertex-login-card">
+      <section className="panel surface-panel oauth-card vertex-login-card">
         <div className="provider-title-row">
           <img src={vertexIcon} alt="" className="provider-logo" />
           <h2>{t('oauth.vertex.title')}</h2>
@@ -44,11 +44,6 @@ function VertexImportDialog({ onClose }: { onClose: () => void }) {
   const busy = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const chooseFile = useRef<HTMLButtonElement>(null);
-  const dialogRef = useDialogFocusTrap<HTMLElement>({
-    onEscape: loading ? undefined : onClose,
-    preventEscape: loading,
-    initialFocusRef: chooseFile,
-  });
 
   const importCredential = async () => {
     if (busy.current) return;
@@ -67,12 +62,9 @@ function VertexImportDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
-  return createPortal(
-    <div className="config-dialog-backdrop" onMouseDown={event => {
-      if (event.currentTarget === event.target && !busy.current) onClose();
-    }}>
-    <section ref={dialogRef} className="config-dialog vertex-import-dialog" role="dialog" aria-modal="true"
-      aria-labelledby="vertex-import-title" aria-describedby="vertex-import-description" aria-busy={loading} tabIndex={-1}>
+  return (
+    <Dialog className="config-dialog vertex-import-dialog" labelledBy="vertex-import-title" describedBy="vertex-import-description"
+      busy={loading} tabIndex={-1} onClose={onClose} closeDisabled={loading} dismissOnBackdrop initialFocusRef={chooseFile}>
       <div className="config-dialog-heading">
         <div className="vertex-import-heading">
           <img src={vertexIcon} alt="" className="provider-logo" />
@@ -101,7 +93,7 @@ function VertexImportDialog({ onClose }: { onClose: () => void }) {
             onChange={event => { setLocation(event.currentTarget.value); setError(''); setResult(null); }} />
           <small>{t('oauth.vertex.locationHint')}</small>
         </label>
-        {error ? <p role="alert" className="vertex-login-error">{privacy.text(error)}</p> : null}
+        {error ? <Notice tone="error" variant="text">{privacy.text(error)}</Notice> : null}
         {result ? <div role="status" className="vertex-login-result">
           <p><Check size={16} aria-hidden="true" />{t('oauth.vertex.success')}</p>
           <dl>
@@ -122,7 +114,6 @@ function VertexImportDialog({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       </form>
-    </section>
-    </div>, document.body,
+    </Dialog>
   );
 }

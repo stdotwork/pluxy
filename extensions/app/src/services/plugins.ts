@@ -359,3 +359,9 @@ export const pluginStoreApi = {
     }
   },
 };
+
+export const getPluginSupport = (): Promise<boolean> =>
+  invoke<boolean>('get_plugin_support');
+
+export const installLocalPlugin = (source: string): Promise<string> =>
+  invoke<string>('install_local_plugin', { source });

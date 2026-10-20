@@ -1,9 +1,12 @@
+import { Notice } from '../components/Notice';
+import { onConfigFilesChanged } from '../services/events';
+import { restartCoreProcess, startCoreProcess, stopCoreProcess } from '../services/coreLifecycle';
+import { getCoreConfigSettings, getCoreTlsSettings } from '../services/coreSettings';
+import { getGuiSettings } from '../services/appSettings';
 import { useEffect, useRef, useState } from 'react';
-import { getVersion } from '@tauri-apps/api/app';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '../services/platform';
 import { LoaderCircle, Play, RefreshCw, RotateCw, Square } from 'lucide-react';
-import { type CoreStatus, useCoreRuntime } from '../coreRuntime';
+import { useCoreRuntime } from '../coreRuntime';
 import { clientApiProfiles } from '../services/clientAccess';
 import { useI18n } from '../i18n';
 import { useAppUpdate } from '../appUpdate';
@@ -16,22 +19,6 @@ import { useHomeOverview } from './useHomeOverview';
 import './HomeDashboard.css';
 
 type CoreProcessCommand = 'start_core_process' | 'stop_core_process' | 'restart_core_process';
-
-type GuiSettings = {
-  host: string;
-  port: number;
-  runOnStartup: boolean;
-};
-
-type CoreConfigSummary = {
-  apiKeys: Array<{ apiKey: string }>;
-};
-
-type CoreTlsSettings = {
-  enabled: boolean;
-  cert: string;
-  key: string;
-};
 
 export type KernelView = 'home' | 'versions';
 
@@ -69,7 +56,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     let disposed = false;
     let unlistenConfig: (() => void) | null = null;
 
-    void listen('config-files-changed', () => {
+    void onConfigFilesChanged(() => {
       if (disposed) return;
       setConfigRevision((value) => value + 1);
       void loadGuiSettings();
@@ -110,7 +97,11 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
     clearProcessNotice();
 
     try {
-      const result = await invoke<CoreStatus>(command);
+      const result = await (command === 'start_core_process'
+        ? startCoreProcess()
+        : command === 'stop_core_process'
+          ? stopCoreProcess()
+          : restartCoreProcess());
       publishStatus(result);
       if (command === 'restart_core_process') {
         showProcessNotice({ key: 'kernel.notice.restarted' }, 'success');
@@ -131,7 +122,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
 
   const loadGuiSettings = async () => {
     try {
-      const settings = await invoke<GuiSettings>('get_gui_settings');
+      const settings = await getGuiSettings();
       setListenHost(settings.host);
       setCustomPort(String(settings.port));
       savedPortRef.current = settings.port;
@@ -140,7 +131,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
 
   const loadHomeApiKey = async () => {
     try {
-      const settings = await invoke<CoreConfigSummary>('get_core_config_settings');
+      const settings = await getCoreConfigSettings();
       setHomeApiKey(settings.apiKeys[0]?.apiKey ?? null);
       setHomeApiKeyError(false);
     } catch {
@@ -151,7 +142,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
 
   const loadTlsSettings = async () => {
     try {
-      const settings = await invoke<CoreTlsSettings>('get_core_tls_settings');
+      const settings = await getCoreTlsSettings();
       setTlsEnabled(settings.enabled);
     } catch {
       setTlsEnabled(false);
@@ -224,13 +215,13 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
         onRefreshModels={overview.refresh} contextKey={healthContext}
       />} />
       <div className="home-top-grid">
-        <div className="panel control-panel">
+        <div className="panel surface-panel control-panel">
           <div className="panel-heading home-panel-heading">
             <div>
               <h2>{t('kernel.control.title')}</h2>
               <p>{t(coreReady ? 'home.runtime.ready' : coreInstalled ? 'home.runtime.stopped' : 'home.runtime.notInstalled')}</p>
             </div>
-            <button type="button" className="icon-button quiet home-runtime-refresh" disabled={coreProcessBusy} onClick={() => void refreshStatus()} title={t('kernel.control.refresh')} aria-label={t('kernel.control.refresh')}><RefreshCw size={15} aria-hidden="true" /></button>
+            <button type="button" className="icon-button quiet ghost small-button" disabled={coreProcessBusy} onClick={() => void refreshStatus()} title={t('kernel.control.refresh')} aria-label={t('kernel.control.refresh')}><RefreshCw size={15} aria-hidden="true" /></button>
           </div>
           <dl className="panel-detail-grid home-runtime-details">
             <div className="panel-detail-row" data-runtime="installation">
@@ -266,11 +257,11 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
               <dd><span className="mono-tag">{customPort}</span></dd>
             </div>
           </dl>
-          {statusError && <p className="home-runtime-error" role="alert">{statusError}</p>}
-          {recovery && <div role={recovery.phase === 'failed' ? 'alert' : 'status'}>
+          {statusError && <Notice tone="error" variant="text">{statusError}</Notice>}
+          {recovery && <Notice tone={recovery.phase === 'failed' ? 'error' : 'warn'} variant="text">
             <p>{t(recovery.phase === 'failed' ? 'kernel.recovery.failedHint' : recovery.phase === 'waiting' ? 'kernel.recovery.waitingHint' : 'kernel.recovery.restartingHint', { attempt: recovery.attempt, seconds: recovery.delaySeconds })}</p>
-            {recovery.detail && <details><summary>{t('kernel.recovery.details')}</summary><p className="home-runtime-error">{recovery.detail}</p></details>}
-          </div>}
+            {recovery.detail && <details><summary>{t('kernel.recovery.details')}</summary><p>{recovery.detail}</p></details>}
+          </Notice>}
 
           <div className="button-row panel-action-row control-action-row">
             <button

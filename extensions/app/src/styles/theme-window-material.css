@@ -1,0 +1,16 @@
+:root[data-window-material],
+:root[data-window-material] :is(body, #root, .app-shell) {
+  background: transparent !important;
+}
+
+:root[data-window-material] .workspace {
+  background: color-mix(in srgb, var(--theme-faf9f5) var(--theme-window-material-workspace-opacity, 72%), transparent);
+}
+
+:root[data-window-material] .sidebar {
+  background: color-mix(in srgb, var(--sidebar-bg) var(--theme-window-material-sidebar-opacity, 40%), transparent);
+}
+
+:root[data-window-material] .workspace .content {
+  background: transparent;
+}

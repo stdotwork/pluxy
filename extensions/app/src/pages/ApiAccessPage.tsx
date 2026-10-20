@@ -1,8 +1,12 @@
+import { EmptyState } from '../components/EmptyState';
+import { Switch } from '../components/Switch';
+import { resolveApiAccessRemarks, saveApiAccessRemark } from '../services/apiAccessRemarks';
+import type { ProviderSection, ApiAccessRemarkLocator } from '../services/apiAccessRemarks';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { AdvancedSettingsGroup } from '../components/api-access/AdvancedSettingsGroup';
 import { normalizeProviderModels } from '../services/providerModels';
 import { ModelSelectionPanel } from '../components/ModelSelectionPanel';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import {
   type CSSProperties,
   FormEvent,
@@ -13,8 +17,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { createPortal } from 'react-dom';
-import { invoke } from '@tauri-apps/api/core';
 import {
   closestCenter,
   DndContext,
@@ -57,6 +59,7 @@ import {
   readBoolean,
   readNumber,
   readString,
+  providerGroupsApi,
 } from '../services/managementApi';
 import {
   DEEPSEEK_BASE_URL,
@@ -87,7 +90,6 @@ import {
   cleanProviderGroup, effectiveProviderKey, providerGroupIdentity, providerGroupKeys, providerGroupStatus,
   providerKeyDraft, providerKeyIsDisabled, serializeProviderKey, validateProviderGroupKeys, validateProviderTemplateRecord, type ProviderKeyDraft,
 } from '../services/providerGroups';
-import { providerGroupsApi } from '../services/managementApi';
 import {
   appendProviderEntry, locateProviderEntry, providerEntries, removeProviderEntry,
   reorderProviderEntries, updateProviderEntry, type ProviderEntrySource,
@@ -95,16 +97,9 @@ import {
 import { getCurrentLocale, translate, useI18n } from '../i18n';
 import type { MessageKey } from '../i18n/resources';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
+import { Select } from '../components/Select';
 
-export type ProviderSection =
-  | 'gemini-api-key'
-  | 'interactions-api-key'
-  | 'vertex-api-key'
-  | 'xai-api-key'
-  | 'meta-api-key'
-  | 'codex-api-key'
-  | 'claude-api-key'
-  | 'openai-compatibility';
+export type { ProviderSection } from '../services/apiAccessRemarks';
 
 export type ProviderCategory = ProviderSection | 'deepseek';
 
@@ -138,12 +133,7 @@ type ProviderRow = {
   remark: string;
 };
 
-export type ApiAccessRemarkLocator = {
-  providerName: string;
-  baseUrl: string;
-  apiKeys: string[];
-  configIdentity?: string;
-};
+export type { ApiAccessRemarkLocator } from '../services/apiAccessRemarks';
 
 export const providerDragId = (
   row: Pick<ProviderRow, 'section' | 'index' | 'name' | 'apiKey' | 'baseUrl'>,
@@ -207,7 +197,7 @@ function SortableProviderRow({
     >
       <button
         type="button"
-        className="icon-button quiet provider-drag-handle"
+        className="icon-button quiet ghost small-button provider-drag-handle"
         disabled={disabled}
         aria-label={dragLabel}
         title={dragLabel}
@@ -1291,7 +1281,7 @@ export function ApiAccessPage() {
       return;
     }
     let disposed = false;
-    void invoke<string[]>('resolve_api_access_remarks', {
+    void resolveApiAccessRemarks({
       queries: providerRows.flatMap((row) => [{
         providerSection: row.section,
         ...apiAccessRemarkLocatorFromRow(row),
@@ -1359,7 +1349,7 @@ export function ApiAccessPage() {
     const previousLocators = previousRows.flatMap((row) => [
       apiAccessRemarkLocatorFromRow(row), apiAccessRemarkLocatorFromRecord(section, row.source!.group),
     ]);
-    const resolved = await invoke<string[]>('resolve_api_access_remarks', {
+    const resolved = await resolveApiAccessRemarks({
       queries: previousLocators.map((locator) => ({ providerSection: section, ...locator })),
     });
     const previousRemarks = new Map(previousRows.map((row, index) => [
@@ -1378,7 +1368,7 @@ export function ApiAccessPage() {
     if (!byRemark.size) byRemark.set('', []);
     let first = true;
     for (const [remark, updatedRecords] of byRemark) {
-      await invoke('save_api_access_remark', { update: {
+      await saveApiAccessRemark({ update: {
         providerSection: section, previousRecords: first ? previousLocators : [],
         records: updatedRecords, allRecords, remark,
       } });
@@ -1645,13 +1635,11 @@ export function ApiAccessPage() {
           {loading ? (
             <div className="management-loading"><LoaderCircle size={20} className="spin" />{t('apiAccess.loading')}</div>
           ) : rows.length === 0 ? (
-            <div className="management-empty">
-              <Filter size={24} aria-hidden="true" />
-              <strong>{filter ? t('apiAccess.empty.filtered') : t('apiAccess.empty.none')}</strong>
-              <span>{filter ? t('apiAccess.empty.tryKeyword') : t('apiAccess.empty.addFirst', {
+            <EmptyState className="management-empty" icon={<Filter size={24} />} title={filter ? t('apiAccess.empty.filtered') : t('apiAccess.empty.none')}>
+              {filter ? t('apiAccess.empty.tryKeyword') : t('apiAccess.empty.addFirst', {
                 action: t(activeDefinition.openAi ? 'apiAccess.entries.addProvider' : 'apiAccess.entries.addKey'),
-              })}</span>
-            </div>
+              })}
+            </EmptyState>
           ) : (
             <DndContext
               sensors={dragSensors}
@@ -1695,7 +1683,7 @@ export function ApiAccessPage() {
                   <div className="provider-row-actions">
                     <button
                       type="button"
-                      className="secondary-button provider-health-button"
+                      className="secondary-button small-button provider-health-button"
                       onClick={() => setHealthDialogRow(row)}
                       disabled={busy}
                     >
@@ -1703,21 +1691,12 @@ export function ApiAccessPage() {
                     </button>
                     <label className="provider-enabled-control">
                       <span>{t(row.disabled ? 'apiAccess.status.disabled' : 'apiAccess.status.enabled')}</span>
-                      <span className="switch-control">
-                        <input
-                          type="checkbox"
-                          checked={!row.disabled}
-                          onChange={() => void toggleProvider(row)}
-                          disabled={busy}
-                          aria-label={t('apiAccess.toggleAria', { remark: row.remark || row.name, action: row.disabled ? t('common.enable') : t('common.disable') })}
-                        />
-                        <span className="switch-track" />
-                      </span>
+                      <Switch checked={!row.disabled} onChange={() => void toggleProvider(row)} disabled={busy} aria-label={t('apiAccess.toggleAria', { remark: row.remark || row.name, action: row.disabled ? t('common.enable') : t('common.disable') })} />
                     </label>
-                    <button type="button" className="icon-button quiet" onClick={() => openEdit(row)} disabled={busy} title={t('common.edit')} aria-label={t('common.edit')}>
+                    <button type="button" className="icon-button quiet small-button" onClick={() => openEdit(row)} disabled={busy} title={t('common.edit')} aria-label={t('common.edit')}>
                       <Edit3 size={16} aria-hidden="true" />
                     </button>
-                    <button type="button" className="icon-button danger" onClick={() => void deleteRow(row)} disabled={busy} title={t('common.delete')} aria-label={t('common.delete')}>
+                    <button type="button" className="icon-button danger small-button" onClick={() => void deleteRow(row)} disabled={busy} title={t('common.delete')} aria-label={t('common.delete')}>
                       <Trash2 size={16} aria-hidden="true" />
                     </button>
                   </div>
@@ -1771,9 +1750,9 @@ function ProviderGroupHealthDialog({ row, onClose }: ProviderHealthDialogProps) 
   }, [row, key]);
   return <ProviderHealthDialog key={selected} row={effectiveRow} onClose={onClose} keySelector={keys.length ?
     <label className="provider-health-key-selector"><span>{t('apiAccess.groups.healthKey')}</span>
-      <select value={selected} onChange={(event) => setSelected(Number(event.currentTarget.value))}>
+      <Select value={selected} onChange={(event) => setSelected(Number(event.currentTarget.value))}>
         {keys.map((entry, index) => <option key={index} value={index}>{t('apiAccess.groups.keyNumber', { number: index + 1 })} · {maskSecret(readString(entry, 'api-key'))}</option>)}
-      </select></label> : undefined} />;
+      </Select></label> : undefined} />;
 }
 
 type ProviderModelHealthState = { status: 'checking' } | ProviderModelHealthResult;
@@ -1791,7 +1770,6 @@ function ProviderHealthDialog({ row, onClose, keySelector }: ProviderHealthDialo
   const [results, setResults] = useState<Record<string, ProviderModelHealthState>>({});
   const [checkingAll, setCheckingAll] = useState(false);
   const healthControllerRef = useRef<AbortController | null>(null);
-  const dialogRef = useDialogFocusTrap<HTMLElement>({ onEscape: onClose });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1885,109 +1863,107 @@ function ProviderHealthDialog({ row, onClose, keySelector }: ProviderHealthDialo
   };
 
   return (
-    <div className="model-discovery-backdrop" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
-      <section ref={dialogRef} className="model-discovery-dialog provider-health-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-health-title">
-        <div className="model-discovery-header">
-          <div>
-            <h2 id="provider-health-title">{t('apiAccess.health.title')}</h2>
-            <span>{t('apiAccess.health.description', { provider: row.remark || row.name })}</span>
-          </div>
-          <button type="button" className="icon-button quiet" onClick={onClose} title={t('common.close')} aria-label={t('common.close')}>
-            <X size={18} aria-hidden="true" />
-          </button>
+    <Dialog className="model-discovery-dialog provider-health-dialog" backdropClassName="model-discovery-backdrop" labelledBy="provider-health-title" onClose={onClose} dismissOnBackdrop>
+      <div className="model-discovery-header">
+        <div>
+          <h2 id="provider-health-title">{t('apiAccess.health.title')}</h2>
+          <span>{t('apiAccess.health.description', { provider: row.remark || row.name })}</span>
         </div>
+        <button type="button" className="icon-button quiet" onClick={onClose} title={t('common.close')} aria-label={t('common.close')}>
+          <X size={18} aria-hidden="true" />
+        </button>
+      </div>
 
-        {keySelector}
-        <div className="model-discovery-search">
-          <Search size={16} aria-hidden="true" />
-          <input value={search} onChange={(event) => setSearch(event.currentTarget.value)} placeholder={t('apiAccess.health.search')} />
-        </div>
+      {keySelector}
+      <div className="model-discovery-search">
+        <Search size={16} aria-hidden="true" />
+        <input value={search} onChange={(event) => setSearch(event.currentTarget.value)} placeholder={t('apiAccess.health.search')} />
+      </div>
 
-        <div className="provider-health-overview">
-          <p>{t('apiAccess.health.warning')}</p>
-          <span>{t('apiAccess.health.summary', {
-            checked: checkedCount,
-            total: models.length,
-            healthy: healthyCount,
-            failed: failedCount,
-          })}</span>
-          {modelError ? (
-            <MessageNotice message={t('apiAccess.health.modelLoadFailed', { error: modelError })} onDismiss={() => setModelError('')} />
-          ) : modelLoading ? (
-            <small>{t('apiAccess.health.loadingModels')}</small>
-          ) : null}
-        </div>
+      <div className="provider-health-overview">
+        <p>{t('apiAccess.health.warning')}</p>
+        <span>{t('apiAccess.health.summary', {
+          checked: checkedCount,
+          total: models.length,
+          healthy: healthyCount,
+          failed: failedCount,
+        })}</span>
+        {modelError ? (
+          <MessageNotice message={t('apiAccess.health.modelLoadFailed', { error: modelError })} onDismiss={() => setModelError('')} />
+        ) : modelLoading ? (
+          <small>{t('apiAccess.health.loadingModels')}</small>
+        ) : null}
+      </div>
 
-        <div className="model-discovery-list provider-health-model-list">
-          {modelLoading && models.length === 0 ? (
-            <div className="model-discovery-message"><LoaderCircle size={20} className="spin" /><strong>{t('apiAccess.health.loadingModels')}</strong></div>
-          ) : visibleModels.length === 0 ? (
-            <div className="model-discovery-message"><strong>{models.length ? t('apiAccess.health.noMatch') : t('apiAccess.health.noModel')}</strong></div>
-          ) : visibleModels.map((model) => {
-            const state = results[model.name.toLowerCase()];
-            const checked = state && state.status !== 'checking' ? state : null;
-            const error = checked?.status === 'failed'
-              ? checked.errorCode === 'missing-direct-key'
-                ? t('apiAccess.health.missingDirectKey')
-                : checked.timedOut
-                  ? t('apiAccess.health.timeout')
-                  : checked.error || t('apiAccess.health.failed')
+      <div className="model-discovery-list provider-health-model-list">
+        {modelLoading && models.length === 0 ? (
+          <div className="model-discovery-message"><LoaderCircle size={20} className="spin" /><strong>{t('apiAccess.health.loadingModels')}</strong></div>
+        ) : visibleModels.length === 0 ? (
+          <div className="model-discovery-message"><strong>{models.length ? t('apiAccess.health.noMatch') : t('apiAccess.health.noModel')}</strong></div>
+        ) : visibleModels.map((model) => {
+          const state = results[model.name.toLowerCase()];
+          const checked = state && state.status !== 'checking' ? state : null;
+          const error = checked?.status === 'failed'
+            ? checked.errorCode === 'missing-direct-key'
+              ? t('apiAccess.health.missingDirectKey')
+              : checked.timedOut
+                ? t('apiAccess.health.timeout')
+                : checked.error || t('apiAccess.health.failed')
+            : '';
+          const latencyTitle = checked?.firstTokenLatencyMs !== undefined
+            ? t('apiAccess.health.firstTokenLatencyResult', { latency: checked.firstTokenLatencyMs })
+            : checked?.responseLatencyMs !== undefined
+              ? t('apiAccess.health.responseLatencyResult', { latency: checked.responseLatencyMs })
+              : error || undefined;
+          const latencyInline = checked?.firstTokenLatencyMs !== undefined
+            ? t('apiAccess.health.firstTokenInline', { latency: checked.firstTokenLatencyMs })
+            : checked?.responseLatencyMs !== undefined
+              ? t('apiAccess.health.responseInline', { latency: checked.responseLatencyMs })
               : '';
-            const latencyTitle = checked?.firstTokenLatencyMs !== undefined
-              ? t('apiAccess.health.firstTokenLatencyResult', { latency: checked.firstTokenLatencyMs })
-              : checked?.responseLatencyMs !== undefined
-                ? t('apiAccess.health.responseLatencyResult', { latency: checked.responseLatencyMs })
-                : error || undefined;
-            const latencyInline = checked?.firstTokenLatencyMs !== undefined
-              ? t('apiAccess.health.firstTokenInline', { latency: checked.firstTokenLatencyMs })
-              : checked?.responseLatencyMs !== undefined
-                ? t('apiAccess.health.responseInline', { latency: checked.responseLatencyMs })
-                : '';
-            return (
-              <div className={`provider-health-model-row ${checked?.status === 'failed' ? 'failed' : ''}`} key={model.name}>
-                <div className="provider-health-model-name">
-                  <strong title={model.name}>{model.name}</strong>
-                  {error
-                    ? <small className="error" title={error}>{error}</small>
-                    : model.alias || model.displayName
-                      ? <small title={model.alias || model.displayName}>{model.alias || model.displayName}</small>
-                      : null}
-                </div>
-                <span
-                  className={`state-pill provider-health-pill ${state?.status === 'checking' ? 'checking' : checked?.status === 'healthy' ? 'success' : checked?.status === 'failed' ? 'error' : ''}`}
-                  title={latencyTitle}
-                >
-                  {statusLabel(state)}
-                  {latencyInline ? ` · ${latencyInline}` : ''}
-                </span>
-                <button
-                  type="button"
-                  className="secondary-button compact-button provider-health-single-button"
-                  onClick={() => void checkOneModel(model)}
-                  disabled={modelLoading || checkingAll || state?.status === 'checking'}
-                >
-                  {checked ? t('apiAccess.health.retryOne') : t('apiAccess.health.checkOne')}
-                </button>
+          return (
+            <div className={`provider-health-model-row ${checked?.status === 'failed' ? 'failed' : ''}`} key={model.name}>
+              <div className="provider-health-model-name">
+                <strong title={model.name}>{model.name}</strong>
+                {error
+                  ? <small className="error" title={error}>{error}</small>
+                  : model.alias || model.displayName
+                    ? <small title={model.alias || model.displayName}>{model.alias || model.displayName}</small>
+                    : null}
               </div>
-            );
-          })}
-        </div>
+              <span
+                className={`state-pill provider-health-pill ${state?.status === 'checking' ? 'checking' : checked?.status === 'healthy' ? 'success' : checked?.status === 'failed' ? 'error' : ''}`}
+                title={latencyTitle}
+              >
+                {statusLabel(state)}
+                {latencyInline ? ` · ${latencyInline}` : ''}
+              </span>
+              <button
+                type="button"
+                className="secondary-button compact-button provider-health-single-button"
+                onClick={() => void checkOneModel(model)}
+                disabled={modelLoading || checkingAll || state?.status === 'checking'}
+              >
+                {checked ? t('apiAccess.health.retryOne') : t('apiAccess.health.checkOne')}
+              </button>
+            </div>
+          );
+        })}
+      </div>
 
-        <div className="model-discovery-actions provider-health-actions">
-          <button type="button" className="secondary-button compact-button" onClick={onClose}>{t('common.close')}</button>
-          <button
-            type="button"
-            className="primary-button compact-button"
-            onClick={() => void checkAllModels()}
-            disabled={modelLoading || models.length === 0 || hasCheckingModel}
-          >
-            {checkingAll
-              ? t('apiAccess.health.checkingProgress', { checked: checkedCount, total: models.length })
-              : t('apiAccess.health.checkAll')}
-          </button>
-        </div>
-      </section>
-    </div>
+      <div className="model-discovery-actions provider-health-actions">
+        <button type="button" className="secondary-button compact-button" onClick={onClose}>{t('common.close')}</button>
+        <button
+          type="button"
+          className="primary-button compact-button"
+          onClick={() => void checkAllModels()}
+          disabled={modelLoading || models.length === 0 || hasCheckingModel}
+        >
+          {checkingAll
+            ? t('apiAccess.health.checkingProgress', { checked: checkedCount, total: models.length })
+            : t('apiAccess.health.checkAll')}
+        </button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -2033,14 +2009,6 @@ export function ApiProviderDialog({
     setModelLoading(false);
     setModelDiscoveryOpen(false);
   }, []);
-  const providerDialogRef = useDialogFocusTrap<HTMLFormElement>({
-    onEscape: busy ? undefined : onClose,
-    preventEscape: busy,
-  });
-  const modelDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: modelDiscoveryOpen,
-    onEscape: closeModelDiscovery,
-  });
 
   useEffect(() => () => { discoveryRequestRef.current += 1; }, []);
 
@@ -2271,10 +2239,9 @@ export function ApiProviderDialog({
         ? t('apiAccess.models.autoHint')
         : t('apiAccess.models.allHint');
 
-  const content = (
+  return (
     <>
-      <div className="config-dialog-backdrop" onMouseDown={(event) => event.currentTarget === event.target && !busy && onClose()}>
-      <form ref={providerDialogRef} className="config-dialog management-dialog api-provider-dialog" role="dialog" aria-modal="true" aria-labelledby="api-provider-dialog-title" onSubmit={(event) => void submit(event)}>
+      <Dialog as="form" className="config-dialog management-dialog api-provider-dialog" labelledBy="api-provider-dialog-title" onSubmit={(event) => void submit(event)} onClose={onClose} closeDisabled={busy} dismissOnBackdrop>
         <div className="config-dialog-heading">
           <div>
             <Plus size={19} aria-hidden="true" />
@@ -2305,17 +2272,17 @@ export function ApiProviderDialog({
             setDraft((current) => ({ ...current, groupKeys }));
           }} /> : null}
         </section>
-        <div className="model-config-card" ref={modelCardRef}>
+        <div className="surface-section surface-muted model-config-card" ref={modelCardRef}>
           <div className="model-config-heading">
             <div><span>{t('apiAccess.models.title')}</span><small>{t('apiAccess.models.description')}</small></div>
             <button type="button" className="secondary-button compact-button" onClick={openModelDiscovery} disabled={busy}>
               <RefreshCw size={15} />{t('apiAccess.models.fetch')}
             </button>
           </div>
-          {(draft.groupKeys?.length ?? 0) > 1 ? <label><span>{t('apiAccess.entries.discoveryKey')}</span><select value={draft.groupKeys!.some((key) => key.id === discoveryKeyId) ? discoveryKeyId : draft.groupKeys![0].id}
+          {(draft.groupKeys?.length ?? 0) > 1 ? <label><span>{t('apiAccess.entries.discoveryKey')}</span><Select value={draft.groupKeys!.some((key) => key.id === discoveryKeyId) ? discoveryKeyId : draft.groupKeys![0].id}
             onChange={(event) => { discoveryRequestRef.current += 1; setModelLoading(false); setDiscoveryKeyId(event.currentTarget.value); }}>
             {draft.groupKeys!.map((key, index) => <option value={key.id} key={key.id}>{t('apiAccess.entries.keyNumber', { number: index + 1 })} · {maskSecret(readString(key.value, 'api-key'))}</option>)}
-          </select></label> : null}
+          </Select></label> : null}
           <div className={`model-config-summary ${configuredModels.length || hasModelExclusions ? 'has-models' : ''}`}>
             <strong>{modelSummaryTitle}</strong>
             <span>{modelSummaryDetail}</span>
@@ -2339,7 +2306,7 @@ export function ApiProviderDialog({
                 />
                 <button
                   type="button"
-                  className="icon-button quiet danger"
+                  className="icon-button quiet danger small-button"
                   onClick={() => removeModel(index)}
                   disabled={busy}
                   title={t('apiAccess.models.remove')}
@@ -2424,12 +2391,12 @@ export function ApiProviderDialog({
               <div className="provider-cloak-settings">
                 <label>
                   <span>{t('apiAccess.cloak.mode')}</span>
-                  <select value={draft.cloakMode ?? ''} onChange={(event) => updateTextField('cloakMode', event.currentTarget.value)}>
+                  <Select value={draft.cloakMode ?? ''} onChange={(event) => updateTextField('cloakMode', event.currentTarget.value)}>
                     <option value="">{t('apiAccess.cloak.default')}</option>
                     <option value="auto">{t('apiAccess.cloak.auto')}</option>
                     <option value="always">{t('apiAccess.cloak.always')}</option>
                     <option value="never">{t('apiAccess.cloak.never')}</option>
-                  </select>
+                  </Select>
                 </label>
                 <label className="multiline-field">
                   <span>{t('apiAccess.cloak.words')}</span>
@@ -2437,31 +2404,31 @@ export function ApiProviderDialog({
                 </label>
                 <div className="provider-advanced-toggle">
                   <div><strong>{t('apiAccess.cloak.strict')}</strong><span>{t('apiAccess.cloak.strictDescription')}</span></div>
-                  <label className="switch-control" title={t('apiAccess.cloak.enableStrict')}><input type="checkbox" checked={Boolean(draft.cloakStrictMode)} onChange={(event) => updateBooleanField('cloakStrictMode', event.currentTarget.checked)} /><span className="switch-track" /></label>
+                  <Switch title={t('apiAccess.cloak.enableStrict')} checked={Boolean(draft.cloakStrictMode)} onChange={(event) => updateBooleanField('cloakStrictMode', event.currentTarget.checked)} />
                 </div>
                 <div className="provider-advanced-toggle">
                   <div><strong>{t('apiAccess.cloak.cacheUser')}</strong><span>{t('apiAccess.cloak.cacheUserDescription')}</span></div>
-                  <select aria-label={t('apiAccess.cloak.cacheUser')} value={draft.cloakCacheUserId == null ? '' : String(draft.cloakCacheUserId)} onChange={(event) => updateOptionalBooleanField('cloakCacheUserId', event.currentTarget.value)}>
+                  <Select aria-label={t('apiAccess.cloak.cacheUser')} value={draft.cloakCacheUserId == null ? '' : String(draft.cloakCacheUserId)} onChange={(event) => updateOptionalBooleanField('cloakCacheUserId', event.currentTarget.value)}>
                     <option value="">{t('apiAccess.option.inherit')}</option>
                     <option value="true">{t('common.enabled')}</option>
                     <option value="false">{t('common.disabled')}</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
             ) : null}
             {!grouped && (activeSection === 'codex-api-key' || activeSection === 'xai-api-key') ? (
               <div className="provider-advanced-toggle">
                 <div><strong>WebSocket</strong><span>{t('apiAccess.websocket.description')}</span></div>
-                <label className="switch-control" title={t('apiAccess.websocket.enable')}><input type="checkbox" checked={Boolean(draft.websockets)} onChange={(event) => updateBooleanField('websockets', event.currentTarget.checked)} /><span className="switch-track" /></label>
+                <Switch title={t('apiAccess.websocket.enable')} checked={Boolean(draft.websockets)} onChange={(event) => updateBooleanField('websockets', event.currentTarget.checked)} />
               </div>
             ) : null}
             <div className="provider-advanced-toggle">
               <div><strong>{t('apiAccess.cooling.title')}</strong><span>{t('apiAccess.cooling.description')}</span></div>
-              <select aria-label={t('apiAccess.cooling.title')} value={draft.disableCooling == null ? '' : String(draft.disableCooling)} onChange={(event) => updateOptionalBooleanField('disableCooling', event.currentTarget.value)}>
+              <Select aria-label={t('apiAccess.cooling.title')} value={draft.disableCooling == null ? '' : String(draft.disableCooling)} onChange={(event) => updateOptionalBooleanField('disableCooling', event.currentTarget.value)}>
                 <option value="">{t('apiAccess.option.inherit')}</option>
                 <option value="true">{t('apiAccess.cooling.disable')}</option>
                 <option value="false">{t('apiAccess.cooling.enable')}</option>
-              </select>
+              </Select>
             </div>
             </AdvancedSettingsGroup>
           </div>
@@ -2473,43 +2440,38 @@ export function ApiProviderDialog({
           <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>{t('common.cancel')}</button>
           <button type="submit" className="primary-button" disabled={busy}>{busy ? t('common.saving') : t('common.save')}</button>
         </div>
-      </form>
-      </div>
+      </Dialog>
 
       {modelDiscoveryOpen ? (
-        <div className="model-discovery-backdrop" onMouseDown={(event) => event.currentTarget === event.target && closeModelDiscovery()}>
-          <section ref={modelDialogRef} className="model-discovery-dialog model-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="model-discovery-title">
-            <div className="model-discovery-header">
-              <div><h2 id="model-discovery-title">{t('apiAccess.modelDialog.title')}</h2><span>{providerLabel(definition)}</span></div>
-              <button type="button" className="icon-button quiet" onClick={closeModelDiscovery} title={t('common.close')} aria-label={t('common.close')}><X size={18} aria-hidden="true" /></button>
-            </div>
+        <Dialog className="model-discovery-dialog model-transfer-dialog" backdropClassName="model-discovery-backdrop" labelledBy="model-discovery-title" onClose={closeModelDiscovery} dismissOnBackdrop>
+          <div className="model-discovery-header">
+            <div><h2 id="model-discovery-title">{t('apiAccess.modelDialog.title')}</h2><span>{providerLabel(definition)}</span></div>
+            <button type="button" className="icon-button quiet" onClick={closeModelDiscovery} title={t('common.close')} aria-label={t('common.close')}><X size={18} aria-hidden="true" /></button>
+          </div>
 
-            <div className="model-transfer-summary">
-              <span role="status">{t('apiAccess.modelDialog.summary', { found: modelOptions.length, selected: selectedModels.length })}</span>
-              <button type="button" className="secondary-button compact-button" onClick={() => void discoverModels()} disabled={modelLoading}>
-                <RefreshCw size={15} className={modelLoading ? 'spin' : ''} />{t('common.refresh')}
-              </button>
-            </div>
+          <div className="model-transfer-summary">
+            <span role="status">{t('apiAccess.modelDialog.summary', { found: modelOptions.length, selected: selectedModels.length })}</span>
+            <button type="button" className="secondary-button compact-button" onClick={() => void discoverModels()} disabled={modelLoading}>
+              <RefreshCw size={15} className={modelLoading ? 'spin' : ''} />{t('common.refresh')}
+            </button>
+          </div>
 
-            {modelError ? (
-              <MessageNotice source="apiAccess.modelDialog.fetchFailed" message={modelError} onDismiss={() => setModelError('')} />
-            ) : null}
+          {modelError ? (
+            <MessageNotice source="apiAccess.modelDialog.fetchFailed" message={modelError} onDismiss={() => setModelError('')} />
+          ) : null}
 
-            <div className="model-transfer-panels">
-              <ModelSelectionPanel models={unselectedModels} selected={false} loading={modelLoading} onMove={moveModels} />
-              <ModelSelectionPanel models={selectedModels} selected loading={modelLoading} onMove={moveModels} />
-            </div>
+          <div className="model-transfer-panels">
+            <ModelSelectionPanel models={unselectedModels} selected={false} loading={modelLoading} onMove={moveModels} />
+            <ModelSelectionPanel models={selectedModels} selected loading={modelLoading} onMove={moveModels} />
+          </div>
 
-            <div className="model-discovery-actions model-transfer-actions">
-              {selectedModels.length === 0 ? <span>{t('apiAccess.modelDialog.chooseOne')}</span> : null}
-              <button type="button" className="secondary-button" onClick={closeModelDiscovery}>{t('common.cancel')}</button>
-              <button type="button" className="primary-button" onClick={applyModelSelection} disabled={modelLoading || selectedModels.length === 0}>{t('apiAccess.modelDialog.apply', { count: selectedModels.length })}</button>
-            </div>
-          </section>
-        </div>
+          <div className="model-discovery-actions model-transfer-actions">
+            {selectedModels.length === 0 ? <span>{t('apiAccess.modelDialog.chooseOne')}</span> : null}
+            <button type="button" className="secondary-button" onClick={closeModelDiscovery}>{t('common.cancel')}</button>
+            <button type="button" className="primary-button" onClick={applyModelSelection} disabled={modelLoading || selectedModels.length === 0}>{t('apiAccess.modelDialog.apply', { count: selectedModels.length })}</button>
+          </div>
+        </Dialog>
       ) : null}
     </>
   );
-  // Keep both dialogs outside the page's query container, which can contain fixed elements in WebKit.
-  return typeof document === 'undefined' ? content : createPortal(content, document.body);
 }

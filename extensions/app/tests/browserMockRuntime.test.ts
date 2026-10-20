@@ -19,6 +19,18 @@ describe('browser mock options', () => {
 });
 
 describe('browser mock runtime', () => {
+  test('saves, preserves and clears the Codex approval model', async () => {
+    const runtime = createBrowserMockRuntime('running');
+    const save = (request: Record<string, unknown>) => runtime.invoke('save_codex_model_catalog_editor', { request });
+    expect(await save({ models: [], review_model: { model: 'custom-review-model' } }))
+      .toMatchObject({ snapshot: { defaultAutoReviewModel: 'custom-review-model' }, synchronizationError: null });
+    await save({ models: [] });
+    expect(await runtime.invoke('get_codex_model_catalog_editor'))
+      .toMatchObject({ defaultAutoReviewModel: 'custom-review-model' });
+    expect(await save({ models: [], review_model: { model: null } }))
+      .toMatchObject({ snapshot: { defaultAutoReviewModel: null } });
+  });
+
   test('offers fast and standard request samples in the first usage rows', async () => {
     const runtime = createBrowserMockRuntime('running');
     const page = await runtime.invoke('get_usage_events', { query: { page_size: 3 } }) as {

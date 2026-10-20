@@ -1,7 +1,25 @@
+import { onCoreInstallProgress, onConfigFilesChanged, onVersionDownloadSourceChanged } from '../services/events';
+import { openExternalUrl } from '../services/appSettings';
+import {
+  getVersionSourceSettings,
+  getCoreInstallTask,
+  setDownloadSource,
+  addCustomDownloadMirror,
+  removeCustomDownloadMirror,
+  installBundledCore,
+  installCoreVersion,
+  cancelCoreInstall,
+  detectBundledCore,
+} from '../services/coreVersions';
+import type {
+  VersionSourceSettings,
+  VersionDownloadSource,
+  CoreInstallTask,
+  CoreInstallResult,
+  BundledCoreInfo,
+} from '../services/coreVersions';
 import { useEffect, useRef, useState } from 'react';
-import { getVersion } from '@tauri-apps/api/app';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '../services/platform';
 import {
   Download,
   ExternalLink,
@@ -18,38 +36,16 @@ import { useAppUpdate } from '../appUpdate';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
 import { createVersionManagementVisitTracker } from '../services/versionManagementVisits';
 import { AppReleaseNotes } from '../components/AppReleaseNotes';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
+import { Select } from '../components/Select';
 
-export type CoreInstallResult = {
-  version: string;
-  assetName: string;
-  installDir: string;
-  binaryPath: string | null;
-};
+export type { CoreInstallResult } from '../services/coreVersions';
 
-type BundledCoreInfo = {
-  version: string;
-  assetName: string;
-};
+export type { CoreInstallTask } from '../services/coreVersions';
 
-export type CoreInstallTask = {
-  running: boolean;
-  cancellable: boolean;
-  phase: string;
-  downloaded: number;
-  total: number | null;
-  percent: number | null;
-  message: string | null;
-  result: CoreInstallResult | null;
-};
+export type { VersionSourceSettings } from '../services/coreVersions';
 
-export type VersionSourceSettings = {
-  source: VersionDownloadSource;
-  gitcodeAvailable: boolean;
-  customMirrors: string[];
-};
-
-export type VersionDownloadSource = string;
+export type { VersionDownloadSource } from '../services/coreVersions';
 
 function downloadSourceLabel(source: VersionDownloadSource, t: ReturnType<typeof useI18n>['t']) {
   const keys: Record<string, Parameters<typeof t>[0]> = {
@@ -177,7 +173,7 @@ export function VersionManagementPage() {
 
   const loadVersionSourceSettings = async () => {
     try {
-      const settings = await invoke<VersionSourceSettings>('get_version_source_settings');
+      const settings = await getVersionSourceSettings();
       setVersionSource(settings);
       setVersionSourceError('');
     } catch (error) {
@@ -187,7 +183,7 @@ export function VersionManagementPage() {
 
   const loadInstallTask = async () => {
     try {
-      const task = await invoke<CoreInstallTask>('get_core_install_task');
+      const task = await getCoreInstallTask();
       applyInstallTask(task, false, false);
     } catch {}
   };
@@ -196,7 +192,7 @@ export function VersionManagementPage() {
     setVersionSourceSaving(true);
     setVersionSourceError('');
     try {
-      const settings = await invoke<VersionSourceSettings>('set_download_source', { source });
+      const settings = await setDownloadSource({ source });
       setVersionSource(settings);
       resetLatest();
       showNotice({ key: 'kernel.versions.sourceSwitched', variables: {
@@ -216,7 +212,7 @@ export function VersionManagementPage() {
     setVersionSourceSaving(true);
     setVersionSourceError('');
     try {
-      const settings = await invoke<VersionSourceSettings>('add_custom_download_mirror', { url });
+      const settings = await addCustomDownloadMirror({ url });
       setVersionSource(settings);
       setCustomMirrorDraft('');
       setCustomMirrorDialogOpen(false);
@@ -235,7 +231,7 @@ export function VersionManagementPage() {
     setVersionSourceSaving(true);
     setVersionSourceError('');
     try {
-      const settings = await invoke<VersionSourceSettings>('remove_custom_download_mirror', {
+      const settings = await removeCustomDownloadMirror({
         url,
       });
       setVersionSource(settings);
@@ -270,8 +266,8 @@ export function VersionManagementPage() {
 
     try {
       const result = target.kind === 'bundled'
-        ? await invoke<CoreInstallResult>('install_bundled_core')
-        : await invoke<CoreInstallResult>('install_core_version', { version: target.version });
+        ? await installBundledCore()
+        : await installCoreVersion({ version: target.version });
       const message = t(target.kind === 'bundled' ? 'kernel.install.bundledCompleted' : 'kernel.install.completed', { version: result.version });
       showInstallCompletedNotice(result, message);
       manualInstallInProgressRef.current = false;
@@ -316,7 +312,7 @@ export function VersionManagementPage() {
 
     setCancellingInstall(true);
     try {
-      await invoke('cancel_core_install');
+      await cancelCoreInstall();
     } catch (error) {
       setCancellingInstall(false);
       showNotice(String(error), 'error');
@@ -334,7 +330,7 @@ export function VersionManagementPage() {
 
   const openAppRelease = async (url = appUpdate?.releaseUrl || APP_RELEASE_URL) => {
     try {
-      await invoke('open_external_url', { url });
+      await openExternalUrl({ url });
     } catch (error) {
       showNotice({ key: 'kernel.error.openUpdate', variables: { error: String(error) } }, 'error');
     }
@@ -356,7 +352,7 @@ export function VersionManagementPage() {
     let unlistenConfig: (() => void) | null = null;
     let unlistenVersionSource: (() => void) | null = null;
 
-    listen<CoreInstallTask>('core-install-progress', (event) => {
+    onCoreInstallProgress((event) => {
       const showTaskUi = manualInstallInProgressRef.current;
       applyInstallTask(event.payload, showTaskUi, showTaskUi);
       if (!event.payload.running) {
@@ -369,7 +365,7 @@ export function VersionManagementPage() {
       })
       .catch(() => undefined);
 
-    void listen('config-files-changed', () => {
+    void onConfigFilesChanged(() => {
       if (disposed) return;
       void loadVersionSourceSettings();
       void refreshStatus();
@@ -378,7 +374,7 @@ export function VersionManagementPage() {
       else unlistenConfig = stop;
     });
 
-    void listen<VersionSourceSettings>('version-download-source-changed', (event) => {
+    void onVersionDownloadSourceChanged((event) => {
       if (disposed) return;
       setVersionSource(event.payload);
       setVersionSourceError('');
@@ -392,7 +388,7 @@ export function VersionManagementPage() {
 
     loadInstallTask();
     void loadVersionSourceSettings();
-    void invoke<BundledCoreInfo | null>('detect_bundled_core')
+    void detectBundledCore()
       .then((info) => {
         if (!disposed) setBundledCore(info);
       })
@@ -509,26 +505,10 @@ export function VersionManagementPage() {
     setVersionSourceError('');
   };
 
-  const customMirrorDialogRef = useDialogFocusTrap<HTMLFormElement>({
-    active: customMirrorDialogOpen,
-    initialFocusRef: customMirrorInputRef,
-    onEscape: versionSourceSaving ? undefined : closeCustomMirrorDialog,
-    preventEscape: versionSourceSaving,
-  });
-  const confirmUpdateDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: confirmUpdateOpen,
-    onEscape: () => setConfirmUpdateOpen(false),
-  });
-  const installDialogRef = useDialogFocusTrap<HTMLDivElement>({
-    active: installDialogOpen && Boolean(progress),
-    onEscape: installing || progress?.running ? undefined : closeInstallDialog,
-    preventEscape: Boolean(installing || progress?.running),
-  });
-
   return (
     <section className="page management-page version-management-page">
       <MessageNotice message={versionSourceError} onDismiss={() => setVersionSourceError('')} />
-      <section className="version-list">
+      <section className="surface-bare version-list">
         <div className="version-source-row" aria-label={t('kernel.versions.downloadSource')}>
           <div className="version-source-copy">
             <strong>{t('kernel.versions.downloadSource')}</strong>
@@ -540,7 +520,7 @@ export function VersionManagementPage() {
           <div className="version-source-control">
             <label>
               <span className="sr-only">{t('kernel.versions.downloadSource')}</span>
-              <select
+              <Select
                 value={versionSource?.source ?? DEFAULT_VERSION_DOWNLOAD_SOURCE}
                 disabled={
                   !versionSource
@@ -562,7 +542,7 @@ export function VersionManagementPage() {
                     {downloadSourceLabel(`custom:${url}`, t)}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <button
               type="button"
@@ -592,11 +572,11 @@ export function VersionManagementPage() {
             </div>
 
             <dl className="version-metrics-comparison">
-              <div className="version-metric-tile">
+              <div className="surface-section surface-muted version-metric-tile">
                 <dt className="version-metric-label">{t('appUpdate.current')}</dt>
                 <dd className="version-metric-value">{currentAppVersion}</dd>
               </div>
-              <div className={`version-metric-tile ${appHasUpdate ? 'has-update' : ''}`}>
+              <div className={`surface-section surface-muted version-metric-tile ${appHasUpdate ? 'has-update' : ''}`}>
                 <dt className="version-metric-label">{t('appUpdate.latest')}</dt>
                 <dd className="version-metric-value">
                   {appUpdate ? (latestAppVersion || currentAppVersion) : (checkingAppUpdate ? t('appUpdate.checking') : t('common.detecting'))}
@@ -659,13 +639,13 @@ export function VersionManagementPage() {
             </div>
 
             <dl className="version-metrics-comparison">
-              <div className="version-metric-tile">
+              <div className="surface-section surface-muted version-metric-tile">
                 <dt className="version-metric-label">{t('kernel.versions.current')}</dt>
                 <dd className="version-metric-value" title={currentVersion || t('kernel.status.notInstalled')}>
                   {currentVersion || t('kernel.status.notInstalled')}
                 </dd>
               </div>
-              <div className={`version-metric-tile ${coreHasUpdate ? 'has-update' : ''}`}>
+              <div className={`surface-section surface-muted version-metric-tile ${coreHasUpdate ? 'has-update' : ''}`}>
                 <dt className="version-metric-label">{t('kernel.versions.latest')}</dt>
                 <dd className="version-metric-value" title={latestVersion || latestError || t('kernel.update.notChecked')}>
                   {checkingLatest ? t('kernel.update.checking') : (latestVersion || (latestError ? t('common.detectionFailed') : t('kernel.update.notChecked')))}
@@ -723,191 +703,188 @@ export function VersionManagementPage() {
       </section>
 
       {customMirrorDialogOpen ? (
-        <div className="install-dialog-backdrop custom-mirror-dialog-backdrop">
-          <form
-            ref={customMirrorDialogRef}
-            className="install-dialog app-update-dialog custom-mirror-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="custom-mirror-dialog-title"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void addCustomMirror();
-            }}
-          >
-            <div className="install-dialog-heading">
-              <div>
-                <span>{t('kernel.versions.downloadSource')}</span>
-                <h2 id="custom-mirror-dialog-title">{t('kernel.versions.customMirrorDialogTitle')}</h2>
-              </div>
-              <button
-                type="button"
-                className="icon-button quiet"
-                onClick={closeCustomMirrorDialog}
-                disabled={versionSourceSaving}
-                title={t('common.close')}
-                aria-label={t('common.close')}
-              >
-                <X size={18} aria-hidden="true" />
-              </button>
+        <Dialog
+          as="form"
+          className="install-dialog app-update-dialog custom-mirror-dialog"
+          backdropClassName="install-dialog-backdrop custom-mirror-dialog-backdrop"
+          labelledBy="custom-mirror-dialog-title"
+          initialFocusRef={customMirrorInputRef}
+          onClose={closeCustomMirrorDialog}
+          closeDisabled={versionSourceSaving}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void addCustomMirror();
+          }}
+        >
+          <div className="install-dialog-heading">
+            <div>
+              <span>{t('kernel.versions.downloadSource')}</span>
+              <h2 id="custom-mirror-dialog-title">{t('kernel.versions.customMirrorDialogTitle')}</h2>
             </div>
-            <p className="custom-mirror-dialog-description">
-              {t('kernel.versions.customMirrorDialogDescription')}
-            </p>
-            <input
-              ref={customMirrorInputRef}
-              type="url"
-              value={customMirrorDraft}
+            <button
+              type="button"
+              className="icon-button quiet"
+              onClick={closeCustomMirrorDialog}
               disabled={versionSourceSaving}
-              placeholder={t('kernel.versions.customMirrorPlaceholder')}
-              aria-label={t('kernel.versions.customMirrorPlaceholder')}
-              onChange={(event) => setCustomMirrorDraft(event.currentTarget.value)}
-            />
+              title={t('common.close')}
+              aria-label={t('common.close')}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+          <p className="custom-mirror-dialog-description">
+            {t('kernel.versions.customMirrorDialogDescription')}
+          </p>
+          <input
+            ref={customMirrorInputRef}
+            type="url"
+            value={customMirrorDraft}
+            disabled={versionSourceSaving}
+            placeholder={t('kernel.versions.customMirrorPlaceholder')}
+            aria-label={t('kernel.versions.customMirrorPlaceholder')}
+            onChange={(event) => setCustomMirrorDraft(event.currentTarget.value)}
+          />
 
-            {versionSource?.customMirrors.length ? (
-              <div className="custom-mirror-dialog-list">
-                <span>{t('kernel.versions.customMirrorSaved')}</span>
-                {versionSource.customMirrors.map((url) => (
-                  <div key={url}>
-                    <span title={url}>{url}</span>
-                    <button
-                      type="button"
-                      disabled={versionSourceSaving}
-                      title={t('kernel.versions.customMirrorRemove')}
-                      aria-label={t('kernel.versions.customMirrorRemove')}
-                      onClick={() => void removeCustomMirror(url)}
-                    >
-                      <Trash2 size={15} aria-hidden="true" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            <div className="app-update-dialog-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={versionSourceSaving}
-                onClick={closeCustomMirrorDialog}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="submit"
-                className="secondary-button"
-                disabled={!customMirrorDraft.trim() || versionSourceSaving}
-              >
-                <span>{t('kernel.versions.customMirrorConfirm')}</span>
-              </button>
+          {versionSource?.customMirrors.length ? (
+            <div className="custom-mirror-dialog-list">
+              <span>{t('kernel.versions.customMirrorSaved')}</span>
+              {versionSource.customMirrors.map((url) => (
+                <div key={url}>
+                  <span title={url}>{url}</span>
+                  <button
+                    type="button"
+                    className="icon-button danger ghost small-button"
+                    disabled={versionSourceSaving}
+                    title={t('kernel.versions.customMirrorRemove')}
+                    aria-label={t('kernel.versions.customMirrorRemove')}
+                    onClick={() => void removeCustomMirror(url)}
+                  >
+                    <Trash2 size={15} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
             </div>
-          </form>
-        </div>
+          ) : null}
+          <div className="app-update-dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={versionSourceSaving}
+              onClick={closeCustomMirrorDialog}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="submit"
+              className="secondary-button"
+              disabled={!customMirrorDraft.trim() || versionSourceSaving}
+            >
+              <span>{t('kernel.versions.customMirrorConfirm')}</span>
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {confirmUpdateOpen ? (
-        <div className="install-dialog-backdrop app-update-dialog-backdrop">
-          <section
-            ref={confirmUpdateDialogRef}
-            className="install-dialog app-update-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="core-update-confirm-title"
-          >
-            <div className="install-dialog-heading">
-              <span className="install-dialog-eyebrow">{t('kernel.dialog.install')}</span>
-              <h2 id="core-update-confirm-title">
-                {t('kernel.versions.confirmUpdateTitle')}
-              </h2>
-            </div>
+        <Dialog
+          className="install-dialog app-update-dialog"
+          backdropClassName="install-dialog-backdrop app-update-dialog-backdrop"
+          labelledBy="core-update-confirm-title"
+          onClose={() => setConfirmUpdateOpen(false)}
+        >
+          <div className="install-dialog-heading">
+            <span className="install-dialog-eyebrow">{t('kernel.dialog.install')}</span>
+            <h2 id="core-update-confirm-title">
+              {t('kernel.versions.confirmUpdateTitle')}
+            </h2>
+          </div>
 
-            <p className="app-update-confirm-copy">
-              {t('kernel.versions.stopAndConfirmDescription', { version: latestVersion })}
-            </p>
+          <p className="app-update-confirm-copy">
+            {t('kernel.versions.stopAndConfirmDescription', { version: latestVersion })}
+          </p>
 
-            <div className="app-update-dialog-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setConfirmUpdateOpen(false)}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => {
-                  setConfirmUpdateOpen(false);
-                  void installCore({ kind: 'release', version: latestVersion });
-                }}
-              >
-                <Download size={15} aria-hidden="true" />
-                <span>{t('kernel.versions.installLatest')}</span>
-              </button>
-            </div>
-          </section>
-        </div>
+          <div className="app-update-dialog-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setConfirmUpdateOpen(false)}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                setConfirmUpdateOpen(false);
+                void installCore({ kind: 'release', version: latestVersion });
+              }}
+            >
+              <Download size={15} aria-hidden="true" />
+              <span>{t('kernel.versions.installLatest')}</span>
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {installDialogOpen && progress ? (
-        <div className="install-dialog-backdrop">
-          <div
-            ref={installDialogRef}
-            className={`install-dialog ${installDialogTone}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="install-dialog-title"
-            aria-describedby="install-dialog-message"
-            aria-busy={installing || progress?.running}
-            tabIndex={-1}
-          >
-            <div className="install-dialog-heading">
-              <span className="install-dialog-eyebrow">{t('kernel.dialog.install')}</span>
-              <h2 id="install-dialog-title">{installDialogTitle}</h2>
-            </div>
-
-            <div className="install-dialog-phase">
-              <span>{t('kernel.dialog.phase')}</span>
-              <strong className="phase-badge">
-                {cancellingInstall ? t('kernel.install.cancellingShort') : localizeInstallPhase(progress.phase, t)}
-              </strong>
-            </div>
-
-            <div
-              className={`install-progress-track ${
-                progressKnown ? '' : (installing || progress?.running) ? 'unknown is-running' : 'unknown'
-              }`}
-            >
-              <span
-                className="install-progress-fill"
-                style={progressKnown ? { width: `${progressPercent}%` } : undefined}
-              />
-            </div>
-
-            <div className="install-progress-meta">
-              <strong>{progressKnown ? `${progressPercent.toFixed(1)}%` : t('kernel.dialog.unknownProgress')}</strong>
-              <span>{progressText}</span>
-            </div>
-
-            <div
-              id="install-dialog-message"
-              className={`install-dialog-message ${installDialogTone}`}
-              aria-live="polite"
-            >
-              {installDialogMessage || ' '}
-            </div>
-
-            <div className="install-dialog-actions">
-              <button
-                type="button"
-                className={(installing || progress?.running) ? 'danger-button' : 'primary-button'}
-                disabled={installDialogActionDisabled}
-                onClick={(installing || progress?.running) ? cancelInstall : closeInstallDialog}
-              >
-                {installDialogAction}
-              </button>
-            </div>
+        <Dialog
+          as="div"
+          className={`install-dialog ${installDialogTone}`}
+          backdropClassName="install-dialog-backdrop"
+          labelledBy="install-dialog-title"
+          describedBy="install-dialog-message"
+          busy={installing || progress?.running}
+          tabIndex={-1}
+          onClose={closeInstallDialog}
+          closeDisabled={Boolean(installing || progress?.running)}
+        >
+          <div className="install-dialog-heading">
+            <span className="install-dialog-eyebrow">{t('kernel.dialog.install')}</span>
+            <h2 id="install-dialog-title">{installDialogTitle}</h2>
           </div>
-        </div>
+
+          <div className="install-dialog-phase">
+            <span>{t('kernel.dialog.phase')}</span>
+            <strong className="phase-badge">
+              {cancellingInstall ? t('kernel.install.cancellingShort') : localizeInstallPhase(progress.phase, t)}
+            </strong>
+          </div>
+
+          <div
+            className={`install-progress-track ${
+              progressKnown ? '' : (installing || progress?.running) ? 'unknown is-running' : 'unknown'
+            }`}
+          >
+            <span
+              className="install-progress-fill"
+              style={progressKnown ? { width: `${progressPercent}%` } : undefined}
+            />
+          </div>
+
+          <div className="install-progress-meta">
+            <strong>{progressKnown ? `${progressPercent.toFixed(1)}%` : t('kernel.dialog.unknownProgress')}</strong>
+            <span>{progressText}</span>
+          </div>
+
+          <div
+            id="install-dialog-message"
+            className={`install-dialog-message ${installDialogTone}`}
+            aria-live="polite"
+          >
+            {installDialogMessage || ' '}
+          </div>
+
+          <div className="install-dialog-actions">
+            <button
+              type="button"
+              className={(installing || progress?.running) ? 'danger-button' : 'primary-button'}
+              disabled={installDialogActionDisabled}
+              onClick={(installing || progress?.running) ? cancelInstall : closeInstallDialog}
+            >
+              {installDialogAction}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
     </section>

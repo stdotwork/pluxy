@@ -11,7 +11,7 @@ const base = process.env.USAGE_TEST_URL || 'http://127.0.0.1:1439';
       await page.setViewportSize({ width, height: 762 });
       await page.goto(`${base}/tests/fixtures/select-menu/index.html`, { waitUntil: 'domcontentloaded' });
       for (let i = 0; i < 5; i++) {
-        const trigger = page.getByRole('button', { name: `Filter ${i}`, exact: true });
+        const trigger = page.getByRole('combobox', { name: `Filter ${i}`, exact: true });
         await trigger.click();
         const menu = page.locator('.select-menu-dropdown');
         const t = await trigger.boundingBox(), m = await menu.boundingBox();
@@ -20,7 +20,7 @@ const base = process.env.USAGE_TEST_URL || 'http://127.0.0.1:1439';
         assert.equal(await menu.evaluate(e => getComputedStyle(e).backgroundColor), 'rgb(23, 45, 67)');
         await page.keyboard.press('Escape');
       }
-      await page.getByRole('button', { name: 'Filter 4', exact: true }).click();
+      await page.getByRole('combobox', { name: 'Filter 4', exact: true }).click();
       const list = page.locator('.select-menu-list');
       await list.hover();
       await page.mouse.wheel(0, 200);
@@ -43,7 +43,7 @@ const base = process.env.USAGE_TEST_URL || 'http://127.0.0.1:1439';
       await page.keyboard.press('Enter');
       await page.locator('#outside').focus();
       assert.equal(await page.locator('.select-menu-dropdown').count(), 0, 'outside focus closes portal');
-      await page.getByRole('button', { name: 'Filter 0', exact: true }).click();
+      await page.getByRole('combobox', { name: 'Filter 0', exact: true }).click();
       await page.locator('#outside').click();
       assert.equal(await page.locator('.select-menu-dropdown').count(), 0);
     }

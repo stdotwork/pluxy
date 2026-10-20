@@ -11,7 +11,6 @@
   color: var(--text-primary);
   box-shadow: 0 24px 80px #0004;
 }
-.credential-settings-dialog::backdrop { background: var(--theme-scrim); backdrop-filter: blur(3px); }
 .credential-settings-dialog form { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; min-height: 0; }
 .credential-settings-heading, .credential-settings-footer { flex-shrink: 0; }
 .credential-settings-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 24px; border-bottom: 1px solid var(--border-color); }
@@ -44,8 +43,10 @@
 .credential-settings-models span { min-width: 0; }
 .credential-settings-footer { position: relative; z-index: 1; flex: 0 0 auto; padding: 16px 24px; border-top: 1px solid var(--border-color); background: var(--bg-card); }
 .credential-settings-actions { display: flex; gap: 10px; justify-content: flex-end; }
-.credential-settings-error { color: var(--failure-badge-text); margin: 0 0 12px; font-size: var(--font-size-caption); overflow-wrap: anywhere; max-height: 90px; overflow-y: auto; }
-.credential-settings-warning { color: var(--amber-text); }
+.credential-settings-error {
+  margin: 0 0 12px;
+  max-height: 90px;
+  overflow-y: auto; }
 .credential-settings-loading { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 150px; }
 @media (max-width: 560px) {
   .credential-settings-grid { grid-template-columns: minmax(0, 1fr); }

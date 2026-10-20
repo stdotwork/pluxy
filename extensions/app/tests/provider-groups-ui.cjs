@@ -91,12 +91,12 @@ const fs = require('node:fs/promises');
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await rows.nth(3).waitFor();
     const beforeToggle = await groups();
-    await rows.nth(0).getByRole('checkbox').uncheck();
+    await rows.nth(0).getByRole('switch').uncheck();
     await page.waitForFunction(() => window.groupFixture.groups[0].keys[0]['excluded-models']?.includes('*'));
     saved = await groups();
     assert.deepEqual(saved[0].keys[1], beforeToggle[0].keys[1], 'Disabling one key preserves its sibling');
     assert.equal(saved[0]['excluded-models'], undefined, 'Disabling a key leaves the group enabled');
-    assert.equal(await rows.nth(1).getByRole('checkbox').isChecked(), true);
+    assert.equal(await rows.nth(1).getByRole('switch').isChecked(), true);
     await rows.nth(0).getByRole('button', { name: 'Delete', exact: true }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click();
     await page.waitForFunction(() => window.groupFixture.groups[0].keys.length === 1);
@@ -128,7 +128,7 @@ const fs = require('node:fs/promises');
     // A legacy group remark must migrate to every individual key before the
     // backend removes group identities that are absent from allRecords.
     await page.goto(`${base}/tests/fixtures/provider-groups.html?scenario=remarks`);
-    const rowRemark = (index) => rows.nth(index).locator('.provider-row-title > span:not(.state-pill)');
+    const rowRemark = (index) => rows.nth(index).locator('.provider-row-title > strong');
     await rowRemark(1).getByText('Existing group note', { exact: true }).waitFor();
     await rows.nth(0).getByRole('button', { name: 'Edit', exact: true }).click();
     assert.equal(await dialog.getByLabel('Remark', { exact: true }).inputValue(), 'Existing group note');

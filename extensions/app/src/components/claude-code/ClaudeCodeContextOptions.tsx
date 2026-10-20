@@ -1,3 +1,4 @@
+import { Switch } from '../Switch';
 import { useI18n } from '../../i18n';
 import { claudeCodeRoles, claudeCodeRole, claudeCodeModelBase, type ClaudeCodeRoutes } from '../../services/claudeCodeModels';
 
@@ -19,8 +20,7 @@ export function ClaudeCodeContextOptions({ routes, startupModel, subagentModel, 
       <div>
         {claudeCodeRoles.map(role => (
           <label key={role}>
-            <input type="checkbox" checked={routes[`${role}1m`]} disabled={disabled}
-              onChange={event => onRoleChange(`${role}1m`, event.currentTarget.checked)} />
+            <Switch checked={routes[`${role}1m`]} disabled={disabled} onChange={event => onRoleChange(`${role}1m`, event.currentTarget.checked)} />
             <span>{role[0].toUpperCase() + role.slice(1)}</span>
           </label>
         ))}
@@ -28,8 +28,7 @@ export function ClaudeCodeContextOptions({ routes, startupModel, subagentModel, 
           const value = field === 'startupModel' ? startupModel : subagentModel;
           if (!value.trim() || claudeCodeRole(value)) return null;
           return <label key={field}>
-            <input type="checkbox" checked={/\[1m\]$/i.test(value.trim())} disabled={disabled}
-              onChange={event => onModelChange(field, claudeCodeModelBase(value) + (event.currentTarget.checked ? '[1m]' : ''))} />
+            <Switch checked={/\[1m\]$/i.test(value.trim())} disabled={disabled} onChange={event => onModelChange(field, claudeCodeModelBase(value) + (event.currentTarget.checked ? '[1m]' : ''))} />
             <span>{t(`agents.claudeCodeRuntime.${field}`)}</span>
           </label>;
         })}

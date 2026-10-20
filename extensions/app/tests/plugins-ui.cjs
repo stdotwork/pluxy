@@ -28,7 +28,7 @@ const fs = require('node:fs');
       await page.locator('.plugins-page[aria-label]').waitFor();
     };
     const card = title => page.locator('.plugin-card').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
-    const tab = name => page.locator('.plugin-tabs').getByRole('button', { name, exact: true });
+    const tab = name => page.locator('.plugin-tabs').getByRole('tab', { name, exact: true });
     const dialog = () => page.getByRole('dialog');
     const installs = () => page.evaluate(() => window.pluginsFixture.installs);
     const noOverflow = async () => assert.equal(await page.evaluate(() =>
@@ -89,7 +89,7 @@ const fs = require('node:fs');
 
     await card('kiro').getByRole('button', { name: 'Find in store', exact: true }).click();
     await card('Kiro').getByRole('button', { name: 'Install', exact: true }).waitFor();
-    assert.equal(await tab('Plugin store').getAttribute('aria-current'), 'page');
+    assert.equal(await tab('Plugin store').getAttribute('aria-selected'), 'true');
     assert.equal(await page.getByRole('searchbox').inputValue(), 'kiro');
     assert.equal(await page.locator('.plugin-card').count(), 1);
     await tab('Local plugins').click();
@@ -114,7 +114,7 @@ const fs = require('node:fs');
     assert.equal(await page.evaluate(() => window.pluginsFixture.commands.some(call => call.command.includes('webview') || call.command.includes('resource_url'))), false);
 
     await page.locator('.plugin-tabs button').nth(2).click();
-    const globalSwitch = page.getByRole('checkbox', { name: 'Enable plugins', exact: true });
+    const globalSwitch = page.getByRole('switch', { name: 'Enable plugins', exact: true });
     await globalSwitch.uncheck();
     await page.getByText('Plugins are globally disabled.', { exact: false }).waitFor();
     await page.locator('.plugin-tabs button').nth(0).click();
@@ -132,7 +132,7 @@ const fs = require('node:fs');
     await card('Sample provider').getByRole('button', { name: 'Enable', exact: true }).click();
     const search = page.getByRole('searchbox');
     await search.fill('does-not-exist');
-    await page.getByRole('heading', { name: 'No matching plugins' }).waitFor();
+    await page.locator('.plugin-empty .empty-state-title', { hasText: 'No matching plugins' }).waitFor();
     await search.fill('');
 
     await tab('Plugin store').click();

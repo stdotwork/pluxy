@@ -56,7 +56,7 @@ const path = require('node:path');
     assert.equal(saved[1].priority, 10);
     assert.equal(saved[1].models[0].alias, 'claude-a');
 
-    await rows.filter({ hasText: 'Second route' }).getByRole('checkbox').uncheck();
+    await rows.filter({ hasText: 'Second route' }).getByRole('switch').uncheck();
     await page.waitForFunction(() => window.providerFixture.records[0].keys[0]['excluded-models']?.includes('*'));
     assert.equal((await records())[1]['excluded-models'], undefined);
     await rows.filter({ hasText: 'Second route' }).waitFor();

@@ -1,12 +1,14 @@
+import { Notice } from '../components/Notice';
+import { EmptyState } from '../components/EmptyState';
+import { Switch } from '../components/Switch';
+import { getCodexSessionContext, saveCodexSessionContext, openCodexSessionRollout } from '../services/codexSessions';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import {
   AlertCircle,
   ArrowLeft,
   Bot,
   Brain,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -29,13 +31,12 @@ import {
   X,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { APP_NAVIGATION_REQUEST_EVENT, type AppNavigationRequest } from '../navigation';
 import type {
   CodexSessionContextDetail,
   CodexSessionNewMessage,
   SaveCodexSessionContextRequest,
-  SaveCodexSessionContextResult,
 } from '../services/codexSessionState';
 
 type Props = {
@@ -96,10 +97,6 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
   const translateRef = useRef(t);
   translateRef.current = t;
   const pendingNavigationRef = useRef<(() => void) | null>(null);
-  const discardDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: discardConfirmOpen,
-    onEscape: () => setDiscardConfirmOpen(false),
-  });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -126,7 +123,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
     if (!silent) setNotice(null);
     const pending = pendingReadRef.current?.sessionId === sessionId
       ? pendingReadRef.current
-      : { sessionId, promise: invoke<CodexSessionContextDetail>('get_codex_session_context', { request: { sessionId } }) };
+      : { sessionId, promise: getCodexSessionContext({ request: { sessionId } }) };
     pendingReadRef.current = pending;
     try {
       const data = await pending.promise;
@@ -265,7 +262,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
         }
       }
 
-      const result = await invoke<SaveCodexSessionContextResult>('save_codex_session_context', {
+      const result = await saveCodexSessionContext({
         request: payload,
       });
 
@@ -401,16 +398,13 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
       <p className="context-edit-safety" role="note">{t('agents.sessions.context.editSafety')}</p>
 
       {notice ? (
-        <div className={`codex-session-notice ${notice.kind}`}>
-          {notice.kind === 'error' ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
-          <span>{notice.message}</span>
-          <button type="button" onClick={() => setNotice(null)} aria-label={t('common.close')}>
-            <X size={14} />
-          </button>
-        </div>
+        <Notice tone={notice.kind === 'warning' ? 'warn' : notice.kind} className="codex-session-notice" bodyClassName="codex-session-notice-message"
+          onDismiss={() => setNotice(null)} dismissLabel={t('common.close')}>
+          {notice.message}
+        </Notice>
       ) : null}
 
-      <section className="context-meta-card">
+      <section className="surface-section context-meta-card">
         <button type="button" className="context-meta-head" onClick={() => setMetaExpanded((prev) => !prev)}
           aria-expanded={metaExpanded} aria-controls="context-metadata" aria-label={t('agents.sessions.context.toggleMetadata')}>
           <span className="context-meta-head-title">
@@ -456,7 +450,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 {detail?.rolloutPath ? (
                   <button
                     type="button"
-                    className="icon-button"
+                    className="icon-button quiet ghost tiny-button"
                     onClick={() => copyToClipboard(detail.rolloutPath!, 'rollout')}
                     title={t('common.copy')}
                   >
@@ -471,12 +465,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
               </div>
 
               <label className="context-archived-checkbox">
-                <input
-                  type="checkbox"
-                  checked={archived}
-                  disabled={loading || saving || !detail?.rolloutPath}
-                  onChange={(event) => setArchived(event.target.checked)}
-                />
+                <Switch checked={archived} disabled={loading || saving || !detail?.rolloutPath} onChange={(event) => setArchived(event.target.checked)} />
                 <span>{t('agents.sessions.context.archived')}</span>
               </label>
             </div>
@@ -492,7 +481,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 onClick={async () => {
                   setOpening(true);
                   try {
-                    await invoke('open_codex_session_rollout', { request: { sessionId } });
+                    await openCodexSessionRollout({ request: { sessionId } });
                   } catch (error) {
                     setNotice({ kind: 'error', message: t('agents.sessions.context.openFailed', { error: String(error) }) });
                   } finally {
@@ -535,7 +524,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
               {searchQuery ? (
-                <button type="button" onClick={() => setSearchQuery('')} aria-label={t('common.clear')}>
+                <button type="button" className="icon-button quiet ghost tiny-button" onClick={() => setSearchQuery('')} aria-label={t('common.clear')}>
                   <X size={13} />
                 </button>
               ) : null}
@@ -543,17 +532,11 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
           </div>
 
           {loading ? (
-            <div className="codex-session-empty">
-              <LoaderCircle size={22} className="spin" />
-              <span>{t('agents.sessions.loading')}</span>
-            </div>
+            <EmptyState variant="box" className="codex-session-empty" icon={<LoaderCircle size={22} className="spin" />}>{t('agents.sessions.loading')}</EmptyState>
           ) : (
             <div className="context-message-list">
               {filteredMessages.length === 0 && newMessages.length === 0 ? (
-                <div className="codex-session-empty">
-                  <FileText size={22} />
-                  <span>{t('agents.sessions.context.emptyMessages')}</span>
-                </div>
+                <EmptyState variant="box" className="codex-session-empty" icon={<FileText size={22} />}>{t('agents.sessions.context.emptyMessages')}</EmptyState>
               ) : null}
               {filteredMessages.map((msg) => {
                 const edit = messageEdits[msg.lineNumber] || {
@@ -566,7 +549,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                 return (
                   <article
                     key={msg.id}
-                    className={`context-message-card ${msg.role} ${edit.isDeleted ? 'deleted' : ''} ${isModified ? 'modified' : ''}`}
+                    className={`surface-section context-message-card ${msg.role} ${edit.isDeleted ? 'deleted' : ''} ${isModified ? 'modified' : ''}`}
                   >
                     <div className="message-card-header">
                       <div className="message-role-badge">
@@ -593,7 +576,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                         <div className="message-item-actions">
                           <button
                             type="button"
-                            className="icon-button"
+                            className="icon-button quiet ghost tiny-button"
                             onClick={() => copyToClipboard(edit.content, `msg-${msg.lineNumber}`)}
                             title={t('common.copy')}
                           >
@@ -659,10 +642,9 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                       ) : edit.isEditing && msg.role !== 'tool' ? (
                         <div className="message-editor-wrapper">
                           {msg.role === 'reasoning' ? (
-                            <div className="reasoning-edit-warning">
-                              <ShieldAlert size={13} />
-                              <span>{t('agents.sessions.context.reasoningEditNotice')}</span>
-                            </div>
+                            <Notice tone="warn" variant="text" icon={<ShieldAlert size={13} />}>
+                              {t('agents.sessions.context.reasoningEditNotice')}
+                            </Notice>
                           ) : null}
                           <textarea
                             className="message-textarea"
@@ -685,7 +667,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
                             {isModified ? (
                               <button
                                 type="button"
-                                className="text-button"
+                                className="link-button"
                                 disabled={saving}
                                 onClick={() => {
                                   setMessageEdits((prev) => ({
@@ -713,7 +695,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
               })}
 
               {newMessages.map((newMsg, index) => (
-                <article key={`new-${index}`} className={`context-message-card ${newMsg.role} new-item`}>
+                <article key={`new-${index}`} className={`surface-section context-message-card ${newMsg.role} new-item`}>
                   <div className="message-card-header">
                     <div className="message-role-badge">
                       {newMsg.role === 'user' ? <User size={13} /> : <Bot size={13} />}
@@ -739,7 +721,7 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
               ))}
 
               {addingMessage ? (
-                <div className="context-add-message-card">
+                <div className="surface-section context-add-message-card">
                   <div className="add-message-head">
                     <strong>{t('agents.sessions.context.addMessage')}</strong>
                     <div className="add-message-role-select">
@@ -811,36 +793,34 @@ export function CodexSessionContextEditor({ sessionId, onBack, onSessionUpdated 
         </section>
 
       {discardConfirmOpen ? (
-        <div className="config-dialog-backdrop">
-          <section ref={discardDialogRef} className="config-dialog codex-session-dialog" role="alertdialog" aria-modal="true" aria-labelledby="codex-session-context-discard-title">
-            <div className="config-dialog-heading">
-              <div>
-                <AlertCircle size={19} />
-                <h2 id="codex-session-context-discard-title">{t('agents.sessions.context.discardTitle')}</h2>
-              </div>
+        <Dialog alert className="config-dialog codex-session-dialog" labelledBy="codex-session-context-discard-title" onClose={() => setDiscardConfirmOpen(false)}>
+          <div className="config-dialog-heading">
+            <div>
+              <AlertCircle size={19} />
+              <h2 id="codex-session-context-discard-title">{t('agents.sessions.context.discardTitle')}</h2>
             </div>
-            <p>{t('agents.sessions.context.confirmDiscard')}</p>
-            <div className="config-dialog-actions two-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setDiscardConfirmOpen(false)}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => {
-                  setDiscardConfirmOpen(false);
-                  (pendingNavigationRef.current ?? onBack)();
-                }}
-              >
-                {t('agents.sessions.context.discard')}
-              </button>
-            </div>
-          </section>
-        </div>
+          </div>
+          <p>{t('agents.sessions.context.confirmDiscard')}</p>
+          <div className="config-dialog-actions two-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setDiscardConfirmOpen(false)}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => {
+                setDiscardConfirmOpen(false);
+                (pendingNavigationRef.current ?? onBack)();
+              }}
+            >
+              {t('agents.sessions.context.discard')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
     </div>
   );

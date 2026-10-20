@@ -1,3 +1,6 @@
+import { Checkbox } from '../components/Checkbox';
+import { SegmentedControl } from '../components/SegmentedControl';
+import { getOAuthStatus, startOAuthLogin, openOAuthUrl } from '../services/oauth';
 import { ThemeSelector } from '../components/ThemeSelector';
 import {
   useCallback,
@@ -7,7 +10,6 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowLeft,
   ArrowRight,
@@ -45,7 +47,6 @@ import { normalizeProviderProxyUrl } from "../services/providerProxy";
 import { normalizeOAuthProvider } from "../services/authFiles";
 import { type ThemePreference } from "../theme";
 import { AgentsPage } from "./AgentsPage";
-
 import codexIcon from "../assets/icons/codex.svg";
 import claudeIcon from "../assets/icons/claude.svg";
 import antigravityIcon from "../assets/icons/antigravity.svg";
@@ -279,15 +280,7 @@ export function EasyModePage({
     clearOAuthNotice();
 
     try {
-      const result = await invoke<{
-        url?: string;
-        state?: string;
-        userCode?: string | null;
-        flow?: string | null;
-        expiresIn?: number | null;
-        opened?: boolean;
-        openError?: string;
-      }>("start_oauth_login", {
+      const result = await startOAuthLogin({
         provider,
         browser: "default",
       });
@@ -327,10 +320,7 @@ export function EasyModePage({
           return;
         }
         try {
-          const pollRes = await invoke<{ status: string; error?: string }>(
-            "get_oauth_status",
-            { state: stateKey },
-          );
+          const pollRes = await getOAuthStatus({ state: stateKey });
           if (generation !== oauthGeneration.current) return;
           failures = 0;
           const status = (pollRes.status || "").toLowerCase();
@@ -394,7 +384,7 @@ export function EasyModePage({
 
   const openAuthorizationUrl = async (url: string) => {
     try {
-      await invoke("open_oauth_url", { url, browser: "default" });
+      await openOAuthUrl({ url, browser: "default" });
     } catch (error) {
       showOAuthNotice(String(error), "error");
     }
@@ -725,7 +715,7 @@ export function EasyModePage({
           </div>
           <button
             type="button"
-            className={`simple-mode-guide-toggle simple-mode-highlight-button${guideActive ? " active" : ""}`}
+            className="primary-button compact-button simple-mode-guide-toggle"
             title={guideActive ? t("easyMode.guide.toggleClose") : t("easyMode.guide.toggleOpen")}
             onClick={() => {
               handleGuideToggle();
@@ -793,7 +783,7 @@ export function EasyModePage({
 
           <button
             type="button"
-            className="secondary-button simple-mode-exit-btn"
+            className="secondary-button compact-button simple-mode-exit-btn"
             title={t("easyMode.exitTitle")}
             onClick={() => onExit?.()}
           >
@@ -970,7 +960,7 @@ export function EasyModePage({
 
                         <button
                           type="button"
-                          className={loggedIn ? "secondary-button" : "primary-button"}
+                          className={`${loggedIn ? "secondary-button" : "primary-button"} small-button`}
                           disabled={isLogging}
                           onClick={() => void handleStartOAuth(provider.id)}
                         >
@@ -1004,19 +994,20 @@ export function EasyModePage({
               ) : null}
 
               <div className="simple-mode-api-form">
-                <div className="simple-mode-api-platforms">
-                  {apiSectionOptions.map((opt) => (
-                    <button
-                      type="button"
-                      key={opt.id}
-                      className={`secondary-button simple-mode-api-platform${selectedApiSection === opt.id ? " active" : ""}`}
-                      onClick={() => handleApiSectionChange(opt.id)}
-                    >
+                <SegmentedControl
+                  className="simple-mode-api-platforms"
+                  aria-label={t("easyMode.api.platform")}
+                  value={selectedApiSection}
+                  onChange={handleApiSectionChange}
+                  buttonClassName="secondary-button simple-mode-api-platform"
+                  items={apiSectionOptions.map((opt) => ({
+                    value: opt.id,
+                    label: <>
                       <img className="simple-mode-api-platform-icon" src={opt.icon} alt="" />
                       {opt.name ?? t(opt.nameKey)}
-                    </button>
-                  ))}
-                </div>
+                    </>,
+                  }))}
+                />
 
                 <div className="simple-mode-field">
                   <label>{t("easyMode.api.name")}</label>
@@ -1078,7 +1069,7 @@ export function EasyModePage({
                     <div className="simple-mode-api-model-fetch">
                       <button
                         type="button"
-                        className="secondary-button simple-mode-api-fetch-button"
+                        className="secondary-button compact-button simple-mode-api-fetch-button"
                         disabled={apiTesting || !apiBaseUrl.trim() || !apiKey.trim()}
                         onClick={() => void handleTestApi()}
                       >
@@ -1126,12 +1117,7 @@ export function EasyModePage({
                                 className={`simple-mode-api-model-option${selected ? " selected" : ""}`}
                                 key={model.name}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={selected}
-                                  disabled={apiTesting}
-                                  onChange={() => handleToggleApiModel(model)}
-                                />
+                                <Checkbox checked={selected} disabled={apiTesting} onChange={() => handleToggleApiModel(model)} />
                                 <span title={model.name}>{model.name}</span>
                               </label>
                             );
@@ -1241,7 +1227,7 @@ export function EasyModePage({
 
             <button
               type="button"
-              className="guide-tooltip-close"
+              className="icon-button quiet ghost tiny-button"
               title={t("easyMode.guide.close")}
               onClick={() => setGuideActive(false)}
             >
@@ -1346,7 +1332,7 @@ export function EasyModePage({
               {guideStep > 1 ? (
                 <button
                   type="button"
-                  className="secondary-button guide-btn-sm"
+                  className="secondary-button small-button guide-btn-sm"
                   onClick={handlePrevGuideStep}
                 >
                   {t("easyMode.navigation.back")}
@@ -1355,7 +1341,7 @@ export function EasyModePage({
 
               <button
                 type="button"
-                className="primary-button guide-btn-sm"
+                className="primary-button small-button guide-btn-sm"
                 onClick={handleNextGuideStep}
                 disabled={!guideCanAdvance}
               >

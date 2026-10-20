@@ -321,6 +321,37 @@ describe('theme preferences and native synchronization', () => {
     app.controller.dispose();
   });
 
+  test('replacing the registry reapplies the saved theme and notifies subscribers', async () => {
+    const forest: ThemeDefinition = { id: 'forest-dark', name: 'Forest', appearance: 'dark', order: 1000,
+      windowBackground: '#102018', tokens: { accent: '#88cc99' } };
+    const app = setup({ platform: 'windows', preference: 'forest-dark', system: 'light' });
+    await app.connect();
+    expect(app.displayedId).toBe('light');
+    let notified = 0;
+    app.controller.subscribe(() => { notified++; });
+    const registry = createThemeRegistry([...themeRegistry.themes, forest]);
+    app.controller.setRegistry(registry);
+    await settle();
+    expect(app.controller.getRegistry()).toBe(registry);
+    expect(app.displayedId).toBe('forest-dark');
+    expect(app.displayed).toBe('dark');
+    expect(app.shell).toBe('dark');
+    expect(app.backdropColor).toBe('#102018');
+    expect(app.controller.getPreference()).toBe('forest-dark');
+    expect(app.writes).toEqual([]);
+    expect(notified).toBe(1);
+    app.controller.setRegistry(createThemeRegistry([...registry.themes]));
+    expect(notified).toBe(2);
+    app.controller.setRegistry(themeRegistry);
+    await settle();
+    expect(app.displayedId).toBe('light');
+    expect(app.shell).toBe('light');
+    expect(notified).toBe(3);
+    app.controller.dispose();
+    app.controller.setRegistry(registry);
+    expect(app.controller.getRegistry()).toBe(themeRegistry);
+  });
+
   test('disposes all observers and ignores late async reads', async () => {
     const app = setup();
     const reading = deferred<AppTheme>();

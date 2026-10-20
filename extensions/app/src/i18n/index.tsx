@@ -1,5 +1,5 @@
+import { setAppLocale } from '../services/appSettings';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { en, ja, zhCN, zhTW, type MessageKey, type MessageVariables } from './resources';
 
 export type AppLocale = 'zh-CN' | 'zh-TW' | 'ja' | 'en';
@@ -83,7 +83,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       window.localStorage.setItem(STORAGE_KEY, locale);
     } catch {
     }
-    void invoke('set_app_locale', { locale }).catch((error) => {
+    void setAppLocale({ locale }).catch((error) => {
       console.warn('Failed to synchronize the app locale with the native shell', error);
     });
   }, [locale]);

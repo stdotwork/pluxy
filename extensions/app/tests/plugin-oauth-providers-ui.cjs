@@ -2,19 +2,26 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createServer: createPortProbe } = require('node:net');
 
 (async () => {
   const { createServer } = await import('vite');
   const react = (await import('@vitejs/plugin-react')).default;
+  const probe = createPortProbe();
+  await new Promise((resolve, reject) => { probe.once('error', reject); probe.listen(0, '127.0.0.1', resolve); });
+  const port = probe.address().port;
+  await new Promise((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
   const server = await createServer({
     configFile: false, root: path.resolve(__dirname, '..'),
     cacheDir: 'node_modules/.vite-plugin-oauth-providers-test', plugins: [react()],
     logLevel: 'error', optimizeDeps: { entries: ['tests/fixtures/plugin-oauth-providers.html'] },
-    server: { host: '127.0.0.1', port: 1436, strictPort: false, watch: null },
+    server: { host: '127.0.0.1', port, strictPort: true, watch: null },
   });
   let browser;
   try {
+    assert.equal(server.config.server.port, port, 'Use the allocated port instead of Vite’s default port');
     await server.listen();
+    assert.equal(server.httpServer.address().port, port);
     const base = `http://127.0.0.1:${server.httpServer.address().port}`;
     const channel = process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'win32' ? 'msedge' : undefined);
     browser = await chromium.launch({ channel, headless: true, args: ['--no-proxy-server'] });

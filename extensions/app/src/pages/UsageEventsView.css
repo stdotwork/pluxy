@@ -33,60 +33,6 @@
   gap: 6px;
 }
 
-.usage-request-log .usage-col-settings-btn,
-.usage-request-log .usage-col-reset-btn,
-.usage-request-log .usage-events-export-btn {
-  display: inline-flex;
-  height: 32px;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--usage-log-line);
-  border-radius: 6px;
-  background: var(--bg-card);
-  color: var(--usage-log-muted);
-  box-shadow: none;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background .15s ease, border-color .15s ease;
-}
-
-.usage-request-log .usage-col-settings-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.usage-request-log .usage-col-settings-btn {
-  color: var(--usage-log-text);
-}
-
-.usage-request-log .usage-col-settings-btn:hover,
-.usage-request-log .usage-col-reset-btn:hover,
-.usage-request-log .usage-events-export-btn:hover {
-  border-color: var(--border-hover);
-  background: var(--bg-tertiary);
-  color: var(--usage-log-text);
-}
-
-.usage-request-log .usage-events-export-btn:disabled,
-.usage-request-log .usage-col-settings-btn:disabled,
-.usage-request-log .usage-col-reset-btn:disabled {
-  opacity: .48;
-  cursor: default;
-  box-shadow: none;
-}
-
-.usage-request-log .usage-col-settings-btn:focus-visible,
-.usage-request-log .usage-col-reset-btn:focus-visible,
-.usage-request-log .usage-events-export-btn:focus-visible,
-.usage-request-log .usage-page-nav-btn:focus-visible {
-  outline: 2px solid var(--ui-accent);
-  outline-offset: 3px;
-}
-
 .usage-request-log .usage-table-wrap {
   min-height: 0;
   flex: 1 1 auto;
@@ -384,10 +330,6 @@
 
 .usage-request-log .usage-error-copy {
   flex: 0 0 24px;
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  padding: 3px;
   vertical-align: middle;
 }
 
@@ -491,13 +433,10 @@
 }
 
 .usage-request-log .usage-col-reset-btn {
-  width: auto;
   min-width: 92px;
-  padding: 0 10px;
 }
 
-.usage-request-log .usage-page-size-select,
-.usage-request-log .usage-page-nav-btn {
+.usage-request-log .usage-page-size-select {
   height: 32px;
   padding: 0 11px;
   border: 1px solid var(--usage-log-line);
@@ -507,15 +446,8 @@
   font-size: 11px;
 }
 
-.usage-request-log .usage-page-nav-btn:hover:not(:disabled) {
-  border-color: var(--border-hover);
-  background: var(--bg-tertiary);
-  color: var(--usage-log-text);
-}
-
 .usage-request-log > .usage-empty {
   min-height: 220px;
-  color: var(--usage-log-muted);
 }
 
 :root[data-theme='dark'] .usage-records-page .usage-request-log {

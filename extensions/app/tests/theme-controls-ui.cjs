@@ -64,7 +64,7 @@ const settlePaint = locator => locator.evaluate(async element => {
       controller.setPreference('system');
     });
     await page.waitForFunction(() => document.documentElement.dataset.themeId === 'warm-sand-light');
-    await page.getByRole('button', { name: '时间范围', exact: true }).click();
+    await page.getByRole('combobox', { name: '时间范围', exact: true }).click();
     const menu = page.locator('.select-menu-dropdown');
     const assertMenuTheme = async (scheme, id) => {
       await page.emulateMedia({ colorScheme: scheme });
@@ -90,7 +90,7 @@ const settlePaint = locator => locator.evaluate(async element => {
     await page.keyboard.press('Escape');
 
     await page.getByRole('button', { name: '高级功能', exact: true }).click();
-    const remote = page.getByRole('checkbox', { name: '允许远程管理', exact: true });
+    const remote = page.getByRole('switch', { name: '允许远程管理', exact: true });
     await remote.waitFor();
     for (const activeThumb of [null, '#6A3554']) {
       await remote.uncheck();

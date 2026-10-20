@@ -1,3 +1,6 @@
+import { EmptyState } from '../components/EmptyState';
+import { SegmentedControl } from '../components/SegmentedControl';
+import type { UsageAnalysis, UsageCategory } from '../services/usage';
 import { useState, type CSSProperties } from 'react';
 import { BarChart3, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -7,21 +10,9 @@ import type { UsageTimelinePoint } from '../services/usageTrend';
 import { UsageActivityChart } from './UsageActivityChart';
 import './UsageAnalysisView.css';
 
-export type UsageCategory = {
-  key: string;
-  label: string;
-  requests: number;
-  failures: number;
-  tokens: number;
-};
+export type { UsageCategory } from '../services/usage';
 
-export type UsageAnalysis = {
-  models: UsageCategory[];
-  providers: UsageCategory[];
-  sources: UsageCategory[];
-  apiKeys: UsageCategory[];
-  upstreams?: (UsageCategory & { provider: string })[];
-};
+export type { UsageAnalysis } from '../services/usage';
 
 type AnalysisOverview = {
   totalRequests: number;
@@ -42,9 +33,7 @@ export function UsageAnalysisView({ analysis, overview, range }: {
 }) {
   const { t } = useI18n();
   if (!overview?.totalRequests) {
-    return <div className="usage-analysis-grid usage-analysis-view usage-analysis-empty">
-      <BarChart3 size={32} aria-hidden="true" /><p>{t('usage.empty')}</p>
-    </div>;
+    return <EmptyState className="usage-analysis-empty" icon={<BarChart3 size={32} />}>{t('usage.empty')}</EmptyState>;
   }
   return (
     <div className="usage-analysis-grid usage-analysis-view">
@@ -53,7 +42,7 @@ export function UsageAnalysisView({ analysis, overview, range }: {
         <RequestResults overview={overview} models={analysis.models} />
       </div>
       <UsageActivityChart timeline={overview.timeline} range={range} />
-      <section className="usage-analysis-context">
+      <section className="surface-card usage-analysis-context">
         <CategorySummary title={t('usage.analysis.sources')} items={analysis.upstreams ?? []} />
         <CategorySummary title={t('usage.analysis.keys')} items={analysis.apiKeys} />
       </section>
@@ -78,15 +67,11 @@ function ModelComparison({ models }: { models: UsageCategory[] }) {
     : ranked;
   const colorOrder = [...models].sort((a, b) => b.tokens - a.tokens || a.key.localeCompare(b.key));
   return (
-    <section className="usage-analysis-card usage-model-comparison">
+    <section className="surface-card usage-analysis-card usage-model-comparison">
       <header className="usage-analysis-heading">
         <div><h2>{t('usage.analysis.modelTitle')}</h2><p>{t('usage.analysis.modelHint')}</p></div>
-        <div className="usage-analysis-metric" role="group" aria-label={t('usage.analysis.metricLabel')}>
-          {(['tokens', 'requests'] as const).map(value => <button key={value} type="button"
-            aria-pressed={metric === value} onClick={() => setMetric(value)}>
-            {t(value === 'tokens' ? 'usage.analysis.metricTokens' : 'usage.analysis.metricRequests')}
-          </button>)}
-        </div>
+        <SegmentedControl className="usage-analysis-metric" aria-label={t('usage.analysis.metricLabel')} value={metric} onChange={setMetric}
+          items={(['tokens', 'requests'] as const).map(value => ({ value, label: t(value === 'tokens' ? 'usage.analysis.metricTokens' : 'usage.analysis.metricRequests') }))} />
       </header>
       <div className="usage-model-bars">
         {visible.map(item => {
@@ -110,11 +95,11 @@ function ModelComparison({ models }: { models: UsageCategory[] }) {
         })}
         {!models.length && <p className="usage-analysis-muted">{t('usage.empty')}</p>}
       </div>
-      {models.length > 6 && <button className="usage-analysis-expand" type="button" aria-expanded={expanded}
+      {models.length > 6 && <div className="usage-analysis-expand-row"><button className="link-button muted usage-analysis-expand" type="button" aria-expanded={expanded}
         onClick={() => setExpanded(value => !value)}>
         {t(expanded ? 'usage.analysis.showLess' : 'usage.analysis.showAll', { count: models.length })}
         {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-      </button>}
+      </button></div>}
     </section>
   );
 }
@@ -133,7 +118,7 @@ function RequestResults({ overview, models }: { overview: AnalysisOverview; mode
   const circumference = 2 * Math.PI * 46;
   let offset = 0;
   return (
-    <section className="usage-analysis-card usage-request-results">
+    <section className="surface-card usage-analysis-card usage-request-results">
       <header className="usage-analysis-heading">
         <div><h2>{t('usage.analysis.resultsTitle')}</h2><p>{t('usage.analysis.resultsHint')}</p></div>
         <span className="usage-analysis-total">{t('usage.analysis.requestCount', { count: formatUsageNumber(overview.totalRequests, locale) })}</span>

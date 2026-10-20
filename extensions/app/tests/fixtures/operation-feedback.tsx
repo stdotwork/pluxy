@@ -1,4 +1,4 @@
-import { StrictMode, useRef, useState } from 'react';
+import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { I18nProvider } from '../../src/i18n';
@@ -6,13 +6,25 @@ import { FloatingNotice, MessageNotice, useAppNotice } from '../../src/appNotice
 import { UsageRecordsPage } from '../../src/pages/UsageRecordsPage';
 import { AgentConfigurationFeedback } from '../../src/pages/AgentControls';
 import { useConfirmation } from '../../src/components/ConfirmationDialog';
+import { Dialog } from '../../src/components/Dialog';
 import { QuotaActionFeedback } from '../../src/components/QuotaActionFeedback';
+import { themeRegistry } from '../../src/themes/registry';
+import { createThemeApplicator } from '../../src/themes/applyTheme';
+import type { PlatformWindowMaterial } from '../../src/themes/types';
 import '../../src/styles/index.css';
 
 const params = new URLSearchParams(location.search);
 localStorage.setItem('easy-cli-proxy-api.locale', params.get('locale') ?? 'zh-CN');
 localStorage.setItem('cpa-gui.usage-records-tab.v1', 'pricing');
-document.documentElement.dataset.theme = params.get('theme') ?? 'light';
+const themeId = params.get('themeId');
+if (themeId) {
+  const theme = themeRegistry.get(themeId);
+  const material = params.get('material') as PlatformWindowMaterial | null;
+  if (theme) createThemeApplicator(document, () => material)(theme);
+} else {
+  document.documentElement.dataset.theme = params.get('theme') ?? 'light';
+  if (params.get('material')) document.documentElement.dataset.windowMaterial = params.get('material')!;
+}
 const fixture = window as typeof window & { feedbackFixture: { failSync: boolean } };
 fixture.feedbackFixture = { failSync: false };
 mockIPC(async (cmd) => {
@@ -42,10 +54,10 @@ function Fixture() {
   const second = useAppNotice();
   const [agent, setAgent] = useState(false);
   const [quota, setQuota] = useState(false);
-  const [nativeError, setNativeError] = useState('');
+  const [dialogError, setDialogError] = useState('');
   const { askConfirmation, confirmationDialog } = useConfirmation();
   const [mounted, setMounted] = useState(true);
-  const dialog = useRef<HTMLDialogElement>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
   return <main style={{ padding: 24 }}>
     <div data-testid="toolbar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <button onClick={() => first.showNotice('Saved', 'success')}>Success</button>
@@ -54,7 +66,7 @@ function Fixture() {
       <button onClick={() => { first.clearNotice(); second.clearNotice(); setAgent(false); setQuota(false); }}>Clear</button>
       <button onClick={() => setAgent(true)}>Agent result</button>
       <button onClick={() => setQuota(true)}>Quota result</button>
-      <button onClick={() => dialog.current?.showModal()}>Native dialog</button>
+      <button onClick={() => setDialogOpen(true)}>Tall dialog</button>
       <button onClick={() => void askConfirmation({ title: "Confirm test", message: "Confirm the operation", confirmText: "Confirm" })}>Confirmation dialog</button>
       <button onClick={() => setMounted(value => !value)}>Toggle source</button>
     </div>
@@ -71,12 +83,13 @@ function Fixture() {
       <input data-testid="after" defaultValue="Keep focus" />
     </section>
     {confirmationDialog}
-    <dialog ref={dialog} className="agent-backup-modal" style={{ width: 400, height: 'calc(100vh - 48px)' }}>
-      <h2>Native backup dialog</h2>
-      <button onClick={() => setNativeError('Native modal error')}>Native error</button>
-      <MessageNotice message={nativeError} onDismiss={() => setNativeError('')} />
-      <button data-testid="native-footer" style={{ position: 'absolute', right: 20, bottom: 20 }} onClick={() => dialog.current?.close()}>Close dialog</button>
-    </dialog>
+    {dialogOpen && <Dialog className="agent-backup-modal" label="Tall backup dialog" onClose={() => setDialogOpen(false)}>
+      <div style={{ position: 'relative', width: 400, height: 'calc(100vh - 96px)' }}>
+        <button onClick={() => setDialogError('Dialog error')}>Dialog error</button>
+        <MessageNotice message={dialogError} onDismiss={() => setDialogError('')} />
+        <button data-testid="dialog-footer" style={{ position: 'absolute', right: 0, bottom: 0 }} onClick={() => setDialogOpen(false)}>Close dialog</button>
+      </div>
+    </Dialog>}
   </main>;
 }
 createRoot(document.getElementById('root')!).render(<StrictMode><I18nProvider>

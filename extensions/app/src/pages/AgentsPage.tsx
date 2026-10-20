@@ -1,3 +1,42 @@
+import { Notice } from '../components/Notice';
+import { Tabs } from '../components/Tabs';
+import { SegmentedControl } from '../components/SegmentedControl';
+import { Switch } from '../components/Switch';
+import { onConfigFilesChanged } from '../services/events';
+import {
+  refreshAgentConfigStatuses,
+  getAgentConfigStatuses,
+  getDeepSeekHarnessProcessStatus,
+  getAgentModels,
+  checkPiProviderUpdate,
+  restoreCodexOfficialConfig,
+  updateAgentConfig,
+  installPiProvider as installPiProviderCommand,
+  updatePiProvider as updatePiProviderCommand,
+  repairPiProvider as repairPiProviderCommand,
+  uninstallPiProvider as uninstallPiProviderCommand,
+  applyAgentConfigTemplate,
+  closeCodexConfigModification,
+  setAgentConfigEnabled,
+  clearCodexConfig,
+  launchAgent as launchAgentCommand,
+  stopDeepSeekHarnessProcess,
+  restartAgentApp,
+  getCodexCliDaemonRunning,
+  restartCodexCliDaemon,
+  restartDeepSeekHarnessProcess,
+  createAgentConfigBackup,
+  previewAgentConfigTemplate,
+} from '../services/agents';
+import type {
+  AgentConfigStatus,
+  AgentClientId,
+  AgentLaunchTarget,
+  ClaudeModelMappings,
+  DeepSeekHarnessProcessStatus,
+  PiProviderUpdateStatus,
+} from '../services/agents';
+import { checkCodexOAuthLogin } from '../services/oauth';
 import { CopilotPluginStatus } from '../components/copilot/CopilotPluginStatus';
 import type { MessageKey } from '../i18n/resources';
 import { ClaudeCodeRoleRows } from '../components/claude-code/ClaudeCodeRoleRows';
@@ -12,9 +51,7 @@ import {
   useState,
   type ComponentType,
 } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open } from '../services/platform';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -79,9 +116,10 @@ import { DeepSeekHarnessCatalogDialog } from './DeepSeekHarnessCatalogDialog';
 import { AgentConfigBackupDialog } from './AgentConfigBackupDialog';
 import { AgentClientList } from './AgentClientList';
 import { AgentConfigManagementPanel, AgentConfigurationFeedback, AgentRunControls } from './AgentControls';
-import { useDialogFocusTrap } from '../components/useDialogFocusTrap';
+import { Dialog } from '../components/Dialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { requestAppNavigation } from '../navigation';
+import { Select } from '../components/Select';
 
 const setupErrors: Record<string, MessageKey> = {
   COPILOT_SETUP_REQUIRED: 'agents.copilotSetup.required',
@@ -100,105 +138,9 @@ function copilotSetupErrorKey(error: string): MessageKey | undefined {
   return code ? setupErrors[code] : undefined;
 }
 
-type AgentClientId =
-  | 'claude-code'
-  | 'claude-desktop'
-  | 'codex'
-  | 'opencode'
-  | 'openclaw'
-  | 'hermes'
-  | 'deepseek-harness'
-  | 'zcode'
-  | 'workbuddy'
-  | 'antigravity-cli'
-  | 'copilot-cli'
-  | 'vscode-copilot'
-  | 'kimi-code'
-  | 'grok-build'
-  | 'omp'
-  | 'pi';
-
 type ClaudeModelMappingClientId = 'claude-code' | 'claude-desktop';
 
-type AgentModificationState = 'unconfigured' | 'applied' | 'invalid';
-
-type AgentConfigStatus = {
-  id: AgentClientId;
-  name: string;
-  supportedPlatform: boolean;
-  installed: boolean;
-  pluginInstalled: boolean;
-  launchTargets: AgentLaunchTarget[];
-  version: string | null;
-  cliVersion: string | null;
-  appVersion: string | null;
-  pluginVersion: string | null;
-  configExists: boolean;
-  configValid: boolean;
-  configured: boolean;
-  connectionState: 'configured' | 'not-configured' | 'needs-update' | 'invalid';
-  configurationSynchronized: boolean;
-  currentModel: string | null;
-  oauthConfiguration: boolean;
-  codexNativeOauth: boolean;
-  codexOpenaiProvider?: boolean;
-  codexRemoteCompaction?: boolean;
-  modificationEnabled: boolean;
-  modificationState: AgentModificationState;
-  backupAvailable: boolean;
-  appliedModel: string | null;
-  claudeCodeModelMappings: ClaudeModelMappings | null;
-  claudeDesktopModelMappings: ClaudeModelMappings | null;
-  warnings: string[];
-  error: string | null;
-};
-
-type AgentLaunchTarget = {
-  id: 'app' | 'cli';
-  label: string;
-  detail: string;
-};
-
-type DeepSeekHarnessProcessStatus = {
-  running: boolean;
-  pid: number | null;
-  mode: string | null;
-};
-
-type AgentConfigActionResult = {
-  outcome: 'applied' | 'default' | 'updated' | 'unchanged';
-  enabled: boolean;
-  model: string | null;
-  changedFiles: string[];
-  conflictFiles: string[];
-};
-
-type PiProviderUpdateStatus = {
-  installedVersion: string | null;
-  latestVersion: string | null;
-  updateAvailable: boolean;
-};
-
 type OAuthLoginRequiredAction = 'enable' | 'apply' | 'launch';
-
-type ClaudeModelMappings = {
-  desktopModels?: ClaudeDesktopModelMapping[];
-  opus: string;
-  sonnet: string;
-  haiku: string;
-  fable: string;
-  fable1m: boolean;
-  opus1m: boolean;
-  sonnet1m: boolean;
-  haiku1m: boolean;
-  maxContextTokens: number;
-  autoCompactPct: number;
-  disableAutoCompact: boolean;
-  manageDefaultModel: boolean;
-  manageSubagentModel: boolean;
-  startupModel: string;
-  subagentModel: string;
-};
 
 type AgentFormValues = {
   model: string;
@@ -554,25 +496,9 @@ const listStatusText = (status: AgentConfigStatus | undefined) => {
 
 function ClaudeDesktopHelpDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    const previousFocus = document.activeElement;
-    dialog?.showModal();
-    return () => {
-      dialog?.close();
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
-    };
-  }, []);
   return (
-    <dialog ref={dialogRef} className="config-dialog agent-desktop-help-dialog" aria-labelledby={titleId}
-      onCancel={(event) => { event.preventDefault(); onClose(); }}
-      onMouseDown={(event) => {
-        if (event.target !== event.currentTarget) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose();
-      }}>
+    <Dialog className="config-dialog agent-desktop-help-dialog" labelledBy={titleId} onClose={onClose} dismissOnBackdrop>
       <div className="config-dialog-heading">
         <h2 id={titleId}>{t('agents.claudeDesktopMapping.help')}</h2>
         <button type="button" className="icon-button quiet" onClick={onClose} aria-label={t('common.close')}><X size={18} /></button>
@@ -585,7 +511,7 @@ function ClaudeDesktopHelpDialog({ onClose }: { onClose: () => void }) {
       <div className="agent-desktop-help-actions">
         <button type="button" className="primary-button" onClick={onClose}>{t('common.close')}</button>
       </div>
-    </dialog>
+    </Dialog>
   );
 }
 
@@ -691,30 +617,6 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const statusRequestRef = useRef(0);
   const piUpdateRequestRef = useRef(0);
   const claudeModelMappingsDirtyRef = useRef(claudeModelMappingsDirtyCache);
-  const launchDirectoryDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: launchDirectoryDialogOpen,
-    onEscape: busy
-      ? undefined
-      : () => {
-          setLaunchDirectoryDialogOpen(false);
-          setLaunchDirectoryTarget(null);
-        },
-    preventEscape: busy,
-  });
-  const defaultDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: defaultConfirmOpen,
-    onEscape: busy ? undefined : () => setDefaultConfirmOpen(false),
-    preventEscape: busy,
-  });
-  const clearDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: clearConfirmOpen,
-    onEscape: busy ? undefined : () => setClearConfirmOpen(false),
-    preventEscape: busy,
-  });
-  const oauthRequiredDialogRef = useDialogFocusTrap<HTMLElement>({
-    active: Boolean(oauthLoginRequiredAction),
-    onEscape: () => setOauthLoginRequiredAction(null),
-  });
 
   const setClaudeModelMappingsDraftByClient = useCallback((
     update: (
@@ -747,10 +649,9 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
 
   const loadStatuses = useCallback(async (forceRefresh = false) => {
     const requestId = ++statusRequestRef.current;
-    const command = forceRefresh
-      ? 'refresh_agent_config_statuses'
-      : 'get_agent_config_statuses';
-    const nextStatuses = await invoke<AgentConfigStatus[]>(command, { executableOverrides: executablePaths });
+    const nextStatuses = await (forceRefresh
+      ? refreshAgentConfigStatuses({ executableOverrides: executablePaths })
+      : getAgentConfigStatuses({ executableOverrides: executablePaths }));
     if (requestId !== statusRequestRef.current) return;
     setStatuses(nextStatuses);
   }, [executablePaths]);
@@ -766,7 +667,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   }, []);
 
   const loadDeepSeekHarnessProcessStatus = useCallback(async () => {
-    const status = await invoke<DeepSeekHarnessProcessStatus>('get_deepseek_harness_process_status');
+    const status = await getDeepSeekHarnessProcessStatus();
     setDeepSeekHarnessProcessStatus(status);
   }, []);
 
@@ -776,7 +677,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setModelLoading(!background || agentModelsCache[client] === undefined);
     setModelError('');
     try {
-      const nextModels = await invoke<ModelOption[]>('get_agent_models', { client });
+      const nextModels = await getAgentModels({ client });
       if (modelRequestRef.current !== requestId) return;
       agentModelsCache[client] = nextModels;
       setModelData({ client, models: nextModels });
@@ -826,7 +727,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   useEffect(() => {
     let disposed = false;
     let stop: (() => void) | null = null;
-    void listen('config-files-changed', () => {
+    void onConfigFilesChanged(() => {
       if (disposed) return;
       setDetectionError('');
       void loadStatuses().catch((requestError) => {
@@ -914,7 +815,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     const requestId = piUpdateRequestRef.current + 1;
     piUpdateRequestRef.current = requestId;
     try {
-      const nextStatus = await invoke<PiProviderUpdateStatus>('check_pi_provider_update');
+      const nextStatus = await checkPiProviderUpdate();
       if (piUpdateRequestRef.current === requestId) setPiProviderUpdateStatus(nextStatus);
     } catch {
       if (piUpdateRequestRef.current === requestId) setPiProviderUpdateStatus(null);
@@ -1278,7 +1179,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setConfigurationNotice('');
     setClearNotice('');
     try {
-      await invoke('restore_codex_official_config');
+      await restoreCodexOfficialConfig();
       setModelError('');
       setModelSelectionError('');
       setStatuses((current) => current.map((status) => status.id === 'codex'
@@ -1324,7 +1225,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
 
     setBusyAction('oauth-check');
     try {
-      await invoke('check_codex_oauth_login');
+      await checkCodexOAuthLogin();
       trackFormEdit({ ...formValues, oauthConfiguration: true });
       setOauthConfigurationDraft(true);
     } catch (requestError) {
@@ -1347,7 +1248,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('apply');
     setConfigurationNotice('');
     try {
-      const result = await invoke<AgentConfigActionResult>('update_agent_config', {
+      const result = await updateAgentConfig({
         client: selected,
         model,
         oauthConfiguration,
@@ -1381,7 +1282,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setConfigurationNotice('');
     setClearNotice('');
     try {
-      await invoke<AgentConfigActionResult>('install_pi_provider', { model, executableOverrides: executablePaths });
+      await installPiProviderCommand({ model, executableOverrides: executablePaths });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t('agents.management.pluginInstalled'));
@@ -1402,7 +1303,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setClearNotice('');
     setPiProviderUpdateStatus(null);
     try {
-      await invoke<AgentConfigActionResult>('update_pi_provider', { model, executableOverrides: executablePaths });
+      await updatePiProviderCommand({ model, executableOverrides: executablePaths });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t('agents.management.pluginUpdated'));
@@ -1420,7 +1321,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('repair-pi');
     setConfigurationError('');
     try {
-      const result = await invoke<AgentConfigActionResult>('repair_pi_provider', { model });
+      const result = await repairPiProviderCommand({ model });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t(result.outcome === 'unchanged' ? 'agents.backup.unchanged' : 'agents.backup.updated'));
@@ -1439,7 +1340,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setClearNotice('');
     setPiProviderUpdateStatus(null);
     try {
-      await invoke<AgentConfigActionResult>('uninstall_pi_provider', { executableOverrides: executablePaths });
+      await uninstallPiProviderCommand({ executableOverrides: executablePaths });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t('agents.management.pluginUninstalled'));
@@ -1461,7 +1362,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('default');
     setDefaultError('');
     try {
-      await invoke<AgentConfigActionResult>('apply_agent_config_template', {
+      await applyAgentConfigTemplate({
         revision: templatePreview.revision,
         client: selected,
         model,
@@ -1474,7 +1375,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       if (isClaudeModelMappingClient) {
         claudeModelMappingsDirtyRef.current[selected] = false;
       }
-      const refreshed = await invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: executablePaths });
+      const refreshed = await refreshAgentConfigStatuses({ executableOverrides: executablePaths });
       setStatuses(refreshed);
       const current = refreshed.find((status) => status.id === selected)?.currentModel;
       setModelByClient((values) => { const next = { ...values, [selected]: current ?? '' }; writeAgentModelSelections(next); return next; });
@@ -1494,8 +1395,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   };
 
   const removeSelectedConfiguration = () => selected === 'codex'
-    ? invoke<AgentConfigActionResult>('close_codex_config_modification')
-    : invoke<AgentConfigActionResult>('set_agent_config_enabled', {
+    ? closeCodexConfigModification()
+    : setAgentConfigEnabled({
       client: selected, model: '', enabled: false, forceRestore: false,
       claudeCodeModelMappings: null, claudeDesktopModelMappings: null,
       executableOverrides: executablePaths,
@@ -1508,7 +1409,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setClearError('');
     setClearNotice('');
     try {
-      if (selected === 'codex') await invoke<string[]>('clear_codex_config');
+      if (selected === 'codex') await clearCodexConfig();
       else await removeSelectedConfiguration();
       clearPendingChanges();
       if (isClaudeModelMappingClient) claudeModelMappingsDirtyRef.current[selected] = false;
@@ -1564,7 +1465,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       const next = { ...executablePaths, [key]: selectedPath.trim() };
       setExecutablePaths(next);
       writeAgentExecutablePaths(next);
-      const refreshed = await invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: next });
+      const refreshed = await refreshAgentConfigStatuses({ executableOverrides: next });
       setStatuses(refreshed);
       setConfigurationNotice(t('agents.executablePath.saved'));
     } catch (requestError) {
@@ -1577,7 +1478,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     delete next[desktop ? `${selected}:app` as const : selected];
     setExecutablePaths(next);
     writeAgentExecutablePaths(next);
-    void invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: next }).then(setStatuses);
+    void refreshAgentConfigStatuses({ executableOverrides: next }).then(setStatuses);
   };
 
   const rememberLaunchDirectory = (client: AgentClientId, directory: string) => {
@@ -1599,7 +1500,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction(action);
     setLaunchError('');
     try {
-      await invoke('launch_agent', {
+      await launchAgentCommand({
         client: selected,
         target: target.id,
         executablePath: executablePaths[selected] ?? null,
@@ -1639,7 +1540,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('stop-deepseek');
     setLaunchError('');
     try {
-      const status = await invoke<DeepSeekHarnessProcessStatus>('stop_deepseek_harness_process');
+      const status = await stopDeepSeekHarnessProcess();
       setDeepSeekHarnessProcessStatus(status);
     } catch (requestError) {
       setLaunchError(String(requestError));
@@ -1653,7 +1554,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('restart-app');
     setLaunchError('');
     try {
-      await invoke('restart_agent_app', { client: selected,
+      await restartAgentApp({ client: selected,
         executablePath: executablePaths[hasIndependentCliAndApp ? `${selected}:app` as const : selected] ?? null });
     } catch (requestError) {
       if (!handleOAuthLoginError(requestError, 'launch')) {
@@ -1685,7 +1586,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setLaunchError('');
     setConfigurationNotice('');
     try {
-      if (!await invoke<boolean>('get_codex_cli_daemon_running', { executablePath })) {
+      if (!await getCodexCliDaemonRunning({ executablePath })) {
         setConfigurationNotice(t('agents.launch.cliServiceNotRunning'));
         return;
       }
@@ -1696,7 +1597,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         variant: 'danger',
       });
       if (!confirmed) return;
-      const restart = invoke<void>('restart_codex_cli_daemon', { executablePath })
+      const restart = restartCodexCliDaemon({ executablePath })
         .finally(() => { codexCliServiceRestart = null; });
       codexCliServiceRestart = restart;
       await restart;
@@ -1712,7 +1613,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('restart-deepseek');
     setLaunchError('');
     try {
-      setDeepSeekHarnessProcessStatus(await invoke<DeepSeekHarnessProcessStatus>('restart_deepseek_harness_process'));
+      setDeepSeekHarnessProcessStatus(await restartDeepSeekHarnessProcess());
     } catch (requestError) {
       setLaunchError(String(requestError));
       await loadDeepSeekHarnessProcessStatus().catch(() => undefined);
@@ -1750,7 +1651,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const createManualBackup = async () => {
     setBusyAction('backup'); setConfigurationError(''); setConfigurationNotice('');
     try {
-      await invoke('create_agent_config_backup', { client: selected });
+      await createAgentConfigBackup({ client: selected });
       setConfigurationNotice(t('agents.backup.created'));
     } catch (cause) { setConfigurationError(String(cause)); }
     finally { setBusyAction(null); }
@@ -1763,7 +1664,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     if (!model) return;
     setDefaultError(''); setConfigurationError(''); setTemplatePreview(null); setBusyAction('default');
     try {
-      const preview = await invoke<{ revision: string; files: string[] }>('preview_agent_config_template', {
+      const preview = await previewAgentConfigTemplate({
         client: selected, model, oauthConfiguration,
         claudeCodeModelMappings: selected === 'claude-code' ? mappings : null,
         claudeDesktopModelMappings: selected === 'claude-desktop' ? mappings : null,
@@ -1856,15 +1757,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
             title={t('agents.claudeDesktopMapping.customMappingHint')}
           >
             <span>{t('agents.claudeDesktopMapping.customMapping')}</span>
-            <span className="switch-control">
-              <input
-                type="checkbox"
-                checked={claudeCustomMapping}
-                onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)}
-                disabled={busy || loading || modelLoading}
-              />
-              <span className="switch-track" />
-            </span>
+            <Switch checked={claudeCustomMapping} onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)} disabled={busy || loading || modelLoading} />
           </label>
           <button type="button" className="secondary-button compact-button" onClick={() => setDesktopHelpOpen(true)}>
             {t('agents.claudeDesktopMapping.help')}
@@ -1883,7 +1776,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
           const aliasSuffixed = desktopEntries[index].alias.trim().toLowerCase() !== entry.alias.trim().toLowerCase();
           const isClaude = isClaudeDesktopModel(entry.model);
           return (
-          <div className="agent-claude-desktop-mapping-row agent-desktop-model-row" key={index}>
+          <div className="surface-section agent-claude-desktop-mapping-row agent-desktop-model-row" key={index}>
             <div className="agent-desktop-model-fields">
               <div className="agent-desktop-model-field">
                 <span>{t('agents.claudeDesktopMapping.model')}</span>
@@ -1905,9 +1798,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               <div className="agent-section-heading-actions agent-desktop-model-actions">
                 <label className="agent-claude-context-toggle" title={t('agents.claudeMapping.context1mHint')}>
                   <span>{t('agents.claudeMapping.context1m')}</span>
-                  <span className="switch-control"><input type="checkbox" checked={entry.context1m}
-                    onChange={(event) => updateDesktopEntry(index, { context1m: event.currentTarget.checked })}
-                    disabled={busy || loading} /><span className="switch-track" /></span>
+                  <Switch checked={entry.context1m} onChange={(event) => updateDesktopEntry(index, { context1m: event.currentTarget.checked })} disabled={busy || loading} />
                 </label>
                 <button type="button" className="icon-button quiet" aria-label={t('agents.claudeDesktopMapping.remove')}
                   title={t('agents.claudeDesktopMapping.remove')} disabled={busy || loading}
@@ -1917,26 +1808,26 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               </div>
             </div>
             {aliasSuffixed
-              ? <p className="agent-desktop-model-notice" role="status">{t('agents.claudeDesktopMapping.aliasSuffixed', { alias: entry.alias.trim() })}</p>
+              ? <Notice tone="info" variant="text">{t('agents.claudeDesktopMapping.aliasSuffixed', { alias: entry.alias.trim() })}</Notice>
               : entryError && hasPendingChanges && !modelLoading
-              ? <p className="agent-inline-message warning agent-desktop-model-notice" role="status">{t(`agents.claudeDesktopMapping.error.${entryError}`)}</p>
+              ? <Notice tone="warn" variant="text">{t(`agents.claudeDesktopMapping.error.${entryError}`)}</Notice>
               : aliasNotice === 'aliasExists'
-                ? <p className="agent-inline-message warning agent-desktop-model-notice" role="status">{t(
+                ? <Notice tone="warn" variant="text">{t(
                   claudeDesktopDefaultAliases.includes(entry.alias.trim().toLowerCase())
                     ? 'agents.claudeDesktopMapping.defaultAliasExists' : 'agents.claudeDesktopMapping.error.aliasExists',
                   { alias: entry.alias.trim() },
-                )}</p>
+                )}</Notice>
                 : aliasNotice === 'sameModel'
-                  ? <p className="agent-desktop-model-notice" role="status">{t('agents.claudeDesktopMapping.sameModel')}</p>
+                  ? <Notice tone="info" variant="text">{t('agents.claudeDesktopMapping.sameModel')}</Notice>
                   : isClaude
-                    ? <p className="agent-desktop-model-notice" role="status">{t('agents.claudeDesktopMapping.claudeDefault')}</p>
+                    ? <Notice tone="info" variant="text">{t('agents.claudeDesktopMapping.claudeDefault')}</Notice>
                     : null}
           </div>
           );
         })}
       </div>
       {desktopValidation === 'duplicate' && !modelLoading && hasPendingChanges
-        ? <p className="agent-inline-message warning" role="status">{t(`agents.claudeDesktopMapping.error.${desktopValidation}`)}</p> : null}
+        ? <Notice tone="warn" variant="text">{t(`agents.claudeDesktopMapping.error.${desktopValidation}`)}</Notice> : null}
     </section>
   );
 
@@ -1968,36 +1859,10 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         }} onRefresh={() => void refresh()}
           loading={loading} busy={busy} error={detectionError} onDismissError={() => setDetectionError('')} />
 
-        <section className="panel agent-config-panel">
+        <section className="panel surface-panel agent-config-panel">
           {availableSubpages.length > 1 ? (
-            <div className="agent-subpage-tabs" role="tablist" aria-label={t('agents.tabs.label')}>
-            {availableSubpages.map((subpage) => (
-              <button
-                type="button"
-                id={`agent-subpage-tab-${subpage.id}`}
-                role="tab"
-                className={activeSubpage === subpage.id ? 'active' : ''}
-                aria-selected={activeSubpage === subpage.id}
-                aria-controls={`agent-subpage-panel-${subpage.id}`}
-                tabIndex={activeSubpage === subpage.id ? 0 : -1}
-                key={subpage.id}
-                disabled={busy}
-                onClick={() => setActiveSubpage(subpage.id)}
-                onKeyDown={(event) => {
-                  const index = availableSubpages.findIndex((item) => item.id === subpage.id);
-                  const next = event.key === 'Home' ? 0 : event.key === 'End' ? availableSubpages.length - 1
-                    : event.key === 'ArrowRight' ? (index + 1) % availableSubpages.length
-                    : event.key === 'ArrowLeft' ? (index - 1 + availableSubpages.length) % availableSubpages.length : -1;
-                  if (next < 0) return;
-                  event.preventDefault();
-                  setActiveSubpage(availableSubpages[next].id);
-                  document.getElementById('agent-subpage-tab-' + availableSubpages[next].id)?.focus();
-                }}
-              >
-                {t(subpage.labelKey)}
-              </button>
-            ))}
-          </div>
+            <Tabs className="agent-subpage-tabs" aria-label={t('agents.tabs.label')} value={activeSubpage} onChange={setActiveSubpage} disabled={busy}
+              items={availableSubpages.map(subpage => ({ value: subpage.id, id: `agent-subpage-tab-${subpage.id}`, panelId: `agent-subpage-panel-${subpage.id}`, label: t(subpage.labelKey) }))} />
           ) : null}
           <div className="agent-config-scroll-region">
           {embedded && selected === 'vscode-copilot' && activeSubpage === 'core' && activeStatus ? (
@@ -2017,10 +1882,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               </div>
 
                 <MessageNotice message={activeStatus?.error || activeStatus?.warnings.join('；')} tone={activeStatus?.error ? 'error' : 'info'} />
-                {activeStatus && !activeStatus.installed ? <div className="agent-detection-help" role="status">
-                  <span>{t('agents.executablePath.notDetected')}</span>
-                  <button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>
-                </div> : null}
+                {activeStatus && !activeStatus.installed ? <Notice tone="warn" variant="text" className="agent-detection-help" action={<button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>}>{t('agents.executablePath.notDetected')}</Notice> : null}
               {selected === 'claude-desktop' ? desktopModelEditor : <div className="agent-minimal-field">
                 <label htmlFor="embedded-agent-model">{t(isDeepSeekHarnessClient ? 'agents.harness.defaultModel' : 'agents.useModel')}</label>
                 <AgentModelPicker
@@ -2116,10 +1978,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               </div>
 
               <MessageNotice message={activeStatus?.error || activeStatus?.warnings.join('；')} tone={activeStatus?.error ? 'error' : 'info'} />
-              {activeStatus && !activeStatus.installed ? <div className="agent-detection-help" role="status">
-                <span>{t('agents.executablePath.notDetected')}</span>
-                <button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>
-              </div> : null}
+              {activeStatus && !activeStatus.installed ? <Notice tone="warn" variant="text" className="agent-detection-help" action={<button type="button" className="link-button" onClick={() => setActiveSubpage('management')}>{t('agents.executablePath.openManagement')}</button>}>{t('agents.executablePath.notDetected')}</Notice> : null}
 
               {!isClaudeModelMappingClient ? (
                 <section className="agent-core-setting-section agent-model-section">
@@ -2145,63 +2004,20 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                       <div className="agent-auth-method">
                         <div className="agent-signin-label">
                           <span id="agent-connection-method-label" className="agent-signin-label-title">{t('agents.modify.authMethod')}</span>
-                          <button type="button" className="agent-signin-help-toggle" aria-expanded={connectionHelpOpen} aria-controls="agent-signin-hint"
+                          <button type="button" className="link-button muted agent-signin-help-toggle" aria-expanded={connectionHelpOpen} aria-controls="agent-signin-hint"
                             onClick={() => updateViewState({ connectionHelpOpen: !connectionHelpOpen })}>
                             {t(connectionHelpOpen ? 'agents.modify.authHelpHide' : 'agents.modify.authHelpShow')}
                             <ChevronDown size={14} aria-hidden="true" />
                           </button>
                         </div>
-                        <div
-                          id="agent-connection-method"
-                          className="agent-auth-segmented"
-                          role="radiogroup"
-                          aria-labelledby="agent-connection-method-label"
-                          aria-describedby={connectionHelpOpen ? "agent-signin-hint" : undefined}
-                          onKeyDown={(event) => {
-                            if (busy || loading || modelLoading || activeStatus?.codexOpenaiProvider) return;
-                            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-                              event.preventDefault();
-                              if (!oauthConfiguration) void changeOauthConfiguration(true);
-                            } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-                              event.preventDefault();
-                              if (oauthConfiguration) void changeOauthConfiguration(false);
-                            }
-                          }}
-                        >
-                          <button
-                            type="button"
-                            role="radio"
-                            className={`agent-auth-segmented-button${!oauthConfiguration ? ' active' : ''}`}
-                            aria-checked={!oauthConfiguration}
-                            tabIndex={!oauthConfiguration ? 0 : -1}
-                            disabled={busy || loading || modelLoading || activeStatus?.codexOpenaiProvider}
-                            data-value="apikey"
-                            onClick={() => {
-                              if (oauthConfiguration) {
-                                void changeOauthConfiguration(false);
-                              }
-                            }}
-                          >
-                            {t('agents.modify.authApiKey')}
-                          </button>
-                          <button
-                            type="button"
-                            role="radio"
-                            className={`agent-auth-segmented-button${oauthConfiguration ? ' active' : ''}`}
-                            aria-checked={Boolean(oauthConfiguration)}
-                            tabIndex={oauthConfiguration ? 0 : -1}
-                            disabled={busy || loading || modelLoading || activeStatus?.codexOpenaiProvider}
-                            data-value="oauth"
-                            onClick={() => {
-                              if (!oauthConfiguration) {
-                                void changeOauthConfiguration(true);
-                              }
-                            }}
-                          >
-                            {busyAction === 'oauth-check' ? <LoaderCircle size={14} className="spin" /> : null}
-                            {t('agents.modify.authOAuth')}
-                          </button>
-                        </div>
+                        <SegmentedControl id="agent-connection-method" className="agent-auth-segmented" aria-labelledby="agent-connection-method-label"
+                          aria-describedby={connectionHelpOpen ? "agent-signin-hint" : undefined} value={oauthConfiguration ? 'oauth' : 'apikey'}
+                          disabled={busy || loading || modelLoading || activeStatus?.codexOpenaiProvider} buttonClassName="agent-auth-segmented-button"
+                          onChange={value => { if ((value === 'oauth') !== Boolean(oauthConfiguration)) void changeOauthConfiguration(value === 'oauth'); }}
+                          items={[
+                            { value: 'apikey', label: t('agents.modify.authApiKey') },
+                            { value: 'oauth', label: <>{busyAction === 'oauth-check' ? <LoaderCircle size={14} className="spin" /> : null}{t('agents.modify.authOAuth')}</> },
+                          ]} />
                       </div>
 
                       {codexCatalogButton}
@@ -2232,15 +2048,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                         title={t('agents.claudeDesktopMapping.customMappingHint')}
                       >
                         <span>{t('agents.claudeDesktopMapping.customMapping')}</span>
-                        <span className="switch-control">
-                          <input
-                            type="checkbox"
-                            checked={claudeCustomMapping}
-                            onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)}
-                            disabled={busy || loading || modelLoading}
-                          />
-                          <span className="switch-track" />
-                        </span>
+                        <Switch checked={claudeCustomMapping} onChange={(event) => changeClaudeCustomMapping(event.currentTarget.checked)} disabled={busy || loading || modelLoading} />
                       </label>
                     </div>
                   </div>
@@ -2262,12 +2070,11 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                         ))}
                       />
                   {modelError ? (
-                    <div className="claude-code-model-error" role="status">
-                      <div><strong>{t('agents.model.loadFailed')}</strong><p>{t('agents.claudeCodeRuntime.connectionHint')}</p></div>
+                    <Notice tone="error" icon={false} className="claude-code-model-error" title={t('agents.model.loadFailed')} action={
                       <button type="button" className="secondary-button" onClick={refreshModels} disabled={modelLoading}>
                         {t('agents.model.refresh')}
                       </button>
-                    </div>
+                    }>{t('agents.claudeCodeRuntime.connectionHint')}</Notice>
                   ) : null}
                   <ClaudeCodeRoleRows routes={claudeModelMappingsDraft} models={claudeMappingModels}
                     loading={modelLoading} error={modelError}
@@ -2276,7 +2083,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                     onRefresh={refreshModels} />
                   <details className="claude-code-context-settings">
                     <summary>{t('agents.claudeCodeRuntime.advancedContext')}</summary>
-                    <div className="agent-claude-code-runtime-settings">
+                    <div className="surface-section surface-muted agent-claude-code-runtime-settings">
                       <div className="agent-claude-code-number-field">
                         <span>{t('agents.claudeCodeRuntime.maxContextTokens')}</span>
                         <input
@@ -2327,17 +2134,9 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                           <strong>{t('agents.claudeCodeRuntime.disableAutoCompact')}</strong>
                           <small>{t('agents.claudeCodeRuntime.disableAutoCompactHint')}</small>
                         </span>
-                        <span className="switch-control">
-                          <input
-                            type="checkbox"
-                            checked={claudeModelMappingsDraft.disableAutoCompact}
-                            onChange={(event) => changeClaudeCodeAutoCompactDisabled(
+                        <Switch checked={claudeModelMappingsDraft.disableAutoCompact} onChange={(event) => changeClaudeCodeAutoCompactDisabled(
                               event.currentTarget.checked,
-                            )}
-                            disabled={busy || loading || modelLoading}
-                          />
-                          <span className="switch-track" />
-                        </span>
+                            )} disabled={busy || loading || modelLoading} />
                       </label>
                     </div>
                   </details>
@@ -2438,7 +2237,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         clearPendingChanges();
         if (selected === 'claude-code' || selected === 'claude-desktop') claudeModelMappingsDirtyRef.current[selected] = false;
         setOauthConfigurationDraft(null);
-        const refreshed = await invoke<AgentConfigStatus[]>('refresh_agent_config_statuses', { executableOverrides: executablePaths });
+        const refreshed = await refreshAgentConfigStatuses({ executableOverrides: executablePaths });
         setStatuses(refreshed);
         const current = refreshed.find((status) => status.id === selected)?.currentModel;
         setModelByClient((values) => { const next = { ...values, [selected]: current ?? '' }; writeAgentModelSelections(next); return next; });
@@ -2457,301 +2256,286 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
       ) : null}
 
       {launchDirectoryDialogOpen ? (
-        <div className="config-dialog-backdrop" onMouseDown={(event) => {
-          if (event.currentTarget === event.target && !busy) {
+        <Dialog
+          className="config-dialog agent-launch-directory-dialog"
+          labelledBy="agent-launch-directory-title"
+          onClose={() => {
             setLaunchDirectoryDialogOpen(false);
             setLaunchDirectoryTarget(null);
-          }
-        }}>
-          <section
-            ref={launchDirectoryDialogRef}
-            className="config-dialog agent-launch-directory-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="agent-launch-directory-title"
-          >
-            <div className="config-dialog-heading">
-              <div>
-                <h2 id="agent-launch-directory-title">
-                  {isDeepSeekHarnessClient
-                    ? t('agents.deepseekLaunch.dialogTitle')
-                    : t('agents.launchDirectory.dialogTitle', { client: activeDefinition.name })}
-                </h2>
-              </div>
+          }}
+          closeDisabled={busy}
+          dismissOnBackdrop
+        >
+          <div className="config-dialog-heading">
+            <div>
+              <h2 id="agent-launch-directory-title">
+                {isDeepSeekHarnessClient
+                  ? t('agents.deepseekLaunch.dialogTitle')
+                  : t('agents.launchDirectory.dialogTitle', { client: activeDefinition.name })}
+              </h2>
             </div>
-            <p>{isDeepSeekHarnessClient
-              ? t('agents.deepseekLaunch.dialogDescription')
-              : t('agents.launchDirectory.dialogDescription', { client: activeDefinition.name })}</p>
-            {isDeepSeekHarnessClient ? (
-              <div className="deepseek-harness-launch-options">
-                <label className="config-dialog-field deepseek-harness-launch-field">
-                  <span>{t('agents.deepseekLaunch.mode.label')}</span>
-                  <select
-                    className="config-dialog-text-input"
-                    value={deepSeekHarnessLaunchDraft.mode}
-                    onChange={(event) => updateDeepSeekHarnessLaunchDraft({
-                      mode: event.currentTarget.value as DeepSeekHarnessLaunchMode,
-                    })}
-                    disabled={busy}
-                  >
-                    <option value="web">{t('agents.deepseekLaunch.mode.web')}</option>
-                    <option value="headless">{t('agents.deepseekLaunch.mode.headless')}</option>
-                    <option value="acp">{t('agents.deepseekLaunch.mode.acp')}</option>
-                    <option value="sdk">{t('agents.deepseekLaunch.mode.sdk')}</option>
-                    <option value="sdk-minimal">{t('agents.deepseekLaunch.mode.sdkMinimal')}</option>
-                    <option value="custom">{t('agents.deepseekLaunch.mode.custom')}</option>
-                  </select>
-                </label>
-                <p className="deepseek-harness-launch-mode-description">
-                  {deepSeekHarnessLaunchModeDescription}
-                </p>
+          </div>
+          <p>{isDeepSeekHarnessClient
+            ? t('agents.deepseekLaunch.dialogDescription')
+            : t('agents.launchDirectory.dialogDescription', { client: activeDefinition.name })}</p>
+          {isDeepSeekHarnessClient ? (
+            <div className="deepseek-harness-launch-options">
+              <label className="config-dialog-field deepseek-harness-launch-field">
+                <span>{t('agents.deepseekLaunch.mode.label')}</span>
+                <Select
+                  className="config-dialog-text-input"
+                  value={deepSeekHarnessLaunchDraft.mode}
+                  onChange={(event) => updateDeepSeekHarnessLaunchDraft({
+                    mode: event.currentTarget.value as DeepSeekHarnessLaunchMode,
+                  })}
+                  disabled={busy}
+                >
+                  <option value="web">{t('agents.deepseekLaunch.mode.web')}</option>
+                  <option value="headless">{t('agents.deepseekLaunch.mode.headless')}</option>
+                  <option value="acp">{t('agents.deepseekLaunch.mode.acp')}</option>
+                  <option value="sdk">{t('agents.deepseekLaunch.mode.sdk')}</option>
+                  <option value="sdk-minimal">{t('agents.deepseekLaunch.mode.sdkMinimal')}</option>
+                  <option value="custom">{t('agents.deepseekLaunch.mode.custom')}</option>
+                </Select>
+              </label>
+              <p className="deepseek-harness-launch-mode-description">
+                {deepSeekHarnessLaunchModeDescription}
+              </p>
 
-                {deepSeekHarnessLaunchDraft.mode === 'web' ? (
-                  <>
-                    <div className="deepseek-harness-launch-grid">
-                      <label className="config-dialog-field deepseek-harness-launch-field">
-                        <span>{t('agents.deepseekLaunch.web.host')}</span>
-                        <input
-                          className="config-dialog-text-input"
-                          type="text"
-                          value={deepSeekHarnessLaunchDraft.webHost}
-                          onChange={(event) => updateDeepSeekHarnessLaunchDraft({ webHost: event.currentTarget.value })}
-                          placeholder={t('agents.deepseekLaunch.web.hostPlaceholder')}
-                          disabled={busy}
-                        />
-                      </label>
-                      <label className="config-dialog-field deepseek-harness-launch-field">
-                        <span>{t('agents.deepseekLaunch.web.port')}</span>
-                        <input
-                          className="config-dialog-text-input"
-                          type="text"
-                          inputMode="numeric"
-                          value={deepSeekHarnessLaunchDraft.webPort}
-                          onChange={(event) => updateDeepSeekHarnessLaunchDraft({ webPort: event.currentTarget.value })}
-                          placeholder={t('agents.deepseekLaunch.web.portPlaceholder')}
-                          disabled={busy}
-                        />
-                      </label>
-                    </div>
-                    <label className="deepseek-harness-launch-checkbox">
+              {deepSeekHarnessLaunchDraft.mode === 'web' ? (
+                <>
+                  <div className="deepseek-harness-launch-grid">
+                    <label className="config-dialog-field deepseek-harness-launch-field">
+                      <span>{t('agents.deepseekLaunch.web.host')}</span>
                       <input
-                        type="checkbox"
-                        checked={deepSeekHarnessLaunchDraft.openBrowser}
-                        onChange={(event) => updateDeepSeekHarnessLaunchDraft({ openBrowser: event.currentTarget.checked })}
-                        disabled={busy}
-                      />
-                      <span>
-                        <strong>{t('agents.deepseekLaunch.web.openBrowser')}</strong>
-                        <small>{t('agents.deepseekLaunch.web.openBrowserDescription')}</small>
-                      </span>
-                    </label>
-                    <label className="config-dialog-field deepseek-harness-launch-field multiline">
-                      <span>{t('agents.deepseekLaunch.web.trustedHosts')}</span>
-                      <textarea
                         className="config-dialog-text-input"
-                        value={deepSeekHarnessLaunchDraft.trustedHosts}
-                        onChange={(event) => updateDeepSeekHarnessLaunchDraft({ trustedHosts: event.currentTarget.value })}
-                        placeholder={t('agents.deepseekLaunch.web.trustedHostsPlaceholder')}
+                        type="text"
+                        value={deepSeekHarnessLaunchDraft.webHost}
+                        onChange={(event) => updateDeepSeekHarnessLaunchDraft({ webHost: event.currentTarget.value })}
+                        placeholder={t('agents.deepseekLaunch.web.hostPlaceholder')}
                         disabled={busy}
                       />
                     </label>
-                  </>
-                ) : null}
-
-                {deepSeekHarnessLaunchDraft.mode === 'headless' ? (
-                  <label className="config-dialog-field deepseek-harness-launch-field">
-                    <span>{t('agents.deepseekLaunch.headless.task')}</span>
-                    <input
+                    <label className="config-dialog-field deepseek-harness-launch-field">
+                      <span>{t('agents.deepseekLaunch.web.port')}</span>
+                      <input
+                        className="config-dialog-text-input"
+                        type="text"
+                        inputMode="numeric"
+                        value={deepSeekHarnessLaunchDraft.webPort}
+                        onChange={(event) => updateDeepSeekHarnessLaunchDraft({ webPort: event.currentTarget.value })}
+                        placeholder={t('agents.deepseekLaunch.web.portPlaceholder')}
+                        disabled={busy}
+                      />
+                    </label>
+                  </div>
+                  <label className="deepseek-harness-launch-checkbox">
+                    <Switch checked={deepSeekHarnessLaunchDraft.openBrowser} onChange={(event) => updateDeepSeekHarnessLaunchDraft({ openBrowser: event.currentTarget.checked })} disabled={busy} />
+                    <span>
+                      <strong>{t('agents.deepseekLaunch.web.openBrowser')}</strong>
+                      <small>{t('agents.deepseekLaunch.web.openBrowserDescription')}</small>
+                    </span>
+                  </label>
+                  <label className="config-dialog-field deepseek-harness-launch-field multiline">
+                    <span>{t('agents.deepseekLaunch.web.trustedHosts')}</span>
+                    <textarea
                       className="config-dialog-text-input"
-                      type="text"
-                      value={deepSeekHarnessLaunchDraft.task}
-                      onChange={(event) => updateDeepSeekHarnessLaunchDraft({ task: event.currentTarget.value })}
-                      placeholder={t('agents.deepseekLaunch.headless.taskPlaceholder')}
+                      value={deepSeekHarnessLaunchDraft.trustedHosts}
+                      onChange={(event) => updateDeepSeekHarnessLaunchDraft({ trustedHosts: event.currentTarget.value })}
+                      placeholder={t('agents.deepseekLaunch.web.trustedHostsPlaceholder')}
                       disabled={busy}
                     />
                   </label>
-                ) : null}
+                </>
+              ) : null}
 
-                {deepSeekHarnessLaunchDraft.mode === 'custom' ? (
-                  <label className="config-dialog-field deepseek-harness-launch-field">
-                    <span>{t('agents.deepseekLaunch.custom.profile')}</span>
-                    <input
-                      className="config-dialog-text-input"
-                      type="text"
-                      value={deepSeekHarnessLaunchDraft.profile}
-                      onChange={(event) => updateDeepSeekHarnessLaunchDraft({ profile: event.currentTarget.value })}
-                      placeholder={t('agents.deepseekLaunch.custom.profilePlaceholder')}
-                      disabled={busy}
-                    />
-                  </label>
-                ) : null}
-
-                <label className="config-dialog-field deepseek-harness-launch-field multiline">
-                  <span>{t('agents.deepseekLaunch.patches')}</span>
-                  <textarea
+              {deepSeekHarnessLaunchDraft.mode === 'headless' ? (
+                <label className="config-dialog-field deepseek-harness-launch-field">
+                  <span>{t('agents.deepseekLaunch.headless.task')}</span>
+                  <input
                     className="config-dialog-text-input"
-                    value={deepSeekHarnessLaunchDraft.patches}
-                    onChange={(event) => updateDeepSeekHarnessLaunchDraft({ patches: event.currentTarget.value })}
-                    placeholder={t('agents.deepseekLaunch.patchesPlaceholder')}
+                    type="text"
+                    value={deepSeekHarnessLaunchDraft.task}
+                    onChange={(event) => updateDeepSeekHarnessLaunchDraft({ task: event.currentTarget.value })}
+                    placeholder={t('agents.deepseekLaunch.headless.taskPlaceholder')}
                     disabled={busy}
                   />
                 </label>
-              </div>
-            ) : null}
-            <div className="config-dialog-field">
-              <span>{t('agents.launchDirectory.workingDirectory')}</span>
-              <button
-                type="button"
-                className="agent-launch-directory-picker"
-                onClick={() => void chooseLaunchDirectory()}
-                disabled={busy}
-                autoFocus
-              >
-                <span>
-                  <small>{launchDirectory
-                    ? t('agents.launchDirectory.selectedDirectory')
-                    : t('agents.launchDirectory.noDirectory')}</small>
-                  <strong title={launchDirectory || undefined}>
-                    {launchDirectory || t('agents.launchDirectory.chooseDirectory')}
-                  </strong>
-                </span>
-                <b>{busyAction === 'directory'
-                  ? t('agents.launchDirectory.choosing')
-                  : t('agents.launchDirectory.browse')}</b>
-              </button>
+              ) : null}
+
+              {deepSeekHarnessLaunchDraft.mode === 'custom' ? (
+                <label className="config-dialog-field deepseek-harness-launch-field">
+                  <span>{t('agents.deepseekLaunch.custom.profile')}</span>
+                  <input
+                    className="config-dialog-text-input"
+                    type="text"
+                    value={deepSeekHarnessLaunchDraft.profile}
+                    onChange={(event) => updateDeepSeekHarnessLaunchDraft({ profile: event.currentTarget.value })}
+                    placeholder={t('agents.deepseekLaunch.custom.profilePlaceholder')}
+                    disabled={busy}
+                  />
+                </label>
+              ) : null}
+
+              <label className="config-dialog-field deepseek-harness-launch-field multiline">
+                <span>{t('agents.deepseekLaunch.patches')}</span>
+                <textarea
+                  className="config-dialog-text-input"
+                  value={deepSeekHarnessLaunchDraft.patches}
+                  onChange={(event) => updateDeepSeekHarnessLaunchDraft({ patches: event.currentTarget.value })}
+                  placeholder={t('agents.deepseekLaunch.patchesPlaceholder')}
+                  disabled={busy}
+                />
+              </label>
             </div>
-            {activeLaunchDirectoryHistory.length ? (
-              <div className="agent-launch-directory-history">
-                <strong>{t('agents.launchDirectory.historyTitle')}</strong>
-                <div className="agent-launch-directory-history-list">
-                  {activeLaunchDirectoryHistory.map((directory, index) => {
-                    const active = directory === launchDirectory;
-                    return (
-                      <button
-                        type="button"
-                        className={active ? 'active' : ''}
-                        key={directory}
-                        onClick={() => {
-                          setLaunchDirectory(directory);
-                          setLaunchDirectoryError('');
-                        }}
-                        disabled={busy}
-                        title={directory}
-                      >
-                        <span>
-                          <strong>{directory}</strong>
-                          <small>{index === 0
-                            ? t('agents.launchDirectory.lastUsed')
-                            : t('agents.launchDirectory.recentItem')}</small>
-                        </span>
-                        <b>
-                          {active ? <Check size={15} aria-hidden /> : null}
-                          {active
-                            ? t('agents.launchDirectory.historySelected')
-                            : t('agents.launchDirectory.historyUse')}
-                        </b>
-                      </button>
-                    );
-                  })}
-                </div>
+          ) : null}
+          <div className="config-dialog-field">
+            <span>{t('agents.launchDirectory.workingDirectory')}</span>
+            <button
+              type="button"
+              className="agent-launch-directory-picker"
+              onClick={() => void chooseLaunchDirectory()}
+              disabled={busy}
+              autoFocus
+            >
+              <span>
+                <small>{launchDirectory
+                  ? t('agents.launchDirectory.selectedDirectory')
+                  : t('agents.launchDirectory.noDirectory')}</small>
+                <strong title={launchDirectory || undefined}>
+                  {launchDirectory || t('agents.launchDirectory.chooseDirectory')}
+                </strong>
+              </span>
+              <b>{busyAction === 'directory'
+                ? t('agents.launchDirectory.choosing')
+                : t('agents.launchDirectory.browse')}</b>
+            </button>
+          </div>
+          {activeLaunchDirectoryHistory.length ? (
+            <div className="agent-launch-directory-history">
+              <strong>{t('agents.launchDirectory.historyTitle')}</strong>
+              <div className="agent-launch-directory-history-list">
+                {activeLaunchDirectoryHistory.map((directory, index) => {
+                  const active = directory === launchDirectory;
+                  return (
+                    <button
+                      type="button"
+                      className={active ? 'active' : ''}
+                      key={directory}
+                      onClick={() => {
+                        setLaunchDirectory(directory);
+                        setLaunchDirectoryError('');
+                      }}
+                      disabled={busy}
+                      title={directory}
+                    >
+                      <span>
+                        <strong>{directory}</strong>
+                        <small>{index === 0
+                          ? t('agents.launchDirectory.lastUsed')
+                          : t('agents.launchDirectory.recentItem')}</small>
+                      </span>
+                      <b>
+                        {active ? <Check size={15} aria-hidden /> : null}
+                        {active
+                          ? t('agents.launchDirectory.historySelected')
+                          : t('agents.launchDirectory.historyUse')}
+                      </b>
+                    </button>
+                  );
+                })}
               </div>
-            ) : null}
-            {launchDirectoryError ? (
-              <MessageNotice message={launchDirectoryError} onDismiss={() => setLaunchDirectoryError('')} />
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => {
-                  setLaunchDirectoryDialogOpen(false);
-                  setLaunchDirectoryTarget(null);
-                }}
-                disabled={busy}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => void launchFromDirectoryDialog()}
-                disabled={busy || !launchDirectory.trim() || !launchDirectoryTarget}
-              >
-                {busyAction === 'launch' || busyAction === 'launch-cli'
-                  ? <LoaderCircle size={16} className="spin" />
-                  : null}
-                {isDeepSeekHarnessClient
-                  ? t('agents.deepseekLaunch.launch', { mode: deepSeekHarnessLaunchModeLabel })
-                  : t('agents.launchDirectory.launch', { client: activeDefinition.name })}
-              </button>
             </div>
-          </section>
-        </div>
+          ) : null}
+          {launchDirectoryError ? (
+            <MessageNotice message={launchDirectoryError} onDismiss={() => setLaunchDirectoryError('')} />
+          ) : null}
+          <div className="config-dialog-actions two-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                setLaunchDirectoryDialogOpen(false);
+                setLaunchDirectoryTarget(null);
+              }}
+              disabled={busy}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => void launchFromDirectoryDialog()}
+              disabled={busy || !launchDirectory.trim() || !launchDirectoryTarget}
+            >
+              {busyAction === 'launch' || busyAction === 'launch-cli'
+                ? <LoaderCircle size={16} className="spin" />
+                : null}
+              {isDeepSeekHarnessClient
+                ? t('agents.deepseekLaunch.launch', { mode: deepSeekHarnessLaunchModeLabel })
+                : t('agents.launchDirectory.launch', { client: activeDefinition.name })}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {defaultConfirmOpen ? (
-        <div className="config-dialog-backdrop">
-          <section ref={defaultDialogRef} className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-default-title">
-            <div className="config-dialog-heading">
-              <div><AlertTriangle size={19} /><h2 id="agent-default-title">{t('agents.default.title')}</h2></div>
-            </div>
-            <p>
-              {t('agents.default.description', { name: activeDefinition.name })}
-            </p>
-            {templatePreview ? <ul className="agent-template-files">{templatePreview.files.map((file) => <li key={file}><code>{file}</code></li>)}</ul> : null}
-            {defaultError ? (
-              <MessageNotice message={defaultError} onDismiss={() => setDefaultError('')} />
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" onClick={closeDefaultConfirmation} disabled={busy}>{t('common.cancel')}</button>
-              <button type="button" className="danger-button" onClick={() => void resetConfigurationToDefault()} disabled={busy || !templatePreview}>
-                {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : null}
-                {t('agents.default.confirm')}
-              </button>
-            </div>
-          </section>
-        </div>
+        <Dialog alert className="config-dialog agent-restore-dialog" labelledBy="agent-default-title" onClose={() => setDefaultConfirmOpen(false)} closeDisabled={busy}>
+          <div className="config-dialog-heading">
+            <div><AlertTriangle size={19} /><h2 id="agent-default-title">{t('agents.default.title')}</h2></div>
+          </div>
+          <p>
+            {t('agents.default.description', { name: activeDefinition.name })}
+          </p>
+          {templatePreview ? <ul className="agent-template-files">{templatePreview.files.map((file) => <li key={file}><code>{file}</code></li>)}</ul> : null}
+          {defaultError ? (
+            <MessageNotice message={defaultError} onDismiss={() => setDefaultError('')} />
+          ) : null}
+          <div className="config-dialog-actions two-actions">
+            <button type="button" className="secondary-button" onClick={closeDefaultConfirmation} disabled={busy}>{t('common.cancel')}</button>
+            <button type="button" className="danger-button" onClick={() => void resetConfigurationToDefault()} disabled={busy || !templatePreview}>
+              {busyAction === 'default' ? <LoaderCircle size={16} className="spin" /> : null}
+              {t('agents.default.confirm')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {clearConfirmOpen ? (
-        <div className="config-dialog-backdrop">
-          <section ref={clearDialogRef} className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-clear-title">
-            <div className="config-dialog-heading">
-              <div><AlertTriangle size={19} /><h2 id="agent-clear-title">{selected === 'codex' ? t('agents.clear.title') : t('agents.clearIntegration.title', { name: activeDefinition.name })}</h2></div>
-            </div>
-            <p>{t(selected === 'codex' ? 'agents.clear.description' : 'agents.clearIntegration.description')}</p>
-            {clearError ? (
-              <MessageNotice message={clearError} onDismiss={() => setClearError('')} />
-            ) : null}
-            <div className="config-dialog-actions two-actions">
-              <button type="button" className="secondary-button" onClick={closeClearConfirmation} disabled={busy}>{t('common.cancel')}</button>
-              <button type="button" className="danger-button" onClick={() => void clearConfiguration()} disabled={busy}>
-                {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
-                {t(selected === 'codex' ? 'agents.clear.confirm' : 'agents.clearIntegration.confirm')}
-              </button>
-            </div>
-          </section>
-        </div>
+        <Dialog alert className="config-dialog agent-restore-dialog" labelledBy="agent-clear-title" onClose={() => setClearConfirmOpen(false)} closeDisabled={busy}>
+          <div className="config-dialog-heading">
+            <div><AlertTriangle size={19} /><h2 id="agent-clear-title">{selected === 'codex' ? t('agents.clear.title') : t('agents.clearIntegration.title', { name: activeDefinition.name })}</h2></div>
+          </div>
+          <p>{t(selected === 'codex' ? 'agents.clear.description' : 'agents.clearIntegration.description')}</p>
+          {clearError ? (
+            <MessageNotice message={clearError} onDismiss={() => setClearError('')} />
+          ) : null}
+          <div className="config-dialog-actions two-actions">
+            <button type="button" className="secondary-button" onClick={closeClearConfirmation} disabled={busy}>{t('common.cancel')}</button>
+            <button type="button" className="danger-button" onClick={() => void clearConfiguration()} disabled={busy}>
+              {busyAction === 'clear' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}
+              {t(selected === 'codex' ? 'agents.clear.confirm' : 'agents.clearIntegration.confirm')}
+            </button>
+          </div>
+        </Dialog>
       ) : null}
 
       {oauthLoginRequiredAction ? (
-        <div className="config-dialog-backdrop">
-          <section ref={oauthRequiredDialogRef} className="config-dialog agent-restore-dialog" role="alertdialog" aria-modal="true" aria-labelledby="agent-oauth-login-required-title">
-            <div className="config-dialog-heading">
-              <div><AlertTriangle size={19} /><h2 id="agent-oauth-login-required-title">{t('agents.oauthLoginRequired.title')}</h2></div>
-            </div>
-            <p>{oauthLoginRequiredDescription}</p>
-            <div className={`config-dialog-actions${oauthLoginRequiredAction === 'launch' ? ' single-action' : ''}`}>
-              <button type="button" className={oauthLoginRequiredAction === 'launch' ? 'primary-button' : 'secondary-button'}
-                onClick={() => setOauthLoginRequiredAction(null)}>{t('agents.oauthLoginRequired.confirm')}</button>
-              {oauthLoginRequiredAction !== 'launch' ? (
-                <button type="button" className="primary-button" onClick={openClearIntegrationGuide}>
-                  {t('agents.oauthLoginRequired.openManagement')}
-                </button>
-              ) : null}
-            </div>
-          </section>
-        </div>
+        <Dialog alert className="config-dialog agent-restore-dialog" labelledBy="agent-oauth-login-required-title" onClose={() => setOauthLoginRequiredAction(null)}>
+          <div className="config-dialog-heading">
+            <div><AlertTriangle size={19} /><h2 id="agent-oauth-login-required-title">{t('agents.oauthLoginRequired.title')}</h2></div>
+          </div>
+          <p>{oauthLoginRequiredDescription}</p>
+          <div className={`config-dialog-actions${oauthLoginRequiredAction === 'launch' ? ' single-action' : ''}`}>
+            <button type="button" className={oauthLoginRequiredAction === 'launch' ? 'primary-button' : 'secondary-button'}
+              onClick={() => setOauthLoginRequiredAction(null)}>{t('agents.oauthLoginRequired.confirm')}</button>
+            {oauthLoginRequiredAction !== 'launch' ? (
+              <button type="button" className="primary-button" onClick={openClearIntegrationGuide}>
+                {t('agents.oauthLoginRequired.openManagement')}
+              </button>
+            ) : null}
+          </div>
+        </Dialog>
       ) : null}
       {confirmationDialog}
     </section>

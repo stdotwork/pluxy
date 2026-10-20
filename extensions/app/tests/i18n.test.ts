@@ -2,8 +2,20 @@ import { describe, expect, it } from 'bun:test';
 import { languageOptions, normalizeLocale, supportedLocales, translate } from '../src/i18n';
 import { en, ja, zhCN, zhTW, type MessageKey } from '../src/i18n/resources';
 import { jaOverrides } from '../src/i18n/ja';
+import { pluginConfigText } from '../src/i18n/pluginConfig';
 
 describe('i18n', () => {
+  it('localizes the plugin discard confirmation in every language', () => {
+    for (const [locale, cancel, confirm] of [
+      ['zh-CN', '继续编辑', '放弃修改'], ['zh-TW', '繼續編輯', '放棄修改'],
+      ['en', 'Keep editing', 'Discard changes'], ['ja', '編集を続ける', '変更を破棄'],
+    ] as const) {
+      expect(pluginConfigText('keepEditing', locale)).toBe(cancel);
+      expect(pluginConfigText('discard', locale)).toBe(confirm);
+      expect(pluginConfigText('unsaved', locale)).not.toBe('');
+    }
+  });
+
   it('localizes system appearance controls in every language', () => {
     expect(translate('zh-CN', 'app.theme.system')).toBe('自动');
     expect(translate('zh-TW', 'app.theme.system')).toBe('自動');

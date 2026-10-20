@@ -1,13 +1,10 @@
+import { Notice } from '../components/Notice';
+import { getCoreSensitiveWordsSettings, saveCoreSensitiveWordsSettings } from '../services/coreSettings';
+import type { SensitiveWordsSettings } from '../services/coreSettings';
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Check, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { useConfirmation } from '../components/ConfirmationDialog';
-
-type SensitiveWordsSettings = {
-  antigravitySensitiveWords: string[];
-  devinSensitiveWords: string[];
-};
 
 type Provider = 'antigravity' | 'devin';
 type WordEntry = { id: number; value: string };
@@ -121,7 +118,7 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
     setLoading(true);
     setError('');
     try {
-      const result = await invoke<SensitiveWordsSettings>('get_core_sensitive_words_settings');
+      const result = await getCoreSensitiveWordsSettings();
       setSaved(result);
       replaceDraft({
         ...result,
@@ -201,7 +198,7 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
     setSaving(true);
     setError('');
     try {
-      const result = await invoke<SensitiveWordsSettings>('save_core_sensitive_words_settings', {
+      const result = await saveCoreSensitiveWordsSettings({
         settings: words,
       });
       setSaved(result);
@@ -224,7 +221,7 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
   };
 
   return (
-    <section className="panel config-sensitive-words-panel">
+    <section className="panel surface-bare config-sensitive-words-panel">
       <div className="config-panel-heading">
         <div className="config-heading-title">
           <ShieldAlert size={18} aria-hidden="true" />
@@ -244,7 +241,7 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
           </button>
         </div>
       </div>
-      {error ? <div className="config-form-message error" role="alert">{error}</div> : null}
+      {error ? <Notice tone="error" variant="text">{error}</Notice> : null}
       {loading ? <p>{t('common.loading')}</p> : saved === null ? (
         <button type="button" className="secondary-button compact-button" onClick={() => void load()}>{t('common.retry')}</button>
       ) : (

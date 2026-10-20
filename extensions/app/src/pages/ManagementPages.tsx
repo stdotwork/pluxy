@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { Notice } from '../components/Notice';
+import { getOAuthStatus, startOAuthLogin, openOAuthUrl, submitOAuthCallback, listOAuthBrowsers } from '../services/oauth';
+import type { OAuthBrowserOption } from '../services/oauth';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronRight,
   Check,
@@ -37,10 +39,11 @@ import { managementApi, responseList } from '../services/managementApi';
 import { createOAuthLoginSuccessCache } from '../services/oauthLoginState';
 import { AuthFileManagementPage } from './AuthFileManagementPage';
 import { validateDevinCallback } from '../services/devinOAuth';
-import { handleHorizontalTabKey } from '../components/tabKeyboardNavigation';
+import { Tabs } from '../components/Tabs';
 import { PluginOAuthProviders } from './PluginOAuthProviders';
 import { notifyPluginResourcesChanged, PLUGIN_RESOURCES_REFRESH_EVENT } from '../services/pluginResources';
 import { VertexLoginCard } from './VertexLoginCard';
+import { Select } from '../components/Select';
 
 type OAuthProviderId = 'codex' | 'claude' | 'antigravity' | 'kimi' | 'xai' | 'devin' | 'meta';
 type OAuthFlowStatus = 'idle' | 'waiting' | 'success' | 'error';
@@ -57,26 +60,6 @@ type OAuthProviderState = {
   callbackStatus?: 'success' | 'error';
   callbackError?: string;
   refreshing?: boolean;
-};
-
-type OAuthStartResult = {
-  url: string;
-  state?: string | null;
-  userCode?: string | null;
-  flow?: string | null;
-  expiresIn?: number | null;
-  opened: boolean;
-  openError?: string | null;
-};
-
-type OAuthBrowserOption = {
-  id: string;
-  label: string;
-};
-
-type OAuthStatusResult = {
-  status: string;
-  error?: string | null;
 };
 
 const oauthProviders = [
@@ -138,47 +121,12 @@ export function OAuthManagementPage() {
     setAuthFilesProvider(provider);
     setActiveSubpage('authFiles');
   }, []);
-  const subpageIds = oauthSubpages.map((subpage) => subpage.id);
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, subpage: OAuthSubpage) => {
-    handleHorizontalTabKey(
-      event,
-      subpageIds,
-      subpage,
-      setActiveSubpage,
-      (next) => document.getElementById(`oauth-subpage-tab-${next}`),
-    );
-  };
 
   return (
     <section className="page oauth-management-page">
-      <div
-        className="agent-subpage-tabs oauth-subpage-tabs"
-        role="tablist"
-        aria-label={t('oauth.tabs.label')}
-      >
-        {oauthSubpages.map((subpage) => {
-          const active = activeSubpage === subpage.id;
-          return (
-            <button
-              type="button"
-              id={`oauth-subpage-tab-${subpage.id}`}
-              key={subpage.id}
-              role="tab"
-              className={active ? 'active' : ''}
-              aria-selected={active}
-              aria-controls="oauth-subpage-panel"
-              tabIndex={active ? 0 : -1}
-              onClick={() => {
-                setAuthFilesProvider(undefined);
-                setActiveSubpage(subpage.id);
-              }}
-              onKeyDown={(event) => handleTabKeyDown(event, subpage.id)}
-            >
-              {t(subpage.labelKey)}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs className="agent-subpage-tabs oauth-subpage-tabs" aria-label={t('oauth.tabs.label')} value={activeSubpage}
+        onChange={subpage => { setAuthFilesProvider(undefined); setActiveSubpage(subpage); }}
+        items={oauthSubpages.map(subpage => ({ value: subpage.id, id: `oauth-subpage-tab-${subpage.id}`, panelId: 'oauth-subpage-panel', label: t(subpage.labelKey) }))} />
 
       <div
         className="oauth-subpage-panel"
@@ -214,7 +162,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
 
   useEffect(() => {
     let active = true;
-    void invoke<OAuthBrowserOption[]>('list_oauth_browsers')
+    void listOAuthBrowsers()
       .then((available) => {
         if (!active) return;
         setBrowsers(available);
@@ -327,7 +275,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
         if (pollingRequests.current[provider]) return;
         pollingRequests.current[provider] = true;
         try {
-          const result = await invoke<OAuthStatusResult>('get_oauth_status', { state });
+          const result = await getOAuthStatus({ state });
           if (!isCurrent()) return;
           const status = (result.status || '').toLowerCase();
           if (status === 'ok') {
@@ -407,7 +355,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
 
     try {
       await captureCredentialSnapshot(provider);
-      const result = await invoke<OAuthStartResult>('start_oauth_login', {
+      const result = await startOAuthLogin({
         provider,
         browser: selectedBrowser,
       });
@@ -478,7 +426,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
   const openAuthUrl = async (url?: string) => {
     if (!url) return;
     try {
-      await invoke('open_oauth_url', {
+      await openOAuthUrl({
         url,
         browser: selectedBrowser === NO_AUTO_OPEN_BROWSER_ID ? 'default' : selectedBrowser,
       });
@@ -542,7 +490,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
       callbackError: undefined,
     });
     try {
-      await invoke('submit_oauth_callback', { provider, redirectUrl });
+      await submitOAuthCallback({ provider, redirectUrl });
       updateProviderState(provider, {
         callbackSubmitting: false,
         callbackStatus: 'success',
@@ -563,7 +511,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
       <header className="management-header">
         <label className="oauth-browser-picker">
           <span>{t('oauth.browser.label')}</span>
-          <select
+          <Select
             value={selectedBrowser}
             onChange={(event) => setSelectedBrowser(event.currentTarget.value)}
             aria-label={t('oauth.browser.label')}
@@ -576,7 +524,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
               </option>
             ))}
             <option value={NO_AUTO_OPEN_BROWSER_ID}>{t('oauth.browser.noAutoOpen')}</option>
-          </select>
+          </Select>
         </label>
         <button type="button" className="secondary-button" onClick={notifyPluginResourcesChanged}>
           <RefreshCw size={16} aria-hidden="true" />{t('common.refresh')}
@@ -611,7 +559,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
           const LoginIcon = hasAccounts || state.status === 'success' ? Plus : LogIn;
 
           return (
-            <section className={`panel oauth-card${state.polling ? ' is-waiting' : ''}`} key={provider.id}>
+            <section className={`panel surface-panel oauth-card${state.polling ? ' is-waiting' : ''}`} key={provider.id}>
               <div className="provider-title-row">
                 <img src={provider.icon} alt="" className={provider.id === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} />
                 <div>
@@ -653,20 +601,11 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
                   </ul>
                 ) : null}
                 {state.polling ? (
-                  <div className="oauth-flow-status waiting" role="status">
-                    <LoaderCircle size={15} className="spin" aria-hidden="true" />
-                    <span>{t('oauth.flow.waiting')}</span>
-                  </div>
+                  <Notice tone="info" icon={<LoaderCircle size={15} className="spin" />}>{t('oauth.flow.waiting')}</Notice>
                 ) : state.status === 'success' ? (
-                  <div className="oauth-flow-status success" role="status">
-                    <CircleCheck size={15} aria-hidden="true" />
-                    <span>{t('oauth.flow.success')}</span>
-                  </div>
+                  <Notice tone="success" icon={<CircleCheck size={15} />}>{t('oauth.flow.success')}</Notice>
                 ) : state.status === 'error' ? (
-                  <div className="oauth-flow-status error" role="alert">
-                    <CircleAlert size={15} aria-hidden="true" />
-                    <span>{t('oauth.flow.error', { error: privacy.text(state.error || t('oauth.authFailed')) })}</span>
-                  </div>
+                  <Notice tone="error" icon={<CircleAlert size={15} />}>{t('oauth.flow.error', { error: privacy.text(state.error || t('oauth.authFailed')) })}</Notice>
                 ) : null}
                 <p className="oauth-hint">{t(provider.id === 'devin' ? 'oauth.devinHint' : provider.id === 'meta' ? 'oauth.metaHint' : 'oauth.hint')}</p>
                 {state.url ? (

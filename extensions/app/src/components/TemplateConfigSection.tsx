@@ -1,16 +1,31 @@
+import { Notice } from './Notice';
+import { Switch } from './Switch';
+import { onConfigFilesChanged } from '../services/events';
+import {
+  getExtendedCoreConfig,
+  saveExtendedCoreConfig,
+  applyTemplateChanges,
+  draftTemplateField,
+  readTemplatePath,
+  templateFieldKey,
+  templateFieldValidation,
+  templateFieldSaveValue,
+  type TemplateConfigChange,
+  type TemplateConfigDraft,
+  type TemplateConfigField,
+  type TemplateConfigGroup,
+  type TemplateText,
+} from '../services/templateConfig';
+import { restartCoreProcess } from '../services/coreLifecycle';
+import { openExternalUrl } from '../services/appSettings';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open } from '../services/platform';
 import { ExternalLink, Eye, EyeOff, RotateCcw, Save } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { templateMessages, templateText } from '../i18n/templateConfig';
-import { useCoreRuntime, type CoreStatus } from '../coreRuntime';
+import { useCoreRuntime } from '../coreRuntime';
 import { SettingsHelp } from './SettingsHelp';
-import {
-  applyTemplateChanges, draftTemplateField, readTemplatePath, templateFieldKey, templateFieldValidation, templateFieldSaveValue,
-  type TemplateConfigChange, type TemplateConfigDraft, type TemplateConfigField, type TemplateConfigGroup, type TemplateConfigSaveResult, type TemplateText,
-} from '../services/templateConfig';
+import { Select } from './Select';
 import '../styles/template-config.css';
 
 const restartHint = { zh: '需重启内核', en: 'Core restart required', ja: 'コアの再起動が必要' } satisfies TemplateText;
@@ -47,7 +62,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
   const reload = useCallback(async () => {
     const request = ++revision.current;
     try {
-      const value = await invoke<Record<string, unknown>>('get_extended_core_config');
+      const value = await getExtendedCoreConfig();
       if (mounted.current && request === revision.current) { setConfig(value); setLoadError(''); }
     } catch (error) {
       if (mounted.current && request === revision.current) setLoadError(String(error));
@@ -59,7 +74,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
     let disposed = false;
     let stop: (() => void) | undefined;
     void reload();
-    void listen('config-files-changed', () => { if (!disposed) void reload(); }).then((unlisten) => {
+    void onConfigFilesChanged(() => { if (!disposed) void reload(); }).then((unlisten) => {
       if (!disposed) stop = unlisten;
       else unlisten();
     }).catch((error) => { if (!disposed) setLoadError(String(error)); });
@@ -109,7 +124,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
     setBusy(group.id);
     setGroupErrors((previous) => ({ ...previous, [group.id]: '' }));
     try {
-      const result = await invoke<TemplateConfigSaveResult>('save_extended_core_config', { changes });
+      const result = await saveExtendedCoreConfig({ changes });
       ++revision.current;
       setConfig(result.config);
       setLoadError('');
@@ -129,7 +144,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
 
   const restart = async () => {
     setBusy('restart');
-    try { publishStatus(await invoke<CoreStatus>('restart_core_process')); setRestartNeeded(false); setLoadError(''); }
+    try { publishStatus(await restartCoreProcess()); setRestartNeeded(false); setLoadError(''); }
     catch (error) { setLoadError(String(error)); await refreshStatus(); }
     finally { setBusy(null); }
   };
@@ -149,13 +164,13 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
     const onChange = (next: unknown) => changeField(group, field, next);
     const common = { id, disabled, 'aria-invalid': invalid || undefined, 'aria-describedby': invalid ? `${id}-error` : undefined };
     if (field.type === 'custom' && field.render) return field.render({ value, onChange, disabled, id });
-    if (field.type === 'boolean') return <label className="switch-control template-config-switch"><input {...common} type="checkbox" checked={value === true} onChange={(event) => onChange(event.currentTarget.checked)} /><span className="switch-track" /></label>;
+    if (field.type === 'boolean') return <Switch {...common} checked={value === true} onChange={(event) => onChange(event.currentTarget.checked)} />;
     if (field.type === 'select') {
       const selected = field.options?.findIndex((option) => Object.is(option.value, value)) ?? -1;
-      return <select {...common} className="config-network-input" value={String(selected)} onChange={(event) => onChange(field.options?.[Number(event.currentTarget.value)]?.value)}>
+      return <Select {...common} className="config-network-input" value={String(selected)} onChange={(event) => onChange(field.options?.[Number(event.currentTarget.value)]?.value)}>
         {selected < 0 ? <option value="-1">{String(value ?? '')}</option> : null}
         {field.options?.map((option, index) => <option key={index} value={String(index)}>{templateText(option.label, locale)}</option>)}
-      </select>;
+      </Select>;
     }
     if (field.type === 'string-list' || field.type === 'json') return <textarea {...common} className="config-network-input template-config-textarea" rows={field.rows ?? (field.type === 'json' ? 6 : 3)}
       value={field.type === 'string-list' ? Array.isArray(value) ? value.join('\n') : '' : typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2)}
@@ -169,16 +184,16 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
       title={t(revealed[id] ? 'config.keys.hide' : 'config.keys.show')} aria-label={t(revealed[id] ? 'config.keys.hide' : 'config.keys.show')}>{revealed[id] ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}</button></div> : input;
     if (field.link) {
       const link = field.link;
-      return <div className="template-config-directory">{secret}<button type="button" className="secondary-button compact-button" onClick={() => void invoke('open_external_url', { url: link.url }).catch((error) => setGroupErrors((previous) => ({ ...previous, [group.id]: String(error) })))}><ExternalLink size={15} aria-hidden="true" />{templateText(link.label, locale)}</button></div>;
+      return <div className="template-config-directory">{secret}<button type="button" className="secondary-button compact-button" onClick={() => void openExternalUrl({ url: link.url }).catch((error) => setGroupErrors((previous) => ({ ...previous, [group.id]: String(error) })))}><ExternalLink size={15} aria-hidden="true" />{templateText(link.label, locale)}</button></div>;
     }
     return field.directory ? <div className="template-config-directory">{secret}<button type="button" className="secondary-button compact-button" disabled={disabled} onClick={() => void chooseDirectory(group, field)} aria-label={`${tr('chooseDirectory')}: ${templateText(field.label, locale)}`}>{tr('chooseDirectory')}</button></div> : secret;
   };
 
   const visible = groups.filter((group) => !visibleGroups || visibleGroups.includes(group.id));
   return <div className="template-config-section" hidden={visible.length === 0}>
-    {loadError ? <div className="template-config-notice template-config-error" role="alert"><span>{loadError}</span><button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void reload()}>{tr('reload')}</button></div> : null}
+    {loadError ? <Notice tone="error" icon={false} className="template-config-notice" action={<button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void reload()}>{tr('reload')}</button>}>{loadError}</Notice> : null}
     {!config && !loadError ? <p role="status">{tr('loading')}</p> : null}
-    {restartNeeded ? <div className="template-config-notice" role="status"><span>{tr('restart')}</span>{status?.running ? <button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void restart()}>{tr('restartNow')}</button> : null}</div> : null}
+    {restartNeeded ? <Notice tone="info" icon={false} className="template-config-notice" action={status?.running ? <button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void restart()}>{tr('restartNow')}</button> : undefined}>{tr('restart')}</Notice> : null}
     {groups.map((group) => {
       const dirty = group.fields.some((field) => drafts[templateFieldKey(field.path)]);
       const needsRestart = group.fields.some((field) => field.restart);
@@ -195,13 +210,13 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
           const description = [templateText(field.description, locale), field.type === 'string-list' ? tr('list') : ''].filter(Boolean).join(' ');
           const resetLabel = `${tr('default')}: ${templateText(field.label, locale)}`;
           return <div key={key} id={`template-field-${group.id}-${index}`} data-field-type={field.type} tabIndex={-1} className={`template-config-field${field.type === 'custom' || field.type === 'json' || field.type === 'string-list' ? ' template-config-field-wide' : ''}${field.type === 'boolean' ? ' template-config-toggle' : ''}${draft ? ' template-config-field-dirty' : ''}`}>
-            <div className="template-config-label">{field.type === 'custom' ? <span id={`${id}-label`}>{templateText(field.label, locale)}</span> : <label htmlFor={id}>{templateText(field.label, locale)}</label>}<div className="template-config-label-tools">{description ? <SettingsHelp label={templateText(field.label, locale)}>{description}</SettingsHelp> : null}{exists ? <button type="button" className="template-config-reset" disabled={busy !== null || !config} title={resetLabel} aria-label={resetLabel} onClick={() => changeField(group, field, null, true)}><RotateCcw size={14} aria-hidden="true" /></button> : null}</div></div>
-            {field.type === 'custom' ? <details className="template-config-custom"><summary aria-labelledby={`${id}-label ${id}-edit`} aria-describedby={validation ? `${id}-error` : undefined}><span id={`${id}-edit`}>{tr('editDetails')}</span></summary><div className="template-config-control" role="group" aria-labelledby={`${id}-label`}>{control(group, field, value, id, Boolean(validation))}</div></details> : <div className="template-config-control">{control(group, field, value, id, Boolean(validation))}</div>}
+            <div className="template-config-label">{field.type === 'custom' ? <span id={`${id}-label`}>{templateText(field.label, locale)}</span> : <label htmlFor={id}>{templateText(field.label, locale)}</label>}<div className="template-config-label-tools">{description ? <SettingsHelp label={templateText(field.label, locale)}>{description}</SettingsHelp> : null}{exists ? <button type="button" className="icon-button quiet ghost tiny-button template-config-reset" disabled={busy !== null || !config} title={resetLabel} aria-label={resetLabel} onClick={() => changeField(group, field, null, true)}><RotateCcw size={14} aria-hidden="true" /></button> : null}</div></div>
+            {field.type === 'custom' ? <details className="surface-section template-config-custom"><summary aria-labelledby={`${id}-label ${id}-edit`} aria-describedby={validation ? `${id}-error` : undefined}><span id={`${id}-edit`}>{tr('editDetails')}</span></summary><div className="template-config-control" role="group" aria-labelledby={`${id}-label`}>{control(group, field, value, id, Boolean(validation))}</div></details> : <div className="template-config-control">{control(group, field, value, id, Boolean(validation))}</div>}
             {field.link?.hint ? <small className="template-config-link-hint">{templateText(field.link.hint, locale)}</small> : null}
             {validation ? <small id={`${id}-error`} className="template-config-error" role="alert">{templateText(validation, locale)}</small> : null}
           </div>;
         })}</div>
-        {groupErrors[group.id] ? <p className="template-config-error" role="alert">{groupErrors[group.id]}</p> : null}
+        {groupErrors[group.id] ? <Notice tone="error" variant="text">{groupErrors[group.id]}</Notice> : null}
         <div className="template-config-actions"><span className={dirty ? 'template-config-action-status-dirty' : saved[group.id] ? 'template-config-action-status-saved' : undefined} role="status">{dirty ? tr('dirty') : saved[group.id] ? tr('saved') : ''}</span><div>{dirty ? <button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => discardGroup(group)}>{tr('discard')}</button> : null}<button type="button" className="primary-button compact-button" disabled={!dirty || busy !== null || !config} onClick={() => void saveGroup(group)}><Save size={15} aria-hidden="true" />{busy === group.id ? tr('saving') : tr('save')}</button></div></div>
       </section>;
     })}

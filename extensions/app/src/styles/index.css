@@ -1,5 +1,6 @@
 @import '../styles.css';
 @import './feature-pages.css';
+@import './surfaces.css';
 @import './ui-refinements.css';
 @import './responsive-shell-usage.css';
 @import './sidebar.css';
@@ -14,3 +15,4 @@
 @import './workspace-white.css';
 @import './theme-surfaces.css';
 @import './theme-backdrop.css';
+@import './theme-window-material.css';

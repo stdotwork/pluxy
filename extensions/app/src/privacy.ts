@@ -1,6 +1,6 @@
+import { getPrivacyMode, savePrivacyMode, PrivacyPreferences } from './services/privacyPreferences';
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
-import { invoke, isTauri } from '@tauri-apps/api/core';
-import { PrivacyPreferences } from './services/privacyPreferences';
+import { isTauri } from './services/platform';
 import { maskIdentifier, maskSensitiveText } from './services/privacyMask';
 import { authFileIdentities, authFileName, type AuthFileRecord } from './services/authFiles';
 
@@ -10,8 +10,8 @@ export async function initializePrivacyMode(): Promise<void> {
   if (!isTauri()) return;
   try {
     await preferences.initialize({
-      load: () => invoke<boolean | null>('get_privacy_mode'),
-      save: (enabled) => invoke('save_privacy_mode', { enabled }),
+      load: () => getPrivacyMode(),
+      save: (enabled) => savePrivacyMode({ enabled }),
     });
   } catch {
     console.error('Failed to load privacy mode preference; using browser preference');

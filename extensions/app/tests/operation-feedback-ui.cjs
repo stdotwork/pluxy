@@ -3,7 +3,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const base = process.env.FEEDBACK_TEST_BASE_URL || 'http://127.0.0.1:1421';
 (async () => {
-  const browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--no-proxy-server'] });
+  const browser = await chromium.launch({ ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}), headless: true, args: ['--no-proxy-server'] });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     page.setDefaultTimeout(10000);
@@ -67,14 +67,14 @@ const base = process.env.FEEDBACK_TEST_BASE_URL || 'http://127.0.0.1:1421';
     await button('Clear').click(); await waitNotices(0);
 
     await button('Second').click(); await waitNotices(1);
-    await button('Native dialog').click();
-    const footer = page.getByTestId('native-footer');
-    const nativeBefore = await footer.boundingBox();
-    await button('Native error').click(); await waitNotices(2);
-    assert.equal(await stack.evaluate(node => node.parentElement.matches('dialog:modal')), true, 'Notifications remain above native dialog and clickable');
-    assert.deepEqual(await footer.boundingBox(), nativeBefore, 'Native error does not move dialog actions');
+    await button('Tall dialog').click();
+    const footer = page.getByTestId('dialog-footer');
+    const dialogBefore = await footer.boundingBox();
+    await button('Dialog error').click(); await waitNotices(2);
+    assert.equal(await stack.evaluate(node => node.parentElement.matches('.app-dialog[role="dialog"][aria-modal="true"]')), true, 'Notifications move into the open modal and stay clickable');
+    assert.deepEqual(await footer.boundingBox(), dialogBefore, 'Dialog error does not move dialog actions');
     const floated = await stack.boundingBox();
-    assert.ok(floated.y + floated.height <= nativeBefore.y, 'Stack avoids dialog action buttons, allowing immediate retry');
+    assert.ok(floated.y + floated.height <= dialogBefore.y, 'Stack avoids dialog action buttons, allowing immediate retry');
     await notice.last().getByRole('button').click(); await waitNotices(1);
     await button('Close dialog').click();
     await page.waitForFunction(() => document.querySelector('.app-notice-stack')?.parentElement === document.body);
@@ -111,6 +111,65 @@ const base = process.env.FEEDBACK_TEST_BASE_URL || 'http://127.0.0.1:1421';
       assert.ok(r.x >= 0 && r.y >= 0 && r.x + r.width <= width && r.y + r.height <= 700, `${theme} ${width}: stack fits viewport`);
       assert.ok(Math.abs(width - (r.x + r.width) - 24) < 1 && Math.abs(700 - (r.y + r.height) - 24) < 1, 'Anchored at bottom right');
     }
+
+    const evaluateSurface = () => notice.evaluate(node => {
+      const style = getComputedStyle(node);
+      const probe = document.createElement('span');
+      probe.style.color = style.getPropertyValue('--notice-background');
+      node.append(probe);
+      const tint = getComputedStyle(probe).color;
+      probe.style.color = `color-mix(in srgb, ${tint} 90%, transparent)`;
+      const materialTint = getComputedStyle(probe).color;
+      probe.remove();
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d');
+      const luminance = rgb => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+        .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+      context.fillStyle = style.color; context.fillRect(0, 0, 1, 1);
+      const text = luminance([...context.getImageData(0, 0, 1, 1).data].slice(0, 3));
+      const contrasts = ['#000000', '#ffffff'].map(base => {
+        context.fillStyle = base; context.fillRect(0, 0, 1, 1);
+        context.fillStyle = style.backgroundColor; context.fillRect(0, 0, 1, 1);
+        context.fillStyle = document.documentElement.dataset.windowMaterial ? materialTint : tint;
+        context.fillRect(0, 0, 1, 1);
+        const background = luminance([...context.getImageData(0, 0, 1, 1).data].slice(0, 3));
+        return (Math.max(text, background) + 0.05) / (Math.min(text, background) + 0.05);
+      });
+      const alpha = color => color.startsWith('rgba') || color.startsWith('color(')
+        ? Number(color.match(/(?:,|\/)\s*([\d.]+)\s*\)$/)?.[1] ?? 1) : 1;
+      return { background: style.backgroundColor, image: style.backgroundImage,
+        blur: style.backdropFilter, alpha: alpha(style.backgroundColor), tint, materialTint, contrast: Math.min(...contrasts) };
+    });
+    const surfaces = [];
+    for (const theme of ['dark', 'light']) for (const material of [false, true]) for (const tone of ['Success', 'Error']) {
+      await open(`theme=${theme}${material ? '&material=vibrancy' : ''}`);
+      await button(tone).click(); await waitNotices(1);
+      const surface = await evaluateSurface();
+      const label = `${theme} ${tone} material=${material}`;
+      if (material) {
+        assert.ok(surface.alpha > 0.8 && surface.alpha < 1, `${label}: translucent overlay surface`);
+        assert.equal(surface.blur, 'blur(4px)', `${label}: overlay blur`);
+        assert.notEqual(surface.background, surface.tint, `${label}: surface is not bare tint`);
+        assert.ok(surface.image.includes(surface.materialTint), `${label}: retains tone layer`);
+      } else {
+        assert.equal(surface.alpha, 1, `${label}: floating notice is opaque`);
+        assert.ok(surface.image.includes(surface.tint), `${label}: retains original tint`);
+      }
+      assert.ok(surface.contrast >= 4.5, `${label}: readable text contrast ${surface.contrast}`);
+      surfaces.push({ theme, material, tone, ...surface });
+    }
+    for (const themeId of ['graphite-dark', 'sakura-light']) for (const tone of ['Success', 'Error']) {
+      await open(`themeId=${themeId}`);
+      await button(tone).click(); await waitNotices(1);
+      const surface = await evaluateSurface();
+      const label = `${themeId} ${tone}`;
+      assert.equal(surface.alpha, 1, `${label}: floating notice is opaque`);
+      assert.ok(surface.image.includes(surface.tint), `${label}: retains original tint`);
+      assert.ok(surface.contrast >= 4.5, `${label}: readable text contrast ${surface.contrast}`);
+      surfaces.push({ themeId, tone, ...surface });
+    }
+    console.log('Floating notice surfaces:', JSON.stringify(surfaces));
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await open('scenario=pricing');

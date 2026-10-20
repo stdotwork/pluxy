@@ -1,3 +1,5 @@
+import { checkLatestCore } from './services/coreVersions';
+import type { CoreLatest } from './services/coreVersions';
 import {
   createContext,
   useCallback,
@@ -8,13 +10,9 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useCoreRuntime } from './coreRuntime';
 
-export type CoreLatest = {
-  version: string;
-  assetName: string;
-};
+export type { CoreLatest } from './services/coreVersions';
 
 type CoreUpdateContextValue = {
   latest: CoreLatest | null;
@@ -103,7 +101,7 @@ export function requestLatestCore(force = false) {
   }
 
   const requestEpoch = ++latestRequestEpoch;
-  const request = invoke<CoreLatest>('check_latest_core')
+  const request = checkLatestCore()
     .then((result) => {
       if (requestEpoch === latestRequestEpoch) {
         cachedLatest = result;

@@ -1,5 +1,7 @@
 /* Shared surfaces for usage subpages; the overview keeps its own chart palette. */
-.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) {
+.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']),
+.usage-price-sync-dialog,
+.usage-column-dialog {
   --usage-page-text: var(--theme-text-primary, #17212f);
   --usage-page-muted: var(--theme-text-muted, #526071);
   --usage-page-border: var(--theme-border, #e4e7ec);
@@ -20,17 +22,15 @@
   color: var(--usage-page-text);
 }
 
-:root[data-theme='dark'] .usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) {
+:root[data-theme='dark'] .usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']),
+:root[data-theme='dark'] .usage-price-sync-dialog,
+:root[data-theme='dark'] .usage-column-dialog {
   --usage-page-text: var(--theme-text-primary, #f4f7fb);
   --usage-page-muted: var(--theme-text-muted, #c0cbda);
   --usage-page-border: var(--theme-border, #414d60);
 }
 
-.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) :is(
-  .usage-analysis-card, .usage-analysis-context, .usage-pricing-panel,
-  .usage-data-management-panel, .usage-data-management-action,
-  .usage-data-management-result > div, .usage-price-editor, .usage-price-sync-dialog
-) {
+.usage-price-sync-dialog {
   background: var(--bg-card);
   border-color: var(--usage-page-border);
   color: var(--usage-page-text);
@@ -73,13 +73,17 @@
 .usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) :is(
   input:not([type='checkbox']):not([type='radio']), select,
   .usage-price-row-actions button, .secondary-button
-) {
+),
+:root .app-dialog.usage-price-sync-dialog :is(input:not([type='checkbox']):not([type='radio']), .secondary-button),
+:root .app-dialog.usage-column-dialog :is(input:not([type='checkbox']):not([type='radio']), select, .secondary-button) {
   background: var(--bg-card);
   color: var(--usage-page-text);
   border-color: var(--usage-page-border);
 }
 
-.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) input::placeholder {
+.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) input::placeholder,
+.usage-price-sync-dialog input::placeholder,
+.usage-column-dialog input::placeholder {
   color: var(--usage-page-muted);
   opacity: 1;
 }

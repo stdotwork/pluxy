@@ -4,6 +4,7 @@ import { useI18n } from '../i18n';
 import { templateText } from '../i18n/templateConfig';
 import { configRecord, defaultStructuredValue, type ConfigShape, type ConfigText } from '../services/structuredConfig';
 import { SettingsHelp } from './SettingsHelp';
+import { Select } from './Select';
 import './StructuredConfigEditor.css';
 
 export function useConfigText() {
@@ -38,10 +39,10 @@ export function StructuredConfigEditor({ shape, value, onChange, disabled = fals
       map: { zh: '对象', en: 'Object', ja: 'オブジェクト' },
     };
     return <div className="structured-any">
-      <select className="select-input" aria-label={`${label} ${tx({ zh: '类型', en: 'type', ja: 'の型' })}`} value={current} disabled={disabled}
+      <Select className="select-input" aria-label={`${label} ${tx({ zh: '类型', en: 'type', ja: 'の型' })}`} value={current} disabled={disabled}
         onChange={event => onChange(({ string: '', number: 0, boolean: false, null: null, array: [], map: {} } as Record<string, unknown>)[event.currentTarget.value])}>
         {Object.entries(types).map(([type, text]) => <option key={type} value={type}>{tx(text)}</option>)}
-      </select>
+      </Select>
       {current !== 'null' && <StructuredConfigEditor shape={{ type: current as ConfigShape['type'], item: { type: 'any' }, label: shape.label, integer: false }} value={value} onChange={onChange} disabled={disabled} id={id} />}
     </div>;
   }
@@ -55,7 +56,7 @@ export function StructuredConfigEditor({ shape, value, onChange, disabled = fals
       onChange(next);
     };
     return <div className="structured-list">
-      {rows.map((row, index) => <div className="structured-list-item" key={index}>
+      {rows.map((row, index) => <div className="surface-card structured-list-item" key={index}>
         <div className="structured-list-toolbar"><span>{index + 1}</span><div>
           <button type="button" className="icon-button quiet" disabled={disabled || index === 0} onClick={() => move(index, -1)} aria-label={tx({ zh: '上移', en: 'Move up', ja: '上へ' })}><ArrowUp size={14} /></button>
           <button type="button" className="icon-button quiet" disabled={disabled || index === rows.length - 1} onClick={() => move(index, 1)} aria-label={tx({ zh: '下移', en: 'Move down', ja: '下へ' })}><ArrowDown size={14} /></button>
@@ -88,7 +89,7 @@ export function StructuredConfigEditor({ shape, value, onChange, disabled = fals
     const record = configRecord(value) ? value : {};
     const item = shape.item ?? { type: 'any' };
     return <div className="structured-map">
-      {Object.entries(record).map(([key, entry]) => <div className="structured-map-item" key={key}>
+      {Object.entries(record).map(([key, entry]) => <div className="surface-card structured-map-item" key={key}>
         <div className="structured-map-key"><strong>{key}</strong><button type="button" className="icon-button quiet" disabled={disabled} aria-label={`${removeText} ${key}`} onClick={() => {
           const next = { ...record }; delete next[key]; onChange(next);
         }}><Trash2 size={14} /></button></div>
@@ -106,10 +107,10 @@ export function StructuredConfigEditor({ shape, value, onChange, disabled = fals
   }
   if (shape.type === 'boolean' || shape.type === 'select') {
     const options = shape.type === 'boolean' ? [true, false] : shape.options ?? [];
-    return <select id={id} className="select-input" aria-label={label} disabled={disabled} value={String(value)} onChange={event => onChange(options.find(option => String(option) === event.currentTarget.value))}>
+    return <Select id={id} className="select-input" aria-label={label} disabled={disabled} value={String(value)} onChange={event => onChange(options.find(option => String(option) === event.currentTarget.value))}>
       {!options.some(option => option === value) && <option value={String(value)}>{String(value ?? '')}</option>}
       {options.map(option => <option value={String(option)} key={String(option)}>{option === true ? tx({ zh: '启用', en: 'Enabled', ja: '有効' }) : option === false ? tx({ zh: '禁用', en: 'Disabled', ja: '無効' }) : String(option)}</option>)}
-    </select>;
+    </Select>;
   }
   return <input id={id} aria-label={label} className="text-input" type={shape.secret ? 'password' : shape.type === 'number' ? 'number' : 'text'} autoComplete="off" spellCheck={false} disabled={disabled}
     min={shape.min} max={shape.max} step={shape.type === 'number' ? shape.integer === false ? 'any' : 1 : undefined} value={typeof value === 'string' || typeof value === 'number' ? value : ''}

@@ -60,15 +60,7 @@ body, html, #root {
 
 /* 3. Refined Panels & Cards on Pure White */
 .panel {
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-card);
-  box-shadow: var(--ui-panel-shadow);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.panel:hover {
-  border-color: var(--border-primary);
 }
 
 /* 5. Home Page Layout & Quick Navigation */
@@ -157,20 +149,6 @@ body, html, #root {
 .client-api-panel .client-api-meta {
   white-space: nowrap;
   flex-shrink: 0;
-}
-
-.client-api-card {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 12px 14px;
-  transition: all 0.15s ease;
-}
-
-.client-api-card:hover {
-  background: var(--theme-hover-background, #ffffff);
-  border-color: var(--border-primary);
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
 }
 
 .client-api-card-heading {
@@ -507,46 +485,9 @@ button.oauth-account-count:focus-visible {
   color: var(--text-tertiary);
 }
 
-.oauth-flow-status {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  font-size: var(--font-size-meta);
-  line-height: 1.5;
-}
-
-.oauth-flow-status > svg {
-  flex: none;
-  margin-top: 2px;
-}
-
-.oauth-flow-status.waiting {
-  border-color: color-mix(in srgb, var(--primary-color) 30%, var(--border-color));
-  background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-card));
-  color: var(--primary-color);
-}
-
-.oauth-flow-status.success {
-  border-color: var(--success-badge-border);
-  background: var(--success-badge-bg);
-  color: var(--success-badge-text);
-}
-
-.oauth-flow-status.error {
-  border-color: color-mix(in srgb, var(--danger-color) 35%, var(--border-color));
-  background: color-mix(in srgb, var(--danger-color) 8%, var(--bg-card));
-  color: var(--danger-color);
-  overflow-wrap: anywhere;
-}
-
 .oauth-card.is-waiting {
   border-color: color-mix(in srgb, var(--primary-color) 45%, var(--border-color));
 }
-
-
 
 .oauth-grid {
   display: grid;
@@ -558,10 +499,6 @@ button.oauth-account-count:focus-visible {
   display: flex;
   flex-direction: column;
   padding: 22px;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: var(--bg-card);
-  box-shadow: var(--ui-panel-shadow);
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
@@ -649,8 +586,7 @@ button.oauth-account-count:focus-visible {
   align-items: center;
 }
 
-.usage-records-page .usage-collector-state,
-.usage-records-page .usage-refresh-btn {
+.usage-records-page .usage-collector-state {
   height: 34px;
   border: 0;
   border-radius: 999px;
@@ -670,8 +606,6 @@ button.oauth-account-count:focus-visible {
   color: var(--text-secondary);
 }
 
-.usage-records-page .usage-trend-panel,
-.usage-records-page .usage-health-panel,
 .usage-records-page .usage-events-panel {
   border: 0;
   border-radius: 18px;
@@ -683,10 +617,6 @@ button.oauth-account-count:focus-visible {
   display: grid;
   gap: 8px;
   padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
 }
 
 .usage-records-page .usage-filter-row,
@@ -781,13 +711,11 @@ button.oauth-account-count:focus-visible {
   gap: 1px;
   overflow: hidden;
   padding: 0;
-  border-radius: 18px;
-  background: var(--theme-border, #d8d8de);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 28px rgba(0, 0, 0, 0.045);
 }
 
 .usage-stat-card {
   --usage-tone: var(--theme-text-primary, #1d1d1f);
+  outline: 1px solid var(--border-color);
   position: relative;
   justify-content: flex-start;
   gap: 8px;
@@ -955,6 +883,27 @@ button.oauth-account-count:focus-visible {
   color: #ffffff;
 }
 
+:root :is(.secondary-button, .danger-button, .icon-button).ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: none;
+}
+
+:root :is(.secondary-button, .danger-button, .icon-button).ghost:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+:root :is(.secondary-button, .danger-button, .icon-button).ghost.danger {
+  color: var(--error-color);
+}
+
+:root :is(.secondary-button, .danger-button, .icon-button).ghost.danger:hover:not(:disabled) {
+  color: var(--error-color);
+}
+
 /* Quota Progress Bar Polish */
 .real-quota-track {
   height: 8px;
@@ -1027,13 +976,7 @@ button.oauth-account-count:focus-visible {
   color: var(--theme-text-primary, #f5f5f7);
 }
 
-:root[data-theme='dark'] .usage-records-page .panel.usage-filter-panel {
-  background: transparent;
-  box-shadow: none;
-}
-
-:root[data-theme='dark'] .usage-records-page .usage-collector-state,
-:root[data-theme='dark'] .usage-records-page .usage-refresh-btn {
+:root[data-theme='dark'] .usage-records-page .usage-collector-state {
   background: var(--theme-surface, #2c2c2e);
   color: var(--theme-text-primary, #f5f5f7);
 }
@@ -1045,17 +988,10 @@ button.oauth-account-count:focus-visible {
   color: var(--text-primary);
 }
 
-:root[data-theme='dark'] .usage-records-page .usage-trend-panel,
-:root[data-theme='dark'] .usage-records-page .usage-health-panel,
 :root[data-theme='dark'] .usage-records-page .usage-events-panel,
 :root[data-theme='dark'] .usage-stat-card {
   background: var(--theme-surface, #1c1c1e);
   border-color: transparent;
-  box-shadow: none;
-}
-
-:root[data-theme='dark'] .usage-records-page .usage-stat-grid {
-  background: var(--theme-border, #3a3a3c);
   box-shadow: none;
 }
 
@@ -1068,12 +1004,8 @@ button.oauth-account-count:focus-visible {
 }
 
 :root[data-theme='dark'] .usage-stat-card,
-:root[data-theme='dark'] .usage-filter-panel,
-:root[data-theme='dark'] .usage-trend-panel,
-:root[data-theme='dark'] .usage-health-panel,
 :root[data-theme='dark'] .usage-events-panel,
-:root[data-theme='dark'] .usage-collector-state,
-:root[data-theme='dark'] .usage-refresh-btn {
+:root[data-theme='dark'] .usage-collector-state {
   background: var(--bg-card);
   border-color: var(--border-color);
   box-shadow: none;

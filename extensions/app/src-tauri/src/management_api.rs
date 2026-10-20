@@ -293,7 +293,7 @@ pub(crate) fn open_core_logs_directory(
     open_directory_in_file_manager(&logs_dir)
 }
 
-fn open_directory_in_file_manager(path: &Path) -> Result<(), String> {
+pub(crate) fn open_directory_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = Command::new(windows_explorer_executable());
     #[cfg(target_os = "macos")]

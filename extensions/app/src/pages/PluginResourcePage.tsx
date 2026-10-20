@@ -1,10 +1,19 @@
+import { Notice } from '../components/Notice';
+import {
+  hidePluginWebview,
+  showPluginWebview,
+  setPluginWebviewBounds,
+  EMPTY_BOUNDS,
+  effectiveBounds,
+  newWebviewToken,
+  roundBounds,
+  type WebviewBounds,
+} from '../services/pluginWebview';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useI18n } from '../i18n';
 import { pluginText } from '../i18n/plugins';
 import { useOverlayOpen } from '../components/useOverlayOpen';
 import type { PluginNavEntry } from '../services/pluginNavigation';
-import { EMPTY_BOUNDS, effectiveBounds, newWebviewToken, roundBounds, type WebviewBounds } from '../services/pluginWebview';
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -52,7 +61,7 @@ export function PluginResourcePage({ entry, reloadToken }: { entry: PluginNavEnt
   }, [measure]);
 
   useEffect(() => () => {
-    void invoke('hide_plugin_webview', { token: token.current }).catch(() => undefined);
+    void hidePluginWebview({ token: token.current }).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -64,7 +73,7 @@ export function PluginResourcePage({ entry, reloadToken }: { entry: PluginNavEnt
     setReady(false);
     setError('');
     const labels = { back: pt('pageBack'), reload: pt('pageReload'), openExternal: pt('openExternal'), move: pt('pageMove') };
-    invoke('show_plugin_webview', { pluginId: entry.pluginID, menuIndex: entry.menuIndex, bounds: wantedRef.current, labels, reload, token: mine })
+    showPluginWebview({ pluginId: entry.pluginID, menuIndex: entry.menuIndex, bounds: wantedRef.current, labels, reload, token: mine })
       .then(() => {
         if (!cancelled) setReady(true);
       })
@@ -75,13 +84,13 @@ export function PluginResourcePage({ entry, reloadToken }: { entry: PluginNavEnt
   }, [entry.pluginID, entry.menuIndex, reloadToken, attempt, locale]);
 
   useEffect(() => {
-    void invoke('set_plugin_webview_bounds', { bounds: wanted, token: token.current }).catch((reason) => setError(message(reason)));
+    void setPluginWebviewBounds({ bounds: wanted, token: token.current }).catch((reason) => setError(message(reason)));
   }, [ready, wanted]);
 
   return <section className="page plugin-resource-page">
     <h1 className="sr-only">{entry.label}</h1>
     <div ref={host} className="plugin-resource-host">
-      {error ? <div className="plugin-error plugin-banner" role="alert"><span>{error}</span><button type="button" className="secondary-button" onClick={() => setAttempt((value) => value + 1)}>{pt('retry')}</button></div>
+      {error ? <Notice tone="error" icon={false} className="plugin-error plugin-banner" action={<button type="button" className="secondary-button" onClick={() => setAttempt((value) => value + 1)}>{pt('retry')}</button>}>{error}</Notice>
         : !ready && <p className="plugin-resource-status" role="status">{t('common.loading')}</p>}
     </div>
   </section>;

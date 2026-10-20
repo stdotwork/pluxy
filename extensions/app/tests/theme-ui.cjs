@@ -17,7 +17,7 @@ const assert = require('node:assert/strict');
     const theme = expected => page.waitForFunction(expected => document.documentElement.dataset.theme === expected, expected);
     const trigger = () => page.locator('.theme-selector-trigger:visible');
     const menu = () => page.locator('.theme-selector-menu');
-    const mode = id => page.locator(`.theme-selector-mode[data-mode="${id}"]`);
+    const mode = id => page.locator(`.theme-selector-mode[data-value="${id}"]`);
     const card = id => page.locator(`.theme-selector-card[data-theme-id="${id}"]`);
     const openMenu = async () => {
       if (await trigger().getAttribute('aria-expanded') !== 'true') await trigger().click();
@@ -29,14 +29,14 @@ const assert = require('node:assert/strict');
       else {
         await card(id).click();
         const appearance = id.includes('dark') ? 'dark' : 'light';
-        if (await mode(appearance).getAttribute('aria-pressed') !== 'true') await mode(appearance).click();
+        if (await mode(appearance).getAttribute('aria-checked') !== 'true') await mode(appearance).click();
       }
       assert.equal(await trigger().getAttribute('aria-expanded'), 'true', 'selection keeps the theme picker open');
       await page.keyboard.press('Escape');
     };
     const assign = async id => {
       await openMenu();
-      assert.equal(await mode('system').getAttribute('aria-pressed'), 'true', 'assignment happens while following the system');
+      assert.equal(await mode('system').getAttribute('aria-checked'), 'true', 'assignment happens while following the system');
       await card(id).click();
       assert.equal(await card(id).getAttribute('aria-pressed'), 'true');
       await page.keyboard.press('Escape');
@@ -66,7 +66,7 @@ const assert = require('node:assert/strict');
       await page.waitForFunction(() => window.themeFixture.appearance === 'dark');
       await openMenu(); await card('warm-sand-light').click();
       assert.equal(await page.locator('html').getAttribute('data-theme-id'), 'warm-sand-light', 'picking a theme of the other appearance switches to it');
-      assert.equal(await mode('light').getAttribute('aria-pressed'), 'true');
+      assert.equal(await mode('light').getAttribute('aria-checked'), 'true');
       await page.keyboard.press('Escape');
       await select('system'); await saved('system');
       await assign('sakura-light'); await assign('midnight-dark');
@@ -77,13 +77,13 @@ const assert = require('node:assert/strict');
       assert.equal(await page.locator('html').getAttribute('data-theme-id'), 'midnight-dark');
       assert.deepEqual(selection, { version: 1, selectedId: 'system', lastLightId: 'sakura-light', lastDarkId: 'midnight-dark' });
       await openMenu();
-      assert.equal(await mode('system').getAttribute('aria-pressed'), 'true');
+      assert.equal(await mode('system').getAttribute('aria-checked'), 'true');
       await page.keyboard.press('Escape');
       await page.locator('.sidebar-easy-entry').click();
       await select('light'); await theme('light'); await saved('light');
       await page.locator('.simple-mode-exit-btn').click();
       await openMenu();
-      assert.equal(await mode('light').getAttribute('aria-pressed'), 'true');
+      assert.equal(await mode('light').getAttribute('aria-checked'), 'true');
       assert.equal(await card('light').getAttribute('aria-pressed'), 'true');
       await page.keyboard.press('Escape');
       const writes = await page.evaluate(() => window.themeFixture.calls.filter(call => call.cmd === 'plugin:window|set_theme').length);
@@ -149,6 +149,109 @@ const assert = require('node:assert/strict');
     await mode('light').click(); await theme('light');
     assert.equal(await page.locator('html').getAttribute('data-theme-id'), 'warm-sand-light');
     await page.keyboard.press('Escape');
+
+    await page.addInitScript(() => {
+      window.themeIds = [];
+      new MutationObserver(() => window.themeIds.push(document.documentElement.dataset.themeId))
+        .observe(document, { attributes: true, subtree: true, attributeFilter: ['data-theme-id'] });
+    });
+    selection = { version: 1, selectedId: 'harbor-dark' };
+    await open('platform=macos&custom'); await nativeReady(); await theme('dark');
+    assert.deepEqual([...new Set(await page.evaluate(() => window.themeIds))], ['harbor-dark'], 'custom themes load before the first theme is applied');
+    await openMenu();
+    assert.equal(await card('harbor-dark').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('.theme-selector-group[data-appearance="dark"] .theme-selector-card').last().getAttribute('data-theme-id'), 'harbor-dark');
+    assert.equal(await card('harbor-dark').innerText(), '港湾');
+    const customNotice = () => page.locator('.theme-selector-custom-notice');
+    for (const name of ['b-broken.json', 'c-duplicate.json', 'd-extra.json', 'e-large.json']) assert.match(await customNotice().innerText(), new RegExp(name.replace('.', '\\.')));
+    assert.doesNotMatch(await customNotice().innerText(), /a-harbor/);
+    assert.match(await customNotice().innerText(), /另有 3 个主题文件超出/);
+    await page.locator('[data-action="open-themes"]').click();
+    await page.waitForFunction(() => window.themeFixture.calls.some(call => call.cmd === 'open_custom_themes_directory'));
+    await page.evaluate(() => window.themeFixture.setCustomThemes([], true));
+    await page.locator('[data-action="reload-themes"]').click();
+    await page.waitForFunction(() => /无法读取自定义主题/.test(document.querySelector('.theme-selector-custom-notice')?.textContent ?? ''));
+    assert.equal(await card('harbor-dark').count(), 1, 'a failed reload keeps the loaded themes');
+    await page.evaluate(() => window.themeFixture.setCustomThemes([]));
+    await page.locator('[data-action="reload-themes"]').click();
+    await card('harbor-dark').waitFor({ state: 'detached' });
+    assert.equal(await customNotice().count(), 0);
+    assert.match(await trigger().getAttribute('aria-label'), /主题不可用/);
+    assert.equal(await page.locator('html').getAttribute('data-theme-id'), 'light');
+    await page.keyboard.press('Escape');
+    await open('platform=macos&open-error'); await nativeReady();
+    await openMenu();
+    await page.locator('[data-action="open-themes"]').click();
+    await page.waitForFunction(() => /无法打开主题目录/.test(document.querySelector('.theme-selector-custom-notice')?.textContent ?? ''));
+    await page.keyboard.press('Escape');
+
+    const nativeLog = () => page.evaluate(() => window.themeFixture.calls
+      .filter(call => call.cmd === 'set_window_material' || call.cmd.includes('background_color'))
+      .map(call => call.cmd === 'set_window_material' ? `material:${call.args.material}:${call.args.appearance}` : `paint:${call.args.value}`));
+    const alpha = selector => page.locator(selector).first().evaluate(element => {
+      const color = getComputedStyle(element).backgroundColor;
+      return color.startsWith('rgba') || color.includes('/') ? Number(color.match(/([\d.]+)\)$/)[1]) : 1;
+    });
+    for (const [platform, material] of [['windows', 'mica'], ['macos', 'liquid-glass']]) {
+      console.log(`Checking native window material: ${material}`);
+      selection = { version: 1, selectedId: 'glass-dark' };
+      await open(`platform=${platform}&glass&material=${material}`); await nativeReady(); await theme('dark');
+      await page.waitForFunction(material => document.documentElement.dataset.windowMaterial === material, material);
+      let log = await nativeLog();
+      assert.equal(log[0], `material:${material}:dark`, 'the material is applied before the page turns transparent');
+      assert.deepEqual([...new Set(log.filter(entry => entry.startsWith('paint:')))], ['paint:#00000000']);
+      assert.equal(await alpha('html'), 0);
+      assert.equal(await alpha('body'), 0);
+      assert.ok(await alpha('.sidebar') < 1 && await alpha('.workspace') < 1);
+      const applied = log.length;
+      await select('dark'); await saved('dark');
+      await page.waitForFunction(() => document.documentElement.dataset.windowMaterial === undefined);
+      await page.waitForFunction(() => window.themeFixture.calls.some(call => call.cmd === 'set_window_material' && call.args.material === null));
+      log = (await nativeLog()).slice(applied);
+      const cleared = log.indexOf('material:null:dark');
+      assert.ok(cleared > 0 && log.slice(0, cleared).some(entry => entry.startsWith('paint:#') && entry !== 'paint:#00000000'), 'the window is painted opaque before the material is cleared');
+      assert.ok(!log.includes('paint:#00000000'));
+      assert.equal(await alpha('html'), 1);
+      assert.equal(await alpha('.sidebar'), 1);
+    }
+    console.log('Checking failed window material');
+    selection = { version: 1, selectedId: 'glass-dark' };
+    await open('platform=windows&glass&material=mica&material-error'); await nativeReady(); await theme('dark');
+    await page.waitForFunction(() => window.themeFixture.calls.some(call => call.cmd === 'set_window_material'));
+    await page.waitForFunction(() => document.documentElement.dataset.windowMaterial === undefined);
+    await page.waitForFunction(() => window.themeFixture.calls.some(call => call.cmd.includes('background_color')
+      && call.args.value === '#0E1A1F'));
+    assert.ok(!(await nativeLog()).includes('paint:#00000000'), 'a failed material never turns the window transparent');
+    assert.equal(await alpha('html'), 1);
+    assert.equal(await alpha('.sidebar'), 1);
+    selection = { version: 1, selectedId: 'glass-dark' };
+    await open('platform=windows&glass&material=mica&material-error&material-delay=2000'); await theme('dark');
+    await page.waitForFunction(() => window.themeFixture.calls.some(call => call.cmd === 'set_window_material'));
+    await select('dark'); await saved('dark');
+    await page.waitForFunction(() => window.themeFixture.calls.some(call => call.cmd.includes('background_color')));
+    await page.waitForTimeout(500);
+    assert.equal(await page.locator('html').getAttribute('data-theme-id'), 'dark', 'a late material failure keeps the newer selection');
+    assert.equal(await page.locator('html').getAttribute('data-window-material'), null);
+    assert.ok(!(await nativeLog()).includes('paint:#00000000'));
+    for (const platform of ['linux', 'macos']) {
+      console.log(`Checking unsupported window material: ${platform}`);
+      selection = { version: 1, selectedId: 'glass-dark' };
+      await open(`platform=${platform}&glass`); await nativeReady(); await theme('dark');
+      await page.waitForFunction(() => document.documentElement.dataset.themeId === 'glass-dark');
+      assert.equal(await page.locator('html').getAttribute('data-window-material'), null);
+      const log = await nativeLog();
+      assert.ok(log.length > 0 && log.every(entry => entry === 'paint:#0E1A1F'), 'unsupported systems keep the solid window');
+      assert.equal(await alpha('html'), 1);
+      assert.equal(await alpha('.sidebar'), 1);
+    }
+    selection = null;
+    for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja']) {
+      await open(`platform=windows&locale=${locale}`); await nativeReady();
+      await openMenu();
+      const clipped = await page.locator('.theme-selector-actions button').evaluateAll(buttons => buttons.filter(button => button.scrollWidth > button.clientWidth).map(button => button.textContent));
+      assert.deepEqual(clipped, [], `${locale}: custom theme actions must not be truncated`);
+      await page.keyboard.press('Escape');
+    }
 
     selection = null;
     for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja']) for (const width of [1440, 1100, 900, 640]) {

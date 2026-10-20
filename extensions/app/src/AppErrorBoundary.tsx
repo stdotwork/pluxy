@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { useI18n } from './i18n';
+import { EmptyState } from './components/EmptyState';
 
 type Props = { children: ReactNode };
 type State = { error: Error | null };
@@ -25,13 +26,13 @@ function AppErrorFallback({ error }: { error: Error }) {
   const { t } = useI18n();
   return (
     <main className="app-error-boundary">
-      <section className="empty-state">
-        <strong>{t('error.render.title')}</strong>
-        <span>{error.message || t('error.unknown')}</span>
+      <EmptyState variant="box" title={t('error.render.title')} action={
         <button type="button" className="primary-button" onClick={() => window.location.reload()}>
           {t('error.reload')}
         </button>
-      </section>
+      }>
+        {error.message || t('error.unknown')}
+      </EmptyState>
     </main>
   );
 }

@@ -1,6 +1,5 @@
+import { getPluginSupport, pluginsApi } from './services/plugins';
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { pluginsApi } from './services/plugins';
 import { collectPluginResourceEntries, PLUGIN_RESOURCES_REFRESH_EVENT } from './services/pluginResources';
 import {
   readCachedPluginNavEntries,
@@ -28,7 +27,7 @@ export function usePluginNavEntries(coreReady: boolean) {
     let cancelled = false;
     void (async () => {
       try {
-        const supported = await invoke<boolean>('get_plugin_support');
+        const supported = await getPluginSupport();
         const data = supported ? await pluginsApi.list() : null;
         if (cancelled) return;
         const next = data?.pluginsEnabled ? collectPluginResourceEntries(data.plugins).map(toPluginNavEntry) : [];
