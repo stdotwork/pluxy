@@ -3128,7 +3128,17 @@
 }
 .app-notice-entry .action-feedback.inline-notice {
   margin: 0;
+  background: linear-gradient(var(--notice-background), var(--notice-background)), var(--theme-overlay-surface);
   box-shadow: 0 4px 16px rgba(45, 42, 38, 0.18);
+}
+
+:root[data-theme='dark'] .app-notice-entry .action-feedback.inline-notice.error {
+  color: color-mix(in srgb, var(--notice-color), var(--text-primary));
+}
+
+:root[data-window-material] .app-notice-entry .action-feedback.inline-notice {
+  background: linear-gradient(color-mix(in srgb, var(--notice-background) 90%, transparent), color-mix(in srgb, var(--notice-background) 90%, transparent)), color-mix(in srgb, var(--theme-overlay-surface) 90%, transparent);
+  backdrop-filter: blur(4px);
 }
 
 .agent-model-status {

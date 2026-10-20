@@ -8,12 +8,23 @@ import { AgentConfigurationFeedback } from '../../src/pages/AgentControls';
 import { useConfirmation } from '../../src/components/ConfirmationDialog';
 import { Dialog } from '../../src/components/Dialog';
 import { QuotaActionFeedback } from '../../src/components/QuotaActionFeedback';
+import { themeRegistry } from '../../src/themes/registry';
+import { createThemeApplicator } from '../../src/themes/applyTheme';
+import type { PlatformWindowMaterial } from '../../src/themes/types';
 import '../../src/styles/index.css';
 
 const params = new URLSearchParams(location.search);
 localStorage.setItem('easy-cli-proxy-api.locale', params.get('locale') ?? 'zh-CN');
 localStorage.setItem('cpa-gui.usage-records-tab.v1', 'pricing');
-document.documentElement.dataset.theme = params.get('theme') ?? 'light';
+const themeId = params.get('themeId');
+if (themeId) {
+  const theme = themeRegistry.get(themeId);
+  const material = params.get('material') as PlatformWindowMaterial | null;
+  if (theme) createThemeApplicator(document, () => material)(theme);
+} else {
+  document.documentElement.dataset.theme = params.get('theme') ?? 'light';
+  if (params.get('material')) document.documentElement.dataset.windowMaterial = params.get('material')!;
+}
 const fixture = window as typeof window & { feedbackFixture: { failSync: boolean } };
 fixture.feedbackFixture = { failSync: false };
 mockIPC(async (cmd) => {
