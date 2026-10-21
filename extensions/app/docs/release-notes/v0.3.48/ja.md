@@ -2,6 +2,7 @@
 
 ## 修正
 
+- 詳細設定からログフォルダーを開く際に、スタックオーバーフローエラー（`Maximum call stack size exceeded`）が発生する問題を修正しました。
 - Linux でマウスを重ねた後に一部の内容が白くなったり透明になったりする再描画の問題に対応するため、メインウィンドウを不透明に戻しました。AMD / KDE と NVIDIA / Hyprland で報告された事象が対象です。Windows と macOS のネイティブな半透明テーマは引き続き利用できます。[#491](https://github.com/router-for-me/EasyCLIProxyAPI/issues/491)
 
 ## 改善

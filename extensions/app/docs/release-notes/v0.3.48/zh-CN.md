@@ -2,6 +2,7 @@
 
 ## 修复
 
+- 修复在高级功能中打开日志文件夹时出现堆栈溢出错误（`Maximum call stack size exceeded`）的问题。
 - 针对 Linux 上鼠标悬停后部分内容白屏或透明的重绘问题，恢复主窗口的不透明模式，覆盖 AMD / KDE 和 NVIDIA / Hyprland 等反馈场景。Windows 和 macOS 的原生半透明主题支持不受影响。[#491](https://github.com/router-for-me/EasyCLIProxyAPI/issues/491)
 
 ## 优化

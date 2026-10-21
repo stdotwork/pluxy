@@ -2,6 +2,7 @@
 
 ## 修復
 
+- 修復在進階功能中開啟日誌資料夾時出現堆疊溢位錯誤（`Maximum call stack size exceeded`）的問題。
 - 針對 Linux 上滑鼠移入後部分內容變成白畫面或透明的重繪問題，恢復主視窗的不透明模式，涵蓋 AMD / KDE 與 NVIDIA / Hyprland 等回報情境。Windows 與 macOS 的原生半透明主題支援不受影響。[#491](https://github.com/router-for-me/EasyCLIProxyAPI/issues/491)
 
 ## 改善

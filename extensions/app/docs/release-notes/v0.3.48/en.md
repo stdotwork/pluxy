@@ -2,6 +2,7 @@
 
 ## Fixed
 
+- Fixed a stack overflow error (`Maximum call stack size exceeded`) when opening the log folder from Advanced settings.
 - Restored an opaque main window on Linux to address partial blank or transparent content after hovering, as reported on AMD / KDE and NVIDIA / Hyprland. Native translucent themes on Windows and macOS remain supported. [#491](https://github.com/router-for-me/EasyCLIProxyAPI/issues/491)
 
 ## Improved
