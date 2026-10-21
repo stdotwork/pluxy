@@ -1,3 +1,4 @@
+import { pollWhileActive } from '../services/windowActivity';
 import { useEffect, useState } from 'react';
 import { loadHomeOverview, type HomeOverviewSnapshot } from '../services/homeOverview';
 
@@ -29,11 +30,9 @@ export function useHomeOverview(coreReady: boolean, contextKey: string) {
         if (active) setLoading(false);
       }
     };
-    void load(true);
-    const timer = window.setInterval(() => {
-      if (!document.hidden) void load();
-    }, 60_000);
-    return () => { active = false; window.clearInterval(timer); };
+    setLoading(true);
+    const stopPolling = pollWhileActive(() => { void load(); }, 60_000);
+    return () => { active = false; stopPolling(); };
   }, [coreReady, scope, revision]);
 
   return {

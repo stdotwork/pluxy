@@ -1,3 +1,4 @@
+import { pollWhileActive, windowActivity } from '../services/windowActivity';
 import { Notice } from '../components/Notice';
 import { EmptyState } from '../components/EmptyState';
 import { Checkbox } from '../components/Checkbox';
@@ -207,7 +208,7 @@ export function UsageRecordsPage() {
   const optionsLoadedAtRef = useRef(0);
   const requestIdRef = useRef(0);
   const schedulerRef = useRef<ReturnType<typeof createRefreshScheduler> | null>(null);
-  if (!schedulerRef.current) schedulerRef.current = createRefreshScheduler(250);
+  if (!schedulerRef.current) schedulerRef.current = createRefreshScheduler(1_000);
 
   useEffect(() => {
     try {
@@ -349,7 +350,6 @@ export function UsageRecordsPage() {
   );
 
   useEffect(() => {
-    void loadData();
     return () => {
       ++requestIdRef.current;
       schedulerRef.current?.cancelPending();
@@ -358,12 +358,14 @@ export function UsageRecordsPage() {
 
   useEffect(() => {
     let disposed = false;
+    let initial = true;
     let unlisten: (() => void) | null = null;
     const refresh = () => {
-      // WebView2 may classify an unfocused or occluded window on another monitor
-      // as hidden. Keep usage refreshes independent of Page Visibility so both
-      // record events and the fallback poll continue to update the current view.
-      if (!disposed) void loadData(true, true);
+      // #493: coalesce record events only while the native window is visible.
+      if (!disposed && windowActivity.active()) {
+        void loadData(!initial, false);
+        initial = false;
+      }
     };
     onUsageRecordsUpdated(refresh)
       .then((stop) => {
@@ -371,18 +373,11 @@ export function UsageRecordsPage() {
         else unlisten = stop;
       })
       .catch(() => {});
-    const timer = window.setInterval(refresh, 1_000);
-    const refreshWhenVisible = () => {
-      if (!document.hidden) refresh();
-    };
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', refreshWhenVisible);
+    const stopPolling = pollWhileActive(refresh, 10_000, () => schedulerRef.current?.cancelPending());
     return () => {
       disposed = true;
       unlisten?.();
-      window.clearInterval(timer);
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      stopPolling();
     };
   }, [loadData]);
 

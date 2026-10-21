@@ -3066,13 +3066,11 @@ pub(crate) fn configure_initial_main_window(
     };
 
     if start_hidden {
-        return window
-            .hide()
+        return crate::window_activity::hide(&window)
             .map_err(|error| format!("Failed to hide main window during silent startup: {error}"));
     }
 
-    window
-        .show()
+    crate::window_activity::show(&window)
         .map_err(|error| format!("Failed to show main window: {error}"))?;
     if window.is_minimized().unwrap_or(false) {
         window

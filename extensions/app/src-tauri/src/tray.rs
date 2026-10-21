@@ -35,7 +35,7 @@ pub(crate) fn show_main_window_on_main_thread(app_handle: &tauri::AppHandle) {
         return;
     };
     set_macos_dock_visible(app_handle, true);
-    if let Err(error) = window.show() {
+    if let Err(error) = crate::window_activity::show(&window) {
         eprintln!("Failed to show the main window: {error}");
         set_macos_dock_visible(app_handle, false);
         return;
@@ -409,7 +409,7 @@ pub(crate) fn show_windows_main_window(app_handle: &tauri::AppHandle) {
     let Some(window) = main_window(app_handle) else {
         return;
     };
-    if let Err(error) = window.show() {
+    if let Err(error) = crate::window_activity::show(&window) {
         eprintln!("Failed to show the main window: {error}");
         return;
     }

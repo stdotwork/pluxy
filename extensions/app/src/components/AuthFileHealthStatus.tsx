@@ -1,3 +1,4 @@
+import { pollWhileActive } from '../services/windowActivity';
 import { useMemo, useSyncExternalStore } from 'react';
 import { ChevronDown, CircleHelp, Clock3, Info, LoaderCircle, PauseCircle, RotateCcw, ShieldAlert } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -13,14 +14,14 @@ import {
 import './AuthFileHealthStatus.css';
 
 let clockNow = Date.now();
-let timer: ReturnType<typeof setInterval> | undefined;
+let stopClock: (() => void) | undefined;
 const listeners = new Set<() => void>();
 const getClockSnapshot = () => clockNow;
 const subscribeClock = (listener: () => void) => {
   listeners.add(listener);
-  if (!timer) {
+  if (!stopClock) {
     clockNow = Date.now();
-    timer = setInterval(() => {
+    stopClock = pollWhileActive(() => {
       clockNow = Date.now();
       listeners.forEach((notify) => notify());
     }, 1000);
@@ -28,8 +29,8 @@ const subscribeClock = (listener: () => void) => {
   return () => {
     listeners.delete(listener);
     if (!listeners.size) {
-      clearInterval(timer);
-      timer = undefined;
+      stopClock?.();
+      stopClock = undefined;
     }
   };
 };

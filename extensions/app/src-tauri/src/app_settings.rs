@@ -795,8 +795,7 @@ pub(crate) fn resolve_windows_close_request(
         WindowsCloseAction::MinimizeToTray => {
             let window =
                 main_window(&app).ok_or_else(|| "Main window does not exist".to_string())?;
-            window
-                .hide()
+            crate::window_activity::hide(&window)
                 .map_err(|error| format!("Failed to hide main window: {error}"))?;
         }
     }

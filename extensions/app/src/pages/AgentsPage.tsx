@@ -1,3 +1,4 @@
+import { pollWhileActive } from '../services/windowActivity';
 import { Notice } from '../components/Notice';
 import { Tabs } from '../components/Tabs';
 import { SegmentedControl } from '../components/SegmentedControl';
@@ -752,11 +753,10 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         if (!disposed) setLaunchError(String(requestError));
       });
     };
-    refreshProcessStatus();
-    const timer = window.setInterval(refreshProcessStatus, 2000);
+    const stopPolling = pollWhileActive(refreshProcessStatus, 2000);
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      stopPolling();
     };
   }, [loadDeepSeekHarnessProcessStatus, selected]);
 

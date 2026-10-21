@@ -237,8 +237,23 @@ fn plugin_webview(app: &AppHandle) -> Option<Webview> {
     app.get_webview(PLUGIN_WEBVIEW)
 }
 
+pub(crate) fn sync_window_activity(app: &AppHandle) -> Result<(), String> {
+    // Called on a worker, like the plugin commands. Serialize with navigation
+    // and read current placement; apply_bounds checks current native visibility.
+    let state = app.state::<PluginWebviewState>();
+    let inner = state.lock()?;
+    let placed = if inner.owner.is_some() { inner.placed } else { None };
+    if let Some(webview) = plugin_webview(app) {
+        apply_bounds(&webview, placed)?;
+    }
+    Ok(())
+}
+
 fn apply_bounds(webview: &Webview, placed: Option<PlacedBounds>) -> Result<(), String> {
-    match placed {
+    // Pending layout requests must not reshow a plugin while its window is hidden.
+    let window = webview.window();
+    let active = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(true);
+    match placed.filter(|_| active) {
         Some(placed) => {
             webview
                 .set_bounds(to_rect(placed))
@@ -284,9 +299,7 @@ fn build_webview(
             tauri::PhysicalSize::new(initial.width as u32, initial.height as u32),
         )
         .map_err(|error| error.to_string())?;
-    if placed.is_none() {
-        webview.hide().map_err(|error| error.to_string())?;
-    }
+    apply_bounds(&webview, placed)?;
     Ok(webview)
 }
 

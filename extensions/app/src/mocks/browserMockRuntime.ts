@@ -1030,6 +1030,7 @@ export function createBrowserMockRuntime(
       case 'launch_agent': return null;
 
       case 'get_core_status': return clone(state.coreStatus);
+      case 'main_window_active': return !document.hidden;
       case 'start_core_process': {
         if (!state.coreStatus.installed) throw new Error('Browser Mock: install the core first');
         Object.assign(state.coreStatus, { running: true, ready: true, managed: true, starting: false, processId: 42817, message: 'Browser Mock core is running' });

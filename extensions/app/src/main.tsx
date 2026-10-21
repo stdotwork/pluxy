@@ -8,8 +8,10 @@ import { initializeTheme, initializeThemePreferences, reloadCustomThemes } from 
 import { initializeUsagePreferences } from './services/usagePreferences';
 import { initializePrivacyMode } from './privacy';
 import './styles/index.css';
+import { initializeWindowActivity } from './services/windowActivity';
 
 async function bootstrap() {
+  await initializeWindowActivity();
   await Promise.all([initializeUsagePreferences(), initializeThemePreferences().then(() => initializeTheme()), initializePrivacyMode()]);
   if (import.meta.env.DEV && !isTauri()) {
     const { installBrowserMock } = await import('./mocks/browserMock');

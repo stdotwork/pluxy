@@ -1,3 +1,4 @@
+import { pollWhileActive, windowActivity } from './services/windowActivity';
 import { onCoreStatusChanged } from './services/events';
 import { getCoreStatus } from './services/coreLifecycle';
 import type { CoreStatus } from './services/coreLifecycle';
@@ -49,7 +50,7 @@ export function CoreRuntimeProvider({ children }: { children: ReactNode }) {
     let unlisten: (() => void) | null = null;
 
     onCoreStatusChanged((event) => {
-      if (!disposed) {
+      if (!disposed && windowActivity.active()) {
         publishStatus(event.payload);
       }
     }).then((stop) => {
@@ -64,17 +65,12 @@ export function CoreRuntimeProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    void refreshStatus();
-    const timer = window.setInterval(() => {
-      if (!document.hidden) {
-        void refreshStatus();
-      }
-    }, 10_000);
+    const stopPolling = pollWhileActive(() => { void refreshStatus(); }, 10_000);
 
     return () => {
       disposed = true;
       unlisten?.();
-      window.clearInterval(timer);
+      stopPolling();
     };
   }, [publishStatus, refreshStatus]);
 

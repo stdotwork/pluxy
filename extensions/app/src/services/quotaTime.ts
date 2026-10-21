@@ -1,3 +1,4 @@
+import { pollWhileActive } from './windowActivity';
 import { useSyncExternalStore } from 'react';
 import { getCurrentLocale, translate, type AppLocale } from '../i18n';
 
@@ -53,13 +54,13 @@ export const formatQuotaReset = (
 };
 
 let now = Date.now();
-let timer: ReturnType<typeof setInterval> | undefined;
+let stopClock: (() => void) | undefined;
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
-  if (!timer) {
+  if (!stopClock) {
     now = Date.now();
-    timer = setInterval(() => {
+    stopClock = pollWhileActive(() => {
       now = Date.now();
       listeners.forEach((notify) => notify());
     }, 60_000);
@@ -67,8 +68,8 @@ const subscribe = (listener: () => void) => {
   return () => {
     listeners.delete(listener);
     if (!listeners.size) {
-      clearInterval(timer);
-      timer = undefined;
+      stopClock?.();
+      stopClock = undefined;
     }
   };
 };

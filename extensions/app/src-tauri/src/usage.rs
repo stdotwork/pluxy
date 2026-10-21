@@ -47,6 +47,14 @@ const USAGE_FAILURE_MIGRATION_KEY: &str = "failure_details_v4";
 const USAGE_EVENT_KEY_MIGRATION_KEY: &str = "event_key_v5";
 const USAGE_DATABASE_MAX_MB_KEY: &str = "max_database_size_mb";
 const USAGE_UPDATED_EVENT: &str = "usage-records-updated";
+
+fn emit_usage_updated(app: &tauri::AppHandle, collected_at: String) {
+    // #493: collection persists in Rust while hidden; do not keep feeding JS
+    // events into the suspended WebView. The UI fetches current data on resume.
+    if crate::window_activity::is_active(app) {
+        let _ = app.emit_to("main", USAGE_UPDATED_EVENT, collected_at);
+    }
+}
 const USAGE_SCHEMA_VERSION: u8 = 1;
 const USAGE_DATABASE_SCHEMA_VERSION: i64 = 6;
 const MAX_USAGE_FAILURE_BODY_CHARS: usize = 2_000;
@@ -689,7 +697,7 @@ pub(crate) async fn save_usage_storage_settings(
     app.state::<UsageCollectorState>()
         .set_total_records(settings.total_records);
     if settings.deleted_records > 0 {
-        let _ = app.emit(USAGE_UPDATED_EVENT, Local::now().to_rfc3339());
+        emit_usage_updated(&app, Local::now().to_rfc3339());
     }
     Ok(settings)
 }
@@ -709,7 +717,7 @@ pub(crate) async fn shrink_usage_database(
     app.state::<UsageCollectorState>()
         .set_total_records(settings.total_records);
     if settings.deleted_records > 0 {
-        let _ = app.emit(USAGE_UPDATED_EVENT, Local::now().to_rfc3339());
+        emit_usage_updated(&app, Local::now().to_rfc3339());
     }
     Ok(settings)
 }
@@ -1898,7 +1906,7 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
                         &format!("Restored {saved} pending records"),
                         Some(collected_at.clone()),
                     );
-                    let _ = app.emit(USAGE_UPDATED_EVENT, collected_at);
+                    emit_usage_updated(&app, collected_at);
                     retry_seconds = 1;
                     continue;
                 }
@@ -2142,7 +2150,7 @@ fn publish_collected_records(app: &tauri::AppHandle, outcome: UsagePersistOutcom
         (saved > 0).then_some(collected_at.clone()),
     );
     if saved > 0 {
-        let _ = app.emit(USAGE_UPDATED_EVENT, collected_at);
+        emit_usage_updated(&app, collected_at);
     }
 }
 
