@@ -2546,7 +2546,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     let context = {
         let mut context = context;
-        // Prevent #491's partial blank rendering on AMD/KDE: disable native
+        // Prevent #491's partial blank rendering on Linux (AMD and NVIDIA): disable native
         // transparency before build creates the window, not later in setup.
         linux_graphics::configure_main_window(context.config_mut());
         context

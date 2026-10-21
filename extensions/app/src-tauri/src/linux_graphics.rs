@@ -11,7 +11,9 @@
 use std::{env, ffi::OsString, path::Path};
 
 /// Keep Linux's main window opaque to avoid the partial blank content / repaint
-/// regression reported on AMD + KDE Wayland after transparency was enabled.
+/// regression reported on both AMD/KDE and NVIDIA/Hyprland after transparency
+/// was enabled. Partial repaints can leave the untouched area transparent;
+/// switching themes or forcing X11 does not fix the underlying window mode.
 /// See https://github.com/router-for-me/EasyCLIProxyAPI/issues/491.
 /// Native window materials are only supported on Windows/macOS in this app,
 /// so Linux does not need the transparent window used by those materials.
