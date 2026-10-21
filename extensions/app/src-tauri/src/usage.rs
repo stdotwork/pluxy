@@ -8,7 +8,7 @@ use super::executable_dir;
 use super::VersionDownloadSource;
 use super::{
     apply_configured_proxy, core_base_dir, current_core_status, format_management_request_error,
-    management_authorization, management_endpoint, management_http_client, CoreProcessState,
+    management_authorization, management_endpoint, management_http_client_for, CoreProcessState,
     GuiConfigFile, GuiConfigState,
 };
 use chrono::{DateTime, Local};
@@ -1828,6 +1828,8 @@ fn redis_pull_can_try_legacy_queue(error: &str) -> bool {
 }
 
 pub(crate) fn start_usage_collector(app: tauri::AppHandle) {
+    let Ok(config) = app.state::<GuiConfigState>().snapshot() else { return };
+    if crate::core_connection::require_local(&config).is_err() { return }
     let state = app.state::<UsageCollectorState>();
     if let Ok(total_records) = total_usage_records() {
         state.set_total_records(total_records);
@@ -1875,6 +1877,10 @@ async fn usage_collector_loop(app: tauri::AppHandle, token: CancellationToken) {
                 continue;
             }
         };
+        if crate::core_connection::require_local(&config).is_err() {
+            set_collector_status(&app, "paused", "Usage collection is unavailable in remote mode", None);
+            return;
+        }
         if subscription_config.as_ref().is_some_and(|(port, secret)| {
             *port != config.port || secret != &config.management_secret_key
         }) {
@@ -2182,7 +2188,7 @@ async fn wait_or_cancel(token: &CancellationToken, seconds: u64) {
 }
 
 async fn fetch_usage_queue(config: &GuiConfigFile) -> Result<Vec<Value>, String> {
-    let client = management_http_client()?;
+    let client = management_http_client_for(config)?;
     let response = client
         .get(management_endpoint(config, "observability/usage/queue")?)
         .header("Authorization", management_authorization(config)?)
@@ -5647,6 +5653,9 @@ mod tests {
     #[test]
     fn normalizes_queue_records_without_persisting_secrets_or_headers() {
         let config = GuiConfigFile {
+            connection_mode: crate::CoreConnectionMode::Local,
+            remote_management_origin: String::new(),
+            remote_management_key: String::new(),
             locale: "zh-CN".to_string(),
             port: 8317,
             allow_lan: false,

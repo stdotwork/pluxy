@@ -1,6 +1,6 @@
 use super::{
     agent_managed_paths, apply_gui_managed_settings, consume_software_write,
-    core_config_settings_from_value, core_install_dir, gui_config_path, is_loopback_host,
+    core_config_settings_from_value, core_connection::CoreConnection, core_install_dir, gui_config_path, is_loopback_host,
     lock_core_config_file, normalized_config_path, path_to_string,
     refresh_agent_config_status_cache, request_codex_model_catalog_refresh, validate_gui_config,
     write_core_config_if_changed, AgentClient, AgentConfigStatusCache, ConfigFilesChangedPayload,
@@ -163,6 +163,10 @@ fn handle_configuration_file_changes(
                     }
                 };
                 let result = (|| -> Result<(), String> {
+                    let current = gui_state.snapshot()?;
+                    if CoreConnection::from(&current) != CoreConnection::from(&config) {
+                        return Err("Use Core connection settings to change the active core connection".into());
+                    }
                     gui_state.replace_external(config.clone())?;
                     if !preserve_invalid_core_file {
                         patch_core_from_gui_config_if_valid(&config)?;

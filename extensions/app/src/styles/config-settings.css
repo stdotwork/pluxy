@@ -411,6 +411,8 @@
 }
 /* A single-purpose page has one centered workspace instead of an empty grid cell. */
 .config-page .config-settings-content #config-native-software { width: min(100%, 1000px); justify-self: center; }
+/* Remote mode: one notice explains that core settings are read-only. */
+.config-page .config-settings-cards > .config-remote-notice { grid-column: 1 / -1; width: min(100%, 1000px); justify-self: center; }
 @container settings-card (min-width: 1040px) {
   .config-page :is(#config-group-extensions-concurrency, #config-group-extensions-inflight, #config-group-diagnostics, #config-group-request-behavior) .template-config-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .config-page :is(#config-group-extensions-concurrency, #config-group-extensions-inflight, #config-group-diagnostics, #config-group-request-behavior) .template-config-field:not(.template-config-toggle) {

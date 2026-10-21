@@ -174,7 +174,7 @@ async fn management_request_inner(
         return Err("Invalid management API path".to_string());
     }
 
-    let client = management_http_client()?;
+    let client = management_http_client_for(&config)?;
     let mut builder = client
         .request(method, management_endpoint(&config, path)?)
         .header("Authorization", management_authorization(&config)?);
@@ -231,7 +231,7 @@ pub(crate) async fn import_vertex_credential(
     if let Some(location) = location.filter(|value| !value.trim().is_empty()) {
         form = form.text("location", location.trim().to_owned());
     }
-    let response = management_http_client()?
+    let response = management_http_client_for(&config)?
         .post(management_endpoint(&config, "oauth/import")?)
         .header("Authorization", management_authorization(&config)?)
         .query(&[("provider", "vertex")])
@@ -254,7 +254,7 @@ pub(crate) async fn upload_auth_file(
     }
 
     let config = gui_config_state.snapshot()?;
-    let client = management_http_client()?;
+    let client = management_http_client_for(&config)?;
     let mut query = HashMap::new();
     query.insert("name".to_string(), name);
     let response = client
@@ -274,6 +274,7 @@ pub(crate) fn open_auth_files_directory(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<(), String> {
     let config = gui_config_state.snapshot()?;
+    crate::core_connection::require_local(&config)?;
     let install_dir = core_install_dir()?;
     let auth_dir = auth_dir_path_for_core(&config.auth_dir, &install_dir)?;
     fs::create_dir_all(&auth_dir)
@@ -286,6 +287,7 @@ pub(crate) fn open_core_logs_directory(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<(), String> {
     let config = gui_config_state.snapshot()?;
+    crate::core_connection::require_local(&config)?;
     let install_dir = core_install_dir()?;
     let logs_dir = core_logs_dir_path(&config.auth_dir, &install_dir)?;
     fs::create_dir_all(&logs_dir)
@@ -325,7 +327,7 @@ pub(crate) async fn start_oauth_login(
     super::network_proxy::prepare_oauth(&app).await;
     let config = gui_config_state.snapshot()?;
     let provider_key = normalize_oauth_request_provider(&provider, plugin_provider.unwrap_or(false))?;
-    let client = management_http_client()?;
+    let client = management_http_client_for(&config)?;
     let mut request = client
         .get(management_endpoint(&config, "oauth/auth-url")?)
         .header("Authorization", management_authorization(&config)?);
@@ -391,7 +393,7 @@ pub(crate) async fn get_oauth_status(
         return Err("OAuth state cannot be empty".to_string());
     }
     let config = gui_config_state.snapshot()?;
-    let client = management_http_client()?;
+    let client = management_http_client_for(&config)?;
     let response = client
         .get(management_endpoint(&config, "oauth/status")?)
         .header("Authorization", management_authorization(&config)?)
@@ -428,7 +430,7 @@ pub(crate) async fn submit_oauth_callback(
     }
     let config = gui_config_state.snapshot()?;
     let provider_key = normalize_oauth_request_provider(&provider, plugin_provider.unwrap_or(false))?;
-    let client = management_http_client()?;
+    let client = management_http_client_for(&config)?;
     let body = serde_json::json!({
         "provider": provider_key,
         "redirect_url": redirect_url,
@@ -464,6 +466,22 @@ pub(crate) fn management_http_client() -> Result<reqwest::Client, String> {
     CLIENT.as_ref().cloned().map_err(Clone::clone)
 }
 
+pub(crate) fn management_http_client_for(config: &GuiConfigFile) -> Result<reqwest::Client, String> {
+    if config.connection_mode == crate::CoreConnectionMode::Local {
+        return management_http_client();
+    }
+    static REMOTE_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|err| format_management_request_error("Failed to create management API client", &err))
+    });
+    REMOTE_CLIENT.as_ref().cloned().map_err(Clone::clone)
+}
+
 pub(crate) fn format_management_request_error(
     action: &str,
     error: &(dyn Error + 'static),
@@ -492,7 +510,11 @@ pub(crate) fn format_management_request_error(
 }
 
 pub(crate) fn management_plaintext_key(config: &GuiConfigFile) -> Result<&str, String> {
-    let secret_key = config.management_secret_key.trim();
+    let secret_key = if config.connection_mode == crate::CoreConnectionMode::Remote {
+        &config.remote_management_key
+    } else {
+        &config.management_secret_key
+    }.trim();
     if secret_key.is_empty() || is_hashed_management_secret_key(secret_key) {
         return Err("Management interface unavailable: no plaintext management key is available".to_string());
     }
@@ -504,6 +526,10 @@ pub(crate) fn management_authorization(config: &GuiConfigFile) -> Result<String,
 }
 
 pub(crate) fn management_endpoint(config: &GuiConfigFile, path: &str) -> Result<String, String> {
+    if config.connection_mode == crate::CoreConnectionMode::Remote {
+        let origin = crate::core_connection::normalize_origin(&config.remote_management_origin)?;
+        return Ok(format!("{origin}/v8/management/{}", path.trim_start_matches('/')));
+    }
     if config.port == 0 {
         return Err("Invalid kernel port".to_string());
     }

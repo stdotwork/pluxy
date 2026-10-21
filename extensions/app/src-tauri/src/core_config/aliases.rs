@@ -154,7 +154,7 @@ pub(crate) fn normalize_oauth_alias_channel(value: &str) -> Option<&'static str>
 pub(crate) async fn fetch_active_oauth_alias_channels(
     config: &GuiConfigFile,
 ) -> Result<std::collections::HashSet<String>, String> {
-    let client = management_http_client()?;
+    let client = management_http_client_for(config)?;
     let response = client
         .get(management_endpoint(config, "credentials")?)
         .header("Authorization", management_authorization(config)?)
@@ -240,7 +240,7 @@ pub(crate) async fn fetch_management_config_yaml(config: &GuiConfigFile) -> Resu
 }
 
 pub(crate) async fn fetch_management_raw_config_yaml(config: &GuiConfigFile) -> Result<String, String> {
-    let client = management_http_client()?;
+    let client = management_http_client_for(config)?;
     let response = client
         .get(management_endpoint(config, "config.yaml")?)
         .header("Authorization", management_authorization(config)?)
@@ -266,7 +266,7 @@ pub(crate) async fn put_management_oauth_model_aliases(
     config: &GuiConfigFile,
     aliases: &serde_json::Value,
 ) -> Result<(), String> {
-    let client = management_http_client()?;
+    let client = management_http_client_for(config)?;
     let response = client
         .put(management_endpoint(config, "config/oauth/model-alias")?)
         .header("Authorization", management_authorization(config)?)
@@ -550,7 +550,7 @@ pub(crate) async fn put_management_config_value(
 ) -> Result<(), String> {
     let value = serde_json::to_value(value)
         .map_err(|error| format!("Failed to serialize kernel configuration value: {error}"))?;
-    let client = management_http_client()?;
+    let client = management_http_client_for(config)?;
     let response = client
         .put(management_endpoint(config, &format!("config/{path}"))?)
         .header("Authorization", management_authorization(config)?)
@@ -567,7 +567,7 @@ async fn delete_management_config_value(
     config: &GuiConfigFile,
     path: &str,
 ) -> Result<(), String> {
-    let client = management_http_client()?;
+    let client = management_http_client_for(config)?;
     let response = client
         .delete(management_endpoint(config, &format!("config/{path}"))?)
         .header("Authorization", management_authorization(config)?)
@@ -1555,7 +1555,7 @@ pub(crate) async fn fetch_oauth_channel_model_definitions(
     config: &GuiConfigFile,
     channel: &str,
 ) -> Result<Vec<CodexModelDefinition>, String> {
-    let client = management_http_client()?;
+    let client = management_http_client_for(config)?;
     let response = client
         .get(management_endpoint(
             config,

@@ -2,13 +2,15 @@ import { pollWhileActive } from '../services/windowActivity';
 import { useEffect, useState } from 'react';
 import { loadHomeOverview, type HomeOverviewSnapshot } from '../services/homeOverview';
 
-export function useHomeOverview(coreReady: boolean, contextKey: string) {
+// `remote` is null until the connection mode is known; nothing loads before then.
+export function useHomeOverview(coreReady: boolean, contextKey: string, remote: boolean | null = false) {
   const [state, setState] = useState<{ scope: string; snapshot: HomeOverviewSnapshot } | null>(null);
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const scope = `${coreReady}:${contextKey}`;
 
   useEffect(() => {
+    if (remote === null) { setLoading(false); return; }
     let active = true;
     let inFlight = false;
     const load = async (showLoading = false) => {
@@ -16,7 +18,7 @@ export function useHomeOverview(coreReady: boolean, contextKey: string) {
       inFlight = true;
       if (showLoading) setLoading(true);
       try {
-        const snapshot = await loadHomeOverview(coreReady);
+        const snapshot = await loadHomeOverview(coreReady, Date.now(), remote);
         if (active) setState((previous) => ({
           scope,
           snapshot: {
@@ -33,7 +35,7 @@ export function useHomeOverview(coreReady: boolean, contextKey: string) {
     setLoading(true);
     const stopPolling = pollWhileActive(() => { void load(); }, 60_000);
     return () => { active = false; stopPolling(); };
-  }, [coreReady, scope, revision]);
+  }, [coreReady, remote, scope, revision]);
 
   return {
     snapshot: state?.scope === scope ? state.snapshot : null,

@@ -11,6 +11,8 @@ export type CoreStatus = {
   installDir: string;
   binaryPath: string | null;
   message: string;
+  connectionMode?: 'local' | 'remote';
+  remoteOrigin?: string | null;
   recovery?: {
     phase: 'waiting' | 'restarting' | 'failed';
     attempt: number;

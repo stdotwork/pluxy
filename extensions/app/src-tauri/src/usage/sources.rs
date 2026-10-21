@@ -229,7 +229,7 @@ fn local_api_remark(
 }
 
 async fn fetch_json(config: &GuiConfigFile, path: &str) -> Option<Value> {
-    management_http_client()
+    management_http_client_for(config)
         .ok()?
         .get(management_endpoint(config, path).ok()?)
         .header("Authorization", management_authorization(config).ok()?)

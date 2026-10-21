@@ -89,25 +89,37 @@ describe('plugin entry cache', () => {
 
   test('round-trips entries', () => {
     const entries = [entry('alpha', 0)];
-    writeCachedPluginNavEntries(entries);
-    expect(readCachedPluginNavEntries()).toEqual(entries);
+    writeCachedPluginNavEntries(entries, 'local');
+    expect(readCachedPluginNavEntries('local')).toEqual(entries);
+  });
+
+  test('never reads another target or the old unscoped cache; clearing is target-specific', () => {
+    const entries = [entry('alpha', 0)];
+    store.set('cpa-gui-plugin-nav-entries', JSON.stringify(entries));
+    expect(readCachedPluginNavEntries('remote')).toEqual([]);
+    writeCachedPluginNavEntries(entries, 'local');
+    expect(readCachedPluginNavEntries('remote')).toEqual([]);
+    writeCachedPluginNavEntries([entry('remote', 0)], 'remote');
+    writeCachedPluginNavEntries([], 'remote');
+    expect(readCachedPluginNavEntries('remote')).toEqual([]);
+    expect(readCachedPluginNavEntries('local')).toEqual(entries);
   });
 
   test('tolerates invalid JSON and malformed rows', () => {
-    store.set('cpa-gui-plugin-nav-entries', '{oops');
-    expect(readCachedPluginNavEntries()).toEqual([]);
-    store.set('cpa-gui-plugin-nav-entries', JSON.stringify([entry('alpha', 0), { pluginID: 1 }, null, 'x']));
-    expect(readCachedPluginNavEntries()).toEqual([entry('alpha', 0)]);
-    store.set('cpa-gui-plugin-nav-entries', '{"a":1}');
-    expect(readCachedPluginNavEntries()).toEqual([]);
+    store.set('cpa-gui-plugin-nav-entries:local', '{oops');
+    expect(readCachedPluginNavEntries('local')).toEqual([]);
+    store.set('cpa-gui-plugin-nav-entries:local', JSON.stringify([entry('alpha', 0), { pluginID: 1 }, null, 'x']));
+    expect(readCachedPluginNavEntries('local')).toEqual([entry('alpha', 0)]);
+    store.set('cpa-gui-plugin-nav-entries:local', '{"a":1}');
+    expect(readCachedPluginNavEntries('local')).toEqual([]);
   });
 
   test('tolerates unavailable storage', () => {
     (globalThis as { window?: unknown }).window = {
       get localStorage(): never { throw new Error('blocked'); },
     };
-    expect(readCachedPluginNavEntries()).toEqual([]);
-    expect(() => writeCachedPluginNavEntries([entry('alpha', 0)])).not.toThrow();
+    expect(readCachedPluginNavEntries('local')).toEqual([]);
+    expect(() => writeCachedPluginNavEntries([entry('alpha', 0)], 'local')).not.toThrow();
   });
 });
 

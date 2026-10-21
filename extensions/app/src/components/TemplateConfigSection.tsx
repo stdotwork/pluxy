@@ -30,7 +30,8 @@ import '../styles/template-config.css';
 
 const restartHint = { zh: '需重启内核', en: 'Core restart required', ja: 'コアの再起動が必要' } satisfies TemplateText;
 
-export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChange }: {
+export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChange, readOnly = false }: {
+  readOnly?: boolean;
   groups: readonly TemplateConfigGroup[];
   visibleGroups?: readonly string[];
   onDirtyGroupsChange?: (groupIds: readonly string[]) => void;
@@ -160,7 +161,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
   };
 
   const control = (group: TemplateConfigGroup, field: TemplateConfigField, value: unknown, id: string, invalid: boolean) => {
-    const disabled = busy !== null || config === null;
+    const disabled = busy !== null || config === null || readOnly;
     const onChange = (next: unknown) => changeField(group, field, next);
     const common = { id, disabled, 'aria-invalid': invalid || undefined, 'aria-describedby': invalid ? `${id}-error` : undefined };
     if (field.type === 'custom' && field.render) return field.render({ value, onChange, disabled, id });
@@ -180,7 +181,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
     const input = <input {...common} className="config-network-input" type={field.type === 'number' ? 'number' : field.sensitive && !revealed[id] ? 'password' : 'text'} autoComplete={field.sensitive ? 'new-password' : undefined}
       min={field.min} max={field.max} step={field.step ?? 1} placeholder={field.placeholder} value={typeof value === 'string' || typeof value === 'number' ? value : ''}
       onChange={(event) => onChange(field.type === 'number' && event.currentTarget.value !== '' ? Number(event.currentTarget.value) : event.currentTarget.value)} />;
-    const secret = field.sensitive ? <div className="config-secret-input template-config-secret">{input}<button type="button" className="icon-button quiet" disabled={disabled} onClick={() => setRevealed((previous) => ({ ...previous, [id]: !previous[id] }))}
+    const secret = field.sensitive ? <div className="config-secret-input template-config-secret">{input}<button type="button" className="icon-button quiet" disabled={busy !== null || config === null} onClick={() => setRevealed((previous) => ({ ...previous, [id]: !previous[id] }))}
       title={t(revealed[id] ? 'config.keys.hide' : 'config.keys.show')} aria-label={t(revealed[id] ? 'config.keys.hide' : 'config.keys.show')}>{revealed[id] ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}</button></div> : input;
     if (field.link) {
       const link = field.link;
@@ -193,7 +194,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
   return <div className="template-config-section" hidden={visible.length === 0}>
     {loadError ? <Notice tone="error" icon={false} className="template-config-notice" action={<button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void reload()}>{tr('reload')}</button>}>{loadError}</Notice> : null}
     {!config && !loadError ? <p role="status">{tr('loading')}</p> : null}
-    {restartNeeded ? <Notice tone="info" icon={false} className="template-config-notice" action={status?.running ? <button type="button" className="secondary-button compact-button" disabled={busy !== null} onClick={() => void restart()}>{tr('restartNow')}</button> : undefined}>{tr('restart')}</Notice> : null}
+    {restartNeeded ? <Notice tone="info" icon={false} className="template-config-notice" action={status?.running ? <button type="button" className="secondary-button compact-button" disabled={busy !== null || readOnly} onClick={() => void restart()}>{tr('restartNow')}</button> : undefined}>{tr('restart')}</Notice> : null}
     {groups.map((group) => {
       const dirty = group.fields.some((field) => drafts[templateFieldKey(field.path)]);
       const needsRestart = group.fields.some((field) => field.restart);
@@ -210,7 +211,7 @@ export function TemplateConfigSection({ groups, visibleGroups, onDirtyGroupsChan
           const description = [templateText(field.description, locale), field.type === 'string-list' ? tr('list') : ''].filter(Boolean).join(' ');
           const resetLabel = `${tr('default')}: ${templateText(field.label, locale)}`;
           return <div key={key} id={`template-field-${group.id}-${index}`} data-field-type={field.type} tabIndex={-1} className={`template-config-field${field.type === 'custom' || field.type === 'json' || field.type === 'string-list' ? ' template-config-field-wide' : ''}${field.type === 'boolean' ? ' template-config-toggle' : ''}${draft ? ' template-config-field-dirty' : ''}`}>
-            <div className="template-config-label">{field.type === 'custom' ? <span id={`${id}-label`}>{templateText(field.label, locale)}</span> : <label htmlFor={id}>{templateText(field.label, locale)}</label>}<div className="template-config-label-tools">{description ? <SettingsHelp label={templateText(field.label, locale)}>{description}</SettingsHelp> : null}{exists ? <button type="button" className="icon-button quiet ghost tiny-button template-config-reset" disabled={busy !== null || !config} title={resetLabel} aria-label={resetLabel} onClick={() => changeField(group, field, null, true)}><RotateCcw size={14} aria-hidden="true" /></button> : null}</div></div>
+            <div className="template-config-label">{field.type === 'custom' ? <span id={`${id}-label`}>{templateText(field.label, locale)}</span> : <label htmlFor={id}>{templateText(field.label, locale)}</label>}<div className="template-config-label-tools">{description ? <SettingsHelp label={templateText(field.label, locale)}>{description}</SettingsHelp> : null}{exists ? <button type="button" className="icon-button quiet ghost tiny-button template-config-reset" disabled={busy !== null || !config || readOnly} title={resetLabel} aria-label={resetLabel} onClick={() => changeField(group, field, null, true)}><RotateCcw size={14} aria-hidden="true" /></button> : null}</div></div>
             {field.type === 'custom' ? <details className="surface-section template-config-custom"><summary aria-labelledby={`${id}-label ${id}-edit`} aria-describedby={validation ? `${id}-error` : undefined}><span id={`${id}-edit`}>{tr('editDetails')}</span></summary><div className="template-config-control" role="group" aria-labelledby={`${id}-label`}>{control(group, field, value, id, Boolean(validation))}</div></details> : <div className="template-config-control">{control(group, field, value, id, Boolean(validation))}</div>}
             {field.link?.hint ? <small className="template-config-link-hint">{templateText(field.link.hint, locale)}</small> : null}
             {validation ? <small id={`${id}-error`} className="template-config-error" role="alert">{templateText(validation, locale)}</small> : null}

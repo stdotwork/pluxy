@@ -90,6 +90,7 @@ import {
   type OAuthModelTarget,
 } from '../services/oauthModelSettings';
 import { getCurrentLocale, translate, useI18n } from '../i18n';
+import { useRemoteMode } from '../coreRuntime';
 import { usePrivacyMask } from '../privacy';
 import { Select } from '../components/Select';
 
@@ -127,6 +128,7 @@ const isRuntimeOnly = isRuntimeOnlyAuthFile;
 const hasQuota = (file: AuthFile) => Boolean(quotaProviderForFile(file));
 
 export function AuthFileManagementPage({ initialProvider }: { initialProvider?: string } = {}) {
+  const remoteMode = useRemoteMode();
   const { t } = useI18n();
   const privacy = usePrivacyMask();
   const now = useQuotaClock();
@@ -498,7 +500,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
           const provider = oauthModelProviders.find((item) => item.label === providerFilter) ?? oauthModelProviders[0];
           if (provider) void openOauthModelSettings({ ...provider, scope: 'provider' });
         }}><Settings2 size={15} />{t('authFiles.models.toolbarButton')}</button>
-        <button type="button" className="secondary-button small-button ghost" disabled={busy} onClick={() => void openAuthFilesDirectory()}><FolderOpen size={15} />{t('authFiles.openDirectory')}</button>
+        <button type="button" className="secondary-button small-button ghost" disabled={busy || remoteMode} title={remoteMode ? t('connection.remoteDisabledTitle') : undefined} onClick={() => void openAuthFilesDirectory()}><FolderOpen size={15} />{t('authFiles.openDirectory')}</button>
         <button type="button" className="secondary-button small-button" onClick={() => void loadFiles()} disabled={loading || busy}>
           <RefreshCw size={16} className={loading ? 'spin' : ''} />{t('authFiles.toolbar.refreshList')}
         </button>

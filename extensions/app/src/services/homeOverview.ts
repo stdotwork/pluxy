@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentLocale, translate } from '../i18n';
 import { dedupeAuthFiles, isOAuthCredentialFile } from './authFiles';
 import { authFileHealth, normalizeAuthFileCooldowns } from './authFileHealth';
 import type { CoreHealthModel } from './coreHealthCheck';
@@ -122,14 +123,16 @@ async function loadProviderKeys(): Promise<number> {
   }
 }
 
-export async function loadHomeOverview(coreReady: boolean, nowMs = Date.now()): Promise<HomeOverviewSnapshot> {
+export async function loadHomeOverview(coreReady: boolean, nowMs = Date.now(), remote = false): Promise<HomeOverviewSnapshot> {
   const query = {
     start: new Date(nowMs - 24 * 60 * 60_000).toISOString(),
     end: new Date(nowMs).toISOString(),
   };
   const [usage, credentials, providerKeys, models] = await Promise.allSettled([
-    // Usage is stored locally and remains meaningful while the core is stopped.
-    invoke<unknown>('get_usage_overview', { query }).then(summarizeHomeUsage),
+    // Usage is stored locally and remains meaningful while the core is stopped. It is not collected
+    // from a remote core, so this computer's history is never shown as the remote core's.
+    remote ? Promise.reject(new Error(translate(getCurrentLocale(), 'connection.remoteDisabledTitle')))
+      : invoke<unknown>('get_usage_overview', { query }).then(summarizeHomeUsage),
     coreReady ? managementApi.get('/credentials').then(summarizeHomeCredentials) : Promise.resolve(null),
     coreReady ? loadProviderKeys() : Promise.resolve(null),
     coreReady ? invoke<unknown>('get_core_models').then(normalizeHomeModels) : Promise.resolve(null),

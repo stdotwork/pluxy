@@ -14,6 +14,7 @@ mod alias_save;
 mod app_settings;
 mod app_update;
 mod core_config;
+mod core_connection;
 mod core_runtime;
 mod core_v8_contract;
 mod desktop_alias_routing;

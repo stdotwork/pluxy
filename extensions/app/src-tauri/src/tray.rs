@@ -253,6 +253,15 @@ pub(crate) fn windows_tray_presentation(
     busy: bool,
     locale: &str,
 ) -> WindowsTrayPresentation {
+    if status.connection_mode == CoreConnectionMode::Remote {
+        return WindowsTrayPresentation {
+            status_text: native_text(locale, if status.ready { NativeText::RemoteConnected } else { NativeText::RemoteDisconnected }).into(),
+            toggle_text: native_text(locale, NativeText::StartCore).into(),
+            toggle_enabled: false,
+            restart_enabled: false,
+            tooltip: native_text(locale, NativeText::TooltipRemoteCore).into(),
+        };
+    }
     let status_text = if busy {
         native_text(locale, NativeText::CoreStatusWorking)
     } else if !status.installed {
@@ -495,6 +504,7 @@ pub(crate) fn run_windows_tray_core_action(
         let gui_config_state = app_handle.state::<GuiConfigState>();
         let result = (|| -> Result<CoreStatus, String> {
             let _guard = lock_core_operation(process_state.inner())?;
+            crate::core_connection::require_local(&gui_config_state.snapshot()?)?;
             match action {
                 WindowsTrayCoreAction::Toggle => {
                     let config = gui_config_state.snapshot()?;
@@ -525,7 +535,10 @@ pub(crate) fn run_windows_tray_core_action(
         match result {
             Ok(status) => emit_core_status(&app_handle, &status),
             Err(error) => {
-                if let Ok(config) = gui_config_state.snapshot() {
+                if let Ok(config) = gui_config_state.snapshot().and_then(|config| {
+                    crate::core_connection::require_local(&config)?;
+                    Ok(config)
+                }) {
                     if let Ok(status) =
                         current_core_status(Some(process_state.inner()), Some(config.port))
                     {

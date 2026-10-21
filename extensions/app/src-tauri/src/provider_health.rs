@@ -1,7 +1,7 @@
 use super::{
-    build_http_client_with_proxy, effective_agent_api_key, fetch_agent_model_payload, is_loopback_host,
-    managed_core_loopback_origin, managed_core_tls_enabled, usage, validate_agent_model,
-    GuiConfigFile, GuiConfigState, APP_USER_AGENT,
+    build_http_client_with_proxy, core_config_settings_from_value, effective_agent_api_key,
+    fetch_model_payload_from, is_loopback_host, managed_core_loopback_origin, managed_core_tls_enabled,
+    usage, validate_agent_model, CoreConnectionMode, GuiConfigFile, GuiConfigState, APP_USER_AGENT,
 };
 use chrono::Local;
 use futures_util::StreamExt;
@@ -329,8 +329,52 @@ pub(crate) fn provider_health_content_type_is_streaming(content_type: &str) -> b
 pub(crate) async fn get_core_models(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<Vec<CoreHealthModel>, String> {
-    let config = gui_config_state.snapshot()?;
-    fetch_core_models(config.port, effective_agent_api_key(&config)).await
+    fetch_core_models(&gui_config_state.snapshot()?).await
+}
+
+async fn fetch_core_models(config: &GuiConfigFile) -> Result<Vec<CoreHealthModel>, String> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let (client, origin, api_key) = core_client_target(config, Duration::from_secs(15)).await?;
+        parse_core_models(&fetch_model_payload_from(&client, &origin, &api_key).await?)
+    }).await.map_err(|_| "Model list request timed out".to_string())?
+}
+
+/// The core's client API for Home's model list and health checks: the managed loopback core in Local
+/// mode, or the remote origin with the remote core's first client key in Remote mode. The management
+/// key is never used as a client key.
+async fn core_client_target(
+    config: &GuiConfigFile,
+    timeout: Duration,
+) -> Result<(reqwest::Client, String, String), String> {
+    if let Some(document) = crate::core_connection::remote_core_config_document(config).await? {
+        let api_key = core_config_settings_from_value(&document)?
+            .api_keys
+            .into_iter()
+            .next()
+            .ok_or("The remote core has no client API key configured")?;
+        static CLIENT: std::sync::LazyLock<Result<reqwest::Client, String>> = std::sync::LazyLock::new(|| {
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(3))
+                .build()
+                .map_err(|error| format!("Failed to create kernel client: {error}"))
+        });
+        let client = CLIENT.as_ref().cloned().map_err(Clone::clone)?;
+        return Ok((client, config.remote_management_origin.clone(), api_key));
+    }
+    if config.port == 0 {
+        return Err("Invalid kernel port".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(timeout)
+        .danger_accept_invalid_certs(managed_core_tls_enabled())
+        .build()
+        .map_err(|error| format!("Failed to create kernel client: {error}"))?;
+    Ok((client, managed_core_loopback_origin(config.port), effective_agent_api_key(config).to_string()))
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -339,11 +383,6 @@ pub(crate) struct CoreHealthModel {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     display_name: Option<String>,
-}
-
-async fn fetch_core_models(port: u16, api_key: &str) -> Result<Vec<CoreHealthModel>, String> {
-    let payload = fetch_agent_model_payload(port, api_key).await?;
-    parse_core_models(&payload)
 }
 
 fn parse_core_models(payload: &serde_json::Value) -> Result<Vec<CoreHealthModel>, String> {
@@ -398,43 +437,34 @@ async fn probe_core_model(
     model: &str,
     timeout_ms: Option<u64>,
 ) -> Result<ProviderHealthProbeResponse, String> {
-    let model = validate_agent_model(model)?;
-    if config.port == 0 {
-        return Err("Invalid kernel port".to_string());
-    }
-    let tls_enabled = managed_core_tls_enabled();
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(health_probe_timeout(timeout_ms))
-        .danger_accept_invalid_certs(tls_enabled)
-        .build()
-        .map_err(|error| format!("Failed to create kernel health check client: {error}"))?;
-    let request = ProviderHealthProbeRequest {
-        url: format!("{}/v1/chat/completions", managed_core_loopback_origin(config.port)),
-        header: HashMap::from([
-            ("Authorization".to_string(), format!("Bearer {}", effective_agent_api_key(config))),
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("Accept".to_string(), "text/event-stream".to_string()),
-        ]),
-        data: serde_json::json!({
-            "model": model,
-            "messages": [{ "role": "user", "content": "Reply with OK." }],
-            "max_tokens": 16,
-            "stream": true,
-        }).to_string(),
-        protocol: "openai-chat".to_string(),
-        source_provider: None,
-        proxy_url: None,
-        timeout_ms,
-        model,
-        source: String::new(),
-        auth_index: String::new(),
-    };
-    // The kernel records these requests itself. Only direct upstream probes need a
-    // desktop usage event, otherwise one health check appears twice in usage.
-    execute_health_probe(None, client, request).await
+    tokio::time::timeout(health_probe_timeout(timeout_ms), async {
+        let model = validate_agent_model(model)?;
+        let (client, origin, api_key) = core_client_target(config, health_probe_timeout(timeout_ms)).await?;
+        let request = ProviderHealthProbeRequest {
+            url: format!("{origin}/v1/chat/completions"),
+            header: HashMap::from([
+                ("Authorization".to_string(), format!("Bearer {api_key}")),
+                ("Content-Type".to_string(), "application/json".to_string()),
+                ("Accept".to_string(), "text/event-stream".to_string()),
+            ]),
+            data: serde_json::json!({
+                "model": model,
+                "messages": [{ "role": "user", "content": "Reply with OK." }],
+                "max_tokens": 16,
+                "stream": true,
+            }).to_string(),
+            protocol: "openai-chat".to_string(),
+            source_provider: None,
+            proxy_url: None,
+            timeout_ms,
+            model,
+            source: String::new(),
+            auth_index: String::new(),
+        };
+        // The kernel records these requests itself. Only direct upstream probes need a
+        // desktop usage event, otherwise one health check appears twice in usage.
+        execute_health_probe(None, client, request).await
+    }).await.map_err(|_| "Health check request timed out".to_string())?
 }
 
 fn health_probe_timeout(timeout_ms: Option<u64>) -> Duration {
@@ -458,7 +488,9 @@ pub(crate) async fn provider_health_probe(
         proxy_url,
         "Failed to create health check client",
     )?;
-    execute_health_probe(Some(&app), client, request).await
+    // Usage is not collected in Remote mode, so direct probes are not recorded locally either.
+    let usage_app = (config.connection_mode == CoreConnectionMode::Local).then_some(&app);
+    execute_health_probe(usage_app, client, request).await
 }
 
 fn provider_health_proxy_url<'a>(url: &reqwest::Url, requested: Option<&'a str>, global: &'a str) -> &'a str {

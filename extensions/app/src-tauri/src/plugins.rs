@@ -1,7 +1,7 @@
 use super::{
     core_origin, current_core_tls_settings, format_management_request_error,
-    management_authorization, management_endpoint, management_http_client, read_management_value,
-    GuiConfigFile, GuiConfigState,
+    management_authorization, management_endpoint, management_http_client_for, read_management_value,
+    CoreConnectionMode, GuiConfigFile, GuiConfigState,
 };
 use futures_util::StreamExt;
 
@@ -20,7 +20,7 @@ pub(crate) async fn get_plugin_latest_releases(
     repositories: Vec<String>,
 ) -> Result<Vec<PluginLatestRelease>, String> {
     let config = gui_config_state.snapshot()?;
-    let response = management_http_client()?
+    let response = management_http_client_for(&config)?
         .get(management_endpoint(&config, "config/server")?)
         .header("Authorization", management_authorization(&config)?)
         .send()
@@ -174,16 +174,17 @@ pub(crate) async fn resolve_plugin_entry_url(
     let response = request_plugins(config).await?;
     let plugins = read_management_value(response).await?;
     let path = active_plugin_menu_path(&plugins, plugin_id, menu_index)?;
-    let origin = core_origin(
-        &config.host,
-        config.port,
-        current_core_tls_settings()?.enabled,
-    );
+    // Plugin pages are served by the core, so a remote core's pages load from its origin.
+    let origin = if config.connection_mode == CoreConnectionMode::Remote {
+        config.remote_management_origin.clone()
+    } else {
+        core_origin(&config.host, config.port, current_core_tls_settings()?.enabled)
+    };
     resolve_plugin_resource_url(&origin, path)
 }
 
 async fn request_plugins(config: &GuiConfigFile) -> Result<reqwest::Response, String> {
-    management_http_client()?
+    management_http_client_for(config)?
         .get(management_endpoint(config, "plugins")?)
         .header("Authorization", management_authorization(config)?)
         .send()

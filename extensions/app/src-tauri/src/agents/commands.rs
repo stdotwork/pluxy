@@ -874,7 +874,15 @@ pub(crate) async fn fetch_agent_model_payload(
         .danger_accept_invalid_certs(tls_enabled)
         .build()
         .map_err(|error| format!("Failed to create model list client: {error}"))?;
-    let base_url = managed_core_loopback_origin(port);
+    fetch_model_payload_from(&client, &managed_core_loopback_origin(port), api_key).await
+}
+
+/// Reads the model list from a core's client API (the managed local core or a remote core).
+pub(crate) async fn fetch_model_payload_from(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+) -> Result<serde_json::Value, String> {
     let endpoints = [
         format!("{base_url}/v1/models"),
         format!("{base_url}/models"),
@@ -1104,6 +1112,9 @@ pub(crate) fn start_codex_model_catalog_sync(app: tauri::AppHandle) {
             let Ok(config) = app.state::<GuiConfigState>().snapshot() else {
                 continue;
             };
+            if crate::core_connection::require_local(&config).is_err() {
+                continue;
+            }
             let paths = agent_config_paths(AgentClient::Codex, &home);
             if !matches!(
                 inspect_agent_managed_config(

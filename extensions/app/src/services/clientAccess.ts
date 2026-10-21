@@ -34,11 +34,12 @@ export function clientApiProfiles(
   tlsEnabled = false,
   listenHost = '127.0.0.1',
 ): ClientApiProfile[] {
-  const safePort = safeLocalPort(port);
   const scheme = tlsEnabled ? 'https' : 'http';
-  const connectHost = normalizedConnectHost(listenHost);
-  const origin = `${scheme}://${urlHost(connectHost)}:${safePort}`;
+  return clientApiProfilesForOrigin(`${scheme}://${urlHost(normalizedConnectHost(listenHost))}:${safeLocalPort(port)}`);
+}
 
+// A remote core serves its client API on the management origin.
+export function clientApiProfilesForOrigin(origin: string): ClientApiProfile[] {
   return [
     {
       id: 'openai',

@@ -37,6 +37,27 @@ pub(crate) fn detect_core_platform() -> Result<CorePlatform, String> {
 
 #[tauri::command]
 pub(crate) async fn get_core_status(app: tauri::AppHandle) -> Result<CoreStatus, String> {
+    let config = app.state::<GuiConfigState>().snapshot()?;
+    if config.connection_mode == CoreConnectionMode::Remote {
+        let connection = core_connection::CoreConnection::from(&config);
+        let result = core_connection::poll_core_connection(connection.clone())
+            .await
+            .unwrap_or_else(|message| core_connection::CoreConnectionTestResult {
+                connected: false,
+                version: None,
+                message,
+            });
+        // Do not publish an old target response after Save has selected another core.
+        let gui_config_state = app.state::<GuiConfigState>();
+        let current = gui_config_state.inner.lock()
+            .map_err(|_| "GUI configuration status lock is poisoned")?;
+        if core_connection::CoreConnection::from(&*current) != connection {
+            return Err("Core connection changed; refresh status".into());
+        }
+        let status = core_connection::remote_status(&connection, result);
+        emit_core_status(&app, &status);
+        return Ok(status);
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let config = app.state::<GuiConfigState>().snapshot()?;
         current_core_status(
@@ -760,8 +781,10 @@ pub(crate) fn set_app_locale(
 ) -> Result<String, String> {
     let config = gui_config_state.set_locale(locale)?;
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    if let Ok(status) = current_core_status(Some(process_state.inner()), Some(config.port)) {
-        update_windows_tray_locale(&app, &config.locale, &status);
+    if config.connection_mode == CoreConnectionMode::Local {
+        if let Ok(status) = current_core_status(Some(process_state.inner()), Some(config.port)) {
+            update_windows_tray_locale(&app, &config.locale, &status);
+        }
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let _ = (app, process_state);

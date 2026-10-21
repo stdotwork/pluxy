@@ -171,6 +171,7 @@ pub(crate) async fn install_local_plugin(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<String, String> {
     let config = gui_config_state.snapshot()?;
+    crate::core_connection::require_local(&config)?;
     let value = read_management_value(super::request_plugins(&config).await?).await?;
     let dir = value
         .get("plugins_dir")

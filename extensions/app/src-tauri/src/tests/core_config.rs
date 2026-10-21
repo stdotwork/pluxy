@@ -2037,6 +2037,7 @@ fn startup_preserves_all_user_owned_yaml_and_only_applies_gui_managed_values() {
         max_retry_credentials: 2,
         max_retry_interval: 5,
         streaming_bootstrap_retries: 1,
+        ..GuiConfigFile::default()
     };
     let merged = merge_core_config_yaml(template, Some(current), &config).unwrap();
     let current_document = serde_norway::from_str::<serde_norway::Value>(current).unwrap();

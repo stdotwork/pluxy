@@ -161,7 +161,7 @@ const thinkingAliasSourceDetail = (source: ThinkingAliasSource) => (
   thinkingAliasProviderDetail(source.kind, source.provider)
 );
 
-export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean } = {}) {
+export function ThinkingAliasesPage({ embedded = false, readOnly = false }: { embedded?: boolean; readOnly?: boolean } = {}) {
   const { askConfirmation, confirmationDialog } = useConfirmation();
   const { t } = useI18n();
   const [thinkingEntries, setThinkingEntries] = useState<ThinkingAliasEntry[]>([]);
@@ -538,7 +538,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
             type="button"
             className="primary-button compact-button"
             onClick={addAlias}
-            disabled={loading || Boolean(busyAlias)}
+            disabled={loading || readOnly || Boolean(busyAlias)}
             title={t('aliases.create')}
             aria-label={t('aliases.create')}
           >
@@ -612,7 +612,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
                 placeholder={loading ? t('aliases.loadingModels') : t('aliases.searchModel')}
                 autoComplete="off"
                 spellCheck={false}
-                disabled={loading || Boolean(busyAlias)}
+                disabled={loading || readOnly || Boolean(busyAlias)}
               />
               {!modelPickerOpen && selectedSource ? (
                 <span className="thinking-source-kind">
@@ -767,7 +767,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
             type="button"
             className="primary-button thinking-alias-create"
             onClick={() => void createAlias()}
-            disabled={loading || Boolean(busyAlias)}
+            disabled={loading || readOnly || Boolean(busyAlias)}
           >
             {busyAction === 'create'
               ? <LoaderCircle size={16} className="spin" />
@@ -810,7 +810,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
                   ) : null}
                 </div>
                 <div className="thinking-alias-actions">
-                  <button type="button" className="icon-button quiet" disabled={loading || Boolean(busyAlias)}
+                  <button type="button" className="icon-button quiet" disabled={loading || readOnly || Boolean(busyAlias)}
                     onClick={() => void editAlias(entry)} title={t('common.edit')} aria-label={t('common.edit')}>
                     <Pencil size={15} />
                   </button>
@@ -818,7 +818,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
                     type="button"
                     className="icon-button quiet danger"
                     onClick={() => void deleteAlias(entry)}
-                    disabled={Boolean(busyAlias)}
+                    disabled={readOnly || Boolean(busyAlias)}
                     title={t('aliases.delete', { alias: entry.alias })}
                     aria-label={t('aliases.delete', { alias: entry.alias })}
                   >

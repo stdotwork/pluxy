@@ -969,6 +969,14 @@ export function createBrowserMockRuntime(
   const state = createState(scenario);
   let usageViewPreferences: Record<string, string> = {};
   let privacyMode: boolean | null = null;
+  const connectionStorageKey = 'browser-mock.core-connection';
+  let coreConnection = JSON.parse(globalThis.sessionStorage?.getItem(connectionStorageKey) ?? 'null')
+    ?? { mode: 'local', managementOrigin: '', managementKey: '' };
+  if (coreConnection.mode === 'remote') Object.assign(state.coreStatus, {
+    installed: false, running: true, ready: true, managed: false, processId: null,
+    installDir: '', binaryPath: null, currentVersion: 'v8.0.35',
+    connectionMode: 'remote', remoteOrigin: coreConnection.managementOrigin,
+  });
   let themeSelection: ThemeSelection | null = null;
   if (scenario === 'empty') {
     state.usageEvents = [];
@@ -1059,6 +1067,12 @@ export function createBrowserMockRuntime(
         usageViewPreferences = clone(values) as Record<string, string>;
         return null;
       }
+      case 'get_core_connection': return clone(coreConnection);
+      case 'save_core_connection':
+        coreConnection = { ...coreConnection, ...asObject(payload.connection) };
+        globalThis.sessionStorage?.setItem(connectionStorageKey, JSON.stringify(coreConnection));
+        return clone(coreConnection);
+      case 'test_core_connection': return { connected: false, version: null, message: 'Browser Mock: no remote core' };
       case 'get_privacy_mode': return privacyMode;
       case 'save_privacy_mode': {
         if (typeof payload.enabled !== 'boolean') throw new Error('Invalid privacy mode');

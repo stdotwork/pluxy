@@ -9,6 +9,7 @@ mod codex_sessions;
 mod configuration_watcher;
 mod core_config;
 mod core_runtime;
+mod core_connection;
 mod core_recovery;
 mod desktop_theme;
 mod instance_lock;
@@ -44,7 +45,7 @@ mod window_activity;
 use configuration_watcher::nearest_existing_watch_directory;
 use management_api::{
     format_management_request_error, management_authorization, management_endpoint,
-    management_http_client, management_plaintext_key, read_management_text, read_management_value,
+    management_http_client_for, management_plaintext_key, read_management_text, read_management_value,
 };
 use oauth_browser::*;
 #[cfg(test)]
@@ -435,6 +436,8 @@ struct CoreStatus {
     current_version: Option<String>,
     install_dir: String,
     binary_path: Option<String>,
+    connection_mode: CoreConnectionMode,
+    remote_origin: Option<String>,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<core_recovery::RecoveryStatus>,
@@ -613,6 +616,9 @@ struct CoreInstallTask {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 struct GuiConfigFile {
+    connection_mode: CoreConnectionMode,
+    remote_management_origin: String,
+    remote_management_key: String,
     locale: String,
     port: u16,
     allow_lan: bool,
@@ -658,6 +664,14 @@ struct GuiConfigFile {
     max_retry_credentials: u32,
     max_retry_interval: i64,
     streaming_bootstrap_retries: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CoreConnectionMode {
+    #[default]
+    Local,
+    Remote,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -925,6 +939,9 @@ where
 impl Default for GuiConfigFile {
     fn default() -> Self {
         Self {
+            connection_mode: CoreConnectionMode::Local,
+            remote_management_origin: String::new(),
+            remote_management_key: String::new(),
             locale: "en".to_string(),
             port: 8317,
             allow_lan: false,
@@ -2566,7 +2583,7 @@ fn main() {
         .manage(CoreDownloadState::default())
         .manage(AppUpdateState::default())
         .manage(window_activity::WindowActivity::default())
-        .manage(CoreProcessState::new(gui_config.start_core_on_launch))
+        .manage(CoreProcessState::new(should_start_core_on_launch(&gui_config)))
         .manage(DeepSeekHarnessProcessState::default())
         .manage(usage::UsageCollectorState::default())
         .manage(GuiConfigState::new(gui_config))
@@ -2739,6 +2756,11 @@ fn main() {
                     return;
                 };
 
+                if config.connection_mode == CoreConnectionMode::Remote {
+                    process_state.set_starting(false);
+                    return;
+                }
+
                 if config.start_core_on_launch {
                     if let Ok(status) =
                         current_core_status(Some(process_state.inner()), Some(config.port))
@@ -2806,6 +2828,9 @@ fn main() {
             health_check,
             detect_core_platform,
             get_core_status,
+            core_connection::get_core_connection,
+            core_connection::save_core_connection,
+            core_connection::test_core_connection,
             get_gui_settings,
             get_usage_view_preferences,
             save_usage_view_preferences,

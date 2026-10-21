@@ -6,8 +6,13 @@ pub(crate) fn get_lan_ipv4() -> Option<String> {
 }
 
 #[tauri::command]
-pub(crate) fn get_core_tls_settings() -> Result<CoreTlsSettings, String> {
-    current_core_tls_settings()
+pub(crate) async fn get_core_tls_settings(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<CoreTlsSettings, String> {
+    match crate::core_connection::remote_core_config_document(&gui_config_state.snapshot()?).await? {
+        Some(document) => core_tls_settings_from_value(&document),
+        None => current_core_tls_settings(),
+    }
 }
 
 #[tauri::command]
@@ -22,8 +27,13 @@ pub(crate) fn save_core_tls_settings(
 }
 
 #[tauri::command]
-pub(crate) fn get_core_sensitive_words_settings() -> Result<CoreSensitiveWordsSettings, String> {
-    read_core_sensitive_words_settings()
+pub(crate) async fn get_core_sensitive_words_settings(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<CoreSensitiveWordsSettings, String> {
+    match crate::core_connection::remote_core_config_document(&gui_config_state.snapshot()?).await? {
+        Some(document) => core_sensitive_words_settings_from_value(&document),
+        None => read_core_sensitive_words_settings(),
+    }
 }
 
 #[tauri::command]
@@ -252,9 +262,12 @@ pub(crate) fn save_session_routing_settings(
 }
 
 #[tauri::command]
-pub(crate) fn get_core_config_settings(
+pub(crate) async fn get_core_config_settings(
     gui_config_state: tauri::State<'_, GuiConfigState>,
 ) -> Result<CoreConfigView, String> {
+    if let Some(document) = crate::core_connection::remote_core_config_document(&gui_config_state.snapshot()?).await? {
+        return Ok(crate::core_connection::remote_config_view(core_config_settings_from_value(&document)?));
+    }
     let settings = current_core_config_settings(gui_config_state.inner())?;
     let config = gui_config_state.sync_core_settings(&settings)?;
     let api_keys = gui_api_key_values(&config.api_keys);

@@ -8,6 +8,10 @@ export function canOpenAppPage(pageId: string, coreReady: boolean) {
   return coreReady || isAlwaysAvailablePage(pageId);
 }
 
+export function isRemoteDisabledPage(pageId: string) {
+  return ['easy', 'agents', 'usage-records', 'versions'].includes(pageId);
+}
+
 export const APP_NAVIGATION_REQUEST_EVENT = 'cpa-gui-navigation-request';
 
 export type AppNavigationRequest = CustomEvent<() => void>;

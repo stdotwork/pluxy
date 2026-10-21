@@ -8,9 +8,8 @@ import {
   type PluginNavEntry,
 } from './services/pluginNavigation';
 
-export function usePluginNavEntries(coreReady: boolean) {
-  const [entries, setEntries] = useState<PluginNavEntry[]>(readCachedPluginNavEntries);
-  const [fetched, setFetched] = useState(false);
+export function usePluginNavEntries(coreReady: boolean, target: string | null) {
+  const [state, setState] = useState<{ target: string; entries: PluginNavEntry[]; fetched: boolean } | null>(null);
   const [revision, setRevision] = useState(0);
 
   useEffect(() => {
@@ -20,10 +19,11 @@ export function usePluginNavEntries(coreReady: boolean) {
   }, []);
 
   useEffect(() => {
-    if (!coreReady) {
-      setFetched(false);
+    if (!coreReady || !target) {
+      setState(null);
       return undefined;
     }
+    setState({ target, entries: readCachedPluginNavEntries(target), fetched: false });
     let cancelled = false;
     void (async () => {
       try {
@@ -31,15 +31,19 @@ export function usePluginNavEntries(coreReady: boolean) {
         const data = supported ? await pluginsApi.list() : null;
         if (cancelled) return;
         const next = data?.pluginsEnabled ? collectPluginResourceEntries(data.plugins).map(toPluginNavEntry) : [];
-        setEntries(next);
-        writeCachedPluginNavEntries(next);
-        setFetched(true);
+        setState({ target, entries: next, fetched: true });
+        writeCachedPluginNavEntries(next, target);
       } catch {
-        return;
+        if (cancelled) return;
+        setState({ target, entries: [], fetched: false });
+        writeCachedPluginNavEntries([], target);
       }
     })();
     return () => { cancelled = true; };
-  }, [coreReady, revision]);
+  }, [coreReady, target, revision]);
 
-  return { entries, fetched };
+  return {
+    entries: coreReady && state?.target === target ? state.entries : [],
+    fetched: coreReady && state?.target === target && state.fetched,
+  };
 }

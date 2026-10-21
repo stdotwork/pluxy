@@ -82,6 +82,11 @@ export function CoreRuntimeProvider({ children }: { children: ReactNode }) {
   return <CoreRuntimeContext.Provider value={value}>{children}</CoreRuntimeContext.Provider>;
 }
 
+// Pages rendered without the provider behave as Local.
+export function useRemoteMode() {
+  return useContext(CoreRuntimeContext)?.status?.connectionMode === 'remote';
+}
+
 export function useCoreRuntime() {
   const context = useContext(CoreRuntimeContext);
   if (!context) {

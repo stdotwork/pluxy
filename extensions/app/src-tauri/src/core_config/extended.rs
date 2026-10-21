@@ -1086,7 +1086,12 @@ fn prepare_patch(
 }
 
 #[tauri::command]
-pub(crate) fn get_extended_core_config() -> Result<Json, String> {
+pub(crate) async fn get_extended_core_config(
+    gui_config_state: tauri::State<'_, GuiConfigState>,
+) -> Result<Json, String> {
+    if let Some(document) = crate::core_connection::remote_core_config_document(&gui_config_state.snapshot()?).await? {
+        return extended_config_view(&document);
+    }
     let _guard = lock_core_config_file()?;
     let path = core_install_dir()?.join(CORE_CONFIG_FILE);
     let content = fs::read_to_string(&path)

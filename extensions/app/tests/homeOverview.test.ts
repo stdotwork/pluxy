@@ -127,6 +127,22 @@ describe('home overview loading', () => {
     expect(requests.sort()).toEqual(['/config/api-keys', '/credentials']);
   });
 
+  it('reads a remote core through management and the core model command but never shows local usage', async () => {
+    const calls: string[] = [];
+    mockIPC((command, args) => {
+      calls.push(command);
+      if (command === 'get_core_models') return [{ name: 'remote-model' }];
+      const request = args?.request as { path: string };
+      if (request.path === '/credentials') return { files: [] };
+      return { meta: [] };
+    });
+    const overview = await loadHomeOverview(true, Date.now(), true);
+    expect(calls).not.toContain('get_usage_overview');
+    expect(overview.usage).toBeNull();
+    expect(overview.errors.usage).toBe('Not available in Remote mode yet');
+    expect(overview.models).toEqual([{ name: 'remote-model' }]);
+  });
+
   it('keeps successful metrics when independent requests fail and reports failed values as unknown', async () => {
     mockIPC((command, args) => {
       if (command === 'get_usage_overview') return usage;

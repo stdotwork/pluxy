@@ -6,6 +6,8 @@ use super::*;
 #[test]
 fn windows_tray_presentation_tracks_core_state_and_busy_actions() {
     let mut status = CoreStatus {
+        connection_mode: CoreConnectionMode::Local,
+        remote_origin: None,
         installed: false,
         running: false,
         ready: false,

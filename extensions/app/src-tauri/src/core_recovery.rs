@@ -142,7 +142,10 @@ impl CoreRecovery {
 
 fn publish(app: &tauri::AppHandle) {
     let state = app.state::<CoreProcessState>();
-    if let Ok(config) = app.state::<GuiConfigState>().snapshot() {
+    if let Ok(config) = app.state::<GuiConfigState>().snapshot().and_then(|config| {
+        crate::core_connection::require_local(&config)?;
+        Ok(config)
+    }) {
         if let Ok(status) = current_core_status(Some(state.inner()), Some(config.port)) {
             emit_core_status(app, &status);
         }

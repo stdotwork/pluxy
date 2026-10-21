@@ -94,7 +94,7 @@ const viewports = [{ width: 1920, height: 1080 }, { width: 2560, height: 1440 },
               const cards = [...document.querySelectorAll('.config-settings-cards > section, .template-config-card, #config-native-aliases, #config-native-sensitive-words')]
                 .map(card => ({ id: card.id, box: card.getBoundingClientRect() })).filter(card => card.box.width > 0);
               return cards.filter(card => {
-                if (['config-native-software', 'config-group-extensions-plugins'].includes(card.id)) {
+                if (['config-native-software', 'config-core-connection', 'config-group-extensions-plugins'].includes(card.id)) {
                   return Math.abs(card.box.left + card.box.width / 2 - content.left - content.width / 2) > 1;
                 }
                 const peers = cards.filter(peer => Math.abs(peer.box.top - card.box.top) < 2);
@@ -492,6 +492,7 @@ const viewports = [{ width: 1920, height: 1080 }, { width: 2560, height: 1440 },
           await tab('general');
           const remoteManagement = page.locator('#template-management-0');
           await remoteManagement.check();
+          await page.locator('#config-subpage-tab-general .config-nav-dirty').waitFor();
           assert.equal(await hasDirtyMarker('general'), true, `${label}: template drafts mark their category`);
           await tab('requests');
           const retryInput = retrySection.locator('input[type="text"]').first();
@@ -525,6 +526,7 @@ const viewports = [{ width: 1920, height: 1080 }, { width: 2560, height: 1440 },
           const management = page.locator('#template-group-management').locator('xpath=ancestor::section[1]');
           await management.getByRole('button', { name: locale === 'en' ? 'Discard changes' : '放弃本组修改', exact: true }).click();
           assert.equal(await remoteManagement.isChecked(), false);
+          await page.locator('#config-subpage-tab-general .config-nav-dirty').waitFor({ state: 'detached' });
           assert.equal(await hasDirtyMarker('general'), false, `${label}: discarding clears the category marker`);
 
           await tab('requests');

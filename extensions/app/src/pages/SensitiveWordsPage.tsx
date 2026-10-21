@@ -93,7 +93,7 @@ function WordEditor({ provider, entries, composer, disabled, onAdd, onCompose, o
   );
 }
 
-export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void } = {}) {
+export function SensitiveWordsPage({ onDirtyChange, readOnly = false }: { onDirtyChange?: (dirty: boolean) => void; readOnly?: boolean } = {}) {
   const { t } = useI18n();
   const { askConfirmation, confirmationDialog } = useConfirmation();
   const nextEntryId = useRef(0);
@@ -247,10 +247,10 @@ export function SensitiveWordsPage({ onDirtyChange }: { onDirtyChange?: (dirty: 
       ) : (
         <div className="config-sensitive-words-grid">
           <WordEditor provider="antigravity" entries={draft.antigravity} composer={composer.antigravity}
-            disabled={saving} onAdd={addWords} onCompose={composeWord} onChange={changeWord}
+            disabled={saving || readOnly} onAdd={addWords} onCompose={composeWord} onChange={changeWord}
             onRemove={removeWord} onPaste={pasteWords} />
           <WordEditor provider="devin" entries={draft.devin} composer={composer.devin}
-            disabled={saving} onAdd={addWords} onCompose={composeWord} onChange={changeWord}
+            disabled={saving || readOnly} onAdd={addWords} onCompose={composeWord} onChange={changeWord}
             onRemove={removeWord} onPaste={pasteWords} />
         </div>
       )}

@@ -579,7 +579,7 @@ pub(crate) fn set_manual(state: &GuiConfigState, proxy_url: String) -> Result<()
 }
 
 pub(crate) async fn verify_core_proxy(config: &GuiConfigFile) -> Result<(), String> {
-    let client = management_api::management_http_client()?;
+    let client = management_api::management_http_client_for(config)?;
     let mut updated = false;
     for attempt in 0..10 {
         let response = client
@@ -633,6 +633,9 @@ static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn synchronize(app: &tauri::AppHandle, require_core: bool) -> Result<(), String> {
     let _guard = SYNC_LOCK.lock().await;
+    if app.state::<GuiConfigState>().snapshot()?.connection_mode == CoreConnectionMode::Remote {
+        return Ok(());
+    }
     // Keep the existing process check active even if proxy synchronization fails.
     let core_running = require_core || app.state::<CoreProcessState>().managed_pid().is_some();
     let work_app = app.clone();

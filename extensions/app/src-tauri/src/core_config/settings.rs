@@ -1413,6 +1413,12 @@ pub(crate) fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
         )
     };
 
+    // Remote mode does not use the local core files. Skip their reconciliation so
+    // a local problem cannot fall back to the default Local mode and start a core.
+    if config.connection_mode == CoreConnectionMode::Remote {
+        return Ok(config);
+    }
+
     let saved_management_secret = presence.management_secret_key.as_deref();
 
     if gui_config_exists {
@@ -2226,6 +2232,21 @@ pub(crate) fn write_gui_config_to_path(
         root.remove("image-generation-user-selected");
     }
     for (key, item) in [
+        (
+            "connection-mode",
+            value(match config.connection_mode {
+                CoreConnectionMode::Local => "local",
+                CoreConnectionMode::Remote => "remote",
+            }),
+        ),
+        (
+            "remote-management-origin",
+            value(config.remote_management_origin.as_str()),
+        ),
+        (
+            "remote-management-key",
+            value(config.remote_management_key.as_str()),
+        ),
         ("locale", value(config.locale.as_str())),
         ("port", value(i64::from(config.port))),
         ("allow-lan", value(config.allow_lan)),

@@ -73,18 +73,18 @@ const isNavEntry = (value: unknown): value is PluginNavEntry => {
     && entry.route === buildPluginResourceRoute(entry.pluginID, entry.menuIndex as number);
 };
 
-export function readCachedPluginNavEntries(): PluginNavEntry[] {
+export function readCachedPluginNavEntries(target: string): PluginNavEntry[] {
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(CACHE_KEY) ?? '[]');
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(`${CACHE_KEY}:${target}`) ?? '[]');
     return Array.isArray(parsed) ? parsed.filter(isNavEntry) : [];
   } catch {
     return [];
   }
 }
 
-export function writeCachedPluginNavEntries(entries: PluginNavEntry[]) {
+export function writeCachedPluginNavEntries(entries: PluginNavEntry[], target: string) {
   try {
-    window.localStorage.setItem(CACHE_KEY, JSON.stringify(entries));
+    window.localStorage.setItem(`${CACHE_KEY}:${target}`, JSON.stringify(entries));
   } catch {
     return;
   }

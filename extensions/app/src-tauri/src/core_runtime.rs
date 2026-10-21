@@ -184,6 +184,7 @@ pub(crate) async fn install_bundled_core(
         let state = app.state::<CoreDownloadState>();
         let process_state = app.state::<CoreProcessState>();
         let gui_config_state = app.state::<GuiConfigState>();
+        crate::core_connection::require_local(&gui_config_state.snapshot()?)?;
         let (info, archive_path) = bundled_core_archive()?
             .ok_or_else(|| "This distribution has no bundled kernel matching the system architecture".to_string())?;
         let token = CancellationToken::new();
@@ -322,6 +323,7 @@ pub(crate) async fn install_core_version(
         let process_state = app.state::<CoreProcessState>();
         let gui_config_state = app.state::<GuiConfigState>();
         let config = gui_config_state.snapshot()?;
+        crate::core_connection::require_local(&config)?;
         let proxy_url = config.proxy_url.clone();
         let rollback_dir = core_base_dir()?.join("cpa-core.rollback");
         archive_previous_core_rollback(&rollback_dir)?;
@@ -476,6 +478,7 @@ pub(crate) fn start_core_process_with_state(
     process_state: &CoreProcessState,
     gui_config_state: &GuiConfigState,
 ) -> Result<CoreStatus, String> {
+    crate::core_connection::require_local(&gui_config_state.snapshot()?)?;
     network_proxy::refresh(gui_config_state)?;
     let config = gui_config_state.snapshot()?;
     process_state.recovery.cancel();
@@ -496,6 +499,7 @@ pub(crate) fn stop_core_process_with_state(
     process_state: &CoreProcessState,
     gui_config_state: &GuiConfigState,
 ) -> Result<CoreStatus, String> {
+    crate::core_connection::require_local(&gui_config_state.snapshot()?)?;
     stop_core_process_inner(process_state)?;
     let config = gui_config_state.set_run_on_startup(false)?;
     current_core_status(Some(process_state), Some(config.port))
@@ -510,6 +514,7 @@ pub(crate) fn restart_core_process_with_state(
     process_state: &CoreProcessState,
     gui_config_state: &GuiConfigState,
 ) -> Result<CoreStatus, String> {
+    crate::core_connection::require_local(&gui_config_state.snapshot()?)?;
     network_proxy::refresh(gui_config_state)?;
     let config = gui_config_state.snapshot()?;
     process_state.recovery.cancel();
@@ -1361,6 +1366,8 @@ pub(crate) fn current_core_status(
         current_version,
         install_dir: path_to_string(&install_dir),
         binary_path: binary_path.map(|path| path_to_string(&path)),
+        connection_mode: CoreConnectionMode::Local,
+        remote_origin: None,
         message,
     })
 }
@@ -1545,6 +1552,7 @@ pub(crate) fn start_core_process_inner(
     process_state: &CoreProcessState,
     gui_config: &GuiConfigFile,
 ) -> Result<(), String> {
+    crate::core_connection::require_local(gui_config)?;
     process_state.ensure_active()?;
     let mut resolved_config = gui_config.clone();
     resolved_config.proxy_url = network_proxy::resolve(gui_config);
@@ -2332,6 +2340,10 @@ pub(crate) fn shutdown_managed_core(
     process_state: &CoreProcessState,
     gui_config_state: &GuiConfigState,
 ) {
+    if !gui_config_state.snapshot().is_ok_and(|config| config.connection_mode == CoreConnectionMode::Local) {
+        return;
+    }
+
     let was_running = process_state.managed_pid().is_some()
         || core_install_dir()
             .ok()
@@ -3033,8 +3045,10 @@ pub(crate) fn core_binary_name() -> &'static str {
     }
 }
 
+// Silent Launch keeps a locally hosted core in the tray; Remote mode hosts nothing, so it opens normally.
 pub(crate) fn should_start_hidden(config: &GuiConfigFile) -> bool {
-    config.silent_start
+    config.connection_mode == CoreConnectionMode::Local
+        && config.silent_start
         && cfg!(any(
             target_os = "linux",
             target_os = "macos",
@@ -3043,7 +3057,7 @@ pub(crate) fn should_start_hidden(config: &GuiConfigFile) -> bool {
 }
 
 pub(crate) fn should_start_core_on_launch(config: &GuiConfigFile) -> bool {
-    config.start_core_on_launch
+    config.connection_mode == CoreConnectionMode::Local && config.start_core_on_launch
 }
 
 pub(crate) fn configure_initial_main_window(
