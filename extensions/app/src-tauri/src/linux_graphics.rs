@@ -10,6 +10,24 @@
 
 use std::{env, ffi::OsString, path::Path};
 
+/// Keep Linux's main window opaque to avoid the partial blank content / repaint
+/// regression reported on AMD + KDE Wayland after transparency was enabled.
+/// See https://github.com/router-for-me/EasyCLIProxyAPI/issues/491.
+/// Native window materials are only supported on Windows/macOS in this app,
+/// so Linux does not need the transparent window used by those materials.
+/// This must run before Builder::build creates the GTK window and WebView;
+/// setting an opaque background in setup does not undo transparent creation.
+pub(super) fn configure_main_window(config: &mut tauri::utils::config::Config) {
+    if let Some(window) = config
+        .app
+        .windows
+        .iter_mut()
+        .find(|window| window.label == "main")
+    {
+        window.transparent = false;
+    }
+}
+
 fn defaults(
     get: impl Fn(&str) -> Option<OsString>,
     nvidia_driver: bool,
@@ -45,6 +63,30 @@ pub(super) unsafe fn configure() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn main_window_is_opaque_without_changing_other_window_settings() {
+        let mut config: tauri::utils::config::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let mut other = config.app.windows[0].clone();
+        other.label = "other".into();
+        other.transparent = true;
+        config.app.windows.insert(0, other);
+        let mut expected = serde_json::to_value(&config).unwrap();
+        expected["app"]["windows"][1]["transparent"] = serde_json::json!(false);
+
+        configure_main_window(&mut config);
+
+        assert_eq!(serde_json::to_value(&config).unwrap(), expected);
+    }
+
+    #[test]
+    fn missing_main_window_is_left_unchanged() {
+        let mut config = tauri::utils::config::Config::default();
+        config.app.windows.clear();
+        configure_main_window(&mut config);
+        assert!(config.app.windows.is_empty());
+    }
 
     fn settings_with(
         environment: &[(&str, &str)],

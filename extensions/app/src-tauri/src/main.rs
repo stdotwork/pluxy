@@ -12,7 +12,7 @@ mod core_runtime;
 mod core_recovery;
 mod desktop_theme;
 mod instance_lock;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 mod linux_graphics;
 mod management_api;
 mod network_proxy;
@@ -2541,6 +2541,16 @@ fn main() {
     let initial_window_position = configured_window_position(&gui_config);
     let start_hidden = should_start_hidden(&gui_config);
 
+    let context = tauri::generate_context!();
+    #[cfg(target_os = "linux")]
+    let context = {
+        let mut context = context;
+        // Prevent #491's partial blank rendering on AMD/KDE: disable native
+        // transparency before build creates the window, not later in setup.
+        linux_graphics::configure_main_window(context.config_mut());
+        context
+    };
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
@@ -2935,7 +2945,7 @@ fn main() {
             codex_sessions::context::save_codex_session_context,
             codex_sessions::context::open_codex_session_rollout
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build app");
 
     app.run(|app_handle, event| match event {
