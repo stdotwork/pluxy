@@ -612,7 +612,7 @@ export function ConfigPanelPage() {
     }
   };
 
-  const openCoreLogsDirectory = async () => {
+  const handleOpenCoreLogsDirectory = async () => {
     if (busyAction !== null) return;
     setBusyAction('open-logs');
     try {
@@ -1867,7 +1867,7 @@ export function ConfigPanelPage() {
                 type="button"
                 className="secondary-button compact-button"
                 disabled={controlsDisabled}
-                onClick={() => void openCoreLogsDirectory()}
+                onClick={() => void handleOpenCoreLogsDirectory()}
               >
                 <FolderOpen size={16} aria-hidden="true" />
                 {t('config.diagnostics.openLogs')}
