@@ -57,6 +57,10 @@ const headersFromText = (text: string): Record<string, string> => {
 // cloak block in API-key configuration. Keep typed values only in the form.
 const advancedDraftValue = (key: string, value: unknown): unknown => {
   if (value == null) return value;
+  if (key === 'request_retry' && (typeof value === 'number' || typeof value === 'string')) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) return parsed < 0 ? undefined : parsed;
+  }
   if (key === 'cloak_strict_mode' || key === 'cloak_cache_user_id') {
     if (typeof value === 'string') return value.trim().toLowerCase() === 'true';
   }

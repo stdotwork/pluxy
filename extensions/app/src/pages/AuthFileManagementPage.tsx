@@ -1,3 +1,6 @@
+import { AuthFileBatchDialog } from '../components/AuthFileBatchDialog';
+import { refreshCredential } from '../services/authFileOperations';
+import { credentialQuotaPlugin } from '../services/pluginCredentialQuota';
 import { EmptyState } from '../components/EmptyState';
 import { Checkbox } from '../components/Checkbox';
 import { commitFetchedQuota } from '../services/quotaEnrichment';
@@ -122,6 +125,7 @@ const providerKey = (file: AuthFile) => {
 const fileName = authFileName;
 
 const isRuntimeOnly = isRuntimeOnlyAuthFile;
+const hasQuota = (file: AuthFile) => Boolean(credentialQuotaPlugin(file) || quotaProviderForFile(file));
 
 export function AuthFileManagementPage({ initialProvider }: { initialProvider?: string } = {}) {
   const { t } = useI18n();
@@ -141,9 +145,11 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
   const [providerFilter, setProviderFilter] = useState(() => (
     initialProvider ? providerName({ provider: initialProvider }) : 'all'
   ));
-  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled' | 'runtime'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled' | 'runtime' | 'problem'>('all');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const refreshPending = useRef(false);
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [cooldownResetting, setCooldownResetting] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState('');
@@ -257,7 +263,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
 
   const refreshAllQuotas = async () => {
     if (quotaRefreshing || busy || loading) return;
-    const queryable = files.filter((file) => !readBoolean(file, 'disabled') && quotaProviderForFile(file));
+    const queryable = files.filter((file) => !readBoolean(file, 'disabled') && hasQuota(file));
     if (!queryable.length) return;
     setQuotaRefreshing(true);
     setError('');
@@ -359,10 +365,11 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
         statusFilter === 'all' ||
         (statusFilter === 'disabled' && disabled) ||
         (statusFilter === 'enabled' && !disabled) ||
-        (statusFilter === 'runtime' && isRuntimeOnly(file));
+        (statusFilter === 'runtime' && isRuntimeOnly(file)) ||
+        (statusFilter === 'problem' && !disabled && (['error', 'warning'].includes(authFileHealth(file).tone) || (Array.isArray(file.cooldowns) && file.cooldowns.length > 0)));
       const searchMatch =
         !query ||
-        [fileName(file), providerName(file), readString(file, 'email', 'account', 'label')]
+        [fileName(file), providerName(file), readString(file, 'email', 'account', 'label'), readString(file, 'note'), readString(file, 'prefix')]
           .join(' ')
           .toLowerCase()
           .includes(query);
@@ -407,6 +414,20 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
     } finally {
       setBusy(false);
     }
+  };
+
+  const refreshToken = async (file: AuthFile) => {
+    if (refreshPending.current || busy || loading) return;
+    refreshPending.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      await refreshCredential(file);
+      if (!mountedRef.current) return;
+      showNotice({ key: 'authFiles.operations.done', variables: { success: 1, failed: 0 } });
+      await loadFiles(false);
+    } catch (reason) { if (mountedRef.current) setError(String(reason)); }
+    finally { refreshPending.current = false; if (mountedRef.current) setBusy(false); }
   };
 
   const toggleStatus = async (file: AuthFile) => {
@@ -482,12 +503,13 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
         <button type="button" className="secondary-button small-button" onClick={() => void loadFiles()} disabled={loading || busy}>
           <RefreshCw size={16} className={loading ? 'spin' : ''} />{t('authFiles.toolbar.refreshList')}
         </button>
-        <button type="button" className="secondary-button small-button ghost" onClick={() => void refreshAllQuotas()} disabled={loading || busy || quotaRefreshing || !files.some((file) => !readBoolean(file, 'disabled') && quotaProviderForFile(file))}>
+        <button type="button" className="secondary-button small-button ghost" onClick={() => void refreshAllQuotas()} disabled={loading || busy || quotaRefreshing || !files.some((file) => !readBoolean(file, 'disabled') && hasQuota(file))}>
           <RefreshCw size={16} className={quotaRefreshing ? 'spin' : ''} />{t('authFiles.toolbar.refreshQuota')}
         </button>
         <button type="button" className="secondary-button small-button" onClick={() => fileInputRef.current?.click()} disabled={busy}>
           <Import size={16} />{t('authFiles.import')}
         </button>
+        <button type="button" className="secondary-button small-button ghost" disabled={busy || loading} onClick={() => setBatchOpen(true)}>{t('authFiles.operations.title')}</button>
         <input ref={fileInputRef} type="file" accept=".json,application/json" multiple hidden onChange={(event) => void handleUpload(event)} />
         </div>
       </header>
@@ -509,6 +531,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
             <option value="all">{t('authFiles.filter.allStatuses')}</option>
             <option value="enabled">{t('authFiles.filter.enabled')}</option>
             <option value="disabled">{t('authFiles.filter.disabled')}</option>
+            <option value="problem">{t('authFiles.filter.problem')}</option>
             <option value="runtime">{t('authFiles.filter.runtime')}</option>
           </Select>
           </div>
@@ -539,7 +562,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
               const displayName = privacy.text(name, identities);
               const note = privacy.text(readString(file, 'note'), identities);
               const quota = quotas[quotaKey(file)] ?? idleQuota();
-              const quotaProvider = quotaProviderForFile(file);
+              const quotaProvider = credentialQuotaPlugin(file) ? 'plugin' : quotaProviderForFile(file);
               const metadata = providerKey(file) === 'codex' ? codexMetadataFor(file) : undefined;
               const plan = quota.plan || metadata?.plan || readString(file, 'plan_type', 'plan');
               const expiry = quota.subscriptionActiveUntil || metadata?.subscriptionActiveUntil;
@@ -598,6 +621,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
                   <div className="auth-list-details" id={detailsId} hidden={!expanded}>
                     {!showCooldown ? <AuthFileHealthStatus file={file} receivedAtMs={receivedAtMs} observedAt={observedAt} /> : null}
                     <AuthFileRequestStatus file={file} summary />
+                    {isOAuthCredentialFile(file) ? <button type="button" className="secondary-button small-button" disabled={busy || disabled || resettingCooldown} onClick={() => void refreshToken(file)}>{t('authFiles.operations.refresh')}</button> : null}
                     <div className="auth-card-meta">
                       <strong title={displayName}>{displayName}</strong>
                       <span>{t('authFiles.priority.button', { priority })}</span>
@@ -624,6 +648,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
       </section>
       {runtimeCount > 0 ? <p className="page-footnote">{t('authFiles.runtimeFootnote', { count: runtimeCount })}</p> : null}
 
+      {batchOpen ? <AuthFileBatchDialog files={visibleFiles} onClose={() => setBatchOpen(false)} onChanged={() => loadFiles(false)} /> : null}
       {settingsName ? <AuthFileSettingsDialog key={settingsName} name={settingsName} displayName={shownNameFor(settingsName)} provider={providerKey(files.find((file) => fileName(file) === settingsName) ?? {})} onClose={() => setSettingsName(null)} onSaved={() => {
         showNotice({ key: 'authFiles.settings.updated', variables: { name: shownNameFor(settingsName) } });
         setSettingsName(null);

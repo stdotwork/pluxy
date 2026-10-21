@@ -1,0 +1,19 @@
+.model-discovery-dialog.auth-batch-dialog {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-height: 0;
+  height: min(620px, calc(100dvh - 48px));
+}
+
+.auth-batch-dialog .model-discovery-content {
+  min-height: 0;
+  overflow: auto;
+}
+
+.auth-batch-dialog .model-discovery-actions {
+  flex-wrap: wrap;
+}
+
+.auth-batch-dialog .model-discovery-actions button {
+  min-width: 0;
+  flex: 1 1 auto;
+}

@@ -1,4 +1,14 @@
 export const authFileListZhCN = {
+  "authFiles.policy.title": "请求策略",
+  "authFiles.policy.hint": "未设置时继承全局配置。错误规则按顺序优先生效，清空后恢复继承；正则使用 Go 语法。",
+  "authFiles.operations.title": "批量管理",
+  "authFiles.operations.selectAll": "选择当前筛选结果",
+  "authFiles.operations.refresh": "刷新凭证",
+  "authFiles.operations.refreshAll": "刷新全部凭证",
+  "authFiles.operations.confirmRefresh": "刷新服务器上所有符合条件的凭证，不限当前筛选；不会重置配额，可能需要几分钟。",
+  "authFiles.operations.done": "处理完成：成功 {success}，失败 {failed}",
+  "authFiles.operations.confirmDelete": "删除选中的 {count} 个凭证文件？此操作不可撤销。",
+  "authFiles.filter.problem": "存在问题",
   'authFiles.list.credential': '凭证',
   'authFiles.list.plan': '套餐',
   'authFiles.list.status': '可用状态',
@@ -31,6 +41,16 @@ export const authFileListZhCN = {
 } as const;
 
 export const authFileListEn: Record<keyof typeof authFileListZhCN, string> = {
+  "authFiles.policy.title": "Request policies",
+  "authFiles.policy.hint": "Unset values inherit global settings. Error rules run in order; clearing restores inheritance. Regex uses Go syntax.",
+  "authFiles.operations.title": "Batch management",
+  "authFiles.operations.selectAll": "Select filtered results",
+  "authFiles.operations.refresh": "Refresh credentials",
+  "authFiles.operations.refreshAll": "Refresh all credentials",
+  "authFiles.operations.confirmRefresh": "Refresh all eligible credentials on the server, beyond this filter. This does not reset quota and may take several minutes.",
+  "authFiles.operations.done": "Completed: {success} succeeded, {failed} failed",
+  "authFiles.operations.confirmDelete": "Delete {count} selected credential files? This cannot be undone.",
+  "authFiles.filter.problem": "Problems",
   'authFiles.list.credential': 'Credential',
   'authFiles.list.plan': 'Plan',
   'authFiles.list.status': 'Availability',
@@ -63,6 +83,16 @@ export const authFileListEn: Record<keyof typeof authFileListZhCN, string> = {
 };
 
 export const authFileListJa: Record<keyof typeof authFileListZhCN, string> = {
+  "authFiles.policy.title": "リクエストポリシー",
+  "authFiles.policy.hint": "未設定は全体設定を継承します。ルールは順番に適用され、空にすると継承に戻ります。正規表現は Go 構文です。",
+  "authFiles.operations.title": "一括管理",
+  "authFiles.operations.selectAll": "絞り込み結果を選択",
+  "authFiles.operations.refresh": "認証情報を更新",
+  "authFiles.operations.refreshAll": "すべての認証情報を更新",
+  "authFiles.operations.confirmRefresh": "絞り込みに関係なくサーバーの対象認証情報を更新します。割当量はリセットされません。数分かかる場合があります。",
+  "authFiles.operations.done": "完了：成功 {success}、失敗 {failed}",
+  "authFiles.operations.confirmDelete": "選択した {count} 件の認証情報を削除しますか？元に戻せません。",
+  "authFiles.filter.problem": "問題あり",
   'authFiles.list.credential': '認証情報',
   'authFiles.list.plan': 'プラン',
   'authFiles.list.status': '利用状態',

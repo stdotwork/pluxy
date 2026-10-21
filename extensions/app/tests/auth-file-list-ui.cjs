@@ -163,11 +163,11 @@ const fs = require('node:fs/promises');
     let updates = await page.evaluate(() => window.authFileListFixture.requests.filter(request => request.method === 'PATCH'));
     assert.equal(updates.length, 1);
     assert.equal(updates[0].path, '/credentials/status');
-    assert.deepEqual(updates[0].body, { name: '01-account.json', disabled: true });
+    assert.deepEqual(updates[0].body, { name: '01-account.json', disabled: true, auth_index: 'fixture-account-1' });
     await card(1).getByRole('switch').click();
     await page.waitForFunction(() => window.authFileListFixture.reads === 3);
     updates = await page.evaluate(() => window.authFileListFixture.requests.filter(request => request.method === 'PATCH'));
-    assert.deepEqual(updates[1].body, { name: '01-account.json', disabled: false });
+    assert.deepEqual(updates[1].body, { name: '01-account.json', disabled: false, auth_index: 'fixture-account-1' });
     assert.equal(await card(1).getByRole('switch').getAttribute('aria-checked'), 'true');
     assert.equal(await card(3).getByRole('switch').getAttribute('aria-checked'), 'false', 'Sibling status stays unchanged');
 
@@ -275,6 +275,39 @@ const fs = require('node:fs/promises');
       assert.deepEqual(quotaOverflow, [], `${width}: quota content overflows its column`);
       await page.screenshot({ path: path.join(screenshotDir, `display-cases-${width}.png`), fullPage: true });
     }
+
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await open('locale=zh-CN');
+    await expand(card(1));
+    await card(1).getByRole('button', { name: '刷新凭证', exact: true }).click();
+    await page.waitForFunction(() => window.authFileListFixture.reads === 2);
+    assert.deepEqual(await page.evaluate(() => window.authFileListFixture.requests.find(r => r.path === '/credentials/refresh').body), { name: '01-account.json', auth_index: 'fixture-account-1' });
+    await page.getByRole('button', { name: '批量管理', exact: true }).click();
+    const batch = page.getByRole('dialog', { name: '批量管理', exact: true });
+    await batch.waitFor();
+    await batch.getByRole('checkbox').nth(1).check();
+    await batch.getByRole('button', { name: '停用', exact: true }).click();
+    await batch.getByRole('status').first().waitFor();
+    assert.ok((await batch.getByRole('status').first().innerText()).includes('成功 1'));
+    await page.setViewportSize({ width: 390, height: 850 });
+    assert.equal(await batch.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'Batch dialog fits narrow viewport');
+    assert.equal(await batch.locator('.model-discovery-actions').evaluate(node => { const box = node.getBoundingClientRect(); return box.bottom <= innerHeight && box.top >= 0; }), true, 'Batch actions remain in the viewport');
+    await page.screenshot({ path: path.join(screenshotDir, 'batch-management-mobile.png'), fullPage: false });
+    assert.deepEqual(await page.evaluate(() => window.authFileListFixture.unhandled), []);
+
+    await batch.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.goto(`${base}/tests/fixtures/credential-settings.html`);
+    await page.locator('.credential-settings-body[aria-busy="false"]').waitFor();
+    const policy = page.locator('details.credential-settings-section');
+    assert.equal(await policy.getAttribute('open'), null, 'New policies are collapsed by default');
+    await policy.locator('summary').click();
+    await policy.getByRole('button', { name: '请求重试次数: 继承 / 未设置', exact: true }).click();
+    await policy.getByRole('spinbutton', { name: '请求重试次数', exact: true }).fill('2');
+    await policy.getByRole('button', { name: '凭证错误处理规则: 继承 / 未设置', exact: true }).click();
+    await policy.getByRole('button', { name: '添加', exact: true }).click();
+    assert.equal(await policy.getByRole('spinbutton', { name: 'HTTP 状态码', exact: true }).inputValue(), '400');
+    await page.screenshot({ path: path.join(screenshotDir, 'credential-policy-mobile.png'), fullPage: true });
+    assert.equal(await page.locator('.credential-settings-dialog').evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, 'Policy settings fit the existing dialog');
 
     console.log('PASS: offline compact credential card grid with visible request/runtime/quota/action data, compact row height, exact quota percentages/reset timestamps, unknown quota, ten/two pagination, search/provider/status reset, page size twenty, additional quota disclosure, main-row and detail-summary request keyboard tooltips, directly visible cooldown controls, exact status PATCH, direct delete confirmation/cancel, small idle accounts without pagination, light/dark Chinese/English 1800/1280/1024/390 without page or card overflow, contained table scrolling only at intermediate widths.');
     console.log(`Screenshots: ${screenshotDir}`);

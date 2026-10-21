@@ -12,6 +12,7 @@ import {
   readString,
 } from './managementApi';
 import { authFileName } from './authFiles';
+import { credentialQuotaPlugin, loadPluginCredentialQuota } from './pluginCredentialQuota';
 import { DEVIN_QUOTA_DATA, DEVIN_QUOTA_HEADERS, DEVIN_QUOTA_URL, readDevinQuota } from './devinQuota';
 import { antigravityProjectFor, codexMetadataFor, isPaidXaiFile } from './quotaMetadata';
 import { quotaResetFor, quotaResetInstant } from './quotaTime';
@@ -948,6 +949,7 @@ const callCodexResetCredits = async (
 };
 
 async function loadQuotaSnapshot(file: AuthFile): Promise<QuotaState> {
+  if (credentialQuotaPlugin(file)) return loadPluginCredentialQuota(file);
   const provider = providerForFile(file);
   if (!provider) {
     return {

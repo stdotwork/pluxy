@@ -16,7 +16,9 @@ describe('credential settings interaction', () => {
     expect(html).toContain('Credential timezone');
     expect(html).toContain('Asia/Shanghai');
     expect(html).not.toContain('Request cloaking');
-    expect(html).not.toContain('Inherit / not set');
+    expect(html).toContain('<details class="credential-settings-section">');
+    expect(html).not.toContain('<details class="credential-settings-section" open');
+    expect(html).toContain('Request policies');
     expect(html).not.toContain('Model aliases and Claude compatibility');
   });
 

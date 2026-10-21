@@ -1,6 +1,9 @@
-import { boolShape, nonemptyText, stringsShape, textShape, type ConfigShape } from './structuredConfig';
+import { boolShape, errorRulesShape, nonemptyText, stringsShape, textShape, type ConfigShape } from './structuredConfig';
 
 export const credentialAdvancedShape: ConfigShape = { type: 'object', fields: {
+  request_retry: { type: 'number', optional: true, min: 0, label: { zh: '请求重试次数', en: 'Request retries', ja: '再試行回数' } },
+  request_scoped_errors: { ...errorRulesShape, optional: true, label: { zh: '凭证错误处理规则', en: 'Credential error rules', ja: '認証情報のエラー処理' } },
+  using_api: boolShape({ zh: '使用 xAI 官方 API', en: 'Use the official xAI API', ja: 'xAI 公式 API を使用' }),
   cloak_mode: { type: 'select', optional: true, options: ['auto', 'always', 'never'], label: { zh: 'Claude 请求伪装', en: 'Claude request cloaking', ja: 'Claude リクエスト偽装' } },
   cloak_strict_mode: boolShape({ zh: '严格伪装模式', en: 'Strict cloaking', ja: '厳格な偽装' }),
   cloak_cache_user_id: boolShape({ zh: '复用用户标识', en: 'Cache user ID', ja: 'ユーザー ID を再利用' }),

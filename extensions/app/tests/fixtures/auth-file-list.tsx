@@ -81,6 +81,7 @@ mockIPC(async (cmd, args) => {
     state.reads += 1;
     return { observed_at: new Date().toISOString(), files: structuredClone(state.files) };
   }
+  if (request.path === '/credentials/refresh' && request.method === 'POST') return { ok: true, auth: { access_token: 'fixture-secret-not-for-display' } };
   if (request.path === '/credentials/status' && request.method === 'PATCH') {
     const target = state.files.find(file => file.name === request.body?.name);
     if (!target || typeof request.body?.disabled !== 'boolean') throw new Error('Fixture status update needs a known name and boolean');
