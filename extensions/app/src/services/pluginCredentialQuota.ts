@@ -1,8 +1,37 @@
 import { isRecord, managementApi, normalizeAuthIndex, readString } from './managementApi';
+import { pluginsApi, type PluginListEntry } from './plugins';
+import { captureQuotaCacheGeneration } from './quotaCache';
 import type { AuthFile, QuotaRow, QuotaState } from './quotaService';
 
 export const credentialQuotaPlugin = (file: AuthFile): string =>
   file.supports_quota === false || file.supportsQuota === false ? '' : readString(file, 'quota_plugin_id', 'quotaPluginId');
+
+export const supportsPluginCredentialQuota = (file: AuthFile): boolean => {
+  const supported = file.supportsQuota ?? file.supports_quota;
+  return supported === true || supported === 'true' || supported === '1';
+};
+
+export function resolveQuotaPluginId(plugins: PluginListEntry[], provider: string): string | undefined {
+  const normalize = (value: string | undefined) => (value ?? '').trim().toLowerCase().replace(/_/g, '-');
+  const target = normalize(provider);
+  if (!target) return undefined;
+  const candidates = plugins.filter(plugin => plugin.registered && plugin.supportsQuota);
+  return (candidates.find(plugin => normalize(plugin.quotaProvider) === target)
+    ?? candidates.find(plugin => normalize(plugin.id) === target)
+    ?? candidates.find(plugin => normalize(plugin.oauthProvider) === target)
+    ?? (candidates.length === 1 ? candidates[0] : undefined))?.id;
+}
+
+// Share concurrent lookups, but never retain a plugin list across connection generations.
+let pluginLookup: { generation: number; promise: Promise<PluginListEntry[]> } | undefined;
+async function quotaPlugins(): Promise<PluginListEntry[]> {
+  const generation = captureQuotaCacheGeneration();
+  if (pluginLookup?.generation === generation) return pluginLookup.promise;
+  const entry = { generation, promise: pluginsApi.list().then(result => result.plugins) };
+  pluginLookup = entry;
+  try { return await entry.promise; }
+  finally { if (pluginLookup === entry) pluginLookup = undefined; }
+}
 
 export function parsePluginCredentialQuota(payload: unknown): QuotaState {
   if (!isRecord(payload)) throw new Error('Invalid plugin quota response');
@@ -38,7 +67,14 @@ export function parsePluginCredentialQuota(payload: unknown): QuotaState {
 
 export async function loadPluginCredentialQuota(file: AuthFile): Promise<QuotaState> {
   try {
-    const plugin = credentialQuotaPlugin(file);
+    const generation = captureQuotaCacheGeneration();
+    let plugin = credentialQuotaPlugin(file);
+    if (!plugin && supportsPluginCredentialQuota(file)) {
+      const provider = readString(file, 'quotaProvider', 'quota_provider');
+      if (!provider) throw new Error('This credential has no supported plugin quota route');
+      plugin = resolveQuotaPluginId(await quotaPlugins(), provider) ?? '';
+    }
+    if (generation !== captureQuotaCacheGeneration()) throw new Error('Connection changed during quota lookup');
     const authIndex = normalizeAuthIndex(file.auth_index ?? file.authIndex);
     if (!plugin || !authIndex || file.disabled === true) throw new Error('Plugin quota is unavailable for this credential');
     return parsePluginCredentialQuota(await managementApi.post(`/plugins/${encodeURIComponent(plugin)}/quota`, { auth_index: authIndex }));

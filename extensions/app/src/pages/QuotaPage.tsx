@@ -16,6 +16,7 @@ import claudeIcon from '../assets/icons/claude.svg';
 import codexIcon from '../assets/icons/codex.svg';
 import grokIcon from '../assets/icons/grok.svg';
 import devinIcon from '../assets/icons/devin.svg';
+import geminiIcon from '../assets/icons/gemini.svg';
 import kimiIcon from '../assets/icons/kimi-light.svg';
 import { managementApi, readBoolean, responseList } from '../services/managementApi';
 import { formatQuotaReset, useQuotaClock } from '../services/quotaTime';
@@ -23,10 +24,10 @@ import {
   formatQuotaTimestamp,
   idleQuota,
   loadQuota,
-  providerForFile,
+  quotaProviderForFile,
   quotaKey,
   type AuthFile,
-  type QuotaProvider,
+  type QuotaDisplayProvider,
   type QuotaState,
 } from '../services/quotaService';
 import {
@@ -41,7 +42,8 @@ import { useI18n } from '../i18n';
 import { usePrivacyMask } from '../privacy';
 import './QuotaPage.css';
 
-const providerMeta: Record<QuotaProvider, { label: string; icon: string }> = {
+const providerMeta: Record<QuotaDisplayProvider, { label: string; icon: string }> = {
+  plugin: { label: 'Plugin', icon: '' },
   claude: { label: 'Claude', icon: claudeIcon },
   codex: { label: 'Codex', icon: codexIcon },
   kimi: { label: 'Kimi', icon: kimiIcon },
@@ -50,7 +52,7 @@ const providerMeta: Record<QuotaProvider, { label: string; icon: string }> = {
   antigravity: { label: 'Antigravity', icon: antigravityIcon },
 };
 
-const providerOrder: QuotaProvider[] = ['claude', 'antigravity', 'codex', 'xai', 'kimi', 'devin'];
+const providerOrder: QuotaDisplayProvider[] = ['claude', 'antigravity', 'codex', 'xai', 'kimi', 'devin', 'plugin'];
 const REFRESH_CONCURRENCY = 4;
 
 export function QuotaPage() {
@@ -61,7 +63,7 @@ export function QuotaPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [category, setCategory] = useState<'all' | QuotaProvider>('all');
+  const [category, setCategory] = useState<'all' | QuotaDisplayProvider>('all');
   const querying = Object.values(quotas).some((quota) => quota.status === 'loading');
 
   const loadFiles = useCallback(async () => {
@@ -70,7 +72,7 @@ export function QuotaPage() {
     try {
       const payload = await managementApi.get('/credentials');
       const allFiles = sortAuthFilesByPriority(dedupeAuthFiles(responseList(payload, 'files')));
-      const nextFiles = allFiles.filter((file) => !readBoolean(file, 'disabled') && providerForFile(file));
+      const nextFiles = allFiles.filter((file) => !readBoolean(file, 'disabled') && quotaProviderForFile(file));
       setFiles(nextFiles);
       const validQuotaKeys = new Set(allFiles.map(quotaKey));
       pruneQuotaCache(validQuotaKeys);
@@ -129,9 +131,9 @@ export function QuotaPage() {
   }, [files, t]);
 
   const grouped = useMemo(() => {
-    const groups = new Map<QuotaProvider, { file: AuthFile; quota: QuotaState }[]>();
+    const groups = new Map<QuotaDisplayProvider, { file: AuthFile; quota: QuotaState }[]>();
     files.forEach((file) => {
-      const provider = providerForFile(file);
+      const provider = quotaProviderForFile(file);
       if (!provider) return;
       const items = groups.get(provider) ?? [];
       items.push({ file, quota: quotas[quotaKey(file)] ?? idleQuota() });
@@ -169,9 +171,9 @@ export function QuotaPage() {
         <>
           <SegmentedControl className="quota-category-filter" aria-label={t('quota.filter.label')} value={activeCategory} onChange={setCategory}
             items={([['all', files.length] as const, ...grouped.map(([provider, items]) => [provider, items.length] as const)]).map(([provider, count]) => {
-              const label = provider === 'all' ? t('quota.filter.all') : providerMeta[provider].label;
+              const label = provider === 'all' ? t('quota.filter.all') : provider === 'plugin' ? t('quota.pluginCategory') : providerMeta[provider].label;
               return { value: provider, 'aria-label': `${label}, ${t(count === 1 ? 'quota.credentials.one' : 'quota.credentials.other', { count })}`, label: <>
-                {provider === 'all' ? null : <img src={providerMeta[provider].icon} alt="" className={provider === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} />}
+                {provider === 'all' ? null : provider === 'plugin' ? <Gauge size={18} aria-hidden="true" /> : <img src={providerMeta[provider].icon} alt="" className={provider === 'devin' ? 'provider-logo devin-logo' : 'provider-logo'} />}
                 <span>{label}</span><span className="quota-filter-count">{count}</span>
               </> };
             })} />
@@ -185,7 +187,7 @@ export function QuotaPage() {
 export function QuotaCard({ file, quota, onRefresh, onReset }: { file: AuthFile; quota: QuotaState; onRefresh: () => void; onReset?: () => void }) {
   const { locale, t } = useI18n();
   const now = useQuotaClock() + (quota.serverTimeOffsetMs ?? 0);
-  const provider = providerForFile(file);
+  const provider = quotaProviderForFile(file);
   const privacy = usePrivacyMask();
   const name = privacy.credentialName(file);
   const disabled = readBoolean(file, 'disabled');
@@ -207,7 +209,7 @@ export function QuotaCard({ file, quota, onRefresh, onReset }: { file: AuthFile;
     <article className="panel real-quota-card">
       <div className="real-quota-card-header">
         <div className="quota-identity">
-          <img src={provider ? providerMeta[provider].icon : ''} alt="" className="quota-account-icon" />
+          {provider === 'plugin' && String(file.provider ?? file.type).toLowerCase() !== 'gemini' ? <Gauge size={24} aria-hidden="true" /> : <img src={provider === 'plugin' && String(file.provider ?? file.type).toLowerCase() === 'gemini' ? geminiIcon : provider ? providerMeta[provider].icon : geminiIcon} alt="" className="quota-account-icon" />}
           <div><strong title={name}>{name}</strong></div>
         </div>
         {quota.plan || quota.subscriptionActiveUntil ? <div className="quota-plan">

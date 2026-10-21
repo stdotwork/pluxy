@@ -1,6 +1,5 @@
 import { AuthFileBatchDialog } from '../components/AuthFileBatchDialog';
 import { refreshCredential } from '../services/authFileOperations';
-import { credentialQuotaPlugin } from '../services/pluginCredentialQuota';
 import { EmptyState } from '../components/EmptyState';
 import { Checkbox } from '../components/Checkbox';
 import { commitFetchedQuota } from '../services/quotaEnrichment';
@@ -50,7 +49,7 @@ import {
 import {
   idleQuota,
   loadQuota,
-  providerForFile as quotaProviderForFile,
+  quotaProviderForFile,
   quotaKey,
 } from '../services/quotaService';
 import {
@@ -125,7 +124,7 @@ const providerKey = (file: AuthFile) => {
 const fileName = authFileName;
 
 const isRuntimeOnly = isRuntimeOnlyAuthFile;
-const hasQuota = (file: AuthFile) => Boolean(credentialQuotaPlugin(file) || quotaProviderForFile(file));
+const hasQuota = (file: AuthFile) => Boolean(quotaProviderForFile(file));
 
 export function AuthFileManagementPage({ initialProvider }: { initialProvider?: string } = {}) {
   const { t } = useI18n();
@@ -562,7 +561,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
               const displayName = privacy.text(name, identities);
               const note = privacy.text(readString(file, 'note'), identities);
               const quota = quotas[quotaKey(file)] ?? idleQuota();
-              const quotaProvider = credentialQuotaPlugin(file) ? 'plugin' : quotaProviderForFile(file);
+              const quotaProvider = quotaProviderForFile(file);
               const metadata = providerKey(file) === 'codex' ? codexMetadataFor(file) : undefined;
               const plan = quota.plan || metadata?.plan || readString(file, 'plan_type', 'plan');
               const expiry = quota.subscriptionActiveUntil || metadata?.subscriptionActiveUntil;
