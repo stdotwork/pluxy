@@ -1165,6 +1165,7 @@ fn restore_text(
         let mut root = parse(path, Some(current))?;
         let target = parse(path, target)?;
         set(&mut root, &["appliedId".into()], target.get("appliedId"));
+        set(&mut root, &["hybridPointer".into()], target.get("hybridPointer"));
         let mut entries = root
             .get("entries")
             .and_then(Value::as_array)

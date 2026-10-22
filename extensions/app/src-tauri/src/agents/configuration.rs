@@ -876,6 +876,21 @@ pub(crate) fn build_claude_desktop_deployment_config(
     render_agent_json(root, "Claude Desktop configuration")
 }
 
+// Keep generation, removal and selective restoration in agreement. These keys
+// belong to CPA's gateway profile; all other preferences remain user-owned.
+pub(crate) const CLAUDE_DESKTOP_PROFILE_KEYS: &[&str] = &[
+    "disableDeploymentModeChooser",
+    "inferenceGatewayApiKey",
+    "inferenceGatewayAuthScheme",
+    "inferenceGatewayBaseUrl",
+    "inferenceProvider",
+    "inferenceCredentialKind",
+    "inferenceModels",
+    "modelDiscoveryEnabled",
+    "bootstrapEnabled",
+    "selfHostedUrl",
+];
+
 pub(crate) fn build_claude_desktop_profile(
     existing: Option<&str>,
     base_url: &str,
@@ -885,6 +900,15 @@ pub(crate) fn build_claude_desktop_profile(
     mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop gateway configuration")?;
+    // An explicit credential source prevents an old helper/SSO setting from
+    // taking precedence over the local proxy key. The full model IDs below
+    // are authoritative, so discovery must not resolve bare tier aliases.
+    root.insert("inferenceCredentialKind".into(), serde_json::json!("static"));
+    root.insert("modelDiscoveryEnabled".into(), serde_json::json!(false));
+    // Preserve bootstrap details for restoration, but don't fetch an overlay
+    // which could replace this gateway. A session host also overrides inference.
+    root.insert("bootstrapEnabled".into(), serde_json::json!(false));
+    root.remove("selfHostedUrl");
     root.insert(
         "disableDeploymentModeChooser".to_string(),
         serde_json::json!(true),
@@ -1023,6 +1047,10 @@ pub(crate) fn claude_desktop_family_tier(route_model: &str) -> Option<&'static s
         || route_model.eq_ignore_ascii_case(LEGACY_CLAUDE_DESKTOP_MODEL_IDS[2])
     {
         Some("haiku")
+    } else if lowered.starts_with("claude-fable-") || lowered.contains("-fable-") {
+        Some("fable")
+    } else if lowered.starts_with("claude-mythos-") || lowered.contains("-mythos-") {
+        Some("mythos")
     } else {
         None
     }
@@ -1030,6 +1058,9 @@ pub(crate) fn claude_desktop_family_tier(route_model: &str) -> Option<&'static s
 
 pub(crate) fn build_claude_desktop_meta(existing: Option<&str>) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop configuration index")?;
+    // Desktop resolves a hybrid pointer before appliedId. Match its own
+    // "apply locally" transition; transaction snapshots retain the old pointer.
+    root.remove("hybridPointer");
     repair_claude_desktop_meta_names(&mut root);
     let entries = ensure_json_array_entry(&mut root, "entries");
     let mut managed_entry = None;
@@ -1155,8 +1186,9 @@ pub(crate) fn prepare_claude_desktop_managed_removal(paths: &[PathBuf]) -> Resul
     }
     let meta = read_agent_json_or_empty(&paths[3], "Claude Desktop configuration index")?;
     let applied_id = meta.get("appliedId").and_then(serde_json::Value::as_str);
-    let managed_active = applied_id == Some(CLAUDE_DESKTOP_PROFILE_ID)
-        || (applied_id.is_none() && agent_has_managed_marker(AgentClient::ClaudeDesktop, paths)?);
+    let managed_active = !claude_desktop_has_hybrid_pointer(&meta)
+        && (applied_id == Some(CLAUDE_DESKTOP_PROFILE_ID)
+            || (applied_id.is_none() && agent_has_managed_marker(AgentClient::ClaudeDesktop, paths)?));
     let mut changed = Vec::new();
     for (path, label) in [
         (&paths[0], "Claude Desktop main configuration"),
@@ -1182,15 +1214,8 @@ pub(crate) fn prepare_claude_desktop_managed_removal(paths: &[PathBuf]) -> Resul
     if let Some(update) =
         prepare_agent_json_removal(&paths[2], "Claude Desktop gateway configuration", |root| {
             let mut updated = false;
-            for key in [
-                "disableDeploymentModeChooser",
-                "inferenceGatewayApiKey",
-                "inferenceGatewayAuthScheme",
-                "inferenceGatewayBaseUrl",
-                "inferenceProvider",
-                "inferenceModels",
-            ] {
-                updated |= root.remove(key).is_some();
+            for key in CLAUDE_DESKTOP_PROFILE_KEYS {
+                updated |= root.remove(*key).is_some();
             }
             updated
         })?
@@ -2018,19 +2043,13 @@ pub(crate) fn build_restored_claude_desktop_config(
     match index {
         0 | 1 => restore_json_key(&mut root, original_root.as_ref(), "deploymentMode"),
         2 => {
-            for key in [
-                "disableDeploymentModeChooser",
-                "inferenceGatewayApiKey",
-                "inferenceGatewayAuthScheme",
-                "inferenceGatewayBaseUrl",
-                "inferenceProvider",
-                "inferenceModels",
-            ] {
+            for key in CLAUDE_DESKTOP_PROFILE_KEYS {
                 restore_json_key(&mut root, original_root.as_ref(), key);
             }
         }
         3 => {
             restore_json_key(&mut root, original_root.as_ref(), "appliedId");
+            restore_json_key(&mut root, original_root.as_ref(), "hybridPointer");
             let mut entries = root
                 .remove("entries")
                 .and_then(|value| value.as_array().cloned())

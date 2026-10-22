@@ -1,6 +1,21 @@
 use super::support::*;
 use super::*;
 
+#[test]
+fn desktop_repairs_oauth_alias_on_api_key_provider_channels() {
+    for section in ["xai-api-key", "meta-api-key", "vertex-api-key", "interactions-api-key"] {
+        let initial = format!("{section}:\n  - api-key: test-key\n    models: [{{name: source-model}}]\noauth-model-alias:\n  xai:\n    - name: source-model\n      alias: claude-sonnet-5-cc\n      fork: true\n      display-name: EasyCLIProxyAPI managed Claude Desktop mapping\n");
+        let mappings = custom_mappings(&[("source-model", "claude-sonnet-5-cc")]);
+        let rendered = ensure_claude_desktop_model_aliases_in_yaml(&initial, &mappings, &[]).unwrap();
+        let parsed = json(&rendered);
+        assert!(parsed[section][0]["models"].as_array().unwrap().iter()
+            .any(|model| model["alias"] == "claude-sonnet-5-cc"));
+        assert!(!parsed["oauth-model-alias"]["xai"].as_array()
+            .is_some_and(|entries| entries.iter().any(|model| model["alias"] == "claude-sonnet-5-cc")));
+        assert_eq!(ensure_claude_desktop_model_aliases_in_yaml(&rendered, &mappings, &[]).unwrap(), rendered);
+    }
+}
+
 fn json(content: &str) -> serde_json::Value {
     serde_json::to_value(serde_norway::from_str::<serde_norway::Value>(content).unwrap()).unwrap()
 }
@@ -598,4 +613,46 @@ fn legacy_desktop_upstream_fallback_does_not_shadow_an_exact_oauth_alias() {
     assert!(entries
         .iter()
         .all(|entry| entry["name"] == "actual-upstream"));
+}
+
+#[test]
+fn excluded_api_source_must_not_accept_stale_managed_oauth_route() {
+    let input = "xai-api-key:\n  - api-key: key\n    excluded-models: [grok-4.6]\n    models: [{name: grok-4.6}]\noauth-model-alias:\n  xai:\n    - name: grok-4.6\n      alias: claude-opus-4-5\n      fork: true\n      display-name: EasyCLIProxyAPI managed Claude Desktop mapping\n";
+    let result = ensure_claude_desktop_model_aliases_in_yaml(
+        input, &custom_mappings(&[("grok-4.6", "claude-opus-4-5")]), &[]);
+    assert!(result.is_err(), "Excluded source was accepted as usable: {result:?}");
+}
+
+#[test]
+fn valid_existing_provider_route_should_not_move_to_other_provider() {
+    let input = "gemini-api-key:\n  - api-key: gemini-key\n    models: [{name: shared-model}]\ncodex-api-key:\n  - api-key: codex-key\n    models:\n      - name: shared-model\n      - name: shared-model\n        alias: claude-sonnet-5-cc\n        display-name: EasyCLIProxyAPI managed Claude Desktop mapping\n";
+    let result = ensure_claude_desktop_model_aliases_in_yaml(
+        input, &custom_mappings(&[("shared-model", "claude-sonnet-5-cc")]), &[]).unwrap();
+    assert_eq!(json(&result), json(input), "A valid existing route changed provider during an unchanged save");
+}
+
+#[test]
+fn desktop_stale_oauth_route_respects_api_exclusions_but_allows_confirmed_oauth() {
+    for restriction in ["disabled: true", "excluded-models: ['grok-*']"] {
+        let input = format!("xai-api-key:\n  - {restriction}\n    models: [{{name: grok-4.6}}]\noauth-model-alias:\n  xai:\n    - name: grok-4.6\n      alias: claude-opus-4-5\n      fork: true\n      display-name: EasyCLIProxyAPI managed Claude Desktop mapping\n");
+        let mappings = custom_mappings(&[("grok-4.6", "claude-opus-4-5")]);
+        assert!(ensure_claude_desktop_model_aliases_in_yaml(&input, &mappings, &[]).is_err());
+        let definitions = [OAuthModelDefinitions {
+            channel: oauth_alias_channel("xai").unwrap(),
+            models: vec![CodexModelDefinition {
+                id: "grok-4.6".into(), display_name: None, description: None,
+                context_window: None, reasoning_levels: vec![], supports_tools: None,
+            }],
+        }];
+        let updated = ensure_claude_desktop_model_aliases_with_oauth_definitions_in_yaml(
+            &input, &mappings, &[], &definitions).unwrap();
+        assert_eq!(json(&updated), json(&input));
+    }
+}
+
+#[test]
+fn desktop_excluded_upstream_cannot_reuse_its_existing_provider_alias() {
+    let input = "xai-api-key:\n  - excluded-models: [grok-4.6]\n    models:\n      - name: grok-4.6\n      - name: grok-4.6\n        alias: claude-opus-4-5\n        display-name: EasyCLIProxyAPI managed Claude Desktop mapping\n";
+    assert!(ensure_claude_desktop_model_aliases_in_yaml(
+        input, &custom_mappings(&[("grok-4.6", "claude-opus-4-5")]), &[]).is_err());
 }

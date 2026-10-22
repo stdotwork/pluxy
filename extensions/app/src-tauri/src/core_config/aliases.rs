@@ -830,7 +830,8 @@ pub(crate) fn ensure_claude_desktop_model_aliases_with_oauth_definitions_and_rou
             }
         }
         for alias in managed_aliases {
-            if !entries.iter().any(|entry| entry.source_or_alias().eq_ignore_ascii_case(&alias)) {
+            if !entries.iter().any(|entry| entry.source_or_alias().eq_ignore_ascii_case(&alias)
+                || entry.model_id().eq_ignore_ascii_case(&alias)) {
                 remove_managed_claude_model_alias(root, &alias)?;
             }
         }
@@ -955,7 +956,7 @@ fn claude_desktop_has_other_model_family(name: &str) -> bool {
 
 fn claude_desktop_configured_models(root: &serde_norway::Mapping) -> Vec<&serde_norway::Value> {
     let mut models = Vec::new();
-    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+    for (section, _) in V8_PROVIDER_FAMILIES {
         for provider in yaml_mapping_value(root, section)
             .and_then(serde_norway::Value::as_sequence)
             .into_iter()
@@ -1016,7 +1017,7 @@ pub(crate) fn remove_managed_claude_model_alias(
     alias: &str,
 ) -> Result<bool, String> {
     let mut changed = false;
-    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+    for (section, _) in V8_PROVIDER_FAMILIES {
         let Some(providers) = yaml_mapping_value_mut(root, section) else {
             continue;
         };
@@ -1047,7 +1048,7 @@ pub(crate) fn remove_existing_claude_model_alias(
     alias: &str,
 ) -> Result<bool, String> {
     let mut changed = false;
-    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+    for (section, _) in V8_PROVIDER_FAMILIES {
         let Some(providers) = yaml_mapping_value_mut(root, section) else {
             continue;
         };
@@ -1218,7 +1219,7 @@ pub(crate) fn is_managed_claude_model_alias(model: &serde_norway::Value, alias: 
             .is_some_and(|value| value == expected_display_name)
 }
 
-pub(crate) fn configured_managed_claude_alias_matches(
+fn configured_managed_claude_provider_alias_matches(
     root: &serde_norway::Mapping,
     alias: &str,
     source_model: &str,
@@ -1228,26 +1229,19 @@ pub(crate) fn configured_managed_claude_alias_matches(
             && configured_model_identity(model)
                 .is_some_and(|(source, _, _)| source.eq_ignore_ascii_case(source_model))
     };
-    let configured_provider_alias = MODEL_ALIAS_CONFIG_SECTIONS.iter().any(|section| {
+    V8_PROVIDER_FAMILIES.iter().any(|(section, _)| {
         yaml_mapping_value(root, section)
             .and_then(serde_norway::Value::as_sequence)
             .into_iter()
             .flatten()
             .filter_map(serde_norway::Value::as_mapping)
-            .filter(|provider| configured_provider_model_is_enabled(provider, alias))
+            .filter(|provider| configured_provider_model_is_enabled(provider, alias)
+                && configured_provider_model_is_enabled(provider, source_model))
             .filter_map(|provider| yaml_mapping_value(provider, "models"))
             .filter_map(serde_norway::Value::as_sequence)
             .flatten()
             .any(matches)
-    });
-    configured_provider_alias
-        || yaml_mapping_value(root, "oauth-model-alias")
-            .and_then(serde_norway::Value::as_mapping)
-            .into_iter()
-            .flat_map(|channels| channels.values())
-            .filter_map(serde_norway::Value::as_sequence)
-            .flatten()
-            .any(matches)
+    })
 }
 
 pub(crate) fn ensure_claude_desktop_model_alias(
@@ -1257,10 +1251,14 @@ pub(crate) fn ensure_claude_desktop_model_alias(
     alias: &str,
     oauth_model_definitions: &[OAuthModelDefinitions],
 ) -> Result<(), String> {
-    if configured_managed_claude_alias_matches(root, alias, source_model) {
+    // Keep a valid existing API-key route even when another provider publishes
+    // the same model. Provider ordering is not a user choice of credentials.
+    if configured_managed_claude_provider_alias_matches(root, alias, source_model) {
         return Ok(());
     }
-    let source = resolve_claude_desktop_alias_source(sources, source_model, alias)?;
+    let source = resolve_claude_desktop_alias_source(
+        sources, source_model, alias, oauth_model_definitions,
+    )?;
     if let Some(source) = source {
         remove_existing_claude_model_alias(root, alias)?;
         append_claude_desktop_model_alias(root, source, alias)?;
@@ -1291,7 +1289,7 @@ pub(crate) fn configured_model_client_identity(
     root: &serde_norway::Mapping,
     client_model: &str,
 ) -> Option<(String, String)> {
-    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+    for (section, _) in V8_PROVIDER_FAMILIES {
         let Some(providers) =
             yaml_mapping_value(root, section).and_then(serde_norway::Value::as_sequence)
         else {
@@ -1393,6 +1391,7 @@ fn resolve_claude_desktop_alias_source(
     root: &serde_norway::Mapping,
     source_model: &str,
     alias: &str,
+    oauth_model_definitions: &[OAuthModelDefinitions],
 ) -> Result<Option<ClaudeDesktopAliasSource>, String> {
     for upstream in [false, true] {
         let matching_model = |model: &serde_norway::Value| {
@@ -1405,7 +1404,7 @@ fn resolve_claude_desktop_alias_source(
             model.insert(yaml_key("name"), serde_norway::Value::String(name));
             Some(model)
         };
-        for section in MODEL_ALIAS_CONFIG_SECTIONS {
+        for (section, _) in V8_PROVIDER_FAMILIES {
             let Some(providers) = yaml_mapping_value(root, section) else {
                 continue;
             };
@@ -1426,8 +1425,9 @@ fn resolve_claude_desktop_alias_source(
                     .as_sequence()
                     .ok_or_else(|| format!("{section}.models must be an array"))?;
                 if let Some(model) = models.iter().find_map(|model| {
-                    let (_, client_model, _) = configured_model_identity(model)?;
-                    if !configured_provider_model_is_enabled(provider, &client_model) {
+                    let (upstream_model, client_model, _) = configured_model_identity(model)?;
+                    if !configured_provider_model_is_enabled(provider, &client_model)
+                        || !configured_provider_model_is_enabled(provider, &upstream_model) {
                         return None;
                     }
                     matching_model(model)
@@ -1447,7 +1447,33 @@ fn resolve_claude_desktop_alias_source(
                 let (Some(channel), Some(models)) = (channel.as_str(), models.as_sequence()) else {
                     continue;
                 };
-                if let Some(model) = models.iter().find_map(matching_model) {
+                if let Some(model) = models.iter().find_map(|model| {
+                    let resolved = matching_model(model)?;
+                    let (upstream, client, _) = configured_model_identity(model)?;
+                    // A managed OAuth mapping is not evidence of an OAuth source
+                    // when this model belongs to an API-key provider. In particular,
+                    // do not bypass that provider's exclusions via a stale mapping.
+                    let api_source_exists = V8_PROVIDER_FAMILIES.iter().any(|(section, _)| {
+                        yaml_mapping_value(root, section)
+                            .and_then(serde_norway::Value::as_sequence)
+                            .into_iter().flatten()
+                            .filter_map(|provider| provider.get("models"))
+                            .filter_map(serde_norway::Value::as_sequence)
+                            .flatten().filter_map(configured_model_identity)
+                            .any(|(name, id, _)| name.eq_ignore_ascii_case(&upstream)
+                                || id.eq_ignore_ascii_case(source_model))
+                    });
+                    let confirmed_oauth_source = oauth_model_definitions.iter().any(|definition| {
+                        definition.channel.key == channel && definition.models.iter()
+                            .any(|entry| entry.id.eq_ignore_ascii_case(&upstream))
+                    });
+                    if is_managed_claude_model_alias(model, &client)
+                        && api_source_exists && !confirmed_oauth_source
+                    {
+                        return None;
+                    }
+                    Some(resolved)
+                }) {
                     return Ok(Some(ClaudeDesktopAliasSource::OAuth {
                         channel: channel.to_string(),
                         model,

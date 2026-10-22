@@ -252,7 +252,11 @@ impl MockCore {
                 let request_body = &bytes[header_end..header_end + content_length];
                 let mut status = "200 OK";
                 let mut response = "{\"status\":\"ok\"}".to_string();
-                if method == "GET" {
+                if method == "GET" && matches!(path, "/v1/models" | "/models") {
+                    // Public discovery is not a complete routing contract.
+                    // Keep this empty even after a successful alias write.
+                    response = r#"{"data":[]}"#.to_string();
+                } else if method == "GET" {
                     assert_eq!(path, "/v8/management/config.yaml");
                     response = if v8_response {
                         v8_yaml_from_legacy_json(&persisted)
@@ -408,6 +412,28 @@ fn v8_yaml_from_legacy_json(legacy: &serde_json::Value) -> String {
     }
     root.insert("api-keys".into(), serde_json::Value::Object(upstreams));
     serde_norway::to_string(&serde_json::Value::Object(root)).unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn desktop_save_does_not_require_routes_to_appear_in_public_discovery() {
+    let initial = "codex-api-key:\n  - api-key: test-upstream\n    models: [{name: model-a}]\n";
+    let core = MockCore::new(initial, Failure::None);
+    assert!(fetch_agent_models(core.config.port, "test-client").await.unwrap().is_empty());
+    let models = super::support::test_agent_models(&["model-a"]);
+    let mappings = ClaudeDesktopModelMappings::all("model-a");
+    let profile = commit_agent_with_core(&core.config, Some(mappings), &models, |mappings| {
+        build_claude_desktop_profile(None, "http://127.0.0.1:8317", "test-client",
+            "model-a", &models, mappings)
+    }).await.unwrap();
+    let profile: serde_json::Value = serde_json::from_str(&profile).unwrap();
+    assert!(!profile["inferenceModels"].as_array().unwrap().is_empty());
+    assert!(fetch_agent_models(core.config.port, "test-client").await.unwrap().is_empty());
+    let (persisted, requests) = core.finish();
+    assert!(persisted["codex-api-key"][0]["models"].as_array().unwrap().iter()
+        .any(|model| model["alias"] == CLAUDE_DESKTOP_SONNET_MODEL_ID));
+    // Only the two explicit reads above; saving must not poll discovery or infer.
+    assert_eq!(requests.iter().filter(|request| *request == "GET /v1/models").count(), 2);
+    assert!(!requests.iter().any(|request| request.contains("/v1/messages")));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1040,4 +1066,31 @@ async fn alias_transaction_checks_core_before_a_local_only_commit() {
     result.unwrap();
     assert!(committed.load(Ordering::SeqCst));
     assert_eq!(core.finish().0, yaml_json(&current));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn desktop_additional_api_channels_save_and_rollback_without_changing_credentials() {
+    for section in ["xai-api-key", "meta-api-key", "vertex-api-key", "interactions-api-key"] {
+        for fail in [false, true] {
+            let initial = format!("{section}:\n  - api-key: preserved-secret\n    base-url: https://provider.test\n    models: [{{name: model-a}}]\n");
+            let core = MockCore::new(&initial, Failure::None);
+            let result = commit_agent_with_core(
+                &core.config,
+                Some(ClaudeDesktopModelMappings::all("model-a")),
+                &super::support::test_agent_models(&["model-a"]),
+                |_| if fail { Err("local write rejected".into()) } else { Ok(()) },
+            ).await;
+            let (persisted, _) = core.finish();
+            if fail {
+                assert!(result.is_err());
+                assert_eq!(persisted, yaml_json(&initial));
+            } else {
+                result.unwrap();
+                assert_eq!(persisted[section][0]["api-key"], "preserved-secret");
+                assert_eq!(persisted[section][0]["base-url"], "https://provider.test");
+                assert!(persisted[section][0]["models"].as_array().unwrap().iter()
+                    .any(|entry| entry["alias"] == CLAUDE_DESKTOP_SONNET_MODEL_ID));
+            }
+        }
+    }
 }

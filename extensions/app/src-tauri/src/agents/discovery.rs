@@ -3393,6 +3393,31 @@ pub(crate) fn claude_code_model_presentation_environment(
     .collect())
 }
 
+pub(crate) fn claude_desktop_has_hybrid_pointer(meta: &serde_json::Value) -> bool {
+    meta.get("hybridPointer")
+        .and_then(|pointer| pointer.get("bootstrapUrl"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|url| !url.trim().is_empty())
+}
+
+pub(crate) fn claude_desktop_profile_uses_local_gateway(profile: &serde_json::Value) -> bool {
+    profile.get("inferenceProvider").and_then(serde_json::Value::as_str) == Some("gateway")
+        && profile.get("inferenceCredentialKind")
+            .is_none_or(|kind| kind.as_str() == Some("static"))
+        && profile.get("inferenceGatewayAuthScheme")
+            .is_none_or(|scheme| scheme.as_str() == Some("bearer"))
+        && !profile.get("selfHostedUrl").and_then(serde_json::Value::as_str)
+            .is_some_and(|url| !url.trim().is_empty())
+        && (!profile.get("bootstrapUrl").and_then(serde_json::Value::as_str)
+            .is_some_and(|url| !url.trim().is_empty())
+            || profile.get("bootstrapEnabled").and_then(serde_json::Value::as_bool) == Some(false))
+        && profile.get("inferenceModels").and_then(serde_json::Value::as_array)
+            .is_some_and(|models| !models.is_empty() && models.iter().all(|model| {
+                model.as_str().or_else(|| model.get("name").and_then(serde_json::Value::as_str))
+                    .is_some_and(|name| !name.trim().is_empty())
+            }))
+}
+
 pub(crate) fn inspect_claude_desktop_agent_config(
     paths: &[PathBuf],
     port: u16,
@@ -3406,7 +3431,9 @@ pub(crate) fn inspect_claude_desktop_agent_config(
     let profile = read_agent_json_or_empty(&paths[2], "Claude Desktop gateway configuration")?;
     let meta = read_agent_json_or_empty(&paths[3], "Claude Desktop configuration index")?;
     let expected_base = managed_core_loopback_origin(port);
-    let configured = normal
+    let configured = claude_desktop_profile_uses_local_gateway(&profile)
+        && !claude_desktop_has_hybrid_pointer(&meta)
+        && normal
         .get("deploymentMode")
         .and_then(serde_json::Value::as_str)
         == Some("3p")

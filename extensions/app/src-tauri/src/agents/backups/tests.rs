@@ -621,6 +621,43 @@ fn claude_desktop_cowork_hosts_survive_update_close_and_reconnect() {
 }
 
 #[test]
+fn claude_desktop_update_exits_hybrid_and_backup_restores_pointer() {
+    if !AgentClient::ClaudeDesktop.supported_platform() { return; }
+    let home = Home::new();
+    let paths = config_paths("claude-desktop", &home.0).unwrap();
+    let pointer = serde_json::json!({"bootstrapUrl":"https://config.example.test"});
+    let meta = serde_json::json!({"appliedId":"other", "hybridPointer":pointer,
+        "entries":[{"id":"other","name":"Original"}], "custom":true});
+    for path in &paths[..2] { save(path, r#"{"deploymentMode":"3p"}"#); }
+    save(&paths[3], meta.to_string());
+    let original = config_images(&paths).unwrap();
+    apply(&home.0, AgentClient::ClaudeDesktop, "gpt-one").unwrap();
+    let connected: Value = serde_json::from_slice(&fs::read(&paths[3]).unwrap()).unwrap();
+    assert!(connected.get("hybridPointer").is_none());
+    assert_eq!(connected["appliedId"], CLAUDE_DESKTOP_PROFILE_ID);
+    assert_eq!(connected["custom"], true);
+    let restored = prepare_recorded_integration_restore(AgentClient::ClaudeDesktop,
+        &paths, &config_images(&paths).unwrap()).unwrap().unwrap();
+    for ((path, restored), (_, original)) in restored.iter().zip(&original) {
+        assert_eq!(restored.is_some(), original.is_some());
+        assert_eq!(parse(path, text(restored.as_deref()).unwrap()).unwrap(),
+            parse(path, text(original.as_deref()).unwrap()).unwrap());
+    }
+
+    // A user who switches back to a hybrid source must not lose 3P mode
+    // when subsequently removing the dormant CPA integration.
+    let mut hybrid = connected;
+    hybrid["hybridPointer"] = pointer.clone();
+    save(&paths[3], hybrid.to_string());
+    assert!(!inspect_claude_desktop_agent_config(&paths, 8317, "test-secret").unwrap().0);
+    clear_agent_managed_configuration(AgentClient::ClaudeDesktop, &home.0, 8317).unwrap();
+    let meta: Value = serde_json::from_slice(&fs::read(&paths[3]).unwrap()).unwrap();
+    assert_eq!(meta["hybridPointer"], pointer);
+    let settings: Value = serde_json::from_slice(&fs::read(&paths[1]).unwrap()).unwrap();
+    assert_eq!(settings["deploymentMode"], "3p");
+}
+
+#[test]
 fn clear_integration_preserves_claude_settings_for_other_endpoints() {
     let home = Home::new();
     let paths = config_paths("claude-code", &home.0).unwrap();

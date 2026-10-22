@@ -735,6 +735,9 @@ fn claude_desktop_config_builds_gateway_profile_and_index() {
         serde_json::json!(["*"])
     );
     assert_eq!(profile["inferenceGatewayApiKey"], DEFAULT_API_KEY);
+    assert_eq!(profile["inferenceCredentialKind"], "static");
+    assert_eq!(profile["modelDiscoveryEnabled"], false);
+    assert_eq!(profile["bootstrapEnabled"], false);
     assert_eq!(profile["inferenceGatewayBaseUrl"], "http://127.0.0.1:8317");
     assert_eq!(
         profile["inferenceModels"],
@@ -755,6 +758,63 @@ fn claude_desktop_config_builds_gateway_profile_and_index() {
         .find(|entry| entry["id"] == CLAUDE_DESKTOP_PROFILE_ID)
         .unwrap();
     assert_eq!(managed_entry["custom"], true);
+}
+
+#[test]
+fn claude_desktop_gateway_update_and_restore_handle_competing_sources() {
+    let original = serde_json::json!({
+        "inferenceProvider": "gateway", "inferenceCredentialKind": "helper-script",
+        "inferenceCredentialHelper": "/user/helper", "inferenceGatewayAuthScheme": "sso",
+        "bootstrapUrl": "https://config.example.test/settings", "bootstrapEnabled": true,
+        "selfHostedUrl": "https://sessions.example.test", "modelDiscoveryEnabled": true,
+        "defaultModelEffort": "high", "coworkEgressAllowedHosts": ["example.test"]
+    }).to_string();
+    let profile = build_claude_desktop_profile(Some(&original), "http://127.0.0.1:8317",
+        "test-key", "claude-sonnet-5", &[], None).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&profile).unwrap();
+    assert!(claude_desktop_profile_uses_local_gateway(&value));
+    assert!(value.get("selfHostedUrl").is_none());
+    assert_eq!(value["inferenceCredentialHelper"], "/user/helper");
+    assert_eq!(value["defaultModelEffort"], "high");
+    let restored = build_restored_claude_desktop_config(2, &profile, Some(&original)).unwrap().unwrap();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&restored).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&original).unwrap());
+}
+
+#[test]
+fn claude_desktop_status_rejects_overridden_and_incomplete_profiles() {
+    let profile: serde_json::Value = serde_json::from_str(&build_claude_desktop_profile(
+        None, "http://127.0.0.1:8317", "key", "claude-sonnet-5", &[], None).unwrap()).unwrap();
+    for (key, value) in [
+        ("inferenceProvider", serde_json::json!("anthropic")),
+        ("inferenceCredentialKind", serde_json::json!("interactive")),
+        ("inferenceGatewayAuthScheme", serde_json::json!("sso")),
+        ("selfHostedUrl", serde_json::json!("https://host.example.test")),
+        ("inferenceModels", serde_json::json!([])),
+        ("inferenceModels", serde_json::json!([{"labelOverride":"only a label"}])),
+    ] {
+        let mut changed = profile.clone();
+        changed[key] = value;
+        assert!(!claude_desktop_profile_uses_local_gateway(&changed), "{key}");
+    }
+    let mut bootstrap = profile.clone();
+    bootstrap["bootstrapUrl"] = serde_json::json!("https://config.example.test");
+    assert!(claude_desktop_profile_uses_local_gateway(&bootstrap));
+    bootstrap["bootstrapEnabled"] = serde_json::json!(true);
+    assert!(!claude_desktop_profile_uses_local_gateway(&bootstrap));
+    let mut legacy = profile;
+    legacy.as_object_mut().unwrap().remove("inferenceCredentialKind");
+    assert!(claude_desktop_profile_uses_local_gateway(&legacy));
+}
+
+#[test]
+fn claude_desktop_current_family_tiers_include_fable_and_mythos() {
+    for (id, tier) in [("claude-fable-5-1", "fable"), ("claude-mythos-5", "mythos"),
+        ("claude-sonnet-5-cc", "sonnet"), ("claude-opus-5", "opus"), ("claude-haiku-4-5", "haiku")] {
+        assert_eq!(claude_desktop_family_tier(id), Some(tier));
+        let model = claude_desktop_inference_model(id, "source-model", false, &[]);
+        assert_eq!(model["anthropicFamilyTier"], tier);
+    }
 }
 
 #[test]
