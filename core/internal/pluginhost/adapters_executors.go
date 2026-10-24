@@ -437,6 +437,28 @@ func (a *executorAdapter) prepareExecutorCall(req coreexecutor.Request, opts cor
 		}
 		nativeReq.Payload = translated.Body
 	}
+	// User payload rules are the last host-side mutation before the plugin sees
+	// the request, matching on the suffix-free model like the built-in executors
+	// and using the canonical client format as source protocol.
+	if cfg := a.host.currentRuntimeConfig(); cfg != nil {
+		baseModel := strings.TrimSpace(thinking.ParseSuffix(req.Model).ModelName)
+		if baseModel == "" {
+			baseModel = strings.TrimSpace(req.Model)
+		}
+		finalizeOpts := opts
+		if inputRequested != "" {
+			finalizeOpts.SourceFormat = inputRequested
+		}
+		if len(req.Metadata) > 0 {
+			finalizeOpts.Metadata = mergeExecutorMetadata(req.Metadata, opts.Metadata)
+		}
+		root := ""
+		if inputFormat == sdktranslator.FormatAntigravity {
+			root = "request"
+		}
+		finalize := helps.NewPayloadFinalizer(cfg, a.provider, baseModel, inputFormat.String(), root, nativeReq.Payload, req, finalizeOpts)
+		nativeReq.Payload = finalize(nativeReq.Payload)
+	}
 	nativeReq.Format = outputFormat
 	nativeOpts.SourceFormat = inputFormat
 	nativeOpts.ResponseFormat = outputFormat
