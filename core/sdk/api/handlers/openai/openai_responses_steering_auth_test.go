@@ -262,6 +262,41 @@ func TestResponsesSteeringRevokedClientKeyCannotSendSecondCreate(t *testing.T) {
 	if got := upstreamCreates.Load(); got != 2 {
 		t.Fatalf("upstream creates after un-revoke = %d, want 2", got)
 	}
+
+	provider.rotated.Store(true)
+	if err := c.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.steer","previous_response_id":"r11","input":"x"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, steerRotatedMsg, err := c.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gjson.GetBytes(steerRotatedMsg, "type").String(); got != "error" {
+		t.Fatalf("steer after key rotation event = %q, want error (%s)", got, steerRotatedMsg)
+	}
+	if got := int(gjson.GetBytes(steerRotatedMsg, "status").Int()); got != http.StatusUnauthorized {
+		t.Fatalf("steer after key rotation status = %d, want %d (%s)", got, http.StatusUnauthorized, steerRotatedMsg)
+	}
+	if got := upstreamSteers.Load(); got != 0 {
+		t.Fatalf("upstream steers after key rotation = %d, want 0", got)
+	}
+
+	if err := c.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"steering-revoke-model","input":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, createRotatedMsg, err := c.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gjson.GetBytes(createRotatedMsg, "type").String(); got != "error" {
+		t.Fatalf("create after key rotation event = %q, want error (%s)", got, createRotatedMsg)
+	}
+	if got := int(gjson.GetBytes(createRotatedMsg, "status").Int()); got != http.StatusUnauthorized {
+		t.Fatalf("create after key rotation status = %d, want %d (%s)", got, http.StatusUnauthorized, createRotatedMsg)
+	}
+	if got := upstreamCreates.Load(); got != 2 {
+		t.Fatalf("upstream creates after key rotation = %d, want 2", got)
+	}
 }
 
 type stripModelInterceptorHost struct {
