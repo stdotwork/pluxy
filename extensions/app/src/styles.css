@@ -6484,6 +6484,12 @@ textarea:focus-visible {
   gap: 8px;
 }
 
+/* Keep heading actions in a single horizontal control group. The generic
+   heading child rule below otherwise gives this container grid layout. */
+.agent-section-heading > .agent-section-heading-actions {
+  display: flex;
+}
+
 .agent-claude-desktop-mapping-filter {
   display: flex;
   align-items: center;
