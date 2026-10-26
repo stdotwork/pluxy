@@ -2851,6 +2851,8 @@ fn main() {
             restore_codex_official_config,
             set_codex_openai_provider,
             set_codex_remote_compaction,
+            get_codex_subagent_config,
+            save_codex_subagent_config,
             close_codex_config_modification,
             set_agent_config_enabled,
             update_agent_config,

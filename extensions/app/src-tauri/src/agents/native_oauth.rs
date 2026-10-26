@@ -665,6 +665,55 @@ pub(crate) fn codex_remote_compaction_enabled(home: &Path) -> Result<bool, Strin
         .and_then(|p| p.get("name")).and_then(toml_edit::Item::as_str) == Some("OpenAI"))
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CodexSubagentConfig {
+    pub enabled: bool,
+    pub max_concurrent_threads_per_session: Option<u64>,
+    pub default_subagent_model: Option<String>,
+    pub default_subagent_reasoning_effort: Option<String>,
+    pub interrupt_message: bool,
+}
+
+pub(crate) fn read_codex_subagent_config(home: &Path) -> Result<CodexSubagentConfig, String> {
+    let content = read_optional_text(&codex_configuration_directory(home).join("config.toml"))?;
+    let document = parse_codex_document(content.as_deref(), "Codex config.toml")?;
+    let agents = document.get("agents").and_then(toml_edit::Item::as_table);
+    let string_value = |key: &str| agents.and_then(|table| table.get(key)).and_then(toml_edit::Item::as_str).map(str::to_string).filter(|value| !value.trim().is_empty());
+    Ok(CodexSubagentConfig {
+        enabled: agents.and_then(|table| table.get("enabled")).and_then(toml_edit::Item::as_bool).unwrap_or(true),
+        max_concurrent_threads_per_session: agents.and_then(|table| table.get("max_concurrent_threads_per_session")).and_then(toml_edit::Item::as_integer).map(|value| value as u64),
+        default_subagent_model: string_value("default_subagent_model"),
+        default_subagent_reasoning_effort: string_value("default_subagent_reasoning_effort"),
+        interrupt_message: agents.and_then(|table| table.get("interrupt_message")).and_then(toml_edit::Item::as_bool).unwrap_or(true),
+    })
+}
+
+pub(crate) fn write_codex_subagent_config(home: &Path, config: CodexSubagentConfig) -> Result<AgentConfigActionResult, String> {
+    if config.max_concurrent_threads_per_session == Some(0) {
+        return Err("Maximum concurrent threads must be at least 1".into());
+    }
+    let path = codex_configuration_directory(home).join("config.toml");
+    let paths = vec![path];
+    let before = config_images(&paths)?;
+    let mut document = parse_codex_document(text(before[0].1.as_deref())?, "Codex config.toml")?;
+    let agents = document["agents"].or_insert(toml_edit::table()).as_table_mut().ok_or("Codex agents configuration must be a table")?;
+    set_codex_table_item(agents, "enabled", toml_edit::value(config.enabled));
+    set_codex_table_item(agents, "interrupt_message", toml_edit::value(config.interrupt_message));
+    match config.max_concurrent_threads_per_session {
+        Some(value) => set_codex_table_item(agents, "max_concurrent_threads_per_session", toml_edit::value(value as i64)),
+        None => { agents.remove("max_concurrent_threads_per_session"); }
+    }
+    for (key, value) in [("default_subagent_model", config.default_subagent_model), ("default_subagent_reasoning_effort", config.default_subagent_reasoning_effort)] {
+        match value.filter(|value| !value.trim().is_empty()) {
+            Some(value) => set_codex_table_item(agents, key, toml_edit::value(value)),
+            None => { agents.remove(key); }
+        }
+    }
+    let after = vec![(paths[0].clone(), Some(document.to_string().into_bytes()))];
+    commit_config("codex", &paths, &before, &after, "subagents", None)
+}
+
 pub(crate) fn switch_codex_remote_compaction(home: &Path, enabled: bool) -> Result<AgentConfigActionResult, String> {
     let paths = vec![codex_configuration_directory(home).join("config.toml")];
     let before = config_images(&paths)?;
@@ -691,6 +740,21 @@ pub(crate) fn set_codex_remote_compaction(app: tauri::AppHandle, enabled: bool) 
     let _guard = AGENT_CONFIG_FILE_LOCK.lock().map_err(|_| "Agent configuration file lock is poisoned")?;
     let home = app.path().home_dir().map_err(|_| "Failed to get user directory")?;
     let result = switch_codex_remote_compaction(&home, enabled)?;
+    app.state::<AgentConfigStatusCache>().clear()?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub(crate) fn get_codex_subagent_config(app: tauri::AppHandle) -> Result<CodexSubagentConfig, String> {
+    let home = app.path().home_dir().map_err(|_| "Failed to get user directory")?;
+    read_codex_subagent_config(&home)
+}
+
+#[tauri::command]
+pub(crate) fn save_codex_subagent_config(app: tauri::AppHandle, config: CodexSubagentConfig) -> Result<AgentConfigActionResult, String> {
+    let _guard = AGENT_CONFIG_FILE_LOCK.lock().map_err(|_| "Agent configuration file lock is poisoned")?;
+    let home = app.path().home_dir().map_err(|_| "Failed to get user directory")?;
+    let result = write_codex_subagent_config(&home, config)?;
     app.state::<AgentConfigStatusCache>().clear()?;
     Ok(result)
 }

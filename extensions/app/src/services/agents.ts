@@ -195,3 +195,17 @@ export const previewAgentConfigTemplate = (args: { client: AgentClientId; model:
 
 export const setCodexRemoteCompaction = (args: { enabled: boolean }) =>
   invoke<void>('set_codex_remote_compaction', args);
+
+export type CodexSubagentConfig = {
+  enabled: boolean;
+  maxConcurrentThreadsPerSession: number | null;
+  defaultSubagentModel: string | null;
+  defaultSubagentReasoningEffort: string | null;
+  interruptMessage: boolean;
+};
+
+export const getCodexSubagentConfig = (): Promise<CodexSubagentConfig> =>
+  invoke<CodexSubagentConfig>('get_codex_subagent_config');
+
+export const saveCodexSubagentConfig = (config: CodexSubagentConfig): Promise<AgentConfigActionResult> =>
+  invoke<AgentConfigActionResult>('save_codex_subagent_config', { config });
