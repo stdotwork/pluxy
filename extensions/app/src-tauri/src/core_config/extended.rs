@@ -243,6 +243,13 @@ pub(crate) fn extended_config_view(document: &serde_norway::Value) -> Result<Jso
             set(&mut config, &legacy, None)?;
         }
     }
+    // Missing compatibility switches default to enabled; explicit false remains respected.
+    for field in ["enable-apply-patch", "optimize-multi-agent-v2"] {
+        let native = parts(&format!("client/codex/{field}"));
+        if at(&config, &native).is_none() {
+            set(&mut config, &native, Some(Json::Bool(true)))?;
+        }
+    }
     // Move narrow legacy fields first so broader provider blocks do not retain
     // fields which now belong to client.* or a separate header-defaults block.
     for (native, legacy) in PATHS {
@@ -1262,6 +1269,17 @@ client: {codex: {optimize-multi-agent-v2: false}}
         );
         assert_eq!(view["client"]["codex"]["optimize-multi-agent-v2"], false);
         assert!(view.get("codex").is_none());
+    }
+
+    #[test]
+    fn codex_compatibility_switches_default_on_only_when_missing() {
+        let document = serde_norway::from_str(
+            "config-version: 8\nclient: {codex: {enable-apply-patch: false}}\n",
+        )
+        .unwrap();
+        let view = extended_config_view(&document).unwrap();
+        assert_eq!(view["client"]["codex"]["enable-apply-patch"], false);
+        assert_eq!(view["client"]["codex"]["optimize-multi-agent-v2"], true);
     }
 
     #[test]

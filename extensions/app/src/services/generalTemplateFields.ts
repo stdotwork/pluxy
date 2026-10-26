@@ -1,7 +1,14 @@
 import type { TemplateConfigField, TemplateConfigGroup } from './templateConfig';
 
 const text = (zh: string, en: string, ja: string) => ({ zh, en, ja });
-const field = (path: string, type: TemplateConfigField['type'], zh: string, en: string, ja: string, defaultValue: unknown, description?: ReturnType<typeof text>, extra: Partial<TemplateConfigField> = {}): TemplateConfigField => ({ path: path.split('.'), type, label: text(zh, en, ja), defaultValue, description, ...extra });
+const field = (path: string, type: TemplateConfigField['type'], zh: string, en: string, ja: string, defaultValue: unknown, description?: ReturnType<typeof text>, extra: Partial<TemplateConfigField> = {}): TemplateConfigField => ({
+  path: path.split('.'),
+  type,
+  label: text(zh, en, ja),
+  defaultValue: path === 'client.codex.enable-apply-patch' || path === 'client.codex.optimize-multi-agent-v2' ? true : defaultValue,
+  description,
+  ...extra,
+});
 
 export const generalTemplateGroups: readonly TemplateConfigGroup[] = [
   {

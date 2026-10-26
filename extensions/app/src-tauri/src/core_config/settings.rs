@@ -335,7 +335,23 @@ pub(crate) fn merge_core_config_yaml(
     }
     startup_config.usage_statistics_enabled = config.usage_statistics_disabled != Some(true);
     let managed = apply_gui_managed_settings(&base, &startup_config)?;
+    let codex_compatibility_config = current
+        .and_then(|content| serde_norway::from_str::<serde_norway::Value>(content).ok());
     let managed = patch_core_yaml_document(&managed, |document| {
+        for field in ["enable-apply-patch", "optimize-multi-agent-v2"] {
+            let explicitly_configured = codex_compatibility_config
+                .as_ref()
+                .and_then(serde_norway::Value::as_mapping)
+                .is_some_and(|root| [
+                    vec!["client", "codex", field],
+                    vec!["oauth", "providers", "codex", field],
+                    vec!["providers", "codex", field],
+                    vec!["codex", field],
+                ].iter().any(|path| nested_yaml_value(root, path).is_some()));
+            if !explicitly_configured {
+                set_core_yaml_schema_value(document, &["client", "codex", field], &["client", "codex", field], serde_norway::Value::Bool(true))?;
+            }
+        }
         if config.image_generation_user_selected { return Ok(false); }
         let Some(root) = document.as_mapping() else { return Ok(false); };
         let has_codex_keys = nested_yaml_value(root, &["api-keys", "codex"])
