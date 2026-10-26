@@ -56,3 +56,27 @@ export async function refreshPluginReleaseVersions(store: PluginStoreResponse): 
   });
   return { ...store, plugins, sourceErrors };
 }
+
+export function filterInstalledStorePlugins(
+  store: PluginStoreResponse,
+  installedPlugins: { id: string; metadata?: { version?: string } | null }[],
+): PluginStoreResponse {
+  const installedVersions = new Map(
+    installedPlugins.map(plugin => [plugin.id, plugin.metadata?.version?.trim() ?? ""]),
+  );
+  return {
+    ...store,
+    plugins: store.plugins
+      .filter(entry => installedVersions.has(entry.id) && entry.installed && ["matched", "assumed"].includes(entry.installSourceStatus))
+      .map(entry => {
+        const installedVersion = entry.installedVersion || installedVersions.get(entry.id) || "";
+        return installedVersion === entry.installedVersion
+          ? entry
+          : {
+              ...entry,
+              installedVersion,
+              updateAvailable: entry.updateAvailable || (Boolean(entry.version) && isNewerPluginRelease(installedVersion, entry.version)),
+            };
+      }),
+  };
+}

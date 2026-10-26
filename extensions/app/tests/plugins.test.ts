@@ -8,7 +8,7 @@ import {
   isOfficialRepository, resolvePluginAssetURL,
 } from '../src/services/pluginResources';
 import {
-  buildGitHubReleasesPageURL, isValidManualReleaseTag, supportsPluginVersionSelection,
+  buildGitHubReleasesPageURL, filterInstalledStorePlugins, isValidManualReleaseTag, supportsPluginVersionSelection,
   isNewerPluginRelease, refreshPluginReleaseVersions,
 } from '../src/services/pluginReleaseVersions';
 import { buildPluginConfigDraft, buildPluginConfigPatch } from '../src/services/pluginConfigDraft';
@@ -248,6 +248,24 @@ describe('plugin normalization and resources', () => {
 });
 
 describe('plugin installation trust and versions', () => {
+  it("fills missing installed store versions from local plugin metadata when checking updates", () => {
+    const store = normalizePluginStore({
+      plugins: [
+        { id: "live-routes", source_id: "official", version: "0.1.9", installed: true, installed_version: "", install_source_status: "assumed" },
+        { id: "freetier2api", source_id: "official", version: "0.1.19", installed: true, installed_version: "v0.1.19", install_source_status: "matched" },
+        { id: "foreign", source_id: "other", version: "2.0.0", installed: true, installed_version: "1.0.0", install_source_status: "different" },
+      ],
+    });
+    const filtered = filterInstalledStorePlugins(store, [
+      { id: "live-routes", metadata: { version: "0.1.6" } },
+      { id: "freetier2api", metadata: { version: "v0.1.19" } },
+      { id: "foreign", metadata: { version: "1.0.0" } },
+    ]);
+    expect(filtered.plugins).toHaveLength(2);
+    expect(filtered.plugins[0]).toMatchObject({ id: "live-routes", installedVersion: "0.1.6", updateAvailable: true });
+    expect(filtered.plugins[1]).toMatchObject({ id: "freetier2api", installedVersion: "v0.1.19", updateAvailable: false });
+  });
+
   it('matches core update comparisons for dotted releases and other tags', () => {
     expect(isNewerPluginRelease('v1.9.0', '1.10.0')).toBe(true);
     expect(isNewerPluginRelease('2.0.0', '1.9.0')).toBe(false);
