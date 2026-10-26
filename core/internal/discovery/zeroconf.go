@@ -2751,8 +2751,8 @@ func (b *ZeroconfBrowser) Browse(ctx context.Context, serviceType, domain string
 			entriesSeen++
 
 			if browseEntryWithinLimits(entry) {
-				svc := entryToDiscovered(entry)
-				if svc.Port != 0 && (len(svc.IPv4) != 0 || len(svc.IPv6) != 0) {
+				svc, usable := entryToDiscovered(entry)
+				if usable && svc.Port != 0 && (len(svc.IPv4) != 0 || len(svc.IPv6) != 0) {
 					key := discoveredServiceKey(svc)
 					mu.Lock()
 					if index, ok := seen[key]; ok {
@@ -2795,6 +2795,9 @@ func discoveredServiceKey(svc DiscoveredService) string {
 	return strings.Join([]string{svc.InstanceName, svc.ServiceType, svc.Domain}, "\x00")
 }
 
+// mergeDiscoveredService combines repeated observations of one instance.
+// Addresses accumulate across interfaces; TXT-derived metadata comes from the
+// latest valid record so draft and legacy schemas are never mixed.
 func mergeDiscoveredService(dst *DiscoveredService, src DiscoveredService) {
 	if dst == nil {
 		return
@@ -2807,65 +2810,20 @@ func mergeDiscoveredService(dst *DiscoveredService, src DiscoveredService) {
 	}
 	dst.IPv4 = appendUniqueIPs(dst.IPv4, src.IPv4)
 	dst.IPv6 = appendUniqueIPs(dst.IPv6, src.IPv6)
-	if src.Product != "" {
-		dst.Product = src.Product
+	if src.RawTXT == nil {
+		return
 	}
-	if src.Version != "" {
-		dst.Version = src.Version
-	}
-	if src.NodeRole != "" {
-		dst.NodeRole = src.NodeRole
-	}
-	if dst.RawTXT == nil {
-		dst.RawTXT = make(map[string]string)
-	}
-	mergeRawTXTRecords(dst.RawTXT, src.RawTXT)
-	if value, ok := dst.RawTXT["auth_required"]; ok {
-		dst.AuthRequired = strings.EqualFold(strings.TrimSpace(value), "true")
-	}
-	dst.AuthMethods = appendUniqueStrings(dst.AuthMethods, src.AuthMethods)
-	dst.Protocols = appendUniqueStrings(dst.Protocols, src.Protocols)
-	dst.Features = appendUniqueStrings(dst.Features, src.Features)
-	if dst.Endpoints == nil {
-		dst.Endpoints = make(map[string]string)
-	}
-	for key, value := range src.Endpoints {
-		dst.Endpoints[key] = value
-	}
-}
-
-func mergeRawTXTRecords(dst, src map[string]string) {
-	totalBytes := rawTXTMapBytes(dst)
-	for key, value := range src {
-		if key == "" {
-			continue
-		}
-		replacedBytes := 0
-		_, exists := dst[key]
-		if exists {
-			replacedBytes = rawTXTRecordBytes(key, dst[key])
-		} else if len(dst) >= maxBrowseTXTRecords {
-			continue
-		}
-		nextBytes := totalBytes - replacedBytes + rawTXTRecordBytes(key, value)
-		if nextBytes > maxBrowseTXTBytes {
-			continue
-		}
-		dst[key] = value
-		totalBytes = nextBytes
-	}
-}
-
-func rawTXTMapBytes(records map[string]string) int {
-	totalBytes := 0
-	for key, value := range records {
-		totalBytes += rawTXTRecordBytes(key, value)
-	}
-	return totalBytes
-}
-
-func rawTXTRecordBytes(key, value string) int {
-	return len(key) + len(value) + 1
+	dst.Path = src.Path
+	dst.TLS = src.TLS
+	dst.Protocols = src.Protocols
+	dst.Product = src.Product
+	dst.InstanceID = src.InstanceID
+	dst.AuthRequired = src.AuthRequired
+	dst.AuthMethods = src.AuthMethods
+	dst.Endpoints = src.Endpoints
+	dst.NodeRole = src.NodeRole
+	dst.Version = src.Version
+	dst.RawTXT = src.RawTXT
 }
 
 func appendUniqueIPs(dst, src []net.IP) []net.IP {
@@ -2955,29 +2913,13 @@ func (b *ZeroconfBrowser) BrowseWithFallbackServiceType(ctx context.Context, ser
 	return append(cpaGateways, otherGateways...), nil
 }
 
-// sanitizeEndpointPath validates that an endpoint path is a safe relative API path
-// starting with '/' and containing no scheme, domain, protocol-relative prefixes, or traversal elements.
-func sanitizeEndpointPath(p string) string {
-	p = strings.TrimSpace(p)
-	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.Contains(p, `\`) || strings.Contains(p, "://") || strings.Contains(p, "..") {
-		return ""
-	}
-	for _, r := range p {
-		if r < 32 || r == 127 {
-			return ""
-		}
-	}
-	return p
-}
-
-func entryToDiscovered(e *zeroconf.ServiceEntry) DiscoveredService {
-	parsed := ParseTXTRecords(e.Text)
-
+// entryToDiscovered converts a zeroconf entry and reports whether its TXT
+// record satisfies draft-su-ai-gateway-discovery-00 (or the legacy CPA schema).
+func entryToDiscovered(e *zeroconf.ServiceEntry) (DiscoveredService, bool) {
 	port := e.Port
 	if port < 1 || port > 65535 {
 		port = 0
 	}
-
 	svc := DiscoveredService{
 		InstanceName: e.Instance,
 		ServiceType:  e.Service,
@@ -2986,43 +2928,12 @@ func entryToDiscovered(e *zeroconf.ServiceEntry) DiscoveredService {
 		Port:         port,
 		IPv4:         filterUsableIPs(e.AddrIPv4),
 		IPv6:         filterUsableIPs(e.AddrIPv6),
-		Product:      parsed["product"],
-		Version:      parsed["version"],
-		NodeRole:     parsed["node_role"],
-		RawTXT:       parsed,
-		Endpoints:    make(map[string]string),
 	}
-
-	if parsed["auth_required"] == "true" {
-		svc.AuthRequired = true
+	if e.HostName == "." {
+		return svc, false
 	}
-	if methods := parsed["auth_methods"]; methods != "" {
-		svc.AuthMethods = parseTXTList(methods)
-	}
-	if protos := parsed["protocols"]; protos != "" {
-		svc.Protocols = parseTXTList(protos)
-	}
-	if feats := parsed["features"]; feats != "" {
-		svc.Features = parseTXTList(feats)
-	}
-
-	if v, ok := parsed["api_openai"]; ok {
-		if clean := sanitizeEndpointPath(v); clean != "" {
-			svc.Endpoints["openai"] = clean
-		}
-	}
-	if v, ok := parsed["api_anthropic"]; ok {
-		if clean := sanitizeEndpointPath(v); clean != "" {
-			svc.Endpoints["anthropic"] = clean
-		}
-	}
-	if v, ok := parsed["api_gemini"]; ok {
-		if clean := sanitizeEndpointPath(v); clean != "" {
-			svc.Endpoints["gemini"] = clean
-		}
-	}
-
-	return svc
+	usable := applyTXTMetadata(&svc, ParseTXTRecords(e.Text))
+	return svc, usable
 }
 
 func filterUsableIPs(ips []net.IP) []net.IP {

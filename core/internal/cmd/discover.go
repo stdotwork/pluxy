@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -220,14 +221,6 @@ func runDiscoverWithOptions(opts DiscoverOptions, stdout, stderr io.Writer, newB
 			}
 			fmt.Fprintf(stdout, "    Protocols: %s\n", strings.Join(safeProtocols, ", "))
 		}
-		if len(gw.Features) > 0 {
-			var safeFeatures []string
-			for _, f := range gw.Features {
-				safeFeatures = append(safeFeatures, sanitizeTerminal(f))
-			}
-			fmt.Fprintf(stdout, "    Features:  %s\n", strings.Join(safeFeatures, ", "))
-		}
-
 		authStatus := "No"
 		if gw.AuthRequired {
 			authStatus = "Required"
@@ -241,24 +234,24 @@ func runDiscoverWithOptions(opts DiscoverOptions, stdout, stderr io.Writer, newB
 		}
 		fmt.Fprintf(stdout, "    Auth:      %s\n", authStatus)
 
-		// Endpoints display
 		scheme := "http"
-		if gw.RawTXT["tls"] == "1" {
+		if gw.TLS {
 			scheme = "https"
 		}
-
-		fmt.Fprintf(stdout, "    Base URLs:\n")
-		if openAIPath, ok := gw.Endpoints["openai"]; ok {
-			fmt.Fprintf(stdout, "      - OpenAI:    %s://%s%s\n", scheme, hostPort, sanitizeTerminal(openAIPath))
-		} else {
-			fmt.Fprintf(stdout, "      - OpenAI:    %s://%s/v1\n", scheme, hostPort)
+		if gw.Path != "" {
+			fmt.Fprintf(stdout, "    Path:      %s\n", sanitizeTerminal(gw.Path))
 		}
-
-		if anthropicPath, ok := gw.Endpoints["anthropic"]; ok {
-			fmt.Fprintf(stdout, "      - Anthropic: %s://%s%s\n", scheme, hostPort, sanitizeTerminal(anthropicPath))
-		}
-		if geminiPath, ok := gw.Endpoints["gemini"]; ok {
-			fmt.Fprintf(stdout, "      - Gemini:    %s://%s%s\n", scheme, hostPort, sanitizeTerminal(geminiPath))
+		fmt.Fprintf(stdout, "    TLS:       %t\n", gw.TLS)
+		if len(gw.Endpoints) > 0 {
+			fmt.Fprintf(stdout, "    Endpoints:\n")
+			protocols := make([]string, 0, len(gw.Endpoints))
+			for protocol := range gw.Endpoints {
+				protocols = append(protocols, protocol)
+			}
+			sort.Strings(protocols)
+			for _, protocol := range protocols {
+				fmt.Fprintf(stdout, "      - %-16s %s://%s%s\n", sanitizeTerminal(protocol)+":", scheme, hostPort, sanitizeTerminal(gw.Endpoints[protocol]))
+			}
 		}
 
 		fmt.Fprintln(stdout)

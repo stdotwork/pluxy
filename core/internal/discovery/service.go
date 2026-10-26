@@ -241,18 +241,19 @@ func BuildServiceSpec(cfg *config.Config, port int, tlsEnabled bool) (ServiceSpe
 		return ServiceSpec{}, fmt.Errorf("discovery: no advertised address matches bind host %q", bindHost)
 	}
 
-	// 6. Build TXT records
+	// 6. Build TXT records; protocols mirror the advertised subtypes.
 	txtOpts := DefaultTXTOptions()
 	txtOpts.InstanceID = instanceID
 	txtOpts.TLS = tlsEnabled
-	txtOpts.AdvertiseManagement = discCfg.AdvertiseManagement
 	if discCfg.AuthRequired != nil {
 		txtOpts.AuthRequired = *discCfg.AuthRequired
-	} else {
-		txtOpts.AuthRequired = true
 	}
+	txtOpts.Protocols = protocolsFromSubtypes(subtypes)
 
-	txtRecords := BuildTXTRecords(txtOpts)
+	txtRecords, errTXT := BuildTXTRecords(txtOpts)
+	if errTXT != nil {
+		return ServiceSpec{}, errTXT
+	}
 
 	return ServiceSpec{
 		InstanceName:  instanceName,
@@ -264,4 +265,14 @@ func BuildServiceSpec(cfg *config.Config, port int, tlsEnabled bool) (ServiceSpe
 		Interfaces:    ifaces,
 		AdvertisedIPs: advertisedIPs,
 	}, nil
+}
+
+// protocolsFromSubtypes derives TXT protocol tokens from advertised subtype labels
+// so the protocols attribute and DNS-SD subtypes stay consistent.
+func protocolsFromSubtypes(subtypes []string) []string {
+	protocols := make([]string, 0, len(subtypes))
+	for _, subtype := range subtypes {
+		protocols = append(protocols, ProtocolFromSubtype(subtype))
+	}
+	return protocols
 }
