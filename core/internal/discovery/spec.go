@@ -63,14 +63,14 @@ var protocolRoutes = map[string]protocolRoute{
 	"interactions":     {version: "/v1beta", suffix: "/interactions", legacyField: legacyKeyGemini},
 }
 
-func sanitizeTXTValue(v string) string {
-	var b strings.Builder
-	for _, r := range v {
-		if r >= 32 && r < 127 {
-			b.WriteRune(r)
+// printableTXTASCII checks bytes without Unicode folding or whitespace normalization.
+func printableTXTASCII(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] > 0x7e {
+			return false
 		}
 	}
-	return strings.TrimSpace(b.String())
+	return true
 }
 
 // TXTOptions contains input fields for generating DNS-SD TXT records.
@@ -127,15 +127,28 @@ func BuildTXTRecords(opts TXTOptions) ([]string, error) {
 		return nil, fmt.Errorf("discovery: required TXT records exceed %d bytes", maxTXTBytes)
 	}
 
+	for _, tokens := range [][]string{opts.Protocols, opts.AuthMethods} {
+		for _, token := range tokens {
+			if !validTXTToken(token) {
+				return nil, fmt.Errorf("discovery: invalid TXT token %q", token)
+			}
+		}
+	}
+	for _, value := range []string{opts.Product, opts.InstanceID, opts.NodeRole} {
+		if !printableTXTASCII(value) {
+			return nil, fmt.Errorf("discovery: optional TXT value must be printable ASCII")
+		}
+	}
+
 	optional := []struct {
 		key   string
 		value string
 	}{
 		{txtKeyProtocols, joinTXTTokens(opts.Protocols)},
 		{txtKeyAuthType, joinTXTTokens(opts.AuthMethods)},
-		{txtKeyProduct, sanitizeTXTValue(opts.Product)},
-		{txtKeyID, sanitizeTXTValue(opts.InstanceID)},
-		{txtKeyRole, sanitizeTXTValue(opts.NodeRole)},
+		{txtKeyProduct, opts.Product},
+		{txtKeyID, opts.InstanceID},
+		{txtKeyRole, opts.NodeRole},
 	}
 	for _, item := range optional {
 		if item.value == "" {
@@ -175,7 +188,7 @@ func joinTXTTokens(values []string) string {
 	tokens := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		token := strings.ToLower(strings.TrimSpace(value))
+		token := value
 		if !validTXTToken(token) {
 			continue
 		}
@@ -207,10 +220,10 @@ func ParseTXTRecords(txt []string) map[string]string {
 	result := make(map[string]string, len(txt))
 	for _, entry := range txt {
 		key, value, _ := strings.Cut(entry, "=")
-		key = strings.ToLower(strings.TrimSpace(key))
-		if key == "" {
+		if key == "" || !printableTXTASCII(key) {
 			continue
 		}
+		key = strings.ToLower(key)
 		if _, exists := result[key]; exists {
 			continue
 		}
@@ -230,7 +243,8 @@ func validateMountPath(p string) string {
 	}
 	for i := 0; i < len(p); i++ {
 		c := p[i]
-		if c <= ' ' || c >= 0x7f || c == '?' || c == '#' || c == '\\' || c == '%' {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || strings.ContainsRune("/-._~!$&'()*+,;=:@", rune(c))) {
 			return ""
 		}
 	}
@@ -254,41 +268,89 @@ func joinURLPath(base, route string) string {
 // record is usable. Draft records (txtvers) are validated strictly; legacy CPA
 // records (version + api_*) remain accepted for mixed-version networks.
 func applyTXTMetadata(svc *DiscoveredService, parsed map[string]string) bool {
+	// Clear schema-specific metadata if the destination was previously populated.
 	svc.RawTXT = parsed
 	svc.Product = parsed[txtKeyProduct]
-	svc.InstanceID = firstTXTValue(parsed, txtKeyID, legacyKeyInstanceID)
-	svc.NodeRole = firstTXTValue(parsed, txtKeyRole, legacyKeyNodeRole)
-	if protocols := parsed[txtKeyProtocols]; protocols != "" {
-		svc.Protocols = parseTXTList(protocols)
-	}
-	if methods := firstTXTValue(parsed, txtKeyAuthType, legacyKeyAuthMethods); methods != "" {
-		svc.AuthMethods = parseTXTList(methods)
-	}
-	tls, okTLS := parseTXTFlag(parsed[txtKeyTLS])
-	svc.TLS = tls
+	svc.InstanceID, svc.NodeRole, svc.Path = "", "", ""
+	svc.Protocols, svc.AuthMethods = nil, nil
+	svc.AuthRequired, svc.TLS = false, false
 	svc.Endpoints = make(map[string]string)
-
-	if version, ok := parsed[txtKeyVersion]; ok {
+	if version, draft := parsed[txtKeyVersion]; draft {
 		svc.Version = version
-		auth, okAuth := parseTXTFlag(parsed[txtKeyAuth])
-		path := validateMountPath(parsed[txtKeyPath])
-		if version != txtSchemaVersion || !okTLS || !okAuth || path == "" {
+		return applyDraftTXTMetadata(svc, parsed)
+	}
+	return applyLegacyTXTMetadata(svc, parsed)
+}
+
+func applyDraftTXTMetadata(svc *DiscoveredService, parsed map[string]string) bool {
+	for _, key := range []string{txtKeyVersion, txtKeyPath, txtKeyTLS, txtKeyAuth,
+		txtKeyProtocols, txtKeyAuthType, txtKeyProduct, txtKeyID, txtKeyRole} {
+		if value, present := parsed[key]; present && (value == "" || !printableTXTASCII(value)) {
 			return false
 		}
-		svc.AuthRequired = auth
-		svc.Path = path
-		for _, protocol := range svc.Protocols {
-			if route, known := protocolRoutes[protocol]; known {
-				svc.Endpoints[protocol] = joinURLPath(path, route.version+route.suffix)
+	}
+	tls, okTLS := parseTXTFlag(parsed[txtKeyTLS])
+	auth, okAuth := parseTXTFlag(parsed[txtKeyAuth])
+	path := validateMountPath(parsed[txtKeyPath])
+	if svc.Version != txtSchemaVersion || !okTLS || !okAuth || path == "" {
+		return false
+	}
+	for _, key := range []string{txtKeyProtocols, txtKeyAuthType} {
+		if value, present := parsed[key]; present {
+			for _, token := range strings.Split(value, ",") {
+				if !validTXTToken(token) {
+					return false
+				}
 			}
 		}
-		return true
 	}
+	svc.TLS, svc.AuthRequired, svc.Path = tls, auth, path
+	svc.InstanceID, svc.NodeRole = parsed[txtKeyID], parsed[txtKeyRole]
+	if value, present := parsed[txtKeyProtocols]; present {
+		for _, token := range draftTXTList(value) {
+			if _, known := protocolRoutes[token]; known {
+				svc.Protocols = append(svc.Protocols, token)
+			}
+		}
+	}
+	if value, present := parsed[txtKeyAuthType]; present {
+		for _, token := range draftTXTList(value) {
+			if token == "api_key" || token == "oauth" {
+				svc.AuthMethods = append(svc.AuthMethods, token)
+			}
+		}
+	}
+	for _, protocol := range svc.Protocols {
+		if route, known := protocolRoutes[protocol]; known {
+			svc.Endpoints[protocol] = joinURLPath(path, route.version+route.suffix)
+		}
+	}
+	return true
+}
 
+// draftTXTList bounds retained hints without changing token spelling or syntax.
+func draftTXTList(value string) []string {
+	var result []string
+	seen := make(map[string]bool)
+	for _, token := range strings.Split(value, ",") {
+		if !seen[token] {
+			result = append(result, token)
+			seen[token] = true
+			if len(result) == maxDiscoveredMetadataItems {
+				break
+			}
+		}
+	}
+	return result
+}
+
+func applyLegacyTXTMetadata(svc *DiscoveredService, parsed map[string]string) bool {
 	svc.Version = parsed[legacyKeyVersion]
+	tls, okTLS := parseTXTFlag(parsed[txtKeyTLS])
 	if svc.Version != txtSchemaVersion || !okTLS {
 		return false
 	}
+	svc.TLS = tls
 	switch parsed[legacyKeyAuth] {
 	case "true":
 		svc.AuthRequired = true
@@ -296,6 +358,17 @@ func applyTXTMetadata(svc *DiscoveredService, parsed map[string]string) bool {
 		svc.AuthRequired = false
 	default:
 		return false
+	}
+	svc.InstanceID, svc.NodeRole = parsed[legacyKeyInstanceID], parsed[legacyKeyNodeRole]
+	svc.Protocols = parseTXTList(parsed[txtKeyProtocols])
+	svc.AuthMethods = parseTXTList(parsed[legacyKeyAuthMethods])
+	if _, present := parsed[txtKeyProtocols]; !present {
+		// A base path does not imply support for any particular operation.
+		for _, key := range []string{legacyKeyOpenAI, legacyKeyAnthropic, legacyKeyGemini} {
+			if base := validateMountPath(parsed[key]); base != "" {
+				svc.Endpoints[key] = base
+			}
+		}
 	}
 	for _, protocol := range svc.Protocols {
 		route, known := protocolRoutes[protocol]
@@ -309,13 +382,20 @@ func applyTXTMetadata(svc *DiscoveredService, parsed map[string]string) bool {
 	return len(svc.Endpoints) > 0
 }
 
-func firstTXTValue(parsed map[string]string, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := parsed[key]; ok {
-			return value
+// validateDraftTXTRecords enforces wire-size limits before parsing loses duplicate
+// strings and their length prefixes. Call this for draft entries before conversion.
+func validateDraftTXTRecords(records []string) bool {
+	total := 0
+	for _, record := range records {
+		if len(record) > maxTXTRecordBytes {
+			return false
+		}
+		total += len(record) + 1
+		if total > maxTXTBytes {
+			return false
 		}
 	}
-	return ""
+	return true
 }
 
 // ProtocolFromSubtype converts a DNS-SD subtype label (e.g. "_responses") to its protocol token.

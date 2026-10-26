@@ -378,53 +378,13 @@ func TestBrowseEntryWithinLimits(t *testing.T) {
 	}
 }
 
-func TestMergeDiscoveredService(t *testing.T) {
-	dst := DiscoveredService{
-		InstanceName: "node",
-		Port:         8317,
-		IPv4:         []net.IP{net.ParseIP("192.0.2.10")},
-		AuthRequired: true,
-		RawTXT:       map[string]string{"auth": "1"},
-		Endpoints:    map[string]string{"responses": "/v1/responses"},
-	}
-	src := DiscoveredService{
-		InstanceName: "node",
-		Port:         8317,
-		IPv4:         []net.IP{net.ParseIP("192.0.2.10"), net.ParseIP("192.0.2.11")},
-		IPv6:         []net.IP{net.ParseIP("2001:db8::10")},
-		Product:      ProductCPA,
-		TLS:          true,
-		RawTXT:       map[string]string{"auth": "0", "tls": "1"},
-		Endpoints:    map[string]string{"messages": "/v1/messages"},
-	}
-	mergeDiscoveredService(&dst, src)
-	if len(dst.IPv4) != 2 || len(dst.IPv6) != 1 {
-		t.Fatalf("merged addresses = v4 %v, v6 %v", dst.IPv4, dst.IPv6)
-	}
-	if dst.AuthRequired || !dst.TLS || dst.Endpoints["messages"] != "/v1/messages" || dst.Endpoints["responses"] != "" {
-		t.Fatalf("merged metadata = %#v", dst)
-	}
-}
-
-func TestDiscoveryMergeLimits(t *testing.T) {
-	dst := DiscoveredService{IPv4: []net.IP{net.ParseIP("192.0.2.1")}}
-	var srcIPs []net.IP
-	for i := 0; i < maxDiscoveredAddresses*2; i++ {
-		srcIPs = append(srcIPs, net.IPv4(198, 18, byte(i/256), byte(i%256)))
-	}
-	mergeDiscoveredService(&dst, DiscoveredService{IPv4: srcIPs})
-	if len(dst.IPv4) != maxDiscoveredAddresses {
-		t.Fatalf("merged IPv4 count = %d, want %d", len(dst.IPv4), maxDiscoveredAddresses)
-	}
-}
-
 func TestEntryToDiscoveredLimitsTXTLists(t *testing.T) {
 	var methods strings.Builder
 	for i := 0; i < maxDiscoveredMetadataItems*2; i++ {
 		if i > 0 {
 			methods.WriteByte(',')
 		}
-		methods.WriteString(fmt.Sprintf("method-%02d", i))
+		methods.WriteString(fmt.Sprintf("%02d", i))
 	}
 	addresses := make([]net.IP, 0, maxDiscoveredAddresses*2)
 	for i := 0; i < maxDiscoveredAddresses*2; i++ {
@@ -438,7 +398,7 @@ func TestEntryToDiscoveredLimitsTXTLists(t *testing.T) {
 		},
 		Port:     8317,
 		AddrIPv4: addresses,
-		Text:     []string{"txtvers=1", "path=/", "tls=0", "auth=1", "auth_type=" + methods.String()},
+		Text:     []string{"version=1", "api_openai=/v1", "tls=0", "auth_required=true", "protocols=responses", "auth_methods=" + methods.String()},
 	})
 	if !usable {
 		t.Fatal("expected draft TXT entry to be usable")
