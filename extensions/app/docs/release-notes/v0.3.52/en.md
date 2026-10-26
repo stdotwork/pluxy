@@ -5,6 +5,10 @@
 - Updated gateway configuration for newer Claude Desktop versions. CPA now explicitly uses static credentials and a specified model list to prevent legacy authentication, automatic configuration, or session service settings from overriding the CPA connection.
 - Updating Claude Desktop configuration now correctly switches to the local CPA profile. Restoring a backup also restores the previous configuration selection.
 - Added recognition of the Fable and Mythos model families in Claude Desktop configuration.
+- Added Codex subagent settings for enabling subagents, limiting concurrent threads, selecting a default subagent model, setting reasoning effort, and including interruption messages.
+- Default subagent models can now be selected from the Codex model list, with reasoning effort inherited from the parent agent or selected explicitly.
+- `enable-apply-patch` and `optimize-multi-agent-v2` now default to enabled when unspecified, while explicit user opt-outs are preserved.
+- Improved the Codex configuration page and subagent settings dialog layout.
 
 ## Fixes
 
