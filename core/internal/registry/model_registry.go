@@ -202,6 +202,14 @@ type ModelRegistry struct {
 	mutex *sync.RWMutex
 	// availableModelsCache stores per-handler snapshots for GetAvailableModels.
 	availableModelsCache map[string]availableModelsCacheEntry
+	// webSearchClientCounts maps model ID to the number of clients advertising
+	// web search for it. It makes hasClientSupportingWebSearchLocked O(1)
+	// instead of scanning every client, which is quadratic when the whole
+	// registry is re-registered (thousands of clients x models).
+	webSearchClientCounts map[string]int
+	// webSearchProviderCounts maps model ID to provider -> client count for
+	// clients advertising web search, mirroring webSearchClientCounts.
+	webSearchProviderCounts map[string]map[string]int
 	// generation tracks changes to model registrations and availability.
 	generation uint64
 	// registrationEpoch tracks monotonic client registration and deregistration structural changes.
@@ -218,14 +226,15 @@ var registryOnce sync.Once
 func GetGlobalRegistry() *ModelRegistry {
 	registryOnce.Do(func() {
 		globalRegistry = &ModelRegistry{
-			models:               make(map[string]*ModelRegistration),
-			clientModels:         make(map[string][]string),
-			clientModelInfos:     make(map[string]map[string]*ModelInfo),
-			clientProviders:      make(map[string]string),
-			clientEpochs:         make(map[string]uint64),
-			clientGenerations:    make(map[string]uint64),
-			availableModelsCache: make(map[string]availableModelsCacheEntry),
-			mutex:                &sync.RWMutex{},
+			models:                make(map[string]*ModelRegistration),
+			clientModels:          make(map[string][]string),
+			clientModelInfos:      make(map[string]map[string]*ModelInfo),
+			clientProviders:       make(map[string]string),
+			clientEpochs:          make(map[string]uint64),
+			clientGenerations:     make(map[string]uint64),
+			availableModelsCache:  make(map[string]availableModelsCacheEntry),
+			webSearchClientCounts: map[string]int{},
+			mutex:                 &sync.RWMutex{},
 		}
 	})
 	return globalRegistry
@@ -522,6 +531,7 @@ func (r *ModelRegistry) registerClientLocked(clientID, clientProvider string, mo
 
 	if len(uniqueModelIDs) == 0 {
 		// No models supplied; unregister existing client state if present.
+		// unregisterClientInternal retracts the client's web-search counts.
 		r.unregisterClientInternal(clientID)
 		delete(r.clientModels, clientID)
 		delete(r.clientModelInfos, clientID)
@@ -545,7 +555,11 @@ func (r *ModelRegistry) registerClientLocked(clientID, clientProvider string, mo
 
 	now := time.Now()
 	if !hadExisting {
-		// Pure addition path.
+		// Pure addition path. clientModels has no entry for this client, but a
+		// stale clientModelInfos entry would still feed the web-search index, so
+		// retract it before the new contributions are recorded. This is a no-op
+		// when the bookkeeping is consistent.
+		r.dropClientWebSearchCountsLocked(clientID)
 		for _, modelID := range rawModelIDs {
 			model := newModels[modelID]
 			r.addModelRegistration(modelID, provider, model, now, clientID)
@@ -562,6 +576,7 @@ func (r *ModelRegistry) registerClientLocked(clientID, clientProvider string, mo
 		} else {
 			delete(r.clientProviders, clientID)
 		}
+		r.addClientWebSearchCountsLocked(clientID)
 		r.invalidateAvailableModelsCacheLocked()
 		r.triggerModelsRegistered(provider, clientID, models)
 		log.Debugf("Registered client %s from provider %s with %d models", clientID, clientProvider, len(rawModelIDs))
@@ -701,6 +716,9 @@ func (r *ModelRegistry) registerClientLocked(clientID, clientProvider string, mo
 	}
 
 	// Update client bookkeeping.
+	// Retract this client's previous web-search contributions before rewriting
+	// clientModelInfos/clientProviders, then re-add them from the new state.
+	r.dropClientWebSearchCountsLocked(clientID)
 	if len(rawModelIDs) > 0 {
 		r.clientModels[clientID] = append([]string(nil), rawModelIDs...)
 	}
@@ -715,6 +733,7 @@ func (r *ModelRegistry) registerClientLocked(clientID, clientProvider string, mo
 	} else {
 		delete(r.clientProviders, clientID)
 	}
+	r.addClientWebSearchCountsLocked(clientID)
 
 	r.invalidateAvailableModelsCacheLocked()
 	r.triggerModelsRegistered(provider, clientID, models)
@@ -902,6 +921,9 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	models, exists := r.clientModels[clientID]
 	provider, hasProvider := r.clientProviders[clientID]
 	if !exists {
+		// Nothing to decrement per model, but the client may still hold
+		// clientModelInfos bookkeeping that contributes to the web-search index.
+		r.dropClientWebSearchCountsLocked(clientID)
 		if hasProvider {
 			delete(r.clientProviders, clientID)
 		}
@@ -949,6 +971,11 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 			}
 		}
 	}
+
+	// Retract this client's web-search contributions while clientModelInfos and
+	// clientProviders still describe it. This must run after the per-model loop
+	// above, which relies on excludeClientID to skip this client.
+	r.dropClientWebSearchCountsLocked(clientID)
 
 	delete(r.clientModels, clientID)
 	delete(r.clientModelInfos, clientID)
@@ -1151,9 +1178,18 @@ func (r *ModelRegistry) ApplyClientModelCapabilities(clientID string, expectedEp
 	}
 
 	provider := r.clientProviders[clientID]
+	// The callback mutates capabilities in place, which can add or clear this
+	// client's web-search contributions. Retract the current ones first so the
+	// index stays in sync with clientInfos.
+	r.dropClientWebSearchCountsLocked(clientID)
 	for id, info := range clientInfos {
 		if info != nil {
 			mutate(id, info)
+			// Reinstate this client's contribution before querying the index so
+			// the aggregate reflects the post-mutation state, including itself.
+			if info.SupportsWebSearch {
+				r.incrementWebSearchCountLocked(id, provider)
+			}
 			if reg, okReg := r.models[id]; okReg && reg != nil {
 				hasWebSearch := r.hasClientSupportingWebSearchLocked(id, "", "")
 				if reg.Info != nil {
@@ -1170,18 +1206,115 @@ func (r *ModelRegistry) ApplyClientModelCapabilities(clientID string, expectedEp
 }
 
 func (r *ModelRegistry) hasClientSupportingWebSearchLocked(modelID, provider, excludeClientID string) bool {
-	for cID, infos := range r.clientModelInfos {
-		if cID == excludeClientID {
-			continue
+	if provider != "" {
+		count := r.webSearchProviderCounts[modelID][provider]
+		if count <= 0 {
+			return false
 		}
-		if provider != "" && r.clientProviders[cID] != provider {
-			continue
-		}
-		if info, ok := infos[modelID]; ok && info != nil && info.SupportsWebSearch {
+		if excludeClientID == "" {
 			return true
 		}
+		if r.clientProviders[excludeClientID] == provider {
+			if info := r.clientModelInfos[excludeClientID][modelID]; info != nil && info.SupportsWebSearch {
+				count--
+			}
+		}
+		return count > 0
 	}
-	return false
+
+	count := r.webSearchClientCounts[modelID]
+	if count <= 0 {
+		return false
+	}
+	if excludeClientID == "" {
+		return true
+	}
+	if info := r.clientModelInfos[excludeClientID][modelID]; info != nil && info.SupportsWebSearch {
+		count--
+	}
+	return count > 0
+}
+
+// incrementWebSearchCountLocked records one client's web-search contribution for modelID.
+func (r *ModelRegistry) incrementWebSearchCountLocked(modelID, provider string) {
+	if modelID == "" {
+		return
+	}
+	if r.webSearchClientCounts == nil {
+		r.webSearchClientCounts = make(map[string]int)
+	}
+	r.webSearchClientCounts[modelID]++
+	if provider == "" {
+		return
+	}
+	if r.webSearchProviderCounts == nil {
+		r.webSearchProviderCounts = make(map[string]map[string]int)
+	}
+	counts := r.webSearchProviderCounts[modelID]
+	if counts == nil {
+		counts = make(map[string]int)
+		r.webSearchProviderCounts[modelID] = counts
+	}
+	counts[provider]++
+}
+
+// decrementWebSearchCountLocked removes one client's web-search contribution for modelID.
+func (r *ModelRegistry) decrementWebSearchCountLocked(modelID, provider string) {
+	if modelID == "" {
+		return
+	}
+	if count := r.webSearchClientCounts[modelID]; count > 1 {
+		r.webSearchClientCounts[modelID] = count - 1
+	} else {
+		delete(r.webSearchClientCounts, modelID)
+	}
+	if provider == "" {
+		return
+	}
+	counts := r.webSearchProviderCounts[modelID]
+	if counts == nil {
+		return
+	}
+	if count := counts[provider]; count > 1 {
+		counts[provider] = count - 1
+	} else {
+		delete(counts, provider)
+	}
+	if len(counts) == 0 {
+		delete(r.webSearchProviderCounts, modelID)
+	}
+}
+
+// dropClientWebSearchCountsLocked removes every web-search contribution currently
+// recorded for clientID. It must run before clientModelInfos/clientProviders are
+// rewritten for that client.
+func (r *ModelRegistry) dropClientWebSearchCountsLocked(clientID string) {
+	infos := r.clientModelInfos[clientID]
+	if len(infos) == 0 {
+		return
+	}
+	provider := r.clientProviders[clientID]
+	for modelID, info := range infos {
+		if info != nil && info.SupportsWebSearch {
+			r.decrementWebSearchCountLocked(modelID, provider)
+		}
+	}
+}
+
+// addClientWebSearchCountsLocked records every web-search contribution currently
+// present for clientID. It must run after clientModelInfos/clientProviders are
+// rewritten for that client.
+func (r *ModelRegistry) addClientWebSearchCountsLocked(clientID string) {
+	infos := r.clientModelInfos[clientID]
+	if len(infos) == 0 {
+		return
+	}
+	provider := r.clientProviders[clientID]
+	for modelID, info := range infos {
+		if info != nil && info.SupportsWebSearch {
+			r.incrementWebSearchCountLocked(modelID, provider)
+		}
+	}
 }
 
 // SuspendClientModel marks a client's model as temporarily unavailable until explicitly resumed.
