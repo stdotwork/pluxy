@@ -2447,6 +2447,7 @@ pub(crate) fn insert_thinking_effort_params(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn add_model_alias_to_yaml(
     content: &str,
     source: &ResolvedThinkingAliasSource,
@@ -2454,6 +2455,25 @@ pub(crate) fn add_model_alias_to_yaml(
     effort: &str,
     fast: bool,
 ) -> Result<String, String> {
+    add_model_alias_with_tier_to_yaml(content, source, alias, effort, fast.then_some("priority"))
+}
+
+pub(crate) fn validate_alias_service_tier(tier: Option<&str>) -> Result<(), String> {
+    if tier.is_some_and(|tier| !matches!(tier, "priority" | "ultrafast")) {
+        return Err("Unsupported service tier; choose priority or ultrafast".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn add_model_alias_with_tier_to_yaml(
+    content: &str,
+    source: &ResolvedThinkingAliasSource,
+    alias: &str,
+    effort: &str,
+    service_tier: Option<&str>,
+) -> Result<String, String> {
+    validate_alias_service_tier(service_tier)?;
+    let fast = service_tier.is_some();
     if fast && !alias_source_supports_fast(source) {
         return Err("Fast supports only OpenAI-compatible API, Codex API, or Codex OAuth model sources".to_string());
     }
@@ -2494,11 +2514,11 @@ pub(crate) fn add_model_alias_to_yaml(
         insert_thinking_effort_params(&mut params_mapping, &source.source, effort)?;
         append_alias_payload_override(root, alias, &source.source.protocol, params_mapping)?;
     }
-    if fast {
+    if let Some(tier) = service_tier {
         let mut params_mapping = serde_norway::Mapping::new();
         params_mapping.insert(
             yaml_key("service_tier"),
-            serde_norway::Value::String("priority".to_string()),
+            serde_norway::Value::String(tier.to_string()),
         );
         append_alias_payload_override(root, alias, &source.source.protocol, params_mapping)?;
     }

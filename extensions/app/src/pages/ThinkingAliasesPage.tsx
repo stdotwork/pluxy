@@ -1,5 +1,4 @@
 import { EmptyState } from '../components/EmptyState';
-import { Switch } from '../components/Switch';
 import {
   getThinkingAliases,
   getModelAliasSources,
@@ -105,12 +104,13 @@ export const defaultModelAlias = (
   model: string | null | undefined,
   effort: string,
   fast: boolean,
+  serviceTier: 'priority' | 'ultrafast' = 'priority',
 ) => {
   const normalizedModel = model?.trim() ?? '';
   const normalizedEffort = effort.trim().toLowerCase();
   if (!normalizedModel) return '';
   if (!normalizedEffort && !fast) return `${normalizedModel}-alias`;
-  return `${normalizedModel}${normalizedEffort ? `-${normalizedEffort}` : ''}${fast ? '-fast' : ''}`;
+  return `${normalizedModel}${normalizedEffort ? `-${normalizedEffort}` : ''}${fast ? serviceTier === 'ultrafast' ? '-ultrafast' : '-fast' : ''}`;
 };
 
 export const uniqueModelAlias = (
@@ -172,6 +172,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
   const [selectedSourceId, setSelectedSourceId] = useState('');
   const [effort, setEffort] = useState('');
   const [fastEnabled, setFastEnabled] = useState(false);
+  const [serviceTier, setServiceTier] = useState<'priority' | 'ultrafast'>('priority');
   const [alias, setAlias] = useState('');
   const [editingEntry, setEditingEntry] = useState<AliasListEntry | null>(null);
   const [editingSource, setEditingSource] = useState<ThinkingAliasSource | null>(null);
@@ -341,7 +342,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
   };
 
   const normalizedEffort = effort.trim().toLowerCase();
-  const defaultAlias = defaultModelAlias(selectedSource?.model, normalizedEffort, fastEnabled);
+  const defaultAlias = defaultModelAlias(selectedSource?.model, normalizedEffort, fastEnabled, serviceTier);
   const uniqueDefaultAlias = uniqueModelAlias(defaultAlias, sources.map((source) => source.model));
   const availableEfforts = selectedSource?.reasoningLevels ?? [];
   const visibleEffortOptions = availableEfforts.map((value) => {
@@ -395,7 +396,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
       if (editingEntry) {
         await createThinkingAlias({
           sourceId: selectedSource.id, alias: normalizedAlias,
-          effort: normalizedEffort, fast: fastEnabled, originalAlias: editingEntry.alias,
+          effort: normalizedEffort, fast: fastEnabled, serviceTier: fastEnabled ? serviceTier : undefined, originalAlias: editingEntry.alias,
           originalEntry: editingEntry,
         });
         setNotice(t('aliases.updated', { alias: normalizedAlias }));
@@ -405,8 +406,9 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
           alias: normalizedAlias,
           effort: normalizedEffort,
           fast: fastEnabled,
+          serviceTier: fastEnabled ? serviceTier : undefined,
         });
-        setNotice(t(fastEnabled ? 'aliases.createdCombined' : 'aliases.created', {
+        setNotice(t(fastEnabled ? serviceTier === 'ultrafast' ? 'aliases.ultrafast.createdCombined' : 'aliases.createdCombined' : 'aliases.created', {
           alias: normalizedAlias,
           effort: normalizedEffort,
         }));
@@ -414,8 +416,9 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
         await createSpeedAlias({
           sourceId: selectedSource.id,
           alias: normalizedAlias,
+          serviceTier,
         });
-        setNotice(t('speedAliases.created', { alias: normalizedAlias }));
+        setNotice(t(serviceTier === 'ultrafast' ? 'aliases.ultrafast.created' : 'speedAliases.created', { alias: normalizedAlias }));
       } else {
         await createThinkingAlias({
           sourceId: selectedSource.id,
@@ -443,6 +446,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
     setSelectedSourceId('');
     setEffort('');
     setFastEnabled(false);
+    setServiceTier('priority');
     setAlias('');
     setSearch('');
     setModelPickerOpen(false);
@@ -476,7 +480,8 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
       setEditingSource(source);
       setSelectedSourceId(source.id);
       setEffort(context.effort ?? '');
-      setFastEnabled(context.fast);
+      setFastEnabled(context.fast || context.serviceTier === 'ultrafast');
+      setServiceTier(context.serviceTier === 'ultrafast' ? 'ultrafast' : 'priority');
       setAlias(entry.alias);
       generatedAliasRef.current = '';
       setModelPickerOpen(false);
@@ -714,15 +719,25 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
           </div>
 
           <div className="thinking-alias-field">
-            <div className="thinking-field-heading">
-              <strong>{t('aliases.fast.title')}</strong>
+            <div className="config-field-label">
+              <strong>{t('aliases.speed.title')}</strong>
             </div>
-            <label className={`thinking-fast-option${fastEnabled ? ' active' : ''}`}>
-              <span className="thinking-fast-option-copy">
-                <span><Zap size={15} /> Fast</span>
-              </span>
-              <Switch size="sm" className="thinking-fast-switch" checked={fastEnabled} onChange={(event) => setFastEnabled(event.currentTarget.checked)} disabled={Boolean(busyAlias) || !fastAvailable} aria-label={t('aliases.fast.title')} />
-            </label>
+            <div className="thinking-effort-options thinking-speed-options" role="group" aria-label={t('aliases.speed.title')}>
+              <button type="button" className={!fastEnabled ? 'active' : ''} aria-pressed={!fastEnabled}
+                onClick={() => setFastEnabled(false)} disabled={Boolean(busyAlias)}>
+                {t('aliases.effort.none')}
+              </button>
+              {(['priority', 'ultrafast'] as const).map((tier) => (
+                <button type="button" key={tier}
+                  className={fastEnabled && serviceTier === tier ? 'active' : ''}
+                  aria-pressed={fastEnabled && serviceTier === tier}
+                  onClick={() => { setServiceTier(tier); setFastEnabled(true); }}
+                  disabled={Boolean(busyAlias) || !fastAvailable}>
+                  <Zap size={14} aria-hidden="true" />
+                  {t(tier === 'ultrafast' ? 'aliases.ultrafast.title' : 'speedAliases.fast.title')}
+                </button>
+              ))}
+            </div>
             {selectedSource && !selectedSource.supportsFast ? (
               <small className="thinking-model-hint">{t('aliases.fast.unsupported')}</small>
             ) : null}
@@ -806,7 +821,7 @@ export function ThinkingAliasesPage({ embedded = false }: { embedded?: boolean }
                     <span className="thinking-effort-badge">{entry.effort}</span>
                   ) : null}
                   {entry.serviceTier ? (
-                    <span className="thinking-effort-badge fast">{t('speedAliases.fast.title')}</span>
+                    <span className="thinking-effort-badge fast">{entry.serviceTier === 'ultrafast' ? t('aliases.ultrafast.title') : entry.serviceTier === 'priority' || entry.serviceTier === 'fast' ? t('speedAliases.fast.title') : entry.serviceTier}</span>
                   ) : null}
                 </div>
                 <div className="thinking-alias-actions">

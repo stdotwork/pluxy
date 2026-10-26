@@ -1446,7 +1446,7 @@ export function createBrowserMockRuntime(
         const alias = readString(payload.alias);
         const entry = state.thinkingAliases.find((item) => item.alias === alias);
         const source = state.aliasSources.find((item) => item.model === entry?.sourceModel) ?? state.aliasSources[0];
-        return { source: clone(source), effort: entry?.effort ?? null, fast: state.speedAliases.some((item) => item.alias === alias) };
+        return { source: clone(source), effort: entry?.effort ?? null, fast: state.speedAliases.some((item) => item.alias === alias && item.serviceTier === 'priority'), serviceTier: state.speedAliases.find((item) => item.alias === alias)?.serviceTier ?? null };
       }
       case 'create_thinking_alias': {
         const request = asObject(payload.request ?? payload);
@@ -1459,7 +1459,13 @@ export function createBrowserMockRuntime(
           kind: readString(request.kind) || 'codex-oauth',
           oauthChannel: readString(request.oauthChannel) || null,
         };
-        state.thinkingAliases = [...state.thinkingAliases.filter((item) => item.alias !== entry.alias), entry];
+        const originalAlias = readString(request.originalAlias) || entry.alias;
+        const source = state.aliasSources.find((item) => item.id === request.sourceId);
+        if (source) { entry.sourceModel = source.model; entry.provider = source.provider; entry.kind = source.kind; }
+        state.speedAliases = state.speedAliases.filter((item) => item.alias !== originalAlias && item.alias !== entry.alias);
+        const tier = readString(request.serviceTier) || (request.fast ? 'priority' : '');
+        if (tier) state.speedAliases.push({ ...entry, serviceTier: tier });
+        state.thinkingAliases = [...state.thinkingAliases.filter((item) => item.alias !== originalAlias && item.alias !== entry.alias), entry];
         return clone(state.thinkingAliases);
       }
       case 'delete_thinking_alias': {

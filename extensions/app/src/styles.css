@@ -4639,7 +4639,18 @@ textarea:focus-visible {
   white-space: normal;
 }
 
-.thinking-alias-dialog .thinking-alias-field > .thinking-fast-option {
+.thinking-alias-dialog .thinking-alias-field > .thinking-speed-options {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.thinking-speed-options button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.thinking-fast-option {
   display: flex;
   grid-template-rows: none;
 }
