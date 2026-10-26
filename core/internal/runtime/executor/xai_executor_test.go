@@ -6036,7 +6036,10 @@ func TestCacheXAIReasoningReplayFromCompletedClearsPreviousEntryWhenNoReplayable
 
 	modelName := "grok-4.5"
 	sessionKey := "prompt-cache:clear-previous"
-	encryptedContent := testValidGrokEncryptedContentForSeed(14)
+	// Seed 15 instead of 14: seed 14's first byte is 0x01, which now classifies
+	// as the Gemini bare-Tink envelope, and the Grok validator positively
+	// rejects values shaped like another provider's known envelope.
+	encryptedContent := testValidGrokEncryptedContentForSeed(15)
 	previousItems := [][]byte{
 		[]byte(`{"type":"reasoning","summary":[],"content":null,"encrypted_content":""}`),
 		[]byte(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"previous answer"}]}`),
