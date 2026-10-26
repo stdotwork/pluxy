@@ -729,7 +729,11 @@ pub(crate) fn validate_client_config_images(client: &str, images: &Images) -> Re
         return Ok(());
     }
     for (path, bytes) in images {
-        if !parse(path, text(bytes.as_deref())?)?.is_object() {
+        let value = parse(path, text(bytes.as_deref())?)?;
+        let is_allowed_array = path.file_name().is_some_and(|n| {
+            n == "models.json" || n == "chatLanguageModels.json" || n == "cordis.patch.yml" || n == "cordis.patch.yaml"
+        }) && value.is_array();
+        if !value.is_object() && !is_allowed_array {
             return Err("Configuration root must be an object".into());
         }
     }
@@ -771,6 +775,12 @@ pub(crate) fn prepare_config_updates(
             .ok_or("Configuration update path mismatch")?;
         let mut rendered = update.after.clone();
         let mut generated = parse(&update.path, Some(&rendered))?;
+        if template && is_cordis_patch_path(&update.path) && !generated.is_array() {
+            return Err(format!(
+                "DSH Cordis profile patch must be a top-level YAML array: {}",
+                path_to_string(&update.path)
+            ));
+        }
         if !template {
             let original = parse(&update.path, text(entry.1.as_deref())?)?;
             if client == "codex"
@@ -899,6 +909,24 @@ fn preserve_model_extensions(client: &str, path: &Path, before: &Value, after: &
         let pointer = format!("/llm-pi-ai/providers/{DEEPSEEK_HARNESS_PROVIDER_ID}/models");
         if let (Some(old), Some(new)) = (before.pointer(&pointer), after.pointer_mut(&pointer)) {
             inventory(client, old, new);
+        } else if let (Some(old_arr), Some(new_arr)) = (before.as_array(), after.as_array_mut()) {
+            let old_models = old_arr
+                .iter()
+                .find(|entry| entry.get("id").and_then(Value::as_str) == Some("llm-pi-ai"))
+                .and_then(|e| e.get("config"))
+                .and_then(|c| c.get("providers"))
+                .and_then(|p| p.get(DEEPSEEK_HARNESS_PROVIDER_ID))
+                .and_then(|d| d.get("models"));
+            if let Some(old_models) = old_models {
+                if let Some(new_entry) = new_arr.iter_mut().find(|entry| entry.get("id").and_then(Value::as_str) == Some("llm-pi-ai")) {
+                    if let Some(new_models) = new_entry.get_mut("config")
+                        .and_then(|c| c.get_mut("providers"))
+                        .and_then(|p| p.get_mut(DEEPSEEK_HARNESS_PROVIDER_ID))
+                        .and_then(|d| d.get_mut("models")) {
+                        inventory(client, old_models, new_models);
+                    }
+                }
+            }
         }
     }
     if client == "hermes" {
@@ -1023,24 +1051,93 @@ fn validate_unmanaged_preserved(
         }
         if client == "deepseek-harness" {
             if path == &paths[0] {
-                for key in ["apiKeyEnv", "baseURL", "models"].into_iter().chain(harness_fields("provider")) {
-                    set(
-                        &mut value,
-                        &[
-                            "llm-pi-ai".into(),
-                            "providers".into(),
-                            DEEPSEEK_HARNESS_PROVIDER_ID.into(),
-                            key.into(),
-                        ],
-                        None,
-                    );
-                }
-                for key in ["provider", "model", "reasoningEffort"] {
-                    set(
-                        &mut value,
-                        &["agent-default-model".into(), key.into()],
-                        None,
-                    );
+                if let Some(seq) = value.as_array_mut() {
+                    let mut remove_indices = Vec::new();
+                    for (i, entry) in seq.iter_mut().enumerate() {
+                        let id = entry.get("id").and_then(Value::as_str).map(str::to_string);
+                        match id.as_deref() {
+                            Some("llm-pi-ai") => {
+                                for key in ["apiKeyEnv", "baseURL", "models"].into_iter().chain(harness_fields("provider")) {
+                                    set(
+                                        entry,
+                                        &[
+                                            "config".into(),
+                                            "providers".into(),
+                                            DEEPSEEK_HARNESS_PROVIDER_ID.into(),
+                                            key.into(),
+                                        ],
+                                        None,
+                                    );
+                                }
+                                let is_empty = entry.get("config").and_then(Value::as_object).map_or(true, |c| c.is_empty());
+                                if is_empty {
+                                    remove_indices.push(i);
+                                }
+                            }
+                            Some("agent-default-model") => {
+                                let is_cpa = entry.get("config")
+                                    .and_then(|c| c.get("provider"))
+                                    .and_then(Value::as_str)
+                                    == Some(DEEPSEEK_HARNESS_PROVIDER_ID);
+                                if is_cpa {
+                                    for key in ["provider", "model", "reasoningEffort"] {
+                                        set(
+                                            entry,
+                                            &["config".into(), key.into()],
+                                            None,
+                                        );
+                                    }
+                                    let is_empty = entry.get("config").and_then(Value::as_object).map_or(true, |c| c.is_empty());
+                                    if is_empty {
+                                        remove_indices.push(i);
+                                    }
+                                }
+                            }
+                            Some("subagent-model-selection-settings") => {
+                                if let Some(allowed) = entry.get_mut("config")
+                                    .and_then(|c| c.get_mut("allowedModels"))
+                                    .and_then(Value::as_array_mut)
+                                {
+                                    allowed.retain(|item| {
+                                        item.get("provider").and_then(Value::as_str) != Some(DEEPSEEK_HARNESS_PROVIDER_ID)
+                                    });
+                                }
+                                if entry.get("config").and_then(|c| c.get("allowedModels")).and_then(Value::as_array).is_some_and(|a| a.is_empty()) {
+                                    set(entry, &["config".into(), "allowedModels".into()], None);
+                                }
+                                let is_empty_or_only_enabled = entry.get("config")
+                                    .and_then(Value::as_object)
+                                    .map_or(true, |c| c.is_empty() || (c.len() == 1 && c.contains_key("enabled")));
+                                if is_empty_or_only_enabled {
+                                    remove_indices.push(i);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    for &i in remove_indices.iter().rev() {
+                        seq.remove(i);
+                    }
+                } else {
+                    for key in ["apiKeyEnv", "baseURL", "models"].into_iter().chain(harness_fields("provider")) {
+                        set(
+                            &mut value,
+                            &[
+                                "llm-pi-ai".into(),
+                                "providers".into(),
+                                DEEPSEEK_HARNESS_PROVIDER_ID.into(),
+                                key.into(),
+                            ],
+                            None,
+                        );
+                    }
+                    for key in ["provider", "model", "reasoningEffort"] {
+                        set(
+                            &mut value,
+                            &["agent-default-model".into(), key.into()],
+                            None,
+                        );
+                    }
                 }
             } else {
                 set(
@@ -1092,8 +1189,10 @@ pub(crate) fn parse(path: &Path, content: Option<&str>) -> Result<Value, String>
             path_to_string(path)
         )
     })?;
-    // WorkBuddy also saves models.json as a top-level array.
-    if !value.is_object() && !(path.file_name().is_some_and(|n| n == "models.json" || n == "chatLanguageModels.json") && value.is_array()) {
+    // WorkBuddy also saves models.json as a top-level array; DeepSeek Harness Cordis profile uses cordis.patch.yml as a top-level array.
+    if !value.is_object() && !(path.file_name().is_some_and(|n| {
+        n == "models.json" || n == "chatLanguageModels.json" || n == "cordis.patch.yml" || n == "cordis.patch.yaml"
+    }) && value.is_array()) {
         return Err(format!("{} configuration root must be an object", path_to_string(path)));
     }
     Ok(value)

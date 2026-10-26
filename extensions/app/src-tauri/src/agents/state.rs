@@ -1552,19 +1552,29 @@ pub(crate) fn build_agent_template_updates(
         return build_antigravity_updates(client, home, &managed_core_loopback_origin(port), api_key, model, true);
     }
     let paths = agent_config_paths(client, home);
-    let contents = fresh_agent_contents_with_oauth(
-        client,
-        port,
-        api_key,
-        model,
-        AgentConfigurationOptions {
-            models,
-            codex_catalog,
-            oauth_configuration,
-            claude_code_model_mappings,
-            claude_desktop_model_mappings,
-        },
-    )?;
+    let contents = if client == AgentClient::DeepSeekHarness
+        && paths.first().is_some_and(|path| is_cordis_patch_path(path))
+    {
+        let openai_base = format!("{}/v1", managed_core_loopback_origin(port));
+        vec![
+            build_deepseek_harness_cordis_patch_template(&openai_base, model, models)?,
+            build_deepseek_harness_credentials(None, api_key)?,
+        ]
+    } else {
+        fresh_agent_contents_with_oauth(
+            client,
+            port,
+            api_key,
+            model,
+            AgentConfigurationOptions {
+                models,
+                codex_catalog,
+                oauth_configuration,
+                claude_code_model_mappings,
+                claude_desktop_model_mappings,
+            },
+        )?
+    };
     if paths.len() != contents.len() {
         return Err("Base configuration template file count mismatch".to_string());
     }
