@@ -307,3 +307,45 @@ func TestResponseCompressionSSEIncremental(t *testing.T) {
 		})
 	}
 }
+
+func TestResponseCompressionReusesPooledEncoders(t *testing.T) {
+	bodies := []string{
+		"{\"message\":\"" + strings.Repeat("first response ", 200) + "\"}",
+		"{\"message\":\"" + strings.Repeat("second, different response ", 150) + "\"}",
+	}
+	engine := gin.New()
+	engine.Use(responseCompressionMiddleware(&config.Config{}))
+	round := 0
+	engine.GET("/", func(c *gin.Context) {
+		c.Data(http.StatusOK, "application/json", []byte(bodies[round%len(bodies)]))
+	})
+	for _, encoding := range []string{"zstd", "gzip"} {
+		for round = 0; round < 4; round++ { // later rounds reuse an encoder from the pool
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Accept-Encoding", encoding)
+			rec := httptest.NewRecorder()
+			engine.ServeHTTP(rec, req)
+			if got := rec.Header().Get("Content-Encoding"); got != encoding {
+				t.Fatalf("%s round %d: Content-Encoding = %q", encoding, round, got)
+			}
+			if got := string(compressionTestBody(t, encoding, rec.Body.Bytes())); got != bodies[round%len(bodies)] {
+				t.Fatalf("%s round %d: decoded body mismatch", encoding, round)
+			}
+		}
+	}
+}
+
+func TestResponseCompressionWriteAfterFinishFails(t *testing.T) {
+	for _, encoding := range []string{"zstd", "gzip"} {
+		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context.Header("Content-Type", "text/event-stream")
+		writer := &responseCompressionWriter{ResponseWriter: context.Writer, encoding: encoding, minBytes: 1}
+		if _, errWrite := writer.WriteString("data: one\n\n"); errWrite != nil {
+			t.Fatal(errWrite)
+		}
+		writer.finish()
+		if _, errWrite := writer.WriteString("data: late\n\n"); errWrite == nil {
+			t.Fatalf("%s: a write after finish must fail, not go out uncompressed", encoding)
+		}
+	}
+}
