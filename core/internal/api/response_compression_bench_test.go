@@ -84,7 +84,8 @@ func BenchmarkResponseCompressionSSE(b *testing.B) {
 }
 
 // BenchmarkResponseCompressionOpenStreams measures the heap each open compressed SSE stream
-// holds: 256 clients connected at once, each paused after its first event.
+// holds: 256 clients connected at once, each paused after its first event. The pools start empty
+// for every sample, so each open stream is charged for the encoder it pins.
 func BenchmarkResponseCompressionOpenStreams(b *testing.B) {
 	gin.SetMode(gin.ReleaseMode)
 	const streams = 256
@@ -96,6 +97,9 @@ func BenchmarkResponseCompressionOpenStreams(b *testing.B) {
 				hold := make(chan struct{})
 				var started, done sync.WaitGroup
 				engine := benchCompressionEngine(events, hold, &started)
+				// Two cycles empty sync.Pool: the first moves pooled encoders to the victim cache,
+				// the second frees them. Otherwise the baseline already counts them.
+				runtime.GC()
 				runtime.GC()
 				var before, during runtime.MemStats
 				runtime.ReadMemStats(&before)

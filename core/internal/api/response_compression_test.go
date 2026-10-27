@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -315,12 +316,27 @@ func TestResponseCompressionReusesPooledEncoders(t *testing.T) {
 	}
 	engine := gin.New()
 	engine.Use(responseCompressionMiddleware(&config.Config{}))
-	round := 0
+	body := ""
 	engine.GET("/", func(c *gin.Context) {
-		c.Data(http.StatusOK, "application/json", []byte(bodies[round%len(bodies)]))
+		c.Data(http.StatusOK, "application/json", []byte(body))
 	})
 	for _, encoding := range []string{"zstd", "gzip"} {
-		for round = 0; round < 4; round++ { // later rounds reuse an encoder from the pool
+		original := responseCompressorPools[encoding]
+		created := 0
+		responseCompressorPools[encoding] = &sync.Pool{New: func() any { created++; return original.New() }}
+		t.Cleanup(func() { responseCompressorPools[encoding] = original })
+		const rounds = 16
+		for round := 0; round < rounds; round++ {
+			if round%2 == 1 {
+				// A failed client write must not poison the encoder handed to the next response.
+				context, _ := gin.CreateTestContext(httptest.NewRecorder())
+				context.Header("Content-Type", "application/json")
+				writer := &responseCompressionWriter{ResponseWriter: &compressionErrorWriter{ResponseWriter: context.Writer}, encoding: encoding, minBytes: 1}
+				_, _ = writer.WriteString(bodies[0])
+				writer.finish()
+				continue
+			}
+			body = bodies[(round/2)%len(bodies)]
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.Header.Set("Accept-Encoding", encoding)
 			rec := httptest.NewRecorder()
@@ -328,9 +344,13 @@ func TestResponseCompressionReusesPooledEncoders(t *testing.T) {
 			if got := rec.Header().Get("Content-Encoding"); got != encoding {
 				t.Fatalf("%s round %d: Content-Encoding = %q", encoding, round, got)
 			}
-			if got := string(compressionTestBody(t, encoding, rec.Body.Bytes())); got != bodies[round%len(bodies)] {
+			if got := string(compressionTestBody(t, encoding, rec.Body.Bytes())); got != body {
 				t.Fatalf("%s round %d: decoded body mismatch", encoding, round)
 			}
+		}
+		// sync.Pool may drop a Put (randomly under -race), so require reuse rather than one encoder.
+		if created >= rounds {
+			t.Fatalf("%s: created %d encoders for %d responses; finished encoders are not reused", encoding, created, rounds)
 		}
 	}
 }
