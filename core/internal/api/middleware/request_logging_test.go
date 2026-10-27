@@ -111,14 +111,14 @@ func TestShouldCaptureRequestBody(t *testing.T) {
 			want:          false,
 		},
 		{
-			name:          "small known size json in error-only mode",
+			name:          "small known size json skipped for eager capture in error-only mode",
 			loggerEnabled: false,
 			req: &http.Request{
 				Body:          io.NopCloser(strings.NewReader("{}")),
 				ContentLength: 2,
 				Header:        http.Header{"Content-Type": []string{"application/json"}},
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name:          "large known size skipped in error-only mode",
