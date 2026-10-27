@@ -40,7 +40,7 @@ func geminiReplaySignatureOrBypass(rawSignature string, blockKind SignatureBlock
 // compatibility decision.
 func geminiSanitizeDecision(rawSignature string, blockKind SignatureBlockKind, opts geminiSanitizeOptions) SignatureCompatibilityDecision {
 	decision := DecideSignatureCompatibility(SignatureProviderGemini, rawSignature, blockKind)
-	if !opts.rejectBareTink || !decision.Compatible || !isGeminiBareTinkSignature(rawSignature) {
+	if !opts.rejectBareTink || !decision.Compatible || !IsGeminiVertexBareTinkSignature(rawSignature) {
 		return decision
 	}
 	decision.Compatible = false
@@ -49,14 +49,6 @@ func geminiSanitizeDecision(rawSignature string, blockKind SignatureBlockKind, o
 	decision.ReplacementSignature = GeminiSkipThoughtSignatureValidator
 	decision.Reason = "Vertex bare-Tink signature is not accepted by this Gemini endpoint"
 	return decision
-}
-
-func isGeminiBareTinkSignature(rawSignature string) bool {
-	info, err := InspectGeminiThoughtSignature(
-		SignaturePayloadWithoutProviderPrefix(rawSignature),
-		GeminiThoughtSignatureValidationOptions{RequireKnownEnvelope: true},
-	)
-	return err == nil && info.Envelope == GeminiThoughtSignatureEnvelopeBareTink
 }
 
 // SanitizeGeminiRequestThoughtSignatures applies Gemini replay policy to a

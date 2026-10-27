@@ -735,3 +735,29 @@ func TestDetectSignatureProvider_VertexBareTinkNeverClaimsOtherFamilies(t *testi
 		t.Fatal("bare-Tink payload must not satisfy the Claude CAIS validator")
 	}
 }
+
+func TestInspectGeminiThoughtSignature_BareTinkRequiresVertexKeyID(t *testing.T) {
+	// The prefix byte alone matches ~1/256 of uniform random payloads, so an
+	// unenveloped 0x01 blob with an unknown key id must not be claimed.
+	payload := []byte{0x01, 0x69, 0x14, 0x7d, 0x13}
+	for len(payload) < 405 {
+		payload = append(payload, byte(0xA0+len(payload)%0x20))
+	}
+	sig := testGeminiThoughtSignature(payload)
+
+	if IsGeminiVertexBareTinkSignature(sig) {
+		t.Fatal("0x01 payload with a non-Vertex key id must not be a bare-Tink envelope")
+	}
+	if _, err := InspectGeminiThoughtSignature(sig, GeminiThoughtSignatureValidationOptions{RequireKnownEnvelope: true}); err == nil {
+		t.Fatal("unknown key id must not be a known envelope")
+	}
+	if got := DetectSignatureProvider(sig); got == SignatureProviderGemini {
+		t.Fatalf("DetectSignatureProvider = %q, must not claim Gemini", got)
+	}
+	if !IsGeminiVertexBareTinkSignature(testGeminiBareTinkSignature(405)) {
+		t.Fatal("Vertex key id must be recognized")
+	}
+	if !IsGeminiVertexBareTinkSignature("gemini#" + testGeminiBareTinkSignature(405)) {
+		t.Fatal("provider-prefixed Vertex signature must be recognized")
+	}
+}

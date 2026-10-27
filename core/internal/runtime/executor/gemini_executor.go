@@ -992,7 +992,7 @@ func nativeInteractionsSourceFormat(format sdktranslator.Format) bool {
 // - `function_result` (FunctionResultStep) requires `call_id` and rejects `id`
 // - other steps and content parts do not support `id`
 func sanitizeGeminiInteractionsUnsupportedInputIDs(body []byte) []byte {
-	return helps.SanitizeGeminiInteractionsUnsupportedInputIDs(body)
+	return helps.SanitizeGeminiInteractionsUnsupportedInputIDs(body, false)
 }
 
 func translateGeminiInteractionsRequestBody(ctx context.Context, cfg *config.Config, model string, payload []byte, opts cliproxyexecutor.Options, stream, isCompat bool) ([]byte, error) {

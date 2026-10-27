@@ -212,19 +212,15 @@ func TestInspectKimiThinkingSignature_RejectsSelfDescribingEnvelope(t *testing.T
 
 // TestDetectSignatureProvider_KimiRunsAfterEnvelopeProbes pins the ordering
 // invariant. Kimi's base64 is uniformly distributed, so roughly 6% of real
-// signatures start with one of the "ACEQRg" envelope characters; those must
-// still resolve to Kimi after the envelope probes decline. The bare-Tink
-// Vertex envelope is the loosest probe (0x01 prefix, no structural tail), so a
-// length-coinciding Kimi payload that is a valid bare-Tink envelope is claimed
-// by the envelope stage by design; only payloads no envelope accepts must fall
-// through to the size probe.
+// signatures start with one of the "CERg" envelope characters; those must still
+// resolve to Kimi after the envelope probes decline, and a real envelope must
+// never be captured by the size probe.
 func TestDetectSignatureProvider_KimiRunsAfterEnvelopeProbes(t *testing.T) {
 	if got := DetectSignatureProvider(observedFable5Sample); got != SignatureProviderClaude {
 		t.Fatalf("DetectSignatureProvider = %q, want %q for a Claude CAIS sample", got, SignatureProviderClaude)
 	}
 
 	var checked int
-	var envelopeClaimed int
 	for seed := int64(0); seed < 200 && checked < 3; seed++ {
 		sig := synthesizeKimiSignature(t, 3255, seed)
 		if !maybeSelfDescribingSignatureEnvelope(sig) {
@@ -232,22 +228,11 @@ func TestDetectSignatureProvider_KimiRunsAfterEnvelopeProbes(t *testing.T) {
 		}
 		checked++
 		if got := DetectSignatureProvider(sig); got != SignatureProviderKimi {
-			// A Kimi-length payload that is itself a valid known envelope is
-			// claimed during the envelope stage; that is the ordering working,
-			// not a regression. Today only the loose bare-Tink probe can do so.
-			if got == SignatureProviderGemini && isRecognizedGeminiProviderSignature(sig, SignatureBlockKindUnknown) {
-				envelopeClaimed++
-				continue
-			}
 			t.Fatalf("DetectSignatureProvider = %q, want %q for an envelope-prefixed Kimi payload", got, SignatureProviderKimi)
 		}
 	}
 	if checked == 0 {
 		t.Skip("no synthesized payload landed on an envelope first character")
-	}
-	if envelopeClaimed == 0 && checked > 2 {
-		// Informational: bare-Tink claims are rare (0x01 exactly, ~0.1%).
-		t.Log("no envelope-claimed Kimi payload observed in this run")
 	}
 }
 
