@@ -24,6 +24,7 @@ import (
 const (
 	maxErrorOnlyCapturedRequestBodyBytes       int64  = 1 << 20  // 1 MiB
 	maxDeferredErrorRequestBodyBytes           int64  = 32 << 20 // 32 MiB
+	maxCapturedZstdWindowBytes                        = 8 << 20  // 8 MiB: covers every zstd level up to 19
 	authenticatedRequestBodyCapturerContextKey string = "CPA_AUTHENTICATED_REQUEST_BODY_CAPTURER"
 )
 
@@ -426,25 +427,14 @@ func captureRequestInfoBody(c *gin.Context, info *RequestInfo) error {
 		return err
 	}
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	// The decoded body is bounded even when no max-request-body-bytes is configured:
+	// a small zstd body can expand to gigabytes.
 	maxBytes := c.GetInt64("maxRequestBodyBytes")
-	if maxBytes > 0 {
-		info.Body = decodeCapturedRequestBodyForLogWithLimit(bodyBytes, c.Request.Header.Get("Content-Encoding"), maxBytes)
-	} else {
-		info.Body = decodeCapturedRequestBodyForLog(bodyBytes, c.Request.Header.Get("Content-Encoding"))
+	if maxBytes <= 0 || maxBytes > maxDeferredErrorRequestBodyBytes {
+		maxBytes = maxDeferredErrorRequestBodyBytes
 	}
+	info.Body = decodeCapturedRequestBodyForLogWithLimit(bodyBytes, c.Request.Header.Get("Content-Encoding"), maxBytes)
 	return nil
-}
-
-func decodeCapturedRequestBodyForLog(raw []byte, encoding string) []byte {
-	if len(raw) == 0 {
-		return raw
-	}
-
-	decoded, errDecode := decodeCapturedRequestBody(raw, encoding)
-	if errDecode != nil {
-		return raw
-	}
-	return decoded
 }
 
 func decodeCapturedRequestBodyForLogWithLimit(raw []byte, encoding string, limit int64) []byte {
@@ -482,48 +472,9 @@ func decodeCapturedRequestBodyForLogWithLimit(raw []byte, encoding string, limit
 	return body
 }
 
-func decodeCapturedRequestBody(raw []byte, encoding string) ([]byte, error) {
-	encoding = strings.TrimSpace(encoding)
-	if encoding == "" || strings.EqualFold(encoding, "identity") {
-		return raw, nil
-	}
-
-	parts := strings.Split(encoding, ",")
-	body := raw
-	for i := len(parts) - 1; i >= 0; i-- {
-		enc := strings.ToLower(strings.TrimSpace(parts[i]))
-		switch enc {
-		case "", "identity":
-			continue
-		case "zstd":
-			decoded, errDecode := decodeCapturedZstdRequestBody(body)
-			if errDecode != nil {
-				return nil, errDecode
-			}
-			body = decoded
-		default:
-			return nil, fmt.Errorf("unsupported request content encoding: %s", enc)
-		}
-	}
-	return body, nil
-}
-
-func decodeCapturedZstdRequestBody(raw []byte) ([]byte, error) {
-	decoder, errNewReader := zstd.NewReader(bytes.NewReader(raw))
-	if errNewReader != nil {
-		return nil, fmt.Errorf("failed to create zstd request decoder: %w", errNewReader)
-	}
-	defer decoder.Close()
-
-	decoded, errRead := io.ReadAll(decoder)
-	if errRead != nil {
-		return nil, fmt.Errorf("failed to decode zstd request body: %w", errRead)
-	}
-	return decoded, nil
-}
-
 func decodeCapturedZstdRequestBodyWithLimit(raw []byte, limit int64) ([]byte, bool, error) {
-	decoder, errNewReader := zstd.NewReader(bytes.NewReader(raw))
+	// One decoder goroutine and a bounded window: a frame that declares a larger window is not decoded (the raw bytes are logged).
+	decoder, errNewReader := zstd.NewReader(bytes.NewReader(raw), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(maxCapturedZstdWindowBytes))
 	if errNewReader != nil {
 		return nil, false, fmt.Errorf("failed to create zstd request decoder: %w", errNewReader)
 	}
