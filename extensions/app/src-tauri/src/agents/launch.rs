@@ -745,6 +745,7 @@ pub(crate) async fn restart_agent_app(
         client,
         AgentClient::Codex
             | AgentClient::OpenCode
+            | AgentClient::DeepSeekHarness
             | AgentClient::ClaudeDesktop
             | AgentClient::ZCode
             | AgentClient::WorkBuddy
@@ -927,6 +928,9 @@ fn find_desktop_restart_target(
     let target = match client {
         AgentClient::Codex => find_codex_app_installation(home),
         AgentClient::OpenCode => find_opencode_desktop_application(home).map(DesktopAppTarget::Application),
+        AgentClient::DeepSeekHarness => {
+            find_deepseek_harness_desktop_application(home).map(DesktopAppTarget::Application)
+        }
         AgentClient::ZCode => {
             find_zcode_desktop_executable(home).map(DesktopAppTarget::Application)
         }
@@ -1759,7 +1763,7 @@ mod tests {
             assert_eq!(status.launch_targets[0].detail, path_to_string(&desktop));
         }
         for client in [AgentClient::Codex, AgentClient::OpenCode, AgentClient::ClaudeDesktop,
-            AgentClient::ZCode, AgentClient::WorkBuddy] {
+            AgentClient::ZCode, AgentClient::WorkBuddy, AgentClient::DeepSeekHarness] {
             match find_desktop_restart_target(client, &root, Some(&desktop)).unwrap() {
                 DesktopAppTarget::Application(path) => assert_eq!(path, desktop),
                 #[cfg(target_os = "windows")]
