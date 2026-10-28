@@ -105,18 +105,29 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 
 	usageDetail := coreusage.EnsureTokenBreakdownForProvider(record.Detail, record.Provider, record.ExecutorType)
 	tokens := tokenStats{
-		InputTokens:            usageDetail.InputTokens,
-		OutputTokens:           usageDetail.OutputTokens,
-		ReasoningTokens:        usageDetail.ReasoningTokens,
-		CachedTokens:           usageDetail.CachedTokens,
-		CacheReadTokens:        usageDetail.CacheReadTokens,
-		CacheReadTokensPresent: true,
-		CacheCreationTokens:    usageDetail.CacheCreationTokens,
-		CacheCreation5mTokens:  coreusage.CloneInt64Ptr(usageDetail.CacheCreation5mTokens),
-		CacheCreation30mTokens: coreusage.CloneInt64Ptr(usageDetail.CacheCreation30mTokens),
-		CacheCreation1hTokens:  coreusage.CloneInt64Ptr(usageDetail.CacheCreation1hTokens),
-		CacheCreation12hTokens: coreusage.CloneInt64Ptr(usageDetail.CacheCreation12hTokens),
-		TotalTokens:            usageDetail.TotalTokens,
+		InputTokens:              usageDetail.InputTokens,
+		OutputTokens:             usageDetail.OutputTokens,
+		ReasoningTokens:          usageDetail.ReasoningTokens,
+		CachedTokens:             usageDetail.CachedTokens,
+		CacheReadTokens:          usageDetail.CacheReadTokens,
+		CacheReadTokensPresent:   true,
+		CacheCreationTokens:      usageDetail.CacheCreationTokens,
+		CacheCreation5mTokens:    coreusage.CloneInt64Ptr(usageDetail.CacheCreation5mTokens),
+		CacheCreation30mTokens:   coreusage.CloneInt64Ptr(usageDetail.CacheCreation30mTokens),
+		CacheCreation1hTokens:    coreusage.CloneInt64Ptr(usageDetail.CacheCreation1hTokens),
+		CacheCreation12hTokens:   coreusage.CloneInt64Ptr(usageDetail.CacheCreation12hTokens),
+		TextInputTokens:          coreusage.CloneInt64Ptr(usageDetail.TextInputTokens),
+		ImageInputTokens:         coreusage.CloneInt64Ptr(usageDetail.ImageInputTokens),
+		AudioInputTokens:         coreusage.CloneInt64Ptr(usageDetail.AudioInputTokens),
+		VideoInputTokens:         coreusage.CloneInt64Ptr(usageDetail.VideoInputTokens),
+		FileInputTokens:          coreusage.CloneInt64Ptr(usageDetail.FileInputTokens),
+		CachedTextTokens:         coreusage.CloneInt64Ptr(usageDetail.CachedTextTokens),
+		TextOutputTokens:         coreusage.CloneInt64Ptr(usageDetail.TextOutputTokens),
+		ImageOutputTokens:        coreusage.CloneInt64Ptr(usageDetail.ImageOutputTokens),
+		AudioOutputTokens:        coreusage.CloneInt64Ptr(usageDetail.AudioOutputTokens),
+		AcceptedPredictionTokens: coreusage.CloneInt64Ptr(usageDetail.AcceptedPredictionTokens),
+		RejectedPredictionTokens: coreusage.CloneInt64Ptr(usageDetail.RejectedPredictionTokens),
+		TotalTokens:              usageDetail.TotalTokens,
 	}
 
 	failed := record.Failed
@@ -179,6 +190,9 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		InferenceGeo:         strings.TrimSpace(usageDetail.InferenceGeo),
 		CacheDetails:         usageDetail.CacheDetails.Clone(),
 		WebSearchRequests:    coreusage.CloneInt64Ptr(usageDetail.WebSearchRequests),
+		ImageCount:           coreusage.CloneInt64Ptr(usageDetail.ImageCount),
+		ImageDetails:         usageDetail.ImageDetails.Clone(),
+		MediaCounts:          usageDetail.MediaCounts.Clone(),
 		ToolUsageDetails:     usageDetail.ToolUsageDetails.Clone(),
 		Iterations:           usageDetail.IterationSlice(),
 		CostDetails:          usageDetail.CostDetails.Clone(),
@@ -219,6 +233,9 @@ type queuedUsageDetail struct {
 	InferenceGeo         string                      `json:"inference_geo,omitempty"`
 	CacheDetails         *coreusage.CacheDetails     `json:"cache_details,omitempty"`
 	WebSearchRequests    *int64                      `json:"web_search_requests,omitempty"`
+	ImageCount           *int64                      `json:"image_count,omitempty"`
+	ImageDetails         *coreusage.ImageDetails     `json:"image_details,omitempty"`
+	MediaCounts          *coreusage.MediaCounts      `json:"media_counts,omitempty"`
 	ToolUsageDetails     *coreusage.ToolUsageDetails `json:"tool_usage_details,omitempty"`
 	Iterations           []coreusage.IterationUsage  `json:"iterations,omitempty"`
 	CostDetails          *coreusage.CostDetails      `json:"cost_details,omitempty"`
@@ -244,18 +261,29 @@ type requestDetail struct {
 }
 
 type tokenStats struct {
-	InputTokens            int64  `json:"input_tokens"`
-	OutputTokens           int64  `json:"output_tokens"`
-	ReasoningTokens        int64  `json:"reasoning_tokens"`
-	CachedTokens           int64  `json:"cached_tokens"`
-	CacheReadTokens        int64  `json:"cache_read_tokens"`
-	CacheReadTokensPresent bool   `json:"cache_read_tokens_present"`
-	CacheCreationTokens    int64  `json:"cache_creation_tokens"`
-	CacheCreation5mTokens  *int64 `json:"cache_creation_5m_tokens,omitempty"`
-	CacheCreation30mTokens *int64 `json:"cache_creation_30m_tokens,omitempty"`
-	CacheCreation1hTokens  *int64 `json:"cache_creation_1h_tokens,omitempty"`
-	CacheCreation12hTokens *int64 `json:"cache_creation_12h_tokens,omitempty"`
-	TotalTokens            int64  `json:"total_tokens"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	ReasoningTokens          int64  `json:"reasoning_tokens"`
+	CachedTokens             int64  `json:"cached_tokens"`
+	CacheReadTokens          int64  `json:"cache_read_tokens"`
+	CacheReadTokensPresent   bool   `json:"cache_read_tokens_present"`
+	CacheCreationTokens      int64  `json:"cache_creation_tokens"`
+	CacheCreation5mTokens    *int64 `json:"cache_creation_5m_tokens,omitempty"`
+	CacheCreation30mTokens   *int64 `json:"cache_creation_30m_tokens,omitempty"`
+	CacheCreation1hTokens    *int64 `json:"cache_creation_1h_tokens,omitempty"`
+	CacheCreation12hTokens   *int64 `json:"cache_creation_12h_tokens,omitempty"`
+	TextInputTokens          *int64 `json:"text_input_tokens,omitempty"`
+	ImageInputTokens         *int64 `json:"image_input_tokens,omitempty"`
+	AudioInputTokens         *int64 `json:"audio_input_tokens,omitempty"`
+	VideoInputTokens         *int64 `json:"video_input_tokens,omitempty"`
+	FileInputTokens          *int64 `json:"file_input_tokens,omitempty"`
+	CachedTextTokens         *int64 `json:"cached_text_tokens,omitempty"`
+	TextOutputTokens         *int64 `json:"text_output_tokens,omitempty"`
+	ImageOutputTokens        *int64 `json:"image_output_tokens,omitempty"`
+	AudioOutputTokens        *int64 `json:"audio_output_tokens,omitempty"`
+	AcceptedPredictionTokens *int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens *int64 `json:"rejected_prediction_tokens,omitempty"`
+	TotalTokens              int64  `json:"total_tokens"`
 }
 
 type failDetail struct {

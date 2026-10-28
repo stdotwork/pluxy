@@ -136,8 +136,10 @@ func (e *XAIExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req 
 					upstreamUsage.PublishFailure(ctx, reporter, errTranslation)
 					return cliproxyexecutor.Response{}, errTranslation
 				}
-				if detail, ok := helps.ParseCodexUsage(eventData); ok {
-					reporter.Publish(ctx, detail)
+				if !upstreamUsage.Publish(ctx, reporter) {
+					if detail, ok := helps.ParseCodexUsage(eventData); ok {
+						reporter.Publish(ctx, detail)
+					}
 				}
 				if prepared.responseFormat == sdktranslator.FormatOpenAIResponse {
 					out = helps.EnsureResponsesUsageDetails(out)

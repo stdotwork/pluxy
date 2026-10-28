@@ -343,6 +343,7 @@ func mergeToolUsageDetails(existing, update *usage.ToolUsageDetails) *usage.Tool
 	out.WebFetchCalls = mergeCounter(out.WebFetchCalls, existing.WebFetchCalls)
 	out.NumSearchResults = mergeCounter(out.NumSearchResults, existing.NumSearchResults)
 	out.NumSourcesUsed = mergeCounter(out.NumSourcesUsed, existing.NumSourcesUsed)
+	out.NumServerSideToolsUsed = mergeCounter(out.NumServerSideToolsUsed, existing.NumServerSideToolsUsed)
 	out.ToolCallsRequested = mergeCounter(out.ToolCallsRequested, existing.ToolCallsRequested)
 	out.ToolCallsExecuted = mergeCounter(out.ToolCallsExecuted, existing.ToolCallsExecuted)
 	out.XSearchCalls = mergeCounter(out.XSearchCalls, existing.XSearchCalls)
@@ -377,6 +378,9 @@ func mergeCostDetails(existing, update *usage.CostDetails) *usage.CostDetails {
 	e := existing.Clone()
 	if out.Cost == nil {
 		out.Cost = e.Cost
+	}
+	if out.CostInUSDTicks == nil {
+		out.CostInUSDTicks = e.CostInUSDTicks
 	}
 	if out.IsBYOK == nil {
 		out.IsBYOK = e.IsBYOK

@@ -16,22 +16,23 @@ type CacheDetails struct {
 
 // ToolUsageDetails holds structured server-side tool execution counters.
 type ToolUsageDetails struct {
-	WebSearchCalls       *int64           `json:"web_search_calls,omitempty"`
-	WebSearchQueries     *int64           `json:"web_search_queries,omitempty"`
-	WebFetchCalls        *int64           `json:"web_fetch_calls,omitempty"`
-	NumSearchResults     *int64           `json:"num_search_results,omitempty"`
-	NumSourcesUsed       *int64           `json:"num_sources_used,omitempty"`
-	ToolCallsRequested   *int64           `json:"tool_calls_requested,omitempty"`
-	ToolCallsExecuted    *int64           `json:"tool_calls_executed,omitempty"`
-	XSearchCalls         *int64           `json:"x_search_calls,omitempty"`
-	XPostsFetched        *int64           `json:"x_posts_fetched,omitempty"`
-	XUsersFetched        *int64           `json:"x_users_fetched,omitempty"`
-	CodeExecutionCalls   *int64           `json:"code_execution_calls,omitempty"`
-	FileSearchCalls      *int64           `json:"file_search_calls,omitempty"`
-	MCPCalls             *int64           `json:"mcp_calls,omitempty"`
-	DocumentSearchCalls  *int64           `json:"document_search_calls,omitempty"`
-	ImageGenerationCalls *int64           `json:"image_generation_calls,omitempty"`
-	Extra                map[string]int64 `json:"extra,omitempty"`
+	WebSearchCalls         *int64           `json:"web_search_calls,omitempty"`
+	WebSearchQueries       *int64           `json:"web_search_queries,omitempty"`
+	WebFetchCalls          *int64           `json:"web_fetch_calls,omitempty"`
+	NumSearchResults       *int64           `json:"num_search_results,omitempty"`
+	NumSourcesUsed         *int64           `json:"num_sources_used,omitempty"`
+	NumServerSideToolsUsed *int64           `json:"num_server_side_tools_used,omitempty"`
+	ToolCallsRequested     *int64           `json:"tool_calls_requested,omitempty"`
+	ToolCallsExecuted      *int64           `json:"tool_calls_executed,omitempty"`
+	XSearchCalls           *int64           `json:"x_search_calls,omitempty"`
+	XPostsFetched          *int64           `json:"x_posts_fetched,omitempty"`
+	XUsersFetched          *int64           `json:"x_users_fetched,omitempty"`
+	CodeExecutionCalls     *int64           `json:"code_execution_calls,omitempty"`
+	FileSearchCalls        *int64           `json:"file_search_calls,omitempty"`
+	MCPCalls               *int64           `json:"mcp_calls,omitempty"`
+	DocumentSearchCalls    *int64           `json:"document_search_calls,omitempty"`
+	ImageGenerationCalls   *int64           `json:"image_generation_calls,omitempty"`
+	Extra                  map[string]int64 `json:"extra,omitempty"`
 }
 
 // IterationUsage holds per-iteration usage reported in usage.iterations[].
@@ -49,9 +50,51 @@ type IterationUsage struct {
 	CacheCreation            *CacheDetails `json:"cache_creation,omitempty"`
 }
 
+// ImageDetails holds image/video generation dimension and quality attributes.
+type ImageDetails struct {
+	Size          string `json:"size,omitempty"`
+	Resolution    string `json:"resolution,omitempty"`
+	AspectRatio   string `json:"aspect_ratio,omitempty"`
+	Quality       string `json:"quality,omitempty"`
+	Background    string `json:"background,omitempty"`
+	OutputFormat  string `json:"output_format,omitempty"`
+	InputFidelity string `json:"input_fidelity,omitempty"`
+}
+
+// Clone returns a deep copy of ImageDetails.
+func (d *ImageDetails) Clone() *ImageDetails {
+	if d == nil {
+		return nil
+	}
+	out := *d
+	return &out
+}
+
+// MediaCounts holds prompt/completion media item counts and audio/video duration.
+type MediaCounts struct {
+	PromptMedia     *int64   `json:"prompt_media,omitempty"`
+	CompletionMedia *int64   `json:"completion_media,omitempty"`
+	PromptAudio     *int64   `json:"prompt_audio,omitempty"`
+	AudioSeconds    *float64 `json:"audio_seconds,omitempty"`
+}
+
+// Clone returns a deep copy of MediaCounts.
+func (m *MediaCounts) Clone() *MediaCounts {
+	if m == nil {
+		return nil
+	}
+	return &MediaCounts{
+		PromptMedia:     cloneInt64Ptr(m.PromptMedia),
+		CompletionMedia: cloneInt64Ptr(m.CompletionMedia),
+		PromptAudio:     cloneInt64Ptr(m.PromptAudio),
+		AudioSeconds:    cloneFloat64Ptr(m.AudioSeconds),
+	}
+}
+
 // CostDetails holds optional upstream-reported cost information (e.g. OpenRouter).
 type CostDetails struct {
 	Cost                             *float64 `json:"cost,omitempty"`
+	CostInUSDTicks                   *int64   `json:"cost_in_usd_ticks,omitempty"`
 	IsBYOK                           *bool    `json:"is_byok,omitempty"`
 	UpstreamInferenceCost            *float64 `json:"upstream_inference_cost,omitempty"`
 	UpstreamInferencePromptCost      *float64 `json:"upstream_inference_prompt_cost,omitempty"`
@@ -143,21 +186,22 @@ func (t *ToolUsageDetails) Clone() *ToolUsageDetails {
 		return nil
 	}
 	out := &ToolUsageDetails{
-		WebSearchCalls:       cloneInt64Ptr(t.WebSearchCalls),
-		WebSearchQueries:     cloneInt64Ptr(t.WebSearchQueries),
-		WebFetchCalls:        cloneInt64Ptr(t.WebFetchCalls),
-		NumSearchResults:     cloneInt64Ptr(t.NumSearchResults),
-		NumSourcesUsed:       cloneInt64Ptr(t.NumSourcesUsed),
-		ToolCallsRequested:   cloneInt64Ptr(t.ToolCallsRequested),
-		ToolCallsExecuted:    cloneInt64Ptr(t.ToolCallsExecuted),
-		XSearchCalls:         cloneInt64Ptr(t.XSearchCalls),
-		XPostsFetched:        cloneInt64Ptr(t.XPostsFetched),
-		XUsersFetched:        cloneInt64Ptr(t.XUsersFetched),
-		CodeExecutionCalls:   cloneInt64Ptr(t.CodeExecutionCalls),
-		FileSearchCalls:      cloneInt64Ptr(t.FileSearchCalls),
-		MCPCalls:             cloneInt64Ptr(t.MCPCalls),
-		DocumentSearchCalls:  cloneInt64Ptr(t.DocumentSearchCalls),
-		ImageGenerationCalls: cloneInt64Ptr(t.ImageGenerationCalls),
+		WebSearchCalls:         cloneInt64Ptr(t.WebSearchCalls),
+		WebSearchQueries:       cloneInt64Ptr(t.WebSearchQueries),
+		WebFetchCalls:          cloneInt64Ptr(t.WebFetchCalls),
+		NumSearchResults:       cloneInt64Ptr(t.NumSearchResults),
+		NumSourcesUsed:         cloneInt64Ptr(t.NumSourcesUsed),
+		NumServerSideToolsUsed: cloneInt64Ptr(t.NumServerSideToolsUsed),
+		ToolCallsRequested:     cloneInt64Ptr(t.ToolCallsRequested),
+		ToolCallsExecuted:      cloneInt64Ptr(t.ToolCallsExecuted),
+		XSearchCalls:           cloneInt64Ptr(t.XSearchCalls),
+		XPostsFetched:          cloneInt64Ptr(t.XPostsFetched),
+		XUsersFetched:          cloneInt64Ptr(t.XUsersFetched),
+		CodeExecutionCalls:     cloneInt64Ptr(t.CodeExecutionCalls),
+		FileSearchCalls:        cloneInt64Ptr(t.FileSearchCalls),
+		MCPCalls:               cloneInt64Ptr(t.MCPCalls),
+		DocumentSearchCalls:    cloneInt64Ptr(t.DocumentSearchCalls),
+		ImageGenerationCalls:   cloneInt64Ptr(t.ImageGenerationCalls),
 	}
 	if len(t.Extra) > 0 {
 		out.Extra = maps.Clone(t.Extra)
@@ -218,6 +262,7 @@ func (c *CostDetails) Clone() *CostDetails {
 	}
 	return &CostDetails{
 		Cost:                             cloneFloat64Ptr(c.Cost),
+		CostInUSDTicks:                   cloneInt64Ptr(c.CostInUSDTicks),
 		IsBYOK:                           cloneBoolPtr(c.IsBYOK),
 		UpstreamInferenceCost:            cloneFloat64Ptr(c.UpstreamInferenceCost),
 		UpstreamInferencePromptCost:      cloneFloat64Ptr(c.UpstreamInferencePromptCost),

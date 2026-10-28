@@ -808,6 +808,11 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 			}
 
 			for _, payload := range xaiNormalizeReasoningSummaryDataEvents(payload) {
+				if rawEventType := gjson.GetBytes(payload, "type").String(); rawEventType == "response.completed" || rawEventType == "response.incomplete" || rawEventType == "response.done" {
+					if detail, ok := helps.ParseCodexUsage(payload); ok {
+						streamUsage.Observe(detail, true)
+					}
+				}
 				prepared.applyPatch.RememberDispatcherEvent(payload)
 				payload = namespaceRestorer.restore(payload)
 				if prepared.webSearchAlias != "" {
@@ -852,9 +857,6 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 						xaiCollectOutputItemDone(payload, outputItemsByIndex, &outputItemsFallback)
 					case "response.completed":
 						logXAIWebsocketTerminalResponse(executionSessionID, authID, wsURL, eventType, payload)
-						if detail, ok := helps.ParseCodexUsage(payload); ok {
-							streamUsage.Observe(detail, true)
-						}
 						payload = xaiPatchCompletedOutput(payload, outputItemsByIndex, outputItemsFallback)
 						payload = xaiNormalizeReasoningSummaryData(payload)
 						cacheXAIReasoningReplayFromCompleted(ctx, prepared.replayScope, payload)
@@ -864,9 +866,6 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 						}
 					case "response.done":
 						logXAIWebsocketTerminalResponse(executionSessionID, authID, wsURL, eventType, payload)
-						if detail, ok := helps.ParseCodexUsage(payload); ok {
-							streamUsage.Observe(detail, true)
-						}
 						if !warmupRequest && idMapper != nil && idMapper.state != nil && !recordedTranscript {
 							idMapper.state.recordTranscriptTurn(wsReqBody, payload, transcriptReset)
 							recordedTranscript = true
