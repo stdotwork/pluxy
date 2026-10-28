@@ -1105,6 +1105,7 @@ pub(crate) fn ordered_agent_models(
     } else {
         ordered.push(AgentModelOption {
             input_modalities: None,
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
             name: selected_model.to_string(),
             alias: None,
@@ -3708,6 +3709,8 @@ pub(crate) fn build_opencode_agent_config(
     }
 }
 
+const ZCODE_CPA_REASONING_MAP: &str = "reasoningLevel == \"none\" ? {\"thinking\": {\"type\": \"disabled\"}} : {\"thinking\": {\"type\": \"adaptive\"}, \"output_config\": {\"effort\": reasoningLevel}}";
+
 pub(crate) fn build_zcode_agent_config(
     existing: Option<&str>,
     base_url: &str,
@@ -3796,6 +3799,7 @@ pub(crate) fn build_zcode_agent_config(
     for option in ordered {
         let manual = existing_manual_rules.get(&option.name);
         if option.context_window.is_none()
+            && option.reasoning_levels.is_empty()
             && manual.is_none()
             && !existing_rules.contains_key(&option.name)
         {
@@ -3817,6 +3821,21 @@ pub(crate) fn build_zcode_agent_config(
         if properties.is_empty() {
             entry.get_mut("config").and_then(serde_json::Value::as_object_mut)
                 .expect("ZCode model config was created").remove("properties");
+        }
+        if !option.reasoning_levels.is_empty() {
+            let specs = ensure_json_object_entry(ensure_json_object_entry(entry, "config"), "optionSpecs");
+            // Respect explicit native/manual options, including an intentional null.
+            // Smart defaults for unknown IDs otherwise expose only an on/off switch
+            // with a no-op map. CPA accepts effort through the Messages API.
+            let generated = manual.is_none() && specs.get("reasoningLevel")
+                .and_then(|spec| spec.get("map")).and_then(serde_json::Value::as_str)
+                == Some(ZCODE_CPA_REASONING_MAP);
+            if generated || !specs.contains_key("reasoningLevel") {
+                specs.insert("reasoningLevel".into(), serde_json::json!({
+                    "values": option.reasoning_levels,
+                    "map": ZCODE_CPA_REASONING_MAP,
+                }));
+            }
         }
         if manual.is_some() {
             manual_updates.push(rule);

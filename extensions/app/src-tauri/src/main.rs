@@ -1153,6 +1153,8 @@ struct AgentModelOption {
     input_modalities: Option<Vec<String>>,
     #[serde(skip)]
     harness_metadata: Option<serde_json::Value>,
+    #[serde(skip)]
+    reasoning_levels: Vec<String>,
 }
 
 

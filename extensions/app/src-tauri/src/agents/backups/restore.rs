@@ -100,6 +100,7 @@ fn desktop_restore_configuration(
             is_alias: false,
             context_window: None,
             input_modalities: None,
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
         })
         .collect();

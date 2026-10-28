@@ -435,7 +435,7 @@ fn copilot_vscode_registers_all_models_with_individual_capabilities() {
     let mut models = ["gpt-model", "claude-model", "gemini-model", "custom-alias", "unknown-model"]
         .map(|name| AgentModelOption {
             name: name.into(), alias: None, is_alias: false, context_window: None,
-            input_modalities: None, harness_metadata: None,
+            input_modalities: None, harness_metadata: None, reasoning_levels: Vec::new(),
         }).to_vec();
     models[0].context_window = Some(256_000);
     models[0].input_modalities = Some(vec!["text".into(), "image".into()]);
@@ -485,7 +485,7 @@ fn copilot_vscode_keeps_uncatalogued_selection_and_defaults_to_vision() {
     let path = Path::new("chatLanguageModels.json");
     for models in [vec![], vec![AgentModelOption {
         name: "available-model".into(), alias: None, is_alias: false,
-        context_window: None, input_modalities: None, harness_metadata: None,
+        context_window: None, input_modalities: None, harness_metadata: None, reasoning_levels: Vec::new(),
     }]] {
         let content = build_copilot_config(AgentClient::VscodeCopilot, path, None,
             "http://localhost/v1", "key", "selected-model", &models).unwrap();
@@ -512,7 +512,7 @@ fn copilot_vscode_uses_codex_context_parameters_and_reserves_output_budget() {
         "codex-api-key:\n  - models:\n      - name: upstream\n        alias: limited-model\n        max-context-length: 64000\n").unwrap();
     let mut models = ["large-model", "limited-model", "small-model", "gpt-6-sol"].map(|name| AgentModelOption {
         name: name.into(), alias: None, is_alias: false, context_window: None,
-        input_modalities: None, harness_metadata: None,
+        input_modalities: None, harness_metadata: None, reasoning_levels: Vec::new(),
     });
     enrich_vscode_context_windows(&mut models, &runtime).unwrap();
     for (name, expected) in [("large-model", 1_000_000_u64), ("limited-model", 64_000), ("small-model", 8_192), ("gpt-6-sol", 272_000)] {

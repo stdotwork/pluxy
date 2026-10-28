@@ -1024,6 +1024,9 @@ pub(crate) async fn fetch_prepared_agent_models(
         if agent_uses_cpa_runtime_context_windows(client) {
             let runtime_models = fetch_codex_runtime_models(config.port, api_key).await?;
             codex_catalog::merge_runtime_context_windows(&mut models, &runtime_models);
+            if client == AgentClient::ZCode {
+                codex_catalog::merge_zcode_reasoning_levels(&mut models, &runtime_models);
+            }
         }
         if matches!(client, AgentClient::ClaudeCode | AgentClient::ClaudeDesktop) {
             let content = fetch_management_config_yaml(config).await?;
@@ -1596,6 +1599,7 @@ pub(crate) fn append_agent_model_option(
         .map(str::to_string);
     models.push(AgentModelOption {
         input_modalities,
+        reasoning_levels: Vec::new(),
         harness_metadata,
         name: name.to_string(),
         alias,

@@ -26,6 +26,7 @@ pub(crate) struct CodexRuntimeModel {
     context_source: &'static str,
     input_modalities: Option<Vec<String>>,
     default_reasoning_level: Option<String>,
+    reasoning_levels: Vec<String>,
     hidden: bool,
 }
 
@@ -237,6 +238,16 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
             },
             input_modalities: input_modalities.clone(),
             default_reasoning_level: default_reasoning_level.clone(),
+            reasoning_levels: value.get("supported_reasoning_levels")
+                .and_then(Value::as_array)
+                .into_iter().flatten()
+                .filter_map(|level| level.as_str().or_else(|| level.get("effort")?.as_str()))
+                .map(|level| level.trim().to_ascii_lowercase())
+                .filter(|level| is_allowed_reasoning_level(level))
+                .fold(Vec::new(), |mut levels, level| {
+                    if !levels.contains(&level) { levels.push(level); }
+                    levels
+                }),
             hidden,
         };
 
@@ -273,6 +284,19 @@ pub(crate) fn merge_runtime_context_windows(
             .or(runtime_model.max_context_window)
         {
             model.context_window = Some(context_window);
+        }
+    }
+}
+
+pub(crate) fn merge_zcode_reasoning_levels(
+    models: &mut [AgentModelOption],
+    runtime_models: &[CodexRuntimeModel],
+) {
+    for model in models {
+        if let Some(runtime) = runtime_models.iter()
+            .find(|runtime| runtime.slug.eq_ignore_ascii_case(&model.name))
+        {
+            model.reasoning_levels = runtime.reasoning_levels.clone();
         }
     }
 }
@@ -562,6 +586,7 @@ fn prepare_catalog_with_customizations(
         .iter()
         .map(|entry| AgentModelOption {
             input_modalities: None,
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
             name: string_value(&entry.value, "slug"),
             alias: optional_map_string(&entry.value, "display_name").filter(|display| {
@@ -1182,6 +1207,7 @@ mod tests {
         let mut models = vec![
             AgentModelOption {
                 input_modalities: None,
+                reasoning_levels: Vec::new(),
                 harness_metadata: None,
                 name: "GPT-Test".to_string(),
                 alias: None,
@@ -1190,6 +1216,7 @@ mod tests {
             },
             AgentModelOption {
                 input_modalities: None,
+                reasoning_levels: Vec::new(),
                 harness_metadata: None,
                 name: "unmatched".to_string(),
                 alias: None,
@@ -1198,6 +1225,7 @@ mod tests {
             },
             AgentModelOption {
                 input_modalities: None,
+                reasoning_levels: Vec::new(),
                 harness_metadata: None,
                 name: "max-only".to_string(),
                 alias: None,

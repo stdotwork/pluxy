@@ -26,6 +26,7 @@ fn models() -> Vec<AgentModelOption> {
         .into_iter()
         .map(|name| AgentModelOption {
             input_modalities: None,
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
             name: name.into(),
             alias: None,

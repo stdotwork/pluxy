@@ -636,6 +636,7 @@ pub(crate) fn fresh_agent_contents(
 ) -> Result<Vec<String>, String> {
     let models = [AgentModelOption {
         input_modalities: None,
+        reasoning_levels: Vec::new(),
         harness_metadata: None,
         name: model.to_string(),
         alias: None,
@@ -1493,6 +1494,7 @@ pub(crate) fn reset_agent_configuration_to_default(
         model,
         models: &[AgentModelOption {
             input_modalities: None,
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
             name: model.to_string(),
             alias: None,
