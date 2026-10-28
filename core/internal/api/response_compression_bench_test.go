@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -83,15 +84,47 @@ func BenchmarkResponseCompressionSSE(b *testing.B) {
 	}
 }
 
-// BenchmarkResponseCompressionOpenStreams measures the heap each open compressed SSE stream
-// holds: 256 clients connected at once, each paused after its first event. The pools start empty
-// for every sample, so each open stream is charged for the encoder it pins.
+// BenchmarkResponseCompressionOpenStreams measures open SSE streams with fresh encoders.
 func BenchmarkResponseCompressionOpenStreams(b *testing.B) {
+	benchmarkResponseCompressionOpenStreams(b, false)
+}
+
+// BenchmarkResponseCompressionOpenStreamsAfterShortResponse measures streams whose encoders
+// have already compressed a short non-streaming response.
+func BenchmarkResponseCompressionOpenStreamsAfterShortResponse(b *testing.B) {
+	benchmarkResponseCompressionOpenStreams(b, true)
+}
+
+func benchmarkResponseCompressionOpenStreams(b *testing.B, afterShortResponse bool) {
 	gin.SetMode(gin.ReleaseMode)
 	const streams = 256
 	events := benchSSEEvents(2)
+	shortResponse := []byte(`{"message":"` + strings.Repeat("response data ", 150) + `"}`)
 	for _, encoding := range []string{"zstd", "gzip"} {
 		b.Run(encoding, func(b *testing.B) {
+			if afterShortResponse {
+				original := responseCompressorPools[encoding]
+				// Prime each encoder before it is handed to a stream, independently of pool eviction.
+				responseCompressorPools[encoding] = &sync.Pool{New: func() any {
+					compressor, ok := original.Get().(responseCompressor)
+					if !ok || compressor == nil {
+						b.Errorf("create %s response compressor", encoding)
+						return nil
+					}
+					compressor.Reset(io.Discard)
+					if n, errWrite := compressor.Write(shortResponse); errWrite != nil || n != len(shortResponse) {
+						b.Errorf("prime %s response compressor: wrote %d bytes: %v", encoding, n, errWrite)
+						return nil
+					}
+					if errClose := compressor.Close(); errClose != nil {
+						b.Errorf("close priming %s response compressor: %v", encoding, errClose)
+						return nil
+					}
+					compressor.Reset(io.Discard)
+					return compressor
+				}}
+				defer func() { responseCompressorPools[encoding] = original }()
+			}
 			var perStream float64
 			for i := 0; i < b.N; i++ {
 				hold := make(chan struct{})

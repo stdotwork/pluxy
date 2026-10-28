@@ -168,11 +168,16 @@ type responseCompressor interface {
 	Reset(io.Writer)
 }
 
+type responseCompressorPool interface {
+	Get() any
+	Put(any)
+}
+
 // responseCompressorPools reuse encoders across responses. The default zstd encoder keeps an
 // 8 MiB window and its buffers (about 18 MB per stream); a 1 MiB window with lower encoder
 // memory loses little ratio on API responses, which are far smaller than the window.
-var responseCompressorPools = map[string]*sync.Pool{
-	"zstd": {New: func() any {
+var responseCompressorPools = map[string]responseCompressorPool{
+	"zstd": &sync.Pool{New: func() any {
 		encoder, errNewWriter := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithWindowSize(1<<20), zstd.WithLowerEncoderMem(true))
 		if errNewWriter != nil {
 			log.Errorf("create response compression encoder: %v", errNewWriter)
@@ -180,7 +185,7 @@ var responseCompressorPools = map[string]*sync.Pool{
 		}
 		return encoder
 	}},
-	"gzip": {New: func() any { return gzip.NewWriter(io.Discard) }},
+	"gzip": &sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }},
 }
 
 // newResponseCompressor takes a pooled encoder writing to dst, or nil when none can be created.
