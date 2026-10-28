@@ -1,6 +1,7 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -809,5 +810,144 @@ func TestRPCSchedulerAndUsageSelectionIDCompatibility(t *testing.T) {
 	}
 	if legacy.Provider != "openai" || legacy.RequestID != "req-1" || legacy.TraceID != "trace-1" {
 		t.Fatalf("legacyUsageRecord = %+v", legacy)
+	}
+}
+
+type recordingRawPatchClient struct {
+	schemaVersion uint32
+	methods       []string
+	rawRequests   [][]byte
+	rawRequestPtr []uintptr
+	patchFunc     func(method string, rawBody []byte) (pluginapi.RequestBodyPatchResponse, error)
+}
+
+func (c *recordingRawPatchClient) Call(_ context.Context, method string, request []byte) ([]byte, error) {
+	c.methods = append(c.methods, method)
+	c.rawRequests = append(c.rawRequests, bytes.Clone(request))
+	if len(request) > 0 {
+		c.rawRequestPtr = append(c.rawRequestPtr, uintptr(reflect.ValueOf(request).Pointer()))
+	} else {
+		c.rawRequestPtr = append(c.rawRequestPtr, 0)
+	}
+	switch method {
+	case pluginabi.MethodPluginRegister:
+		return marshalRPCResult(rpcRegistration{
+			Metadata: pluginapi.Metadata{
+				Name:             "Timezone Patcher",
+				Version:          "1.0.0",
+				Author:           "test",
+				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
+			},
+			SchemaVersion: c.schemaVersion,
+			Capabilities: rpcCapabilities{
+				RequestInterceptorPatchBodyBefore: true,
+				RequestInterceptorPatchBodyAfter:  true,
+			},
+		})
+	case pluginabi.MethodRequestPatchBodyBefore, pluginabi.MethodRequestPatchBodyAfter:
+		resp, err := c.patchFunc(method, request)
+		if err != nil {
+			return nil, err
+		}
+		return marshalRPCResult(resp)
+	case pluginabi.MethodRequestInterceptBefore, pluginabi.MethodRequestInterceptAfter:
+		var req pluginapi.RequestInterceptRequest
+		if err := json.Unmarshal(request, &req); err != nil {
+			return nil, err
+		}
+		return marshalRPCResult(pluginapi.RequestInterceptResponse{
+			Body: bytes.ReplaceAll(req.Body, []byte("<timezone>UTC</timezone>"), []byte("<timezone>Legacy</timezone>")),
+		})
+	default:
+		return marshalRPCResult(struct{}{})
+	}
+}
+
+func (c *recordingRawPatchClient) Shutdown()    {}
+func (c *recordingRawPatchClient) Close() error { return nil }
+
+func TestRPCRequestBodyPatchRawCABIAndSchemaVersionGate(t *testing.T) {
+	rawInput := []byte(`{"model":"gpt-5","input":[{"role":"developer","content":[{"type":"input_text","text":"<environment_context>\n  <current_date>2026-04-19</current_date>\n  <timezone>UTC</timezone>\n</environment_context>"}]}]}`)
+
+	clientV8 := &recordingRawPatchClient{
+		schemaVersion: pluginabi.SchemaVersionRequestInterceptorBodyPatch,
+		patchFunc: func(method string, rawBody []byte) (pluginapi.RequestBodyPatchResponse, error) {
+			if method == pluginabi.MethodRequestPatchBodyBefore {
+				target := []byte("<timezone>UTC</timezone>")
+				idx := bytes.Index(rawBody, target)
+				if idx < 0 {
+					return pluginapi.RequestBodyPatchResponse{}, nil
+				}
+				return pluginapi.RequestBodyPatchResponse{
+					Edits: []pluginapi.RequestBodyEdit{
+						{
+							Start:       idx,
+							End:         idx + len(target),
+							Replacement: "<timezone>Asia/Shanghai</timezone>",
+						},
+					},
+				}, nil
+			}
+			return pluginapi.RequestBodyPatchResponse{}, nil
+		},
+	}
+
+	host := New()
+	pluginV8, errReg := registerRPCPlugin(context.Background(), host, "tz-patcher", clientV8, pluginabi.MethodPluginRegister, nil)
+	if errReg != nil {
+		t.Fatalf("registerRPCPlugin(v8) error = %v", errReg)
+	}
+	if !validPlugin(pluginV8) {
+		t.Fatalf("validPlugin(patch-only pluginV8) = false, want true")
+	}
+	setHostSnapshotForTest(host, true, capabilityRecord{id: "tz-patcher", plugin: pluginV8})
+
+	if !host.HasRequestInterceptors() {
+		t.Fatal("HasRequestInterceptors() = false, want true for patch-only plugin")
+	}
+
+	resp := host.InterceptRequestBeforeAuth(context.Background(), pluginapi.RequestInterceptRequest{
+		Model: "gpt-5",
+		Body:  rawInput,
+	})
+	if len(clientV8.methods) != 2 || clientV8.methods[1] != pluginabi.MethodRequestPatchBodyBefore {
+		t.Fatalf("called methods = %v, want [%s %s]", clientV8.methods, pluginabi.MethodPluginRegister, pluginabi.MethodRequestPatchBodyBefore)
+	}
+	// Crucial requirement 1: C ABI receives the raw request body directly, not a JSON/Base64 envelope,
+	// and without a pre-call bytes.Clone on the host side.
+	if !bytes.Equal(clientV8.rawRequests[1], rawInput) {
+		t.Fatalf("raw C ABI request = %s, want exact rawInput %s", clientV8.rawRequests[1], rawInput)
+	}
+	if gotPtr, wantPtr := clientV8.rawRequestPtr[1], uintptr(reflect.ValueOf(rawInput).Pointer()); gotPtr != wantPtr {
+		t.Fatalf("raw C ABI request slice pointer = %#x, want original rawInput pointer %#x (zero pre-call copy)", gotPtr, wantPtr)
+	}
+	wantPatched := `{"model":"gpt-5","input":[{"role":"developer","content":[{"type":"input_text","text":"<environment_context>\n  <current_date>2026-04-19</current_date>\n  <timezone>Asia/Shanghai</timezone>\n</environment_context>"}]}]}`
+	if string(resp.Body) != wantPatched {
+		t.Fatalf("patched body = %s, want %s", resp.Body, wantPatched)
+	}
+
+	// Crucial requirement 3: When plugin returns empty edits, host reuses original body (resp.Body == nil).
+	afterResp := host.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
+		Model: "gpt-5",
+		Body:  rawInput,
+	})
+	if afterResp.Body != nil {
+		t.Fatalf("no-op patch returned non-nil Body = %s, want nil to reuse original body", afterResp.Body)
+	}
+
+	// Schema v7 must ignore request_interceptor_patch_body_before.
+	clientV7 := &recordingRawPatchClient{
+		schemaVersion: pluginabi.SchemaVersionRequestInterceptorOmitBody,
+		patchFunc: func(string, []byte) (pluginapi.RequestBodyPatchResponse, error) {
+			t.Fatal("patchFunc must not be called on schema v7")
+			return pluginapi.RequestBodyPatchResponse{}, nil
+		},
+	}
+	pluginV7, errRegV7 := registerRPCPlugin(context.Background(), host, "tz-patcher-v7", clientV7, pluginabi.MethodPluginRegister, nil)
+	if errRegV7 != nil {
+		t.Fatalf("registerRPCPlugin(v7) error = %v", errRegV7)
+	}
+	if pluginV7.Capabilities.RequestBodyPatcherBefore != nil || pluginV7.Capabilities.RequestInterceptorPatchBodyBefore {
+		t.Fatalf("schema v7 kept patch capability: %+v", pluginV7.Capabilities)
 	}
 }

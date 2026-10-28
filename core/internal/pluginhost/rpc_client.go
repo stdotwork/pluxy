@@ -86,6 +86,15 @@ type rpcResponseNormalizer struct {
 	method string
 }
 
+type rpcRequestBodyPatcher struct {
+	*rpcPluginAdapter
+	method string
+}
+
+func (p rpcRequestBodyPatcher) PatchRequestBody(ctx context.Context, body []byte) (pluginapi.RequestBodyPatchResponse, error) {
+	return callPluginRaw[pluginapi.RequestBodyPatchResponse](ctx, p.client, p.method, body)
+}
+
 func registerRPCPlugin(ctx context.Context, host *Host, id string, client pluginClient, method string, configYAML []byte) (pluginapi.Plugin, error) {
 	if client == nil {
 		return pluginapi.Plugin{}, fmt.Errorf("plugin client is nil")
@@ -162,6 +171,22 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 		plugin.Capabilities.RequestInterceptorOmitBodyBefore = resp.Capabilities.RequestInterceptorOmitBodyBefore
 		plugin.Capabilities.RequestInterceptorOmitBodyAfter = resp.Capabilities.RequestInterceptorOmitBodyAfter
 	}
+	if schemaVersion >= pluginabi.SchemaVersionRequestInterceptorBodyPatch {
+		if resp.Capabilities.RequestBodyPatcherBefore || resp.Capabilities.RequestInterceptorPatchBodyBefore {
+			plugin.Capabilities.RequestBodyPatcherBefore = rpcRequestBodyPatcher{
+				rpcPluginAdapter: adapter,
+				method:           pluginabi.MethodRequestPatchBodyBefore,
+			}
+			plugin.Capabilities.RequestInterceptorPatchBodyBefore = true
+		}
+		if resp.Capabilities.RequestBodyPatcherAfter || resp.Capabilities.RequestInterceptorPatchBodyAfter {
+			plugin.Capabilities.RequestBodyPatcherAfter = rpcRequestBodyPatcher{
+				rpcPluginAdapter: adapter,
+				method:           pluginabi.MethodRequestPatchBodyAfter,
+			}
+			plugin.Capabilities.RequestInterceptorPatchBodyAfter = true
+		}
+	}
 	if resp.Capabilities.RequestLifecyclePlugin {
 		plugin.Capabilities.RequestLifecyclePlugin = adapter
 	}
@@ -217,6 +242,11 @@ func callPlugin[T any](ctx context.Context, client pluginClient, method string, 
 	if errMarshal != nil {
 		return zero, fmt.Errorf("marshal plugin request %s: %w", method, errMarshal)
 	}
+	return callPluginRaw[T](ctx, client, method, rawRequest)
+}
+
+func callPluginRaw[T any](ctx context.Context, client pluginClient, method string, rawRequest []byte) (T, error) {
+	var zero T
 	rawResp, errCall := client.Call(ctx, method, rawRequest)
 	if errCall != nil {
 		return zero, errCall

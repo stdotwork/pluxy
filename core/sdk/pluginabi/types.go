@@ -23,7 +23,13 @@ const (
 	// frontend_auth_omit_body; the host then omits the request body instead of
 	// reading, cloning, and Base64-encoding the full payload. Plugins that declare
 	// the flags on schema_version < 7 (or do not declare them) still receive it.
-	SchemaVersion uint32 = 7
+	// Version 8 lets request interceptors opt into raw request body delivery and
+	// localized byte-range patching per phase via request_interceptor_patch_body_before/after
+	// (or request_body_patcher_before/after) capabilities and the
+	// request.patch_body_before / request.patch_body_after methods; the host passes
+	// raw request body bytes directly across the C ABI without JSON/Base64 wrapping
+	// and splices validated byte-range edits in a single pass.
+	SchemaVersion uint32 = 8
 	// SchemaVersionStreamChunkOmitRequestBody is the first schema version that omits
 	// request bodies on payload stream-chunk interceptor calls.
 	SchemaVersionStreamChunkOmitRequestBody uint32 = 3
@@ -42,6 +48,9 @@ const (
 	// SchemaVersionFrontendAuthOmitBody is the first schema version where
 	// frontend auth providers may opt out of receiving the request body.
 	SchemaVersionFrontendAuthOmitBody uint32 = 7
+	// SchemaVersionRequestInterceptorBodyPatch is the first schema version where
+	// request interceptors may opt into raw request body delivery and byte-range patching.
+	SchemaVersionRequestInterceptorBodyPatch uint32 = 8
 )
 
 const (
@@ -78,6 +87,8 @@ const (
 	MethodRequestNormalize       = "request.normalize"
 	MethodRequestInterceptBefore = "request.intercept_before"
 	MethodRequestInterceptAfter  = "request.intercept_after"
+	MethodRequestPatchBodyBefore = "request.patch_body_before"
+	MethodRequestPatchBodyAfter  = "request.patch_body_after"
 	MethodRequestComplete        = "request.complete"
 
 	MethodResponseTranslate            = "response.translate"

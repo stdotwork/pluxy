@@ -97,6 +97,26 @@ func (l *testSymbolLookup) Call(ctx context.Context, method string, request []by
 			return nil, errIntercept
 		}
 		return marshalRPCResult(resp)
+	case pluginabi.MethodRequestPatchBodyBefore:
+		patcher := requestRecordBodyPatcher(capabilityRecord{plugin: l.active}, true)
+		if patcher == nil {
+			return nil, fmt.Errorf("missing request body patcher before")
+		}
+		resp, errPatch := patcher.PatchRequestBody(ctx, request)
+		if errPatch != nil {
+			return nil, errPatch
+		}
+		return marshalRPCResult(resp)
+	case pluginabi.MethodRequestPatchBodyAfter:
+		patcher := requestRecordBodyPatcher(capabilityRecord{plugin: l.active}, false)
+		if patcher == nil {
+			return nil, fmt.Errorf("missing request body patcher after")
+		}
+		resp, errPatch := patcher.PatchRequestBody(ctx, request)
+		if errPatch != nil {
+			return nil, errPatch
+		}
+		return marshalRPCResult(resp)
 	case pluginabi.MethodRequestComplete:
 		if l.active.Capabilities.RequestLifecyclePlugin == nil {
 			return nil, fmt.Errorf("missing request lifecycle plugin")
