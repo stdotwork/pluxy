@@ -58,9 +58,7 @@ func ObservePluginExecutorStreamUsage(protocol string, payload []byte, buffer *S
 	switch strings.ToLower(strings.TrimSpace(protocol)) {
 	case "claude":
 		IterateStreamLines(payload, func(line []byte) {
-			if detail, ok := parseClaudeStreamLine(line); ok {
-				ObserveMergedStreamUsage(buffer, detail)
-			}
+			buffer.ObserveClaudeStream(line)
 		})
 	case "gemini":
 		IterateStreamLines(payload, func(line []byte) {
@@ -121,14 +119,17 @@ func parseClaudePayloadUsage(payload []byte) usage.Detail {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return usage.Detail{}
 	}
-	usageNode := gjson.GetBytes(payload, "usage")
+	root := gjson.ParseBytes(payload)
+	usageNode := root.Get("usage")
 	if !usageNode.Exists() {
-		usageNode = gjson.GetBytes(payload, "message.usage")
+		usageNode = root.Get("message.usage")
 	}
 	if !usageNode.Exists() {
 		return usage.Detail{}
 	}
-	return ParseClaudeUsage([]byte(`{"usage":` + usageNode.Raw + `}`))
+	detail := parseClaudeUsageNode(usageNode)
+	applyClaudeContentBlocksUsage(&detail, root.Get("content"))
+	return detail
 }
 
 func parseClaudeStreamLine(line []byte) (usage.Detail, bool) {
@@ -143,8 +144,7 @@ func parseClaudeStreamLine(line []byte) (usage.Detail, bool) {
 	if !usageNode.Exists() {
 		return usage.Detail{}, false
 	}
-	detail := ParseClaudeUsage([]byte(`{"usage":` + usageNode.Raw + `}`))
-	return detail, true
+	return parseClaudeUsageNode(usageNode), true
 }
 
 // ObserveMergedStreamUsage updates buffer with merged usage details.
@@ -254,7 +254,143 @@ func MergeStreamUsageDetail(existing, update usage.Detail) usage.Detail {
 		merged.ReasoningTokens,
 		merged.TotalTokens,
 	)
+	mergeStreamStructuredFields(&merged, existing, update)
 	return merged
+}
+
+func mergeStreamStructuredFields(merged *usage.Detail, existing, update usage.Detail) {
+	if merged == nil {
+		return
+	}
+	if merged.UpstreamServiceTier == "" {
+		merged.UpstreamServiceTier = existing.UpstreamServiceTier
+	}
+	if merged.Speed == "" {
+		merged.Speed = existing.Speed
+	}
+	if merged.InferenceGeo == "" {
+		merged.InferenceGeo = existing.InferenceGeo
+	}
+	if len(merged.IterationSlice()) == 0 && len(existing.IterationSlice()) > 0 {
+		merged.Iterations = usage.IterationsPtr(existing.IterationSlice())
+	} else if len(merged.IterationSlice()) > 0 {
+		merged.Iterations = usage.IterationsPtr(merged.IterationSlice())
+	}
+	merged.ToolUsageDetails = mergeToolUsageDetails(existing.ToolUsageDetails, update.ToolUsageDetails)
+	if merged.WebSearchRequests == nil && existing.WebSearchRequests != nil {
+		merged.WebSearchRequests = usage.CloneInt64Ptr(existing.WebSearchRequests)
+	} else if merged.WebSearchRequests != nil && *merged.WebSearchRequests == 0 && existing.WebSearchRequests != nil && *existing.WebSearchRequests > 0 {
+		merged.WebSearchRequests = usage.CloneInt64Ptr(existing.WebSearchRequests)
+	} else if merged.WebSearchRequests != nil {
+		merged.WebSearchRequests = usage.CloneInt64Ptr(merged.WebSearchRequests)
+	} else if merged.ToolUsageDetails != nil && merged.ToolUsageDetails.WebSearchCalls != nil {
+		merged.WebSearchRequests = usage.CloneInt64Ptr(merged.ToolUsageDetails.WebSearchCalls)
+	}
+	merged.CostDetails = mergeCostDetails(existing.CostDetails, update.CostDetails)
+	cacheDetails := resolveMergedCacheDetails(existing, update, *merged)
+	applyCacheDetailsToUsageDetail(merged, cacheDetails)
+}
+
+func resolveMergedCacheDetails(existing, update, merged usage.Detail) *usage.CacheDetails {
+	existingCC := existing.CacheDetails
+	updateCC := update.CacheDetails
+	if updateCC != nil {
+		if update.CacheCreationTokens == 0 && existing.CacheCreationTokens > 0 && existingCC != nil {
+			if sum, ok := updateCC.SumTokens(); !ok || sum == 0 {
+				return existingCC.Clone()
+			}
+		}
+		if sum, ok := updateCC.SumTokens(); ok && sum == merged.CacheCreationTokens {
+			return updateCC.Clone()
+		}
+		if iterations := merged.IterationSlice(); len(iterations) > 0 {
+			if derived := deriveClaudeCacheCreationFromIterations(iterations, merged.CacheCreationTokens); derived != nil {
+				return derived
+			}
+		}
+		return updateCC.Clone()
+	}
+	if iterations := merged.IterationSlice(); len(iterations) > 0 {
+		if derived := deriveClaudeCacheCreationFromIterations(iterations, merged.CacheCreationTokens); derived != nil {
+			return derived
+		}
+	}
+	if existingCC != nil && merged.CacheCreationTokens == existing.CacheCreationTokens {
+		return existingCC.Clone()
+	}
+	return nil
+}
+
+func mergeToolUsageDetails(existing, update *usage.ToolUsageDetails) *usage.ToolUsageDetails {
+	if existing == nil {
+		return update.Clone()
+	}
+	if update == nil {
+		return existing.Clone()
+	}
+	out := update.Clone()
+	mergeCounter := func(cur, prev *int64) *int64 {
+		if cur == nil {
+			return usage.CloneInt64Ptr(prev)
+		}
+		if *cur == 0 && prev != nil && *prev > 0 {
+			return usage.CloneInt64Ptr(prev)
+		}
+		return cur
+	}
+	out.WebSearchCalls = mergeCounter(out.WebSearchCalls, existing.WebSearchCalls)
+	out.WebSearchQueries = mergeCounter(out.WebSearchQueries, existing.WebSearchQueries)
+	out.WebFetchCalls = mergeCounter(out.WebFetchCalls, existing.WebFetchCalls)
+	out.NumSearchResults = mergeCounter(out.NumSearchResults, existing.NumSearchResults)
+	out.NumSourcesUsed = mergeCounter(out.NumSourcesUsed, existing.NumSourcesUsed)
+	out.ToolCallsRequested = mergeCounter(out.ToolCallsRequested, existing.ToolCallsRequested)
+	out.ToolCallsExecuted = mergeCounter(out.ToolCallsExecuted, existing.ToolCallsExecuted)
+	out.XSearchCalls = mergeCounter(out.XSearchCalls, existing.XSearchCalls)
+	out.XPostsFetched = mergeCounter(out.XPostsFetched, existing.XPostsFetched)
+	out.XUsersFetched = mergeCounter(out.XUsersFetched, existing.XUsersFetched)
+	out.CodeExecutionCalls = mergeCounter(out.CodeExecutionCalls, existing.CodeExecutionCalls)
+	out.FileSearchCalls = mergeCounter(out.FileSearchCalls, existing.FileSearchCalls)
+	out.MCPCalls = mergeCounter(out.MCPCalls, existing.MCPCalls)
+	out.DocumentSearchCalls = mergeCounter(out.DocumentSearchCalls, existing.DocumentSearchCalls)
+	out.ImageGenerationCalls = mergeCounter(out.ImageGenerationCalls, existing.ImageGenerationCalls)
+	if len(existing.Extra) > 0 {
+		if out.Extra == nil {
+			out.Extra = make(map[string]int64, len(existing.Extra))
+		}
+		for k, prev := range existing.Extra {
+			if cur, ok := out.Extra[k]; !ok || (cur == 0 && prev > 0) {
+				out.Extra[k] = prev
+			}
+		}
+	}
+	return out
+}
+
+func mergeCostDetails(existing, update *usage.CostDetails) *usage.CostDetails {
+	if existing == nil {
+		return update.Clone()
+	}
+	if update == nil {
+		return existing.Clone()
+	}
+	out := update.Clone()
+	e := existing.Clone()
+	if out.Cost == nil {
+		out.Cost = e.Cost
+	}
+	if out.IsBYOK == nil {
+		out.IsBYOK = e.IsBYOK
+	}
+	if out.UpstreamInferenceCost == nil {
+		out.UpstreamInferenceCost = e.UpstreamInferenceCost
+	}
+	if out.UpstreamInferencePromptCost == nil {
+		out.UpstreamInferencePromptCost = e.UpstreamInferencePromptCost
+	}
+	if out.UpstreamInferenceCompletionsCost == nil {
+		out.UpstreamInferenceCompletionsCost = e.UpstreamInferenceCompletionsCost
+	}
+	return out
 }
 
 func detailInputIncludesCache(detail usage.Detail) (bool, bool) {

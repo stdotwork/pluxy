@@ -1,6 +1,7 @@
 package helps
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1499,5 +1500,93 @@ func TestFailFromErrorsCarriesStreamTruncatedCode(t *testing.T) {
 	plain := failFromErrors(errors.New("upstream stream closed before finishReason"))
 	if plain.Code != "" {
 		t.Fatalf("plain error must not gain truncated classification, got code %q", plain.Code)
+	}
+}
+
+func TestParseClaudeUsageExtractsCacheTTLServerToolsIterationsAndCost(t *testing.T) {
+	var buffer StreamUsageBuffer
+	lineStart := []byte(`data: {"type":"message_start","message":{"id":"msg_1","model":"claude-opus-5-5","usage":{"input_tokens":4,"cache_creation_input_tokens":3036,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":3036},"output_tokens":16,"service_tier":"standard","inference_geo":"global","speed":"standard"}}}`)
+	lineToolUse := []byte(`data: {"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"anthropic"}}}`)
+	lineToolResult := []byte(`data: {"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_result","url":"https://www.anthropic.com","title":"Anthropic"},{"type":"web_search_result","url":"https://docs.anthropic.com","title":"Docs"}]}}`)
+	lineDelta := []byte(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":6,"cache_creation_input_tokens":8846,"cache_read_input_tokens":3036,"output_tokens":483,"output_tokens_details":{"thinking_tokens":45},"server_tool_use":{"web_search_requests":1,"web_fetch_requests":0},"iterations":[{"input_tokens":4,"output_tokens":53,"cache_read_input_tokens":0,"cache_creation_input_tokens":3036,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":3036},"type":"message","model":null},{"input_tokens":2,"output_tokens":430,"cache_read_input_tokens":3036,"cache_creation_input_tokens":5810,"cache_creation":{"ephemeral_5m_input_tokens":5810,"ephemeral_1h_input_tokens":0},"type":"message","model":null}],"cost":0.035471,"is_byok":false,"cost_details":{"upstream_inference_cost":0.035471,"upstream_inference_prompt_cost":0.023151,"upstream_inference_completions_cost":0.00232}}}`)
+
+	buffer.ObserveClaudeStream(lineStart)
+	buffer.ObserveClaudeStream(lineToolUse)
+	buffer.ObserveClaudeStream(lineToolResult)
+	buffer.ObserveClaudeStream(lineDelta)
+
+	detail, ok := buffer.Detail()
+	if !ok {
+		t.Fatal("expected observed stream usage")
+	}
+	if detail.InputTokens != 6 || detail.CacheReadTokens != 3036 || detail.CacheCreationTokens != 8846 || detail.OutputTokens != 483 || detail.ReasoningTokens != 45 || detail.TotalTokens != 12371 {
+		t.Fatalf("unexpected token totals: %+v", detail)
+	}
+	if detail.CacheCreation5mTokens == nil || *detail.CacheCreation5mTokens != 5810 {
+		t.Fatalf("CacheCreation5mTokens = %v, want 5810", detail.CacheCreation5mTokens)
+	}
+	if detail.CacheCreation1hTokens == nil || *detail.CacheCreation1hTokens != 3036 {
+		t.Fatalf("CacheCreation1hTokens = %v, want 3036", detail.CacheCreation1hTokens)
+	}
+	if detail.WebSearchRequests == nil || *detail.WebSearchRequests != 1 {
+		t.Fatalf("WebSearchRequests = %v, want 1", detail.WebSearchRequests)
+	}
+	if detail.ToolUsageDetails == nil || detail.ToolUsageDetails.WebSearchCalls == nil || *detail.ToolUsageDetails.WebSearchCalls != 1 || detail.ToolUsageDetails.WebFetchCalls == nil || *detail.ToolUsageDetails.WebFetchCalls != 0 || detail.ToolUsageDetails.WebSearchQueries == nil || *detail.ToolUsageDetails.WebSearchQueries != 1 || detail.ToolUsageDetails.NumSearchResults == nil || *detail.ToolUsageDetails.NumSearchResults != 2 {
+		t.Fatalf("ToolUsageDetails = %+v, want web_search=1 queries=1 results=2 web_fetch=0", detail.ToolUsageDetails)
+	}
+	iterations := detail.IterationSlice()
+	if len(iterations) != 2 {
+		t.Fatalf("len(iterations) = %d, want 2", len(iterations))
+	}
+	if iterations[0].CacheCreation1hTokens == nil || *iterations[0].CacheCreation1hTokens != 3036 || iterations[1].CacheCreation5mTokens == nil || *iterations[1].CacheCreation5mTokens != 5810 {
+		t.Fatalf("iterations = %+v", iterations)
+	}
+	if detail.InferenceGeo != "global" || detail.Speed != "standard" || detail.UpstreamServiceTier != "standard" {
+		t.Fatalf("geo=%q speed=%q tier=%q", detail.InferenceGeo, detail.Speed, detail.UpstreamServiceTier)
+	}
+	if detail.CostDetails == nil || detail.CostDetails.Cost == nil || *detail.CostDetails.Cost != 0.035471 || detail.CostDetails.IsBYOK == nil || *detail.CostDetails.IsBYOK != false {
+		t.Fatalf("CostDetails = %+v", detail.CostDetails)
+	}
+}
+
+func TestStreamUsageBufferObserveClaudeStream_PreservesSingleTurnCacheCreationTTL(t *testing.T) {
+	var buffer StreamUsageBuffer
+	buffer.ObserveClaudeStream([]byte(`data: {"type":"message_start","message":{"id":"msg_1","model":"claude-haiku-5-5","usage":{"input_tokens":16,"cache_creation_input_tokens":45045,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":45045},"output_tokens":4,"speed":"standard"}}}`))
+	buffer.ObserveClaudeStream([]byte(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}`))
+
+	detail, ok := buffer.Detail()
+	if !ok {
+		t.Fatal("expected observed stream usage")
+	}
+	if detail.CacheCreation5mTokens == nil || *detail.CacheCreation5mTokens != 0 {
+		t.Fatalf("CacheCreation5mTokens = %v, want explicit 0", detail.CacheCreation5mTokens)
+	}
+	if detail.CacheCreation1hTokens == nil || *detail.CacheCreation1hTokens != 45045 {
+		t.Fatalf("CacheCreation1hTokens = %v, want 45045", detail.CacheCreation1hTokens)
+	}
+}
+
+func TestClaudeStreamToolDeduplicationOwnsIDsAndCountsMultipleSearches(t *testing.T) {
+	use1 := []byte(`data: {"type":"content_block_start","content_block":{"type":"server_tool_use","id":"tool_1","name":"web_search"}}`)
+	result1 := []byte(`data: {"type":"content_block_start","content_block":{"type":"web_search_tool_result","tool_use_id":"tool_1","content":[]}}`)
+	result2 := []byte(`data: {"type":"content_block_start","content_block":{"type":"web_search_tool_result","tool_use_id":"tool_2","content":[]}}`)
+	var b StreamUsageBuffer
+	for i := 0; i < 2; i++ {
+		useCopy, resultCopy := bytes.Clone(use1), bytes.Clone(result1)
+		b.ObserveClaudeStream(useCopy)
+		b.ObserveClaudeStream(resultCopy)
+		for j := range useCopy {
+			useCopy[j] = 'X'
+		}
+		for j := range resultCopy {
+			resultCopy[j] = 'X'
+		}
+	}
+	b.ObserveClaudeStream(result2)
+	d, ok := b.Detail()
+	if !ok || d.ToolUsageDetails == nil || d.ToolUsageDetails.WebSearchQueries == nil ||
+		*d.ToolUsageDetails.WebSearchQueries != 1 || d.ToolUsageDetails.WebSearchCalls == nil ||
+		*d.ToolUsageDetails.WebSearchCalls != 2 || d.WebSearchRequests == nil || *d.WebSearchRequests != 2 {
+		t.Fatalf("unexpected Claude stream search counts: detail=%+v tools=%+v", d, d.ToolUsageDetails)
 	}
 }
