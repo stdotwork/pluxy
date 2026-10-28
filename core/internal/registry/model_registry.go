@@ -555,11 +555,9 @@ func (r *ModelRegistry) registerClientLocked(clientID, clientProvider string, mo
 
 	now := time.Now()
 	if !hadExisting {
-		// Pure addition path. clientModels has no entry for this client, but a
-		// stale clientModelInfos entry would still feed the web-search index, so
-		// retract it before the new contributions are recorded. This is a no-op
-		// when the bookkeeping is consistent.
-		r.dropClientWebSearchCountsLocked(clientID)
+		// Pure addition normally has no prior metadata. Clear orphaned metadata
+		// and refresh its models before publishing the new catalog.
+		r.clearOrphanedClientModelInfosLocked(clientID)
 		for _, modelID := range rawModelIDs {
 			model := newModels[modelID]
 			r.addModelRegistration(modelID, provider, model, now, clientID)
@@ -921,9 +919,7 @@ func (r *ModelRegistry) unregisterClientInternal(clientID string) {
 	models, exists := r.clientModels[clientID]
 	provider, hasProvider := r.clientProviders[clientID]
 	if !exists {
-		// Nothing to decrement per model, but the client may still hold
-		// clientModelInfos bookkeeping that contributes to the web-search index.
-		r.dropClientWebSearchCountsLocked(clientID)
+		r.clearOrphanedClientModelInfosLocked(clientID)
 		if hasProvider {
 			delete(r.clientProviders, clientID)
 		}
@@ -1205,14 +1201,13 @@ func (r *ModelRegistry) ApplyClientModelCapabilities(clientID string, expectedEp
 	return true
 }
 
+// hasClientSupportingWebSearchLocked excludes the given ID even when it is empty,
+// matching the original scan without walking the client set.
 func (r *ModelRegistry) hasClientSupportingWebSearchLocked(modelID, provider, excludeClientID string) bool {
 	if provider != "" {
 		count := r.webSearchProviderCounts[modelID][provider]
 		if count <= 0 {
 			return false
-		}
-		if excludeClientID == "" {
-			return true
 		}
 		if r.clientProviders[excludeClientID] == provider {
 			if info := r.clientModelInfos[excludeClientID][modelID]; info != nil && info.SupportsWebSearch {
@@ -1225,9 +1220,6 @@ func (r *ModelRegistry) hasClientSupportingWebSearchLocked(modelID, provider, ex
 	count := r.webSearchClientCounts[modelID]
 	if count <= 0 {
 		return false
-	}
-	if excludeClientID == "" {
-		return true
 	}
 	if info := r.clientModelInfos[excludeClientID][modelID]; info != nil && info.SupportsWebSearch {
 		count--
@@ -1283,6 +1275,25 @@ func (r *ModelRegistry) decrementWebSearchCountLocked(modelID, provider string) 
 	if len(counts) == 0 {
 		delete(r.webSearchProviderCounts, modelID)
 	}
+}
+
+// clearOrphanedClientModelInfosLocked refreshes capabilities before retracting
+// and discarding metadata for a client without clientModels. The caller must
+// retain clientProviders until this returns; model multiplicities are unknown.
+func (r *ModelRegistry) clearOrphanedClientModelInfosLocked(clientID string) {
+	provider, hasProvider := r.clientProviders[clientID]
+	for modelID := range r.clientModelInfos[clientID] {
+		if registration := r.models[modelID]; registration != nil {
+			if registration.Info != nil {
+				registration.Info.SupportsWebSearch = r.hasClientSupportingWebSearchLocked(modelID, "", clientID)
+			}
+			if hasProvider && registration.InfoByProvider[provider] != nil {
+				registration.InfoByProvider[provider].SupportsWebSearch = r.hasClientSupportingWebSearchLocked(modelID, provider, clientID)
+			}
+		}
+	}
+	r.dropClientWebSearchCountsLocked(clientID)
+	delete(r.clientModelInfos, clientID)
 }
 
 // dropClientWebSearchCountsLocked removes every web-search contribution currently
