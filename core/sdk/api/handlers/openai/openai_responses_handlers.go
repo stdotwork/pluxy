@@ -161,8 +161,10 @@ func (f *responsesSSEFramer) shouldFilterPrivateEvent(streamEvent, payloadType s
 			return false
 		}
 
-		// For standard Responses API clients: filter any codex.* private events.
-		if strings.HasPrefix(name, "codex.") {
+		// For standard Responses API clients: filter any codex.* private events, and the Codex
+		// backend's moderation metadata, which is not a public Responses event: clients that parse
+		// a closed event list fail on it.
+		if strings.HasPrefix(name, "codex.") || name == "response.metadata" {
 			return true
 		}
 
