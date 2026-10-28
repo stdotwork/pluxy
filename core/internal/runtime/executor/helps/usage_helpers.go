@@ -930,9 +930,15 @@ type StreamUsageBuffer struct {
 	seenOpenAIToolCallKeys       map[string]struct{}
 	openAIToolCallsRequested     int64
 	openAIExplicitToolCalls      bool
+	geminiCallCounter            geminiFunctionCallCounter
 	openAIStreamImages           int64
 	openAIExplicitImageCount     bool
 	openAIStreamImageDetails     *usage.ImageDetails
+	geminiToolDetails            *usage.ToolUsageDetails
+	geminiWebSearchRequests      *int64
+	geminiImageCount             int64
+	geminiImageDetails           *usage.ImageDetails
+	requestedImageDetails        *usage.ImageDetails
 }
 
 var (
@@ -957,7 +963,123 @@ func (b *StreamUsageBuffer) Observe(detail usage.Detail, ok bool) {
 	} else {
 		b.detail.ResponseServiceTier = responseServiceTier
 	}
+	b.applyGeminiStreamObservations()
 	b.ok = true
+}
+
+func (b *StreamUsageBuffer) rememberGeminiCandidateArtifacts(detail *usage.Detail) {
+	if b == nil || detail == nil {
+		return
+	}
+	if detail.ToolUsageDetails != nil {
+		// Content parts are incremental executions; grounding metadata is a snapshot.
+		previous := b.geminiToolDetails
+		b.geminiToolDetails = mergeToolUsageDetails(previous, detail.ToolUsageDetails)
+		if previous != nil {
+			addCounter := func(prev, delta *int64) *int64 {
+				if prev == nil || delta == nil {
+					return mergeInt64Ptr(prev, delta)
+				}
+				if sum, ok := safeUsageTokenSum(*prev, *delta); ok {
+					return usage.Int64Ptr(sum)
+				}
+				return nil
+			}
+			b.geminiToolDetails.ToolCallsRequested = addCounter(
+				previous.ToolCallsRequested, detail.ToolUsageDetails.ToolCallsRequested,
+			)
+			b.geminiToolDetails.CodeExecutionCalls = addCounter(
+				previous.CodeExecutionCalls, detail.ToolUsageDetails.CodeExecutionCalls,
+			)
+		}
+	}
+	if detail.WebSearchRequests != nil {
+		b.geminiWebSearchRequests = mergeInt64Ptr(b.geminiWebSearchRequests, detail.WebSearchRequests)
+	}
+	if detail.ImageCount != nil && *detail.ImageCount > 0 {
+		b.geminiImageCount += *detail.ImageCount
+	}
+	if detail.ImageDetails != nil {
+		b.geminiImageDetails = detail.ImageDetails.Clone()
+	}
+}
+
+func (b *StreamUsageBuffer) applyGeminiStreamObservations() {
+	if b == nil {
+		return
+	}
+	if b.geminiToolDetails != nil {
+		b.detail.ToolUsageDetails = mergeToolUsageDetails(b.detail.ToolUsageDetails, b.geminiToolDetails)
+	}
+	if b.geminiWebSearchRequests != nil {
+		b.detail.WebSearchRequests = usage.CloneInt64Ptr(b.geminiWebSearchRequests)
+	}
+	if b.geminiImageCount > 0 {
+		b.detail.ImageCount = usage.Int64Ptr(b.geminiImageCount)
+	}
+	if b.geminiImageDetails != nil && b.detail.ImageDetails == nil {
+		b.detail.ImageDetails = b.geminiImageDetails.Clone()
+	}
+	if b.geminiImageCount > 0 && b.requestedImageDetails != nil && b.detail.RequestedImageDetails == nil {
+		b.detail.RequestedImageDetails = b.requestedImageDetails.Clone()
+	}
+}
+
+// SetRequestPayload records request-side image/media configuration on the stream buffer
+// so it can be attached as RequestedImageDetails if the stream produces images.
+func (b *StreamUsageBuffer) SetRequestPayload(requestPayload []byte) {
+	if b == nil || len(requestPayload) == 0 {
+		return
+	}
+	b.requestedImageDetails = ParseRequestImageDetails(requestPayload)
+}
+
+// ObserveGeminiStream records and merges usage and candidate tool/media artifacts from a Gemini SSE line.
+func (b *StreamUsageBuffer) ObserveGeminiStream(line []byte) {
+	if b == nil {
+		return
+	}
+	payload := jsonPayload(line)
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return
+	}
+	var artifactDetail usage.Detail
+	applyGeminiPayloadArtifactsWithCounter(&artifactDetail, gjson.ParseBytes(payload), &b.geminiCallCounter)
+	b.rememberGeminiCandidateArtifacts(&artifactDetail)
+	if detail, ok := ParseGeminiStreamUsage(payload); ok {
+		if b.ok {
+			update := detail
+			mergeStreamStructuredFields(&detail, b.detail, update)
+		}
+		b.Observe(detail, true)
+	} else if artifactDetail.ToolUsageDetails != nil || artifactDetail.ImageCount != nil {
+		b.applyGeminiStreamObservations()
+		b.ok = true
+	}
+}
+
+// ObserveAntigravityStream records and merges usage and candidate tool/media artifacts from an Antigravity SSE line.
+func (b *StreamUsageBuffer) ObserveAntigravityStream(line []byte) {
+	if b == nil {
+		return
+	}
+	payload := jsonPayload(line)
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return
+	}
+	var artifactDetail usage.Detail
+	applyGeminiPayloadArtifactsWithCounter(&artifactDetail, gjson.ParseBytes(payload), &b.geminiCallCounter)
+	b.rememberGeminiCandidateArtifacts(&artifactDetail)
+	if detail, ok := ParseAntigravityStreamUsage(payload); ok {
+		if b.ok {
+			update := detail
+			mergeStreamStructuredFields(&detail, b.detail, update)
+		}
+		b.Observe(detail, true)
+	} else if artifactDetail.ToolUsageDetails != nil || artifactDetail.ImageCount != nil {
+		b.applyGeminiStreamObservations()
+		b.ok = true
+	}
 }
 
 // ObserveOpenAIStream records response-tier state and the latest usage from an
@@ -1066,8 +1188,9 @@ func (b *StreamUsageBuffer) observeOpenAIImageStreamCompleted(payload []byte) {
 		Quality:      strings.TrimSpace(root.Get("quality").String()),
 		Background:   strings.TrimSpace(root.Get("background").String()),
 		OutputFormat: strings.TrimSpace(root.Get("output_format").String()),
+		MimeType:     strings.TrimSpace(root.Get("mime_type").String()),
 	}
-	if details.Size != "" || details.Quality != "" || details.Background != "" || details.OutputFormat != "" {
+	if !isEmptyImageDetails(details) {
 		b.openAIStreamImageDetails = details
 	}
 }
@@ -1091,6 +1214,9 @@ func (b *StreamUsageBuffer) applyOpenAIStreamObservations() {
 		}
 		if b.openAIStreamImageDetails != nil {
 			b.detail.ImageDetails = b.openAIStreamImageDetails.Clone()
+		}
+		if b.detail.RequestedImageDetails == nil && b.requestedImageDetails != nil {
+			b.detail.RequestedImageDetails = b.requestedImageDetails.Clone()
 		}
 		b.ok = true
 	}
@@ -1384,7 +1510,7 @@ func applyCodexImageToolOutputMetadata(detail *usage.Detail, requestBody []byte,
 		items = parseCollectedOutputItems(itemsByIndex, fallback)
 	}
 	var count int64
-	var firstMeta *usage.ImageDetails
+	var respMeta *usage.ImageDetails
 	for _, item := range items {
 		if strings.TrimSpace(item.Get("type").String()) != "image_generation_call" {
 			continue
@@ -1393,48 +1519,27 @@ func applyCodexImageToolOutputMetadata(detail *usage.Detail, requestBody []byte,
 			continue
 		}
 		count++
-		if firstMeta == nil {
-			firstMeta = &usage.ImageDetails{
+		if respMeta == nil {
+			meta := &usage.ImageDetails{
 				Size:          strings.TrimSpace(item.Get("size").String()),
+				Resolution:    strings.TrimSpace(item.Get("resolution").String()),
+				AspectRatio:   strings.TrimSpace(item.Get("aspect_ratio").String()),
 				Quality:       strings.TrimSpace(item.Get("quality").String()),
 				Background:    strings.TrimSpace(item.Get("background").String()),
 				OutputFormat:  strings.TrimSpace(item.Get("output_format").String()),
+				MimeType:      strings.TrimSpace(firstExistingUsageNode(item, "mime_type", "mimeType").String()),
 				InputFidelity: strings.TrimSpace(item.Get("input_fidelity").String()),
 			}
-		}
-	}
-	if len(requestBody) > 0 && gjson.ValidBytes(requestBody) {
-		for _, tool := range gjson.GetBytes(requestBody, "tools").Array() {
-			if strings.TrimSpace(tool.Get("type").String()) != "image_generation" {
-				continue
+			if !isEmptyImageDetails(meta) {
+				respMeta = meta
 			}
-			if firstMeta == nil {
-				firstMeta = &usage.ImageDetails{}
-			}
-			if firstMeta.Size == "" {
-				firstMeta.Size = strings.TrimSpace(tool.Get("size").String())
-			}
-			if firstMeta.Quality == "" {
-				firstMeta.Quality = strings.TrimSpace(tool.Get("quality").String())
-			}
-			if firstMeta.Background == "" {
-				firstMeta.Background = strings.TrimSpace(tool.Get("background").String())
-			}
-			if firstMeta.OutputFormat == "" {
-				firstMeta.OutputFormat = strings.TrimSpace(tool.Get("output_format").String())
-			}
-			if firstMeta.InputFidelity == "" {
-				firstMeta.InputFidelity = strings.TrimSpace(tool.Get("input_fidelity").String())
-			}
-			break
 		}
 	}
 	if count > 0 {
 		detail.ImageCount = usage.Int64Ptr(count)
 	}
-	if firstMeta != nil && (firstMeta.Size != "" || firstMeta.Quality != "" || firstMeta.Background != "" || firstMeta.OutputFormat != "" || firstMeta.InputFidelity != "") {
-		detail.ImageDetails = firstMeta
-	}
+	detail.ImageDetails = respMeta
+	detail.RequestedImageDetails = ParseRequestImageDetails(requestBody)
 }
 
 func ParseOpenAIUsage(data []byte) usage.Detail {
@@ -1769,12 +1874,15 @@ func applyResponsesOutputItemSliceUsage(detail *usage.Detail, items []gjson.Resu
 			if firstImageMeta == nil {
 				meta := &usage.ImageDetails{
 					Size:          strings.TrimSpace(item.Get("size").String()),
+					Resolution:    strings.TrimSpace(item.Get("resolution").String()),
+					AspectRatio:   strings.TrimSpace(item.Get("aspect_ratio").String()),
 					Quality:       strings.TrimSpace(item.Get("quality").String()),
 					Background:    strings.TrimSpace(item.Get("background").String()),
 					OutputFormat:  strings.TrimSpace(item.Get("output_format").String()),
+					MimeType:      strings.TrimSpace(firstExistingUsageNode(item, "mime_type", "mimeType").String()),
 					InputFidelity: strings.TrimSpace(item.Get("input_fidelity").String()),
 				}
-				if meta.Size != "" || meta.Quality != "" || meta.Background != "" || meta.OutputFormat != "" || meta.InputFidelity != "" {
+				if !isEmptyImageDetails(meta) {
 					firstImageMeta = meta
 				}
 			}
@@ -1852,8 +1960,69 @@ func applyResponsesOutputItemSliceUsage(detail *usage.Detail, items []gjson.Resu
 	}
 }
 
-// ParseOpenAIImageUsage extracts token usage, generated image count, and image parameters
-// from an OpenAI or xAI image generation/edit request and response.
+func isEmptyImageDetails(d *usage.ImageDetails) bool {
+	if d == nil {
+		return true
+	}
+	return d.Size == "" && d.Resolution == "" && d.ImageSize == "" && d.AspectRatio == "" && d.Quality == "" && d.Background == "" && d.OutputFormat == "" && d.ResponseFormat == "" && d.MimeType == "" && d.InputFidelity == ""
+}
+
+// ParseRequestImageDetails extracts requested image/video parameters strictly from a request payload,
+// preserving each upstream protocol's native field names.
+func ParseRequestImageDetails(requestPayload []byte) *usage.ImageDetails {
+	if len(requestPayload) == 0 || !gjson.ValidBytes(requestPayload) {
+		return nil
+	}
+	root := gjson.ParseBytes(requestPayload)
+	pick := func(paths ...string) string {
+		for _, p := range paths {
+			if v := root.Get(p); v.Type == gjson.String {
+				if s := strings.TrimSpace(v.String()); s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+	out := &usage.ImageDetails{
+		Size:           pick("size"),
+		Resolution:     pick("resolution", "image_config.resolution"),
+		ImageSize:      pick("image_size", "imageSize", "image_config.image_size", "image_config.imageSize", "generationConfig.imageConfig.imageSize", "generation_config.image_config.image_size", "request.generationConfig.imageConfig.imageSize", "request.generation_config.image_config.image_size", "parameters.sampleImageSize"),
+		AspectRatio:    pick("aspect_ratio", "aspectRatio", "image_config.aspect_ratio", "image_config.aspectRatio", "generationConfig.imageConfig.aspectRatio", "generation_config.image_config.aspect_ratio", "request.generationConfig.imageConfig.aspectRatio", "request.generation_config.image_config.aspect_ratio", "parameters.aspectRatio"),
+		Quality:        pick("quality"),
+		Background:     pick("background"),
+		OutputFormat:   pick("output_format"),
+		ResponseFormat: pick("response_format"),
+		MimeType:       pick("mime_type", "mimeType", "parameters.outputOptions.mimeType"),
+		InputFidelity:  pick("input_fidelity"),
+	}
+	if isEmptyImageDetails(out) {
+		for _, tool := range root.Get("tools").Array() {
+			if strings.TrimSpace(tool.Get("type").String()) != "image_generation" {
+				continue
+			}
+			out = &usage.ImageDetails{
+				Size:          strings.TrimSpace(tool.Get("size").String()),
+				Resolution:    strings.TrimSpace(tool.Get("resolution").String()),
+				ImageSize:     strings.TrimSpace(firstExistingUsageNode(tool, "image_size", "imageSize").String()),
+				AspectRatio:   strings.TrimSpace(firstExistingUsageNode(tool, "aspect_ratio", "aspectRatio").String()),
+				Quality:       strings.TrimSpace(tool.Get("quality").String()),
+				Background:    strings.TrimSpace(tool.Get("background").String()),
+				OutputFormat:  strings.TrimSpace(tool.Get("output_format").String()),
+				MimeType:      strings.TrimSpace(firstExistingUsageNode(tool, "mime_type", "mimeType").String()),
+				InputFidelity: strings.TrimSpace(tool.Get("input_fidelity").String()),
+			}
+			break
+		}
+	}
+	if isEmptyImageDetails(out) {
+		return nil
+	}
+	return out
+}
+
+// ParseOpenAIImageUsage extracts token usage, generated image count, and separate
+// request vs upstream response image parameters from an OpenAI or xAI image request/response.
 func ParseOpenAIImageUsage(requestPayload, responsePayload []byte) usage.Detail {
 	detail := ParseOpenAIUsage(responsePayload)
 	root := gjson.ParseBytes(responsePayload)
@@ -1863,17 +2032,9 @@ func ParseOpenAIImageUsage(requestPayload, responsePayload []byte) usage.Detail 
 			detail.ImageCount = usage.Int64Ptr(count)
 		}
 	}
-	reqRoot := gjson.ParseBytes(requestPayload)
-	pickString := func(paths ...string) string {
+	pickRespString := func(paths ...string) string {
 		for _, p := range paths {
 			if v := root.Get(p); v.Type == gjson.String {
-				if s := strings.TrimSpace(v.String()); s != "" {
-					return s
-				}
-			}
-		}
-		for _, p := range paths {
-			if v := reqRoot.Get(p); v.Type == gjson.String {
 				if s := strings.TrimSpace(v.String()); s != "" {
 					return s
 				}
@@ -1882,17 +2043,20 @@ func ParseOpenAIImageUsage(requestPayload, responsePayload []byte) usage.Detail 
 		return ""
 	}
 	imgDetails := &usage.ImageDetails{
-		Size:          pickString("size", "data.0.size"),
-		Resolution:    pickString("resolution", "data.0.resolution"),
-		AspectRatio:   pickString("aspect_ratio", "data.0.aspect_ratio"),
-		Quality:       pickString("quality", "data.0.quality"),
-		Background:    pickString("background", "data.0.background"),
-		OutputFormat:  pickString("output_format", "data.0.output_format", "data.0.mime_type"),
-		InputFidelity: pickString("input_fidelity", "data.0.input_fidelity"),
+		Size:          pickRespString("size", "data.0.size"),
+		Resolution:    pickRespString("resolution", "data.0.resolution"),
+		ImageSize:     pickRespString("image_size", "imageSize", "data.0.image_size", "data.0.imageSize"),
+		AspectRatio:   pickRespString("aspect_ratio", "aspectRatio", "data.0.aspect_ratio", "data.0.aspectRatio"),
+		Quality:       pickRespString("quality", "data.0.quality"),
+		Background:    pickRespString("background", "data.0.background"),
+		OutputFormat:  pickRespString("output_format", "data.0.output_format"),
+		MimeType:      pickRespString("mime_type", "mimeType", "data.0.mime_type", "data.0.mimeType"),
+		InputFidelity: pickRespString("input_fidelity", "data.0.input_fidelity"),
 	}
-	if imgDetails.Size != "" || imgDetails.Resolution != "" || imgDetails.AspectRatio != "" || imgDetails.Quality != "" || imgDetails.Background != "" || imgDetails.OutputFormat != "" || imgDetails.InputFidelity != "" {
+	if !isEmptyImageDetails(imgDetails) {
 		detail.ImageDetails = imgDetails
 	}
+	detail.RequestedImageDetails = ParseRequestImageDetails(requestPayload)
 	return detail
 }
 
@@ -1913,16 +2077,9 @@ func ParseXAIVideoUsage(requestPayload, responsePayload []byte) usage.Detail {
 	if !hasCompletedVideo {
 		return detail
 	}
-	pickString := func(paths ...string) string {
+	pickRespString := func(paths ...string) string {
 		for _, p := range paths {
 			if v := root.Get(p); v.Type == gjson.String {
-				if s := strings.TrimSpace(v.String()); s != "" {
-					return s
-				}
-			}
-		}
-		for _, p := range paths {
-			if v := reqRoot.Get(p); v.Type == gjson.String {
 				if s := strings.TrimSpace(v.String()); s != "" {
 					return s
 				}
@@ -1931,12 +2088,13 @@ func ParseXAIVideoUsage(requestPayload, responsePayload []byte) usage.Detail {
 		return ""
 	}
 	imgDetails := &usage.ImageDetails{
-		Resolution:  pickString("resolution", "video.resolution", "data.0.resolution"),
-		AspectRatio: pickString("aspect_ratio", "video.aspect_ratio", "data.0.aspect_ratio"),
+		Resolution:  pickRespString("resolution", "video.resolution", "data.0.resolution"),
+		AspectRatio: pickRespString("aspect_ratio", "video.aspect_ratio", "data.0.aspect_ratio"),
 	}
-	if imgDetails.Resolution != "" || imgDetails.AspectRatio != "" {
+	if !isEmptyImageDetails(imgDetails) {
 		detail.ImageDetails = imgDetails
 	}
+	detail.RequestedImageDetails = ParseRequestImageDetails(requestPayload)
 	if dur := firstExistingUsageNode(root, "duration", "video.duration"); dur.Type == gjson.Number && dur.Float() > 0 {
 		detail.MediaCounts = &usage.MediaCounts{
 			CompletionMedia: usage.Int64Ptr(1),
@@ -2503,14 +2661,15 @@ func parseClaudeCostNode(usageNode gjson.Result) *usage.CostDetails {
 }
 
 func parseGeminiFamilyUsageDetail(node gjson.Result) usage.Detail {
-	cachedTokens := node.Get("cachedContentTokenCount").Int()
+	cachedTokens := firstExistingUsageNode(node, "cachedContentTokenCount", "cached_content_token_count").Int()
 	toolUseTokens := firstExistingUsageNode(node, "toolUsePromptTokenCount", "tool_use_prompt_token_count").Int()
-	inputTokens, okInput := safeUsageTokenSum(node.Get("promptTokenCount").Int(), toolUseTokens)
+	promptTokens := firstExistingUsageNode(node, "promptTokenCount", "prompt_token_count").Int()
+	inputTokens, okInput := safeUsageTokenSum(promptTokens, toolUseTokens)
 	detail := usage.Detail{
 		InputTokens:     inputTokens,
-		OutputTokens:    node.Get("candidatesTokenCount").Int(),
-		ReasoningTokens: node.Get("thoughtsTokenCount").Int(),
-		TotalTokens:     node.Get("totalTokenCount").Int(),
+		OutputTokens:    firstExistingUsageNode(node, "candidatesTokenCount", "candidates_token_count").Int(),
+		ReasoningTokens: firstExistingUsageNode(node, "thoughtsTokenCount", "thoughts_token_count").Int(),
+		TotalTokens:     firstExistingUsageNode(node, "totalTokenCount", "total_token_count").Int(),
 		CachedTokens:    cachedTokens,
 		CacheReadTokens: cachedTokens,
 	}
@@ -2535,7 +2694,295 @@ func parseGeminiFamilyUsageDetail(node gjson.Result) usage.Detail {
 		detail.ReasoningTokens,
 		detail.TotalTokens,
 	)
+	populateGeminiUsageMetadataModalities(&detail, node, toolUseTokens)
 	return detail
+}
+
+func populateGeminiUsageMetadataModalities(detail *usage.Detail, node gjson.Result, toolUseTokens int64) {
+	if detail == nil || !node.Exists() || !node.IsObject() {
+		return
+	}
+	if serviceTier := strings.TrimSpace(firstExistingUsageNode(node, "serviceTier", "service_tier").String()); serviceTier != "" {
+		detail.ResponseServiceTier = serviceTier
+		if detail.UpstreamServiceTier == "" {
+			detail.UpstreamServiceTier = serviceTier
+		}
+	}
+	if trafficType := strings.TrimSpace(firstExistingUsageNode(node, "trafficType", "traffic_type").String()); trafficType != "" {
+		detail.UpstreamServiceTier = trafficType
+		if detail.ResponseServiceTier == "" {
+			detail.ResponseServiceTier = trafficType
+		}
+	}
+	if toolUseTokens > 0 {
+		if detail.ToolUsageDetails == nil {
+			detail.ToolUsageDetails = &usage.ToolUsageDetails{}
+		}
+		if detail.ToolUsageDetails.Extra == nil {
+			detail.ToolUsageDetails.Extra = make(map[string]int64)
+		}
+		detail.ToolUsageDetails.Extra["tool_use_prompt_tokens"] = toolUseTokens
+	}
+	parseModalityList := func(arr gjson.Result, target func(modality string, count int64)) {
+		if !arr.Exists() || !arr.IsArray() {
+			return
+		}
+		for _, entry := range arr.Array() {
+			mod := strings.ToUpper(strings.TrimSpace(entry.Get("modality").String()))
+			if mod == "" {
+				continue
+			}
+			cntNode := firstExistingUsageNode(entry, "tokenCount", "token_count")
+			if cntNode.Type != gjson.Number {
+				continue
+			}
+			target(mod, cntNode.Int())
+		}
+	}
+	var textIn, imgIn, audioIn, videoIn, docIn int64
+	var hasTextIn, hasImgIn, hasAudioIn, hasVideoIn, hasDocIn bool
+	addInputModality := func(mod string, cnt int64) {
+		switch mod {
+		case "TEXT":
+			textIn += cnt
+			hasTextIn = true
+		case "IMAGE":
+			imgIn += cnt
+			hasImgIn = true
+		case "AUDIO":
+			audioIn += cnt
+			hasAudioIn = true
+		case "VIDEO":
+			videoIn += cnt
+			hasVideoIn = true
+		case "DOCUMENT":
+			docIn += cnt
+			hasDocIn = true
+		}
+	}
+	parseModalityList(firstExistingUsageNode(node, "promptTokensDetails", "prompt_tokens_details"), addInputModality)
+	parseModalityList(firstExistingUsageNode(node, "toolUsePromptTokensDetails", "tool_use_prompt_tokens_details"), addInputModality)
+	if hasTextIn {
+		detail.TextInputTokens = usage.Int64Ptr(textIn)
+	}
+	if hasImgIn {
+		detail.ImageInputTokens = usage.Int64Ptr(imgIn)
+	}
+	if hasAudioIn {
+		detail.AudioInputTokens = usage.Int64Ptr(audioIn)
+	}
+	if hasVideoIn {
+		detail.VideoInputTokens = usage.Int64Ptr(videoIn)
+	}
+	if hasDocIn {
+		detail.FileInputTokens = usage.Int64Ptr(docIn)
+	}
+
+	var cachedText int64
+	var hasCachedText bool
+	parseModalityList(firstExistingUsageNode(node, "cacheTokensDetails", "cache_tokens_details"), func(mod string, cnt int64) {
+		if mod == "TEXT" {
+			cachedText += cnt
+			hasCachedText = true
+		}
+	})
+	if hasCachedText {
+		detail.CachedTextTokens = usage.Int64Ptr(cachedText)
+	}
+
+	var textOut, imgOut, audioOut int64
+	var hasTextOut, hasImgOut, hasAudioOut bool
+	parseModalityList(firstExistingUsageNode(node, "candidatesTokensDetails", "candidates_tokens_details"), func(mod string, cnt int64) {
+		switch mod {
+		case "TEXT":
+			textOut += cnt
+			hasTextOut = true
+		case "IMAGE":
+			imgOut += cnt
+			hasImgOut = true
+		case "AUDIO":
+			audioOut += cnt
+			hasAudioOut = true
+		}
+	})
+	if hasTextOut {
+		detail.TextOutputTokens = usage.Int64Ptr(textOut)
+	}
+	if hasImgOut {
+		detail.ImageOutputTokens = usage.Int64Ptr(imgOut)
+	}
+	if hasAudioOut {
+		detail.AudioOutputTokens = usage.Int64Ptr(audioOut)
+	}
+}
+
+func applyGeminiPayloadArtifacts(detail *usage.Detail, root gjson.Result) {
+	var callCounter geminiFunctionCallCounter
+	applyGeminiPayloadArtifactsWithCounter(detail, root, &callCounter)
+}
+
+func applyGeminiPayloadArtifactsWithCounter(detail *usage.Detail, root gjson.Result, callCounter *geminiFunctionCallCounter) {
+	if detail == nil || !root.Exists() || !root.IsObject() {
+		return
+	}
+	if callCounter == nil {
+		callCounter = &geminiFunctionCallCounter{}
+	}
+	candidates := root.Get("candidates")
+	if !candidates.Exists() {
+		candidates = root.Get("response.candidates")
+	}
+	if candidates.Exists() && candidates.IsArray() {
+		var (
+			webSearchGrounded bool
+			webSearchQueries  int64
+			webChunks         int64
+			fileChunks        int64
+			mapsChunks        int64
+			urlFetchCount     int64
+			codeExecCount     int64
+			fnCallCount       int64
+			imageOutCount     int64
+			firstImageMime    string
+		)
+		for candPos, cand := range candidates.Array() {
+			candIdx := int64(candPos)
+			if idxNode := cand.Get("index"); idxNode.Type == gjson.Number {
+				candIdx = idxNode.Int()
+			}
+			gm := firstExistingUsageNode(cand, "groundingMetadata", "grounding_metadata")
+			if gm.Exists() && gm.IsObject() {
+				if q := firstExistingUsageNode(gm, "webSearchQueries", "web_search_queries"); q.IsArray() && len(q.Array()) > 0 {
+					for _, qItem := range q.Array() {
+						if strings.TrimSpace(qItem.String()) != "" {
+							webSearchQueries++
+						}
+					}
+					if webSearchQueries > 0 {
+						webSearchGrounded = true
+					}
+				}
+				if firstExistingUsageNode(gm, "searchEntryPoint", "search_entry_point").Exists() {
+					webSearchGrounded = true
+				}
+				if chunks := firstExistingUsageNode(gm, "groundingChunks", "grounding_chunks"); chunks.IsArray() {
+					for _, ch := range chunks.Array() {
+						switch {
+						case ch.Get("web").Exists():
+							webChunks++
+							webSearchGrounded = true
+						case ch.Get("retrievedContext").Exists() || ch.Get("retrieved_context").Exists():
+							fileChunks++
+						case ch.Get("maps").Exists():
+							mapsChunks++
+						}
+					}
+				}
+			}
+			if ucm := firstExistingUsageNode(cand, "urlContextMetadata", "url_context_metadata"); ucm.Exists() && ucm.IsObject() {
+				if urls := firstExistingUsageNode(ucm, "urlMetadata", "url_metadata"); urls.IsArray() {
+					urlFetchCount += int64(len(urls.Array()))
+				}
+			}
+			if parts := cand.Get("content.parts"); parts.IsArray() {
+				for _, part := range parts.Array() {
+					if part.Get("executableCode").Exists() || part.Get("executable_code").Exists() {
+						codeExecCount++
+					}
+					if fc := firstExistingUsageNode(part, "functionCall", "function_call"); fc.Exists() {
+						fnCallCount += callCounter.observePart(candIdx, fc)
+					}
+					inline := firstExistingUsageNode(part, "inlineData", "inline_data")
+					if inline.Exists() && inline.IsObject() {
+						mimeType := strings.TrimSpace(firstExistingUsageNode(inline, "mimeType", "mime_type").String())
+						if strings.HasPrefix(strings.ToLower(mimeType), "image/") {
+							imageOutCount++
+							if firstImageMime == "" {
+								firstImageMime = mimeType
+							}
+						}
+					}
+				}
+			}
+		}
+		if webSearchGrounded || webSearchQueries > 0 || webChunks > 0 || fileChunks > 0 || mapsChunks > 0 || urlFetchCount > 0 || codeExecCount > 0 || fnCallCount > 0 {
+			if detail.ToolUsageDetails == nil {
+				detail.ToolUsageDetails = &usage.ToolUsageDetails{}
+			}
+			if webSearchGrounded {
+				calls := int64(1)
+				if webSearchQueries > 1 {
+					calls = webSearchQueries
+				}
+				detail.ToolUsageDetails.WebSearchCalls = usage.Int64Ptr(calls)
+				detail.WebSearchRequests = usage.Int64Ptr(calls)
+			}
+			if webSearchQueries > 0 {
+				detail.ToolUsageDetails.WebSearchQueries = usage.Int64Ptr(webSearchQueries)
+			}
+			if webChunks > 0 {
+				detail.ToolUsageDetails.NumSearchResults = usage.Int64Ptr(webChunks)
+				detail.ToolUsageDetails.NumSourcesUsed = usage.Int64Ptr(webChunks)
+			}
+			if fileChunks > 0 {
+				detail.ToolUsageDetails.FileSearchCalls = usage.Int64Ptr(fileChunks)
+			}
+			if urlFetchCount > 0 {
+				detail.ToolUsageDetails.WebFetchCalls = usage.Int64Ptr(urlFetchCount)
+			}
+			if codeExecCount > 0 {
+				detail.ToolUsageDetails.CodeExecutionCalls = usage.Int64Ptr(codeExecCount)
+			}
+			if fnCallCount > 0 {
+				detail.ToolUsageDetails.ToolCallsRequested = usage.Int64Ptr(fnCallCount)
+			}
+			if mapsChunks > 0 {
+				if detail.ToolUsageDetails.Extra == nil {
+					detail.ToolUsageDetails.Extra = make(map[string]int64)
+				}
+				detail.ToolUsageDetails.Extra["google_maps_chunks"] = mapsChunks
+			}
+		}
+		if imageOutCount > 0 {
+			detail.ImageCount = usage.Int64Ptr(imageOutCount)
+			if firstImageMime != "" {
+				if detail.ImageDetails == nil {
+					detail.ImageDetails = &usage.ImageDetails{}
+				}
+				detail.ImageDetails.MimeType = firstImageMime
+			}
+		}
+	}
+	if preds := root.Get("predictions"); preds.Exists() && preds.IsArray() {
+		var count int64
+		var firstMime string
+		for _, pred := range preds.Array() {
+			if pred.Get("bytesBase64Encoded").String() != "" || pred.Get("gcsUri").String() != "" {
+				count++
+				if firstMime == "" {
+					firstMime = strings.TrimSpace(pred.Get("mimeType").String())
+				}
+			}
+		}
+		if count > 0 {
+			detail.ImageCount = usage.Int64Ptr(count)
+			if firstMime != "" {
+				if detail.ImageDetails == nil {
+					detail.ImageDetails = &usage.ImageDetails{}
+				}
+				detail.ImageDetails.MimeType = firstMime
+			}
+		}
+	}
+}
+
+// ApplyGeminiRequestImageConfig populates detail.RequestedImageDetails from a Gemini or Vertex
+// request payload without overwriting upstream-returned detail.ImageDetails.
+func ApplyGeminiRequestImageConfig(detail *usage.Detail, requestPayload []byte) {
+	if detail == nil || detail.ImageCount == nil || *detail.ImageCount <= 0 {
+		return
+	}
+	detail.RequestedImageDetails = ParseRequestImageDetails(requestPayload)
 }
 
 func parseInteractionsUsageDetail(node gjson.Result) usage.Detail {
@@ -2633,15 +3080,20 @@ func ParseInteractionsStreamUsage(line []byte) (usage.Detail, bool) {
 }
 
 func ParseGeminiUsage(data []byte) usage.Detail {
-	usageNode := gjson.ParseBytes(data)
-	node := usageNode.Get("usageMetadata")
-	if !node.Exists() {
-		node = usageNode.Get("usage_metadata")
-	}
-	if !node.Exists() {
+	if len(data) == 0 || !gjson.ValidBytes(data) {
 		return usage.Detail{}
 	}
-	return parseGeminiFamilyUsageDetail(node)
+	root := gjson.ParseBytes(data)
+	node := root.Get("usageMetadata")
+	if !node.Exists() {
+		node = root.Get("usage_metadata")
+	}
+	var detail usage.Detail
+	if node.Exists() {
+		detail = parseGeminiFamilyUsageDetail(node)
+	}
+	applyGeminiPayloadArtifacts(&detail, root)
+	return detail
 }
 
 func ParseGeminiStreamUsage(line []byte) (usage.Detail, bool) {
@@ -2649,9 +3101,10 @@ func ParseGeminiStreamUsage(line []byte) (usage.Detail, bool) {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return usage.Detail{}, false
 	}
-	node := gjson.GetBytes(payload, "usageMetadata")
+	root := gjson.ParseBytes(payload)
+	node := root.Get("usageMetadata")
 	if !node.Exists() {
-		node = gjson.GetBytes(payload, "usage_metadata")
+		node = root.Get("usage_metadata")
 	}
 	if !node.Exists() {
 		return usage.Detail{}, false
@@ -2660,6 +3113,7 @@ func ParseGeminiStreamUsage(line []byte) (usage.Detail, bool) {
 	if !hasNonZeroTokenUsage(detail) {
 		return usage.Detail{}, false
 	}
+	applyGeminiPayloadArtifacts(&detail, root)
 	return detail, true
 }
 
@@ -2697,18 +3151,23 @@ func invalidUsageTokenBreakdown(total int64) usage.TokenBreakdown {
 }
 
 func ParseAntigravityUsage(data []byte) usage.Detail {
-	usageNode := gjson.ParseBytes(data)
-	node := usageNode.Get("response.usageMetadata")
-	if !node.Exists() {
-		node = usageNode.Get("usageMetadata")
-	}
-	if !node.Exists() {
-		node = usageNode.Get("usage_metadata")
-	}
-	if !node.Exists() {
+	if len(data) == 0 || !gjson.ValidBytes(data) {
 		return usage.Detail{}
 	}
-	return parseGeminiFamilyUsageDetail(node)
+	root := gjson.ParseBytes(data)
+	node := root.Get("response.usageMetadata")
+	if !node.Exists() {
+		node = root.Get("usageMetadata")
+	}
+	if !node.Exists() {
+		node = root.Get("usage_metadata")
+	}
+	var detail usage.Detail
+	if node.Exists() {
+		detail = parseGeminiFamilyUsageDetail(node)
+	}
+	applyGeminiPayloadArtifacts(&detail, root)
+	return detail
 }
 
 func ParseAntigravityStreamUsage(line []byte) (usage.Detail, bool) {
@@ -2716,17 +3175,20 @@ func ParseAntigravityStreamUsage(line []byte) (usage.Detail, bool) {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return usage.Detail{}, false
 	}
-	node := gjson.GetBytes(payload, "response.usageMetadata")
+	root := gjson.ParseBytes(payload)
+	node := root.Get("response.usageMetadata")
 	if !node.Exists() {
-		node = gjson.GetBytes(payload, "usageMetadata")
+		node = root.Get("usageMetadata")
 	}
 	if !node.Exists() {
-		node = gjson.GetBytes(payload, "usage_metadata")
+		node = root.Get("usage_metadata")
 	}
 	if !node.Exists() {
 		return usage.Detail{}, false
 	}
-	return parseGeminiFamilyUsageDetail(node), true
+	detail := parseGeminiFamilyUsageDetail(node)
+	applyGeminiPayloadArtifacts(&detail, root)
+	return detail, true
 }
 
 var stopChunkWithoutUsage sync.Map

@@ -62,9 +62,7 @@ func ObservePluginExecutorStreamUsage(protocol string, payload []byte, buffer *S
 		})
 	case "gemini":
 		IterateStreamLines(payload, func(line []byte) {
-			if detail, ok := ParseGeminiStreamUsage(line); ok {
-				buffer.Observe(detail, ok)
-			}
+			buffer.ObserveGeminiStream(line)
 		})
 	case "interactions", "interactions-response":
 		IterateStreamLines(payload, func(line []byte) {
@@ -74,9 +72,7 @@ func ObservePluginExecutorStreamUsage(protocol string, payload []byte, buffer *S
 		})
 	case "antigravity":
 		IterateStreamLines(payload, func(line []byte) {
-			if detail, ok := ParseAntigravityStreamUsage(line); ok {
-				buffer.Observe(detail, ok)
-			}
+			buffer.ObserveAntigravityStream(line)
 		})
 	case "codex", "openai-response":
 		IterateStreamLines(payload, func(line []byte) {
@@ -302,6 +298,11 @@ func mergeStreamStructuredFields(merged *usage.Detail, existing, update usage.De
 	merged.AcceptedPredictionTokens = mergeInt64Ptr(existing.AcceptedPredictionTokens, update.AcceptedPredictionTokens)
 	merged.RejectedPredictionTokens = mergeInt64Ptr(existing.RejectedPredictionTokens, update.RejectedPredictionTokens)
 	merged.ImageCount = mergeInt64Ptr(existing.ImageCount, update.ImageCount)
+	if update.RequestedImageDetails != nil {
+		merged.RequestedImageDetails = update.RequestedImageDetails.Clone()
+	} else if existing.RequestedImageDetails != nil {
+		merged.RequestedImageDetails = existing.RequestedImageDetails.Clone()
+	}
 	if update.ImageDetails != nil {
 		merged.ImageDetails = update.ImageDetails.Clone()
 	} else if existing.ImageDetails != nil {

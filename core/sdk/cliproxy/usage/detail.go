@@ -52,13 +52,16 @@ type IterationUsage struct {
 
 // ImageDetails holds image/video generation dimension and quality attributes.
 type ImageDetails struct {
-	Size          string `json:"size,omitempty"`
-	Resolution    string `json:"resolution,omitempty"`
-	AspectRatio   string `json:"aspect_ratio,omitempty"`
-	Quality       string `json:"quality,omitempty"`
-	Background    string `json:"background,omitempty"`
-	OutputFormat  string `json:"output_format,omitempty"`
-	InputFidelity string `json:"input_fidelity,omitempty"`
+	Size           string `json:"size,omitempty"`
+	Resolution     string `json:"resolution,omitempty"`
+	ImageSize      string `json:"image_size,omitempty"`
+	AspectRatio    string `json:"aspect_ratio,omitempty"`
+	Quality        string `json:"quality,omitempty"`
+	Background     string `json:"background,omitempty"`
+	OutputFormat   string `json:"output_format,omitempty"`
+	ResponseFormat string `json:"response_format,omitempty"`
+	MimeType       string `json:"mime_type,omitempty"`
+	InputFidelity  string `json:"input_fidelity,omitempty"`
 }
 
 // Clone returns a deep copy of ImageDetails.

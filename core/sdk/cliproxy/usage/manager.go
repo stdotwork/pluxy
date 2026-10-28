@@ -124,6 +124,7 @@ type Detail struct {
 	CacheDetails             *CacheDetails
 	WebSearchRequests        *int64
 	ImageCount               *int64
+	RequestedImageDetails    *ImageDetails
 	ImageDetails             *ImageDetails
 	MediaCounts              *MediaCounts
 	ToolUsageDetails         *ToolUsageDetails

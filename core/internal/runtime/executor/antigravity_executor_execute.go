@@ -202,7 +202,9 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	if helps.ApplyPatchTranslationError(param) != nil || len(converted) == 0 {
 		return cliproxyexecutor.Response{}, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
 	}
-	reporter.Publish(ctx, helps.ParseAntigravityUsage(bodyBytes))
+	antiDetail := helps.ParseAntigravityUsage(bodyBytes)
+	helps.ApplyGeminiRequestImageConfig(&antiDetail, requestPayload)
+	reporter.Publish(ctx, antiDetail)
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		converted = helps.EnsureResponsesUsageDetails(converted)
 	}
@@ -477,7 +479,9 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	if helps.ApplyPatchTranslationError(param) != nil || len(converted) == 0 {
 		return cliproxyexecutor.Response{}, statusErr{code: http.StatusBadGateway, msg: helps.ApplyPatchUpstreamErrorMessage}
 	}
-	reporter.Publish(ctx, helps.ParseAntigravityUsage(resp.Payload))
+	antiDetail := helps.ParseAntigravityUsage(resp.Payload)
+	helps.ApplyGeminiRequestImageConfig(&antiDetail, requestPayload)
+	reporter.Publish(ctx, antiDetail)
 	if responseFormat == sdktranslator.FormatOpenAIResponse {
 		converted = helps.EnsureResponsesUsageDetails(converted)
 	}

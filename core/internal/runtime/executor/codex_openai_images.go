@@ -478,6 +478,7 @@ func (e *CodexExecutor) executeDirectOpenAIImageStream(ctx context.Context, auth
 	go func() {
 		defer close(out)
 		var streamUsage helps.StreamUsageBuffer
+		streamUsage.SetRequestPayload(body)
 		usageObserver := helps.NewOpenAIStreamUsageObserver(&streamUsage, streamScannerBuffer)
 		defer func() {
 			if errClose := httpResp.Body.Close(); errClose != nil {
