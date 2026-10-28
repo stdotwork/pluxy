@@ -82,6 +82,13 @@ type Capabilities struct {
 	FrontendAuthProvider FrontendAuthProvider
 	// FrontendAuthProviderExclusive makes this frontend auth provider the only active request auth provider when selected.
 	FrontendAuthProviderExclusive bool
+	// FrontendAuthProviderOmitBody opts out of receiving FrontendAuthRequest.Body and
+	// FrontendAuthRequest.DecodedBody in FrontendAuthProvider.Authenticate. It is honored
+	// only on schema version 7+; the host then skips reading, decoding, and cloning the
+	// request body during authentication.
+	FrontendAuthProviderOmitBody bool
+	// FrontendAuthOmitBody is an alias for FrontendAuthProviderOmitBody.
+	FrontendAuthOmitBody bool
 	// Scheduler chooses an auth candidate before the built-in scheduler runs.
 	Scheduler Scheduler
 	// SchedulerAcrossPriorities opts into receiving available candidates across all priority tiers

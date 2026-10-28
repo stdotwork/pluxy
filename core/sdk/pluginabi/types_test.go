@@ -46,6 +46,9 @@ func TestMethodNamesAreStable(t *testing.T) {
 	if SchemaVersionRequestInterceptorOmitBody != 7 {
 		t.Fatalf("SchemaVersionRequestInterceptorOmitBody = %d, want 7", SchemaVersionRequestInterceptorOmitBody)
 	}
+	if SchemaVersionFrontendAuthOmitBody != 7 {
+		t.Fatalf("SchemaVersionFrontendAuthOmitBody = %d, want 7", SchemaVersionFrontendAuthOmitBody)
+	}
 	if MethodPluginRegister != "plugin.register" {
 		t.Fatalf("MethodPluginRegister = %q", MethodPluginRegister)
 	}

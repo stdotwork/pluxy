@@ -18,10 +18,11 @@ const (
 	// Plugins that still require HTML entity escaping on JSON response strings
 	// should keep schema_version < 6.
 	// Version 7 lets request interceptors opt out of receiving the request body
-	// per phase via request_interceptor_omit_body_before/after capabilities; the
-	// host then omits RequestInterceptRequest.Body for that phase instead of
-	// cloning and Base64-encoding the full payload. Plugins that declare the
-	// flags on schema_version < 7 (or do not declare them) still receive it.
+	// per phase via request_interceptor_omit_body_before/after capabilities and
+	// lets frontend auth providers opt out via frontend_auth_provider_omit_body /
+	// frontend_auth_omit_body; the host then omits the request body instead of
+	// reading, cloning, and Base64-encoding the full payload. Plugins that declare
+	// the flags on schema_version < 7 (or do not declare them) still receive it.
 	SchemaVersion uint32 = 7
 	// SchemaVersionStreamChunkOmitRequestBody is the first schema version that omits
 	// request bodies on payload stream-chunk interceptor calls.
@@ -38,6 +39,9 @@ const (
 	// SchemaVersionRequestInterceptorOmitBody is the first schema version where
 	// request interceptors may opt out of receiving the request body per phase.
 	SchemaVersionRequestInterceptorOmitBody uint32 = 7
+	// SchemaVersionFrontendAuthOmitBody is the first schema version where
+	// frontend auth providers may opt out of receiving the request body.
+	SchemaVersionFrontendAuthOmitBody uint32 = 7
 )
 
 const (

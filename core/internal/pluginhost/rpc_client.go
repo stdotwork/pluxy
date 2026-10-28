@@ -136,7 +136,10 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 		}
 	}
 	if resp.Capabilities.FrontendAuthProvider {
+		omitBody := resp.Capabilities.FrontendAuthProviderOmitBody || resp.Capabilities.FrontendAuthOmitBody
 		plugin.Capabilities.FrontendAuthProvider = rpcFrontendAuthProvider{rpcPluginAdapter: adapter}
+		plugin.Capabilities.FrontendAuthProviderOmitBody = omitBody
+		plugin.Capabilities.FrontendAuthOmitBody = omitBody
 	}
 	if resp.Capabilities.Scheduler {
 		plugin.Capabilities.Scheduler = adapter

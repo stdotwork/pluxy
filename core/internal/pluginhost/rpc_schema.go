@@ -24,6 +24,8 @@ type rpcCapabilities struct {
 	AuthProvider                     bool                         `json:"auth_provider"`
 	FrontendAuthProvider             bool                         `json:"frontend_auth_provider"`
 	FrontendAuthProviderExclusive    bool                         `json:"frontend_auth_provider_exclusive"`
+	FrontendAuthProviderOmitBody     bool                         `json:"frontend_auth_provider_omit_body,omitempty"`
+	FrontendAuthOmitBody             bool                         `json:"frontend_auth_omit_body,omitempty"`
 	Scheduler                        bool                         `json:"scheduler"`
 	SchedulerAcrossPriorities        bool                         `json:"scheduler_across_priorities,omitempty"`
 	ModelRouter                      bool                         `json:"model_router"`
@@ -147,6 +149,22 @@ type rpcQuotaResetRequest struct {
 
 type rpcEmptyResponse struct{}
 
+func frontendAuthProviderWantsOmitBody(caps pluginapi.Capabilities) bool {
+	if caps.FrontendAuthProvider == nil {
+		return false
+	}
+	if caps.FrontendAuthProviderOmitBody || caps.FrontendAuthOmitBody {
+		return true
+	}
+	if opt, ok := caps.FrontendAuthProvider.(interface{ FrontendAuthProviderWantsOmitBody() bool }); ok && opt != nil {
+		return opt.FrontendAuthProviderWantsOmitBody()
+	}
+	if opt, ok := caps.FrontendAuthProvider.(interface{ FrontendAuthWantsOmitBody() bool }); ok && opt != nil {
+		return opt.FrontendAuthWantsOmitBody()
+	}
+	return false
+}
+
 func requestInterceptorWantsOmitBody(caps pluginapi.Capabilities, before bool) bool {
 	if caps.RequestInterceptor == nil {
 		return false
@@ -184,6 +202,8 @@ func rpcCapabilitiesFromPlugin(plugin pluginapi.Plugin) rpcCapabilities {
 		AuthProvider:                     caps.AuthProvider != nil,
 		FrontendAuthProvider:             caps.FrontendAuthProvider != nil,
 		FrontendAuthProviderExclusive:    caps.FrontendAuthProvider != nil && caps.FrontendAuthProviderExclusive,
+		FrontendAuthProviderOmitBody:     frontendAuthProviderWantsOmitBody(caps),
+		FrontendAuthOmitBody:             frontendAuthProviderWantsOmitBody(caps),
 		Scheduler:                        caps.Scheduler != nil,
 		SchedulerAcrossPriorities:        schedulerWantsAcrossPriorities(caps),
 		ModelRouter:                      caps.ModelRouter != nil,
