@@ -198,6 +198,7 @@ func MergeStreamUsageDetail(existing, update usage.Detail) usage.Detail {
 		calculatedTotal, okTotal := safeUsageTokenSum(merged.InputTokens, merged.OutputTokens, merged.ReasoningTokens)
 		if !okTotal {
 			merged.TokenBreakdown = invalidUsageTokenBreakdown(merged.TotalTokens)
+			mergeStreamStructuredFields(&merged, existing, update)
 			return merged
 		}
 		if merged.TotalTokens == 0 || merged.TotalTokens < calculatedTotal {
@@ -211,6 +212,7 @@ func MergeStreamUsageDetail(existing, update usage.Detail) usage.Detail {
 			merged.ReasoningTokens,
 			merged.TotalTokens,
 		)
+		mergeStreamStructuredFields(&merged, existing, update)
 		return merged
 	}
 
@@ -218,6 +220,7 @@ func MergeStreamUsageDetail(existing, update usage.Detail) usage.Detail {
 		calculatedTotal, okTotal := safeUsageTokenSum(merged.InputTokens, merged.OutputTokens)
 		if !okTotal {
 			merged.TokenBreakdown = invalidUsageTokenBreakdown(merged.TotalTokens)
+			mergeStreamStructuredFields(&merged, existing, update)
 			return merged
 		}
 		if merged.TotalTokens == 0 || merged.TotalTokens < calculatedTotal {
@@ -231,6 +234,7 @@ func MergeStreamUsageDetail(existing, update usage.Detail) usage.Detail {
 			merged.ReasoningTokens,
 			merged.TotalTokens,
 		)
+		mergeStreamStructuredFields(&merged, existing, update)
 		return merged
 	}
 
@@ -286,9 +290,41 @@ func mergeStreamStructuredFields(merged *usage.Detail, existing, update usage.De
 	} else if merged.ToolUsageDetails != nil && merged.ToolUsageDetails.WebSearchCalls != nil {
 		merged.WebSearchRequests = usage.CloneInt64Ptr(merged.ToolUsageDetails.WebSearchCalls)
 	}
+	merged.TextInputTokens = mergeInt64Ptr(existing.TextInputTokens, update.TextInputTokens)
+	merged.ImageInputTokens = mergeInt64Ptr(existing.ImageInputTokens, update.ImageInputTokens)
+	merged.AudioInputTokens = mergeInt64Ptr(existing.AudioInputTokens, update.AudioInputTokens)
+	merged.VideoInputTokens = mergeInt64Ptr(existing.VideoInputTokens, update.VideoInputTokens)
+	merged.FileInputTokens = mergeInt64Ptr(existing.FileInputTokens, update.FileInputTokens)
+	merged.CachedTextTokens = mergeInt64Ptr(existing.CachedTextTokens, update.CachedTextTokens)
+	merged.TextOutputTokens = mergeInt64Ptr(existing.TextOutputTokens, update.TextOutputTokens)
+	merged.ImageOutputTokens = mergeInt64Ptr(existing.ImageOutputTokens, update.ImageOutputTokens)
+	merged.AudioOutputTokens = mergeInt64Ptr(existing.AudioOutputTokens, update.AudioOutputTokens)
+	merged.AcceptedPredictionTokens = mergeInt64Ptr(existing.AcceptedPredictionTokens, update.AcceptedPredictionTokens)
+	merged.RejectedPredictionTokens = mergeInt64Ptr(existing.RejectedPredictionTokens, update.RejectedPredictionTokens)
+	merged.ImageCount = mergeInt64Ptr(existing.ImageCount, update.ImageCount)
+	if update.ImageDetails != nil {
+		merged.ImageDetails = update.ImageDetails.Clone()
+	} else if existing.ImageDetails != nil {
+		merged.ImageDetails = existing.ImageDetails.Clone()
+	}
+	if update.MediaCounts != nil {
+		merged.MediaCounts = update.MediaCounts.Clone()
+	} else if existing.MediaCounts != nil {
+		merged.MediaCounts = existing.MediaCounts.Clone()
+	}
 	merged.CostDetails = mergeCostDetails(existing.CostDetails, update.CostDetails)
 	cacheDetails := resolveMergedCacheDetails(existing, update, *merged)
 	applyCacheDetailsToUsageDetail(merged, cacheDetails)
+}
+
+func mergeInt64Ptr(existing, update *int64) *int64 {
+	if update != nil {
+		if *update == 0 && existing != nil && *existing > 0 {
+			return usage.CloneInt64Ptr(existing)
+		}
+		return usage.CloneInt64Ptr(update)
+	}
+	return usage.CloneInt64Ptr(existing)
 }
 
 func resolveMergedCacheDetails(existing, update, merged usage.Detail) *usage.CacheDetails {
