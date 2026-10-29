@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -232,6 +233,161 @@ func TestOpenAICompatImageStreamAccountsLargeCompletedEvents(t *testing.T) {
 			record := capture.await(t)
 			if record.Detail.TotalTokens != 30 || record.Detail.ImageCount == nil || *record.Detail.ImageCount != 1 {
 				t.Fatalf("image completion usage missing: %+v", record.Detail)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatAndCodexImageStreamReadFailurePreservesObservedUsage(t *testing.T) {
+	for _, provider := range []string{"codex", "compat"} {
+		t.Run(provider, func(t *testing.T) {
+			event := `data: {"type":"image_generation.completed","model":"gpt-image-2","b64_json":"AA==","usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30}}` + "\n\n"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Content-Length", fmt.Sprint(len(event)+100))
+				if _, err := fmt.Fprint(w, event); err != nil {
+					t.Errorf("write upstream event: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			alias := t.Name()
+			capture := &multiProviderUsageCapture{alias: alias, records: make(chan coreusage.Record, 4)}
+			coreusage.RegisterNamedPlugin(t.Name(), capture)
+			t.Cleanup(func() {
+				coreusage.RegisterNamedPlugin(t.Name(), multiProviderNoopUsagePlugin{})
+			})
+			ctx := coreusage.WithRequestedModelAlias(context.Background(), alias)
+			req := cliproxyexecutor.Request{
+				Model:   "gpt-image-2",
+				Payload: []byte(`{"model":"gpt-image-2","prompt":"test"}`),
+			}
+			var (
+				res *cliproxyexecutor.StreamResult
+				err error
+			)
+			if provider == "codex" {
+				res, err = NewCodexExecutor(&config.Config{}).ExecuteStream(ctx, newCodexOpenAIImageTestAuth(server.URL), req, codexOpenAIImageTestOptions(codexImagesGenerationsPath, true))
+			} else {
+				res, err = NewOpenAICompatExecutor("openai-compatibility", &config.Config{}).ExecuteStream(ctx, &cliproxyauth.Auth{
+					Provider:   "openai-compatibility",
+					Attributes: map[string]string{"base_url": server.URL, "api_key": "test"},
+				}, req, cliproxyexecutor.Options{
+					SourceFormat: sdktranslator.FromString("openai-image"),
+					Stream:       true,
+				})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got bytes.Buffer
+			var streamErr error
+			for chunk := range res.Chunks {
+				got.Write(chunk.Payload)
+				if chunk.Err != nil {
+					streamErr = chunk.Err
+				}
+			}
+			if got.String() != event || streamErr == nil {
+				t.Fatalf("unexpected stream output=%q err=%v", got.String(), streamErr)
+			}
+			record := capture.await(t)
+			if !record.Failed || record.Detail.TotalTokens != 30 || record.Detail.ImageCount == nil || *record.Detail.ImageCount != 1 {
+				t.Fatalf("read failure lost observed image usage: failed=%v detail=%+v", record.Failed, record.Detail)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatMultipartImageEditExtractsRequestedImageDetails(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			for k, v := range map[string]string{
+				"model":   "gpt-image-2",
+				"prompt":  "test",
+				"size":    "1024x1536",
+				"quality": "high",
+			} {
+				if err := writer.WriteField(k, v); err != nil {
+					t.Fatal(err)
+				}
+			}
+			part, err := writer.CreateFormFile("image", "image.png")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = part.Write([]byte("PNG")); err != nil {
+				t.Fatal(err)
+			}
+			if err = writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if errParse := r.ParseMultipartForm(1 << 20); errParse != nil {
+					t.Errorf("parse multipart: %v", errParse)
+					return
+				}
+				defer func() {
+					if errRemove := r.MultipartForm.RemoveAll(); errRemove != nil {
+						t.Errorf("remove multipart form: %v", errRemove)
+					}
+				}()
+				if stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					if _, errWrite := fmt.Fprint(w, `data: {"type":"image_edit.completed","b64_json":"AA==","usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30}}`+"\n\n"); errWrite != nil {
+						t.Errorf("write stream: %v", errWrite)
+					}
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if _, errWrite := fmt.Fprint(w, `{"data":[{"b64_json":"AA=="}],"usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30}}`); errWrite != nil {
+					t.Errorf("write json: %v", errWrite)
+				}
+			}))
+			defer server.Close()
+
+			alias := t.Name()
+			capture := &multiProviderUsageCapture{alias: alias, records: make(chan coreusage.Record, 4)}
+			coreusage.RegisterNamedPlugin(t.Name(), capture)
+			t.Cleanup(func() {
+				coreusage.RegisterNamedPlugin(t.Name(), multiProviderNoopUsagePlugin{})
+			})
+			ctx := coreusage.WithRequestedModelAlias(context.Background(), alias)
+			exec := NewOpenAICompatExecutor("openai-compatibility", &config.Config{})
+			auth := &cliproxyauth.Auth{
+				Provider:   "openai-compatibility",
+				Attributes: map[string]string{"base_url": server.URL, "api_key": "test"},
+			}
+			req := cliproxyexecutor.Request{Model: "gpt-image-2", Payload: body.Bytes()}
+			opts := cliproxyexecutor.Options{
+				SourceFormat: sdktranslator.FromString("openai-image"),
+				Stream:       stream,
+				Headers:      http.Header{"Content-Type": []string{writer.FormDataContentType()}},
+				Metadata:     map[string]any{cliproxyexecutor.RequestPathMetadataKey: "/v1/images/edits"},
+			}
+			if stream {
+				res, errExec := exec.ExecuteStream(ctx, auth, req, opts)
+				if errExec != nil {
+					t.Fatal(errExec)
+				}
+				for chunk := range res.Chunks {
+					if chunk.Err != nil {
+						t.Fatal(chunk.Err)
+					}
+				}
+			} else {
+				if _, errExec := exec.Execute(ctx, auth, req, opts); errExec != nil {
+					t.Fatal(errExec)
+				}
+			}
+			record := capture.await(t)
+			if record.Detail.TotalTokens != 30 || record.Detail.RequestedImageDetails == nil ||
+				record.Detail.RequestedImageDetails.Size != "1024x1536" ||
+				record.Detail.RequestedImageDetails.Quality != "high" {
+				t.Fatalf("unexpected multipart image usage: %+v requested=%+v", record.Detail, record.Detail.RequestedImageDetails)
 			}
 		})
 	}

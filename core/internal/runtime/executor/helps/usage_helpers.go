@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"reflect"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -927,7 +930,7 @@ type StreamUsageBuffer struct {
 	claudeCompletedSearches      int64
 	claudeSearchResultsCount     int64
 	claudeHasCompletedSearch     bool
-	claudeExplicitWebSearchCalls bool
+	claudeReportedWebSearchCalls *int64
 	seenOpenAIToolCallKeys       map[string]struct{}
 	openAIToolCallsRequested     int64
 	openAIExplicitToolCalls      bool
@@ -944,6 +947,7 @@ type StreamUsageBuffer struct {
 
 var (
 	openAIStreamUsageMarker       = []byte(`"usage"`)
+	openAIStreamCacheMarker       = []byte(`"prompt_cache_`)
 	openAIStreamServiceTierMarker = []byte(`"service_tier"`)
 	openAIStreamToolCallsMarker   = []byte(`"tool_calls"`)
 	openAIStreamImageDoneMarker   = []byte(`.completed"`)
@@ -1001,14 +1005,21 @@ func (b *StreamUsageBuffer) Observe(detail usage.Detail, ok bool) {
 		return
 	}
 	responseServiceTier := strings.TrimSpace(detail.ResponseServiceTier)
-	if responseServiceTier == "" || hasNonZeroTokenUsage(detail) {
+	if responseServiceTier == "" || hasNonZeroTokenUsage(detail) || hasStructuredUsageDetail(detail) {
 		preservedTier := b.detail.ResponseServiceTier
+		preservedUpstreamTier := b.detail.UpstreamServiceTier
 		b.detail = detail
 		if b.detail.ResponseServiceTier == "" {
 			b.detail.ResponseServiceTier = preservedTier
 		}
+		if b.detail.UpstreamServiceTier == "" {
+			b.detail.UpstreamServiceTier = preservedUpstreamTier
+		}
 	} else {
 		b.detail.ResponseServiceTier = responseServiceTier
+		if b.detail.UpstreamServiceTier == "" {
+			b.detail.UpstreamServiceTier = detail.UpstreamServiceTier
+		}
 	}
 	b.applyGeminiStreamObservations()
 	b.ok = true
@@ -1074,11 +1085,11 @@ func (b *StreamUsageBuffer) applyGeminiStreamObservations() {
 
 // SetRequestPayload records request-side image/media configuration on the stream buffer
 // so it can be attached as RequestedImageDetails if the stream produces images.
-func (b *StreamUsageBuffer) SetRequestPayload(requestPayload []byte) {
+func (b *StreamUsageBuffer) SetRequestPayload(requestPayload []byte, contentType ...string) {
 	if b == nil || len(requestPayload) == 0 {
 		return
 	}
-	b.requestedImageDetails = ParseRequestImageDetails(requestPayload)
+	b.requestedImageDetails = ParseRequestImageDetails(requestPayload, contentType...)
 }
 
 // ObserveGeminiStream records and merges usage and candidate tool/media artifacts from a Gemini SSE line.
@@ -1189,6 +1200,7 @@ func (b *StreamUsageBuffer) ObserveOpenAIStream(line []byte) {
 	}
 
 	hasUsageCandidate := bytes.Contains(payload, openAIStreamUsageMarker)
+	hasCacheCandidate := bytes.Contains(payload, openAIStreamCacheMarker)
 	needTier := b.detail.ResponseServiceTier == "" || hasUsageCandidate
 	hasTierCandidate := needTier && bytes.Contains(payload, openAIStreamServiceTierMarker)
 	hasToolCallsCandidate := bytes.Contains(payload, openAIStreamToolCallsMarker)
@@ -1198,7 +1210,7 @@ func (b *StreamUsageBuffer) ObserveOpenAIStream(line []byte) {
 			b.responseModel = model
 		}
 	}
-	if !hasUsageCandidate && !hasTierCandidate && !hasToolCallsCandidate && !hasImageCompletedCandidate {
+	if !hasUsageCandidate && !hasCacheCandidate && !hasTierCandidate && !hasToolCallsCandidate && !hasImageCompletedCandidate {
 		return
 	}
 	if !gjson.ValidBytes(payload) {
@@ -1214,17 +1226,29 @@ func (b *StreamUsageBuffer) ObserveOpenAIStream(line []byte) {
 
 	detail := usage.Detail{}
 	usageOK := false
-	if hasUsageCandidate {
-		usageNode := gjson.GetBytes(payload, "usage")
-		if hasOpenAIStyleUsageTokenFields(usageNode) {
-			detail = parseOpenAIStyleUsageNode(usageNode)
-			if detail.ToolUsageDetails != nil && detail.ToolUsageDetails.ToolCallsRequested != nil {
-				b.openAIExplicitToolCalls = true
+	if hasUsageCandidate || hasCacheCandidate {
+		root := gjson.Parse(unsafeBytesToString(payload))
+		usageNode := root.Get("usage")
+		detail, usageOK = parseOpenAIStyleUsageWithCache(root, usageNode)
+		if detail.ToolUsageDetails != nil && detail.ToolUsageDetails.ToolCallsRequested != nil {
+			b.openAIExplicitToolCalls = true
+		}
+		if detail.ImageCount != nil {
+			b.openAIExplicitImageCount = true
+		}
+		if usageOK && b.ok {
+			// Metadata-only frames do not replace the last token snapshot.
+			if !hasOpenAIStyleUsageTokenFields(usageNode) {
+				detail.InputTokens = b.detail.InputTokens
+				detail.OutputTokens = b.detail.OutputTokens
+				detail.ReasoningTokens = b.detail.ReasoningTokens
+				detail.CachedTokens = b.detail.CachedTokens
+				detail.CacheReadTokens = b.detail.CacheReadTokens
+				detail.CacheCreationTokens = b.detail.CacheCreationTokens
+				detail.TotalTokens = b.detail.TotalTokens
+				detail.TokenBreakdown = b.detail.TokenBreakdown
 			}
-			if detail.ImageCount != nil {
-				b.openAIExplicitImageCount = true
-			}
-			usageOK = true
+			mergeStreamStructuredFields(&detail, b.detail, detail)
 		}
 	}
 	if hasTierCandidate {
@@ -1333,7 +1357,12 @@ func (b *StreamUsageBuffer) ObserveClaudeStream(line []byte) {
 	}
 	if detail, ok := ParseClaudeStreamUsage(line); ok {
 		if detail.ToolUsageDetails != nil && detail.ToolUsageDetails.WebSearchCalls != nil {
-			b.claudeExplicitWebSearchCalls = true
+			calls := detail.ToolUsageDetails.WebSearchCalls
+			// message_start can report a provisional zero before server tools run.
+			// Keep raw reported values separate from content-derived counters.
+			if *calls != 0 || gjson.GetBytes(payload, "type").String() != "message_start" {
+				b.claudeReportedWebSearchCalls = usage.CloneInt64Ptr(calls)
+			}
 		}
 		ObserveMergedStreamUsage(b, detail)
 		b.applyClaudeStreamToolObservations()
@@ -1437,12 +1466,12 @@ func (b *StreamUsageBuffer) applyClaudeStreamToolObservations() {
 	}
 	if b.claudeHasCompletedSearch {
 		b.detail.ToolUsageDetails.NumSearchResults = usage.Int64Ptr(b.claudeSearchResultsCount)
-		if !b.claudeExplicitWebSearchCalls || b.detail.ToolUsageDetails.WebSearchCalls == nil || (b.claudeCompletedSearches > 0 && *b.detail.ToolUsageDetails.WebSearchCalls == 0) {
-			b.detail.ToolUsageDetails.WebSearchCalls = usage.Int64Ptr(b.claudeCompletedSearches)
+		calls := b.claudeCompletedSearches
+		if b.claudeReportedWebSearchCalls != nil {
+			calls = *b.claudeReportedWebSearchCalls
 		}
-		if !b.claudeExplicitWebSearchCalls || b.detail.WebSearchRequests == nil || (b.claudeCompletedSearches > 0 && *b.detail.WebSearchRequests == 0) {
-			b.detail.WebSearchRequests = usage.Int64Ptr(b.claudeCompletedSearches)
-		}
+		b.detail.ToolUsageDetails.WebSearchCalls = usage.Int64Ptr(calls)
+		b.detail.WebSearchRequests = usage.Int64Ptr(calls)
 	}
 	b.ok = true
 }
@@ -1501,7 +1530,8 @@ func ParseCodexUsageWithOutputItems(data []byte, itemsByIndex map[int64][]byte, 
 	}
 	root := gjson.Parse(unsafeBytesToString(data))
 	usageNode := root.Get("response.usage")
-	if !hasOpenAIStyleUsageTokenFields(usageNode) {
+	detail, ok := parseOpenAIStyleUsageWithCache(root, usageNode)
+	if !ok {
 		if responseServiceTier == "" {
 			return usage.Detail{}, false
 		}
@@ -1510,12 +1540,10 @@ func ParseCodexUsageWithOutputItems(data []byte, itemsByIndex map[int64][]byte, 
 			UpstreamServiceTier: responseServiceTier,
 		}, true
 	}
-	detail := parseOpenAIStyleUsageNode(usageNode)
 	detail.ResponseServiceTier = responseServiceTier
 	if detail.UpstreamServiceTier == "" {
 		detail.UpstreamServiceTier = responseServiceTier
 	}
-	applyResponsesCacheRetention(&detail, root, usageNode)
 	if wsReq := root.Get("response.tool_usage.web_search.num_requests"); wsReq.Type == gjson.Number {
 		v := wsReq.Int()
 		if detail.ToolUsageDetails == nil {
@@ -1656,21 +1684,11 @@ func ParseOpenAIUsage(data []byte) usage.Detail {
 	}
 	root := gjson.Parse(unsafeBytesToString(data))
 	usageNode := root.Get("usage")
-	if !hasOpenAIStyleUsageTokenFields(usageNode) {
-		detail := usage.Detail{
-			ResponseServiceTier: responseServiceTier,
-			UpstreamServiceTier: responseServiceTier,
-		}
-		populateOpenAIStyleStructuredFields(&detail, usageNode)
-		applyResponsesCacheRetention(&detail, root, usageNode)
-		return detail
-	}
-	detail := parseOpenAIStyleUsageNode(usageNode)
+	detail, _ := parseOpenAIStyleUsageWithCache(root, usageNode)
 	detail.ResponseServiceTier = responseServiceTier
 	if detail.UpstreamServiceTier == "" {
 		detail.UpstreamServiceTier = responseServiceTier
 	}
-	applyResponsesCacheRetention(&detail, root, usageNode)
 	applyOpenAIChatToolCallsUsage(&detail, root)
 	if outputNode := root.Get("output"); outputNode.Exists() && outputNode.IsArray() {
 		applyResponsesOutputItemsUsage(&detail, outputNode)
@@ -1698,6 +1716,33 @@ func applyOpenAIChatToolCallsUsage(detail *usage.Detail, root gjson.Result) {
 			detail.ToolUsageDetails.ToolCallsRequested = usage.Int64Ptr(requested)
 		}
 	}
+}
+
+// parseOpenAIStyleUsageWithCache keeps structured-only usage and cache metadata
+// consistent across Chat, Responses, and streaming entry points.
+func parseOpenAIStyleUsageWithCache(root, usageNode gjson.Result) (usage.Detail, bool) {
+	var detail usage.Detail
+	hasTokens := hasOpenAIStyleUsageTokenFields(usageNode)
+	if hasTokens {
+		detail = parseOpenAIStyleUsageNode(usageNode)
+	} else {
+		populateOpenAIStyleStructuredFields(&detail, usageNode)
+	}
+	applyResponsesCacheRetention(&detail, root, usageNode)
+	return detail, hasTokens || hasStructuredUsageDetail(detail)
+}
+
+func hasStructuredUsageDetail(d usage.Detail) bool {
+	return d.CacheDetails != nil || d.ToolUsageDetails != nil || d.CostDetails != nil ||
+		d.WebSearchRequests != nil || d.ImageCount != nil || d.ImageDetails != nil ||
+		d.RequestedImageDetails != nil || d.MediaCounts != nil || d.Iterations != nil ||
+		d.CacheCreation5mTokens != nil || d.CacheCreation30mTokens != nil ||
+		d.CacheCreation1hTokens != nil || d.CacheCreation12hTokens != nil ||
+		d.TextInputTokens != nil || d.ImageInputTokens != nil || d.AudioInputTokens != nil ||
+		d.VideoInputTokens != nil || d.FileInputTokens != nil || d.CachedTextTokens != nil ||
+		d.TextOutputTokens != nil || d.ImageOutputTokens != nil || d.AudioOutputTokens != nil ||
+		d.AcceptedPredictionTokens != nil || d.RejectedPredictionTokens != nil ||
+		d.Speed != "" || d.InferenceGeo != ""
 }
 
 func hasOpenAIStyleUsageTokenFields(usageNode gjson.Result) bool {
@@ -2210,7 +2255,13 @@ func isEmptyImageDetails(d *usage.ImageDetails) bool {
 
 // ParseRequestImageDetails extracts requested image/video parameters strictly from a request payload,
 // preserving each upstream protocol's native field names.
-func ParseRequestImageDetails(requestPayload []byte) *usage.ImageDetails {
+func ParseRequestImageDetails(requestPayload []byte, contentType ...string) *usage.ImageDetails {
+	if len(contentType) > 0 {
+		mediaType, params, errParse := mime.ParseMediaType(contentType[0])
+		if errParse == nil && mediaType == "multipart/form-data" {
+			return parseMultipartImageDetails(requestPayload, params["boundary"])
+		}
+	}
 	if len(requestPayload) == 0 || !gjson.ValidBytes(requestPayload) {
 		return nil
 	}
@@ -2262,11 +2313,57 @@ func ParseRequestImageDetails(requestPayload []byte) *usage.ImageDetails {
 	return out
 }
 
+// parseMultipartImageDetails reads only small scalar attributes. File parts and
+// unrelated fields are drained without allocating another copy or temporary files.
+func parseMultipartImageDetails(payload []byte, boundary string) *usage.ImageDetails {
+	if boundary == "" {
+		return nil
+	}
+	out := &usage.ImageDetails{}
+	fields := map[string]*string{
+		"size": &out.Size, "resolution": &out.Resolution, "image_size": &out.ImageSize,
+		"aspect_ratio": &out.AspectRatio, "quality": &out.Quality,
+		"background": &out.Background, "output_format": &out.OutputFormat,
+		"response_format": &out.ResponseFormat, "mime_type": &out.MimeType,
+		"input_fidelity": &out.InputFidelity,
+	}
+	reader := multipart.NewReader(bytes.NewReader(payload), boundary)
+	for {
+		part, errNext := reader.NextPart()
+		if errNext == io.EOF {
+			break
+		}
+		if errNext != nil {
+			log.Debugf("usage: read multipart image attributes: %v", errNext)
+			return nil
+		}
+		dst := fields[part.FormName()]
+		var value []byte
+		var errRead error
+		const maxAttributeBytes = 4096
+		if dst != nil && part.FileName() == "" {
+			value, errRead = io.ReadAll(io.LimitReader(part, maxAttributeBytes+1))
+		}
+		errClose := part.Close()
+		if errRead != nil || errClose != nil {
+			log.Debugf("usage: read multipart image attribute: read=%v close=%v", errRead, errClose)
+			return nil
+		}
+		if dst != nil && len(value) <= maxAttributeBytes && len(value) > 0 {
+			*dst = strings.TrimSpace(string(value))
+		}
+	}
+	if isEmptyImageDetails(out) {
+		return nil
+	}
+	return out
+}
+
 // ParseOpenAIImageUsage extracts token usage, generated image count, and separate
 // request vs upstream response image parameters from an OpenAI or xAI image request/response.
-func ParseOpenAIImageUsage(requestPayload, responsePayload []byte) usage.Detail {
+func ParseOpenAIImageUsage(requestPayload, responsePayload []byte, contentType ...string) usage.Detail {
 	var detail usage.Detail
-	detail.RequestedImageDetails = ParseRequestImageDetails(requestPayload)
+	detail.RequestedImageDetails = ParseRequestImageDetails(requestPayload, contentType...)
 	if len(responsePayload) == 0 || !gjson.ValidBytes(responsePayload) {
 		return detail
 	}
@@ -2372,7 +2469,7 @@ func ParseOpenAIImageUsage(requestPayload, responsePayload []byte) usage.Detail 
 		} else {
 			populateOpenAIStyleStructuredFields(&detail, usageNode)
 		}
-		detail.RequestedImageDetails = ParseRequestImageDetails(requestPayload)
+		detail.RequestedImageDetails = ParseRequestImageDetails(requestPayload, contentType...)
 	}
 	if serviceTier != "" {
 		detail.ResponseServiceTier = serviceTier
@@ -2533,17 +2630,13 @@ func ParseOpenAIStreamUsage(line []byte) (usage.Detail, bool) {
 	if len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return usage.Detail{}, false
 	}
-	responseServiceTier := extractResponseServiceTier(payload)
-	usageNode := gjson.GetBytes(payload, "usage")
-	if !hasOpenAIStyleUsageTokenFields(usageNode) {
-		if responseServiceTier == "" {
-			return usage.Detail{}, false
-		}
-		return usage.Detail{ResponseServiceTier: responseServiceTier}, true
+	root := gjson.Parse(unsafeBytesToString(payload))
+	detail, ok := parseOpenAIStyleUsageWithCache(root, root.Get("usage"))
+	detail.ResponseServiceTier = extractResponseServiceTierFromValidJSON(payload)
+	if detail.UpstreamServiceTier == "" {
+		detail.UpstreamServiceTier = detail.ResponseServiceTier
 	}
-	detail := parseOpenAIStyleUsageNode(usageNode)
-	detail.ResponseServiceTier = responseServiceTier
-	return detail, true
+	return detail, ok || detail.ResponseServiceTier != ""
 }
 
 func ParseClaudeUsage(data []byte) usage.Detail {

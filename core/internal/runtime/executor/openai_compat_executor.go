@@ -330,7 +330,7 @@ func (e *OpenAICompatExecutor) executeImages(ctx context.Context, auth *cliproxy
 	}
 
 	reporter.ObserveResponseModel(body)
-	reporter.Publish(ctx, helps.ParseOpenAIImageUsage(payload, body))
+	reporter.Publish(ctx, helps.ParseOpenAIImageUsage(payload, body, contentType))
 	reporter.EnsurePublished(ctx)
 	resp = cliproxyexecutor.Response{Payload: body, Headers: httpResp.Header.Clone()}
 	return resp, nil
@@ -483,7 +483,9 @@ func (e *OpenAICompatExecutor) executeStreamWithCredentials(ctx context.Context,
 				loggedErr = statusErr{code: streamErr.code, msg: "upstream stream returned an error payload"}
 			}
 			helps.RecordAPIResponseError(ctx, e.cfg, loggedErr)
-			reporter.PublishFailure(ctx, loggedErr)
+			if !streamUsage.PublishFailure(ctx, reporter, loggedErr) {
+				reporter.PublishFailure(ctx, loggedErr)
+			}
 			select {
 			case out <- cliproxyexecutor.StreamChunk{Err: streamErr}:
 			case <-ctx.Done():
@@ -612,7 +614,9 @@ func (e *OpenAICompatExecutor) executeStreamWithCredentials(ctx context.Context,
 		}
 		if errScan != nil && !seenDone {
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
-			reporter.PublishFailure(ctx, errScan)
+			if !streamUsage.PublishFailure(ctx, reporter, errScan) {
+				reporter.PublishFailure(ctx, errScan)
+			}
 			select {
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
 			case <-ctx.Done():
@@ -741,7 +745,7 @@ func (e *OpenAICompatExecutor) executeImagesStream(ctx context.Context, auth *cl
 	go func() {
 		defer close(out)
 		var streamUsage helps.StreamUsageBuffer
-		streamUsage.SetRequestPayload(payload)
+		streamUsage.SetRequestPayload(payload, contentType)
 		usageObserver := helps.NewOpenAIStreamUsageObserver(&streamUsage, streamScannerBuffer)
 		observer := helps.NewStreamResponseModelObserver(reporter)
 		defer func() {
@@ -770,7 +774,11 @@ func (e *OpenAICompatExecutor) executeImagesStream(ctx context.Context, auth *cl
 			if errRead != nil {
 				if errRead != io.EOF {
 					helps.RecordAPIResponseError(ctx, e.cfg, errRead)
-					reporter.PublishFailure(ctx, errRead)
+					observer.Finish()
+					usageObserver.Finish()
+					if !streamUsage.PublishFailure(ctx, reporter, errRead) {
+						reporter.PublishFailure(ctx, errRead)
+					}
 					select {
 					case out <- cliproxyexecutor.StreamChunk{Err: errRead}:
 					case <-ctx.Done():

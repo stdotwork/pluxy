@@ -2018,3 +2018,39 @@ func TestCodexCustomToolCallWithoutXSearchPrefixCountsAsRequestedToolCall(t *tes
 		t.Fatalf("misclassified client custom_tool_call: %+v", d.ToolUsageDetails)
 	}
 }
+
+func TestClaudeStreamProvisionalZeroWebSearchDoesNotFreezeCompletedSearches(t *testing.T) {
+	for _, initial := range []string{"", `,"server_tool_use":{"web_search_requests":0}`} {
+		t.Run(fmt.Sprintf("initial_zero=%v", initial != ""), func(t *testing.T) {
+			var b StreamUsageBuffer
+			b.ObserveClaudeStream([]byte(fmt.Sprintf(`data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1%s}}}`, initial)))
+			for i := 1; i <= 2; i++ {
+				b.ObserveClaudeStream([]byte(fmt.Sprintf(`data: {"type":"content_block_start","content_block":{"type":"web_search_tool_result","tool_use_id":"tool_%d","content":[]}}`, i)))
+			}
+			b.ObserveClaudeStream([]byte(`data: {"type":"message_delta","usage":{"output_tokens":20}}`))
+			d, ok := b.Detail()
+			if !ok || d.WebSearchRequests == nil || *d.WebSearchRequests != 2 ||
+				d.ToolUsageDetails == nil || d.ToolUsageDetails.WebSearchCalls == nil || *d.ToolUsageDetails.WebSearchCalls != 2 {
+				t.Fatalf("expected 2 completed searches, got detail=%+v tools=%+v", d, d.ToolUsageDetails)
+			}
+		})
+	}
+}
+
+func TestOpenAIStreamPreservesCacheTTLBucketsAndStructuredOnlyUsage(t *testing.T) {
+	var cacheBuf StreamUsageBuffer
+	cacheBuf.ObserveOpenAIStream([]byte(`data: {"usage":{"prompt_tokens":100,"completion_tokens":1,"total_tokens":101,"prompt_tokens_details":{"cache_write_tokens":70,"cache_write_tokens_details":{"ttl_30m_tokens":30,"ttl_12h_tokens":40}}}}`))
+	cacheDetail, ok := cacheBuf.Detail()
+	if !ok || cacheDetail.CacheCreation30mTokens == nil || *cacheDetail.CacheCreation30mTokens != 30 ||
+		cacheDetail.CacheCreation12hTokens == nil || *cacheDetail.CacheCreation12hTokens != 40 {
+		t.Fatalf("stream lost cache TTL buckets: %+v", cacheDetail)
+	}
+
+	var costBuf StreamUsageBuffer
+	costBuf.ObserveOpenAIStream([]byte(`data: {"usage":{"cost":0.25,"cost_in_usd_ticks":2500000000,"server_tool_use":{"web_search_requests":2}}}`))
+	costDetail, ok := costBuf.Detail()
+	if !ok || costDetail.CostDetails == nil || costDetail.CostDetails.Cost == nil || *costDetail.CostDetails.Cost != 0.25 ||
+		costDetail.WebSearchRequests == nil || *costDetail.WebSearchRequests != 2 {
+		t.Fatalf("stream lost structured-only usage: %+v", costDetail)
+	}
+}

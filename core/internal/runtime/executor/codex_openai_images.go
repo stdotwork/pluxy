@@ -405,7 +405,7 @@ func (e *CodexExecutor) executeDirectOpenAIImage(ctx context.Context, auth *clip
 		return resp, err
 	}
 
-	reporter.Publish(ctx, helps.ParseOpenAIImageUsage(body, data))
+	reporter.Publish(ctx, helps.ParseOpenAIImageUsage(body, data, contentType))
 	reporter.EnsurePublished(ctx)
 	return cliproxyexecutor.Response{Payload: data, Headers: httpResp.Header.Clone()}, nil
 }
@@ -478,7 +478,7 @@ func (e *CodexExecutor) executeDirectOpenAIImageStream(ctx context.Context, auth
 	go func() {
 		defer close(out)
 		var streamUsage helps.StreamUsageBuffer
-		streamUsage.SetRequestPayload(body)
+		streamUsage.SetRequestPayload(body, contentType)
 		usageObserver := helps.NewOpenAIStreamUsageObserver(&streamUsage, streamScannerBuffer)
 		defer func() {
 			if errClose := httpResp.Body.Close(); errClose != nil {
@@ -505,7 +505,10 @@ func (e *CodexExecutor) executeDirectOpenAIImageStream(ctx context.Context, auth
 			if errRead != nil {
 				if errRead != io.EOF {
 					helps.RecordAPIResponseError(ctx, e.cfg, errRead)
-					reporter.PublishFailure(ctx, errRead)
+					usageObserver.Finish()
+					if !streamUsage.PublishFailure(ctx, reporter, errRead) {
+						reporter.PublishFailure(ctx, errRead)
+					}
 					select {
 					case out <- cliproxyexecutor.StreamChunk{Err: errRead}:
 					case <-ctx.Done():
