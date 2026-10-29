@@ -658,8 +658,8 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
               </div>
 
               <div className="button-row management-card-actions">
-                <button type="button" className="primary-button" disabled={Boolean(state.polling) || browsersLoading} onClick={() => void startLogin(provider.id)}>
-                  {state.polling ? <LoaderCircle size={16} className="spin" aria-hidden="true" /> : <LoginIcon size={16} aria-hidden="true" />}
+                <button type="button" className="primary-button" disabled={Boolean(state.polling) || browsersLoading} title={browsersLoading ? t('oauth.browser.detecting') : undefined} onClick={() => void startLogin(provider.id)}>
+                  {state.polling || browsersLoading ? <LoaderCircle size={16} className="spin" aria-hidden="true" /> : <LoginIcon size={16} aria-hidden="true" />}
                   {loginLabel}
                 </button>
                 {state.url ? (
