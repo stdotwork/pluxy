@@ -18,4 +18,10 @@
   min-width: 0;
   flex: 1 1 auto;
 }
+
+.auth-batch-dialog .auth-batch-excluded {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-meta);
+  line-height: 1.4;
+}
 }

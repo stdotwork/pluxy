@@ -790,6 +790,13 @@ button.oauth-account-count:focus-visible {
   border-color: var(--button-danger-hover-border, var(--color-danger));
   color: var(--button-danger-hover-text, var(--color-text-on-accent));
 }
+
+/* A confirmation is the last step before an irreversible action, so its destructive choice is solid. */
+.app-confirm-dialog .danger-button {
+  background: var(--button-danger-hover-bg, var(--color-danger));
+  border-color: var(--button-danger-hover-border, var(--color-danger));
+  color: var(--button-danger-hover-text, var(--color-text-on-accent));
+}
 :root :is(.secondary-button, .danger-button, .icon-button).ghost {
   border-color: transparent;
   background: transparent;

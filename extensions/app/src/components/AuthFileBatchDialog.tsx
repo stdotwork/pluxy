@@ -22,6 +22,7 @@ export function AuthFileBatchDialog({ files, onClose, onChanged }: {
   const pending = useRef(false);
   const [results, setResults] = useState<CredentialResult[]>([]);
   const [error, setError] = useState('');
+  const excludedCount = files.length - eligible.length;
   const targets = eligible.filter(file => selected.has(quotaKey(file)));
   const run = async (operation: 'enable' | 'disable' | 'delete' | 'refresh' | 'all') => {
     if (pending.current || (operation !== 'all' && !targets.length)) return;
@@ -29,7 +30,10 @@ export function AuthFileBatchDialog({ files, onClose, onChanged }: {
     setBusy(true);
     try {
       if (operation === 'delete' || operation === 'all') {
-        const confirmed = await askConfirmation({ title: t('authFiles.operations.title'),
+        const confirmed = await askConfirmation({
+          title: operation === 'delete'
+            ? t(targets.length === 1 ? 'authFiles.operations.deleteTitleOne' : 'authFiles.operations.deleteTitle', { count: targets.length })
+            : t('authFiles.operations.title'),
           message: t(operation === 'delete' ? 'authFiles.operations.confirmDelete' : 'authFiles.operations.confirmRefresh', { count: targets.length }),
           confirmText: t(operation === 'delete' ? 'common.delete' : 'authFiles.operations.refreshAll'),
           ...(operation === 'delete' ? { variant: 'danger' as const } : {}),
@@ -53,6 +57,7 @@ export function AuthFileBatchDialog({ files, onClose, onChanged }: {
     <Dialog className="model-discovery-dialog auth-batch-dialog" title={t('authFiles.operations.title')} onClose={onClose} closeDisabled={busy}>
       <div className="model-discovery-toolbar">
         <label><Checkbox checked={eligible.length > 0 && selected.size === eligible.length} disabled={busy || !eligible.length} onChange={event => setSelected(new Set(event.currentTarget.checked ? eligible.map(quotaKey) : []))} />{t('authFiles.operations.selectAll')} ({selected.size}/{eligible.length})</label>
+        {excludedCount > 0 ? <small className="auth-batch-excluded">{t(excludedCount === 1 ? 'authFiles.operations.excludedOne' : 'authFiles.operations.excluded', { count: excludedCount })}</small> : null}
       </div>
       <div className="surface-section model-discovery-content">
         <div className="model-discovery-list">
@@ -74,7 +79,7 @@ export function AuthFileBatchDialog({ files, onClose, onChanged }: {
         <button type="button" className="secondary-button small-button" disabled={busy || !targets.length} onClick={() => void run('refresh')}>{t('authFiles.operations.refresh')}</button>
         <button type="button" className="secondary-button small-button" disabled={busy || !targets.length} onClick={() => void run('enable')}>{t('common.enable')}</button>
         <button type="button" className="secondary-button small-button" disabled={busy || !targets.length} onClick={() => void run('disable')}>{t('common.disable')}</button>
-        <button type="button" className="secondary-button small-button" disabled={busy || !targets.length} onClick={() => void run('delete')}>{t('common.delete')}</button>
+        <button type="button" className="danger-button small-button" disabled={busy || !targets.length} onClick={() => void run('delete')}>{t('common.delete')}</button>
       </div>
     </Dialog>
     {confirmationDialog}
