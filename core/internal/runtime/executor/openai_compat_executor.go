@@ -535,6 +535,9 @@ func (e *OpenAICompatExecutor) executeStreamWithCredentials(ctx context.Context,
 			}
 
 			// Observe complete upstream frames before translation or downstream backpressure.
+			if !isDone && len(dataLines) > 1 {
+				streamUsage.ObserveOpenAIStream(dataPayload)
+			}
 			helps.ObserveChatTokenEvent(reporter, dataPayload)
 			streamLine := append([]byte("data: "), dataPayload...)
 			chunks := helps.TranslateStreamWithClaudeInputTokens(ctx, to, responseFormat, req.Model, helps.ApplyPatchOriginalRequest(req, opts), translated, streamLine, &param, claudeInputTokens)

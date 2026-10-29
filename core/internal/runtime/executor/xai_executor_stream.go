@@ -155,10 +155,8 @@ func (e *XAIExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth
 				eventDataList := xaiNormalizeReasoningSummaryDataEvents(bytes.TrimSpace(line[len(xaiDataTag):]))
 				hasPendingEventLine := pendingEventLine != nil
 				for i, eventData := range eventDataList {
-					if rawEventType := gjson.GetBytes(eventData, "type").String(); rawEventType == "response.completed" || rawEventType == "response.incomplete" {
-						if detail, ok := helps.ParseCodexUsage(eventData); ok {
-							streamUsage.Observe(detail, true)
-						}
+					if rawEventType := gjson.GetBytes(eventData, "type").String(); rawEventType == "response.output_item.done" || rawEventType == "response.completed" || rawEventType == "response.incomplete" || rawEventType == "response.done" {
+						streamUsage.ObserveResponsesStream(eventData)
 					}
 					prepared.applyPatch.RememberDispatcherEvent(eventData)
 					eventData = namespaceRestorer.restore(eventData)

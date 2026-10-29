@@ -808,10 +808,8 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 			}
 
 			for _, payload := range xaiNormalizeReasoningSummaryDataEvents(payload) {
-				if rawEventType := gjson.GetBytes(payload, "type").String(); rawEventType == "response.completed" || rawEventType == "response.incomplete" || rawEventType == "response.done" {
-					if detail, ok := helps.ParseCodexUsage(payload); ok {
-						streamUsage.Observe(detail, true)
-					}
+				if rawEventType := gjson.GetBytes(payload, "type").String(); rawEventType == "response.output_item.done" || rawEventType == "response.completed" || rawEventType == "response.incomplete" || rawEventType == "response.done" {
+					streamUsage.ObserveResponsesStream(payload)
 				}
 				prepared.applyPatch.RememberDispatcherEvent(payload)
 				payload = namespaceRestorer.restore(payload)

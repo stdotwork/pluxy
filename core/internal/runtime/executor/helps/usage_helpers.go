@@ -938,6 +938,8 @@ type StreamUsageBuffer struct {
 	openAIStreamImages           int64
 	openAIExplicitImageCount     bool
 	openAIStreamImageDetails     *usage.ImageDetails
+	responsesOutputByIndex       map[int64][]byte
+	responsesOutputFallback      [][]byte
 	geminiToolDetails            *usage.ToolUsageDetails
 	geminiWebSearchRequests      *int64
 	geminiImageCount             int64
@@ -951,6 +953,7 @@ var (
 	openAIStreamServiceTierMarker = []byte(`"service_tier"`)
 	openAIStreamToolCallsMarker   = []byte(`"tool_calls"`)
 	openAIStreamImageDoneMarker   = []byte(`.completed"`)
+	responsesOutputItemDoneMarker = []byte(`"response.output_item.done"`)
 	claudeStreamBlockStartMarker  = []byte(`"content_block_start"`)
 	geminiUsageMetaMarker         = []byte(`"usageMetadata"`)
 	geminiUsageMetaSnakeMarker    = []byte(`"usage_metadata"`)
@@ -1356,13 +1359,8 @@ func (b *StreamUsageBuffer) ObserveClaudeStream(line []byte) {
 		b.observeClaudeStreamToolBlocks(payload)
 	}
 	if detail, ok := ParseClaudeStreamUsage(line); ok {
-		if detail.ToolUsageDetails != nil && detail.ToolUsageDetails.WebSearchCalls != nil {
-			calls := detail.ToolUsageDetails.WebSearchCalls
-			// message_start can report a provisional zero before server tools run.
-			// Keep raw reported values separate from content-derived counters.
-			if *calls != 0 || gjson.GetBytes(payload, "type").String() != "message_start" {
-				b.claudeReportedWebSearchCalls = usage.CloneInt64Ptr(calls)
-			}
+		if detail.ToolUsageDetails != nil && detail.ToolUsageDetails.WebSearchCalls != nil && *detail.ToolUsageDetails.WebSearchCalls > 0 {
+			b.claudeReportedWebSearchCalls = usage.CloneInt64Ptr(detail.ToolUsageDetails.WebSearchCalls)
 		}
 		ObserveMergedStreamUsage(b, detail)
 		b.applyClaudeStreamToolObservations()
@@ -1514,6 +1512,47 @@ func (b *StreamUsageBuffer) ResponseModel() string {
 		return ""
 	}
 	return b.responseModel
+}
+
+// ObserveResponsesStream collects response.output_item.done items across a
+// Responses SSE/WebSocket stream and parses terminal response.usage payloads
+// with those collected items so tool usage is preserved when response.output is empty.
+func (b *StreamUsageBuffer) ObserveResponsesStream(line []byte) bool {
+	if b == nil {
+		return false
+	}
+	payload := jsonPayload(line)
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return false
+	}
+	if b.responseModel == "" {
+		if model, _ := extractGenericResponseModelEvent(payload); model != "" {
+			b.responseModel = model
+		}
+	}
+	if bytes.Contains(payload, responsesOutputItemDoneMarker) {
+		root := gjson.Parse(unsafeBytesToString(payload))
+		if strings.TrimSpace(root.Get("type").String()) == "response.output_item.done" {
+			if item := root.Get("item"); item.Exists() && item.IsObject() {
+				rawItem := bytes.Clone([]byte(item.Raw))
+				if idxNode := root.Get("output_index"); idxNode.Type == gjson.Number && idxNode.Int() >= 0 {
+					if b.responsesOutputByIndex == nil {
+						b.responsesOutputByIndex = make(map[int64][]byte)
+					}
+					b.responsesOutputByIndex[idxNode.Int()] = rawItem
+				} else {
+					b.responsesOutputFallback = append(b.responsesOutputFallback, rawItem)
+				}
+			}
+			return true
+		}
+	}
+	detail, ok := ParseCodexUsageWithOutputItems(payload, b.responsesOutputByIndex, b.responsesOutputFallback)
+	if !ok || (!hasNonZeroTokenUsage(detail) && !hasStructuredUsageDetail(detail) && detail.ResponseServiceTier == "") {
+		return false
+	}
+	b.Observe(detail, true)
+	return true
 }
 
 func ParseCodexUsage(data []byte) (usage.Detail, bool) {
@@ -2811,10 +2850,10 @@ func applyClaudeContentBlocksUsage(detail *usage.Detail, contentNode gjson.Resul
 	}
 	if hasCompleted {
 		detail.ToolUsageDetails.NumSearchResults = usage.Int64Ptr(searchResults)
-		if detail.ToolUsageDetails.WebSearchCalls == nil {
+		if detail.ToolUsageDetails.WebSearchCalls == nil || (completedSearches > 0 && *detail.ToolUsageDetails.WebSearchCalls == 0) {
 			detail.ToolUsageDetails.WebSearchCalls = usage.Int64Ptr(completedSearches)
 		}
-		if detail.WebSearchRequests == nil {
+		if detail.WebSearchRequests == nil || (completedSearches > 0 && *detail.WebSearchRequests == 0) {
 			detail.WebSearchRequests = usage.Int64Ptr(completedSearches)
 		}
 	}

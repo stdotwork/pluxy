@@ -77,9 +77,12 @@ func ObservePluginExecutorStreamUsage(protocol string, payload []byte, buffer *S
 	case "codex", "openai-response":
 		IterateStreamLines(payload, func(line []byte) {
 			if jsonBytes := ExtractStreamJSONPayload(line); len(jsonBytes) > 0 {
+				if bytes.Contains(jsonBytes, responsesOutputItemDoneMarker) && buffer.ObserveResponsesStream(jsonBytes) {
+					return
+				}
 				// A service tier without response.usage is not token usage. Fall through
 				// so a completed Responses object's top-level usage is still recorded.
-				if detail, ok := ParseCodexUsage(jsonBytes); ok && (hasNonZeroTokenUsage(detail) || hasStructuredUsageDetail(detail)) {
+				if detail, ok := ParseCodexUsageWithOutputItems(jsonBytes, buffer.responsesOutputByIndex, buffer.responsesOutputFallback); ok && (hasNonZeroTokenUsage(detail) || hasStructuredUsageDetail(detail)) {
 					buffer.Observe(detail, true)
 					return
 				}

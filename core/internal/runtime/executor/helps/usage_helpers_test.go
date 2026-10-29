@@ -2054,3 +2054,27 @@ func TestOpenAIStreamPreservesCacheTTLBucketsAndStructuredOnlyUsage(t *testing.T
 		t.Fatalf("stream lost structured-only usage: %+v", costDetail)
 	}
 }
+
+func TestObserveResponsesStreamPreservesOutputItemDoneToolUsageWhenCompletedOutputEmpty(t *testing.T) {
+	var b StreamUsageBuffer
+	b.ObserveResponsesStream([]byte(`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"ct_1","type":"custom_tool_call","status":"completed","call_id":"xs_1","name":"x_keyword_search","input":"{}"}}`))
+	b.ObserveResponsesStream([]byte(`data: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{}"}}`))
+	b.ObserveResponsesStream([]byte(`data: {"type":"response.completed","response":{"id":"resp_1","output":[],"usage":{"input_tokens":20,"output_tokens":10,"total_tokens":30}}}`))
+	d, ok := b.Detail()
+	if !ok || d.ToolUsageDetails == nil ||
+		d.ToolUsageDetails.XSearchCalls == nil || *d.ToolUsageDetails.XSearchCalls != 1 ||
+		d.ToolUsageDetails.ToolCallsRequested == nil || *d.ToolUsageDetails.ToolCallsRequested != 1 {
+		t.Fatalf("ObserveResponsesStream lost output_item.done tool usage: %+v", d.ToolUsageDetails)
+	}
+
+	var pluginBuf StreamUsageBuffer
+	ObservePluginExecutorStreamUsage("openai-response", []byte(strings.Join([]string{
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{}"}}`,
+		"",
+		`data: {"type":"response.completed","response":{"output":[],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`,
+	}, "\n")), &pluginBuf)
+	pd, pok := pluginBuf.Detail()
+	if !pok || pd.ToolUsageDetails == nil || pd.ToolUsageDetails.ToolCallsRequested == nil || *pd.ToolUsageDetails.ToolCallsRequested != 1 {
+		t.Fatalf("ObservePluginExecutorStreamUsage lost output_item.done tool usage: %+v", pd.ToolUsageDetails)
+	}
+}
