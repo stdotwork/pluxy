@@ -43,6 +43,12 @@
 .auth-list-usage { grid-area: usage; }
 .auth-list-quota { grid-area: quota; }
 .auth-card-actions { grid-area: actions; }
+/* Cards in one grid row share a height; keep their action rows on a common baseline. */
+.auth-file-card > .auth-credential-row { flex: 1 0 auto; grid-template-rows: auto auto auto auto 1fr auto; }
+/* An expanded cooldown list grows its card; do not stretch the neighbours' main rows with it. */
+.auth-file-card-grid:has(.auth-file-health-compact > details[open]) .auth-file-card > .auth-credential-row { flex: none; }
+/* The enable switch sits beside small buttons, so it uses their height instead of the 34px compact size. */
+.auth-list-main-actions .auth-card-toggle { min-height: auto; margin-top: 0; padding: 5px 10px; }
 .auth-card-header { display: flex; gap: 10px; align-items: center; min-width: 0; }
 .auth-card-header .provider-logo { width: 35px; height: 35px; object-fit: contain; flex-shrink: 0; }
 [data-theme="dark"] .auth-card-header .provider-logo[data-provider="xai"] { filter: invert(1); }
