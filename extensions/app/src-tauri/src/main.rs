@@ -193,6 +193,7 @@ const PI_CLIPROXYAPI_NPM_LATEST_URL: &str =
 const PI_CLIPROXYAPI_PROVIDER_ID: &str = "cliproxyapi";
 const PI_AGENT_CONFIG_FILE: &str = "cliproxyapi.json";
 const PI_AGENT_SETTINGS_FILE: &str = "settings.json";
+const PI_AGENT_MODELS_CACHE_FILE: &str = "cliproxyapi-models.json";
 const CODEX_MODEL_CATALOG_FILE: &str = "cpa-gui-model-catalog.json";
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR: &str = "CODEX_OAUTH_LOGIN_REQUIRED";
 const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";

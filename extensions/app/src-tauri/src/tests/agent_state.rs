@@ -61,6 +61,79 @@ fn repairing_pi_provider_updates_credentials_defaults_and_model() {
 }
 
 #[test]
+fn repairing_pi_provider_clears_plugin_model_cache() {
+    let home = agent_test_home("repair-pi-provider-cache");
+    let settings_path = pi_provider_settings_path(&home);
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(
+        &settings_path,
+        format!(r#"{{"packages":["{PI_CLIPROXYAPI_PACKAGE}"]}}"#),
+    )
+    .unwrap();
+    let cache_path = pi_provider_models_cache_path(&home);
+    fs::write(&cache_path, r#"{"models":[{"id":"removed","stale":true}]}"#).unwrap();
+
+    repair_pi_provider_inner(&home, 9527, "agent-key", "new-model").unwrap();
+
+    assert!(!cache_path.exists());
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn repairing_pi_provider_writes_nothing_when_model_cache_cannot_be_cleared() {
+    let home = agent_test_home("repair-pi-provider-cache-failure");
+    let settings_path = pi_provider_settings_path(&home);
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    let settings = format!(r#"{{"packages":["{PI_CLIPROXYAPI_PACKAGE}"]}}"#);
+    fs::write(&settings_path, &settings).unwrap();
+    fs::create_dir_all(pi_provider_models_cache_path(&home)).unwrap();
+
+    assert!(repair_pi_provider_inner(&home, 9527, "agent-key", "new-model").is_err());
+
+    assert!(!pi_provider_config_path(&home).exists());
+    assert_eq!(fs::read_to_string(&settings_path).unwrap(), settings);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
+async fn pi_models_use_pi_client_catalog_and_skip_hidden_entries() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0; 2048];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let read = socket.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+        assert!(request.starts_with("get /v1/models?client_version=pi http/1.1\r\n"));
+        assert!(request.contains("authorization: bearer pi-key\r\n"));
+        let body = r#"{"models":[{"slug":"visible","display_name":"Visible Model","context_window":272000,"input_modalities":["text","image"]},{"slug":"hidden-image","visibility":"hide"}]}"#;
+        write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+    });
+    let models = fetch_pi_agent_models(port, "pi-key").await.unwrap();
+    server.join().unwrap();
+    assert_eq!(
+        models,
+        vec![AgentModelOption {
+            name: "visible".into(),
+            alias: Some("Visible Model".into()),
+            is_alias: false,
+            context_window: Some(272000),
+            input_modalities: Some(vec!["text".into(), "image".into()]),
+            harness_metadata: None,
+        }]
+    );
+}
+
+#[test]
 fn pi_provider_version_reads_installed_package_metadata() {
     let home = agent_test_home("pi-provider-version");
     let package_path = pi_provider_package_json_path(&home);

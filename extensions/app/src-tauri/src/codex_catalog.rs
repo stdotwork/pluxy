@@ -268,6 +268,24 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
     Ok(models)
 }
 
+pub(crate) fn visible_agent_model_options(runtime_models: &[CodexRuntimeModel]) -> Vec<AgentModelOption> {
+    runtime_models
+        .iter()
+        .filter(|model| !model.hidden)
+        .map(|model| AgentModelOption {
+            name: model.slug.clone(),
+            alias: model
+                .display_name
+                .clone()
+                .filter(|name| !name.eq_ignore_ascii_case(&model.slug)),
+            is_alias: false,
+            context_window: model.context_window.or(model.max_context_window),
+            input_modalities: model.input_modalities.clone(),
+            harness_metadata: None,
+        })
+        .collect()
+}
+
 pub(crate) fn merge_runtime_context_windows(
     models: &mut [AgentModelOption],
     runtime_models: &[CodexRuntimeModel],

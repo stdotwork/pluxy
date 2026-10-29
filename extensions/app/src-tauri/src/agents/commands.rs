@@ -203,7 +203,7 @@ pub(crate) async fn get_agent_models(
 ) -> Result<Vec<AgentModelOption>, String> {
     if client.trim().eq_ignore_ascii_case(PI_AGENT_ID) {
         let config = gui_config_state.snapshot()?;
-        return fetch_agent_models(config.port, effective_agent_api_key(&config)).await;
+        return fetch_pi_agent_models(config.port, effective_agent_api_key(&config)).await;
     }
     let client = AgentClient::parse(&client)?;
     let _sync_guard = if client == AgentClient::Codex {
@@ -220,7 +220,7 @@ pub(crate) async fn resolve_pi_default_model(
     config: &GuiConfigFile,
     model: &str,
 ) -> Result<String, String> {
-    let models = fetch_agent_models(config.port, effective_agent_api_key(config)).await?;
+    let models = fetch_pi_agent_models(config.port, effective_agent_api_key(config)).await?;
     resolve_available_agent_model(&models, &validate_agent_model(model)?)
 }
 
@@ -923,6 +923,14 @@ pub(crate) async fn fetch_agent_model_payload(
     Err("Local kernel does not support the model list endpoint".to_string())
 }
 
+pub(crate) async fn fetch_pi_agent_models(
+    port: u16,
+    api_key: &str,
+) -> Result<Vec<AgentModelOption>, String> {
+    let runtime_models = fetch_client_runtime_models(port, api_key, PI_AGENT_ID).await?;
+    Ok(codex_catalog::visible_agent_model_options(&runtime_models))
+}
+
 pub(crate) async fn fetch_codex_runtime_models(
     port: u16,
     api_key: &str,
@@ -931,6 +939,14 @@ pub(crate) async fn fetch_codex_runtime_models(
     // Keep it independent of the GUI version to preserve extended reasoning levels.
     const CODEX_MODEL_CATALOG_CLIENT_VERSION: &str = "0.162.1";
 
+    fetch_client_runtime_models(port, api_key, CODEX_MODEL_CATALOG_CLIENT_VERSION).await
+}
+
+async fn fetch_client_runtime_models(
+    port: u16,
+    api_key: &str,
+    client_version: &str,
+) -> Result<Vec<codex_catalog::CodexRuntimeModel>, String> {
     if port == 0 {
         return Err("Invalid kernel port".to_string());
     }
@@ -951,7 +967,7 @@ pub(crate) async fn fetch_codex_runtime_models(
     for (index, endpoint) in endpoints.iter().enumerate() {
         let response = client
             .get(endpoint)
-            .query(&[("client_version", CODEX_MODEL_CATALOG_CLIENT_VERSION)])
+            .query(&[("client_version", client_version)])
             .bearer_auth(api_key)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::USER_AGENT, USER_AGENT)

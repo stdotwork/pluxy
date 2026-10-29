@@ -263,6 +263,10 @@ pub(crate) fn pi_provider_settings_path(home: &Path) -> PathBuf {
     pi_agent_directory(home).join(PI_AGENT_SETTINGS_FILE)
 }
 
+pub(crate) fn pi_provider_models_cache_path(home: &Path) -> PathBuf {
+    pi_agent_directory(home).join(PI_AGENT_MODELS_CACHE_FILE)
+}
+
 pub(crate) fn pi_provider_package_json_path(home: &Path) -> PathBuf {
     pi_agent_directory(home)
         .join("npm/node_modules/@router-for-me/pi-cliproxyapi-provider/package.json")
@@ -683,6 +687,16 @@ pub(crate) fn repair_pi_provider_inner(
         )
     })?;
     let rendered_settings = build_pi_provider_settings(&settings, default_model)?;
+    let cache_path = pi_provider_models_cache_path(home);
+    match fs::remove_file(&cache_path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "Failed to clear Pi model cache {}: {error}",
+                path_to_string(&cache_path)
+            ))
+        }
+        _ => {}
+    }
     config_updates(
         PI_AGENT_ID,
         home,
