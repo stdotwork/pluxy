@@ -1315,6 +1315,35 @@ fn zcode_config_paths_fall_back_when_custom_dir_is_missing_or_invalid() {
 }
 
 #[test]
+fn zcode_defaults_to_image_input_and_preserves_explicit_input_settings() {
+    let mut models = test_agent_models(&["custom-alias", "text-only"]);
+    for model in &mut models {
+        model.context_window = None;
+        model.input_modalities = Some(vec!["text".into()]);
+    }
+    let render = |existing: Option<&str>| build_zcode_agent_config(
+        existing, "http://127.0.0.1:8317/v1", DEFAULT_API_KEY, "custom-alias", &models,
+    ).unwrap();
+    let rendered = render(None);
+    let mut value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    let rules = value["config"]["modelConfigRules"]["providerModelRules"].as_array_mut().unwrap();
+    assert_eq!(rules.len(), 2);
+    for rule in rules.iter() {
+        assert_eq!(rule["config"]["properties"]["inputFormat"]["supportsImage"], true);
+    }
+    rules[1]["config"]["properties"]["inputFormat"] = serde_json::json!({
+        "supportsImage": false, "supportsVideo": true
+    });
+    let updated = render(Some(&value.to_string()));
+    let value: serde_json::Value = serde_json::from_str(&updated).unwrap();
+    let rules = value["config"]["modelConfigRules"]["providerModelRules"].as_array().unwrap();
+    assert_eq!(rules[1]["config"]["properties"]["inputFormat"], serde_json::json!({
+        "supportsImage": false, "supportsVideo": true
+    }));
+    assert_eq!(render(Some(&updated)), updated);
+}
+
+#[test]
 fn zcode_runtime_reasoning_options_upgrade_aliases_and_preserve_native_settings() {
     let mut models = test_agent_models(&["custom-alias", "unknown-model", "gpt-manual"]);
     for model in &mut models { model.context_window = None; }
@@ -1336,7 +1365,9 @@ fn zcode_runtime_reasoning_options_upgrade_aliases_and_preserve_native_settings(
     assert_eq!(rule["config"]["optionSpecs"]["reasoningLevel"]["values"],
         serde_json::json!(["low", "medium", "high", "xhigh"]));
     assert_eq!(rule["config"]["optionSpecs"]["reasoningLevel"]["map"], "reasoningLevel == \"none\" ? {\"thinking\": {\"type\": \"disabled\"}} : {\"thinking\": {\"type\": \"adaptive\"}, \"output_config\": {\"effort\": reasoningLevel}}");
-    assert!(!rules.iter().any(|rule| rule["modelId"] == "unknown-model"));
+    let unknown = rules.iter().find(|rule| rule["modelId"] == "unknown-model").unwrap();
+    assert_eq!(unknown["config"]["properties"]["inputFormat"]["supportsImage"], true);
+    assert!(unknown["config"].get("optionSpecs").is_none());
     let original_value: serde_json::Value = serde_json::from_str(original).unwrap();
     assert_eq!(value["config"]["modelConfigRules"]["manualProviderModelRules"],
         original_value["config"]["modelConfigRules"]["manualProviderModelRules"]);
@@ -1377,8 +1408,10 @@ fn zcode_preserves_manual_model_rules_and_rejects_unknown_schema_versions() {
         &models,
     ).unwrap();
     let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-    assert!(value["config"]["modelConfigRules"]["providerModelRules"]
-        .as_array().unwrap().is_empty());
+    let rules = value["config"]["modelConfigRules"]["providerModelRules"].as_array().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["modelId"], "without-context");
+    assert_eq!(rules[0]["config"]["properties"]["inputFormat"]["supportsImage"], true);
     let manual = &value["config"]["modelConfigRules"]["manualProviderModelRules"][0];
     assert_eq!(manual["config"]["properties"]["inputFormat"]["supportsImage"], true);
     assert_eq!(manual["config"]["properties"]["contextWindow"], 200_000);

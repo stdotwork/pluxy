@@ -3798,19 +3798,15 @@ pub(crate) fn build_zcode_agent_config(
     let mut manual_updates = Vec::new();
     for option in ordered {
         let manual = existing_manual_rules.get(&option.name);
-        if option.context_window.is_none()
-            && option.reasoning_levels.is_empty()
-            && manual.is_none()
-            && !existing_rules.contains_key(&option.name)
-        {
-            continue;
-        }
         let mut rule = manual.or_else(|| existing_rules.get(&option.name))
             .cloned().unwrap_or_else(|| serde_json::json!({}));
         let entry = rule.as_object_mut().ok_or("ZCode model rule must be an object")?;
         entry.insert("providerId".to_string(), serde_json::json!(MANAGED_AGENT_PROVIDER_ID));
         entry.insert("modelId".to_string(), serde_json::json!(option.name));
         let properties = ensure_json_object_entry(ensure_json_object_entry(entry, "config"), "properties");
+        ensure_json_object_entry(properties, "inputFormat")
+            .entry("supportsImage")
+            .or_insert(serde_json::json!(true));
         if let Some(context_window) = option.context_window {
             properties.insert("contextWindow".to_string(), serde_json::json!(context_window));
         } else if manual.is_none() {
