@@ -1059,6 +1059,12 @@
   box-shadow: var(--simple-choice-hover-shadow);
 }
 
+/* The soft accent fill is close to the neutral surface in monochrome themes; a doubled accent edge keeps the choice obvious. */
+.simple-mode-choice.selected,
+.simple-mode-choice.selected:hover {
+  box-shadow: inset 0 0 0 1px var(--ui-accent), 0 5px 14px var(--ui-accent-shadow);
+}
+
 .simple-mode-choice-heading {
   display: flex;
   align-items: center;

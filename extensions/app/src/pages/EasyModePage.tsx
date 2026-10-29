@@ -857,7 +857,7 @@ export function EasyModePage({
                   <strong>{t("easyMode.oauth.title")}</strong>
                   {totalLoggedInOAuth > 0 ? (
                     <span className="state-pill success">
-                      {t("easyMode.oauth.accountsLoggedIn", { count: totalLoggedInOAuth })}
+                      {t(totalLoggedInOAuth === 1 ? "easyMode.oauth.accountsLoggedInOne" : "easyMode.oauth.accountsLoggedIn", { count: totalLoggedInOAuth })}
                     </span>
                   ) : (
                     <span className="state-pill neutral">{t("easyMode.oauth.recommended")}</span>
@@ -880,7 +880,7 @@ export function EasyModePage({
                   <strong>{t("easyMode.api.title")}</strong>
                   {totalApiProviders > 0 ? (
                     <span className="state-pill success">
-                      {t("easyMode.api.platformsConnected", { count: totalApiProviders })}
+                      {t(totalApiProviders === 1 ? "easyMode.api.platformsConnectedOne" : "easyMode.api.platformsConnected", { count: totalApiProviders })}
                     </span>
                   ) : null}
                 </div>
@@ -1284,7 +1284,7 @@ export function EasyModePage({
                   ) : apiSelectedModels.length === 0 ? (
                     t("easyMode.guide.cardStep2ApiSelectTip")
                   ) : (
-                    <span>{t("easyMode.guide.cardStep2ApiSelectedTip", { count: apiSelectedModels.length })}</span>
+                    <span>{t(apiSelectedModels.length === 1 ? "easyMode.guide.cardStep2ApiSelectedTipOne" : "easyMode.guide.cardStep2ApiSelectedTip", { count: apiSelectedModels.length })}</span>
                   )}
                 </div>
               </>
