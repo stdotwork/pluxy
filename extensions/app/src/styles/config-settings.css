@@ -1,5 +1,5 @@
 .config-page { gap: 20px; min-width: 0; }
-.config-settings-search { display: flex; align-items: center; gap: 8px; flex: 0 0 160px; box-sizing: border-box; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-card); color: var(--text-tertiary); }
+.config-settings-search { display: flex; align-items: center; gap: 8px; flex: 0 0 184px; box-sizing: border-box; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-card); color: var(--text-tertiary); }
 .config-settings-search:focus-within { border-color: var(--primary-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 12%, transparent); }
 .config-settings-search > svg { flex: none; }
 .config-settings-search input { width: 100%; min-width: 0; min-height: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 13px; }

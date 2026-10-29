@@ -798,6 +798,7 @@ export const zhCN = {
   'usage.dataManagement.shrinkTitle': '数据库一键瘦身',
   'usage.dataManagement.shrinkDescription': '将数据库大小调整到目标大小，确认后将从最旧的使用记录开始删除，直到数据库小于或等于目标大小。',
   'usage.dataManagement.shrinkInput': '瘦身目标大小（MB）',
+  'usage.dataManagement.shrinkPlaceholder': '例如 256',
   'usage.dataManagement.shrinkRun': '一键瘦身',
   'usage.dataManagement.shrinking': '瘦身中…',
   'usage.dataManagement.shrinkInvalid': '请输入大于 0 的整数作为瘦身目标大小。',

@@ -813,6 +813,7 @@ export const en: Record<MessageKey, string> = {
   'usage.dataManagement.shrinkTitle': 'One-click database cleanup',
   'usage.dataManagement.shrinkDescription': 'Set the database to the target size. After confirmation, the oldest usage records are deleted until the database is at or below that size.',
   'usage.dataManagement.shrinkInput': 'Cleanup target size (MB)',
+  'usage.dataManagement.shrinkPlaceholder': 'e.g. 256',
   'usage.dataManagement.shrinkRun': 'Clean up now',
   'usage.dataManagement.shrinking': 'Cleaning up…',
   'usage.dataManagement.shrinkInvalid': 'Enter a positive integer for the cleanup target size.',

@@ -9020,9 +9020,14 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   overflow: hidden;
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface);
+}
+
+/* The inner input drops its own focus ring, so the framed field shows focus instead. */
+.usage-storage-limit-editor label:focus-within {
+  border-color: var(--ui-accent);
 }
 
 .usage-storage-limit-editor input {

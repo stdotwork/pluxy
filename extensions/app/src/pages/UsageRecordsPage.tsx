@@ -734,6 +734,7 @@ function UsageDataManagementView() {
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !savingLimit && !shrinking && !running) void shrinkDatabase();
               }}
+              placeholder={t('usage.dataManagement.shrinkPlaceholder')}
               aria-label={t('usage.dataManagement.shrinkInput')}
             />
             <span>{t('usage.dataManagement.storageUnit')}</span>
