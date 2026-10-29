@@ -18,6 +18,7 @@ export const jaOverrides = {
   'agents.subagents.title': 'Codex サブエージェント設定',
   'agents.subagents.description': 'サブエージェント起動時に Codex が使用する既定値を設定します。',
   'agents.subagents.loading': '設定を読み込み中…',
+  'agents.subagents.loadFailed': "サブエージェント設定を読み込めませんでした。",
   'agents.subagents.enabled': 'サブエージェントを有効化',
   'agents.subagents.enabledHint': 'Codex がマルチエージェントツールでサブエージェントを起動できるようにします。',
   'agents.subagents.maxConcurrency': 'セッションごとの最大同時スレッド数',

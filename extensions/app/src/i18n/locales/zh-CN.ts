@@ -17,6 +17,7 @@ export const zhCN = {
   'agents.subagents.title': 'Codex 子代理设置',
   'agents.subagents.description': '配置 Codex 创建子代理时使用的默认行为。',
   'agents.subagents.loading': '正在读取配置…',
+  'agents.subagents.loadFailed': "无法加载子代理设置。",
   'agents.subagents.enabled': '启用子代理',
   'agents.subagents.enabledHint': '允许 Codex 使用多代理工具创建子代理。',
   'agents.subagents.maxConcurrency': '每个会话最大并发线程数',

@@ -18,6 +18,7 @@ export const en: Record<MessageKey, string> = {
   'agents.subagents.title': 'Codex subagent settings',
   'agents.subagents.description': 'Configure the defaults Codex uses when spawning subagents.',
   'agents.subagents.loading': 'Loading configuration…',
+  'agents.subagents.loadFailed': "Couldn't load subagent settings.",
   'agents.subagents.enabled': 'Enable subagents',
   'agents.subagents.enabledHint': 'Allow Codex to use multi-agent tools to spawn subagents.',
   'agents.subagents.maxConcurrency': 'Maximum concurrent threads per session',

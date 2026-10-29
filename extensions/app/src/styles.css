@@ -6459,6 +6459,33 @@ textarea:focus-visible {
   font-weight: var(--font-weight-medium);
 }
 
+/* Long localized titles wrap above the description instead of truncating beside it. */
+.codex-subagent-dialog .config-dialog-heading > div {
+  display: grid;
+  gap: 6px;
+}
+
+.codex-subagent-dialog .config-dialog-heading h2 {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.codex-subagent-dialog .config-dialog-heading p {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-meta);
+}
+
+.codex-subagent-dialog .config-dialog-actions {
+  grid-template-columns: repeat(2, minmax(118px, max-content));
+  justify-content: end;
+}
+
+.codex-subagent-state {
+  min-height: 160px;
+  overflow-wrap: anywhere;
+}
+
 .agent-desktop-help-list {
   display: grid;
   gap: 16px;

@@ -605,6 +605,7 @@ function createState(scenario: BrowserMockScenario) {
       { id: 'codex:gpt-5.2-codex', model: 'gpt-5.2-codex', displayName: 'GPT-5.2 Codex', provider: 'Codex OAuth', kind: 'codex-oauth', protocol: 'openai', reasoningLevels: ['low', 'medium', 'high', 'xhigh'] },
       { id: 'claude:claude-sonnet-4-6', model: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', provider: 'Claude OAuth', kind: 'claude-oauth', protocol: 'anthropic', reasoningLevels: ['low', 'medium', 'high'] },
     ],
+    codexSubagents: { enabled: true, maxConcurrentThreadsPerSession: 4, defaultSubagentModel: null, defaultSubagentReasoningEffort: 'medium', interruptMessage: true },
     codexCatalog: {
       defaultAutoReviewModel: null as string | null,
       revision: 'mock-catalog-r1',
@@ -1499,6 +1500,11 @@ export function createBrowserMockRuntime(
       }
 
       case 'get_codex_model_catalog_editor': return clone(state.codexCatalog);
+      case 'get_codex_subagent_config': return clone(state.codexSubagents);
+      case 'save_codex_subagent_config': {
+        state.codexSubagents = { ...state.codexSubagents, ...asObject(payload.config) } as typeof state.codexSubagents;
+        return { outcome: 'updated', enabled: true, model: null, changedFiles: ['~/.codex/config.toml'], conflictFiles: [] };
+      }
       case 'save_codex_model_catalog_editor': {
         const request = asObject(payload.request);
         if (request.review_model !== undefined) state.codexCatalog.defaultAutoReviewModel = readString(asObject(request.review_model).model) || null;
