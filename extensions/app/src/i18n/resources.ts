@@ -99,5 +99,9 @@ export const zhTW: Record<MessageKey, string> = {
   'appUpdate.notes.loading': '正在取得更新說明…',
   'appUpdate.notes.failed': '暫時無法取得更新說明，請稍後重新檢查。',
   'appUpdate.notes.notChecked': '檢查軟體更新後，將顯示最新版的更新說明。',
+  'home.runtime.unknown': '無法讀取核心狀態',
+  'home.runtime.unknownHint': '核心狀態未知，讀取成功前無法啟動或重新啟動。',
+  'home.runtime.errorDetails': '錯誤詳細資訊',
+  'home.runtime.installHint': '安裝核心後即可啟動；鎖定的頁面會在核心執行後開放。',
 };
 export const ja: Record<MessageKey, string> = jaOverrides;
