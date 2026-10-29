@@ -10155,8 +10155,9 @@ textarea:focus-visible {
 }
 
 @media (max-width: 1080px) {
-  .app-shell {
-    grid-template-columns: 232px minmax(0, 1fr);
+  /* Through the shared variable so the window titlebar stays aligned with the sidebar. */
+  :root {
+    --app-sidebar-width: 232px;
   }
 
   .status-strip {

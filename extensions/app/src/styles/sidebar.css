@@ -477,6 +477,107 @@
   }
 }
 
+/* ---------- Rail: icon-only sidebar between the top-bar and full layouts ---------- */
+
+/*
+ * Between 901px and 1100px (a narrow window or a high zoom level) the full
+ * sidebar would take a quarter of the width and clip page toolbars. Keep the
+ * same rows but show icons only; labels stay in the accessibility tree and
+ * every row exposes its name as a tooltip.
+ */
+@media (min-width: 901px) and (max-width: 1100px) {
+  :root {
+    --app-sidebar-width: 64px;
+  }
+
+  .app-shell:not(.app-shell-easy-mode) .sidebar {
+    align-items: stretch;
+    padding: 14px 8px 10px;
+  }
+
+  .sidebar-brand {
+    justify-content: center;
+    margin-bottom: 14px;
+    padding: 2px 0;
+  }
+
+  .sidebar-brand-text,
+  .nav-section button > span,
+  .sidebar-link > span,
+  .sidebar-language-trigger > span,
+  .sidebar .theme-selector-trigger > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .nav-section button,
+  .sidebar-link {
+    position: relative;
+    justify-content: center;
+    gap: 0;
+    height: 36px;
+    padding: 0;
+  }
+
+  .sidebar .nav-section .nav-plugin-children button,
+  .sidebar .nav-plugin-parent > button:first-child,
+  .sidebar .nav-section .nav-plugin-row .nav-plugin-entry {
+    padding: 0;
+  }
+
+  .nav-section button .nav-lock-icon {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+  }
+
+  .nav-update-indicator {
+    position: absolute;
+    top: 7px;
+    right: 9px;
+    margin: 0;
+  }
+
+  .sidebar .nav-section button.nav-plugin-toggle,
+  .sidebar .nav-section .nav-plugin-row .nav-plugin-drag,
+  .sidebar-contact > svg:last-child,
+  .sidebar-language-trigger > svg:last-child {
+    display: none;
+  }
+
+  .nav-plugin-children {
+    padding-top: 2px;
+    border-top: 1px solid var(--sidebar-edge);
+  }
+
+  .sidebar-utility,
+  .sidebar-utility-actions {
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .sidebar-utility .sidebar-language {
+    flex: none;
+  }
+
+  .sidebar-utility .sidebar-language-trigger {
+    width: 36px;
+    height: 30px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .sidebar .theme-selector-trigger {
+    width: 36px;
+    padding: 0;
+  }
+}
+
 /* ---------- Compact: the sidebar becomes a top bar ---------- */
 
 @media (max-width: 900px) {

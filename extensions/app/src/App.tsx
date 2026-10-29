@@ -398,7 +398,7 @@ function AppContent() {
                       .join(' ')}
                     aria-current={page.id === active ? 'page' : undefined}
                     disabled={locked}
-                    title={locked ? t('app.nav.lockedHint') : undefined}
+                    title={locked ? `${t(page.labelKey)} — ${t('app.nav.lockedHint')}` : t(page.labelKey)}
                     onClick={() => select(page.id)}
                   >
                     <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -450,6 +450,7 @@ function AppContent() {
                 <button
                   type="button"
                   className="sidebar-link sidebar-easy-entry"
+                  title={t('app.nav.easy')}
                   onClick={() => select('easy')}
                 >
                   <Sprout size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -474,6 +475,7 @@ function AppContent() {
                     type="button"
                     className="sidebar-language-trigger"
                     aria-label={t('app.language')}
+                    title={t('app.language')}
                     aria-haspopup="listbox"
                     aria-expanded={languageMenuOpen}
                     aria-controls="sidebar-language-list"
