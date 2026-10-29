@@ -234,12 +234,18 @@ function createAgentStatuses() {
     opus: 'claude-opus-4-6',
     sonnet: 'claude-sonnet-4-6',
     haiku: 'claude-haiku-4-5',
+    fable: 'claude-opus-4-6',
+    fable1m: false,
     opus1m: false,
     sonnet1m: false,
     haiku1m: false,
     maxContextTokens: 200_000,
     autoCompactPct: 90,
     disableAutoCompact: false,
+    manageDefaultModel: false,
+    manageSubagentModel: false,
+    startupModel: 'opus',
+    subagentModel: '',
   };
   return ids.map(([id, name], index) => ({
     id,
