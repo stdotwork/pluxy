@@ -282,6 +282,7 @@ pub(crate) fn visible_agent_model_options(runtime_models: &[CodexRuntimeModel]) 
             context_window: model.context_window.or(model.max_context_window),
             input_modalities: model.input_modalities.clone(),
             harness_metadata: None,
+            reasoning_levels: Vec::new(),
         })
         .collect()
 }

@@ -129,6 +129,7 @@ async fn pi_models_use_pi_client_catalog_and_skip_hidden_entries() {
             context_window: Some(272000),
             input_modalities: Some(vec!["text".into(), "image".into()]),
             harness_metadata: None,
+            reasoning_levels: Vec::new(),
         }]
     );
 }
