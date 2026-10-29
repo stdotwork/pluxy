@@ -1,3 +1,4 @@
+import { requestBucketRangeLabel } from '../services/authFileRequests';
 type RecordValue = Record<string, unknown>;
 const future = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
 
@@ -26,7 +27,7 @@ export function createQuotaMockFiles(): RecordValue[] {
     note: 'Fictional browser preview account. Changes stay in memory until reload.',
     success: label === 'idle' ? 0 : 250 + index * 97, failed: label === 'idle' ? 0 : index,
     recent_requests: label === 'idle' ? [] : Array.from({ length: 20 }, (_, bucket) => ({
-      time: new Date(Date.now() - (19 - bucket) * 600_000).toISOString(),
+      time: requestBucketRangeLabel(new Date(Date.now() - (19 - bucket) * 600_000)),
       success: bucket % 4 + 1, failed: bucket % 7 === 0 ? 1 : 0,
     })),
     ...extra,

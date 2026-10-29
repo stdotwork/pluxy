@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'bun:test';
-import { authFileRequestStats, requestRateColor } from '../src/services/authFileRequests';
+import { describe, expect, it, test } from 'bun:test';
+import { authFileRequestStats, requestBucketRangeLabel, requestBucketTimeLabel, requestRateColor } from '../src/services/authFileRequests';
 
 describe('credential request statistics', () => {
   it('keeps cumulative counts separate from the recent success rate and preserves server times', () => {
@@ -77,5 +77,20 @@ describe('credential request statistics', () => {
     expect(requestRateColor(0.25)).toContain('--theme-meter-low) 50%');
     expect(requestRateColor(0.75)).toContain('--theme-meter-high) 50%');
     expect(requestRateColor(1)).toBe('color-mix(in srgb, var(--theme-meter-medium) 0%, var(--theme-meter-high) 100%)');
+  });
+});
+
+describe('request bucket time labels', () => {
+  const formatDate = (value: string, options?: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat('en-GB', { ...options, timeZone: 'UTC' }).format(new Date(value));
+
+  test('keeps the core range labels and localizes raw ISO timestamps', () => {
+    expect(requestBucketTimeLabel('15:04-15:14', formatDate)).toBe('15:04-15:14');
+    expect(requestBucketTimeLabel('', formatDate)).toBe('');
+    expect(requestBucketTimeLabel('2026-10-29T09:05:00.000Z', formatDate)).toBe('09:05');
+  });
+
+  test('mirrors the core bucket range format', () => {
+    expect(requestBucketRangeLabel(new Date(2026, 9, 29, 23, 55))).toBe('23:55-00:05');
   });
 });

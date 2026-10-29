@@ -65,3 +65,24 @@ export function requestRateColor(rate: number): string {
   const weight = (normalized < 0.5 ? normalized * 2 : (normalized - 0.5) * 2) * 100;
   return `color-mix(in srgb, var(--theme-meter-${start}) ${100 - weight}%, var(--theme-meter-${end}) ${weight}%)`;
 }
+
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+
+/**
+ * The core labels buckets as local "15:04-15:14" ranges; older or plugin hosts
+ * may send raw ISO timestamps, which are rendered as a local clock time instead.
+ */
+export function requestBucketTimeLabel(
+  time: string,
+  formatDate: (value: string, options?: Intl.DateTimeFormatOptions) => string,
+): string {
+  if (!time || !ISO_TIMESTAMP.test(time) || Number.isNaN(Date.parse(time))) return time;
+  return formatDate(time, { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Mirrors the core's bucket label format ("15:04-15:14") for mocks and fixtures. */
+export function requestBucketRangeLabel(start: Date, minutes = 10): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const clock = (date: Date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${clock(start)}-${clock(new Date(start.getTime() + minutes * 60_000))}`;
+}

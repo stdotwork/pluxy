@@ -1,5 +1,6 @@
 import { isThemeSelection, type ThemeSelection } from '../themes/types';
 import { applyTemplateChanges, readTemplatePath, sameTemplateValue, type TemplateConfigChange } from '../services/templateConfig';
+import { requestBucketRangeLabel } from '../services/authFileRequests';
 import { createPluginMock, type PluginWebviewMockState } from './pluginMock';
 import { createQuotaMock, createQuotaMockFiles } from './quotaMock';
 
@@ -312,7 +313,7 @@ function createState(scenario: BrowserMockScenario) {
       failed: 4,
       modtime: Date.now() - 20 * 60_000,
       recent_requests: Array.from({ length: 20 }, (_, index) => ({
-        time: isoHoursAgo((19 - index) / 3),
+        time: requestBucketRangeLabel(new Date(Date.now() - (19 - index) * 600_000)),
         success: 3 + index % 4,
         failed: index % 8 === 0 ? 1 : 0,
       })),
