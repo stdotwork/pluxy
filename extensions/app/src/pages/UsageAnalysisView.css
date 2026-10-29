@@ -113,7 +113,8 @@
 .usage-results-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
 .usage-results-center > span { color: var(--text-secondary); font-size: 12px; }
 .usage-results-center strong { font-size: 27px; font-weight: 650; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
-.usage-results-center small { color: var(--text-tertiary); font-size: 10px; }
+.usage-results-donut { display: grid; justify-items: center; gap: 8px; min-width: 0; }
+.usage-results-note { max-width: 150px; color: var(--text-tertiary); font-size: 11px; line-height: 1.35; text-align: center; }
 .usage-results-legend { display: grid; gap: 12px; margin: 0; }
 .usage-results-legend > div { display: grid; gap: 4px; }
 .usage-results-legend dt { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; line-height: 1.3; }
