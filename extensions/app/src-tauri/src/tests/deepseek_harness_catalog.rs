@@ -162,6 +162,32 @@ fn harness_context_enrichment_matches_codex_and_preserves_manual_overrides() {
 }
 
 #[test]
+fn harness_upgrades_generated_text_only_models_to_vision() {
+    let old = json!({"llm-pi-ai":{"providers":{DEEPSEEK_HARNESS_PROVIDER_ID:{
+        "models":[{"id":"text-only","input":["text"]},{"id":"unknown"}]
+    }}}});
+    let mut state: DeepSeekHarnessCatalogState = serde_json::from_value(json!({
+        "generated_models":{"text-only":{"input":["text"]},"unknown":{}}
+    })).unwrap();
+    let rendered = build_deepseek_harness_catalog_settings(
+        Some(&serde_norway::to_string(&old).unwrap()),
+        "http://127.0.0.1:8317/v1",
+        "text-only",
+        &models()[1..],
+        &mut state,
+    ).unwrap();
+    let root: Value = serde_norway::from_str(&rendered).unwrap();
+    for model in root["llm-pi-ai"]["providers"][DEEPSEEK_HARNESS_PROVIDER_ID]["models"]
+        .as_array().unwrap()
+    {
+        assert_eq!(model["input"], json!(["text", "image"]));
+    }
+    assert_eq!(build_deepseek_harness_catalog_settings(
+        Some(&rendered), "http://127.0.0.1:8317/v1", "text-only", &models()[1..], &mut state,
+    ).unwrap(), rendered);
+}
+
+#[test]
 fn harness_refreshes_api_defaults_and_preserves_catalog_overrides() {
     let home = agent_test_home("harness-catalog-refresh");
     let mut models = models();
@@ -170,10 +196,13 @@ fn harness_refreshes_api_defaults_and_preserves_catalog_overrides() {
         provider(&home)["models"][0]["input"],
         json!(["text", "image"])
     );
-    assert!(provider(&home)["models"][2].get("input").is_none());
+    for model in provider(&home)["models"].as_array().unwrap() {
+        assert_eq!(model["input"], json!(["text", "image"]));
+    }
     assert_eq!(apply(&home, &models).outcome, "unchanged");
     let initial = harness_editor_snapshot(&home, &models, 8317).unwrap();
     assert!(initial.models.iter().all(|m| m.configuration.is_empty()));
+    assert!(initial.models.iter().all(|m| m.defaults["input"] == json!(["text", "image"])));
     let mut edit = request(initial);
     edit.models[1].configuration = json!({"name":"Text model","maxTokens":4096,"reasoningEfforts":false,"compat":{"supportsDeveloperRole":false}}).as_object().unwrap().clone();
     edit.models[2].configuration = json!({"input":["text","image"]})
@@ -186,7 +215,7 @@ fn harness_refreshes_api_defaults_and_preserves_catalog_overrides() {
     models[0].context_window = Some(256000);
     apply(&home, &models);
     let provider = provider(&home);
-    assert_eq!(provider["models"][0]["input"], json!(["text"]));
+    assert_eq!(provider["models"][0]["input"], json!(["text", "image"]));
     assert_eq!(provider["models"][0]["contextWindow"], 256000);
     assert_eq!(provider["models"][1]["name"], "Text model");
     assert_eq!(provider["models"][1]["maxTokens"], 4096);
@@ -204,7 +233,7 @@ fn harness_refreshes_api_defaults_and_preserves_catalog_overrides() {
     let updated = self::provider(&home);
     assert!(updated["models"][1].get("maxTokens").is_none());
     assert!(updated["models"][1].get("compat").is_none());
-    assert!(updated["models"][2].get("input").is_none());
+    assert_eq!(updated["models"][2]["input"], json!(["text", "image"]));
     assert!(updated.get("defaultInput").is_none());
     fs::remove_dir_all(home).unwrap();
 }

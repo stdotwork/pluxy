@@ -271,9 +271,9 @@ fn harness_model_defaults(model: &AgentModelOption, api: &str) -> Profile {
     if let Some(context) = model.context_window {
         fields.insert("contextWindow".into(), json!(context));
     }
-    if let Some(input) = &model.input_modalities {
-        fields.insert("input".into(), json!(input));
-    }
+    // Enable image attachments for every CPA model, including aliases and
+    // models whose public catalog omits vision metadata.
+    fields.insert("input".into(), json!(["text", "image"]));
     fields
 }
 
