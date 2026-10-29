@@ -34,7 +34,7 @@ const limit = (block: string, key: string, label: TemplateText, placeholder: str
 export const extensionTemplateGroups: TemplateConfigGroup[] = [
   { id: 'extensions-plugins', title: T('原生插件', 'Native plugins', 'ネイティブプラグイン'),
     description: T('插件在内核进程中运行。仓库认证只引用环境变量；单个插件的 enabled 不会隐式开启全局开关。插件配置可按实际插件字段添加，Home 管理的版本号不会被修改。', 'Plugins run inside the core process. Store authentication references environment variables. A plugin’s enabled setting does not enable the global switch. Configure fields supported by each plugin; Home-owned revisions remain unchanged.', 'プラグインはコア内で動作します。認証は環境変数を参照。個別の enabled は全体のスイッチを変更しません。Home の管理番号は維持します。'), fields: [
-      { path: ['plugins', 'enabled'], type: 'boolean', defaultValue: false, label: T('启用原生插件', 'Enable native plugins', 'ネイティブプラグインを有効化') },
+      { path: ['plugins', 'enabled'], type: 'boolean', defaultValue: true, label: T('启用原生插件', 'Enable native plugins', 'ネイティブプラグインを有効化') },
       { path: ['plugins', 'dir'], type: 'string', placeholder: 'plugins', label: T('插件目录', 'Plugin directory', 'プラグインディレクトリ') },
       { path: ['plugins', 'store-sources'], type: 'string-list', label: T('附加插件仓库', 'Additional plugin registries', '追加のプラグインレジストリ'), description: T('每行一个 registry.json URL；内置官方仓库始终保留。', 'One registry.json URL per line. The built-in official registry is always included.', '1 行に registry.json の URL を入力。公式レジストリは常に含まれます。') },
       structuredField(['plugins', 'store-auth'], T('仓库认证规则', 'Registry authentication', 'レジストリ認証'), pluginStoreAuthShape),

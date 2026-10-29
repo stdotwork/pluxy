@@ -2,6 +2,21 @@ use super::support::*;
 use super::*;
 
 #[test]
+fn plugins_default_to_enabled_and_preserve_explicit_disable() {
+    for (input, enabled) in [("", true), ("plugins-enabled = true", true), ("plugins-enabled = false", false)] {
+        let config: GuiConfigFile = toml::from_str(input).unwrap();
+        assert_eq!(config.plugins_enabled, enabled);
+        let merged = merge_core_config_yaml("plugins:\n  enabled: false\n", None, &config).unwrap();
+        let document: serde_norway::Value = serde_norway::from_str(&merged).unwrap();
+        assert_eq!(document["plugins"]["enabled"].as_bool(), Some(enabled));
+    }
+    for (input, enabled) in [("{}", true), ("plugins: {}", true), ("plugins: {enabled: true}", true), ("plugins: {enabled: false}", false)] {
+        let document = serde_norway::from_str(input).unwrap();
+        assert_eq!(core_config_settings_from_value(&document).unwrap().plugins_enabled, enabled);
+    }
+}
+
+#[test]
 fn legacy_string_api_keys_keep_custom_keys_without_special_protection() {
     let legacy = "port = 8317\nallow-lan = false\nrun-on-startup = false\nauth-dir = \"/tmp/oauth\"\napi-keys = [\"123456\", \"custom-key\"]\nmanagement-secret-key = \"123456\"\nplugins-enabled = false\nrouting-strategy = \"round-robin\"\n";
     let mut config = toml::from_str::<GuiConfigFile>(legacy).unwrap();
@@ -2140,7 +2155,7 @@ fn startup_merge_without_current_config_uses_gui_defaults() {
     assert_eq!(document["port"], serde_norway::to_value(8317_u16).unwrap());
     assert_eq!(document["debug"], serde_norway::Value::Bool(false));
     assert_eq!(document["api-keys"][0], DEFAULT_API_KEY, "{merged}");
-    assert_eq!(document["plugins"]["enabled"], false);
+    assert_eq!(document["plugins"]["enabled"], true);
     assert_eq!(document["routing"]["strategy"], "round-robin");
     assert_eq!(document["commercial-mode"], false);
     assert_eq!(document["logging-to-file"], false);

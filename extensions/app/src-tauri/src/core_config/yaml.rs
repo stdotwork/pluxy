@@ -1863,7 +1863,7 @@ pub(crate) fn core_config_settings_from_value(
                 .ok_or_else(|| "plugins.enabled must be a boolean".to_string())
         })
         .transpose()?
-        .unwrap_or(false);
+        .unwrap_or(true);
     let routing_strategy = nested_yaml_value(root, &["routing", "strategy"])
         .map(|value| {
             value

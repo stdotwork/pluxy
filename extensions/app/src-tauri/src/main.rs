@@ -954,7 +954,7 @@ impl Default for GuiConfigFile {
             usage_statistics_disabled: None,
             redis_usage_queue_retention_seconds: DEFAULT_REDIS_USAGE_QUEUE_RETENTION_SECONDS,
             request_log: false,
-            plugins_enabled: false,
+            plugins_enabled: true,
             routing_strategy: "round-robin".to_string(),
             proxy_url: String::new(),
             proxy_override: false,

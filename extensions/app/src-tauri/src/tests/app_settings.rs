@@ -153,7 +153,7 @@ fn gui_config_defaults_are_stable() {
     assert!(content.contains("key = \"123456\""));
     assert!(content.contains("remark = \"Default key\""));
     assert!(content.contains(&format!("management-secret-key = \"{LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY}\"")));
-    assert!(content.contains("plugins-enabled = false"));
+    assert!(content.contains("plugins-enabled = true"));
     assert!(content.contains("routing-strategy = \"round-robin\""));
     assert!(content.contains("download-source = \"github\""));
     assert!(content.contains("prefer-gitcode-downloads = false"));

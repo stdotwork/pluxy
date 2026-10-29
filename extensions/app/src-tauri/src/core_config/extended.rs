@@ -1137,7 +1137,7 @@ pub(crate) fn save_extended_core_config(
     {
         next.plugins_enabled = at(&result.config, &parts("plugins/enabled"))
             .and_then(Json::as_bool)
-            .unwrap_or(false);
+            .unwrap_or(true);
     }
     if changes
         .iter()
