@@ -117,6 +117,7 @@ export type OAuthAccountSummary = {
   name: string;
   label: string;
   disabled: boolean;
+  tone?: 'warning' | 'error';
   /** Account identifiers that privacy mode masks inside `label`. */
   identities: string[];
 };
@@ -128,10 +129,19 @@ export const groupOAuthAccountsByProvider = (files: AuthFileRecord[]): Map<strin
     const provider = authFileProvider(file);
     if (!provider) return;
     const accounts = grouped.get(provider) ?? [];
+    const status = readString(file, 'status').toLowerCase();
+    const hasCooldown = Array.isArray(file.cooldowns) && file.cooldowns.length > 0;
+    const tone: 'warning' | 'error' | undefined =
+      status === 'error' || readBoolean(file, 'unavailable')
+        ? 'error'
+        : hasCooldown
+          ? 'warning'
+          : undefined;
     accounts.push({
       name: readString(file, 'name'),
       label: readString(file, 'email', 'account', 'label') || authFileName(file),
       disabled: readBoolean(file, 'disabled'),
+      ...(tone ? { tone } : {}),
       identities: authFileIdentities(file),
     });
     grouped.set(provider, accounts);

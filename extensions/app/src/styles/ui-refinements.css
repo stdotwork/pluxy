@@ -402,23 +402,47 @@ button.oauth-account-count:focus-visible {
 }
 
 .oauth-account-list li {
+  --account-dot: var(--success-color);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   max-width: 100%;
   overflow: hidden;
-  padding: 3px 9px;
+  padding: 3px 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  font-size: var(--font-size-meta);
-  line-height: 1.4;
+  font-size: var(--font-size-caption);
+  line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.oauth-account-list li:not(.more)::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--account-dot);
+}
+
+.oauth-account-list li.tone-warning {
+  --account-dot: var(--amber-text);
+  border-color: color-mix(in srgb, var(--amber-text) 28%, var(--border-color));
+}
+
+.oauth-account-list li.tone-error {
+  --account-dot: var(--failure-badge-text);
+  border-color: color-mix(in srgb, var(--failure-badge-text) 28%, var(--border-color));
+}
+
 .oauth-account-list li.disabled {
+  --account-dot: var(--text-tertiary);
   color: var(--text-tertiary);
   text-decoration: line-through;
-  opacity: 0.7;
+  opacity: 0.72;
 }
 
 .oauth-account-list li.more {
@@ -454,6 +478,20 @@ button.oauth-account-count:focus-visible {
   margin-top: auto;
 }
 
+.oauth-card .management-card-actions > .primary-button {
+  background: color-mix(in srgb, var(--primary-color) 8%, var(--bg-tertiary));
+  border: 1px solid color-mix(in srgb, var(--primary-color) 22%, var(--border-color));
+  color: var(--text-primary);
+  box-shadow: var(--shadow-xs);
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.oauth-card .management-card-actions > .primary-button:hover:not(:disabled) {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: var(--color-accent-contrast);
+  box-shadow: var(--shadow-sm);
+}
 .oauth-card:hover {
   border-color: var(--border-primary);
   box-shadow: var(--ui-card-hover-shadow);
@@ -677,18 +715,35 @@ button.oauth-account-count:focus-visible {
 }
 
 .usage-stat-card-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-secondary);
   font-size: var(--font-size-caption);
   font-weight: 590;
   letter-spacing: -0.01em;
 }
 
+.usage-stat-card-label::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--usage-tone);
+}
+
 .usage-stat-card-value {
-  color: var(--usage-tone);
+  color: var(--usage-request-color);
   font-size: var(--font-size-display);
   font-weight: 650;
   letter-spacing: -0.045em;
   line-height: 1.02;
+}
+
+.usage-stat-card.tone-success .usage-stat-card-value,
+.usage-stat-card.tone-cache .usage-stat-card-value {
+  color: var(--usage-tone);
 }
 
 .usage-overview-layout {

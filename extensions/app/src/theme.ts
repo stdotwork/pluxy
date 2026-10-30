@@ -14,10 +14,16 @@ import { createThemeController, type ThemePreference } from './themeController';
 import { ThemePreferences } from './services/themePreferences';
 import { createThemeApplicator, themeWindowMaterial } from './themes/applyTheme';
 import { cacheFirstPaint, firstPaint } from './themes/firstPaint';
-import type { PlatformWindowMaterial } from './themes/types';
-import { builtinThemes, createThemeRegistry, themeRegistry, type ThemeRegistry } from './themes/registry';
+import type { PlatformWindowMaterial, ThemeDefinition } from './themes/types';
+import { builtinThemes, createThemeRegistry, type ThemeRegistry } from './themes/registry';
+import {
+  ANIME_SAKURA_SKY_WALLPAPER,
+  ANIME_STARLIGHT_WALLPAPER,
+  withAnimeBackdrop,
+  type AnimeWallpaperPreset,
+} from './themes/anime';
+import { isThemeImageDataUrl } from './themes/resources';
 import { parseCustomThemes, type CustomThemeDiagnostic, type SkippedCustomTheme } from './themes/customThemes';
-
 export type { AppTheme, ThemePreference } from './themeController';
 
 const preferences = new ThemePreferences();
@@ -36,14 +42,102 @@ export type CustomThemeStatus = {
   omitted: number;
 };
 
-let customRegistry = themeRegistry;
+const ANIME_PRESET_KEY = 'easy-cli-proxy-api.anime-backdrop-preset.v1';
+const ANIME_IMAGE_KEY = 'easy-cli-proxy-api.anime-backdrop-image.v1';
+
+function readStorage(key: string): string | null {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string | null) {
+  try {
+    if (typeof window === 'undefined') return;
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {}
+}
+
+let animePreset: AnimeWallpaperPreset = (() => {
+  const saved = readStorage(ANIME_PRESET_KEY);
+  return saved === 'sakura-sky' || saved === 'none' || saved === 'custom' ? saved : 'starlight';
+})();
+let customAnimeImage: string | null = (() => {
+  const saved = readStorage(ANIME_IMAGE_KEY);
+  return isThemeImageDataUrl(saved) ? saved : null;
+})();
+let loadedCustomThemes: ThemeDefinition[] = [];
+
+function resolveAnimeBackdropImage(): string | undefined {
+  if (animePreset === 'none') return undefined;
+  if (animePreset === 'sakura-sky') return ANIME_SAKURA_SKY_WALLPAPER;
+  if (animePreset === 'custom' && customAnimeImage) return customAnimeImage;
+  return ANIME_STARLIGHT_WALLPAPER;
+}
+
+function buildActiveRegistry(): ThemeRegistry {
+  const resolvedBuiltins = builtinThemes.map((theme) =>
+    theme.id === 'anime-light' ? withAnimeBackdrop(resolveAnimeBackdropImage()) : theme,
+  );
+  return createThemeRegistry([...resolvedBuiltins, ...loadedCustomThemes]);
+}
+
+let customRegistry = buildActiveRegistry();
 let customStatus: CustomThemeStatus = { loading: false, failed: false, skipped: [], diagnostics: [], omitted: 0 };
 let customLoads = 0;
 const customSubscribers = new Set<() => void>();
 
+function notifyThemeSubscribers() {
+  customSubscribers.forEach((listener) => listener());
+}
+
+function refreshActiveRegistry() {
+  customRegistry = buildActiveRegistry();
+  controller?.setRegistry(customRegistry);
+  notifyThemeSubscribers();
+}
+
+export function useAnimeBackdropState() {
+  return useSyncExternalStore(
+    subscribeCustomThemes,
+    () => `${animePreset}:${customAnimeImage ? '1' : '0'}`,
+  );
+}
+
+export function getAnimeBackdropInfo(): { preset: AnimeWallpaperPreset; hasCustomImage: boolean } {
+  return { preset: animePreset, hasCustomImage: Boolean(customAnimeImage) };
+}
+
+export function setAnimeBackdropPreset(preset: AnimeWallpaperPreset) {
+  animePreset = preset === 'custom' && !customAnimeImage ? 'starlight' : preset;
+  writeStorage(ANIME_PRESET_KEY, animePreset);
+  refreshActiveRegistry();
+}
+
+export function setCustomAnimeBackdropImage(dataUrl: string | null): boolean {
+  if (dataUrl === null) {
+    customAnimeImage = null;
+    if (animePreset === 'custom') animePreset = 'starlight';
+    writeStorage(ANIME_IMAGE_KEY, null);
+    writeStorage(ANIME_PRESET_KEY, animePreset);
+    refreshActiveRegistry();
+    return true;
+  }
+  if (!isThemeImageDataUrl(dataUrl)) return false;
+  customAnimeImage = dataUrl;
+  animePreset = 'custom';
+  writeStorage(ANIME_IMAGE_KEY, dataUrl);
+  writeStorage(ANIME_PRESET_KEY, 'custom');
+  refreshActiveRegistry();
+  return true;
+}
+
 function reportCustomThemes(next: CustomThemeStatus) {
   customStatus = next;
-  customSubscribers.forEach((listener) => listener());
+  notifyThemeSubscribers();
 }
 
 async function loadCustomThemes() {
@@ -53,7 +147,8 @@ async function loadCustomThemes() {
     const { files, omitted } = await listCustomThemes();
     const { themes, skipped, diagnostics } = parseCustomThemes(files);
     if (load !== customLoads) return;
-    customRegistry = createThemeRegistry([...builtinThemes, ...themes]);
+    loadedCustomThemes = themes;
+    customRegistry = buildActiveRegistry();
     controller?.setRegistry(customRegistry);
     reportCustomThemes({ loading: false, failed: false, skipped, diagnostics, omitted });
   } catch {

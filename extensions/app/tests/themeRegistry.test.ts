@@ -8,10 +8,10 @@ import { graphite } from '../src/themes/graphite';
 import { midnight } from '../src/themes/midnight';
 import { themeMaterialTokens, themeOverlayRules, themeOverlaySurface, themeOverlayPalette } from '../src/themes/materials';
 import { sakura } from '../src/themes/sakura';
-import { backdropImage } from '../src/themes/backdrop';
+import { anime } from '../src/themes/anime';
+import { backdropImage, themeBackdropImage } from '../src/themes/backdrop';
 
-const additionalThemes = [warmSand, graphite, midnight, sakura];
-
+const additionalThemes = [warmSand, graphite, midnight, sakura, anime];
 const custom: ThemeDefinition = { id: 'test-dark', nameKey: 'app.theme.dark', appearance: 'dark', order: 1,
   windowBackground: '#102030', tokens: { surface: '#203040', accent: '#abcdef', sidebarBackground: '#112233' } };
 const customControl: ThemeDefinition = { ...custom, id: 'test-control-dark',
@@ -173,9 +173,9 @@ describe('theme registry and application', () => {
     for (const defaultId of ['light', 'dark']) {
       apply(theme);
       expect(root.dataset).toEqual({ theme: theme.appearance, themeId: theme.id,
-        ...(theme.backdrop ? { themeBackdrop: 'gradient' } : {}),
+        ...(theme.backdrop || theme.backdropImage ? { themeBackdrop: theme.backdropImage ? 'image' : 'gradient' } : {}),
       });
-      if (theme.backdrop) expect(properties.get('--theme-backdrop-image')).toBe(backdropImage(theme.backdrop));
+      if (theme.backdrop || theme.backdropImage) expect(properties.get('--theme-backdrop-image')).toBe(themeBackdropImage(theme));
       if (theme.backdrop) expect(properties.get('--theme-sticky-background')).toContain('100vw 100vh no-repeat fixed');
       expect(properties.get('--theme-surface')).toBe(themeMaterialTokens(theme).surface);
       expect(properties.get('--sidebar-popover-bg')).toBe(themeOverlaySurface(theme));
@@ -290,7 +290,7 @@ describe('theme registry and application', () => {
       expect(contrast(tokens.focusRing!, tokens[surface]!)).toBeGreaterThanOrEqual(3);
     }
   });
-  test.each([sakura, midnight])('$id text and focus remain legible over the gradient and composited translucent surfaces', (theme) => {
+  test.each([sakura, midnight, anime])('$id text and focus remain legible over the gradient and composited translucent surfaces', (theme) => {
     const backdrop = theme.backdrop!;
     const colors = [theme.windowBackground, ...backdrop.layers.flatMap((layer) => layer.stops.map((stop) => stop.color))].map(rgb);
     const darkest = [0, 1, 2].map((channel) => Math.min(...colors.map((value) => value[channel])));

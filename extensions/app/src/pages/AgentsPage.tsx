@@ -1865,7 +1865,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
 
         <section className="panel surface-panel agent-config-panel">
           {availableSubpages.length > 1 ? (
-            <Tabs variant="segmented" className="agent-subpage-tabs" aria-label={t('agents.tabs.label')} value={activeSubpage} onChange={setActiveSubpage} disabled={busy}
+            <Tabs className="agent-subpage-tabs secondary-page-tabs" aria-label={t('agents.tabs.label')} value={activeSubpage} onChange={setActiveSubpage} disabled={busy}
               items={availableSubpages.map(subpage => ({ value: subpage.id, id: `agent-subpage-tab-${subpage.id}`, panelId: `agent-subpage-panel-${subpage.id}`, label: t(subpage.labelKey) }))} />
           ) : null}
           <div className="agent-config-scroll-region">

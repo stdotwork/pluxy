@@ -53,7 +53,7 @@
   }
 }
 
-.app-shell:has(:is(.oauth-management-page, .usage-records-page, .config-page, .agents-page:not(.agents-page-embedded))) .content {
+.app-shell:has(:is(.oauth-management-page, .usage-records-page, .config-page, .agents-page:not(.agents-page-embedded), .api-access-page, .quota-page, .version-page, .plugins-page)) .content {
   padding: clamp(12px, 1.5vw, 20px) clamp(12px, 1.5vw, 20px) 16px;
 }
 

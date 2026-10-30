@@ -280,7 +280,7 @@ const assert = require('node:assert/strict');
       await trigger().focus(); await page.keyboard.press('Enter');
       await menu().waitFor();
       assert.ok(await menu().getByRole('searchbox').evaluate(element => element === document.activeElement), 'keyboard opening focuses search');
-      assert.equal(await page.locator('.theme-selector-group[data-appearance="light"] .theme-selector-card').count(), 3);
+      assert.equal(await page.locator('.theme-selector-group[data-appearance="light"] .theme-selector-card').count(), 4);
       assert.equal(await page.locator('.theme-selector-group[data-appearance="dark"] .theme-selector-card').count(), 3);
       assert.ok((await card('warm-sand-light').getAttribute('title')).includes('\n'), 'the tooltip contains the name and description');
       const menuBox = await menu().boundingBox();

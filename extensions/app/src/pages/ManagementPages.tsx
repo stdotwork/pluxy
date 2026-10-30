@@ -590,8 +590,12 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
                   <ul className="oauth-account-list" aria-label={t('oauth.accounts.listLabel', { provider: provider.name })}>
                     {providerAccounts.slice(0, OAUTH_ACCOUNT_PREVIEW_LIMIT).map((account) => {
                       const label = privacy.text(account.label, account.identities);
+                      const itemClass = [
+                        account.disabled ? 'disabled' : '',
+                        account.tone ? `tone-${account.tone}` : '',
+                      ].filter(Boolean).join(' ') || undefined;
                       return (
-                        <li key={account.name} className={account.disabled ? 'disabled' : undefined} title={account.disabled ? `${label} · ${t('oauth.accounts.disabled')}` : label}>
+                        <li key={account.name} className={itemClass} title={account.disabled ? `${label} · ${t('oauth.accounts.disabled')}` : label}>
                           {label}
                         </li>
                       );
