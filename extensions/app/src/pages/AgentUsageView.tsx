@@ -9,7 +9,15 @@ import {
   type AgentUsageRefreshInterval,
 } from '../services/agentUsagePreferences';
 import { formatUsageNumber } from '../services/usageNumber';
-import { getAgentUsage, type AgentUsageDaily, type AgentUsageReport, type AgentUsageSource } from '../services/agentUsage';
+import { getUsagePricing, type UsagePricing } from '../services/usage';
+import {
+  buildAgentUsagePriceRows,
+  getAgentUsage,
+  type AgentUsageDaily,
+  type AgentUsagePriceRow,
+  type AgentUsageReport,
+  type AgentUsageSource,
+} from '../services/agentUsage';
 import './AgentUsageView.css';
 
 type AgentUsageViewProps = {
@@ -41,6 +49,7 @@ const sourceLabels: Record<string, string> = {
 
 const sourceLabel = (source: string): string => sourceLabels[source] ?? source;
 const money = (value: number): string => `$${value.toFixed(value >= 1 ? 2 : 4)}`;
+const rate = (value: number): string => `$${value.toFixed(value >= 1 ? 2 : 4)}`;
 
 const emptyTotals = () => ({ inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, costUSD: 0 });
 
@@ -76,6 +85,8 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
   const [report, setReport] = useState<AgentUsageReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [pricing, setPricing] = useState<UsagePricing | null>(null);
+  const [pricingLoading, setPricingLoading] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState<AgentUsageRefreshInterval>(loadAgentUsageRefreshInterval);
   const inFlightRef = useRef(false);
 
@@ -84,11 +95,16 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
     inFlightRef.current = true;
     let disposed = false;
     setLoading(true);
+    setPricingLoading(true);
     onLoadingChange(true);
-    getAgentUsage()
-      .then((next) => {
+    Promise.all([
+      getAgentUsage(),
+      getUsagePricing({ query: {} }).catch(() => null),
+    ])
+      .then(([next, nextPricing]) => {
         if (!disposed) {
           setReport(next);
+          setPricing(nextPricing);
           setError('');
         }
       })
@@ -101,6 +117,7 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
       .finally(() => {
         if (!disposed) {
           setLoading(false);
+          setPricingLoading(false);
           onLoadingChange(false);
         }
         inFlightRef.current = false;
@@ -137,6 +154,10 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
     }));
     return [...rows.entries()].sort(([left], [right]) => right.localeCompare(left));
   }, [report]);
+  const priceRows = useMemo(
+    () => report ? buildAgentUsagePriceRows(report, pricing) : [],
+    [pricing, report],
+  );
 
   if (loading && !report) {
     return <EmptyState className="agent-usage-loading" icon={<Database size={22} />}>{t('usage.agentUsage.loading')}</EmptyState>;
@@ -199,6 +220,69 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
           {daily.length ? <div className="agent-usage-table-wrap"><table><thead><tr><th>{t('usage.agentUsage.date')}</th><th>{t('usage.agentUsage.inputTokens')}</th><th>{t('usage.agentUsage.outputTokens')}</th><th>{t('usage.agentUsage.totalTokens')}</th><th>{t('usage.agentUsage.estimatedCost')}</th></tr></thead><tbody>{daily.map(([date, row]) => <tr key={date}><td>{date}</td><td>{formatUsageNumber(row.inputTokens, locale)}</td><td>{formatUsageNumber(row.outputTokens, locale)}</td><td><strong>{formatUsageNumber(row.totalTokens, locale)}</strong></td><td>{money(row.costUSD)}</td></tr>)}</tbody></table></div> : <EmptyState variant="compact">{t('usage.agentUsage.empty')}</EmptyState>}
         </section>
       </div>
+
+      <AgentUsagePricingView rows={priceRows} loading={pricingLoading} locale={locale} />
+    </section>
+  );
+}
+
+function AgentUsagePricingView({
+  rows,
+  loading,
+  locale,
+}: {
+  rows: AgentUsagePriceRow[];
+  loading: boolean;
+  locale: string;
+}) {
+  const { t } = useI18n();
+  return (
+    <section className="panel surface-card agent-usage-pricing">
+      <div className="agent-usage-section-heading">
+        <div>
+          <h3>{t('usage.agentUsage.pricingTitle')}</h3>
+          <span>{t('usage.agentUsage.pricingDescription')}</span>
+        </div>
+        <span>{t('usage.agentUsage.modelCount', { count: rows.length })}</span>
+      </div>
+      {loading ? (
+        <EmptyState variant="compact">{t('usage.agentUsage.pricingLoading')}</EmptyState>
+      ) : rows.length ? (
+        <div className="agent-usage-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>{t('usage.pricing.model')}</th>
+                <th>{t('usage.agentUsage.days')}</th>
+                <th>{t('usage.agentUsage.totalTokens')}</th>
+                <th>{t('usage.pricing.prompt')}</th>
+                <th>{t('usage.pricing.completion')}</th>
+                <th>{t('usage.pricing.cacheRead')}</th>
+                <th>{t('usage.pricing.cacheCreation')}</th>
+                <th>{t('usage.pricing.cost')}</th>
+                <th>{t('usage.agentUsage.recordedCost')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.model}>
+                  <td title={row.model}>{row.model}</td>
+                  <td>{formatUsageNumber(row.days, locale)} {t('usage.agentUsage.days')}</td>
+                  <td>{formatUsageNumber(row.totalTokens, locale)}</td>
+                  <td>{row.price ? rate(row.price.prompt) : '—'}</td>
+                  <td>{row.price ? rate(row.price.completion) : '—'}</td>
+                  <td>{row.price ? rate(row.price.cacheRead) : '—'}</td>
+                  <td>{row.price ? rate(row.price.cacheCreation) : '—'}</td>
+                  <td>{row.estimatedCostUSD === null ? '—' : money(row.estimatedCostUSD)}</td>
+                  <td>{row.recordedCostUSD === null ? '—' : money(row.recordedCostUSD)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState variant="compact">{t('usage.agentUsage.pricingEmpty')}</EmptyState>
+      )}
     </section>
   );
 }

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { isRecord, readNumber, readString } from './managementApi';
+import type { ModelPrice, UsagePricing } from './usage';
 
 export type AgentUsageModel = {
   model: string;
@@ -35,6 +36,19 @@ export type AgentUsageReport = {
   schemaVersion: number;
   generatedAt: string;
   sources: AgentUsageSource[];
+};
+
+export type AgentUsagePriceRow = {
+  model: string;
+  days: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  recordedCostUSD: number | null;
+  price: ModelPrice | null;
+  estimatedCostUSD: number | null;
 };
 
 const tokenValue = (value: unknown, ...keys: string[]): number => {
@@ -107,6 +121,85 @@ export function normalizeAgentUsageReport(value: unknown): AgentUsageReport {
     generatedAt: readString(value, 'generatedAt'),
     sources: value.sources.map(normalizeSource),
   };
+}
+
+function priceForModel(model: string, pricing: UsagePricing | null): ModelPrice | null {
+  if (!pricing) return null;
+  const key = model.trim().toLowerCase();
+  return pricing.rows.find((row) => {
+    const rowModel = row.model.trim().toLowerCase();
+    const sourceModel = row.price?.sourceModelId.trim().toLowerCase();
+    return rowModel === key || sourceModel === key;
+  })?.price ?? null;
+}
+
+function estimatedCostForModel(
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number,
+  cacheCreationTokens: number,
+  price: ModelPrice | null,
+): number | null {
+  if (!price) return null;
+  return (
+    inputTokens * price.prompt
+    + outputTokens * price.completion
+    + cacheReadTokens * price.cacheRead
+    + cacheCreationTokens * price.cacheCreation
+  ) / 1_000_000;
+}
+
+export function buildAgentUsagePriceRows(
+  report: AgentUsageReport,
+  pricing: UsagePricing | null,
+): AgentUsagePriceRow[] {
+  const rows = new Map<string, Omit<AgentUsagePriceRow, 'price' | 'estimatedCostUSD'>>();
+  report.sources.forEach((source) => source.daily.forEach((daily) => daily.models.forEach((model) => {
+    const name = model.model.trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    const current = rows.get(key) ?? {
+      model: name,
+      days: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: 0,
+      recordedCostUSD: null,
+    };
+    current.days += 1;
+    current.inputTokens += model.inputTokens;
+    current.outputTokens += model.outputTokens;
+    current.cacheReadTokens += model.cacheReadTokens;
+    current.cacheCreationTokens += model.cacheCreationTokens;
+    current.totalTokens += model.totalTokens;
+    if (model.costUSD !== null) current.recordedCostUSD = (current.recordedCostUSD ?? 0) + model.costUSD;
+    rows.set(key, current);
+  })));
+
+  return [...rows.values()]
+    .map((row) => {
+      const price = priceForModel(row.model, pricing);
+      return {
+        ...row,
+        price,
+        estimatedCostUSD: estimatedCostForModel(
+          row.inputTokens,
+          row.outputTokens,
+          row.cacheReadTokens,
+          row.cacheCreationTokens,
+          price,
+        ),
+      };
+    })
+    .sort((left, right) => {
+      const leftPriced = left.price ? 1 : 0;
+      const rightPriced = right.price ? 1 : 0;
+      return rightPriced - leftPriced
+        || right.totalTokens - left.totalTokens
+        || left.model.localeCompare(right.model);
+    });
 }
 
 export const getAgentUsage = (_refresh = false): Promise<AgentUsageReport> =>
