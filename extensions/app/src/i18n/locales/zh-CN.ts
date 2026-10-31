@@ -712,6 +712,8 @@ export const zhCN = {
   'usage.agentUsage.estimatedCost': '预估成本',
   'usage.agentUsage.sources': 'Agent 来源',
   'usage.agentUsage.sourceCount': '{count} 个有数据的 Agent',
+  'usage.agentUsage.sourceFilter': '筛选 Agent',
+  'usage.agentUsage.sourceAll': '全部 Agent',
   'usage.agentUsage.tokens': 'Token',
   'usage.agentUsage.days': '天',
   'usage.agentUsage.daily': '每日统计',

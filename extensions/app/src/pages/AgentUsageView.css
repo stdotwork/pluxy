@@ -35,6 +35,23 @@
   gap: 16px;
 }
 
+.agent-usage-source-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-usage-source-filter select {
+  max-width: 170px;
+  padding: 5px 8px;
+  border: 1px solid var(--usage-page-border);
+  border-radius: var(--radius-sm);
+  color: var(--usage-page-text);
+  background: var(--bg-card);
+  font: inherit;
+  font-size: 12px;
+}
+
 .agent-usage-summary-actions {
   display: grid;
   justify-items: end;
@@ -148,9 +165,23 @@
 
 .agent-usage-source-row {
   display: grid;
+  width: 100%;
   gap: 8px;
   padding: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--usage-page-border);
+  color: inherit;
+  text-align: left;
   background: var(--bg-card);
+}
+
+.agent-usage-source-row:hover,
+.agent-usage-source-row.selected {
+  background: var(--bg-hover);
+}
+
+.agent-usage-source-row.selected {
+  box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
 .agent-usage-source-name {
@@ -186,6 +217,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-usage-source-row:last-child {
+  border-bottom: 0;
 }
 
 .agent-usage-table-wrap {
@@ -263,5 +298,6 @@
   .agent-usage-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .agent-usage-summary-heading { align-items: flex-start; flex-direction: column; }
   .agent-usage-summary-actions { justify-items: start; }
+  .agent-usage-source-filter { align-items: flex-start; flex-direction: column; }
   .agent-usage-generated { align-self: flex-start; }
 }

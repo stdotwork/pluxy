@@ -744,6 +744,8 @@ export const jaOverrides = {
   'usage.agentUsage.estimatedCost': '推定コスト',
   'usage.agentUsage.sources': 'Agent ソース',
   'usage.agentUsage.sourceCount': 'データあり {count} Agent',
+  'usage.agentUsage.sourceFilter': 'Agent を絞り込む',
+  'usage.agentUsage.sourceAll': 'すべての Agent',
   'usage.agentUsage.tokens': 'Token',
   'usage.agentUsage.days': '日',
   'usage.agentUsage.daily': '日別統計',

@@ -95,6 +95,7 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
   const [error, setError] = useState('');
   const [pricing, setPricing] = useState<UsagePricing | null>(null);
   const [pricingLoading, setPricingLoading] = useState(true);
+  const [selectedSource, setSelectedSource] = useState('');
   const [refreshInterval, setRefreshInterval] = useState<AgentUsageRefreshInterval>(loadAgentUsageRefreshInterval);
   const inFlightRef = useRef(false);
 
@@ -152,19 +153,24 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
     saveAgentUsageRefreshInterval(interval);
   };
 
-  const totals = useMemo(() => report ? totalsFor(report, pricing) : emptyTotals(), [pricing, report]);
+  const filteredSources = useMemo(
+    () => report?.sources.filter((source) => !selectedSource || source.source === selectedSource) ?? [],
+    [report, selectedSource],
+  );
+  const filteredReport = report ? { ...report, sources: filteredSources } : null;
+  const totals = useMemo(() => filteredReport ? totalsFor(filteredReport, pricing) : emptyTotals(), [filteredReport, pricing]);
   const daily = useMemo(() => {
     const rows = new Map<string, ReturnType<typeof emptyTotals>>();
-    report?.sources.forEach((source) => source.daily.forEach((row) => {
+    filteredSources.forEach((source) => source.daily.forEach((row) => {
       const total = rows.get(row.date) ?? emptyTotals();
       addDaily(total, row, pricing);
       rows.set(row.date, total);
     }));
     return [...rows.entries()].sort(([left], [right]) => right.localeCompare(left));
-  }, [pricing, report]);
+  }, [filteredSources, pricing]);
   const priceRows = useMemo(
-    () => report ? buildAgentUsagePriceRows(report, pricing) : [],
-    [pricing, report],
+    () => filteredReport ? buildAgentUsagePriceRows(filteredReport, pricing) : [],
+    [filteredReport, pricing],
   );
 
   if (loading && !report) {
@@ -210,15 +216,36 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
 
       <div className="agent-usage-columns">
         <section className="panel surface-card agent-usage-sources">
-          <div className="agent-usage-section-heading"><h3>{t('usage.agentUsage.sources')}</h3><span>{t('usage.agentUsage.sourceCount', { count: availableSources.length })}</span></div>
+          <div className="agent-usage-section-heading">
+            <h3>{t('usage.agentUsage.sources')}</h3>
+            <div className="agent-usage-source-filter">
+              <select
+                value={selectedSource}
+                aria-label={t('usage.agentUsage.sourceFilter')}
+                onChange={(event) => setSelectedSource(event.currentTarget.value)}
+              >
+                <option value="">{t('usage.agentUsage.sourceAll')}</option>
+                {report.sources
+                  .filter((source) => source.status !== 'empty' || source.daily.length > 0)
+                  .map((source) => <option key={source.source} value={source.source}>{sourceLabel(source.source)}</option>)}
+              </select>
+              <span>{t('usage.agentUsage.sourceCount', { count: availableSources.length })}</span>
+            </div>
+          </div>
           <div className="agent-usage-source-list">
             {visibleSources.length ? visibleSources.map((source) => {
               const sourceTotal = sourceTotals(source, pricing);
-              return <div className="agent-usage-source-row" key={source.source}>
+              return <button
+                type="button"
+                className={`agent-usage-source-row ${selectedSource === source.source ? 'selected' : ''}`}
+                key={source.source}
+                aria-pressed={selectedSource === source.source}
+                onClick={() => setSelectedSource((current) => current === source.source ? '' : source.source)}
+              >
                 <div className="agent-usage-source-name"><Bot size={16} aria-hidden="true" /><strong>{sourceLabel(source.source)}</strong><span className={`agent-usage-status ${source.status}`}>{t(statusLabelKey(source.status))}</span></div>
                 <div className="agent-usage-source-metrics"><span>{formatUsageNumber(sourceTotal.totalTokens, locale)} {t('usage.agentUsage.tokens')}</span><span>{source.daily.length} {t('usage.agentUsage.days')}</span><span>{money(sourceTotal.costUSD)}</span></div>
                 {source.status === 'error' && source.error ? <small>{source.error}</small> : null}
-              </div>;
+              </button>;
             }) : <EmptyState variant="compact">{t('usage.agentUsage.empty')}</EmptyState>}
           </div>
         </section>

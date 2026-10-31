@@ -727,6 +727,8 @@ export const en: Record<MessageKey, string> = {
   'usage.agentUsage.estimatedCost': 'Estimated Cost',
   'usage.agentUsage.sources': 'Agent Sources',
   'usage.agentUsage.sourceCount': '{count} Agents with data',
+  'usage.agentUsage.sourceFilter': 'Filter Agent',
+  'usage.agentUsage.sourceAll': 'All Agents',
   'usage.agentUsage.tokens': 'tokens',
   'usage.agentUsage.days': 'days',
   'usage.agentUsage.daily': 'Daily Usage',
