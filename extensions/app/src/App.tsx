@@ -10,7 +10,7 @@ import { closePluginWebview } from './services/pluginWebview';
 import { WindowFrame } from './components/WindowFrame';
 import { MessageNotice } from './appNotice';
 import { ThemeSelector } from './components/ThemeSelector';
-import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Bot,
   Check,
@@ -165,6 +165,11 @@ function AppContent() {
   const { info: appUpdateInfo, hasUpdate, processing: appUpdateProcessing } = useAppUpdate();
   const { latest: coreLatest, hasUpdate: coreHasUpdate } = useCoreUpdate();
   const [active, setActive] = useState<AppPageId>('home');
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    // Reset only committed page changes, before the destination is painted.
+    workspaceRef.current?.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [active]);
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [theme, setTheme] = useThemePreference();
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
@@ -549,7 +554,7 @@ function AppContent() {
           </aside>
         ) : null}
 
-        <div className="workspace">
+        <div className="workspace" ref={workspaceRef}>
           <main className="content">
             {!canOpenAppPage(active, coreReady) ? (
               <CoreLockedPage />
