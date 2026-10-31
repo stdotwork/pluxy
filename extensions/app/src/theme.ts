@@ -53,12 +53,15 @@ function readStorage(key: string): string | null {
   }
 }
 
-function writeStorage(key: string, value: string | null) {
+function writeStorage(key: string, value: string | null): boolean {
   try {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return false;
     if (value === null) window.localStorage.removeItem(key);
     else window.localStorage.setItem(key, value);
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 let animePreset: AnimeWallpaperPreset = (() => {
@@ -111,26 +114,25 @@ export function getAnimeBackdropInfo(): { preset: AnimeWallpaperPreset; hasCusto
   return { preset: animePreset, hasCustomImage: Boolean(customAnimeImage) };
 }
 
-export function setAnimeBackdropPreset(preset: AnimeWallpaperPreset) {
-  animePreset = preset === 'custom' && !customAnimeImage ? 'starlight' : preset;
-  writeStorage(ANIME_PRESET_KEY, animePreset);
+export function setAnimeBackdropPreset(preset: AnimeWallpaperPreset): boolean {
+  const next = preset === 'custom' && !customAnimeImage ? 'starlight' : preset;
+  if (!writeStorage(ANIME_PRESET_KEY, next)) return false;
+  animePreset = next;
   refreshActiveRegistry();
+  return true;
 }
 
 export function setCustomAnimeBackdropImage(dataUrl: string | null): boolean {
-  if (dataUrl === null) {
-    customAnimeImage = null;
-    if (animePreset === 'custom') animePreset = 'starlight';
-    writeStorage(ANIME_IMAGE_KEY, null);
-    writeStorage(ANIME_PRESET_KEY, animePreset);
-    refreshActiveRegistry();
-    return true;
+  if (dataUrl !== null && !isThemeImageDataUrl(dataUrl)) return false;
+  const nextPreset = dataUrl !== null ? 'custom' : animePreset === 'custom' ? 'starlight' : animePreset;
+  const previousImage = readStorage(ANIME_IMAGE_KEY);
+  if (!writeStorage(ANIME_IMAGE_KEY, dataUrl)) return false;
+  if (!writeStorage(ANIME_PRESET_KEY, nextPreset)) {
+    writeStorage(ANIME_IMAGE_KEY, previousImage);
+    return false;
   }
-  if (!isThemeImageDataUrl(dataUrl)) return false;
   customAnimeImage = dataUrl;
-  animePreset = 'custom';
-  writeStorage(ANIME_IMAGE_KEY, dataUrl);
-  writeStorage(ANIME_PRESET_KEY, 'custom');
+  animePreset = nextPreset;
   refreshActiveRegistry();
   return true;
 }

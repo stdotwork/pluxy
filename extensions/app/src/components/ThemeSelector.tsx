@@ -272,8 +272,7 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
                           className="secondary-button compact-button"
                           data-action="clear-anime-backdrop"
                           onClick={() => {
-                            setUploadFailed(false);
-                            setCustomAnimeBackdropImage(null);
+                            setUploadFailed(!setCustomAnimeBackdropImage(null));
                           }}
                         >
                           <Trash2 size={14} aria-hidden="true" />
@@ -287,8 +286,7 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
                     aria-label={t('app.theme.anime.backdropTitle')}
                     value={animeBackdrop.preset}
                     onChange={(preset) => {
-                      setUploadFailed(false);
-                      setAnimeBackdropPreset(preset);
+                      setUploadFailed(!setAnimeBackdropPreset(preset));
                     }}
                     buttonClassName="theme-selector-mode"
                     selectedClassName="selected"

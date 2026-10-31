@@ -452,7 +452,7 @@ export const en: Record<MessageKey, string> = {
   'app.theme.anime.preset.none': 'Pure gradient',
   'app.theme.anime.upload': 'Upload wallpaper',
   'app.theme.anime.clearCustom': 'Remove custom image',
-  'app.theme.anime.uploadFailed': 'Could not load image. Please select a PNG, JPG, WebP, or AVIF file.',
+  'app.theme.anime.uploadFailed': 'Could not load the image or save wallpaper settings. Try a smaller PNG, JPG, WebP, or AVIF image and check that local storage is available.',
   'app.theme.light': 'Light',
   'app.theme.dark': 'Dark',
   'app.theme.label': 'Appearance',

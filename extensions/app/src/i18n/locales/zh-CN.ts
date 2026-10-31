@@ -437,7 +437,7 @@ export const zhCN = {
   'app.theme.anime.preset.none': '纯色渐变',
   'app.theme.anime.upload': '上传背景图',
   'app.theme.anime.clearCustom': '清除自定义图',
-  'app.theme.anime.uploadFailed': '无法加载该图片，请选择 PNG、JPG、WebP 或 AVIF 格式图片。',
+  'app.theme.anime.uploadFailed': '无法加载图片或保存壁纸设置。请使用较小的 PNG、JPG、WebP 或 AVIF 图片，并确认本地存储可用后重试。',
   'app.theme.light': '亮色',
   'app.theme.dark': '暗色',
   'app.theme.label': '外观模式',

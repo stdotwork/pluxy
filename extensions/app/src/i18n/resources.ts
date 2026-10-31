@@ -58,7 +58,7 @@ export const zhTW: Record<MessageKey, string> = {
   'app.theme.anime.preset.none': '純色漸層',
   'app.theme.anime.upload': '上傳背景圖',
   'app.theme.anime.clearCustom': '清除自訂圖',
-  'app.theme.anime.uploadFailed': '無法載入該圖片，請選擇 PNG、JPG、WebP 或 AVIF 格式圖片。',
+  'app.theme.anime.uploadFailed': '無法載入圖片或儲存桌布設定。請使用較小的 PNG、JPG、WebP 或 AVIF 圖片，並確認本機儲存空間可用後重試。',
   'app.theme.catalog.title': '選擇主題',
   'app.theme.catalog.search': '搜尋主題',
   'app.theme.catalog.searchHint': '搜尋名稱、描述或主題 ID',

@@ -507,7 +507,7 @@ export const jaOverrides = {
   'app.theme.anime.preset.none': 'グラデーションのみ',
   'app.theme.anime.upload': '背景画像をアップロード',
   'app.theme.anime.clearCustom': 'カスタム画像を削除',
-  'app.theme.anime.uploadFailed': '画像を読み込めませんでした。PNG、JPG、WebP、または AVIF 画像を選択してください。',
+  'app.theme.anime.uploadFailed': '画像の読み込み、または壁紙設定の保存に失敗しました。小さい PNG、JPG、WebP、AVIF 画像を使用し、ローカルストレージが利用可能か確認して再試行してください。',
   'app.theme.light': 'ライト',
   'app.theme.dark': 'ダーク',
   'app.theme.label': '外観モード',
