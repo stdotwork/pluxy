@@ -114,9 +114,7 @@ pub(crate) async fn get_agent_usage(app: tauri::AppHandle) -> Result<AgentUsageR
         .home_dir()
         .map_err(|error| format!("Failed to get user directory: {error}"))?;
 
-    let proxy_usage_database = crate::core_runtime::core_base_dir()
-        .ok()
-        .map(|base| base.join("usage-records").join("usage.db"));
+    let proxy_usage_database = crate::usage::usage_database_path().ok();
 
     tauri::async_runtime::spawn_blocking(move || {
         build_report(&home, proxy_usage_database.as_deref())

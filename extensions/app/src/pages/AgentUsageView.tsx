@@ -12,6 +12,7 @@ import { formatUsageNumber } from '../services/usageNumber';
 import { getUsagePricing, type UsagePricing } from '../services/usage';
 import {
   buildAgentUsagePriceRows,
+  estimateAgentUsageModelCost,
   getAgentUsage,
   type AgentUsageDaily,
   type AgentUsagePriceRow,
@@ -53,18 +54,25 @@ const rate = (value: number): string => `$${value.toFixed(value >= 1 ? 2 : 4)}`;
 
 const emptyTotals = () => ({ inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, costUSD: 0 });
 
-function addDaily(target: ReturnType<typeof emptyTotals>, row: AgentUsageDaily) {
+function dailyCost(row: AgentUsageDaily, pricing: UsagePricing | null): number {
+  const modelCosts = row.models
+    .map((model) => estimateAgentUsageModelCost(model, pricing))
+    .filter((cost): cost is number => cost !== null);
+  return modelCosts.length ? modelCosts.reduce((sum, cost) => sum + cost, 0) : row.costUSD;
+}
+
+function addDaily(target: ReturnType<typeof emptyTotals>, row: AgentUsageDaily, pricing: UsagePricing | null) {
   target.inputTokens += row.inputTokens;
   target.outputTokens += row.outputTokens;
   target.cacheCreationTokens += row.cacheCreationTokens;
   target.cacheReadTokens += row.cacheReadTokens;
   target.totalTokens += row.totalTokens;
-  target.costUSD += row.costUSD;
+  target.costUSD += dailyCost(row, pricing);
 }
 
-function sourceTotals(source: AgentUsageSource) {
+function sourceTotals(source: AgentUsageSource, pricing: UsagePricing | null) {
   const totals = emptyTotals();
-  source.daily.forEach((row) => addDaily(totals, row));
+  source.daily.forEach((row) => addDaily(totals, row, pricing));
   return totals;
 }
 
@@ -74,9 +82,9 @@ const statusLabelKey = (status: AgentUsageSource['status']) => {
   return 'usage.agentUsage.status.error' as const;
 };
 
-function totalsFor(report: AgentUsageReport) {
+function totalsFor(report: AgentUsageReport, pricing: UsagePricing | null) {
   const totals = emptyTotals();
-  report.sources.forEach((source) => source.daily.forEach((row) => addDaily(totals, row)));
+  report.sources.forEach((source) => source.daily.forEach((row) => addDaily(totals, row, pricing)));
   return totals;
 }
 
@@ -144,16 +152,16 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
     saveAgentUsageRefreshInterval(interval);
   };
 
-  const totals = useMemo(() => report ? totalsFor(report) : emptyTotals(), [report]);
+  const totals = useMemo(() => report ? totalsFor(report, pricing) : emptyTotals(), [pricing, report]);
   const daily = useMemo(() => {
     const rows = new Map<string, ReturnType<typeof emptyTotals>>();
     report?.sources.forEach((source) => source.daily.forEach((row) => {
       const total = rows.get(row.date) ?? emptyTotals();
-      addDaily(total, row);
+      addDaily(total, row, pricing);
       rows.set(row.date, total);
     }));
     return [...rows.entries()].sort(([left], [right]) => right.localeCompare(left));
-  }, [report]);
+  }, [pricing, report]);
   const priceRows = useMemo(
     () => report ? buildAgentUsagePriceRows(report, pricing) : [],
     [pricing, report],
@@ -205,7 +213,7 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
           <div className="agent-usage-section-heading"><h3>{t('usage.agentUsage.sources')}</h3><span>{t('usage.agentUsage.sourceCount', { count: availableSources.length })}</span></div>
           <div className="agent-usage-source-list">
             {visibleSources.length ? visibleSources.map((source) => {
-              const sourceTotal = sourceTotals(source);
+              const sourceTotal = sourceTotals(source, pricing);
               return <div className="agent-usage-source-row" key={source.source}>
                 <div className="agent-usage-source-name"><Bot size={16} aria-hidden="true" /><strong>{sourceLabel(source.source)}</strong><span className={`agent-usage-status ${source.status}`}>{t(statusLabelKey(source.status))}</span></div>
                 <div className="agent-usage-source-metrics"><span>{formatUsageNumber(sourceTotal.totalTokens, locale)} {t('usage.agentUsage.tokens')}</span><span>{source.daily.length} {t('usage.agentUsage.days')}</span><span>{money(sourceTotal.costUSD)}</span></div>

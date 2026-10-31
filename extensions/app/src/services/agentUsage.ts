@@ -202,5 +202,18 @@ export function buildAgentUsagePriceRows(
     });
 }
 
+export function estimateAgentUsageModelCost(
+  model: AgentUsageModel,
+  pricing: UsagePricing | null,
+): number | null {
+  return estimatedCostForModel(
+    model.inputTokens,
+    model.outputTokens,
+    model.cacheReadTokens,
+    model.cacheCreationTokens,
+    priceForModel(model.model, pricing),
+  );
+}
+
 export const getAgentUsage = (_refresh = false): Promise<AgentUsageReport> =>
   invoke<unknown>('get_agent_usage').then(normalizeAgentUsageReport);
