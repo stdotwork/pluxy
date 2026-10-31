@@ -1072,6 +1072,8 @@ struct AgentConfigStatus {
     configuration_synchronized: bool,
     connection_state: String,
     current_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_api_key: Option<String>,
     oauth_configuration: bool,
     codex_native_oauth: bool,
     codex_openai_provider: bool,
