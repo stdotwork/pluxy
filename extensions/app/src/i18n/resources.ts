@@ -11,6 +11,8 @@ export const zhTW: Record<MessageKey, string> = {
   ...createTraditionalMessages(zhCN),
   'quota.service.kimi.monthlyTotal': '月總額度',
   'quota.service.kimi.monthlyCode': '月程式設計額度',
+  'quota.service.kimi.domainUnavailable': '無法讀取 Kimi 憑證以確定額度查詢網域',
+  'quota.service.kimi.staleRequest': '連線或憑證已變更，請重新查詢 Kimi 額度',
   "app.theme.lightGroup": "淺色主題",
   "app.theme.darkGroup": "深色主題",
   'app.theme.triggerLabel': '外觀',

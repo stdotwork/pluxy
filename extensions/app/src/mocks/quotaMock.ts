@@ -7,6 +7,7 @@ export function createQuotaMockFiles(): RecordValue[] {
   const seeds: Array<[string, string, RecordValue]> = [
     ['antigravity', 'team-with-a-long-account-name', {}],
     ['kimi', 'personal', {}],
+    ['kimi-ai', 'international', { domain: 'ai' }],
     ['xai', 'subscription', { user_id: 'mock-xai-user' }],
     ['devin', 'team', {}],
     ['codex', 'disabled', { disabled: true }],
@@ -91,7 +92,10 @@ export function createQuotaMock() {
         resetTime: future(bucket ? 72 : 3),
       })),
     })) });
-    if (url.hostname === 'api.kimi.com' && path.endsWith('/usages')) return success({
+    if (['api.kimi.com', 'api.kimi.ai'].includes(url.hostname) && path.endsWith('/me')) return success({
+      user_id: `mock-${auth}`, user_level_name: 'Kimi Code Pro',
+    });
+    if (['api.kimi.com', 'api.kimi.ai'].includes(url.hostname) && path.endsWith('/usages')) return success({
       usage: { used: 64, limit: 100 },
       usages: {
         limit_month_total: { used_ratio: 0.2529, reset_time: future(24 * 20) },

@@ -28,7 +28,9 @@ The selected scenario is remembered locally; an explicit `mock` query overrides 
 
 The running dataset includes more than ten OAuth files, plus a runtime credential
 which the authentication-file list excludes. It covers Codex, Claude, Antigravity,
-Kimi, xAI and Devin. Examples include long account names and quota labels, multiple
+Kimi (including kimi.ai international credentials), xAI and Devin. Kimi previews
+resolve the quota host from the downloaded credential and load the plan from `/me`.
+Examples include long account names and quota labels, multiple
 quota windows, a disabled account, an exhausted account with model cooldown,
 an expired OAuth token, an empty upstream quota response, unknown remaining quota,
 a paid API account and an account with no recent requests.

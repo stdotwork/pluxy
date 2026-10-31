@@ -2180,6 +2180,8 @@ export const jaOverrides = {
   'quota.service.weekly': '週間クォータ',
   'quota.service.kimi.monthlyTotal': '月間合計クォータ',
   'quota.service.kimi.monthlyCode': '月間コーディングクォータ',
+  'quota.service.kimi.domainUnavailable': 'Kimi 認証情報を読み取れないため、クォータ照会先を特定できません',
+  'quota.service.kimi.staleRequest': '接続または認証情報が変更されました。Kimi クォータを再取得してください',
   'quota.service.limit.numbered': '制限 {index}',
   'quota.service.product.numbered': '製品 {index}',
   'quota.service.monthlyIncluded': '月間内包クォータ',

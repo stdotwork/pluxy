@@ -2180,6 +2180,8 @@ export const en: Record<MessageKey, string> = {
   'quota.service.weekly': 'Weekly quota',
   'quota.service.kimi.monthlyTotal': 'Monthly total quota',
   'quota.service.kimi.monthlyCode': 'Monthly coding quota',
+  'quota.service.kimi.domainUnavailable': 'Cannot read the Kimi credential to determine the quota host',
+  'quota.service.kimi.staleRequest': 'Connection or credentials changed; refresh Kimi quota again',
   'quota.service.limit.numbered': 'Limit {index}',
   'quota.service.product.numbered': 'Product {index}',
   'quota.service.monthlyIncluded': 'Monthly included quota',

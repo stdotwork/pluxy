@@ -16,6 +16,7 @@ import { supportsPluginCredentialQuota, loadPluginCredentialQuota } from './plug
 import { DEVIN_QUOTA_DATA, DEVIN_QUOTA_HEADERS, DEVIN_QUOTA_URL, readDevinQuota } from './devinQuota';
 import { antigravityProjectFor, codexMetadataFor, isPaidXaiFile } from './quotaMetadata';
 import { quotaResetFor, quotaResetInstant } from './quotaTime';
+import { parseKimiPlanName, parseKimiQuotaUrl } from './kimiQuota';
 import { getCurrentLocale, translate, type AppLocale } from '../i18n';
 
 const quotaText = (
@@ -111,6 +112,7 @@ export const providerForFile = (file: AuthFile): QuotaProvider | null => {
   if (value === 'cognition') return 'devin';
   if (value === 'anthropic') return 'claude';
   if (value === 'anti-gravity') return 'antigravity';
+  if (value === 'kimi-ai') return 'kimi';
   return ['claude', 'codex', 'kimi', 'xai', 'antigravity', 'devin'].includes(value)
     ? (value as QuotaProvider)
     : null;
@@ -970,6 +972,34 @@ const callCodexResetCredits = async (
   return codexResetCreditDetailsFor(payload);
 };
 
+async function callKimiQuota(file: AuthFile): Promise<{ payload: unknown; plan?: string }> {
+  const authIndex = normalizeAuthIndex(file.auth_index ?? file.authIndex);
+  if (!authIndex) throw new Error(quotaText('quota.service.error.missingAuthIndex'));
+  const generation = captureQuotaCacheGeneration();
+  const assertCurrent = () => {
+    if (captureQuotaCacheGeneration() !== generation) throw new Error(quotaText('quota.service.kimi.staleRequest'));
+  };
+  let url: string;
+  try {
+    if (!readString(file, 'name') || [file.runtimeOnly, file.runtime_only].some(value => value === true || value === 'true')) {
+      throw new Error('Credential unavailable');
+    }
+    url = parseKimiQuotaUrl(await managementApi.get('/credentials/download', { name: file.name as string }), file);
+  } catch {
+    throw new Error(quotaText('quota.service.kimi.domainUnavailable'));
+  }
+  assertCurrent();
+  const payload = await requestQuotaPayload(authIndex, url, headersByProvider.kimi);
+  assertCurrent();
+  let plan: string | undefined;
+  try {
+    plan = parseKimiPlanName(await requestQuotaPayload(authIndex, url.replace(/\/usages$/, '/me'),
+      { ...headersByProvider.kimi, Accept: 'application/json' }, 'GET', undefined, 8_000));
+  } catch { /* Optional profile failures must not hide valid quota data. */ }
+  assertCurrent();
+  return { payload, plan };
+}
+
 async function loadQuotaSnapshot(file: AuthFile): Promise<QuotaState> {
   if (quotaProviderForFile(file) === 'plugin') return loadPluginCredentialQuota(file);
   const provider = providerForFile(file);
@@ -985,14 +1015,15 @@ async function loadQuotaSnapshot(file: AuthFile): Promise<QuotaState> {
     const codexMetadata = provider === 'codex' ? codexMetadataFor(file) : undefined;
     const codexAccountId = codexMetadata?.accountId || '';
     const responseClock: { serverTimeOffsetMs?: number } = {};
-    const payloadPromise = provider === 'xai'
+    const kimi = provider === 'kimi' ? await callKimiQuota(file) : undefined;
+    const payloadPromise = kimi ? Promise.resolve(kimi.payload) : provider === 'xai'
       ? callXaiQuota(file)
       : callUpstreamQuota(file, provider, codexAccountId, responseClock);
     const planPromise = provider === 'claude'
       ? loadClaudePlan(file)
       : provider === 'antigravity'
         ? loadAntigravityPlan(file)
-        : Promise.resolve(undefined);
+        : Promise.resolve(kimi?.plan);
     let resetCreditsError: string | undefined;
     const resetCreditsPromise = provider === 'codex'
       ? callCodexResetCredits(file, codexAccountId).catch((error) => {
