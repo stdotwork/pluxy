@@ -93,6 +93,10 @@ export function createQuotaMock() {
     })) });
     if (url.hostname === 'api.kimi.com' && path.endsWith('/usages')) return success({
       usage: { used: 64, limit: 100 },
+      usages: {
+        limit_month_total: { used_ratio: 0.2529, reset_time: future(24 * 20) },
+        limit_month_code: { used_ratio: 0.4, reset_time: future(24 * 15) },
+      },
       limits: [{ window: { duration: 5, timeUnit: 'TIME_UNIT_HOUR' }, detail: { limit: 100, remaining: 80, reset_in: 3600 } }],
     });
     if (path.endsWith('/getuserstatus')) return success({ userStatus: { planStatus: {

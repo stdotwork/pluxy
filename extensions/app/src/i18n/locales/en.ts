@@ -2178,6 +2178,8 @@ export const en: Record<MessageKey, string> = {
   'quota.service.extraUsage': 'Extra usage',
   'quota.service.usedOf': 'Used {used} / {limit}',
   'quota.service.weekly': 'Weekly quota',
+  'quota.service.kimi.monthlyTotal': 'Monthly total quota',
+  'quota.service.kimi.monthlyCode': 'Monthly coding quota',
   'quota.service.limit.numbered': 'Limit {index}',
   'quota.service.product.numbered': 'Product {index}',
   'quota.service.monthlyIncluded': 'Monthly included quota',

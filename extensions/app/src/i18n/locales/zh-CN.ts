@@ -2177,6 +2177,8 @@ export const zhCN = {
   'quota.service.extraUsage': '额外用量',
   'quota.service.usedOf': '已用 {used} / {limit}',
   'quota.service.weekly': '每周额度',
+  'quota.service.kimi.monthlyTotal': '月总额度',
+  'quota.service.kimi.monthlyCode': '月编程额度',
   'quota.service.limit.numbered': '限制 {index}',
   'quota.service.product.numbered': '产品 {index}',
   'quota.service.monthlyIncluded': '月度包含额度',

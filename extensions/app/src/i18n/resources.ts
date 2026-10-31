@@ -9,6 +9,8 @@ export type MessageVariables = Record<string, string | number>;
 
 export const zhTW: Record<MessageKey, string> = {
   ...createTraditionalMessages(zhCN),
+  'quota.service.kimi.monthlyTotal': '月總額度',
+  'quota.service.kimi.monthlyCode': '月程式設計額度',
   "app.theme.lightGroup": "淺色主題",
   "app.theme.darkGroup": "深色主題",
   'app.theme.triggerLabel': '外觀',

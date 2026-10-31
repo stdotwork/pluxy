@@ -40,6 +40,7 @@ const base = process.env.QUOTA_TEST_BASE || 'http://127.0.0.1:1421';
       assert.deepEqual(layout.issues, [], context);
       for (const text of layout.quotaTexts) {
         assert.ok(text.includes('80%') && text.includes('60%'), `${context}: both Kimi windows remain rendered`);
+        assert.ok(text.includes('Monthly total quota') && text.includes('Monthly coding quota'), `${context}: both monthly quotas remain rendered`);
       }
     }
     const claudeCard = page.locator('.real-quota-card').filter({ has: page.locator('strong[title="claude.json"]') });

@@ -2178,6 +2178,8 @@ export const jaOverrides = {
   'quota.service.extraUsage': '追加使用量',
   'quota.service.usedOf': '使用済み {used} / {limit}',
   'quota.service.weekly': '週間クォータ',
+  'quota.service.kimi.monthlyTotal': '月間合計クォータ',
+  'quota.service.kimi.monthlyCode': '月間コーディングクォータ',
   'quota.service.limit.numbered': '制限 {index}',
   'quota.service.product.numbered': '製品 {index}',
   'quota.service.monthlyIncluded': '月間内包クォータ',

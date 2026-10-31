@@ -486,7 +486,7 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
     if (isRecord(value.usage)) {
       items.push({ ...value.usage, label: readString(value.usage, 'name', 'title') || quotaText('quota.service.weekly') });
     }
-    return items
+    const rows = items
       .map((raw, index): QuotaRow | null => {
         if (!isRecord(raw)) return null;
         const detail = isRecord(raw.detail) ? raw.detail : raw;
@@ -539,6 +539,24 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
         };
       })
       .filter((row): row is QuotaRow => row !== null);
+    // Monthly usages are ratios, unlike the absolute counters in limits/usage.
+    const usages = isRecord(value.usages) ? value.usages : {};
+    for (const [key, labelKey] of [
+      ['limit_month_total', 'quota.service.kimi.monthlyTotal'],
+      ['limit_month_code', 'quota.service.kimi.monthlyCode'],
+    ] as const) {
+      const monthly = usages[key];
+      if (!isRecord(monthly)) continue;
+      const usedRatio = numberValue(monthly.used_ratio);
+      if (usedRatio === null) continue;
+      rows.push({
+        label: quotaText(labelKey),
+        remainingPercent: remainingFromUsedPercent(usedRatio * 100),
+        reset: absoluteResetLabel(monthly.reset_time),
+        resetAtMs: quotaResetFor(monthly, ['reset_time']),
+      });
+    }
+    return rows;
   }
 
   if (provider === 'xai') {
