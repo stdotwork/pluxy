@@ -430,7 +430,7 @@ export const zhCN = {
   'app.theme.midnight.description': '墨蓝渐变至靛蓝，搭配轻透面板与雾紫蓝点缀',
   'app.theme.sakura.name': '樱语红粉',
   'app.theme.sakura.description': '淡樱粉渐变至奶油白，搭配轻透面板与灰黑文字',
-  'app.theme.anime.name': '幻境二次元',
+  'app.theme.anime.name': '渐离の梦境',
   'app.theme.anime.description': '星穹紫粉渐变与轻透毛玻璃面板，支持自定义二次元壁纸背景图',
   'app.theme.anime.backdropTitle': '二次元主题背景图',
   'app.theme.anime.preset.starlight': '星穹暮色',

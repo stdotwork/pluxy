@@ -51,7 +51,7 @@ export const zhTW: Record<MessageKey, string> = {
   'app.theme.midnight.description': '墨藍漸層至靛藍，搭配輕透面板與霧紫藍點綴',
   'app.theme.sakura.name': '櫻語紅粉',
   'app.theme.sakura.description': '淡櫻粉漸層至奶油白，搭配輕透面板與灰黑文字',
-  'app.theme.anime.name': '幻境二次元',
+  'app.theme.anime.name': '渐离の梦境',
   'app.theme.anime.description': '星穹紫粉漸層與輕透毛玻璃面板，支援自訂二次元桌布背景圖',
   'app.theme.anime.backdropTitle': '二次元主題背景圖',
   'app.theme.anime.preset.starlight': '星穹暮色',

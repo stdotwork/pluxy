@@ -500,7 +500,7 @@ export const jaOverrides = {
   'app.theme.midnight.description': '濃紺から藍色へのグラデーションに、透け感のあるパネルと淡い青紫のアクセント',
   'app.theme.sakura.name': '桜ピンク',
   'app.theme.sakura.description': '淡い桜色からクリーム色へのグラデーションに、半透明のパネルと墨色の文字',
-  'app.theme.anime.name': 'アニメ・ミラージュ',
+  'app.theme.anime.name': '渐离の梦境',
   'app.theme.anime.description': '星穹ラベンダーと桜色のグラデーションにすりガラス風パネルを重ね、カスタム壁紙に対応',
   'app.theme.anime.backdropTitle': 'アニメテーマ背景画像',
   'app.theme.anime.preset.starlight': '星穹トワイライト',
