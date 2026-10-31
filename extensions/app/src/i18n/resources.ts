@@ -1,4 +1,5 @@
 import { createTraditionalMessages } from './traditional';
+import { themeDiyZhTW } from './themeDiy';
 import { jaOverrides } from './ja';
 import { en } from './locales/en';
 import { zhCN, type MessageKey } from './locales/zh-CN';
@@ -9,6 +10,7 @@ export type MessageVariables = Record<string, string | number>;
 
 export const zhTW: Record<MessageKey, string> = {
   ...createTraditionalMessages(zhCN),
+  ...themeDiyZhTW,
   'quota.service.kimi.monthlyTotal': '月總額度',
   'quota.service.kimi.monthlyCode': '月程式設計額度',
   'quota.service.kimi.domainUnavailable': '無法讀取 Kimi 憑證以確定額度查詢網域',

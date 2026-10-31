@@ -1,6 +1,6 @@
 import { SegmentedControl } from './SegmentedControl';
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
-import { Check, FolderOpen, ImagePlus, Monitor, Moon, RefreshCw, Search, Sun, SunMoon, Trash2 } from 'lucide-react';
+import { Check, FolderOpen, ImagePlus, Monitor, Moon, Palette, RefreshCw, Search, Sun, SunMoon, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import {
   getAnimeBackdropInfo, openCustomThemesDirectory, reloadCustomThemes, retryThemeSave,
@@ -16,6 +16,7 @@ import { Dialog } from './Dialog';
 import { EmptyState } from './EmptyState';
 import { Notice } from './Notice';
 import { Select } from './Select';
+import { ThemeDiyGuide } from './ThemeDiyGuide';
 import './ThemeSelector.css';
 
 const skipReasonKeys: Record<CustomThemeSkipReason, MessageKey> = {
@@ -67,6 +68,7 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
   const animeBackdrop = getAnimeBackdropInfo();
   const [openFailed, setOpenFailed] = useState(false);
   const [uploadFailed, setUploadFailed] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const search = useRef<HTMLInputElement>(null);
   const backdropInput = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
@@ -110,7 +112,7 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
   };
 
   useEffect(() => {
-    if (!open) { setQuery(''); setSource('all'); setUploadFailed(false); }
+    if (!open) { setQuery(''); setSource('all'); setUploadFailed(false); setGuideOpen(false); }
   }, [open]);
 
   const chooseMode = (next: Mode) => {
@@ -309,6 +311,11 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
           </Notice> : null}
           <p className="theme-selector-hint">{t('app.theme.custom.folderHint')}</p>
           <div className="theme-selector-actions">
+            <button type="button" className="secondary-button compact-button" data-action="theme-diy-guide"
+              onClick={() => setGuideOpen(true)}>
+              <Palette size={15} aria-hidden="true" />{t('app.theme.diy.title')}
+            </button>
+            <div className="theme-selector-file-actions">
             <button type="button" className="secondary-button compact-button" data-action="open-themes" onClick={openDirectory}>
               <FolderOpen size={15} aria-hidden="true" />{t('app.theme.custom.openFolder')}
             </button>
@@ -316,9 +323,11 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
               onClick={() => { setOpenFailed(false); void reloadCustomThemes(); }}>
               <RefreshCw size={15} aria-hidden="true" />{t('app.theme.custom.reload')}
             </button>
+            </div>
           </div>
         </div>
       </Dialog> : null}
+      {open && guideOpen ? <ThemeDiyGuide onClose={() => setGuideOpen(false)} /> : null}
     </div>
   );
 }

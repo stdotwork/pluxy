@@ -81,8 +81,17 @@
 .theme-selector-anime-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .theme-selector-anime-presets { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
 .theme-selector-footer { display: grid; gap: 8px; padding-top: 12px; border-top: var(--border-width) solid var(--color-border-subtle); }
-.theme-selector-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.theme-selector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.theme-selector-file-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-inline-start: auto; }
 .theme-selector-actions button { min-width: 0; }
+.theme-diy-guide { display: flex; flex-direction: column; gap: 16px; width: min(520px, 100%); max-height: calc(100dvh - 40px); padding: 24px; box-sizing: border-box; overflow: hidden; color: var(--color-text-primary); }
+.theme-diy-guide > .config-dialog-heading { flex: none; }
+.theme-diy-content { display: grid; gap: 16px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; line-height: 1.7; overflow-wrap: anywhere; }
+.theme-diy-content p { margin: 0; color: var(--color-text-secondary); }
+.theme-diy-content > button { justify-self: start; }
+.theme-diy-install { padding-top: 16px; border-top: 1px solid var(--color-border-subtle); }
+.theme-diy-install h3 { margin: 0 0 6px; font-size: var(--font-size-label); }
+.theme-diy-fallback { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
 .theme-selector-problems { margin-bottom: 12px; font-size: var(--font-size-meta); }
 .theme-selector-problems summary { cursor: pointer; color: var(--color-text-secondary); }
 .theme-selector-custom-problems { max-height: 100px; overflow-y: auto; overflow-wrap: anywhere; margin-top: 8px; }
