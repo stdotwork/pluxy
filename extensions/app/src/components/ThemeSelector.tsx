@@ -1,11 +1,13 @@
 import { SegmentedControl } from './SegmentedControl';
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Check, FolderOpen, Monitor, Moon, RefreshCw, Search, Sun, SunMoon } from 'lucide-react';
+import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from 'react';
+import { Check, FolderOpen, ImagePlus, Monitor, Moon, RefreshCw, Search, Sun, SunMoon, Trash2 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import {
-  openCustomThemesDirectory, reloadCustomThemes, retryThemeSave, setSystemTheme, useCustomThemeStatus,
-  useResolvedThemeId, useSystemThemes, useThemePreferenceIssue, useThemeRegistry,
+  getAnimeBackdropInfo, openCustomThemesDirectory, reloadCustomThemes, retryThemeSave,
+  setAnimeBackdropPreset, setCustomAnimeBackdropImage, setSystemTheme, useAnimeBackdropState,
+  useCustomThemeStatus, useResolvedThemeId, useSystemThemes, useThemePreferenceIssue, useThemeRegistry,
 } from '../theme';
+import type { AnimeWallpaperPreset } from '../themes/anime';
 import { builtinThemes, themePreview, type ThemeRegistry } from '../themes/registry';
 import { localizeThemeLabel, type ThemeAppearance, type ThemeDefinition, type ThemeIssueCode } from '../themes/types';
 import type { CustomThemeSkipReason } from '../themes/customThemes';
@@ -61,8 +63,12 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
   const systemThemes = useSystemThemes();
   const resolvedId = useResolvedThemeId();
   const custom = useCustomThemeStatus();
+  useAnimeBackdropState();
+  const animeBackdrop = getAnimeBackdropInfo();
   const [openFailed, setOpenFailed] = useState(false);
+  const [uploadFailed, setUploadFailed] = useState(false);
   const search = useRef<HTMLInputElement>(null);
+  const backdropInput = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [source, setSource] = useState<Source>('all');
   const fixed = value === 'system' ? undefined : registry.get(value);
@@ -104,7 +110,7 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
   };
 
   useEffect(() => {
-    if (!open) { setQuery(''); setSource('all'); }
+    if (!open) { setQuery(''); setSource('all'); setUploadFailed(false); }
   }, [open]);
 
   const chooseMode = (next: Mode) => {
@@ -115,6 +121,51 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
     setSystemTheme(theme.id);
     if (mode !== 'system') onChange(theme.id);
   };
+  const handleBackdropUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setUploadFailed(false);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 1600;
+        const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { setUploadFailed(true); return; }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const converted = canvas.toDataURL('image/webp', 0.85);
+        if (setCustomAnimeBackdropImage(converted)) {
+          const animeTheme = registry.get('anime-light');
+          if (animeTheme) chooseTheme(animeTheme);
+        } else {
+          setUploadFailed(true);
+        }
+      };
+      img.onerror = () => {
+        if (setCustomAnimeBackdropImage(result)) {
+          const animeTheme = registry.get('anime-light');
+          if (animeTheme) chooseTheme(animeTheme);
+        } else {
+          setUploadFailed(true);
+        }
+      };
+      img.src = result;
+    };
+    reader.onerror = () => setUploadFailed(true);
+    reader.readAsDataURL(file);
+  };
+  const animePresets: { id: AnimeWallpaperPreset; label: string }[] = [
+    { id: 'starlight', label: t('app.theme.anime.preset.starlight') },
+    { id: 'sakura-sky', label: t('app.theme.anime.preset.sakuraSky') },
+    ...(animeBackdrop.hasCustomImage ? [{ id: 'custom' as const, label: t('app.theme.anime.preset.custom') }] : []),
+    { id: 'none', label: t('app.theme.anime.preset.none') },
+  ];
   const modes: { id: Mode; label: string; Icon: typeof Sun }[] = [
     { id: 'light', label: t('app.theme.light'), Icon: Sun },
     { id: 'dark', label: t('app.theme.dark'), Icon: Moon },
@@ -194,6 +245,60 @@ export function ThemeSelector({ value, onChange, open, onOpenChange, registry: o
                   {chosen === theme.id ? <Check className="theme-selector-check" size={16} aria-hidden="true" /> : null}
                 </button>)}
               </div>
+              {appearance === 'light' && (chosen === 'anime-light' || current.id === 'anime-light') ? (
+                <div className="theme-selector-anime-backdrop surface-section">
+                  <div className="theme-selector-anime-header">
+                    <strong>{t('app.theme.anime.backdropTitle')}</strong>
+                    <div className="theme-selector-anime-actions">
+                      <input
+                        ref={backdropInput}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/avif"
+                        hidden
+                        onChange={handleBackdropUpload}
+                      />
+                      <button
+                        type="button"
+                        className="secondary-button compact-button"
+                        data-action="upload-anime-backdrop"
+                        onClick={() => backdropInput.current?.click()}
+                      >
+                        <ImagePlus size={14} aria-hidden="true" />
+                        {t('app.theme.anime.upload')}
+                      </button>
+                      {animeBackdrop.hasCustomImage ? (
+                        <button
+                          type="button"
+                          className="secondary-button compact-button"
+                          data-action="clear-anime-backdrop"
+                          onClick={() => {
+                            setUploadFailed(false);
+                            setCustomAnimeBackdropImage(null);
+                          }}
+                        >
+                          <Trash2 size={14} aria-hidden="true" />
+                          {t('app.theme.anime.clearCustom')}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <SegmentedControl
+                    className="theme-selector-modes theme-selector-anime-presets"
+                    aria-label={t('app.theme.anime.backdropTitle')}
+                    value={animeBackdrop.preset}
+                    onChange={(preset) => {
+                      setUploadFailed(false);
+                      setAnimeBackdropPreset(preset);
+                    }}
+                    buttonClassName="theme-selector-mode"
+                    selectedClassName="selected"
+                    items={animePresets.map(({ id, label: presetLabel }) => ({ value: id, label: presetLabel }))}
+                  />
+                  {uploadFailed ? (
+                    <Notice tone="error" variant="text">{t('app.theme.anime.uploadFailed')}</Notice>
+                  ) : null}
+                </div>
+              ) : null}
             </div>;
           }) : <EmptyState variant="compact" icon={<Search size={24} />} title={t('app.theme.catalog.empty')}
             action={<button type="button" className="secondary-button compact-button" onClick={resetFilters}>

@@ -7,6 +7,7 @@ import { midnight } from './midnight';
 import { light } from './light';
 import { dark } from './dark';
 import { sakura } from './sakura';
+import { anime } from './anime';
 import { backdropImage, normalizeBackdrop, themeBackdropImage, themeImagePosition } from './backdrop';
 
 export function normalizeTheme(definition: ThemeDefinition, report: (issue: ThemeIssue) => void = () => {}): ThemeDefinition {
@@ -66,7 +67,7 @@ export function createThemeRegistry(definitions: readonly ThemeDefinition[]) {
   };
 }
 
-export const builtinThemes: readonly ThemeDefinition[] = [light, dark, warmSand, graphite, midnight, sakura];
+export const builtinThemes: readonly ThemeDefinition[] = [light, dark, warmSand, graphite, midnight, sakura, anime];
 export const themeRegistry = createThemeRegistry(builtinThemes);
 export type ThemeRegistry = ReturnType<typeof createThemeRegistry>;
 

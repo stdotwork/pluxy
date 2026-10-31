@@ -14,8 +14,7 @@
 .auth-file-health.info { --health-accent: var(--primary-color); }
 
 .auth-file-health.detailed {
-  border: 1px solid var(--border-color);
-  border-left: 3px solid var(--health-accent);
+  border: 1px solid color-mix(in srgb, var(--health-accent) 32%, var(--border-color));
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--health-accent) 4%, var(--bg-card));
 }

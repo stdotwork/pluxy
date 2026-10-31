@@ -36,7 +36,7 @@
 .home-dashboard .control-panel .panel-detail-row:nth-last-child(-n+2) { border-bottom: 0; }
 .home-dashboard .control-panel .panel-detail-row dt { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
 .home-dashboard .control-panel .panel-detail-row dd { margin: 0; color: var(--text-primary); font-size: 14px; font-weight: 500; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
-.home-dashboard .control-panel .panel-detail-row .mono-tag { padding: 0; border: 0; border-radius: var(--radius-none); background: none; font-size: inherit; overflow-wrap: anywhere; }
+.home-dashboard .control-panel .panel-detail-row .mono-tag { display: inline-flex; align-items: center; padding: 2px 8px; border: 1px solid var(--home-line); border-radius: var(--radius-md); background: var(--bg-secondary); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
 .home-dashboard .control-panel .control-action-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: auto 0 0; padding: 0; border: 0; }
 .home-dashboard .control-action-row > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 .home-dashboard .control-action-row > button svg { width: 16px; height: 16px; flex: none; }
@@ -85,6 +85,14 @@
 .home-stat-value { display: block; color: var(--text-primary); font-size: 32px; font-weight: 550; font-variant-numeric: tabular-nums; line-height: 1.15; letter-spacing: -.045em; }
 .home-stat-track { height: 6px; margin: 0; overflow: hidden; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--stat-color) 12%, transparent); }
 .home-stat-track > span { display: block; height: 100%; border-radius: inherit; background: var(--stat-color); }
+.home-stat-card:not(:has(.home-stat-track)) .home-stat-value::after {
+  content: '';
+  display: block;
+  height: 6px;
+  margin-top: 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ui-accent) 14%, var(--bg-secondary));
+}
 .home-stat-card p { margin: auto 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 
 /* Frequent dashboard actions stay immediate; only pointer presses get motion. */

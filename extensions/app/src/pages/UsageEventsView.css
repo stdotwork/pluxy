@@ -353,7 +353,7 @@
   max-width: min(100%, 760px);
   margin-inline: auto;
   padding: 8px 12px;
-  border-left: 3px solid var(--failure-badge-text);
+  border: 1px solid color-mix(in srgb, var(--failure-badge-text) 28%, transparent);
   border-radius: var(--radius-md);
   background: var(--failure-badge-bg);
   color: var(--usage-log-text);

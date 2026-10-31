@@ -80,6 +80,7 @@ const migrated: Record<string, string[]> = {
   'usage-token-context-group': ['surface-sunken'],
   'credential-alias-details': ['surface-sunken'],
   'agent-core-setting-section': ['surface-section'],
+  'theme-selector-anime-backdrop': ['surface-section'],
   'deepseek-harness-launch-options': ['surface-section', 'surface-muted'],
 };
 const ids = new Set(['config-native-aliases', 'config-native-sensitive-words']);

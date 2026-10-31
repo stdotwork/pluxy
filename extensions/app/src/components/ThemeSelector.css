@@ -64,7 +64,7 @@
 .theme-selector-group + .theme-selector-group { margin-top: 18px; }
 .theme-selector-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-weight: 600; }
 .theme-selector-heading > span { color: var(--color-text-tertiary); font-size: var(--font-size-meta); font-weight: 400; }
-.theme-selector-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.theme-selector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
 .theme-selector-card { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; height: auto; padding: 12px; color: var(--color-text-primary); font: inherit; text-align: start; white-space: normal; font-weight: 400; }
 .theme-selector-card:hover { background: var(--color-surface-hover); }
 .theme-selector-card.selected { border-color: var(--ui-accent); background: color-mix(in srgb, var(--ui-accent) 8%, var(--color-surface)); }
@@ -75,6 +75,11 @@
 .theme-selector-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; margin-top: auto; color: var(--color-text-secondary); font-size: var(--font-size-meta); }
 .theme-selector-active { color: var(--ui-accent-strong); }
 .theme-selector-check { position: absolute; top: 16px; right: 16px; padding: 3px; border-radius: var(--radius-full); background: var(--ui-accent); color: var(--primary-contrast); }
+.theme-selector-anime-backdrop { display: grid; gap: 10px; margin-top: 12px; padding: 12px 14px; }
+.theme-selector-anime-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.theme-selector-anime-header strong { color: var(--color-text-primary); font-size: var(--font-size-label); font-weight: 600; }
+.theme-selector-anime-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.theme-selector-anime-presets { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
 .theme-selector-footer { display: grid; gap: 8px; padding-top: 12px; border-top: var(--border-width) solid var(--color-border-subtle); }
 .theme-selector-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
 .theme-selector-actions button { min-width: 0; }

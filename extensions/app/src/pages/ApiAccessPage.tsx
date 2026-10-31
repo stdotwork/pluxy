@@ -1590,24 +1590,28 @@ export function ApiAccessPage() {
       {error ? <MessageNotice message={error} onDismiss={() => setError('')} /> : null}
       <div className="provider-workbench real-provider-workbench">
         <aside className="panel provider-category-panel">
-          {providerDefinitions.map((definition) => (
-            <button
-              type="button"
-              key={definition.id}
-              className={definition.id === activeCategory ? 'active' : ''}
-              aria-pressed={definition.id === activeCategory}
-              onClick={() => {
-                setActiveCategory(definition.id);
-                writeSelectedCategory(definition.id);
-                feedback.clearNotice();
-              }}
-              disabled={busy}
-            >
-              <img src={definition.icon} alt="" className="provider-logo" />
-              <span title={providerLabel(definition)}>{providerLabel(definition)}</span>
-              <strong>{countForDefinition(definition)}</strong>
-            </button>
-          ))}
+          {providerDefinitions.map((definition) => {
+            const count = countForDefinition(definition);
+            return (
+              <button
+                type="button"
+                key={definition.id}
+                className={definition.id === activeCategory ? 'active' : ''}
+                data-empty={count === 0 ? 'true' : undefined}
+                aria-pressed={definition.id === activeCategory}
+                onClick={() => {
+                  setActiveCategory(definition.id);
+                  writeSelectedCategory(definition.id);
+                  feedback.clearNotice();
+                }}
+                disabled={busy}
+              >
+                <img src={definition.icon} alt="" className="provider-logo" />
+                <span title={providerLabel(definition)}>{providerLabel(definition)}</span>
+                <strong>{count}</strong>
+              </button>
+            );
+          })}
         </aside>
 
         <section className="panel provider-resource-panel">
