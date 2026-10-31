@@ -190,7 +190,6 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
         <div className="agent-usage-summary-heading">
           <div>
             <h2>{t('usage.agentUsage.title')}</h2>
-            <p>{t('usage.agentUsage.description')}</p>
           </div>
           <div className="agent-usage-summary-actions">
             <label className="agent-usage-refresh-setting">

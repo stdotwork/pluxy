@@ -712,7 +712,6 @@ export const en: Record<MessageKey, string> = {
   'usage.tab.agentUsage': 'Agent Usage',
   'usage.tab.dataManagement': 'Data Management',
   'usage.agentUsage.title': 'Agent Usage Records',
-  'usage.agentUsage.description': 'Read local Agent statistics. Codex uses the last 30 days of local proxy usage when available, without exposing session content or paths.',
   'usage.agentUsage.loading': 'Loading local Agent usage statistics',
   'usage.agentUsage.readFailed': 'Failed to read local Agent usage statistics. Try again later.',
   'usage.agentUsage.refreshFrequency': 'Read frequency',
