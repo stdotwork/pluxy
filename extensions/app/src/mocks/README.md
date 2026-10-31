@@ -40,6 +40,10 @@ JSON import/replacement and OAuth cancellation update the same in-memory state.
 Malformed imports and missing credentials fail explicitly. Usage event filters
 (time, model, provider, source, API key, failure/cancellation) run before pagination.
 
+The quota preview uses the shared card footer: reset on the left and refresh on
+the right, with matching compact button sizes. The quota layout fixture covers
+both resettable Codex/Claude cards and cards with only a refresh action.
+
 Unknown IPC commands, management routes and upstream URLs fail explicitly instead
 of returning fake success. Add new contracts to `browserMockRuntime.ts`,
 `quotaMock.ts` or `pluginMock.ts` when implementing new backend-facing UI.
