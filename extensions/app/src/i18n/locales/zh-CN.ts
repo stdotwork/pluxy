@@ -697,7 +697,7 @@ export const zhCN = {
   'usage.tab.agentUsage': 'Agent 使用记录',
   'usage.tab.dataManagement': '数据管理',
   'usage.agentUsage.title': 'Agent 使用记录',
-  'usage.agentUsage.description': '读取本地各个 Agent 已保存的会话统计，不展示会话内容或本地路径。',
+  'usage.agentUsage.description': '读取本地 Agent 统计；Codex 优先使用最近 30 天的代理用量记录，不展示会话内容或本地路径。',
   'usage.agentUsage.loading': '正在读取本地 Agent 使用统计',
   'usage.agentUsage.readFailed': '读取本地 Agent 使用统计失败，请稍后重试。',
   'usage.agentUsage.refreshFrequency': '读取频率',

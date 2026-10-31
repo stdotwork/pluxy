@@ -729,7 +729,7 @@ export const jaOverrides = {
   'usage.tab.agentUsage': 'Agent 使用履歴',
   'usage.tab.dataManagement': 'データ管理',
   'usage.agentUsage.title': 'Agent 使用履歴',
-  'usage.agentUsage.description': '各 Agent がローカルに保存したセッション集計を読み込みます。セッション内容やローカルパスは表示しません。',
+  'usage.agentUsage.description': 'ローカル Agent 統計を読み込みます。Codex は利用可能な場合、直近 30 日のローカルプロキシ使用量を使います。セッション内容やパスは表示しません。',
   'usage.agentUsage.loading': 'ローカル Agent 使用統計を読み込み中',
   'usage.agentUsage.readFailed': 'ローカル Agent 使用統計を読み込めませんでした。後でもう一度お試しください。',
   'usage.agentUsage.refreshFrequency': '読み取り頻度',

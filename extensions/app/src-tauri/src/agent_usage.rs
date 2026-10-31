@@ -1,7 +1,8 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
+use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -113,15 +114,30 @@ pub(crate) async fn get_agent_usage(app: tauri::AppHandle) -> Result<AgentUsageR
         .home_dir()
         .map_err(|error| format!("Failed to get user directory: {error}"))?;
 
-    tauri::async_runtime::spawn_blocking(move || build_report(&home))
-        .await
-        .map_err(|error| format!("Failed to read local Agent usage: {error}"))
+    let proxy_usage_database = crate::core_runtime::core_base_dir()
+        .ok()
+        .map(|base| base.join("usage-records").join("usage.db"));
+
+    tauri::async_runtime::spawn_blocking(move || {
+        build_report(&home, proxy_usage_database.as_deref())
+    })
+    .await
+    .map_err(|error| format!("Failed to read local Agent usage: {error}"))
 }
 
-fn build_report(home: &Path) -> AgentUsageReport {
+fn build_report(home: &Path, proxy_usage_database: Option<&Path>) -> AgentUsageReport {
     let sources = SOURCE_NAMES
         .iter()
-        .map(|source| read_source(home, source))
+        .map(|source| {
+            if *source == "codex" {
+                if let Some(database) = proxy_usage_database {
+                    if let Some(aggregate) = read_proxy_codex_usage(database) {
+                        return source_from_aggregate("codex", aggregate);
+                    }
+                }
+            }
+            read_source(home, source)
+        })
         .collect();
 
     AgentUsageReport {
@@ -137,7 +153,7 @@ fn read_source(home: &Path, source: &str) -> AgentUsageSource {
         return empty_source(source);
     }
 
-    let mut aggregate = BTreeMap::new();
+    let mut aggregate: BTreeMap<String, DayAggregate> = BTreeMap::new();
     let mut readable_files = 0usize;
     let mut failed_files = 0usize;
 
@@ -157,6 +173,13 @@ fn read_source(home: &Path, source: &str) -> AgentUsageSource {
         };
     }
 
+    source_from_aggregate(source, aggregate)
+}
+
+fn source_from_aggregate(
+    source: &str,
+    aggregate: BTreeMap<String, DayAggregate>,
+) -> AgentUsageSource {
     let daily = aggregate
         .into_iter()
         .map(|(date, day)| AgentUsageDaily {
@@ -195,6 +218,133 @@ fn read_source(home: &Path, source: &str) -> AgentUsageSource {
         error: String::new(),
         daily,
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProxyModelPrice {
+    prompt: f64,
+    completion: f64,
+    cache_read: f64,
+    cache_creation: f64,
+}
+
+fn read_proxy_codex_usage(path: &Path) -> Option<BTreeMap<String, DayAggregate>> {
+    if !path.is_file() {
+        return None;
+    }
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let _ = connection.busy_timeout(std::time::Duration::from_secs(2));
+    let prices = load_proxy_model_prices(&connection);
+    let cutoff = (Utc::now() - Duration::days(30)).timestamp_millis();
+    let mut statement = connection
+        .prepare(
+            "SELECT timestamp, model, response_model, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_creation_tokens, total_tokens FROM usage_events WHERE timestamp_ms >= ?1 ORDER BY timestamp_ms ASC",
+        )
+        .ok()?;
+    let rows = statement
+        .query_map([cutoff], |row| {
+            let timestamp: String = row.get(0)?;
+            let model: String = row.get(1)?;
+            let response_model: String = row.get(2)?;
+            let input_tokens: u64 = row.get(3)?;
+            let output_tokens: u64 = row.get(4)?;
+            let reasoning_tokens: u64 = row.get(5)?;
+            let cache_read_tokens: u64 = row.get(6)?;
+            let cache_creation_tokens: u64 = row.get(7)?;
+            let total_tokens: u64 = row.get(8)?;
+            Ok((
+                timestamp,
+                if model.trim().is_empty() {
+                    response_model
+                } else {
+                    model
+                },
+                UsageCounter {
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    total_tokens: if total_tokens == 0 {
+                        input_tokens
+                            .saturating_add(output_tokens)
+                            .saturating_add(cache_read_tokens)
+                            .saturating_add(cache_creation_tokens)
+                    } else {
+                        total_tokens
+                    },
+                    cost_usd: 0.0,
+                },
+            ))
+        })
+        .ok()?;
+
+    let mut aggregate: BTreeMap<String, DayAggregate> = BTreeMap::new();
+    let mut row_count = 0usize;
+    for row in rows.flatten() {
+        let (timestamp, model, mut counter) = row;
+        let Some(date) = proxy_date(&timestamp) else {
+            continue;
+        };
+        if let Some(price) = prices.get(&model.to_ascii_lowercase()) {
+            counter.cost_usd = proxy_cost(&counter, price);
+        }
+        let day = aggregate.entry(date).or_default();
+        add_counter(&mut day.totals, &counter);
+        if !model.trim().is_empty() {
+            add_counter(day.models.entry(model).or_default(), &counter);
+        }
+        row_count += 1;
+    }
+    (row_count > 0).then_some(aggregate)
+}
+
+fn load_proxy_model_prices(connection: &Connection) -> HashMap<String, ProxyModelPrice> {
+    let Ok(mut statement) = connection.prepare(
+        "SELECT model, source_model_id, prompt_per_1m, completion_per_1m, cache_read_per_1m, cache_creation_per_1m FROM model_prices",
+    ) else {
+        return HashMap::new();
+    };
+    let Ok(rows) = statement.query_map([], |row| {
+        let model: String = row.get(0)?;
+        let source_model_id: String = row.get(1)?;
+        let price = ProxyModelPrice {
+            prompt: row.get(2)?,
+            completion: row.get(3)?,
+            cache_read: row.get(4)?,
+            cache_creation: row.get(5)?,
+        };
+        Ok((model, source_model_id, price))
+    }) else {
+        return HashMap::new();
+    };
+    let mut prices = HashMap::new();
+    for row in rows.flatten() {
+        let (model, source_model_id, price) = row;
+        prices.insert(model.to_ascii_lowercase(), price);
+        if !source_model_id.trim().is_empty() {
+            prices.insert(source_model_id.to_ascii_lowercase(), price);
+        }
+    }
+    prices
+}
+
+fn proxy_cost(counter: &UsageCounter, price: &ProxyModelPrice) -> f64 {
+    (counter.input_tokens as f64 * price.prompt
+        + counter.output_tokens as f64 * price.completion
+        + counter.cache_read_tokens as f64 * price.cache_read
+        + counter.cache_creation_tokens as f64 * price.cache_creation)
+        / 1_000_000.0
+}
+
+fn proxy_date(timestamp: &str) -> Option<String> {
+    DateTime::parse_from_rfc3339(timestamp)
+        .ok()
+        .map(|date| date.format("%Y-%m-%d").to_string())
 }
 
 fn empty_source(source: &str) -> AgentUsageSource {
@@ -690,6 +840,60 @@ mod tests {
             .models
             .keys()
             .all(|model| model != "private"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn proxy_usage_database_is_used_as_codex_ground_truth() {
+        let path =
+            std::env::temp_dir().join(format!("cpa-agent-usage-proxy-{}.db", std::process::id()));
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE usage_events (
+                    timestamp TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    model TEXT NOT NULL,
+                    response_model TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL,
+                    reasoning_tokens INTEGER NOT NULL,
+                    cache_read_tokens INTEGER NOT NULL,
+                    cache_creation_tokens INTEGER NOT NULL,
+                    total_tokens INTEGER NOT NULL
+                );
+                CREATE TABLE model_prices (
+                    model TEXT PRIMARY KEY,
+                    source_model_id TEXT NOT NULL,
+                    prompt_per_1m REAL NOT NULL,
+                    completion_per_1m REAL NOT NULL,
+                    cache_read_per_1m REAL NOT NULL,
+                    cache_creation_per_1m REAL NOT NULL
+                );",
+            )
+            .unwrap();
+        let timestamp = Utc::now().to_rfc3339();
+        let timestamp_ms = Utc::now().timestamp_millis();
+        connection
+            .execute(
+                "INSERT INTO usage_events VALUES (?1, ?2, 'gpt-5', '', 100, 40, 2, 20, 0, 160)",
+                rusqlite::params![timestamp, timestamp_ms],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO model_prices VALUES ('gpt-5', '', 1.0, 2.0, 0.5, 0.0)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let aggregate = read_proxy_codex_usage(&path).unwrap();
+        let day = aggregate.values().next().unwrap();
+        assert_eq!(day.totals.total_tokens, 160);
+        assert_eq!(day.totals.cache_read_tokens, 20);
+        assert!((day.totals.cost_usd - 0.00019).abs() < 0.0000001);
+        assert!(day.models.contains_key("gpt-5"));
         let _ = fs::remove_file(path);
     }
 }
