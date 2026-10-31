@@ -3,6 +3,8 @@ import { Notice } from '../components/Notice';
 import { Tabs } from '../components/Tabs';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { Switch } from '../components/Switch';
+import { getCoreConfigSettings, type CoreApiKey } from '../services/coreSettings';
+import { maskSecret } from '../services/managementApi';
 import { onConfigFilesChanged } from '../services/events';
 import {
   refreshAgentConfigStatuses,
@@ -149,11 +151,13 @@ type AgentFormValues = {
   model: string;
   oauthConfiguration: boolean;
   mappings: ClaudeModelMappings | null;
+  apiKey?: string | null;
 };
 
 const sameAgentFormValues = (left: AgentFormValues, right: AgentFormValues) => (
   sameAgentModel(left.model, right.model)
   && left.oauthConfiguration === right.oauthConfiguration
+  && (left.apiKey ?? '') === (right.apiKey ?? '')
   && (left.mappings && right.mappings
     ? sameAgentModelMappings(left.mappings, right.mappings)
     : left.mappings === right.mappings)
@@ -451,6 +455,34 @@ const writeAgentModelSelections = (
   }
 };
 
+const AGENT_API_KEY_SELECTIONS_KEY = 'agent-api-key-selections';
+
+const readAgentApiKeySelections = (): Partial<Record<AgentClientId, string>> => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const payload = window.localStorage.getItem(AGENT_API_KEY_SELECTIONS_KEY);
+    if (!payload) return {};
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    return agentDefinitions.reduce<Partial<Record<AgentClientId, string>>>((result, agent) => {
+      const value = parsed[agent.id];
+      if (typeof value === 'string' && value.trim()) result[agent.id] = value.trim();
+      return result;
+    }, {});
+  } catch {
+    return {};
+  }
+};
+
+const writeAgentApiKeySelections = (
+  selections: Partial<Record<AgentClientId, string>>,
+) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(AGENT_API_KEY_SELECTIONS_KEY, JSON.stringify(selections));
+  } catch {
+  }
+};
+
 const readAgentLaunchDirectoryHistory = (): AgentLaunchDirectoryHistory => {
   if (typeof window === 'undefined') return {};
   try {
@@ -562,6 +594,31 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const [modelByClient, setModelByClient] = useState<Partial<Record<AgentClientId, string>>>(
     readAgentModelSelections,
   );
+  const [coreApiKeys, setCoreApiKeys] = useState<CoreApiKey[]>([]);
+  const [apiKeyByClient, setApiKeyByClient] = useState<Partial<Record<AgentClientId, string>>>(
+    readAgentApiKeySelections,
+  );
+
+  useEffect(() => {
+    let mounted = true;
+    const loadCoreSettings = async () => {
+      try {
+        const settings = await getCoreConfigSettings();
+        if (mounted) {
+          setCoreApiKeys(settings.apiKeys.filter((item) => item.apiKey.trim().length > 0));
+        }
+      } catch {
+      }
+    };
+    void loadCoreSettings();
+    const unlisten = onConfigFilesChanged(() => {
+      void loadCoreSettings();
+    });
+    return () => {
+      mounted = false;
+      void unlisten.then((fn) => fn?.());
+    };
+  }, []);
   const [formEditBaselineByClient, setFormEditBaselineByClient] = useState(
     () => ({ ...agentFormEditBaselineCache }),
   );
@@ -790,6 +847,29 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
   const oauthConfiguration = oauthConfigurationDraft
     ?? activeStatus?.oauthConfiguration
     ?? false;
+  const configuredApiKey = activeStatus?.currentApiKey ?? null;
+  const savedApiKey = apiKeyByClient[selected];
+  const effectiveSelectedApiKey = useMemo(() => {
+    if (savedApiKey !== undefined && (coreApiKeys.some((k) => k.apiKey === savedApiKey) || savedApiKey === configuredApiKey)) {
+      return savedApiKey;
+    }
+    if (configuredApiKey && (coreApiKeys.some((k) => k.apiKey === configuredApiKey) || coreApiKeys.length === 0)) {
+      return configuredApiKey;
+    }
+    return coreApiKeys[0]?.apiKey ?? '';
+  }, [savedApiKey, configuredApiKey, coreApiKeys]);
+
+  const selectApiKey = (value: string) => {
+    setConfigurationNotice('');
+    setClearNotice('');
+    trackFormEdit({ ...formValues, apiKey: value });
+    setApiKeyByClient((current) => {
+      const next = { ...current, [selected]: value };
+      writeAgentApiKeySelections(next);
+      return next;
+    });
+  };
+
   const savedSelectedModel = modelByClient[selected] ?? '';
   const selectedModelOption = findAgentModel(models, savedSelectedModel);
   const selectedModel = selectedModelOption?.name ?? '';
@@ -926,6 +1006,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     model: isClaudeModelMappingClient ? '' : selectedModel,
     oauthConfiguration: selected === 'codex' && oauthConfiguration,
     mappings: isClaudeModelMappingClient ? claudeModelMappingsDraft : null,
+    apiKey: effectiveSelectedApiKey,
   };
   const hasPendingChanges = Boolean(formEditBaselineByClient[selected]);
 
@@ -1259,6 +1340,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         claudeCodeModelMappings: selected === 'claude-code' ? claudeModelMappings : null,
         claudeDesktopModelMappings: selected === 'claude-desktop' ? claudeModelMappings : null,
         executableOverrides: executablePaths,
+        apiKey: effectiveSelectedApiKey,
       });
       clearPendingChanges();
       if (isClaudeModelMappingClient) {
@@ -1286,7 +1368,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setConfigurationNotice('');
     setClearNotice('');
     try {
-      await installPiProviderCommand({ model, executableOverrides: executablePaths });
+      await installPiProviderCommand({ model, executableOverrides: executablePaths, apiKey: effectiveSelectedApiKey });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t('agents.management.pluginInstalled'));
@@ -1307,7 +1389,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setClearNotice('');
     setPiProviderUpdateStatus(null);
     try {
-      await updatePiProviderCommand({ model, executableOverrides: executablePaths });
+      await updatePiProviderCommand({ model, executableOverrides: executablePaths, apiKey: effectiveSelectedApiKey });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t('agents.management.pluginUpdated'));
@@ -1325,7 +1407,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     setBusyAction('repair-pi');
     setConfigurationError('');
     try {
-      const result = await repairPiProviderCommand({ model });
+      const result = await repairPiProviderCommand({ model, apiKey: effectiveSelectedApiKey });
       clearPendingChanges();
       await reloadStatusesAfterAction();
       setConfigurationNotice(t(result.outcome === 'unchanged' ? 'agents.backup.unchanged' : 'agents.backup.updated'));
@@ -1373,6 +1455,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         oauthConfiguration,
         claudeCodeModelMappings: selected === 'claude-code' ? claudeModelMappings : null,
         claudeDesktopModelMappings: selected === 'claude-desktop' ? claudeModelMappings : null,
+        apiKey: effectiveSelectedApiKey,
       });
       clearPendingChanges();
       setDefaultConfirmOpen(false);
@@ -1672,6 +1755,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
         client: selected, model, oauthConfiguration,
         claudeCodeModelMappings: selected === 'claude-code' ? mappings : null,
         claudeDesktopModelMappings: selected === 'claude-desktop' ? mappings : null,
+        apiKey: effectiveSelectedApiKey,
       });
       setTemplatePreview(preview); setDefaultConfirmOpen(true);
     } catch (cause) { setConfigurationError(String(cause)); }
@@ -1903,7 +1987,32 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                 {!isClaudeModelMappingClient && missingModelHint ? <span className="agent-model-hint" role="status">{missingModelHint}</span> : null}
               </div>}
 
+              {coreApiKeys.length > 1 && !(selected === 'codex' && oauthConfiguration) ? (
+                <div className="agent-minimal-field">
+                  <label htmlFor="embedded-agent-api-key">{t('agents.apiKey.title')}</label>
+                  <Select
+                    id="embedded-agent-api-key"
+                    value={effectiveSelectedApiKey}
+                    disabled={busy || !canConfigureActiveClient}
+                    onChange={(event) => selectApiKey(event.currentTarget.value)}
+                  >
+                    {coreApiKeys.map((entry, index) => {
+                      const isDefault = index === 0;
+                      const label = entry.remark
+                        ? `${entry.remark} (${maskSecret(entry.apiKey)})${isDefault ? ` · ${t('agents.apiKey.default')}` : ''}`
+                        : `${maskSecret(entry.apiKey)}${isDefault ? ` · ${t('agents.apiKey.default')}` : ''}`;
+                      return (
+                        <option key={entry.apiKey} value={entry.apiKey}>
+                          {label}
+                        </option>
+                      );
+                    })}
+                  </Select>
+                </div>
+              ) : null}
+
               {isDeepSeekHarnessClient ? <p className="agent-model-hint">{t('agents.harness.defaultHint')}</p> : null}
+
 
               <div className="agent-save-bar">
                 {configurationFeedback}
@@ -2146,6 +2255,48 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                   </details>
                 </section>
               ) : null}
+
+              <section className="agent-core-setting-section agent-api-key-section surface-section">
+                <div className="agent-section-heading">
+                  <div><strong>{t('agents.apiKey.title')}</strong></div>
+                </div>
+                {selected === 'codex' && oauthConfiguration ? (
+                  <p className="agent-model-hint">{t('agents.apiKey.oauthNotice')}</p>
+                ) : (
+                  <>
+                    <Select
+                      value={effectiveSelectedApiKey}
+                      disabled={busy || !canConfigureActiveClient}
+                      onChange={(event) => selectApiKey(event.currentTarget.value)}
+                    >
+                      {coreApiKeys.map((entry, index) => {
+                        const isDefault = index === 0;
+                        const label = entry.remark
+                          ? `${entry.remark} (${maskSecret(entry.apiKey)})${isDefault ? ` · ${t('agents.apiKey.default')}` : ''}`
+                          : `${maskSecret(entry.apiKey)}${isDefault ? ` · ${t('agents.apiKey.default')}` : ''}`;
+                        return (
+                          <option key={entry.apiKey} value={entry.apiKey}>
+                            {label}
+                          </option>
+                        );
+                      })}
+                      {configuredApiKey && !coreApiKeys.some((k) => k.apiKey === configuredApiKey) ? (
+                        <option value={configuredApiKey}>
+                          {maskSecret(configuredApiKey)} ({t('agents.apiKey.externalKey')})
+                        </option>
+                      ) : null}
+                      {coreApiKeys.length === 0 && !configuredApiKey ? (
+                        <option value="">{t('agents.apiKey.defaultUnset')}</option>
+                      ) : null}
+                    </Select>
+                    <span className="agent-model-hint">
+                      {coreApiKeys.length > 1
+                        ? t('agents.apiKey.hintMultiple', { count: coreApiKeys.length })
+                        : t('agents.apiKey.hint')}
+                    </span>
+                  </>
+                )}
+              </section>
 
               <div className="agent-save-bar">
                 {configurationFeedback}
