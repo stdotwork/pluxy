@@ -1615,7 +1615,7 @@ export function createBrowserMockRuntime(
         const ids = asArray(request.sessionIds).map(String);
         state.codexSessions = state.codexSessions.filter((session) => !ids.includes(session.id));
         return {
-          results: ids.map((id) => ({ sessionId: id, status: 'deleted', message: 'Deleted by Browser Mock', backupPath: 'C:\\Users\\Mock\\.codex\\backups\\mock.zip' })),
+          results: ids.map((id) => ({ sessionId: id, status: 'deleted', message: 'Deleted by Browser Mock', backupPath: request.skipBackup ? null : 'C:\\Users\\Mock\\.codex\\backups\\mock.zip' })),
           deletedCount: ids.length,
           failedCount: 0,
         };

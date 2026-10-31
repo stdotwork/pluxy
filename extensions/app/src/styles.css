@@ -5821,7 +5821,29 @@ textarea:focus-visible {
 }
 
 .codex-session-dialog {
-  min-height: 210px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: calc(100dvh - 40px);
+  overflow: hidden;
+}
+
+.codex-session-delete-content {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+  line-height: var(--line-height-relaxed);
+}
+
+.codex-session-delete-content p {
+  margin: 0 0 16px;
+}
+
+.codex-session-delete-backup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
 }
 
 .codex-session-dialog .config-dialog-heading > div,
