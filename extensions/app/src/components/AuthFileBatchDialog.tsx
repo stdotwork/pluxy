@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
 import { Dialog } from './Dialog';
 import { Checkbox } from './Checkbox';
+import { Select } from './Select';
 import { useConfirmation } from './ConfirmationDialog';
 import { useI18n } from '../i18n';
 import { usePrivacyMask } from '../privacy';
-import { isOAuthCredentialFile, setOAuthCredentialFileDisabled, type AuthFileRecord } from '../services/authFiles';
+import { authFileIdentities, isOAuthCredentialFile, normalizeAuthFileTags, setOAuthCredentialFileDisabled, type AuthFileRecord } from '../services/authFiles';
 import { refreshAllCredentials, refreshCredential, runCredentialBatch, type CredentialResult } from '../services/authFileOperations';
 import { managementApi, readString } from '../services/managementApi';
 import { quotaKey } from '../services/quotaService';
@@ -18,12 +19,16 @@ export function AuthFileBatchDialog({ files, onClose, onChanged }: {
   const { askConfirmation, confirmationDialog } = useConfirmation();
   const eligible = files.filter(isOAuthCredentialFile);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [tagFilter, setTagFilter] = useState('');
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
   const [results, setResults] = useState<CredentialResult[]>([]);
   const [error, setError] = useState('');
   const excludedCount = files.length - eligible.length;
-  const targets = eligible.filter(file => selected.has(quotaKey(file)));
+  const tags = [...new Set(eligible.flatMap(file => normalizeAuthFileTags(file.tags)))].sort((left, right) => left.localeCompare(right));
+  const tagIdentities = files.flatMap(authFileIdentities);
+  const matching = eligible.filter(file => !tagFilter || normalizeAuthFileTags(file.tags).includes(tagFilter));
+  const targets = matching.filter(file => selected.has(quotaKey(file)));
   const run = async (operation: 'enable' | 'disable' | 'delete' | 'refresh' | 'all') => {
     if (pending.current || (operation !== 'all' && !targets.length)) return;
     pending.current = true;
@@ -56,16 +61,26 @@ export function AuthFileBatchDialog({ files, onClose, onChanged }: {
   return <>
     <Dialog className="model-discovery-dialog auth-batch-dialog" title={t('authFiles.operations.title')} onClose={onClose} closeDisabled={busy}>
       <div className="model-discovery-toolbar">
-        <label><Checkbox checked={eligible.length > 0 && selected.size === eligible.length} disabled={busy || !eligible.length} onChange={event => setSelected(new Set(event.currentTarget.checked ? eligible.map(quotaKey) : []))} />{t('authFiles.operations.selectAll')} ({selected.size}/{eligible.length})</label>
+        <label><Checkbox checked={matching.length > 0 && targets.length === matching.length} disabled={busy || !matching.length} onChange={event => setSelected(new Set(event.currentTarget.checked ? matching.map(quotaKey) : []))} />{t('authFiles.operations.selectAll')} ({targets.length}/{matching.length})</label>
+        <label>{t('authFiles.tags.selectGroup')}
+          <Select value={tagFilter} disabled={busy} onChange={event => {
+            const tag = event.currentTarget.value;
+            setTagFilter(tag);
+            setSelected(new Set(tag ? eligible.filter(file => normalizeAuthFileTags(file.tags).includes(tag)).map(quotaKey) : []));
+          }}>
+            <option value="">{t('authFiles.tags.all')}</option>
+            {tags.map(tag => <option key={tag} value={tag}>{privacy.text(tag, tagIdentities)}</option>)}
+          </Select>
+        </label>
         {excludedCount > 0 ? <small className="auth-batch-excluded">{t(excludedCount === 1 ? 'authFiles.operations.excludedOne' : 'authFiles.operations.excluded', { count: excludedCount })}</small> : null}
       </div>
       <div className="surface-section model-discovery-content">
         <div className="model-discovery-list">
-          {eligible.map(file => <label className="model-discovery-row" key={quotaKey(file)}>
+          {matching.map(file => <label className="model-discovery-row" key={quotaKey(file)}>
             <Checkbox checked={selected.has(quotaKey(file))} disabled={busy} onChange={event => {
               const checked = event.currentTarget.checked;
               setSelected(current => { const next = new Set(current); if (checked) next.add(quotaKey(file)); else next.delete(quotaKey(file)); return next; });
-            }} /><span>{privacy.credentialName(file)}</span>
+            }} /><span>{privacy.credentialName(file)}{normalizeAuthFileTags(file.tags).length ? <small className="auth-batch-tags">{privacy.text(normalizeAuthFileTags(file.tags).join(' · '), authFileIdentities(file))}</small> : null}</span>
           </label>)}
         </div>
         {error ? <p role="alert">{privacy.text(error, files.flatMap(file => [readString(file, 'email'), readString(file, 'name')]).filter(Boolean))}</p> : null}

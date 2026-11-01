@@ -1,4 +1,9 @@
 export const authFileListZhCN = {
+  'authFiles.tags.label': '标签',
+  'authFiles.tags.all': '全部标签',
+  'authFiles.tags.placeholder': '个人, 团队, 生产',
+  'authFiles.tags.hint': '用逗号分隔标签；自动去除空白、空标签和重复项。清空可移除全部标签。',
+  'authFiles.tags.selectGroup': '按标签选择整组',
   'quota.pluginCategory': '插件额度',
   "authFiles.policy.title": "请求策略",
   "authFiles.policy.hint": "未设置时继承全局配置。错误规则按顺序优先生效，清空后恢复继承；正则使用 Go 语法。",
@@ -46,6 +51,11 @@ export const authFileListZhCN = {
 } as const;
 
 export const authFileListEn: Record<keyof typeof authFileListZhCN, string> = {
+  'authFiles.tags.label': 'Tags',
+  'authFiles.tags.all': 'All tags',
+  'authFiles.tags.placeholder': 'personal, team, production',
+  'authFiles.tags.hint': 'Separate tags with commas. Whitespace, empty tags and duplicates are removed. Clear to remove all tags.',
+  'authFiles.tags.selectGroup': 'Select group by tag',
   'quota.pluginCategory': 'Plugin quotas',
   "authFiles.policy.title": "Request policies",
   "authFiles.policy.hint": "Unset values inherit global settings. Error rules run in order; clearing restores inheritance. Regex uses Go syntax.",
@@ -93,6 +103,11 @@ export const authFileListEn: Record<keyof typeof authFileListZhCN, string> = {
 };
 
 export const authFileListJa: Record<keyof typeof authFileListZhCN, string> = {
+  'authFiles.tags.label': 'タグ',
+  'authFiles.tags.all': 'すべてのタグ',
+  'authFiles.tags.placeholder': '個人, チーム, 本番',
+  'authFiles.tags.hint': 'タグをカンマで区切って入力します。前後の空白、空のタグ、重複は除去されます。空にするとすべてのタグを削除します。',
+  'authFiles.tags.selectGroup': 'タグでグループを選択',
   'quota.pluginCategory': 'プラグイン割当量',
   "authFiles.policy.title": "リクエストポリシー",
   "authFiles.policy.hint": "未設定は全体設定を継承します。ルールは順番に適用され、空にすると継承に戻ります。正規表現は Go 構文です。",
@@ -137,4 +152,12 @@ export const authFileListJa: Record<keyof typeof authFileListZhCN, string> = {
   'authFiles.action.settings': '設定',
   'authFiles.action.models': 'モデル',
   'authFiles.action.copy': 'コピー',
+};
+
+export const authFileTagsZhTW = {
+  'authFiles.tags.label': '標籤',
+  'authFiles.tags.all': '全部標籤',
+  'authFiles.tags.placeholder': '個人, 團隊, 正式環境',
+  'authFiles.tags.hint': '使用逗號分隔標籤；自動移除前後空白、空標籤和重複項目。清空可移除全部標籤。',
+  'authFiles.tags.selectGroup': '依標籤選取整組',
 };

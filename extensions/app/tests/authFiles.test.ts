@@ -15,6 +15,15 @@ import {
 } from '../src/services/authFiles';
 
 describe('认证文件列表规范化', () => {
+  it('preserves cleared credential tags instead of restoring stale runtime tags', () => {
+    const disk = { name: 'same.json', source: 'file', tags: [] };
+    const runtime = { name: 'same.json', runtime_only: true, tags: ['old'] };
+    for (const entries of [[disk, runtime], [runtime, disk]]) {
+      expect(dedupeAuthFiles(entries)[0].tags).toEqual([]);
+    }
+    expect(dedupeAuthFiles([{ name: 'same.json', source: 'file' }, runtime])[0].tags).toEqual(['old']);
+  });
+
   it('合并同名的磁盘和运行时记录并优先保留磁盘状态', () => {
     const files = dedupeAuthFiles([
       {

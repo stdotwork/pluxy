@@ -155,6 +155,11 @@ export function AuthFileSettingsDialog({ name, displayName = name, provider = ''
                 <h3>{t('authFiles.settings.additional')}</h3>
                 <CredentialHeadersEditor value={draft.headers} disabled={saving} onChange={(headers) => update('headers', headers)} />
                 <label className="credential-settings-field">
+                  <span>{t('authFiles.tags.label')} <code>tags</code></span>
+                  <input value={draft.tags} onChange={(event) => update('tags', event.currentTarget.value)} placeholder={t('authFiles.tags.placeholder')} />
+                  <small>{t('authFiles.tags.hint')}</small>
+                </label>
+                <label className="credential-settings-field">
                   <span>{t('authFiles.settings.note')} <code>note</code></span>
                   <textarea rows={2} value={draft.note} onChange={(event) => update('note', event.currentTarget.value)} />
                 </label>

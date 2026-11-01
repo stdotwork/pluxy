@@ -5,6 +5,16 @@ import { jaOverrides } from '../src/i18n/ja';
 import { pluginConfigText } from '../src/i18n/pluginConfig';
 
 describe('i18n', () => {
+  it('localizes credential tag controls in every language', () => {
+    for (const [locale, label] of [['en', 'Tags'], ['zh-CN', '标签'], ['zh-TW', '標籤'], ['ja', 'タグ']] as const) {
+      expect(translate(locale, 'authFiles.tags.label')).toBe(label);
+      for (const key of ['authFiles.tags.all', 'authFiles.tags.placeholder', 'authFiles.tags.hint', 'authFiles.tags.selectGroup'] as const) {
+        expect(translate(locale, key)).not.toBe(key);
+        expect(translate(locale, key)).not.toBe('');
+      }
+    }
+  });
+
   it('localizes the plugin discard confirmation in every language', () => {
     for (const [locale, cancel, confirm] of [
       ['zh-CN', '继续编辑', '放弃修改'], ['zh-TW', '繼續編輯', '放棄修改'],

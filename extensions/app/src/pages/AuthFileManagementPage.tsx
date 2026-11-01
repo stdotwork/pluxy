@@ -62,6 +62,7 @@ import {
 import {
   authFileName,
   authFileIdentities,
+  normalizeAuthFileTags,
   authFileCooldownResetIndex,
   dedupeAuthFiles,
   isOAuthCredentialFile,
@@ -138,6 +139,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
   }>({ files: [], receivedAtMs: 0 });
   const { files, receivedAtMs, observedAt } = fileSnapshot;
   const [filter, setFilter] = useState('');
+  const [tagFilter, setTagFilter] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(() => new Set());
@@ -355,6 +357,9 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
     [files],
   );
 
+  const tags = useMemo(() => [...new Set(files.flatMap(file => normalizeAuthFileTags(file.tags)))].sort((left, right) => left.localeCompare(right)), [files]);
+  const tagIdentities = files.flatMap(authFileIdentities);
+
   const visibleFiles = useMemo(() => {
     const query = filter.trim().toLowerCase();
     return files.filter((file) => {
@@ -368,18 +373,18 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
         (statusFilter === 'problem' && !disabled && (['error', 'warning'].includes(authFileHealth(file).tone) || (Array.isArray(file.cooldowns) && file.cooldowns.length > 0)));
       const searchMatch =
         !query ||
-        [fileName(file), providerName(file), readString(file, 'email', 'account', 'label'), readString(file, 'note'), readString(file, 'prefix')]
+        [fileName(file), providerName(file), readString(file, 'email', 'account', 'label'), readString(file, 'note'), readString(file, 'prefix'), ...normalizeAuthFileTags(file.tags)]
           .join(' ')
           .toLowerCase()
           .includes(query);
-      return providerMatch && runtimeMatch && searchMatch;
+      return providerMatch && runtimeMatch && searchMatch && (!tagFilter || normalizeAuthFileTags(file.tags).includes(tagFilter));
     });
-  }, [files, filter, providerFilter, statusFilter]);
+  }, [files, filter, providerFilter, statusFilter, tagFilter]);
 
   const pageCount = Math.max(1, Math.ceil(visibleFiles.length / pageSize));
   const currentPage = Math.min(page, pageCount);
   const pageFiles = visibleFiles.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  useEffect(() => setPage(1), [filter, providerFilter, statusFilter, pageSize]);
+  useEffect(() => setPage(1), [filter, providerFilter, statusFilter, tagFilter, pageSize]);
   useEffect(() => setPage((current) => Math.min(current, pageCount)), [pageCount]);
 
   const toggleDetails = (key: string) => setExpandedFiles((current) => {
@@ -522,6 +527,10 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
           <input value={filter} onChange={(event) => setFilter(event.currentTarget.value)} placeholder={t('authFiles.searchPlaceholder')} aria-label={t('authFiles.searchPlaceholder')} />
           </div>
           <div className="auth-files-filters">
+          <Select value={tagFilter} onChange={(event) => setTagFilter(event.currentTarget.value)} aria-label={t('authFiles.tags.label')}>
+            <option value="">{t('authFiles.tags.all')}</option>
+            {tags.map(tag => <option key={tag} value={tag}>{privacy.text(tag, tagIdentities)}</option>)}
+          </Select>
           <Select value={providerFilter} onChange={(event) => setProviderFilter(event.currentTarget.value)} aria-label={t('authFiles.filter.allProviders')}>
             <option value="all">{t('authFiles.filter.allProviders')}</option>
             {providers.map((provider) => <option key={provider} value={provider}>{provider}</option>)}
@@ -583,6 +592,9 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
                     <div className="auth-card-identity">
                       <strong title={identity || displayName}>{identity || displayName}</strong>
                       <span className="auth-card-filename" title={displayName}>{identity ? displayName : providerName(file)}</span>
+                      {normalizeAuthFileTags(file.tags).length ? <span className="auth-file-tags" aria-label={t('authFiles.tags.label')}>
+                        {normalizeAuthFileTags(file.tags).map(tag => <small key={tag}>{privacy.text(tag, identities)}</small>)}
+                      </span> : null}
                       {isRuntimeOnly(file) ? <span className="auth-card-provider">{t('authFiles.runtime')}</span> : null}
                     </div>
                   </header>

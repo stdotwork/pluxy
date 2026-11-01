@@ -4,6 +4,11 @@ import { getCurrentLocale, translate } from '../i18n';
 export type AuthFileRecord = Record<string, unknown>;
 export type AuthFileSnapshot = Map<string, string>;
 
+export const normalizeAuthFileTags = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? [...new Set(value.filter((tag): tag is string => typeof tag === 'string').map(tag => tag.trim()).filter(Boolean))]
+    : [];
+
 export type AuthFileCooldownResetResponse = {
   status: 'ok';
   auth_index: string;
@@ -227,7 +232,7 @@ const mergeDuplicateAuthFiles = (entries: AuthFileRecord[]) => {
   sorted.slice(1).forEach((entry) => {
     Object.entries(entry).forEach(([key, value]) => {
       if (authFileSourceFields.has(key)) return;
-      if (key === 'cooldowns' && Object.prototype.hasOwnProperty.call(merged, key)) return;
+      if ((key === 'cooldowns' || key === 'tags') && Object.prototype.hasOwnProperty.call(merged, key)) return;
       if (!hasMeaningfulValue(merged[key]) && hasMeaningfulValue(value)) merged[key] = value;
     });
   });
