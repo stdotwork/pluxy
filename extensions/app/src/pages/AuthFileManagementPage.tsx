@@ -62,6 +62,7 @@ import {
 import {
   authFileName,
   authFileIdentities,
+  countAuthFileTags,
   normalizeAuthFileTags,
   authFileCooldownResetIndex,
   dedupeAuthFiles,
@@ -140,6 +141,9 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
   const { files, receivedAtMs, observedAt } = fileSnapshot;
   const [filter, setFilter] = useState('');
   const [tagFilter, setTagFilter] = useState('');
+  const [quickTagEditingName, setQuickTagEditingName] = useState<string | null>(null);
+  const [quickTagInput, setQuickTagInput] = useState("");
+
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(() => new Set());
@@ -154,6 +158,45 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
   const [quotaRefreshing, setQuotaRefreshing] = useState(false);
   const [cooldownResetting, setCooldownResetting] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState('');
+  const handleQuickAddTag = async (file: AuthFile, tagToAdd: string) => {
+    const normalized = tagToAdd.trim();
+    if (!normalized) return;
+    const currentTags = normalizeAuthFileTags(file.tags);
+    if (currentTags.includes(normalized)) {
+      setQuickTagInput("");
+      return;
+    }
+    const nextTags = [...currentTags, normalized];
+    const targetName = fileName(file);
+    try {
+      setFileSnapshot((cur) => ({
+        ...cur,
+        files: cur.files.map((f) => (fileName(f) === targetName ? { ...f, tags: nextTags } : f)),
+      }));
+      setQuickTagInput("");
+      await managementApi.patch("/credentials/fields", { name: targetName, tags: nextTags });
+    } catch (err) {
+      setError(String(err));
+      await loadFiles(false);
+    }
+  };
+
+  const handleQuickRemoveTag = async (file: AuthFile, tagToRemove: string) => {
+    const currentTags = normalizeAuthFileTags(file.tags);
+    const nextTags = currentTags.filter((t) => t !== tagToRemove);
+    const targetName = fileName(file);
+    try {
+      setFileSnapshot((cur) => ({
+        ...cur,
+        files: cur.files.map((f) => (fileName(f) === targetName ? { ...f, tags: nextTags } : f)),
+      }));
+      await managementApi.patch("/credentials/fields", { name: targetName, tags: nextTags });
+    } catch (err) {
+      setError(String(err));
+      await loadFiles(false);
+    }
+  };
+
   const resetQuota = useQuotaReset(askConfirmation, setError);
   const feedback = useAppNotice();
   const { showNotice } = feedback;
@@ -358,6 +401,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
   );
 
   const tags = useMemo(() => [...new Set(files.flatMap(file => normalizeAuthFileTags(file.tags)))].sort((left, right) => left.localeCompare(right)), [files]);
+  const tagCounts = useMemo(() => countAuthFileTags(files), [files]);
   const tagIdentities = files.flatMap(authFileIdentities);
 
   const visibleFiles = useMemo(() => {
@@ -528,9 +572,21 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
           </div>
           <div className="auth-files-filters">
           <Select value={tagFilter} onChange={(event) => setTagFilter(event.currentTarget.value)} aria-label={t('authFiles.tags.label')}>
-            <option value="">{t('authFiles.tags.all')}</option>
-            {tags.map(tag => <option key={tag} value={tag}>{privacy.text(tag, tagIdentities)}</option>)}
+            <option value="">{t('authFiles.tags.all')} ({files.length})</option>
+            {tags.map(tag => <option key={tag} value={tag}>{privacy.text(tag, tagIdentities)} ({tagCounts.get(tag) ?? 0})</option>)}
           </Select>
+          {tagFilter ? (
+            <button
+              type="button"
+              className="filter-chip auth-active-tag-badge"
+              onClick={() => setTagFilter("")}
+              title={t("authFiles.tags.filterClear")}
+              aria-label={t("authFiles.tags.filterClear")}
+            >
+              <span>{privacy.text(tagFilter, tagIdentities)}</span>
+              <X size={12} aria-hidden="true" />
+            </button>
+          ) : null}
           <Select value={providerFilter} onChange={(event) => setProviderFilter(event.currentTarget.value)} aria-label={t('authFiles.filter.allProviders')}>
             <option value="all">{t('authFiles.filter.allProviders')}</option>
             {providers.map((provider) => <option key={provider} value={provider}>{provider}</option>)}
@@ -592,9 +648,124 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
                     <div className="auth-card-identity">
                       <strong title={identity || displayName}>{identity || displayName}</strong>
                       <span className="auth-card-filename" title={displayName}>{identity ? displayName : providerName(file)}</span>
-                      {normalizeAuthFileTags(file.tags).length ? <span className="auth-file-tags" aria-label={t('authFiles.tags.label')}>
-                        {normalizeAuthFileTags(file.tags).map(tag => <small key={tag}>{privacy.text(tag, identities)}</small>)}
-                      </span> : null}
+                      <div className="auth-card-tags-container">
+                        <div className="auth-file-tags" role="group" aria-label={t("authFiles.tags.label")}>
+                          {normalizeAuthFileTags(file.tags).map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              className={`filter-chip auth-tag-chip ${tagFilter === tag ? "active" : ""}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTagFilter((current) => (current === tag ? "" : tag));
+                              }}
+                              title={t(tagFilter === tag ? "authFiles.tags.filterClear" : "authFiles.tags.filterBy", {
+                                tag: privacy.text(tag, identities),
+                              })}
+                              aria-pressed={tagFilter === tag}
+                            >
+                              <span>{privacy.text(tag, identities)}</span>
+                            </button>
+                          ))}
+                          {isOAuthCredentialFile(file) ? (
+                            <button
+                              type="button"
+                              className={`filter-chip auth-tag-add-trigger ${quickTagEditingName === name ? "active" : ""}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setQuickTagEditingName((current) => (current === name ? null : name));
+                                setQuickTagInput("");
+                              }}
+                              title={t("authFiles.tags.manageQuick")}
+                              aria-label={t("authFiles.tags.manageQuick")}
+                              aria-expanded={quickTagEditingName === name}
+                            >
+                              + {normalizeAuthFileTags(file.tags).length === 0 ? t("authFiles.tags.add") : ""}
+                            </button>
+                          ) : null}
+                        </div>
+
+                        {quickTagEditingName === name ? (
+                          <div className="auth-card-quick-tag-editor surface-frame" onClick={(e) => e.stopPropagation()}>
+                            <div className="auth-quick-tag-header">
+                              <strong>{t("authFiles.tags.quickEditTitle")}</strong>
+                              <button
+                                type="button"
+                                className="icon-button tiny-button ghost"
+                                onClick={() => setQuickTagEditingName(null)}
+                                title={t("common.close")}
+                                aria-label={t("common.close")}
+                              >
+                                <X size={14} aria-hidden="true" />
+                              </button>
+                            </div>
+
+                            <div className="auth-quick-tag-current" role="list" aria-label={t("authFiles.tags.label")}>
+                              {normalizeAuthFileTags(file.tags).map((tag) => (
+                                <span key={tag} className="auth-quick-tag-badge" role="listitem">
+                                  <span>{privacy.text(tag, identities)}</span>
+                                  <button
+                                    type="button"
+                                    className="icon-button quiet ghost tiny-button"
+                                    onClick={() => void handleQuickRemoveTag(file, tag)}
+                                    title={t("authFiles.tags.removeTag", { tag: privacy.text(tag, identities) })}
+                                    aria-label={t("authFiles.tags.removeTag", { tag: privacy.text(tag, identities) })}
+                                  >
+                                    <X size={12} aria-hidden="true" />
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+
+                            <div className="auth-quick-tag-input-row">
+                              <input
+                                type="text"
+                                value={quickTagInput}
+                                onChange={(e) => setQuickTagInput(e.currentTarget.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    void handleQuickAddTag(file, quickTagInput);
+                                  }
+                                }}
+                                placeholder={t("authFiles.tags.inputPlaceholder")}
+                                className="auth-quick-tag-input"
+                                aria-label={t("authFiles.tags.inputPlaceholder")}
+                              />
+                              <button
+                                type="button"
+                                className="secondary-button tiny-button"
+                                disabled={!quickTagInput.trim()}
+                                onClick={() => void handleQuickAddTag(file, quickTagInput)}
+                              >
+                                {t("authFiles.tags.addTag")}
+                              </button>
+                            </div>
+
+                            {tags.filter((t) => !normalizeAuthFileTags(file.tags).includes(t)).length > 0 ? (
+                              <div className="auth-quick-tag-pool">
+                                <span className="auth-quick-tag-pool-label">{t("authFiles.tags.poolLabel")}:</span>
+                                <div className="auth-quick-tag-pool-list">
+                                  {tags
+                                    .filter((t) => !normalizeAuthFileTags(file.tags).includes(t))
+                                    .slice(0, 8)
+                                    .map((tag) => (
+                                      <button
+                                        key={tag}
+                                        type="button"
+                                        className="filter-chip auth-quick-tag-pool-btn"
+                                        onClick={() => void handleQuickAddTag(file, tag)}
+                                        title={t("authFiles.tags.addFromPool", { tag: privacy.text(tag, tagIdentities) })}
+                                      >
+                                        + {privacy.text(tag, tagIdentities)}
+                                      </button>
+                                    ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
                       {isRuntimeOnly(file) ? <span className="auth-card-provider">{t('authFiles.runtime')}</span> : null}
                     </div>
                   </header>
@@ -660,7 +831,8 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
       {runtimeCount > 0 ? <p className="page-footnote">{t('authFiles.runtimeFootnote', { count: runtimeCount })}</p> : null}
 
       {batchOpen ? <AuthFileBatchDialog files={visibleFiles} onClose={() => setBatchOpen(false)} onChanged={() => loadFiles(false)} /> : null}
-      {settingsName ? <AuthFileSettingsDialog key={settingsName} name={settingsName} displayName={shownNameFor(settingsName)} provider={providerKey(files.find((file) => fileName(file) === settingsName) ?? {})} onClose={() => setSettingsName(null)} onSaved={() => {
+      {settingsName ? <AuthFileSettingsDialog key={settingsName} name={settingsName} displayName={shownNameFor(settingsName)} provider={providerKey(files.find((file) => fileName(file) === settingsName) ?? {})}
+          existingTags={tags} onClose={() => setSettingsName(null)} onSaved={() => {
         showNotice({ key: 'authFiles.settings.updated', variables: { name: shownNameFor(settingsName) } });
         setSettingsName(null);
         void loadFiles(false);
