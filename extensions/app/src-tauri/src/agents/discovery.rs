@@ -2367,7 +2367,11 @@ pub(crate) fn read_claude_desktop_version(home: &Path) -> Option<String> {
             read_macos_app_version(application)
         })
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        find_claude_desktop_executable(home).and_then(|path| read_agent_version(&path, home))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = home;
         None

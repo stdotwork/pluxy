@@ -893,9 +893,14 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
     () => filterAgentModelsByAlias(models, claudeCustomMapping),
     [claudeCustomMapping, models],
   );
+  const fallbackApplied = useMemo(
+    () => models.filter((m) => m.isAlias && m.alias).map((m) => ({ model: m.alias!, alias: m.name, context1m: false })),
+    [models],
+  );
   const desktopEntries = claudeModelMappingsDraft.desktopModels ?? desktopModelEntries(claudeModelMappingsDraft);
   const appliedDesktopEntries = activeStatus?.claudeDesktopModelMappings
-    ? desktopModelEntries(activeStatus.claudeDesktopModelMappings) : [];
+    ? desktopModelEntries(activeStatus.claudeDesktopModelMappings)
+    : fallbackApplied;
   const resolvedDesktopEntries = suffixCollidingDesktopAliases(desktopEntries, models, appliedDesktopEntries);
   const desktopValidation = desktopModelValidation(resolvedDesktopEntries, models, appliedDesktopEntries);
 
@@ -1881,8 +1886,8 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
               <div className="agent-desktop-model-field">
                 <span>{t('agents.claudeDesktopMapping.model')}</span>
                 <AgentModelPicker models={claudeMappingModels} value={entry.model} loading={modelLoading} error={modelError}
-                  allowCustomValue disabled={busy || loading || !activeStatus?.installed || !activeStatus.supportedPlatform}
-                  onChange={(model) => updateDesktopEntry(index, { model, ...(isClaudeDesktopModel(model) ? { alias: '' } : {}) })}
+                  allowCustomValue disabled={busy || loading || !canConfigureActiveClient}
+                  onChange={(model) => updateDesktopEntry(index, { model, ...(isClaudeDesktopModel(model) && !entry.alias.trim() ? { alias: '' } : {}) })}
                   onRefresh={refreshModels} />
               </div>
               <div className="agent-desktop-model-field">
@@ -1890,7 +1895,7 @@ export function AgentsPage({ embedded = false, onConfigurationApplied }: AgentsP
                 <AgentModelPicker
                   models={claudeDesktopAliasSuggestions.filter((alias) => !resolvedDesktopEntries.some((other, i) => i !== index && other.model.trim() && desktopModelId(other).toLowerCase() === alias))
                     .map((name) => ({ name, alias: t('agents.claudeDesktopMapping.suggestedAlias') }))}
-                  value={entry.alias} loading={false} error="" disabled={busy || loading}
+                  value={desktopEntries[index].alias} loading={false} error="" disabled={busy || loading}
                   editable={{ label: t('agents.claudeDesktopMapping.alias'),
                     placeholder: t(isClaude ? 'agents.claudeDesktopMapping.claudeDefault' : 'agents.claudeDesktopMapping.noRename'), maxLength: 128 }}
                   onChange={(alias) => updateDesktopEntry(index, { alias })} />
