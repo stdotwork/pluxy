@@ -323,8 +323,13 @@ pub(crate) fn zcode_editor_snapshot(
         seen_ids.insert(option.name.clone());
         let (inferred_cw, inferred_mot, inferred_img, inferred_pdf, inferred_rl) = infer_zcode_model_knowledge(&option.name);
 
+        let effective_default_cw = match option.context_window {
+            Some(500_000) | None => inferred_cw.or(option.context_window),
+            Some(cw) => Some(cw).or(inferred_cw),
+        };
+
         let default_config = ZCodeModelConfig {
-            context_window: option.context_window.or(inferred_cw),
+            context_window: effective_default_cw,
             max_output_tokens: inferred_mot,
             supports_image: inferred_img,
             supports_pdf: inferred_pdf,
@@ -334,13 +339,13 @@ pub(crate) fn zcode_editor_snapshot(
             supports_mid_conversation_system: true,
             reasoning_levels: if option.reasoning_levels.is_empty() { inferred_rl } else { option.reasoning_levels.clone() },
             reasoning_map: Some(ZCODE_CPA_REASONING_MAP.to_string()),
-            is_manual: false,
+            is_manual: true,
         };
 
         let configuration = if let Some(manual_rule) = manual_rules.get(&option.name) {
             let (cw, mot, img, pdf, vid, json_out, search, sys) = parse_zcode_rule_properties(manual_rule);
             let (rl, map) = parse_zcode_rule_reasoning(manual_rule);
-            let effective_cw = cw.or(default_config.context_window);
+            let effective_cw = if cw == Some(500000) || cw.is_none() { default_config.context_window } else { cw };
             ZCodeModelConfig {
                 context_window: effective_cw,
                 max_output_tokens: mot.or(default_config.max_output_tokens),
@@ -357,7 +362,7 @@ pub(crate) fn zcode_editor_snapshot(
         } else if let Some(prov_rule) = provider_rules.get(&option.name) {
             let (cw, mot, img, pdf, vid, json_out, search, sys) = parse_zcode_rule_properties(prov_rule);
             let (rl, map) = parse_zcode_rule_reasoning(prov_rule);
-            let effective_cw = cw.or(default_config.context_window);
+            let effective_cw = if cw == Some(500000) || cw.is_none() { default_config.context_window } else { cw };
             ZCodeModelConfig {
                 context_window: effective_cw,
                 max_output_tokens: mot.or(default_config.max_output_tokens),
@@ -525,12 +530,10 @@ pub(crate) fn save_zcode_editor(
         .filter_map(|rule| Some((rule.get("modelId")?.as_str()?.to_string(), rule.clone())))
         .collect::<std::collections::HashMap<_, _>>();
     for model in &request.models {
-        let rule_obj = build_zcode_rule_object(&model.id, &model.configuration, existing_rules.get(&model.id));
-        if model.configuration.is_manual {
-            new_manual_rules.push(rule_obj);
-        } else {
-            new_provider_rules.push(rule_obj);
-        }
+        let mut cfg = model.configuration.clone();
+        cfg.is_manual = true;
+        let rule_obj = build_zcode_rule_object(&model.id, &cfg, existing_rules.get(&model.id));
+        new_manual_rules.push(rule_obj);
     }
 
     let model_rules_sec = ensure_json_object_entry(config, "modelConfigRules");

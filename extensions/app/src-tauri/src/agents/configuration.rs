@@ -3811,7 +3811,11 @@ pub(crate) fn build_zcode_agent_config(
                 .entry("supportsImage")
                 .or_insert(serde_json::json!(true));
             properties.remove("maxOutputTokens");
-            if let Some(context_window) = option.context_window.or(inferred_cw.filter(|_| manual.is_none())) {
+            let effective_cw = match option.context_window {
+                Some(500_000) | None => inferred_cw.or(option.context_window),
+                Some(cw) => Some(cw).or(inferred_cw),
+            };
+            if let Some(context_window) = effective_cw {
                 properties.insert("contextWindow".to_string(), serde_json::json!(context_window));
             } else if manual.is_none() {
                 properties.remove("contextWindow");
@@ -3838,14 +3842,9 @@ pub(crate) fn build_zcode_agent_config(
         if specs.is_empty() {
             config_obj.remove("optionSpecs");
         }
-        if manual.is_some() {
-            manual_updates.push(rule);
-        } else {
-            rules.insert((first_managed_index + rules.iter().filter(|entry| {
-                entry.get("providerId").and_then(serde_json::Value::as_str)
-                    == Some(MANAGED_AGENT_PROVIDER_ID)
-            }).count()).min(rules.len()), rule);
-        }
+        // Always place CPA managed models into manualProviderModelRules so ZCode software
+        // displays "关闭智能配置" (Manual configuration), bypassing ZCode's internal faulty discovery.
+        manual_updates.push(rule);
     }
     let manual_rules = model_rules.get_mut("manualProviderModelRules")
         .and_then(serde_json::Value::as_array_mut)
