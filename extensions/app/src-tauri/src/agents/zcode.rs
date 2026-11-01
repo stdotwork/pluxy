@@ -214,8 +214,7 @@ fn parse_zcode_rule_reasoning(rule: &Value) -> (Option<Vec<String>>, Option<Stri
     let option_specs = rule.get("config").and_then(|c| c.get("optionSpecs"));
     let reasoning = option_specs.and_then(|o| o.get("reasoningLevel"));
     let values = reasoning.and_then(|r| r.get("values")).and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect::<Vec<_>>())
-        .filter(|v| !v.is_empty());
+        .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect::<Vec<_>>());
     let map = reasoning.and_then(|r| r.get("map")).and_then(Value::as_str).map(String::from);
     (values, map)
 }
@@ -250,18 +249,14 @@ fn build_zcode_rule_object(model_id: &str, config: &ZCodeModelConfig, existing: 
     } else {
         option_specs.remove("maxOutputTokens");
     }
-    if !config.reasoning_levels.is_empty() {
-        let mut rl = option_specs.get("reasoningLevel").and_then(Value::as_object).cloned().unwrap_or_default();
-        rl.insert("values".into(), serde_json::json!(config.reasoning_levels));
-        if let Some(ref m) = config.reasoning_map {
-            rl.insert("map".into(), serde_json::json!(m));
-        } else {
-            rl.insert("map".into(), serde_json::json!(ZCODE_CPA_REASONING_MAP));
-        }
-        option_specs.insert("reasoningLevel".into(), Value::Object(rl));
+    let mut rl = option_specs.get("reasoningLevel").and_then(Value::as_object).cloned().unwrap_or_default();
+    rl.insert("values".into(), serde_json::json!(config.reasoning_levels));
+    if let Some(ref m) = config.reasoning_map {
+        rl.insert("map".into(), serde_json::json!(m));
     } else {
-        option_specs.insert("reasoningLevel".into(), Value::Null);
+        rl.insert("map".into(), serde_json::json!(ZCODE_CPA_REASONING_MAP));
     }
+    option_specs.insert("reasoningLevel".into(), Value::Object(rl));
 
     cfg.insert("properties".into(), Value::Object(properties));
     if !option_specs.is_empty() {
@@ -375,7 +370,7 @@ pub(crate) fn zcode_editor_snapshot(
         let configuration = if let Some(manual_rule) = manual_rules.get(&option.name) {
             let (cw, mot, img, pdf, vid, json_out, search, sys) = parse_zcode_rule_properties(manual_rule);
             let (rl, map) = parse_zcode_rule_reasoning(manual_rule);
-            let effective_cw = if cw == Some(500000) || cw.is_none() { default_config.context_window } else { cw };
+            let effective_cw = cw.or(default_config.context_window);
             ZCodeModelConfig {
                 context_window: effective_cw,
                 max_output_tokens: mot.or(default_config.max_output_tokens),

@@ -3812,7 +3812,11 @@ pub(crate) fn build_zcode_agent_config(
                 .or_insert(serde_json::json!(true));
             properties.remove("maxOutputTokens");
             let effective_cw = match option.context_window {
-                Some(500_000) | None => inferred_cw.or(option.context_window),
+                Some(500_000) | None => manual
+                    .and_then(|rule| rule.pointer("/config/properties/contextWindow"))
+                    .and_then(serde_json::Value::as_u64)
+                    .or(inferred_cw)
+                    .or(option.context_window),
                 Some(cw) => Some(cw).or(inferred_cw),
             };
             if let Some(context_window) = effective_cw {

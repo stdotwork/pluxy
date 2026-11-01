@@ -1504,11 +1504,14 @@ pub(crate) fn query_model_usage_calibration(model_id: &str) -> Option<ModelUsage
                 let is_effort_failure = (failure_status == Some(400) || failure_status == Some(422))
                     && failure_body.as_deref().map(|body| {
                         let lower = body.to_ascii_lowercase();
-                        lower.contains("effort") 
-                            || lower.contains("reasoning") 
-                            || lower.contains("thinking") 
-                            || lower.contains("thought")
-                            || lower.contains("unsupported")
+                        let mentions_reasoning = lower.contains("effort")
+                            || lower.contains("reasoning")
+                            || lower.contains("thinking")
+                            || lower.contains("thought");
+                        let rejects_parameter = lower.contains("unsupported")
+                            || lower.contains("not supported")
+                            || lower.contains("invalid");
+                        mentions_reasoning && rejects_parameter
                     }).unwrap_or(false);
                 if is_effort_failure {
                     failed_efforts.insert(effort);
