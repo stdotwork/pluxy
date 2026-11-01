@@ -455,24 +455,37 @@
 /* 旗舰档 —— 和田玉 · 金镶玉（2026-11-01 起替代液态铂金）。
  * 与金卡（premiumPlanValue）的档差：金卡是一整枚金，旗舰是「金只做镶边，主体是玉」。
  *
- * 玉的三个本质，各由一层背景承担（自上而下）：
- *   1. 油脂光泽：上方一块宽而软的反光 —— 羊脂玉的光是蜡质的「润」，不是镜面的「亮」，
- *      所以没有硬切高光、没有扫光；
- *   2. 次表面透光：光像从玉肉里透出来，中心亮、边缘积厚偏暖灰；
- *   3. 玉肉：暖白羊脂底，两处极淡的絮状棉点，让它像天然料而不是塑料。
+ * 玉之所以像玉，靠的是这些细节（背景自上而下 + ::after 纹理）：
+ *   1. 抛光点：左上一粒很小的亮点 —— 玉面是抛过光的；
+ *   2. 油脂光泽：上方一块宽而软的反光 —— 羊脂玉的光是蜡质的「润」，不是镜面的「亮」；
+ *   3. 次表面透光：光像从玉肉里透出来，极缓游移（14s 往返）；
+ *   4. 底部聚光：光穿过玉肉在底缘聚出一汪亮色，是「透」的关键；
+ *   5. 棉：两处白色絮点；
+ *   6. 糖色：右下一抹极淡的赭色籽料皮，天然料的记号；
+ *   7. 玉肉：青白羊脂底 —— 一丝青灰是和田白玉与象牙、珍珠的分界，纯奶白会读成塑料；
+ *   8. 纹理（::after）：分形噪声的玉肉斑驳 + 一根发丝细的石纹，正片叠底压进玉面。
  * 金边：2px 斜面金（上亮下暗），金与玉之间一道细「口」线（inset），像镶嵌的包边。
- * 动效只有一处：玉里的光极缓地游移（14s 往返），读作「温润」，而非「闪」。
  * 两主题玉体同为浅色 —— 暗卡上羊脂玉本身就是柔光源，只压暗一档免得刺眼。 */
+@property --jade-light-x {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 40%;
+}
+
 .elitePlanValue {
-  --jade-ink: #34402a;
-  --jade-ink-shadow: 0 1px 0 rgba(255, 253, 244, 0.7);
-  --jade-sheen: rgba(255, 255, 255, 0.95);
-  --jade-sheen-soft: rgba(255, 255, 255, 0.22);
-  --jade-glow: rgba(255, 253, 242, 0.95);
-  --jade-cloud: rgba(196, 192, 156, 0.4);
-  --jade-body-hi: #fcfaf2;
-  --jade-body: #ece7d2;
-  --jade-body-edge: #c9c3a0;
+  --jade-ink: #33402b;
+  --jade-ink-shadow: 0 1px 0 rgba(255, 255, 246, 0.7);
+  --jade-glint: rgba(255, 255, 255, 0.95);
+  --jade-sheen: rgba(255, 255, 255, 0.9);
+  --jade-sheen-soft: rgba(255, 255, 255, 0.2);
+  --jade-glow: rgba(255, 255, 246, 0.9);
+  --jade-caustic: rgba(252, 255, 238, 0.95);
+  --jade-cotton: rgba(255, 255, 250, 0.7);
+  --jade-sugar: rgba(190, 118, 50, 0.5);
+  --jade-body-hi: #fbfbf3;
+  --jade-body: #e7e8d2;
+  --jade-body-edge: #c3c6a3;
+  --jade-texture-opacity: 0.45;
   --jade-gold: linear-gradient(
     180deg,
     #fbeebf 0%,
@@ -481,7 +494,7 @@
     #8d6a1f 80%,
     #d6b25a 100%
   );
-  --jade-seat: rgba(110, 82, 24, 0.32);
+  --jade-seat: rgba(110, 82, 24, 0.34);
   --jade-halo: rgba(232, 204, 128, 0.42);
   --jade-shadow: rgba(96, 74, 22, 0.3);
   --jade-rim-glow: rgba(214, 172, 74, 0.32);
@@ -501,44 +514,34 @@
   isolation: isolate;
   border: 2px solid transparent;
   background:
+    radial-gradient(7% 22% at 23% 24%, var(--jade-glint) 0%, transparent 100%) padding-box,
     radial-gradient(
-        90% 60% at 36% 0%,
+        90% 58% at 36% 0%,
         var(--jade-sheen) 0%,
         var(--jade-sheen-soft) 46%,
         transparent 72%
       )
       padding-box,
-    radial-gradient(60% 110% at 50% 62%, var(--jade-glow) 0%, transparent 72%) padding-box,
-    radial-gradient(22% 55% at 74% 38%, var(--jade-cloud) 0%, transparent 72%) padding-box,
-    radial-gradient(18% 45% at 16% 74%, var(--jade-cloud) 0%, transparent 72%) padding-box,
+    radial-gradient(48% 100% at var(--jade-light-x) 58%, var(--jade-glow) 0%, transparent 72%)
+      padding-box,
+    radial-gradient(64% 46% at 50% 112%, var(--jade-caustic) 0%, transparent 80%) padding-box,
+    radial-gradient(14% 34% at 72% 36%, var(--jade-cotton) 0%, transparent 100%) padding-box,
+    radial-gradient(10% 26% at 13% 68%, var(--jade-cotton) 0%, transparent 100%) padding-box,
+    radial-gradient(40% 110% at 104% 108%, var(--jade-sugar) 0%, transparent 76%) padding-box,
     radial-gradient(
         140% 170% at 50% 40%,
-        var(--jade-body-hi) 22%,
-        var(--jade-body) 62%,
+        var(--jade-body-hi) 20%,
+        var(--jade-body) 60%,
         var(--jade-body-edge) 100%
       )
       padding-box,
     var(--jade-gold) border-box;
   background-repeat: no-repeat;
-  background-size:
-    auto,
-    170% 100%,
-    auto,
-    auto,
-    auto,
-    auto;
-  background-position:
-    0 0,
-    30% 0,
-    0 0,
-    0 0,
-    0 0,
-    0 0;
   animation: jadeWarmth 14s ease-in-out infinite alternate;
   box-shadow:
     inset 0 0 0 0.5px var(--jade-seat),
     inset 0 1px 1px rgba(255, 255, 255, 0.85),
-    inset 0 -2px 4px rgba(140, 132, 86, 0.3),
+    inset 0 -1.5px 3px rgba(132, 130, 86, 0.22),
     0 1px 3px var(--jade-shadow),
     0 0 10px var(--jade-rim-glow);
   color: var(--jade-ink);
@@ -564,6 +567,21 @@
     z-index: -1;
   }
 
+  /* 玉肉纹理：分形噪声斑驳（青灰）+ 一根发丝石纹，正片叠底压在玉面上、文字之下。
+   * 内联 SVG，不引外部资源（单文件构建）。 */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 30' preserveAspectRatio='none'%3E%3Cfilter id='m' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.045 0.13' numOctaves='2' seed='11'/%3E%3CfeColorMatrix values='0 0 0 0 0.6 0 0 0 0 0.63 0 0 0 0 0.5 1.7 0 0 0 -0.84'/%3E%3C/filter%3E%3Crect width='100' height='30' filter='url(%23m)'/%3E%3Cpath d='M-4 23 C 20 15 44 26 66 13 S 94 5 106 8' fill='none' stroke='rgb(140 136 98)' stroke-opacity='0.28' stroke-width='0.25'/%3E%3C/svg%3E")
+      center / 100% 100% no-repeat;
+    mix-blend-mode: multiply;
+    opacity: var(--jade-texture-opacity);
+    pointer-events: none;
+    z-index: -1;
+  }
+
   /* P3 屏：金边多一档彩度（暖金有色域外的彩度可扩，玉体是低彩度，无需扩） */
   @media (dynamic-range: high) {
     --jade-gold: linear-gradient(
@@ -579,36 +597,27 @@
 
 @keyframes jadeWarmth {
   from {
-    background-position:
-      0 0,
-      30% 0,
-      0 0,
-      0 0,
-      0 0,
-      0 0;
+    --jade-light-x: 30%;
   }
   to {
-    background-position:
-      0 0,
-      70% 0,
-      0 0,
-      0 0,
-      0 0,
-      0 0;
+    --jade-light-x: 70%;
   }
 }
 
 /* 暗色：玉体压暗一档、光晕收敛；金边压暗避免在深底上刺眼。 */
 :global([data-theme='dark']) .elitePlanValue {
-  --jade-ink: #2f3a25;
-  --jade-ink-shadow: 0 1px 0 rgba(255, 252, 240, 0.45);
-  --jade-sheen: rgba(255, 255, 255, 0.6);
+  --jade-ink: #2e3a26;
+  --jade-ink-shadow: 0 1px 0 rgba(252, 252, 240, 0.45);
+  --jade-glint: rgba(255, 255, 255, 0.85);
+  --jade-sheen: rgba(255, 255, 255, 0.58);
   --jade-sheen-soft: rgba(255, 255, 255, 0.1);
-  --jade-glow: rgba(250, 246, 230, 0.85);
-  --jade-cloud: rgba(190, 180, 146, 0.34);
-  --jade-body-hi: #eee9da;
-  --jade-body: #ddd5bd;
-  --jade-body-edge: #c2b794;
+  --jade-glow: rgba(248, 248, 232, 0.8);
+  --jade-caustic: rgba(246, 250, 228, 0.8);
+  --jade-cotton: rgba(252, 252, 244, 0.55);
+  --jade-sugar: rgba(178, 108, 46, 0.5);
+  --jade-body-hi: #ecebdd;
+  --jade-body: #d8d8c0;
+  --jade-body-edge: #b6b993;
   --jade-gold: linear-gradient(
     180deg,
     #efdca0 0%,
@@ -631,17 +640,11 @@
   .elitePlanValue,
   :global([data-theme='dark']) .elitePlanValue {
     animation: none;
-    background-position:
-      0 0,
-      50% 0,
-      0 0,
-      0 0,
-      0 0,
-      0 0;
+    --jade-light-x: 50%;
   }
 }
 
-/* 高对比：去掉光泽与絮，只留实色玉体 + 实色金边。 */
+/* 高对比：去掉光泽、絮与纹理，只留实色玉体 + 实色金边。 */
 @media (prefers-contrast: more) {
   .elitePlanValue {
     background:
@@ -649,7 +652,8 @@
       linear-gradient(#8d6a1f, #8d6a1f) border-box;
     text-shadow: none;
 
-    &::before {
+    &::before,
+    &::after {
       content: none;
     }
   }
@@ -692,7 +696,7 @@
   }
 
   // 玉徽章移动端：与金卡同一刀 —— 砍模糊光晕层；
-  // 玉光游移只是 background-position 重绘，~70×20px 成本可忽略，保留。
+  // 玉光游移只是一个渐变中心的重绘，~70×20px 成本可忽略，保留。
   .elitePlanValue {
     overflow: hidden;
 
