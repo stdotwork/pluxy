@@ -202,7 +202,7 @@ export function ZCodeModelCatalogDialog({
                 <div>
                   <h3>{selectedModel.id}</h3>
                   <span className="customized">
-                    已由 CPA 代管下发规格（ZCode 软件端显示为手动自定义配置，关闭其内部智能配置）
+                    已由 CPA 代管下发规格（ZCode 软件端显示为手动自定义配置，关闭其内部默认配置）
                   </span>
                 </div>
               </div>
