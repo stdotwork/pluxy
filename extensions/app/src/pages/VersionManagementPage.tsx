@@ -23,6 +23,7 @@ import type {
 import { useEffect, useRef, useState } from 'react';
 import { getVersion } from '../services/platform';
 import {
+  ChevronDown,
   Download,
   ExternalLink,
   Info,
@@ -682,19 +683,22 @@ export function VersionManagementPage() {
             <div className="core-version-selector">
               <label>
                 <span>{t('kernel.versions.chooseVersion')}</span>
-                <Select
-                  value={selectedCoreVersion}
-                  disabled={coreVersionsLoading || busy || coreVersions.length === 0}
-                  aria-label={t('kernel.versions.chooseVersion')}
-                  onChange={(event) => setSelectedCoreVersion(event.currentTarget.value)}
-                >
-                  {coreVersions.length === 0 ? <option value="">{coreVersionsLoading ? t('kernel.versions.loadingVersions') : t('kernel.versions.noVersions')}</option> : null}
-                  {coreVersions.map((version) => (
-                    <option key={version.version} value={version.version}>
-                      {version.version}{version.prerelease ? ` · ${t('kernel.versions.prerelease')}` : ''}
-                    </option>
-                  ))}
-                </Select>
+                <span className="core-version-select-control">
+                  <Select
+                    value={selectedCoreVersion}
+                    disabled={coreVersionsLoading || busy || coreVersions.length === 0}
+                    aria-label={t('kernel.versions.chooseVersion')}
+                    onChange={(event) => setSelectedCoreVersion(event.currentTarget.value)}
+                  >
+                    {coreVersions.length === 0 ? <option value="">{coreVersionsLoading ? t('kernel.versions.loadingVersions') : t('kernel.versions.noVersions')}</option> : null}
+                    {coreVersions.map((version) => (
+                      <option key={version.version} value={version.version}>
+                        {version.version}{version.prerelease ? ` · ${t('kernel.versions.prerelease')}` : ''}
+                      </option>
+                    ))}
+                  </Select>
+                  <ChevronDown size={16} aria-hidden="true" />
+                </span>
               </label>
               <button
                 type="button"
