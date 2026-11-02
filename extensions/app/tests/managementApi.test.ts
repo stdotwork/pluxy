@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
 import {
   apiCallErrorMessage,
+  readNumber,
   providerGroupsApi,
   managementApi,
 } from '../src/services/managementApi';
@@ -200,4 +201,27 @@ describe('v8 Management API compatibility view', () => {
     expect(records[1]).not.toHaveProperty('name');
   });
 
+});
+
+describe('numeric field fallbacks', () => {
+  const missing = [null, undefined, '', ' \t\n', false, true, NaN, Infinity, -Infinity, 'NaN', 'invalid', [], [123], {}];
+
+  it.each(missing.map((candidate) => ({ candidate })))('skips missing or non-numeric value %p', ({ candidate }) => {
+    expect(readNumber({ primary: candidate, fallback: 123 }, 'primary', 'fallback')).toBe(123);
+    expect(readNumber({ primary: candidate }, 'primary', 'absent')).toBeNull();
+  });
+
+  it.each([0, '0', ' 0 '])('keeps explicit zero %p', (candidate) => {
+    expect(readNumber({ primary: candidate, fallback: 123 }, 'primary', 'fallback')).toBe(0);
+  });
+
+  it.each([[123, 123], ['123', 123], [' 123 ', 123], [1.5, 1.5], ['1.5', 1.5], [-2, -2], ['-2', -2]])('reads numeric value %p', (candidate, expected) => {
+    expect(readNumber({ value: candidate }, 'value')).toBe(expected);
+  });
+
+  it('returns null without a record or keys', () => {
+    expect(readNumber(null, 'value')).toBeNull();
+    expect(readNumber(123, 'value')).toBeNull();
+    expect(readNumber({ value: 123 })).toBeNull();
+  });
 });

@@ -11,6 +11,20 @@ import { usagePreferences } from '../src/services/usagePreferences';
 import { createBrowserMockRuntime } from '../src/mocks/browserMockRuntime';
 
 describe('Agent usage report normalization', () => {
+  it.each([null, undefined, '', ' ', false, true, NaN])('falls back from missing reasoning tokens %p', (reasoningOutputTokens) => {
+    const report = normalizeAgentUsageReport({ sources: [{
+      source: 'codex', status: 'ok', daily: [{
+        date: '2026-10-29', reasoningOutputTokens, reasoningTokens: 123,
+        costUSD: null, totalCost: 0.5,
+        models: [{ model: 'gpt-5', reasoningOutputTokens, reasoningTokens: 123 }],
+      }],
+    }] });
+    const daily = report.sources[0].daily[0];
+    expect(daily.reasoningTokens).toBe(123);
+    expect(daily.models[0].reasoningTokens).toBe(123);
+    expect(daily.costUSD).toBe(0.5);
+  });
+
   it('keeps the aggregate fields from the harness usage report', () => {
     const report = normalizeAgentUsageReport({
       schemaVersion: 1,
