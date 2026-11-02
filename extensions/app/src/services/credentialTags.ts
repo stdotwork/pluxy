@@ -1,5 +1,14 @@
 export const CREDENTIAL_TAGS_STORAGE_KEY = 'easy-cli-proxy-api.credential-tags';
 
+// Tags live only on this computer, keyed by credential file name. Keep one map per core
+// connection so a remote core's credentials never show the local core's tags; the local
+// core keeps the original key.
+let storageKey = CREDENTIAL_TAGS_STORAGE_KEY;
+
+export const setCredentialTagTarget = (remoteOrigin: string | null) => {
+  storageKey = remoteOrigin === null ? CREDENTIAL_TAGS_STORAGE_KEY : `${CREDENTIAL_TAGS_STORAGE_KEY}:remote:${remoteOrigin}`;
+};
+
 export const normalizeAuthFileTags = (value: unknown): string[] =>
   Array.isArray(value)
     ? [...new Set(value.filter((tag): tag is string => typeof tag === 'string').map(tag => tag.trim()).filter(Boolean))]
@@ -7,7 +16,7 @@ export const normalizeAuthFileTags = (value: unknown): string[] =>
 
 const readTags = (): Map<string, string[]> => {
   try {
-    const payload: unknown = JSON.parse(localStorage.getItem(CREDENTIAL_TAGS_STORAGE_KEY) ?? '{}');
+    const payload: unknown = JSON.parse(localStorage.getItem(storageKey) ?? '{}');
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return new Map();
     return new Map(Object.entries(payload).flatMap(([name, tags]) =>
       Array.isArray(tags) ? [[name, normalizeAuthFileTags(tags)] as const] : []));
@@ -23,7 +32,7 @@ export const setCredentialTags = (name: string, tags: unknown): string[] => {
   if (typeof localStorage === 'undefined') return normalized;
   const stored = readTags();
   stored.set(name, normalized);
-  localStorage.setItem(CREDENTIAL_TAGS_STORAGE_KEY, JSON.stringify(Object.fromEntries(stored)));
+  localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(stored)));
   return normalized;
 };
 

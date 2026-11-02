@@ -70,6 +70,8 @@ const path = require('node:path');
     await dialog.getByRole('radio', { name: 'Remote core' }).click();
     await dialog.getByLabel('Management URL').fill('https://other.example');
     await dialog.getByLabel('Management key', { exact: true }).fill('secret');
+    // This computer's tag cache for the local core must not leak into the remote core's credentials.
+    await page.evaluate(() => localStorage.setItem('easy-cli-proxy-api.credential-tags', JSON.stringify({ 'codex-idle.json': ['local-only'] })));
     await Promise.all([page.waitForEvent('load'), dialog.getByRole('button', { name: 'Save & connect', exact: true }).click()]);
     await page.locator('.app-shell').waitFor();
     assert.equal((await savedConnection()).managementOrigin, 'https://other.example');
@@ -129,6 +131,13 @@ const path = require('node:path');
     const install = page.getByRole('button', { name: 'Install local plugin' });
     assert.equal(await install.isDisabled(), true, 'local plugin install shown but disabled remotely');
     assert.equal(await install.getAttribute('title'), 'Not available in Remote mode yet');
+    await nav('OAuth').click();
+    await page.getByRole('tab', { name: 'Authentication Files' }).click();
+    const remoteCard = page.locator('.auth-file-card').filter({ has: page.locator('.auth-card-filename[title="codex-idle.json"]') });
+    await remoteCard.waitFor();
+    assert.equal(await remoteCard.getByRole('button', { name: 'local-only', exact: true }).count(), 0, 'local credential tags are not shown for a remote core');
+    assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('easy-cli-proxy-api.credential-tags'))), { 'codex-idle.json': ['local-only'] }, 'local tags are kept for the local core');
+
     // The Routing page shows the remote core's plan read-only, like Advanced Features, and writes nothing.
     await page.evaluate(() => {
       const internals = window.__TAURI_INTERNALS__;

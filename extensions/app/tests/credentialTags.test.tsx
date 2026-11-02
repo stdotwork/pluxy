@@ -7,7 +7,7 @@ import { batchAddCredentialTag, batchRemoveCredentialTag } from '../src/services
 import { loadAuthFileSettings, saveAuthFileSettings } from '../src/services/authFileSettings';
 import {
   CREDENTIAL_TAGS_STORAGE_KEY, getCredentialTags, mergeCredentialTags,
-  resolveCredentialTags, setCredentialTags,
+  resolveCredentialTags, setCredentialTags, setCredentialTagTarget,
 } from '../src/services/credentialTags';
 
 const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -25,11 +25,26 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setCredentialTagTarget(null);
   if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor);
   else Reflect.deleteProperty(globalThis, 'localStorage');
 });
 
 describe('credential tag persistence', () => {
+  it('keeps each core connection\'s tags apart, so local tags never override a remote core\'s', () => {
+    setCredentialTags('same-account.json', ['local-only']);
+    setCredentialTagTarget('https://remote.example:8317');
+    expect(mergeCredentialTags([{ name: 'same-account.json', tags: ['remote-authoritative'] }])[0].tags).toEqual(['remote-authoritative']);
+    setCredentialTags('same-account.json', ['remote-edit']);
+    setCredentialTagTarget('https://other.example:8317');
+    expect(getCredentialTags('same-account.json')).toEqual([]);
+    setCredentialTagTarget('https://remote.example:8317');
+    expect(getCredentialTags('same-account.json')).toEqual(['remote-edit']);
+    setCredentialTagTarget(null);
+    expect(getCredentialTags('same-account.json')).toEqual(['local-only']);
+    expect(JSON.parse(values.get(CREDENTIAL_TAGS_STORAGE_KEY)!)).toEqual({ 'same-account.json': ['local-only'] });
+  });
+
   it('normalizes and persists independent filename mappings, including special property names', () => {
     setCredentialTags('one.json', [' team ', 'team', '', 3, null, '日本語']);
     setCredentialTags('__proto__', ['special']);
