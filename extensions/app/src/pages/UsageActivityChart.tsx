@@ -75,7 +75,9 @@ export function UsageActivityChart({ timeline, range }: UsageActivityChartProps)
     const maximum = niceCeiling(points.reduce((value, point) => Math.max(value, point.requests, point.success + point.failure + point.canceled), 1));
     const peakIndex = points.reduce((best, point, index) => point.requests > (points[best]?.requests ?? -1) ? index : best, 0);
     const compactSameDay = start.toDateString() === end.toDateString();
-    const timeTicks = points.length ? trendTimeAxisTicks(start, end, plotWidth, compactSameDay ? 68 : 110) : [];
+    // Edge labels are anchored inward, so space ticks 1.5 label widths apart
+    // to keep the first and last labels clear of their centered neighbours.
+    const timeTicks = points.length ? trendTimeAxisTicks(start, end, plotWidth, (compactSameDay ? 68 : 110) * 1.5) : [];
     const showTime = timeTicks.length > 1 && timeTicks[1].getTime() - timeTicks[0].getTime() < 86400000;
     const bars = points.map((point) => {
       const x0 = left + trendTimePosition(point.start, start, end) * plotWidth;

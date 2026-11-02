@@ -18,7 +18,7 @@ describe('credential cooldown actions', () => {
   it('makes model cooldowns and the clear action visible without opening details', () => {
     const html = render({ status: 'error', cooldowns: [cooldown] });
     const summary = html.slice(0, html.indexOf('</summary>'));
-    expect(summary).toContain('<strong>1 models cooling down</strong>');
+    expect(summary).toContain('<strong>1 model cooling down</strong>');
     expect(summary).toContain('Quota or rate limit');
     expect(html.slice(html.indexOf('</details>'))).toContain('Clear cooldown</button>');
     expect(html).toContain('HTTP 429');

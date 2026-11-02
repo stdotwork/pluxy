@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agents;
+mod agent_usage;
 mod app_settings;
 mod app_update;
 mod claude_catalog;
@@ -113,6 +114,8 @@ const RELEASE_PAGE_URL: &str = "https://github.com/router-for-me/CLIProxyAPI/rel
 const RELEASE_ATOM_URL: &str = "https://github.com/router-for-me/CLIProxyAPI/releases.atom";
 const RELEASE_DOWNLOAD_PREFIX: &str =
     "https://github.com/router-for-me/CLIProxyAPI/releases/download/";
+const CORE_RELEASES_API_URL: &str =
+    "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases?per_page=100";
 #[cfg(windows)]
 const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-windows.json";
 #[cfg(target_os = "linux")]
@@ -194,6 +197,7 @@ const PI_CLIPROXYAPI_NPM_LATEST_URL: &str =
 const PI_CLIPROXYAPI_PROVIDER_ID: &str = "cliproxyapi";
 const PI_AGENT_CONFIG_FILE: &str = "cliproxyapi.json";
 const PI_AGENT_SETTINGS_FILE: &str = "settings.json";
+const PI_AGENT_MODELS_CACHE_FILE: &str = "cliproxyapi-models.json";
 const CODEX_MODEL_CATALOG_FILE: &str = "cpa-gui-model-catalog.json";
 const CODEX_OAUTH_LOGIN_REQUIRED_ERROR: &str = "CODEX_OAUTH_LOGIN_REQUIRED";
 const CLAUDE_DESKTOP_PROFILE_ID: &str = "00000000-0000-4000-8000-000000831700";
@@ -448,6 +452,14 @@ struct CoreStatus {
 struct CoreLatest {
     version: String,
     asset_name: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CoreVersionOption {
+    version: String,
+    asset_name: String,
+    prerelease: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -970,7 +982,7 @@ impl Default for GuiConfigFile {
             usage_statistics_disabled: None,
             redis_usage_queue_retention_seconds: DEFAULT_REDIS_USAGE_QUEUE_RETENTION_SECONDS,
             request_log: false,
-            plugins_enabled: false,
+            plugins_enabled: true,
             routing_strategy: "round-robin".to_string(),
             proxy_url: String::new(),
             proxy_override: false,
@@ -1088,6 +1100,8 @@ struct AgentConfigStatus {
     configuration_synchronized: bool,
     connection_state: String,
     current_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_api_key: Option<String>,
     oauth_configuration: bool,
     codex_native_oauth: bool,
     codex_openai_provider: bool,
@@ -1170,6 +1184,8 @@ struct AgentModelOption {
     input_modalities: Option<Vec<String>>,
     #[serde(skip)]
     harness_metadata: Option<serde_json::Value>,
+    #[serde(skip)]
+    reasoning_levels: Vec<String>,
 }
 
 
@@ -2531,6 +2547,10 @@ fn main() {
     let _instance_guard = match acquire_app_instance_guard() {
         Ok(guard) => guard,
         Err(error) => {
+            #[cfg(target_os = "linux")]
+            if portable_update_ack_argument().is_none() && request_running_app_activation() {
+                return;
+            }
             eprintln!("{error}");
             return;
         }
@@ -2573,7 +2593,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![AUTOSTART_ARGUMENT]),
         ))
         .plugin(
             tauri_plugin_opener::Builder::new()
@@ -2583,7 +2603,9 @@ fn main() {
         .manage(CoreDownloadState::default())
         .manage(AppUpdateState::default())
         .manage(window_activity::WindowActivity::default())
-        .manage(CoreProcessState::new(should_start_core_on_launch(&gui_config)))
+        .manage(CoreProcessState::new(should_start_core_on_launch(
+            &gui_config,
+        )))
         .manage(DeepSeekHarnessProcessState::default())
         .manage(usage::UsageCollectorState::default())
         .manage(GuiConfigState::new(gui_config))
@@ -2709,6 +2731,21 @@ fn main() {
                 eprintln!("Failed to configure startup window state: {error}");
             }
 
+            #[cfg(target_os = "linux")]
+            {
+                let activation_app = app.handle().clone();
+                if let Err(error) = start_app_activation_listener(move || {
+                    let app_handle = activation_app.clone();
+                    if let Err(error) = activation_app
+                        .run_on_main_thread(move || show_windows_main_window(&app_handle))
+                    {
+                        eprintln!("Failed to schedule showing the main window: {error}");
+                    }
+                }) {
+                    eprintln!("{error}");
+                }
+            }
+
             if let Err(error) =
                 configuration_watcher::start_configuration_file_watcher(app.handle().clone())
             {
@@ -2761,7 +2798,7 @@ fn main() {
                     return;
                 }
 
-                if config.start_core_on_launch {
+                if should_start_core_on_launch(&config) {
                     if let Ok(status) =
                         current_core_status(Some(process_state.inner()), Some(config.port))
                     {
@@ -2775,8 +2812,10 @@ fn main() {
                     Err(error) => eprintln!("Failed to automatically install CPA offline kernel: {error}"),
                 }
 
-                let adopted_process_ids = match adopt_existing_core_processes(process_state.inner())
-                {
+                let adopted_process_ids = match adopt_existing_core_processes(
+                    process_state.inner(),
+                    &config,
+                ) {
                     Ok(process_ids) => process_ids,
                     Err(error) => {
                         eprintln!("Failed to scan for and adopt the CPA kernel in the current directory: {error}");
@@ -2793,8 +2832,14 @@ fn main() {
                             .join(", ")
                     );
                 } else if should_start_core_on_launch(&config) {
-                    if let Err(error) = start_core_process_inner(process_state.inner(), &config) {
+                    let start_result = retry_core_operation(3, Duration::from_millis(400), || {
+                        process_state.ensure_active()?;
+                        start_core_process_inner(process_state.inner(), &config)
+                    });
+                    if let Err(error) = start_result {
                         eprintln!("Failed to automatically start CPA kernel: {error}");
+                    } else if let Err(error) = gui_config_state.set_run_on_startup(true) {
+                        eprintln!("Failed to save automatically started kernel state: {error}");
                     }
                 }
 
@@ -2834,6 +2879,7 @@ fn main() {
             get_gui_settings,
             get_usage_view_preferences,
             save_usage_view_preferences,
+            agent_usage::get_agent_usage,
             resolve_api_access_remarks,
             save_api_access_remark,
             set_app_locale,
@@ -2841,6 +2887,7 @@ fn main() {
             get_software_settings,
             save_software_settings,
             get_agent_config_statuses,
+            get_agent_environment_options,
             create_agent_config_backup,
             list_agent_config_backups,
             preview_agent_config_backup,
@@ -2861,6 +2908,8 @@ fn main() {
             save_deepseek_harness_model_catalog_editor,
             get_codex_model_catalog_editor,
             save_codex_model_catalog_editor,
+            get_zcode_model_catalog_editor,
+            save_zcode_model_catalog_editor,
             get_thinking_aliases,
             get_model_alias_sources,
             get_model_alias_edit_source,
@@ -2876,6 +2925,10 @@ fn main() {
             restore_codex_official_config,
             set_codex_openai_provider,
             set_codex_remote_compaction,
+            get_codex_subagent_config,
+            save_codex_subagent_config,
+            get_zcode_subagent_config,
+            save_zcode_subagent_config,
             close_codex_config_modification,
             set_agent_config_enabled,
             update_agent_config,
@@ -2946,6 +2999,7 @@ fn main() {
             start_app_update,
             cancel_app_update,
             check_latest_core,
+            core_runtime::list_core_versions,
             detect_bundled_core,
             install_core_version,
             install_bundled_core,

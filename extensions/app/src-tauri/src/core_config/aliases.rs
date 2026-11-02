@@ -830,7 +830,8 @@ pub(crate) fn ensure_claude_desktop_model_aliases_with_oauth_definitions_and_rou
             }
         }
         for alias in managed_aliases {
-            if !entries.iter().any(|entry| entry.source_or_alias().eq_ignore_ascii_case(&alias)) {
+            if !entries.iter().any(|entry| entry.source_or_alias().eq_ignore_ascii_case(&alias)
+                || entry.model_id().eq_ignore_ascii_case(&alias)) {
                 remove_managed_claude_model_alias(root, &alias)?;
             }
         }
@@ -955,7 +956,7 @@ fn claude_desktop_has_other_model_family(name: &str) -> bool {
 
 fn claude_desktop_configured_models(root: &serde_norway::Mapping) -> Vec<&serde_norway::Value> {
     let mut models = Vec::new();
-    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+    for (section, _) in V8_PROVIDER_FAMILIES {
         for provider in yaml_mapping_value(root, section)
             .and_then(serde_norway::Value::as_sequence)
             .into_iter()
@@ -1016,7 +1017,7 @@ pub(crate) fn remove_managed_claude_model_alias(
     alias: &str,
 ) -> Result<bool, String> {
     let mut changed = false;
-    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+    for (section, _) in V8_PROVIDER_FAMILIES {
         let Some(providers) = yaml_mapping_value_mut(root, section) else {
             continue;
         };
@@ -1047,7 +1048,7 @@ pub(crate) fn remove_existing_claude_model_alias(
     alias: &str,
 ) -> Result<bool, String> {
     let mut changed = false;
-    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+    for (section, _) in V8_PROVIDER_FAMILIES {
         let Some(providers) = yaml_mapping_value_mut(root, section) else {
             continue;
         };
@@ -1218,7 +1219,7 @@ pub(crate) fn is_managed_claude_model_alias(model: &serde_norway::Value, alias: 
             .is_some_and(|value| value == expected_display_name)
 }
 
-pub(crate) fn configured_managed_claude_alias_matches(
+fn configured_managed_claude_provider_alias_matches(
     root: &serde_norway::Mapping,
     alias: &str,
     source_model: &str,
@@ -1228,26 +1229,19 @@ pub(crate) fn configured_managed_claude_alias_matches(
             && configured_model_identity(model)
                 .is_some_and(|(source, _, _)| source.eq_ignore_ascii_case(source_model))
     };
-    let configured_provider_alias = MODEL_ALIAS_CONFIG_SECTIONS.iter().any(|section| {
+    V8_PROVIDER_FAMILIES.iter().any(|(section, _)| {
         yaml_mapping_value(root, section)
             .and_then(serde_norway::Value::as_sequence)
             .into_iter()
             .flatten()
             .filter_map(serde_norway::Value::as_mapping)
-            .filter(|provider| configured_provider_model_is_enabled(provider, alias))
+            .filter(|provider| configured_provider_model_is_enabled(provider, alias)
+                && configured_provider_model_is_enabled(provider, source_model))
             .filter_map(|provider| yaml_mapping_value(provider, "models"))
             .filter_map(serde_norway::Value::as_sequence)
             .flatten()
             .any(matches)
-    });
-    configured_provider_alias
-        || yaml_mapping_value(root, "oauth-model-alias")
-            .and_then(serde_norway::Value::as_mapping)
-            .into_iter()
-            .flat_map(|channels| channels.values())
-            .filter_map(serde_norway::Value::as_sequence)
-            .flatten()
-            .any(matches)
+    })
 }
 
 pub(crate) fn ensure_claude_desktop_model_alias(
@@ -1257,10 +1251,14 @@ pub(crate) fn ensure_claude_desktop_model_alias(
     alias: &str,
     oauth_model_definitions: &[OAuthModelDefinitions],
 ) -> Result<(), String> {
-    if configured_managed_claude_alias_matches(root, alias, source_model) {
+    // Keep a valid existing API-key route even when another provider publishes
+    // the same model. Provider ordering is not a user choice of credentials.
+    if configured_managed_claude_provider_alias_matches(root, alias, source_model) {
         return Ok(());
     }
-    let source = resolve_claude_desktop_alias_source(sources, source_model, alias)?;
+    let source = resolve_claude_desktop_alias_source(
+        sources, source_model, alias, oauth_model_definitions,
+    )?;
     if let Some(source) = source {
         remove_existing_claude_model_alias(root, alias)?;
         append_claude_desktop_model_alias(root, source, alias)?;
@@ -1282,6 +1280,11 @@ pub(crate) fn ensure_claude_desktop_model_alias(
         )?;
         return Ok(());
     }
+    if let Some(source) = resolve_claude_desktop_fallback_source(sources, source_model, alias)? {
+        remove_existing_claude_model_alias(root, alias)?;
+        append_claude_desktop_model_alias(root, source, alias)?;
+        return Ok(());
+    }
     Err(format!(
         "Unable to determine the CPA configuration source for model {source_model}; cannot create Claude Desktop alias {alias}"
     ))
@@ -1291,7 +1294,7 @@ pub(crate) fn configured_model_client_identity(
     root: &serde_norway::Mapping,
     client_model: &str,
 ) -> Option<(String, String)> {
-    for section in MODEL_ALIAS_CONFIG_SECTIONS {
+    for (section, _) in V8_PROVIDER_FAMILIES {
         let Some(providers) =
             yaml_mapping_value(root, section).and_then(serde_norway::Value::as_sequence)
         else {
@@ -1389,10 +1392,86 @@ pub(crate) fn configured_provider_model_is_enabled(provider: &serde_norway::Mapp
         })
 }
 
+fn provider_family_matches_model(family: &str, model: &str) -> bool {
+    let lowered = model.trim().to_ascii_lowercase();
+    match family {
+        "claude" => {
+            is_claude_native_model_id(&lowered)
+                || lowered.contains("claude")
+                || lowered.contains("anthropic")
+        }
+        "codex" => {
+            lowered.starts_with("gpt")
+                || lowered.starts_with("o1")
+                || lowered.starts_with("o3")
+                || lowered.starts_with("o4")
+                || lowered.contains("openai")
+                || lowered.contains("chatgpt")
+        }
+        "xai" => lowered.contains("grok") || lowered.contains("xai"),
+        "gemini" | "vertex" | "interactions" => {
+            lowered.contains("gemini") || lowered.contains("learnlm")
+        }
+        "meta" => lowered.contains("llama") || lowered.contains("meta"),
+        _ => false,
+    }
+}
+
+fn resolve_claude_desktop_fallback_source(
+    root: &serde_norway::Mapping,
+    source_model: &str,
+    alias: &str,
+) -> Result<Option<ClaudeDesktopAliasSource>, String> {
+    let mut candidates: Vec<(usize, &'static str, usize)> = Vec::new();
+    for (section, family) in V8_PROVIDER_FAMILIES {
+        let Some(providers) = yaml_mapping_value(root, section) else {
+            continue;
+        };
+        let providers = providers
+            .as_sequence()
+            .ok_or_else(|| format!("{section} must be an array"))?;
+        for (provider_index, provider) in providers.iter().enumerate() {
+            let Some(provider) = provider.as_mapping() else {
+                continue;
+            };
+            if !configured_provider_model_is_enabled(provider, alias)
+                || !configured_provider_model_is_enabled(provider, source_model)
+            {
+                continue;
+            }
+            let priority = if provider_family_matches_model(family, source_model) {
+                0
+            } else if section == "openai-compatibility" {
+                1
+            } else {
+                2
+            };
+            candidates.push((priority, section, provider_index));
+        }
+    }
+
+    candidates.sort_by_key(|&(priority, _, _)| priority);
+
+    if let Some(&(_, section, provider_index)) = candidates.first() {
+        let mut model = serde_norway::Mapping::new();
+        model.insert(
+            yaml_key("name"),
+            serde_norway::Value::String(source_model.to_string()),
+        );
+        return Ok(Some(ClaudeDesktopAliasSource::Provider {
+            section,
+            provider_index,
+            model,
+        }));
+    }
+    Ok(None)
+}
+
 fn resolve_claude_desktop_alias_source(
     root: &serde_norway::Mapping,
     source_model: &str,
     alias: &str,
+    oauth_model_definitions: &[OAuthModelDefinitions],
 ) -> Result<Option<ClaudeDesktopAliasSource>, String> {
     for upstream in [false, true] {
         let matching_model = |model: &serde_norway::Value| {
@@ -1405,7 +1484,7 @@ fn resolve_claude_desktop_alias_source(
             model.insert(yaml_key("name"), serde_norway::Value::String(name));
             Some(model)
         };
-        for section in MODEL_ALIAS_CONFIG_SECTIONS {
+        for (section, _) in V8_PROVIDER_FAMILIES {
             let Some(providers) = yaml_mapping_value(root, section) else {
                 continue;
             };
@@ -1426,8 +1505,9 @@ fn resolve_claude_desktop_alias_source(
                     .as_sequence()
                     .ok_or_else(|| format!("{section}.models must be an array"))?;
                 if let Some(model) = models.iter().find_map(|model| {
-                    let (_, client_model, _) = configured_model_identity(model)?;
-                    if !configured_provider_model_is_enabled(provider, &client_model) {
+                    let (upstream_model, client_model, _) = configured_model_identity(model)?;
+                    if !configured_provider_model_is_enabled(provider, &client_model)
+                        || !configured_provider_model_is_enabled(provider, &upstream_model) {
                         return None;
                     }
                     matching_model(model)
@@ -1447,7 +1527,33 @@ fn resolve_claude_desktop_alias_source(
                 let (Some(channel), Some(models)) = (channel.as_str(), models.as_sequence()) else {
                     continue;
                 };
-                if let Some(model) = models.iter().find_map(matching_model) {
+                if let Some(model) = models.iter().find_map(|model| {
+                    let resolved = matching_model(model)?;
+                    let (upstream, client, _) = configured_model_identity(model)?;
+                    // A managed OAuth mapping is not evidence of an OAuth source
+                    // when this model belongs to an API-key provider. In particular,
+                    // do not bypass that provider's exclusions via a stale mapping.
+                    let api_source_exists = V8_PROVIDER_FAMILIES.iter().any(|(section, _)| {
+                        yaml_mapping_value(root, section)
+                            .and_then(serde_norway::Value::as_sequence)
+                            .into_iter().flatten()
+                            .filter_map(|provider| provider.get("models"))
+                            .filter_map(serde_norway::Value::as_sequence)
+                            .flatten().filter_map(configured_model_identity)
+                            .any(|(name, id, _)| name.eq_ignore_ascii_case(&upstream)
+                                || id.eq_ignore_ascii_case(source_model))
+                    });
+                    let confirmed_oauth_source = oauth_model_definitions.iter().any(|definition| {
+                        definition.channel.key == channel && definition.models.iter()
+                            .any(|entry| entry.id.eq_ignore_ascii_case(&upstream))
+                    });
+                    if is_managed_claude_model_alias(model, &client)
+                        && api_source_exists && !confirmed_oauth_source
+                    {
+                        return None;
+                    }
+                    Some(resolved)
+                }) {
                     return Ok(Some(ClaudeDesktopAliasSource::OAuth {
                         channel: channel.to_string(),
                         model,
@@ -1470,13 +1576,16 @@ fn append_claude_desktop_model_alias(
             provider_index,
             model,
         } => {
-            let models = yaml_mapping_value_mut(root, section)
+            let provider = yaml_mapping_value_mut(root, section)
                 .and_then(serde_norway::Value::as_sequence_mut)
                 .and_then(|providers| providers.get_mut(provider_index))
                 .and_then(serde_norway::Value::as_mapping_mut)
-                .and_then(|provider| yaml_mapping_value_mut(provider, "models"))
-                .and_then(serde_norway::Value::as_sequence_mut)
                 .ok_or("Model source configuration changed. Refresh and try again")?;
+            let models = provider
+                .entry(yaml_key("models"))
+                .or_insert_with(|| serde_norway::Value::Sequence(Vec::new()))
+                .as_sequence_mut()
+                .ok_or_else(|| format!("{section}.models must be an array"))?;
             (models, model)
         }
         ClaudeDesktopAliasSource::OAuth { channel, mut model } => {
@@ -2421,6 +2530,7 @@ pub(crate) fn insert_thinking_effort_params(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn add_model_alias_to_yaml(
     content: &str,
     source: &ResolvedThinkingAliasSource,
@@ -2428,6 +2538,25 @@ pub(crate) fn add_model_alias_to_yaml(
     effort: &str,
     fast: bool,
 ) -> Result<String, String> {
+    add_model_alias_with_tier_to_yaml(content, source, alias, effort, fast.then_some("priority"))
+}
+
+pub(crate) fn validate_alias_service_tier(tier: Option<&str>) -> Result<(), String> {
+    if tier.is_some_and(|tier| !matches!(tier, "priority" | "ultrafast")) {
+        return Err("Unsupported service tier; choose priority or ultrafast".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn add_model_alias_with_tier_to_yaml(
+    content: &str,
+    source: &ResolvedThinkingAliasSource,
+    alias: &str,
+    effort: &str,
+    service_tier: Option<&str>,
+) -> Result<String, String> {
+    validate_alias_service_tier(service_tier)?;
+    let fast = service_tier.is_some();
     if fast && !alias_source_supports_fast(source) {
         return Err("Fast supports only OpenAI-compatible API, Codex API, or Codex OAuth model sources".to_string());
     }
@@ -2468,11 +2597,11 @@ pub(crate) fn add_model_alias_to_yaml(
         insert_thinking_effort_params(&mut params_mapping, &source.source, effort)?;
         append_alias_payload_override(root, alias, &source.source.protocol, params_mapping)?;
     }
-    if fast {
+    if let Some(tier) = service_tier {
         let mut params_mapping = serde_norway::Mapping::new();
         params_mapping.insert(
             yaml_key("service_tier"),
-            serde_norway::Value::String("priority".to_string()),
+            serde_norway::Value::String(tier.to_string()),
         );
         append_alias_payload_override(root, alias, &source.source.protocol, params_mapping)?;
     }

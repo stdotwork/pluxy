@@ -588,8 +588,9 @@ pub(crate) fn validate_portable_update_asset_fallbacks_for_repository(
     if asset.fallback_urls.is_empty() {
         return Ok(());
     }
-    let repository = repository
-        .ok_or_else(|| "GitCode fallback is not configured for this build".to_string())?;
+    let Some(repository) = repository else {
+        return Ok(());
+    };
     if asset.fallback_urls.len() != 1 {
         return Err("Software update assets may define only one fallback URL".to_string());
     }
@@ -1161,8 +1162,22 @@ pub(crate) fn portable_update_download_urls(
     asset: &PortableUpdateAsset,
     source: &VersionDownloadCandidate,
 ) -> Vec<String> {
+    portable_update_download_urls_for_repository(asset, source, configured_gitcode_gui_repository())
+}
+
+pub(crate) fn portable_update_download_urls_for_repository(
+    asset: &PortableUpdateAsset,
+    source: &VersionDownloadCandidate,
+    repository: Option<&str>,
+) -> Vec<String> {
     let mut urls = std::iter::once(asset.url.as_str())
-        .chain(asset.fallback_urls.iter().map(String::as_str))
+        .chain(
+            asset
+                .fallback_urls
+                .iter()
+                .filter(|_| repository.is_some())
+                .map(String::as_str),
+        )
         .map(str::to_string)
         .collect::<Vec<_>>();
     if source.source == VersionDownloadSource::Gitcode {

@@ -40,7 +40,16 @@ const assert = require('node:assert/strict');
       } else {
         assert.equal(await controls.getByRole('button', { name: '启动 CLI', exact: true }).isDisabled(), scenario === 'desktop');
       }
-      assert.equal(await controls.getByRole('button', { name: '重启 App', exact: true }).count(), 0);
+      const restart = controls.getByRole('button', { name: '重启 App', exact: true });
+      if (scenario === 'cli') {
+        assert.ok(await restart.isDisabled());
+      } else {
+        await restart.click();
+        await page.waitForFunction(() => window.fixtureCalls.some(call => call.cmd === 'restart_agent_app'));
+        const calls = await page.evaluate(() => window.fixtureCalls.filter(call => call.cmd === 'restart_agent_app'));
+        assert.deepEqual(calls[0].args, { client: 'deepseek-harness', executablePath: null });
+        assert.equal(await page.evaluate(() => window.fixtureCalls.filter(call => call.cmd === 'restart_deepseek_harness_process').length), 0);
+      }
       await page.close();
     }
     console.log('DeepSeek Desktop UI: desktop-only, CLI-only, both, and running Web passed');

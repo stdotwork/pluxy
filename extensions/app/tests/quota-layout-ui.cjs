@@ -19,7 +19,17 @@ const base = process.env.QUOTA_TEST_BASE || 'http://127.0.0.1:1421';
         const issues = [];
         for (const [index, card] of cards.entries()) {
           const outer = rects[index];
-          const elements = [...card.querySelectorAll('.quota-identity, .quota-plan, .quota-status, .quota-row-list, .quota-card-actions, .quota-reset-footer, .quota-reset-credit-summary, .quota-card-message, .quota-card-error')];
+          const elements = [...card.querySelectorAll('.quota-identity, .quota-plan, .quota-status, .quota-row-list, .quota-card-actions, .quota-reset-credit-summary, .quota-card-message, .quota-card-error')];
+          const reset = card.querySelector('.quota-reset-footer');
+          if (reset) {
+            const actions = card.querySelector('.quota-card-actions');
+            const left = reset.getBoundingClientRect();
+            const right = actions.lastElementChild.getBoundingClientRect();
+            const footer = actions.getBoundingClientRect();
+            if (Math.abs(left.top - right.top) > 1 || Math.abs(left.height - right.height) > 1) issues.push(`${index}: action buttons must align with equal heights`);
+            if (left.right + 15 > right.left) issues.push(`${index}: action buttons need separation`);
+            if (Math.abs(left.left - footer.left) > 1 || Math.abs(right.right - footer.right) > 1) issues.push(`${index}: actions must occupy opposite footer corners`);
+          }
           for (const el of elements) {
             const r = el.getBoundingClientRect();
             if (r.left < outer.left - 1 || r.right > outer.right + 1 || r.bottom > outer.bottom + 1) issues.push(`${index}: ${el.className} outside card`);
@@ -40,6 +50,7 @@ const base = process.env.QUOTA_TEST_BASE || 'http://127.0.0.1:1421';
       assert.deepEqual(layout.issues, [], context);
       for (const text of layout.quotaTexts) {
         assert.ok(text.includes('80%') && text.includes('60%'), `${context}: both Kimi windows remain rendered`);
+        assert.ok(text.includes('Monthly total quota') && text.includes('Monthly coding quota'), `${context}: both monthly quotas remain rendered`);
       }
     }
     const claudeCard = page.locator('.real-quota-card').filter({ has: page.locator('strong[title="claude.json"]') });

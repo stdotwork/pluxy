@@ -28,7 +28,9 @@ The selected scenario is remembered locally; an explicit `mock` query overrides 
 
 The running dataset includes more than ten OAuth files, plus a runtime credential
 which the authentication-file list excludes. It covers Codex, Claude, Antigravity,
-Kimi, xAI and Devin. Examples include long account names and quota labels, multiple
+Kimi (including kimi.ai international credentials), xAI and Devin. Kimi previews
+resolve the quota host from the downloaded credential and load the plan from `/me`.
+Examples include long account names and quota labels, multiple
 quota windows, a disabled account, an exhausted account with model cooldown,
 an expired OAuth token, an empty upstream quota response, unknown remaining quota,
 a paid API account and an account with no recent requests.
@@ -39,6 +41,10 @@ its usage windows. Credential edits, enable/disable, cooldown reset, deletion,
 JSON import/replacement and OAuth cancellation update the same in-memory state.
 Malformed imports and missing credentials fail explicitly. Usage event filters
 (time, model, provider, source, API key, failure/cancellation) run before pagination.
+
+The quota preview uses the shared card footer: reset on the left and refresh on
+the right, with matching compact button sizes. The quota layout fixture covers
+both resettable Codex/Claude cards and cards with only a refresh action.
 
 Unknown IPC commands, management routes and upstream URLs fail explicitly instead
 of returning fake success. Add new contracts to `browserMockRuntime.ts`,

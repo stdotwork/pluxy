@@ -344,13 +344,13 @@ function parseCsv(text) {
 
     assert.equal(await page.getByRole('button', { name: 'Reset Filters', exact: true }).count(), 0, 'The request log has no reset filters control');
     await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('test-model');
-    await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 266');
+    await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 266 matching filters');
     assert.deepEqual(await page.locator('.usage-td-model > strong').allTextContents(), Array(20).fill('test-model'), 'Changing a filter resets pagination and shows matching models');
     await page.getByRole('combobox', { name: 'Source', exact: true }).selectOption('test-source');
-    await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 133');
+    await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 133 matching filters');
     assert.ok((await page.locator('.usage-td-source').allTextContents()).every(text => text === 'Test source'));
     await page.getByRole('combobox', { name: 'Request result', exact: true }).selectOption('failed');
-    await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 66');
+    await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 66 matching filters');
     assert.equal(await page.locator('.usage-events-table tbody .usage-result.failed').count(), 20);
     assert.equal(await page.getByRole('button', { name: 'Reset Filters', exact: true }).count(), 0, 'Active filters do not show a reset filters control');
     await page.locator('.usage-filter-panel select').first().selectOption('custom');
@@ -363,7 +363,7 @@ function parseCsv(text) {
     await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('');
     await page.getByRole('combobox', { name: 'Source', exact: true }).selectOption('');
     await page.getByRole('combobox', { name: 'Request result', exact: true }).selectOption('all');
-    await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 400');
+    await page.waitForFunction(() => document.querySelector('.usage-pagination-summary').textContent === 'Showing 1 - 20 of 400 matching filters');
     assert.equal(await page.getByRole('combobox', { name: 'Model', exact: true }).inputValue(), '');
     assert.equal(await page.getByRole('combobox', { name: 'Source', exact: true }).inputValue(), '');
     assert.equal(await page.getByRole('combobox', { name: 'Request result', exact: true }).inputValue(), 'all');

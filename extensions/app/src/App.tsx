@@ -10,7 +10,7 @@ import { closePluginWebview } from './services/pluginWebview';
 import { WindowFrame } from './components/WindowFrame';
 import { MessageNotice } from './appNotice';
 import { ThemeSelector } from './components/ThemeSelector';
-import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Bot,
   Check,
@@ -19,6 +19,7 @@ import {
   Eye,
   EyeOff,
   Gauge,
+  GitBranch,
   History,
   House,
   Languages,
@@ -46,6 +47,7 @@ import { QuotaPage } from './pages/QuotaPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { EasyModePage } from './pages/EasyModePage';
 import { UsageRecordsPage } from './pages/UsageRecordsPage';
+import { RoutingPage } from './pages/routing/RoutingPage';
 import { PluginsPage } from './pages/PluginsPage';
 import { PluginResourcePage } from './pages/PluginResourcePage';
 import { PluginNavChildren, PluginNavToggle } from './components/SidebarPluginNav';
@@ -119,6 +121,12 @@ const pages = [
     component: ConfigPanelPage,
   },
   {
+    id: 'routing',
+    labelKey: 'app.nav.routing',
+    icon: GitBranch,
+    component: RoutingPage,
+  },
+  {
     id: 'versions',
     labelKey: 'app.nav.versions',
     icon: PackageOpen,
@@ -166,6 +174,11 @@ function AppContent() {
   const { info: appUpdateInfo, hasUpdate, processing: appUpdateProcessing } = useAppUpdate();
   const { latest: coreLatest, hasUpdate: coreHasUpdate } = useCoreUpdate();
   const [active, setActive] = useState<AppPageId>('home');
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    // Reset only committed page changes, before the destination is painted.
+    workspaceRef.current?.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [active]);
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [theme, setTheme] = useThemePreference();
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
@@ -402,7 +415,13 @@ function AppContent() {
                       .join(' ')}
                     aria-current={page.id === active ? 'page' : undefined}
                     disabled={locked}
-                    title={remoteDisabled(page.id) ? t('connection.remoteDisabledTitle') : locked ? t('app.nav.lockedHint') : undefined}
+                    title={
+                      remoteDisabled(page.id)
+                        ? `${t(page.labelKey)} — ${t('connection.remoteDisabledTitle')}`
+                        : locked
+                          ? `${t(page.labelKey)} — ${t('app.nav.lockedHint')}`
+                          : t(page.labelKey)
+                    }
                     onClick={() => select(page.id)}
                   >
                     <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -455,7 +474,7 @@ function AppContent() {
                   type="button"
                   className="sidebar-link sidebar-easy-entry"
                   disabled={localBlocked}
-                  title={localBlocked ? t('connection.remoteDisabledTitle') : undefined}
+                  title={localBlocked ? `${t('app.nav.easy')} — ${t('connection.remoteDisabledTitle')}` : t('app.nav.easy')}
                   onClick={() => select('easy')}
                 >
                   <Sprout size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -480,6 +499,7 @@ function AppContent() {
                     type="button"
                     className="sidebar-language-trigger"
                     aria-label={t('app.language')}
+                    title={t('app.language')}
                     aria-haspopup="listbox"
                     aria-expanded={languageMenuOpen}
                     aria-controls="sidebar-language-list"
@@ -553,7 +573,7 @@ function AppContent() {
           </aside>
         ) : null}
 
-        <div className="workspace">
+        <div className="workspace" ref={workspaceRef}>
           <main className="content">
             {remoteDisabled(active) ? (
               <RemoteUnavailablePage />

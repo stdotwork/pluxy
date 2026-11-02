@@ -68,6 +68,7 @@ export function CodexSessionsPanel() {
   const [selectionMode, setSelectionMode] = useState(() => sessionViewCache.selectionMode);
   const [selectedIds, setSelectedIds] = useState(() => new Set(sessionViewCache.selectedIds));
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteConfirmation | null>(null);
+  const [backupBeforeDelete, setBackupBeforeDelete] = useState(true);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [cleanupPreview, setCleanupPreview] = useState<SessionIndexCleanupPreview | null>(null);
   const [cleanupSelectedIds, setCleanupSelectedIds] = useState<Set<string>>(() => new Set());
@@ -173,6 +174,7 @@ export function CodexSessionsPanel() {
       .map((session) => session.title || session.id)
       .join('、');
     const extra = Math.max(0, targets.length - 6);
+    setBackupBeforeDelete(true);
     setDeleteConfirmation({
       ids: targets.map((session) => session.id),
       title: targets.length === 1
@@ -196,7 +198,7 @@ export function CodexSessionsPanel() {
     setNotice(null);
     try {
       const result = await deleteCodexSessions({
-        request: { sessionIds: request.ids },
+        request: { sessionIds: request.ids, skipBackup: !backupBeforeDelete },
       });
       const failed = result.results.filter((item) => !['deleted', 'partial'].includes(item.status));
       const partial = result.results.filter((item) => item.status === 'partial');
@@ -509,10 +511,17 @@ export function CodexSessionsPanel() {
       {deleteConfirmation ? (
         <Dialog alert className="config-dialog codex-session-dialog" labelledBy="codex-session-delete-title" onClose={() => setDeleteConfirmation(null)} closeDisabled={operation === 'delete'}>
           <div className="config-dialog-heading"><div><TriangleAlert size={19} /><h2 id="codex-session-delete-title">{deleteConfirmation.title}</h2></div></div>
-          <p>{deleteConfirmation.description}</p>
+          <div className="codex-session-delete-content">
+            <p>{deleteConfirmation.description}</p>
+            <label className="codex-session-delete-backup">
+              <Checkbox checked={backupBeforeDelete} onChange={(event) => setBackupBeforeDelete(event.currentTarget.checked)} />
+              <span>{t('agents.sessions.backupBeforeDelete')}</span>
+            </label>
+            {!backupBeforeDelete ? <p>{t('agents.sessions.deleteWithoutBackupWarning')}</p> : null}
+          </div>
           <div className="config-dialog-actions two-actions">
             <button type="button" className="secondary-button" onClick={() => setDeleteConfirmation(null)}>{t('common.cancel')}</button>
-            <button type="button" className="danger-button" onClick={() => void confirmDelete()}><Trash2 size={15} />{t('agents.sessions.confirmDelete')}</button>
+            <button type="button" className="danger-button" onClick={() => void confirmDelete()}><Trash2 size={15} />{t(backupBeforeDelete ? 'agents.sessions.confirmDelete' : 'agents.sessions.confirmDeleteWithoutBackup')}</button>
           </div>
         </Dialog>
       ) : null}

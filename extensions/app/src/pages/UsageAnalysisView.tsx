@@ -124,6 +124,7 @@ function RequestResults({ overview, models }: { overview: AnalysisOverview; mode
         <span className="usage-analysis-total">{t('usage.analysis.requestCount', { count: formatUsageNumber(overview.totalRequests, locale) })}</span>
       </header>
       <div className="usage-results-chart">
+        <div className="usage-results-donut">
         <div className="usage-results-ring">
           <svg viewBox="0 0 120 120" role="img" aria-label={t('usage.analysis.resultChart', {
             success: formatNumber(overview.successCount), failed: formatNumber(overview.failureCount), canceled: formatNumber(overview.canceledCount),
@@ -139,8 +140,9 @@ function RequestResults({ overview, models }: { overview: AnalysisOverview; mode
             })}
           </svg>
           <div className="usage-results-center"><span>{t('usage.analysis.successRate')}</span>
-            <strong>{rate === null ? '—' : `${formatNumber(rate, { maximumFractionDigits: 1 })}%`}</strong>
-            <small>{t('usage.analysis.excludingCanceled')}</small></div>
+            <strong>{rate === null ? '—' : `${formatNumber(rate, { maximumFractionDigits: 1 })}%`}</strong></div>
+        </div>
+        <small className="usage-results-note">{t('usage.analysis.excludingCanceled')}</small>
         </div>
         <dl className="usage-results-legend">
           {statuses.map(status => <div key={status.key}>
@@ -174,7 +176,7 @@ function CategorySummary({ title, items }: { title: string; items: UsageCategory
   const first = ranked[0];
   return <details className="usage-context-detail">
     <summary>
-      <div className="usage-context-heading"><span>{title}</span><small>{t('usage.analysis.categoryCount', { count: items.length })}</small></div>
+      <div className="usage-context-heading"><span>{title}</span><small>{t(items.length === 1 ? 'usage.analysis.categoryCountOne' : 'usage.analysis.categoryCount', { count: items.length })}</small></div>
       <strong title={first?.label}>{first?.label || '—'}</strong>
       <div className="usage-context-caption"><span>{items.length === 1 ? t('usage.analysis.singleCategory')
         : first ? t('usage.analysis.leadingShare', { percent: formatNumber(total ? first.requests / total * 100 : 0, { maximumFractionDigits: 1 }) }) : '—'}</span><ChevronDown size={14} aria-hidden="true" /></div>

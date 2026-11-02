@@ -1,4 +1,7 @@
+import { routingZhTW } from './locales/routing';
 import { createTraditionalMessages } from './traditional';
+import { themeDiyZhTW } from './themeDiy';
+import { authFileTagsZhTW } from './authFileList';
 import { jaOverrides } from './ja';
 import { en } from './locales/en';
 import { zhCN, type MessageKey } from './locales/zh-CN';
@@ -9,14 +12,32 @@ export type MessageVariables = Record<string, string | number>;
 
 export const zhTW: Record<MessageKey, string> = {
   ...createTraditionalMessages(zhCN),
+  ...routingZhTW,
+  ...themeDiyZhTW,
+  ...authFileTagsZhTW,
+  'quota.service.kimi.monthlyTotal': '月總額度',
+  'quota.service.kimi.monthlyCode': '月程式設計額度',
+  'quota.service.kimi.domainUnavailable': '無法讀取 Kimi 憑證以確定額度查詢網域',
+  'quota.service.kimi.staleRequest': '連線或憑證已變更，請重新查詢 Kimi 額度',
   "app.theme.lightGroup": "淺色主題",
   "app.theme.darkGroup": "深色主題",
   'app.theme.triggerLabel': '外觀',
   'app.theme.custom.openFolder': '開啟主題資料夾',
   'app.theme.custom.openFailed': '無法開啟主題資料夾。',
   'app.theme.custom.loadFailed': '無法讀取自訂主題，已保留目前的主題列表。',
-  'app.theme.custom.skipped': '已略過無效的主題檔案：{files}',
-  'app.theme.custom.omitted': '另有 {count} 個主題檔案超出 64 個的上限，未讀取。',
+  'app.theme.custom.folderHint': '每個主題放在 themes/<資料夾>/theme.json，圖示與背景圖可放在同一個資料夾。',
+  'app.theme.custom.skippedFile': '已略過 {folder}：{reason}',
+  'app.theme.custom.diagnostics': '{folder}：{fields}',
+  'app.theme.custom.reason.unreadable': '無法讀取該檔案',
+  'app.theme.custom.reason.invalidJson': 'JSON 格式錯誤',
+  'app.theme.custom.reason.unsupportedVersion': '不支援的 schemaVersion',
+  'app.theme.custom.reason.invalidMetadata': '主題中繼資料無效',
+  'app.theme.custom.reason.duplicateId': 'id 與既有主題重複',
+  'app.theme.custom.issue.unknownToken': '未知 token',
+  'app.theme.custom.issue.invalidToken': '取值無效',
+  'app.theme.custom.issue.invalidIcon': '圖示路徑無效',
+  'app.theme.custom.issue.invalidAsset': '資源路徑無效',
+  'app.theme.custom.omitted': '另有 {count} 個主題資料夾超出 64 個的上限，未讀取。',
 
   'app.theme.triggerHint': '切換日夜模式與主題外觀',
 
@@ -34,6 +55,29 @@ export const zhTW: Record<MessageKey, string> = {
   'app.theme.midnight.description': '墨藍漸層至靛藍，搭配輕透面板與霧紫藍點綴',
   'app.theme.sakura.name': '櫻語紅粉',
   'app.theme.sakura.description': '淡櫻粉漸層至奶油白，搭配輕透面板與灰黑文字',
+  'app.theme.anime.name': '渐离の梦境',
+  'app.theme.anime.description': '星穹紫粉漸層與輕透毛玻璃面板，支援自訂二次元桌布背景圖',
+  'app.theme.anime.backdropTitle': '二次元主題背景圖',
+  'app.theme.anime.preset.starlight': '星穹暮色',
+  'app.theme.anime.preset.sakuraSky': '櫻花晴空',
+  'app.theme.anime.preset.custom': '自訂圖片',
+  'app.theme.anime.preset.none': '純色漸層',
+  'app.theme.anime.upload': '上傳背景圖',
+  'app.theme.anime.clearCustom': '清除自訂圖',
+  'app.theme.anime.uploadFailed': '無法載入圖片或儲存桌布設定。請使用較小的 PNG、JPG、WebP 或 AVIF 圖片，並確認本機儲存空間可用後重試。',
+  'app.theme.catalog.title': '選擇主題',
+  'app.theme.catalog.search': '搜尋主題',
+  'app.theme.catalog.searchHint': '搜尋名稱、描述或主題 ID',
+  'app.theme.catalog.source': '主題來源',
+  'app.theme.catalog.all': '全部主題',
+  'app.theme.catalog.builtin': '內建主題',
+  'app.theme.catalog.custom': '自訂主題',
+  'app.theme.catalog.count': '顯示 {count} / {total} 個主題',
+  'app.theme.catalog.empty': '沒有符合的主題',
+  'app.theme.catalog.reset': '清除篩選',
+  'app.theme.catalog.systemHint': '跟隨系統時，可分別選擇淺色與深色主題。',
+  'app.theme.catalog.current': '正在使用',
+  'app.theme.catalog.problems': '載入詳情（{count}）',
   'oauth.vertex.title': 'Vertex JSON 登入',
   'app.privacy.enable': '開啟隱私模式，隱藏帳號信箱等身分資訊',
   'app.privacy.disable': '關閉隱私模式，顯示完整帳號資訊',
@@ -75,5 +119,9 @@ export const zhTW: Record<MessageKey, string> = {
   'appUpdate.notes.loading': '正在取得更新說明…',
   'appUpdate.notes.failed': '暫時無法取得更新說明，請稍後重新檢查。',
   'appUpdate.notes.notChecked': '檢查軟體更新後，將顯示最新版的更新說明。',
+  'home.runtime.unknown': '無法讀取核心狀態',
+  'home.runtime.unknownHint': '核心狀態未知，讀取成功前無法啟動或重新啟動。',
+  'home.runtime.errorDetails': '錯誤詳細資訊',
+  'home.runtime.installHint': '安裝核心後即可啟動；鎖定的頁面會在核心執行後開放。',
 };
 export const ja: Record<MessageKey, string> = jaOverrides;

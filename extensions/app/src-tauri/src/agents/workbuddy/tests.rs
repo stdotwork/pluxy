@@ -359,6 +359,7 @@ fn workbuddy_switch_refreshes_retained_credentials_and_metadata() {
             is_alias: false,
             context_window: Some(128_000),
             input_modalities: Some(vec!["text".into(), "image".into()]),
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
         }],
     )
@@ -430,6 +431,7 @@ fn workbuddy_metadata_and_model_extensions_survive_reapply() {
             is_alias: false,
             context_window: Some(128_000),
             input_modalities: Some(vec!["text".into(), "image".into()]),
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
         }],
     )

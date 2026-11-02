@@ -44,6 +44,7 @@ export type ModelAliasEditContext = {
   source: ThinkingAliasSource;
   effort: string | null;
   fast: boolean;
+  serviceTier?: string | null;
 };
 
 export const getThinkingAliases = (): Promise<ThinkingAliasEntry[]> =>
@@ -61,10 +62,10 @@ export const getSpeedAliases = (): Promise<SpeedAliasEntry[]> =>
 export const getSpeedAliasSources = (): Promise<ThinkingAliasSource[]> =>
   invoke<ThinkingAliasSource[]>('get_speed_alias_sources');
 
-export const createThinkingAlias = (args: { sourceId: string; alias: string; effort: string; fast: boolean; originalAlias?: string; originalEntry?: AliasListEntry }): Promise<ThinkingAliasEntry[]> =>
+export const createThinkingAlias = (args: { sourceId: string; alias: string; effort: string; fast: boolean; serviceTier?: 'priority' | 'ultrafast'; originalAlias?: string; originalEntry?: AliasListEntry }): Promise<ThinkingAliasEntry[]> =>
   invoke<ThinkingAliasEntry[]>('create_thinking_alias', args);
 
-export const createSpeedAlias = (args: { sourceId: string; alias: string; }): Promise<SpeedAliasEntry[]> =>
+export const createSpeedAlias = (args: { sourceId: string; alias: string; serviceTier?: 'priority' | 'ultrafast'; }): Promise<SpeedAliasEntry[]> =>
   invoke<SpeedAliasEntry[]>('create_speed_alias', args);
 
 export const getModelAliasEditSource = (args: { alias: string; entry: AliasListEntry; }): Promise<ModelAliasEditContext> =>

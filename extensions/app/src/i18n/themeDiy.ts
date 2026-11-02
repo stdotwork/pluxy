@@ -1,0 +1,68 @@
+export const themeDiyZhCN = {
+  'app.theme.diy.title': "自定义主题",
+  'app.theme.diy.intro': "复制制作指南发给 AI，再告诉它你喜欢的风格，或提供参考图。指南已包含主题规则和完整示例。",
+  'app.theme.diy.defaults': "省略的 token 使用浅色或深色默认值。改主色时请同时调整按钮、开关和侧栏；将 appearance 改为 light 不会自动转换已填写的深色配色。颜色使用 #RRGGBB 或 #RRGGBBAA（末两位为不透明度）。",
+  'app.theme.diy.image': "图片是可选的：放入主题文件夹的 assets 目录，在 JSON 顶层添加下方字段（与 tokens 同级，注意逗号）。支持 PNG、JPEG、WebP、AVIF，最大 8 MiB；路径相对主题文件夹，使用 /，不能含 ..、绝对路径或符号链接。",
+  'app.theme.diy.gradient': "示例中的 backdrop 定义渐变和半透明面板，并优先于对应的 tokens 表面颜色。渐变位于图片上方；想看原图可先删除 backdrop，或将渐变色改为半透明。backdrop.imagePosition: [50, 25] 可调整图片定位。",
+  'app.theme.diy.validation': "schemaVersion 使用数字 1；id 必须唯一，以小写字母开头，只含小写字母、数字和连字符，最长 64 字符，不能使用 system 或内置主题 ID。name 是显示名称，appearance 为 light 或 dark。windowBackground 必须是六位颜色。JSON 不允许注释或尾逗号，theme.json 最大 64 KiB。",
+  'app.theme.diy.recovery': "确认文件位于 themes/文件夹/theme.json，清空搜索并切到“全部主题”或“自定义”。检查选择器中的跳过提示和字段诊断。复制第二套主题时要改 id；图片被遮住时检查渐变透明度。目录位置以“打开主题目录”为准。",
+  'app.theme.diy.copy': "复制制作指南",
+  'app.theme.diy.copied': "已复制，粘贴给 AI 后描述你想要的风格即可。",
+  'app.theme.diy.copyFailed': "复制失败，请在下方手动选中并复制指南。",
+  'app.theme.diy.agentTask': "请根据我在对话中描述的风格或提供的参考图，为 EasyCLIProxyAPI 制作可加载的自定义主题。若我还没有提供偏好，先询问明暗模式、主色和是否使用背景图。以下是制作规则、完整参考示例与 JSON Schema。示例仅用于说明格式，请按我的偏好设计。",
+  'app.theme.diy.deliverables': "交付要求：1. 若需求不明确，先询问关键偏好；若需写入应用主题目录，先让我通过“打开主题目录”提供准确路径，不要猜测路径或覆盖已有主题。2. 在新的独立文件夹内生成 UTF-8 的 theme.json；背景图放在该文件夹的 assets/ 内，只引用实际存在的文件。3. 如果没有文件操作能力，返回完整可复制的 JSON、目录结构与保存步骤，不要声称已安装。4. 使用唯一 ID；确保文字与背景对比清晰，统一按钮、开关、侧栏的配色，未设置的 token 使用默认值。5. 交付前检查 JSON 语法、Schema、文件大小、资源路径，并指出尚未实际验证的部分。最后给出生成文件位置和“重新加载 → 选择主题”的步骤。仅制作主题，不修改应用源码或其他设置。",
+  'app.theme.diy.install': "生成后如何使用",
+  'app.theme.diy.installHint': "将 AI 生成的主题文件夹放入“打开主题目录”对应的位置，再点击“重新加载”并选择新主题。",
+};
+
+export const themeDiyEn = {
+  'app.theme.diy.title': "Custom themes",
+  'app.theme.diy.intro': "Send the creation guide to an AI, then describe your preferred style or share a reference image. The guide includes theme rules and a complete example.",
+  'app.theme.diy.defaults': "Omitted tokens use light or dark defaults. Adjust buttons, switches and sidebar colors together when changing the accent. Setting appearance to light does not convert explicit dark colors. Use #RRGGBB or #RRGGBBAA colors (AA is opacity).",
+  'app.theme.diy.image': "Images are optional: place one in the theme’s assets folder and add the field below at the JSON top level, alongside tokens, with a separating comma. PNG, JPEG, WebP and AVIF are supported, up to 8 MiB. Use relative paths with /; absolute paths, .. and symlinks are not allowed.",
+  'app.theme.diy.gradient': "The example’s backdrop defines gradients and translucent surfaces, overriding corresponding surface tokens. Gradients sit above images: remove backdrop to see the original image, or use translucent gradient colors. Set backdrop.imagePosition to [50, 25] to adjust the crop.",
+  'app.theme.diy.validation': "Use numeric schemaVersion: 1 and a unique id: start with a lowercase letter, use only lowercase letters, digits and hyphens, up to 64 characters. Do not use system or built-in IDs. name is the display name; appearance is light or dark. windowBackground requires a six-digit color. JSON cannot contain comments or trailing commas; theme.json is limited to 64 KiB.",
+  'app.theme.diy.recovery': "Check themes/folder/theme.json, clear search, and choose All themes or Custom. Review skipped-theme messages and field diagnostics. Change id when duplicating a theme. Check gradient opacity if an image is hidden. Use “Open themes folder” to find the correct location.",
+  'app.theme.diy.copy': "Copy creation guide",
+  'app.theme.diy.copied': "Copied. Paste it into your AI chat and describe the style you want.",
+  'app.theme.diy.copyFailed': "Copy failed. Select and copy the guide below manually.",
+  'app.theme.diy.agentTask': "Create a loadable EasyCLIProxyAPI custom theme based on the style or reference images I provide in our conversation. If I have not provided preferences, ask about light/dark appearance, accent colors and background images first. The rules, complete reference example and JSON Schema follow. Use the example for its format and design the theme to match my preferences.",
+  'app.theme.diy.deliverables': "Deliverables: 1. Ask about essential preferences if unclear. Before writing to the application's theme directory, ask me to provide its exact path using Open themes folder; do not guess or overwrite existing themes. 2. Create UTF-8 theme.json in a new dedicated folder. Put background images in its assets/ subfolder and reference only existing files. 3. Without file access, provide complete JSON, directory structure and save instructions; do not claim installation. 4. Use a unique ID, readable contrast and coordinated buttons, switches and sidebar colors. Omitted tokens use defaults. 5. Check JSON syntax, Schema, file sizes and asset paths before delivery; identify anything not actually verified. Provide output paths and instructions to reload and select the theme. Create only the theme; do not modify application source code or other settings.",
+  'app.theme.diy.install': "Use your new theme",
+  'app.theme.diy.installHint': "Place the generated theme folder in the location shown by “Open themes folder”, then click “Reload” and select your new theme.",
+};
+
+export const themeDiyZhTW = {
+  'app.theme.diy.title': "自訂主題",
+  'app.theme.diy.intro': "複製製作指南傳給 AI，再告訴它你喜歡的風格，或提供參考圖。指南已包含主題規則和完整範例。",
+  'app.theme.diy.defaults': "省略的 token 使用淺色或深色預設值。改主色時請同時調整按鈕、開關和側欄；將 appearance 改為 light 不會自動轉換已填寫的深色配色。顏色使用 #RRGGBB 或 #RRGGBBAA（末兩位為不透明度）。",
+  'app.theme.diy.image': "圖片為選用：放入主題資料夾的 assets 目錄，在 JSON 頂層加入下方欄位（與 tokens 同層，注意逗號）。支援 PNG、JPEG、WebP、AVIF，最大 8 MiB；路徑相對主題資料夾，使用 /，不能含 ..、絕對路徑或符號連結。",
+  'app.theme.diy.gradient': "範例中的 backdrop 定義漸層和半透明面板，並優先於對應的 tokens 表面顏色。漸層位於圖片上方；想看原圖可先刪除 backdrop，或將漸層色改為半透明。backdrop.imagePosition: [50, 25] 可調整圖片定位。",
+  'app.theme.diy.validation': "schemaVersion 使用數字 1；id 必須唯一，以小寫字母開頭，只含小寫字母、數字和連字號，最長 64 字元，不能使用 system 或內建主題 ID。name 是顯示名稱，appearance 為 light 或 dark。windowBackground 必須是六位顏色。JSON 不允許註解或尾逗號，theme.json 最大 64 KiB。",
+  'app.theme.diy.recovery': "確認檔案位於 themes/資料夾/theme.json，清除搜尋並切到「全部主題」或「自訂」。檢查選擇器中的略過提示和欄位診斷。複製第二套主題時要改 id；圖片被遮住時檢查漸層透明度。目錄位置以「開啟主題目錄」為準。",
+  'app.theme.diy.copy': "複製製作指南",
+  'app.theme.diy.copied': "已複製，貼給 AI 後描述你想要的風格即可。",
+  'app.theme.diy.copyFailed': "複製失敗，請在下方手動選取並複製指南。",
+  'app.theme.diy.agentTask': "請依我在對話中描述的風格或提供的參考圖，為 EasyCLIProxyAPI 製作可載入的自訂主題。若尚未提供偏好，先詢問明暗模式、主色及是否使用背景圖。以下是製作規則、完整參考範例與 JSON Schema。範例僅供格式參考，請依我的偏好設計。",
+  'app.theme.diy.deliverables': "交付要求：1. 需求不明確時先詢問關鍵偏好；寫入應用程式主題目錄前，請讓我透過「開啟主題目錄」提供正確路徑，不要猜測或覆寫既有主題。2. 在新的獨立資料夾內產生 UTF-8 的 theme.json；背景圖放在 assets/ 內，只引用實際存在的檔案。3. 若無檔案操作能力，回傳完整 JSON、目錄結構與儲存步驟，不要宣稱已安裝。4. 使用唯一 ID，確保文字對比清晰，統一按鈕、開關與側欄配色，省略的 token 使用預設值。5. 交付前檢查 JSON、Schema、大小與資源路徑，註明尚未驗證的部分。最後提供檔案位置與重新載入、選擇主題的步驟。僅製作主題，不修改應用程式原始碼或其他設定。",
+  'app.theme.diy.install': "產生後如何使用",
+  'app.theme.diy.installHint': "將 AI 產生的主題資料夾放入「開啟主題目錄」對應的位置，再點擊「重新載入」並選擇新主題。",
+};
+
+export const themeDiyJa = {
+  'app.theme.diy.title': "カスタムテーマ",
+  'app.theme.diy.intro': "作成ガイドを AI に送り、好みのスタイルや参考画像を伝えましょう。ガイドにはテーマのルールと完全なサンプルが含まれます。",
+  'app.theme.diy.defaults': "省略した token はライトまたはダークの既定値になります。アクセント色を変える際はボタン、スイッチ、サイドバーも調整してください。appearance を light にしても指定済みの暗い色は変換されません。色は #RRGGBB または #RRGGBBAA（AA は不透明度）を使います。",
+  'app.theme.diy.image': "画像は任意です。テーマの assets フォルダーに置き、下の項目を JSON の最上位（tokens と同じ階層）にカンマで区切って追加します。PNG、JPEG、WebP、AVIF、最大 8 MiB に対応。/ を使った相対パスのみ有効で、絶対パス、..、シンボリックリンクは使えません。",
+  'app.theme.diy.gradient': "サンプルの backdrop はグラデーションと半透明の面を定義し、対応する表面 token より優先されます。グラデーションは画像より上です。原画像を見るには backdrop を削除するか半透明の色にしてください。backdrop.imagePosition: [50, 25] で画像位置を調整できます。",
+  'app.theme.diy.validation': "schemaVersion は数値の 1。id は一意で、小文字で始め、小文字・数字・ハイフンのみ、最大 64 文字です。system や組み込み ID は使えません。name は表示名、appearance は light または dark、windowBackground は 6 桁の色です。JSON のコメントや末尾カンマは禁止で、theme.json は最大 64 KiB です。",
+  'app.theme.diy.recovery': "themes/フォルダー/theme.json を確認し、検索を消して「すべて」または「カスタム」を選びます。スキップ理由や項目の診断を確認してください。複製時は id を変え、画像が隠れる場合はグラデーションの不透明度を確認します。保存先は「テーマフォルダーを開く」で確認できます。",
+  'app.theme.diy.copy': "作成ガイドをコピー",
+  'app.theme.diy.copied': "コピーしました。AI に貼り付けて希望のスタイルを伝えてください。",
+  'app.theme.diy.copyFailed': "コピーできませんでした。下のガイドを選択して手動でコピーしてください。",
+  'app.theme.diy.agentTask': "会話で伝える好みや参考画像に合わせて、EasyCLIProxyAPI で読み込めるカスタムテーマを作成してください。希望をまだ伝えていない場合は、明暗モード、主色、背景画像の有無を先に確認してください。以下にルール、完全な参考サンプルと JSON Schema を示します。サンプルは形式の参考として使い、好みに合わせてデザインしてください。",
+  'app.theme.diy.deliverables': "納品条件：1. 不明な好みは先に質問してください。アプリのテーマ保存先へ書き込む前に「テーマフォルダーを開く」で正確なパスを確認してもらい、推測や既存テーマの上書きをしないでください。2. 新しい専用フォルダーに UTF-8 の theme.json を作成し、背景画像は assets/ に保存して実在するファイルのみ参照します。3. ファイル操作ができない場合は完全な JSON、構成、保存手順を返し、インストール済みと主張しないでください。4. 一意の ID と読みやすいコントラストを使い、ボタン・スイッチ・サイドバーの配色を統一します。省略 token は既定値を使います。5. JSON、Schema、サイズ、パスを確認し、未検証の部分を明記してください。最後に出力先と再読み込み・選択手順を示します。テーマだけを作成し、アプリのソースや他の設定は変更しないでください。",
+  'app.theme.diy.install': "作成したテーマの使い方",
+  'app.theme.diy.installHint': "生成されたテーマフォルダーを「テーマフォルダーを開く」で表示される場所に置き、再読み込みして新しいテーマを選びます。",
+};
+

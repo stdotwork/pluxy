@@ -21,10 +21,11 @@ afterEach(() => { get.mockRestore(); post.mockRestore(); });
 test('all supported providers parse through the actual quota service', async () => {
   const accounts = await files();
   expect(accounts.filter(file => file.source === 'file').length).toBeGreaterThan(10);
-  for (const provider of ['codex', 'claude', 'antigravity', 'kimi', 'xai', 'devin']) {
+  for (const provider of ['codex', 'claude', 'antigravity', 'kimi', 'kimi-ai', 'xai', 'devin']) {
     const file = accounts.find(file => file.provider === provider)!;
     const quota = await loadQuota(file);
     expect(quota.status).toBe('success');
+    if (provider.startsWith('kimi')) expect(quota.plan).toBe('Kimi Code Pro');
     expect(quota.rows.length).toBeGreaterThanOrEqual(2);
     expect(quota.resetCreditsError).toBeUndefined();
     expect(quota.rows.every(row => row.remainingPercent !== null), JSON.stringify({ provider, rows: quota.rows })).toBe(true);

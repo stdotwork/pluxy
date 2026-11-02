@@ -11,6 +11,7 @@ pub(super) fn test_agent_models(names: &[&str]) -> Vec<AgentModelOption> {
         .iter()
         .map(|name| AgentModelOption {
             input_modalities: None,
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
             name: (*name).to_string(),
             alias: None,

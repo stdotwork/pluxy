@@ -11,6 +11,10 @@ localStorage.setItem('easy-cli-proxy-api.locale', 'en');
 const rows = quotaRowsFor('kimi', {
   limits: [{ window: { duration: 5, timeUnit: 'TIME_UNIT_HOUR' }, detail: { limit: 100, remaining: 80 } }],
   usage: { limit: 100, remaining: 60 },
+  usages: {
+    limit_month_total: { used_ratio: 0.2529, reset_time: '2099-10-22T00:00:00Z' },
+    limit_month_code: { used_ratio: 0.6, reset_time: '2099-10-23T00:00:00Z' },
+  },
 });
 
 const claudeFile = { name: 'claude.json', provider: 'claude', auth_index: 'claude-fixture' };

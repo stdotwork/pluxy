@@ -572,6 +572,81 @@ fn portable_update_manifest_requires_both_matching_github_assets() {
 }
 
 #[test]
+fn portable_update_manifest_with_unavailable_mirror_keeps_github_validation() {
+    let mut manifest = portable_update_test_manifest("1.2.3");
+    let repository = configured_gitcode_gui_repository().unwrap_or("mirror-owner/EasyCLIProxyAPI");
+    for asset in manifest.assets.values_mut() {
+        let filename = asset.url.rsplit('/').next().unwrap();
+        asset.fallback_urls = vec![gitcode_release_attachment_url(
+            repository, "v1.2.3", filename,
+        )];
+    }
+    manifest.full_assets = Some(manifest.assets.clone());
+    assert_eq!(validate_portable_update_manifest(&manifest), Ok(()));
+
+    for asset in manifest.assets.values() {
+        let filename = asset.url.rsplit('/').next().unwrap();
+        assert_eq!(
+            validate_portable_update_asset_fallbacks_for_repository(
+                asset,
+                "v1.2.3",
+                &[filename],
+                None,
+            ),
+            Ok(())
+        );
+    }
+
+    let (platform, _, _) = portable_update_asset_platform().unwrap();
+    let key = format!("{platform}-amd64");
+    let original = manifest.assets[&key].clone();
+    for invalid_url in [
+        original
+            .url
+            .replace("github.com/", "github.com.example.invalid/"),
+        original.url.replace("/v1.2.3/", "/v9.9.9/"),
+    ] {
+        manifest.assets.get_mut(&key).unwrap().url = invalid_url;
+        assert!(validate_portable_update_manifest(&manifest).is_err());
+    }
+    manifest.assets.insert(key.clone(), original);
+    manifest.assets.get_mut(&key).unwrap().sha256 = "invalid".to_string();
+    assert!(validate_portable_update_manifest(&manifest).is_err());
+}
+
+#[test]
+fn portable_update_download_skips_unavailable_gitcode_fallback() {
+    let mut asset = portable_update_test_asset("1.2.3", "amd64");
+    asset.fallback_urls = vec!["https://api.gitcode.com/unavailable".to_string()];
+    for source in [
+        VersionDownloadSource::Github,
+        VersionDownloadSource::Gitcode,
+    ] {
+        assert_eq!(
+            portable_update_download_urls_for_repository(
+                &asset,
+                &VersionDownloadCandidate::builtin(source),
+                None,
+            ),
+            vec![asset.url.clone()]
+        );
+    }
+    for source in [
+        VersionDownloadSource::GhProxy,
+        VersionDownloadSource::GhFast,
+    ] {
+        let candidate = VersionDownloadCandidate::builtin(source);
+        assert_eq!(
+            portable_update_download_urls_for_repository(&asset, &candidate, None),
+            vec![
+                version_source_url(&candidate, &asset.url),
+                asset.url.clone(),
+            ]
+        );
+    }
+}
+
+#[test]
 fn portable_update_asset_accepts_only_the_configured_gitcode_fallback() {
     let mut asset = portable_update_test_asset("1.2.3", "amd64");
     let (_, display, suffix) = portable_update_asset_platform().unwrap();
@@ -608,23 +683,26 @@ fn portable_update_download_order_respects_gitcode_preference() {
         &filename,
     )];
 
-    let github_first = portable_update_download_urls(
+    let github_first = portable_update_download_urls_for_repository(
         &asset,
         &VersionDownloadCandidate::builtin(VersionDownloadSource::Github),
+        Some("mirror-owner/EasyCLIProxyAPI"),
     );
     assert_eq!(update_download_source_name(&github_first[0]), "GitHub");
     assert_eq!(update_download_source_name(&github_first[1]), "GitCode");
 
-    let gitcode_first = portable_update_download_urls(
+    let gitcode_first = portable_update_download_urls_for_repository(
         &asset,
         &VersionDownloadCandidate::builtin(VersionDownloadSource::Gitcode),
+        Some("mirror-owner/EasyCLIProxyAPI"),
     );
     assert_eq!(update_download_source_name(&gitcode_first[0]), "GitCode");
     assert_eq!(update_download_source_name(&gitcode_first[1]), "GitHub");
 
-    let mirror_first = portable_update_download_urls(
+    let mirror_first = portable_update_download_urls_for_repository(
         &asset,
         &VersionDownloadCandidate::builtin(VersionDownloadSource::GhProxy),
+        Some("mirror-owner/EasyCLIProxyAPI"),
     );
     assert_eq!(
         update_download_source_name(&mirror_first[0]),

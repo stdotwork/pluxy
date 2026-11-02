@@ -99,7 +99,7 @@ const path = require('node:path');
     await page.waitForFunction(() => document.querySelector('.sidebar-easy-entry')?.disabled);
     for (const name of ['Agent Configuration', 'Usage', 'Version Management']) {
       assert.equal(await nav(name).isDisabled(), true, `${name} locked remotely`);
-      assert.equal(await nav(name).getAttribute('title'), 'Not available in Remote mode yet');
+      assert.equal(await nav(name).getAttribute('title'), `${name} — Not available in Remote mode yet`);
     }
     await page.locator('#nav-plugin-children').waitFor();
 

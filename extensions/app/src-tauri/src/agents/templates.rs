@@ -144,10 +144,11 @@ async fn prepare_template_plan(
     oauth_configuration: bool,
     claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
+    api_key: Option<&str>,
 ) -> Result<TemplatePlan, String> {
     if client == "codex" { ensure_codex_cpa_mode(home)?; }
     let paths = config_paths(client, home)?;
-    let api_key = effective_agent_api_key(config);
+    let api_key = resolve_agent_api_key(config, api_key);
     let (model, mappings, before, after, core) = if client == PI_AGENT_ID {
         let model = resolve_pi_default_model(config, model).await?;
         let _guard = AGENT_CONFIG_FILE_LOCK
@@ -280,6 +281,34 @@ pub(crate) async fn preview_agent_config_template(
     oauth_configuration: bool,
     claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
+    api_key: Option<String>,
+    config_directories: Option<AgentConfigDirectories>,
+) -> Result<TemplatePreview, String> {
+    let directories = validate_agent_config_directories(config_directories)?;
+    AGENT_CONFIG_DIRECTORIES
+        .scope(directories, async move {
+            preview_agent_config_template_in_directories(
+                app,
+                client,
+                model,
+                oauth_configuration,
+                claude_code_model_mappings,
+                claude_desktop_model_mappings,
+                api_key,
+            )
+            .await
+        })
+        .await
+}
+
+pub(crate) async fn preview_agent_config_template_in_directories(
+    app: tauri::AppHandle,
+    client: String,
+    model: String,
+    oauth_configuration: bool,
+    claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
+    api_key: Option<String>,
 ) -> Result<TemplatePreview, String> {
     let home = app.path().home_dir().map_err(|_| "Failed to get user directory")?;
     let config = app.state::<GuiConfigState>().snapshot()?;
@@ -291,6 +320,7 @@ pub(crate) async fn preview_agent_config_template(
         oauth_configuration,
         claude_code_model_mappings,
         claude_desktop_model_mappings,
+        api_key.as_deref(),
     )
     .await?
     .preview)
@@ -305,6 +335,36 @@ pub(crate) async fn apply_agent_config_template(
     claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
     claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
     revision: String,
+    api_key: Option<String>,
+    config_directories: Option<AgentConfigDirectories>,
+) -> Result<AgentConfigActionResult, String> {
+    let directories = validate_agent_config_directories(config_directories)?;
+    AGENT_CONFIG_DIRECTORIES
+        .scope(directories, async move {
+            apply_agent_config_template_in_directories(
+                app,
+                client,
+                model,
+                oauth_configuration,
+                claude_code_model_mappings,
+                claude_desktop_model_mappings,
+                revision,
+                api_key,
+            )
+            .await
+        })
+        .await
+}
+
+pub(crate) async fn apply_agent_config_template_in_directories(
+    app: tauri::AppHandle,
+    client: String,
+    model: String,
+    oauth_configuration: bool,
+    claude_code_model_mappings: Option<ClaudeDesktopModelMappings>,
+    claude_desktop_model_mappings: Option<ClaudeDesktopModelMappings>,
+    revision: String,
+    api_key: Option<String>,
 ) -> Result<AgentConfigActionResult, String> {
     let home = app.path().home_dir().map_err(|_| "Failed to get user directory")?;
     let config = app.state::<GuiConfigState>().snapshot()?;
@@ -316,6 +376,7 @@ pub(crate) async fn apply_agent_config_template(
         oauth_configuration,
         claude_code_model_mappings,
         claude_desktop_model_mappings,
+        api_key.as_deref(),
     )
     .await?;
     let result = execute_template_plan(&config, plan, &revision).await?;

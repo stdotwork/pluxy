@@ -38,6 +38,7 @@ import {
   Gauge,
   Pencil,
   RefreshCw,
+  Search,
   Trash2,
   TriangleAlert,
   Wallet,
@@ -71,8 +72,9 @@ import { SelectMenu } from '../components/SelectMenu';
 import { Dialog } from '../components/Dialog';
 import { UsageAnalysisView, type UsageAnalysis, type UsageCategory } from './UsageAnalysisView';
 import { Select } from '../components/Select';
+import { AgentUsageView } from './AgentUsageView';
 
-type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing' | 'data-management';
+type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing' | 'agent-usage' | 'data-management';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
 
 const USAGE_TABS = [
@@ -80,6 +82,7 @@ const USAGE_TABS = [
   { value: 'analysis', labelKey: 'usage.tab.analysis' },
   { value: 'events', labelKey: 'usage.tab.events' },
   { value: 'pricing', labelKey: 'usage.tab.pricing' },
+  { value: 'agent-usage', labelKey: 'usage.tab.agentUsage' },
   { value: 'data-management', labelKey: 'usage.tab.dataManagement' },
 ] as const;
 
@@ -110,7 +113,7 @@ const emptyAnalysis: UsageAnalysis = { models: [], providers: [], sources: [], a
 const loadTab = (): UsageTab => {
   try {
     const saved = usagePreferences.getItem(TAB_KEY);
-    return saved === 'analysis' || saved === 'events' || saved === 'pricing' || saved === 'data-management'
+    return saved === 'analysis' || saved === 'events' || saved === 'pricing' || saved === 'agent-usage' || saved === 'data-management'
       ? saved
       : 'overview';
   } catch {
@@ -202,6 +205,8 @@ export function UsageRecordsPage() {
   const [optionsAnalysis, setOptionsAnalysis] = useState<UsageAnalysis>(emptyAnalysis);
   const [events, setEvents] = useState<UsageEventPage | null>(null);
   const [pricing, setPricing] = useState<UsagePricing | null>(null);
+  const [agentUsageRefreshKey, setAgentUsageRefreshKey] = useState(0);
+  const [agentUsageLoading, setAgentUsageLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const loadedFilterScopeKeyRef = useRef('');
@@ -265,6 +270,10 @@ export function UsageRecordsPage() {
       const requestId = ++requestIdRef.current;
       const { timeQuery, query } = buildQueries();
       if (!quiet) setLoading(true);
+      if (activeTab === 'agent-usage') {
+        setLoading(false);
+        return;
+      }
       try {
         const statusRequest = getUsageCollectorStatus();
         const filtersChanged = loadedFilterScopeKeyRef.current !== filterScopeKey;
@@ -389,6 +398,7 @@ export function UsageRecordsPage() {
   const collectorTone = status?.state === 'error' ? 'error' : status?.state === 'collecting' ? 'success' : '';
   const showInitialLoading =
     activeTab !== 'data-management' &&
+    activeTab !== 'agent-usage' &&
     !error &&
     loading &&
     ((activeTab === 'overview' && !overview) ||
@@ -489,7 +499,7 @@ export function UsageRecordsPage() {
       <div className="usage-topbar">
         <div className="usage-page-navigation">
           <h1 className="sr-only">{t('usage.title')}</h1>
-          <Tabs className="usage-tabs" aria-label={t('usage.pageLabel')} value={activeTab} onChange={setActiveTab}
+          <Tabs className="usage-tabs secondary-page-tabs" aria-label={t('usage.pageLabel')} value={activeTab} onChange={setActiveTab}
             items={USAGE_TABS.map(({ value, labelKey }) => ({ value, id: `usage-tab-${value}`, panelId: 'usage-tab-panel', label: <span>{t(labelKey)}</span> }))} />
         </div>
 
@@ -508,8 +518,10 @@ export function UsageRecordsPage() {
           <button
             type="button"
             className="icon-button quiet usage-refresh-btn"
-            onClick={() => void loadData(false)}
-            disabled={loading}
+            onClick={() => activeTab === 'agent-usage'
+              ? setAgentUsageRefreshKey((current) => current + 1)
+              : void loadData(false)}
+            disabled={loading || agentUsageLoading}
             title={t('usage.refresh')}
             aria-label={t('usage.refresh')}
           >
@@ -524,12 +536,13 @@ export function UsageRecordsPage() {
         role="tabpanel"
         aria-labelledby={`usage-tab-${activeTab}`}
       >
-      {activeTab !== 'data-management' ? filterPanel : null}
+      {activeTab !== 'data-management' && activeTab !== 'agent-usage' ? filterPanel : null}
 
       {showInitialLoading && activeTab !== 'events' ? (
         <EmptyState className="usage-initial-loading" icon={<Database size={22} />}>{t('usage.loading')}</EmptyState>
       ) : null}
 
+      {activeTab === 'overview' && <RoutingPanel />}
       {activeTab === 'overview' && overview ? <OverviewView overview={overview} range={overviewRange} /> : null}
       {activeTab === 'analysis' && (analysis || overview) ? <UsageAnalysisView analysis={analysis} overview={overview} range={overviewRange} /> : null}
       {activeTab === 'events' ? (
@@ -548,6 +561,7 @@ export function UsageRecordsPage() {
       {activeTab === 'pricing' && pricing ? (
         <PricingView pricing={pricing} query={buildQueries().query} onChanged={() => loadData(true)} />
       ) : null}
+      {activeTab === 'agent-usage' ? <AgentUsageView refreshKey={agentUsageRefreshKey} onLoadingChange={setAgentUsageLoading} /> : null}
       {activeTab === 'data-management' ? <UsageDataManagementView /> : null}
       </div>
     </section>
@@ -733,6 +747,7 @@ function UsageDataManagementView() {
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !savingLimit && !shrinking && !running) void shrinkDatabase();
               }}
+              placeholder={t('usage.dataManagement.shrinkPlaceholder')}
               aria-label={t('usage.dataManagement.shrinkInput')}
             />
             <span>{t('usage.dataManagement.storageUnit')}</span>
@@ -1236,7 +1251,7 @@ function UsageTrend({
               <span
                 key={date.getTime()}
                 className={posClass}
-                style={{ left: `${left}%` }}
+                style={posClass === 'is-mid' ? { left: `${left}%` } : undefined}
                 title={date.toLocaleString(locale)}
               >
                 {formatTrendAxisLabel({ start: date }, series.bucket, locale, {
@@ -1325,7 +1340,7 @@ function TokenComposition({ overview }: { overview: UsageOverview }) {
           <span>{t('usage.stat.cacheHitRate')} <b>{(overview.cacheHitRate * 100).toFixed(1)}%</b></span>
         </div>
         <div className="usage-token-context">
-          <section className="usage-token-context-group usage-token-results" aria-labelledby="usage-token-results-title">
+          <section className="usage-token-context-group usage-token-results surface-sunken" aria-labelledby="usage-token-results-title">
             <h3 id="usage-token-results-title"><Activity size={14} aria-hidden="true" />{t('usage.token.requestStatus')}</h3>
             <dl className="usage-token-context-metrics">
               <div className="tone-success"><dt>{t('usage.result.success')}</dt><dd>{compactNumber(overview.successCount)}</dd></div>
@@ -1333,14 +1348,14 @@ function TokenComposition({ overview }: { overview: UsageOverview }) {
               <div><dt>{t('usage.result.canceled')}</dt><dd>{compactNumber(overview.canceledCount)}</dd></div>
             </dl>
           </section>
-          <section className="usage-token-context-group" aria-labelledby="usage-token-performance-title">
+          <section className="usage-token-context-group surface-sunken" aria-labelledby="usage-token-performance-title">
             <h3 id="usage-token-performance-title"><Gauge size={14} aria-hidden="true" />{t('usage.token.performance')}</h3>
             <dl className="usage-token-context-metrics">
               <div><dt>{t('usage.stat.rpm')}</dt><dd>{overview.rpm.toFixed(2)}</dd></div>
               <div><dt>{t('usage.stat.averageLatency')}</dt><dd>{compactDuration(overview.averageLatencyMs)}</dd></div>
             </dl>
           </section>
-          <section className="usage-token-context-group" aria-labelledby="usage-token-pricing-title" title={t('usage.stat.costNote')}>
+          <section className="usage-token-context-group surface-sunken" aria-labelledby="usage-token-pricing-title" title={t('usage.stat.costNote')}>
             <h3 id="usage-token-pricing-title"><Wallet size={14} aria-hidden="true" />{pricingLabel}</h3>
             <dl className="usage-token-context-metrics">
               <div><dt>{t('usage.token.priced')}</dt><dd>{compactNumber(overview.pricedRequests)}</dd></div>
@@ -1541,12 +1556,15 @@ function PricingView({
         </div>
         <div className="usage-pricing-actions">
           <div className="usage-pricing-action-group">
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.currentTarget.value)}
-              placeholder={t('usage.pricing.search')}
-              aria-label={t('usage.pricing.search')}
-            />
+            <div className="usage-pricing-search search-control" data-size="default">
+              <Search size={16} aria-hidden="true" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.currentTarget.value)}
+                placeholder={t('usage.pricing.search')}
+                aria-label={t('usage.pricing.search')}
+              />
+            </div>
             <button type="button" className="secondary-button compact-button" onClick={() => setDraft(emptyPriceDraft())}>
               {t('usage.pricing.add')}
             </button>
@@ -1749,3 +1767,4 @@ function UsageEmpty() {
     <EmptyState className="usage-empty" icon={<TriangleAlert size={18} />}>{t('usage.empty')}</EmptyState>
   );
 }
+import { RoutingPanel } from '../components/routing/RoutingPanel';
