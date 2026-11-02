@@ -129,7 +129,33 @@ const path = require('node:path');
     const install = page.getByRole('button', { name: 'Install local plugin' });
     assert.equal(await install.isDisabled(), true, 'local plugin install shown but disabled remotely');
     assert.equal(await install.getAttribute('title'), 'Not available in Remote mode yet');
+    // The Routing page shows the remote core's plan read-only, like Advanced Features, and writes nothing.
+    await page.evaluate(() => {
+      const internals = window.__TAURI_INTERNALS__;
+      const original = internals.invoke.bind(internals);
+      window.__managementWrites = [];
+      internals.invoke = (command, args, options) => {
+        const request = args && args.request;
+        if (command === 'management_request' && request && request.method !== 'GET') window.__managementWrites.push(`${request.method} ${request.path}`);
+        return original(command, args, options);
+      };
+    });
+    await nav('Routing').click();
+    const routing = page.locator('.routing-page');
+    const fillFirst = routing.getByRole('radio', { name: /Fill first/ });
+    await fillFirst.waitFor();
+    await routing.locator('.routing-board').waitFor();
+    assert.equal(await routing.locator('.routing-error').count(), 0, 'the remote routing board loaded completely');
+    assert.equal(await fillFirst.isDisabled(), true, 'routing strategy is read-only remotely');
+    await fillFirst.click({ force: true });
+    const apply = routing.getByRole('button', { name: 'Apply plan' });
+    assert.equal(await apply.isDisabled(), true, 'a remote routing plan cannot be applied');
+    assert.equal(await apply.getAttribute('title'), 'Not available in Remote mode yet');
+    await apply.click({ force: true });
+    await routing.getByText(/Showing the remote core's current settings/).waitFor();
+    assert.equal(await routing.getByRole('button', { name: 'Refresh' }).isEnabled(), true, 'the remote plan can be reloaded');
+    assert.deepEqual(await page.evaluate(() => window.__managementWrites), [], 'Remote routing sends no management writes');
     assert.deepEqual(errors, []);
-    console.log('PASS: one connection component on Home and in Advanced Features; Remote keeps the Local layout with remote values, read-only settings and in-place disabled local actions; Silent Launch hidden.');
+    console.log('PASS: one connection component on Home and in Advanced Features; Remote keeps the Local layout with remote values, read-only settings and Routing plan, no remote writes, and in-place disabled local actions; Silent Launch hidden.');
   } finally { await browser?.close(); await server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

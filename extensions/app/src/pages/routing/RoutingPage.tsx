@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { GitBranch, RefreshCw, Save } from 'lucide-react';
 import { useI18n } from '../../i18n';
+import { useRemoteMode } from '../../coreRuntime';
+import { Notice } from '../../components/Notice';
 import { APP_NAVIGATION_REQUEST_EVENT, type AppNavigationRequest } from '../../navigation';
 import { applyRoutingPlan, readRoutingBoard, validateRoutingPlan, type RoutingBoard } from '../../services/routing';
 import { diffPlan, draftFromBoard, resolveRoute, type RoutingDraft } from './routingPlan';
@@ -10,6 +12,8 @@ import './RoutingPage.css';
 
 export function RoutingPage() {
   const { t } = useI18n();
+  // Remote mode shows the remote core's settings read-only, as Advanced Features does.
+  const readOnly = useRemoteMode();
   const [board, setBoard] = useState<RoutingBoard | null>(null);
   const [plan, setPlan] = useState<RoutingDraft | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,13 +40,13 @@ export function RoutingPage() {
   let valid = false;
   if (board && diff) { try { validateRoutingPlan(board, diff.plan); valid = true; } catch { valid = false; } }
   const apply = async () => {
-    if (!diff || busy) return;
+    if (!diff || busy || readOnly) return;
     setBusy(true); setError(''); setSaved(false);
     try { accept(await applyRoutingPlan(diff.plan)); setSaved(true); }
     catch (failure) { setError(String(failure)); setNeedsRefresh(true); }
     finally { setBusy(false); }
   };
-  const disabled = busy || needsRefresh || !!board?.partial.length;
+  const disabled = busy || readOnly || needsRefresh || !!board?.partial.length;
   return <section className="page routing-page" aria-busy={busy}>
     <header className="routing-heading"><div><h1><GitBranch size={24} />{t('routing.title')}</h1><p>{t('routing.description')}</p></div><div className="routing-actions">
       {diff && dirty && <details className="routing-changes"><summary className="routing-summary-pill">{t('routing.changeCount', { count: diff.changes.length })}</summary><div className="routing-change-list">{diff.changes.map((change, index) => {
@@ -52,9 +56,10 @@ export function RoutingPage() {
         return <div key={index}><strong>{name}</strong><span>{field}</span><span>{t('routing.changeDetail', { from: display(change.from), to: display(change.to) })}</span></div>;
       })}</div></details>}
       <button type="button" className="secondary-button" disabled={busy} onClick={() => { if (!dirty || window.confirm(t('routing.leave'))) void refresh(); }}><RefreshCw size={15} />{t('routing.refresh')}</button>
-      <button type="button" className="secondary-button" disabled={!dirty || busy} onClick={() => { if (board) { setPlan(draftFromBoard(board)); setSaved(false); } }}>{t('routing.reset')}</button>
-      <button type="button" className="primary-button" disabled={disabled || !dirty || !valid} onClick={() => void apply()}><Save size={15} />{t(busy ? 'routing.saving' : 'routing.apply')}</button>
+      <button type="button" className="secondary-button" disabled={!dirty || busy || readOnly} onClick={() => { if (board) { setPlan(draftFromBoard(board)); setSaved(false); } }}>{t('routing.reset')}</button>
+      <button type="button" className="primary-button" disabled={disabled || !dirty || !valid} title={readOnly ? t('connection.remoteDisabledTitle') : undefined} onClick={() => void apply()}><Save size={15} />{t(busy ? 'routing.saving' : 'routing.apply')}</button>
     </div></header>
+    {readOnly ? <Notice tone="info">{t('connection.remoteSettingsNotice')}</Notice> : null}
     {error && <p role="alert" className="routing-error">{error}</p>}
     {board?.partial.length ? <p role="alert" className="routing-error">{t('routing.partial')} ({board.partial.join(', ')})</p> : null}
     <div role="status" className="routing-status">{saved ? t('routing.saved') : dirty ? t('routing.dirty') : busy ? t('routing.loading') : ''}</div>

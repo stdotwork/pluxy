@@ -887,6 +887,17 @@ function managementResponse(state: BrowserMockState, payload: JsonObject) {
   if (method === 'GET' && path === '/credentials') {
     return { files: clone(state.authFiles).map(({ tags, ...file }) => file), observed_at: new Date().toISOString() };
   }
+  if (method === 'GET' && path === '/config/routing') return clone(state.extendedConfig.routing);
+  if (method === 'PUT' && path.startsWith('/config/routing/')) {
+    const keys = path.slice('/config/routing/'.length).split('/');
+    let target = asObject(state.extendedConfig.routing);
+    for (const key of keys.slice(0, -1)) {
+      if (!target[key] || typeof target[key] !== 'object') target[key] = {};
+      target = asObject(target[key]);
+    }
+    target[keys[keys.length - 1]] = clone(body);
+    return { status: 'ok' };
+  }
   if (method === 'GET' && path === '/credentials/download') {
     const file = findAuthFile(state, readString(query.name));
     if (!file) throw new Error(`Browser Mock credential not found: ${readString(query.name)}`);
