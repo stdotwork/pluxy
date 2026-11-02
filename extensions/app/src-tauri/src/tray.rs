@@ -239,6 +239,7 @@ pub(crate) enum WindowsTrayCoreAction {
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WindowsTrayPresentation {
     pub(crate) status_text: String,
     pub(crate) toggle_text: String,
@@ -306,10 +307,17 @@ pub(crate) struct WindowsTrayState {
     quit_item: MenuItem<tauri::Wry>,
     locale: Mutex<String>,
     busy: AtomicBool,
+    presentation: Mutex<Option<WindowsTrayPresentation>>,
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 impl WindowsTrayState {
+    fn invalidate_presentation(&self) {
+        if let Ok(mut previous) = self.presentation.lock() {
+            *previous = None;
+        }
+    }
+
     fn locale(&self) -> String {
         self.locale
             .lock()
@@ -318,6 +326,7 @@ impl WindowsTrayState {
     }
 
     fn set_locale(&self, locale: &str) {
+        self.invalidate_presentation();
         let normalized = normalize_app_locale(locale);
         if let Ok(mut current) = self.locale.lock() {
             *current = normalized.to_string();
@@ -349,6 +358,7 @@ impl WindowsTrayState {
             return false;
         }
 
+        self.invalidate_presentation();
         let locale = self.locale();
         if let Err(error) = self
             .status_item
@@ -374,34 +384,46 @@ impl WindowsTrayState {
         self.busy.store(false, Ordering::Release);
     }
 
-    fn update(&self, status: &CoreStatus) -> String {
+    // Called on the main thread, so native writes cannot interleave between updates.
+    fn update(&self, status: &CoreStatus) -> Option<String> {
         let presentation =
             windows_tray_presentation(status, self.busy.load(Ordering::Acquire), &self.locale());
+        if let Ok(mut previous) = self.presentation.lock() {
+            if previous.as_ref() == Some(&presentation) {
+                return None;
+            }
+            *previous = Some(presentation.clone());
+        }
         if let Err(error) = self.status_item.set_text(presentation.status_text.clone()) {
+            self.invalidate_presentation();
             eprintln!("Failed to update desktop tray core status: {error}");
         }
         if let Err(error) = self
             .toggle_core_item
             .set_text(presentation.toggle_text.clone())
         {
+            self.invalidate_presentation();
             eprintln!("Failed to update desktop tray action text: {error}");
         }
         if let Err(error) = self
             .toggle_core_item
             .set_enabled(presentation.toggle_enabled)
         {
+            self.invalidate_presentation();
             eprintln!("Failed to update desktop tray action state: {error}");
         }
         if let Err(error) = self
             .restart_core_item
             .set_enabled(presentation.restart_enabled)
         {
+            self.invalidate_presentation();
             eprintln!("Failed to update desktop tray restart state: {error}");
         }
-        presentation.tooltip
+        Some(presentation.tooltip)
     }
 
     fn show_error(&self, error: &str) {
+        self.invalidate_presentation();
         let mut summary = error.chars().take(48).collect::<String>();
         if error.chars().count() > 48 {
             summary.push('…');
@@ -434,15 +456,29 @@ pub(crate) fn show_windows_main_window(app_handle: &tauri::AppHandle) {
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn update_windows_tray_status(app_handle: &tauri::AppHandle, status: &CoreStatus) {
-    let tooltip = app_handle
-        .try_state::<WindowsTrayState>()
-        .map(|tray_state| tray_state.update(status))
-        .unwrap_or_else(|| windows_tray_presentation(status, false, "en").tooltip);
-
-    if let Some(tray) = app_handle.tray_by_id(WINDOWS_TRAY_ID) {
-        if let Err(error) = tray.set_tooltip(Some(&tooltip)) {
-            eprintln!("Failed to update desktop tray tooltip: {error}");
+    let app = app_handle.clone();
+    let status = status.clone();
+    // Remote status publication holds the configuration lock to reject stale targets.
+    // Menu setters dispatch synchronously: waiting here can deadlock with settings IPC
+    // on the main thread waiting for that lock. Queue the entire tray update instead.
+    if let Err(error) = app_handle.run_on_main_thread(move || {
+        let tooltip = match app.try_state::<WindowsTrayState>() {
+            Some(state) => state.update(&status),
+            None => Some(windows_tray_presentation(&status, false, "en").tooltip),
+        };
+        let Some(tooltip) = tooltip else {
+            return;
+        };
+        if let Some(tray) = app.tray_by_id(WINDOWS_TRAY_ID) {
+            if let Err(error) = tray.set_tooltip(Some(&tooltip)) {
+                if let Some(state) = app.try_state::<WindowsTrayState>() {
+                    state.invalidate_presentation();
+                }
+                eprintln!("Failed to update desktop tray tooltip: {error}");
+            }
         }
+    }) {
+        eprintln!("Failed to schedule desktop tray update: {error}");
     }
 }
 
@@ -461,20 +497,28 @@ pub(crate) fn update_windows_tray_locale(
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) fn show_windows_tray_action_error(app_handle: &tauri::AppHandle, error: &str) {
     eprintln!("Desktop tray core operation failed: {error}");
-    let locale = app_handle
-        .try_state::<WindowsTrayState>()
-        .map(|state| state.locale())
-        .unwrap_or_else(|| "en".to_string());
-    if let Some(tray_state) = app_handle.try_state::<WindowsTrayState>() {
-        tray_state.show_error(error);
-    }
-    if let Some(tray) = app_handle.tray_by_id(WINDOWS_TRAY_ID) {
-        if let Err(update_error) = tray.set_tooltip(Some(native_text(
-            &locale,
-            NativeText::TooltipCoreOperationFailed,
-        ))) {
-            eprintln!("Failed to update desktop tray error tooltip: {update_error}");
+    let app = app_handle.clone();
+    let error = error.to_string();
+    // Invalidate and write together, serialized with queued status updates. Otherwise a
+    // status update can cache success between invalidation and the error's native writes.
+    if let Err(error) = app_handle.run_on_main_thread(move || {
+        let locale = app
+            .try_state::<WindowsTrayState>()
+            .map(|state| state.locale())
+            .unwrap_or_else(|| "en".to_string());
+        if let Some(tray_state) = app.try_state::<WindowsTrayState>() {
+            tray_state.show_error(&error);
         }
+        if let Some(tray) = app.tray_by_id(WINDOWS_TRAY_ID) {
+            if let Err(update_error) = tray.set_tooltip(Some(native_text(
+                &locale,
+                NativeText::TooltipCoreOperationFailed,
+            ))) {
+                eprintln!("Failed to update desktop tray error tooltip: {update_error}");
+            }
+        }
+    }) {
+        eprintln!("Failed to schedule desktop tray error: {error}");
     }
 }
 
@@ -653,6 +697,7 @@ pub(crate) fn setup_windows_tray(app: &mut tauri::App<tauri::Wry>) -> tauri::Res
         quit_item: quit,
         locale: Mutex::new(locale),
         busy: AtomicBool::new(false),
+        presentation: Mutex::new(None),
     });
 
     Ok(())
