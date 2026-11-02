@@ -335,7 +335,23 @@ pub(crate) fn merge_core_config_yaml(
     }
     startup_config.usage_statistics_enabled = config.usage_statistics_disabled != Some(true);
     let managed = apply_gui_managed_settings(&base, &startup_config)?;
+    let codex_compatibility_config = current
+        .and_then(|content| serde_norway::from_str::<serde_norway::Value>(content).ok());
     let managed = patch_core_yaml_document(&managed, |document| {
+        for field in ["enable-apply-patch", "optimize-multi-agent-v2"] {
+            let explicitly_configured = codex_compatibility_config
+                .as_ref()
+                .and_then(serde_norway::Value::as_mapping)
+                .is_some_and(|root| [
+                    vec!["client", "codex", field],
+                    vec!["oauth", "providers", "codex", field],
+                    vec!["providers", "codex", field],
+                    vec!["codex", field],
+                ].iter().any(|path| nested_yaml_value(root, path).is_some()));
+            if !explicitly_configured {
+                set_core_yaml_schema_value(document, &["client", "codex", field], &["client", "codex", field], serde_norway::Value::Bool(true))?;
+            }
+        }
         if config.image_generation_user_selected { return Ok(false); }
         let Some(root) = document.as_mapping() else { return Ok(false); };
         let has_codex_keys = nested_yaml_value(root, &["api-keys", "codex"])
@@ -916,13 +932,29 @@ pub(crate) fn retry_windows_file_replace(
     }
 }
 
+#[cfg(any(windows, test))]
+pub(crate) fn is_wsl_path(path: &Path) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let unc = normalized
+        .strip_prefix("\\\\?\\unc\\")
+        .or_else(|| normalized.strip_prefix("\\\\"));
+    unc.and_then(|value| value.split_once('\\'))
+        .is_some_and(|(server, share)| {
+            (server.eq_ignore_ascii_case("wsl$") || server.eq_ignore_ascii_case("wsl.localhost"))
+                && !share.split('\\').next().unwrap_or_default().is_empty()
+        })
+}
+
 #[cfg(windows)]
 pub(crate) fn replace_file_atomically(
     temporary_path: &Path,
     destination_path: &Path,
 ) -> io::Result<()> {
     use std::{os::windows::ffi::OsStrExt, ptr};
-    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+    use windows_sys::Win32::{Foundation::ERROR_NOT_SUPPORTED, Storage::FileSystem::ReplaceFileW};
 
     let destination = destination_path
         .as_os_str()
@@ -936,7 +968,7 @@ pub(crate) fn replace_file_atomically(
         .collect::<Vec<_>>();
     retry_windows_file_replace(
         || {
-            if !destination_path.exists() {
+            if is_wsl_path(destination_path) || !destination_path.exists() {
                 return fs::rename(temporary_path, destination_path);
             }
             let replaced = unsafe {
@@ -950,7 +982,11 @@ pub(crate) fn replace_file_atomically(
                 )
             };
             if replaced == 0 {
-                return Err(io::Error::last_os_error());
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(ERROR_NOT_SUPPORTED as i32) {
+                    return fs::rename(temporary_path, destination_path);
+                }
+                return Err(error);
             }
             Ok(())
         },
@@ -1709,6 +1745,18 @@ pub(crate) fn effective_agent_api_key(config: &GuiConfigFile) -> &str {
         .map(|entry| entry.key.trim())
         .find(|key| !key.is_empty())
         .unwrap_or(DEFAULT_API_KEY)
+}
+
+pub(crate) fn resolve_agent_api_key<'a>(
+    config: &'a GuiConfigFile,
+    requested_key: Option<&'a str>,
+) -> &'a str {
+    if let Some(requested) = requested_key.map(str::trim).filter(|k| !k.is_empty()) {
+        if config.api_keys.iter().any(|entry| entry.key.trim() == requested) {
+            return requested;
+        }
+    }
+    effective_agent_api_key(config)
 }
 
 pub(crate) fn merge_core_api_keys_with_gui_metadata(

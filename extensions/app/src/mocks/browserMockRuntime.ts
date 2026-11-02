@@ -1,7 +1,9 @@
 import { isThemeSelection, type ThemeSelection } from '../themes/types';
 import { applyTemplateChanges, readTemplatePath, sameTemplateValue, type TemplateConfigChange } from '../services/templateConfig';
+import { requestBucketRangeLabel } from '../services/authFileRequests';
 import { createPluginMock, type PluginWebviewMockState } from './pluginMock';
 import { createQuotaMock, createQuotaMockFiles } from './quotaMock';
+import { normalizeAuthFileTags } from '../services/authFiles';
 
 export type BrowserMockScenario = 'running' | 'stopped' | 'empty' | 'error';
 export type BrowserMockMode = BrowserMockScenario | 'off';
@@ -22,6 +24,7 @@ export type BrowserMockRuntime = {
 const SCENARIOS = new Set<BrowserMockScenario>(['running', 'stopped', 'empty', 'error']);
 const BUNDLED_CORE = { version: '7.3.15', assetName: 'CLIProxyAPI_7.3.15_windows_amd64.zip' };
 const MOCK_CUSTOM_THEME = {
+  schemaVersion: 1,
   id: 'harbor-dark',
   name: { en: 'Harbor', 'zh-CN': '港湾', ja: 'ハーバー' },
   description: { en: 'Deep teal surfaces with a sea-glass accent', 'zh-CN': '深青底色与海玻璃色点缀', ja: '深い青緑とシーグラスのアクセント' },
@@ -233,12 +236,18 @@ function createAgentStatuses() {
     opus: 'claude-opus-4-6',
     sonnet: 'claude-sonnet-4-6',
     haiku: 'claude-haiku-4-5',
+    fable: 'claude-opus-4-6',
+    fable1m: false,
     opus1m: false,
     sonnet1m: false,
     haiku1m: false,
     maxContextTokens: 200_000,
     autoCompactPct: 90,
     disableAutoCompact: false,
+    manageDefaultModel: false,
+    manageSubagentModel: false,
+    startupModel: 'opus',
+    subagentModel: '',
   };
   return ids.map(([id, name], index) => ({
     id,
@@ -262,6 +271,7 @@ function createAgentStatuses() {
     connectionState: id === 'openclaw' ? 'not-configured' : 'configured',
     configurationSynchronized: true,
     currentModel: id.startsWith('claude') ? 'claude-sonnet-4-6' : 'gpt-5.2-codex',
+    currentApiKey: 'mock-key-1',
     oauthConfiguration: id === 'codex',
     codexNativeOauth: false,
     codexOpenaiProvider: false,
@@ -292,6 +302,7 @@ function createState(scenario: BrowserMockScenario) {
   const authFiles: JsonObject[] = [
     {
       name: 'codex-personal.json',
+      tags: ['personal'],
       provider: 'codex',
       type: 'codex',
       source: 'file',
@@ -305,7 +316,7 @@ function createState(scenario: BrowserMockScenario) {
       failed: 4,
       modtime: Date.now() - 20 * 60_000,
       recent_requests: Array.from({ length: 20 }, (_, index) => ({
-        time: isoHoursAgo((19 - index) / 3),
+        time: requestBucketRangeLabel(new Date(Date.now() - (19 - index) * 600_000)),
         success: 3 + index % 4,
         failed: index % 8 === 0 ? 1 : 0,
       })),
@@ -313,6 +324,7 @@ function createState(scenario: BrowserMockScenario) {
     },
     {
       name: 'claude-team.json',
+      tags: ['team', 'production'],
       provider: 'claude',
       type: 'anthropic',
       source: 'file',
@@ -509,6 +521,11 @@ function createState(scenario: BrowserMockScenario) {
       message: null,
     },
     coreLatest: { version: '7.3.16', assetName: 'CLIProxyAPI_7.3.16_windows_amd64.zip' },
+    coreVersions: [
+      { version: '7.3.16', assetName: 'CLIProxyAPI_7.3.16_windows_amd64.zip', prerelease: false },
+      { version: '7.3.15', assetName: 'CLIProxyAPI_7.3.15_windows_amd64.zip', prerelease: false },
+      { version: '7.3.14', assetName: 'CLIProxyAPI_7.3.14_windows_amd64.zip', prerelease: false },
+    ],
     coreInstallTask: {
       running: false,
       cancellable: false,
@@ -597,6 +614,7 @@ function createState(scenario: BrowserMockScenario) {
       { id: 'codex:gpt-5.2-codex', model: 'gpt-5.2-codex', displayName: 'GPT-5.2 Codex', provider: 'Codex OAuth', kind: 'codex-oauth', protocol: 'openai', reasoningLevels: ['low', 'medium', 'high', 'xhigh'] },
       { id: 'claude:claude-sonnet-4-6', model: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', provider: 'Claude OAuth', kind: 'claude-oauth', protocol: 'anthropic', reasoningLevels: ['low', 'medium', 'high'] },
     ],
+    codexSubagents: { enabled: true, maxConcurrentThreadsPerSession: 4, defaultSubagentModel: null, defaultSubagentReasoningEffort: 'medium', interruptMessage: true },
     codexCatalog: {
       defaultAutoReviewModel: null as string | null,
       revision: 'mock-catalog-r1',
@@ -867,7 +885,18 @@ function managementResponse(state: BrowserMockState, payload: JsonObject) {
     }
   }
   if (method === 'GET' && path === '/credentials') {
-    return { files: clone(state.authFiles), observed_at: new Date().toISOString() };
+    return { files: clone(state.authFiles).map(({ tags, ...file }) => file), observed_at: new Date().toISOString() };
+  }
+  if (method === 'GET' && path === '/config/routing') return clone(state.extendedConfig.routing);
+  if (method === 'PUT' && path.startsWith('/config/routing/')) {
+    const keys = path.slice('/config/routing/'.length).split('/');
+    let target = asObject(state.extendedConfig.routing);
+    for (const key of keys.slice(0, -1)) {
+      if (!target[key] || typeof target[key] !== 'object') target[key] = {};
+      target = asObject(target[key]);
+    }
+    target[keys[keys.length - 1]] = clone(body);
+    return { status: 'ok' };
   }
   if (method === 'GET' && path === '/credentials/download') {
     const file = findAuthFile(state, readString(query.name));
@@ -888,6 +917,7 @@ function managementResponse(state: BrowserMockState, payload: JsonObject) {
     const file = findAuthFile(state, readString(patch.name));
     if (!file) throw new Error(`Browser Mock credential not found: ${readString(patch.name)}`);
     Object.assign(file, clone(patch));
+    if (Object.prototype.hasOwnProperty.call(patch, 'tags')) file.tags = normalizeAuthFileTags(patch.tags);
     return { status: 'ok' };
   }
   if (method === 'POST' && path === '/routing/cooldown/reset') {
@@ -1018,7 +1048,14 @@ export function createBrowserMockRuntime(
       case 'detect_core_platform': return { os: 'windows', arch: 'x86_64', assetOs: 'windows', assetArch: 'amd64', archiveKind: 'zip' };
       case 'get_linux_system_theme': return 'light';
       case 'detect_window_material': return null;
-      case 'list_custom_themes': return { files: [{ fileName: 'harbor-dark.json', content: JSON.stringify(MOCK_CUSTOM_THEME) }], omitted: 0 };
+      case 'list_custom_themes': return { files: [
+        { folder: 'harbor-dark', content: JSON.stringify(MOCK_CUSTOM_THEME) },
+        { folder: 'harbor-image-dark', content: JSON.stringify({
+          ...MOCK_CUSTOM_THEME, id: 'harbor-image-dark',
+          name: { en: 'Harbor Image', 'zh-CN': '港湾·图片', 'zh-TW': '港灣·圖片', ja: 'ハーバー・画像' },
+          assets: { backdropImage: 'assets/harbor.png' },
+        }), backdropImage: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=' },
+      ], omitted: 0 };
       case 'set_app_locale':
       case 'open_external_url':
       case 'open_oauth_url':
@@ -1059,6 +1096,42 @@ export function createBrowserMockRuntime(
         return clone(state.coreStatus);
       }
       case 'get_usage_view_preferences': return clone(usageViewPreferences);
+      case 'get_agent_usage': {
+        const generatedAt = new Date().toISOString();
+        const sources = ['claude', 'codex', 'gemini', 'antigravity', 'opencode', 'kimi', 'pi', 'omp', 'mcode', 'copilot', 'zcode'];
+        const daily = {
+          date: generatedAt.slice(0, 10),
+          inputTokens: 12_400,
+          outputTokens: 4_800,
+          cacheCreationTokens: 600,
+          cacheReadTokens: 1_200,
+          reasoningOutputTokens: 800,
+          totalTokens: 19_000,
+          costUSD: 0,
+          models: [{
+            model: 'gpt-5.2-codex',
+            inputTokens: 12_400,
+            outputTokens: 4_800,
+            cacheCreationTokens: 600,
+            cacheReadTokens: 1_200,
+            reasoningOutputTokens: 800,
+            totalTokens: 19_000,
+            costUSD: null,
+          }],
+        };
+        return state.coreStatus.installed && scenario !== 'empty' ? {
+            schemaVersion: 1,
+            generatedAt,
+            sources: sources.map((source) => ({
+              source,
+              status: source === 'codex' ? 'ok' : 'empty',
+              error: '',
+              daily: source === 'codex' ? [daily] : [],
+              events: source === 'codex' ? [{ ...daily, timestamp: generatedAt }] : [],
+            })),
+          }
+        : { schemaVersion: 1, generatedAt, sources: [] };
+      }
       case 'save_usage_view_preferences': {
         const values = asObject(payload.values);
         if (!payload.values || typeof payload.values !== 'object' || Array.isArray(payload.values) || Object.keys(values).length > 100
@@ -1193,6 +1266,7 @@ export function createBrowserMockRuntime(
         return null;
       }
       case 'check_latest_core': return clone(state.coreLatest);
+      case 'list_core_versions': return clone(state.coreVersions);
       case 'get_core_install_task': return clone(state.coreInstallTask);
       case 'install_core_version':
       case 'install_bundled_core': {
@@ -1391,6 +1465,7 @@ export function createBrowserMockRuntime(
       };
       case 'apply_usage_model_prices': return { imported: asArray(payload.prices).length };
 
+      case 'get_agent_environment_options': return { supported: false, defaultDirectory: '/home/user/.config', distributions: [] };
       case 'get_agent_config_statuses':
       case 'refresh_agent_config_statuses': return clone(state.agentStatuses);
       case 'get_core_models': {
@@ -1452,7 +1527,7 @@ export function createBrowserMockRuntime(
         const alias = readString(payload.alias);
         const entry = state.thinkingAliases.find((item) => item.alias === alias);
         const source = state.aliasSources.find((item) => item.model === entry?.sourceModel) ?? state.aliasSources[0];
-        return { source: clone(source), effort: entry?.effort ?? null, fast: state.speedAliases.some((item) => item.alias === alias) };
+        return { source: clone(source), effort: entry?.effort ?? null, fast: state.speedAliases.some((item) => item.alias === alias && item.serviceTier === 'priority'), serviceTier: state.speedAliases.find((item) => item.alias === alias)?.serviceTier ?? null };
       }
       case 'create_thinking_alias': {
         const request = asObject(payload.request ?? payload);
@@ -1465,7 +1540,13 @@ export function createBrowserMockRuntime(
           kind: readString(request.kind) || 'codex-oauth',
           oauthChannel: readString(request.oauthChannel) || null,
         };
-        state.thinkingAliases = [...state.thinkingAliases.filter((item) => item.alias !== entry.alias), entry];
+        const originalAlias = readString(request.originalAlias) || entry.alias;
+        const source = state.aliasSources.find((item) => item.id === request.sourceId);
+        if (source) { entry.sourceModel = source.model; entry.provider = source.provider; entry.kind = source.kind; }
+        state.speedAliases = state.speedAliases.filter((item) => item.alias !== originalAlias && item.alias !== entry.alias);
+        const tier = readString(request.serviceTier) || (request.fast ? 'priority' : '');
+        if (tier) state.speedAliases.push({ ...entry, serviceTier: tier });
+        state.thinkingAliases = [...state.thinkingAliases.filter((item) => item.alias !== originalAlias && item.alias !== entry.alias), entry];
         return clone(state.thinkingAliases);
       }
       case 'delete_thinking_alias': {
@@ -1492,6 +1573,11 @@ export function createBrowserMockRuntime(
       }
 
       case 'get_codex_model_catalog_editor': return clone(state.codexCatalog);
+      case 'get_codex_subagent_config': return clone(state.codexSubagents);
+      case 'save_codex_subagent_config': {
+        state.codexSubagents = { ...state.codexSubagents, ...asObject(payload.config) } as typeof state.codexSubagents;
+        return { outcome: 'updated', enabled: true, model: null, changedFiles: ['~/.codex/config.toml'], conflictFiles: [] };
+      }
       case 'save_codex_model_catalog_editor': {
         const request = asObject(payload.request);
         if (request.review_model !== undefined) state.codexCatalog.defaultAutoReviewModel = readString(asObject(request.review_model).model) || null;
@@ -1602,7 +1688,7 @@ export function createBrowserMockRuntime(
         const ids = asArray(request.sessionIds).map(String);
         state.codexSessions = state.codexSessions.filter((session) => !ids.includes(session.id));
         return {
-          results: ids.map((id) => ({ sessionId: id, status: 'deleted', message: 'Deleted by Browser Mock', backupPath: 'C:\\Users\\Mock\\.codex\\backups\\mock.zip' })),
+          results: ids.map((id) => ({ sessionId: id, status: 'deleted', message: 'Deleted by Browser Mock', backupPath: request.skipBackup ? null : 'C:\\Users\\Mock\\.codex\\backups\\mock.zip' })),
           deletedCount: ids.length,
           failedCount: 0,
         };

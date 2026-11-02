@@ -1,9 +1,15 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { readAgentConfigDirectories } from './agentConfigDirectories';
 import type { ClaudeDesktopModelMapping } from './claudeDesktopModels';
 import type { ModelOption } from './modelService';
 import type { DeepSeekHarnessLaunchOptions } from './deepSeekHarnessLaunch';
 
 export type AgentExecutablePaths = Partial<Record<AgentClientId | `${AgentClientId}:app`, string>>;
+
+export const invokeAgentCommand = <Result>(command: string, args?: Record<string, unknown>): Promise<Result> =>
+  tauriInvoke<Result>(command, { configDirectories: readAgentConfigDirectories(), ...args });
+
+const invoke = invokeAgentCommand;
 
 export type AgentConfigBackupListing = { versions: AgentConfigBackupVersion[] };
 
@@ -30,6 +36,7 @@ export type AgentConfigStatus = {
   connectionState: 'configured' | 'not-configured' | 'needs-update' | 'invalid';
   configurationSynchronized: boolean;
   currentModel: string | null;
+  currentApiKey?: string | null;
   oauthConfiguration: boolean;
   codexNativeOauth: boolean;
   codexOpenaiProvider?: boolean;
@@ -139,22 +146,22 @@ export const checkPiProviderUpdate = (): Promise<PiProviderUpdateStatus> =>
 export const restoreCodexOfficialConfig = (): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('restore_codex_official_config');
 
-export const updateAgentConfig = (args: { client: AgentClientId; model: string; oauthConfiguration: boolean; claudeCodeModelMappings: ClaudeModelMappings | null; claudeDesktopModelMappings: ClaudeModelMappings | null; executableOverrides: AgentExecutablePaths; }): Promise<AgentConfigActionResult> =>
+export const updateAgentConfig = (args: { client: AgentClientId; model: string; oauthConfiguration: boolean; claudeCodeModelMappings: ClaudeModelMappings | null; claudeDesktopModelMappings: ClaudeModelMappings | null; executableOverrides: AgentExecutablePaths; apiKey?: string | null; }): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('update_agent_config', args);
 
-export const installPiProvider = (args: { model: string; executableOverrides: AgentExecutablePaths; }): Promise<AgentConfigActionResult> =>
+export const installPiProvider = (args: { model: string; executableOverrides: AgentExecutablePaths; apiKey?: string | null; }): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('install_pi_provider', args);
 
-export const updatePiProvider = (args: { model: string; executableOverrides: AgentExecutablePaths; }): Promise<AgentConfigActionResult> =>
+export const updatePiProvider = (args: { model: string; executableOverrides: AgentExecutablePaths; apiKey?: string | null; }): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('update_pi_provider', args);
 
-export const repairPiProvider = (args: { model: string; }): Promise<AgentConfigActionResult> =>
+export const repairPiProvider = (args: { model: string; apiKey?: string | null; }): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('repair_pi_provider', args);
 
 export const uninstallPiProvider = (args: { executableOverrides: AgentExecutablePaths; }): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('uninstall_pi_provider', args);
 
-export const applyAgentConfigTemplate = (args: { revision: string; client: AgentClientId; model: string; oauthConfiguration: boolean; claudeCodeModelMappings: ClaudeModelMappings | null; claudeDesktopModelMappings: ClaudeModelMappings | null; }): Promise<AgentConfigActionResult> =>
+export const applyAgentConfigTemplate = (args: { revision: string; client: AgentClientId; model: string; oauthConfiguration: boolean; claudeCodeModelMappings: ClaudeModelMappings | null; claudeDesktopModelMappings: ClaudeModelMappings | null; apiKey?: string | null; }): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('apply_agent_config_template', args);
 
 export const setCodexOpenaiProvider = (args: { enabled: boolean; }): Promise<AgentConfigActionResult> =>
@@ -163,7 +170,7 @@ export const setCodexOpenaiProvider = (args: { enabled: boolean; }): Promise<Age
 export const closeCodexConfigModification = (): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('close_codex_config_modification');
 
-export const setAgentConfigEnabled = (args: { client: Exclude<AgentClientId, 'codex'>; model: string; enabled: boolean; forceRestore: boolean; claudeCodeModelMappings: null; claudeDesktopModelMappings: null; executableOverrides: AgentExecutablePaths; }): Promise<AgentConfigActionResult> =>
+export const setAgentConfigEnabled = (args: { client: Exclude<AgentClientId, 'codex'>; model: string; enabled: boolean; forceRestore: boolean; claudeCodeModelMappings: null; claudeDesktopModelMappings: null; executableOverrides: AgentExecutablePaths; apiKey?: string | null; }): Promise<AgentConfigActionResult> =>
   invoke<AgentConfigActionResult>('set_agent_config_enabled', args);
 
 export const clearCodexConfig = (): Promise<string[]> =>
@@ -190,8 +197,22 @@ export const restartDeepSeekHarnessProcess = (): Promise<DeepSeekHarnessProcessS
 export const createAgentConfigBackup = (args: { client: AgentClientId; }): Promise<AgentConfigBackupVersion> =>
   invoke<AgentConfigBackupVersion>('create_agent_config_backup', args);
 
-export const previewAgentConfigTemplate = (args: { client: AgentClientId; model: string; oauthConfiguration: boolean; claudeCodeModelMappings: ClaudeModelMappings | null; claudeDesktopModelMappings: ClaudeModelMappings | null; }): Promise<{ revision: string; files: string[] }> =>
+export const previewAgentConfigTemplate = (args: { client: AgentClientId; model: string; oauthConfiguration: boolean; claudeCodeModelMappings: ClaudeModelMappings | null; claudeDesktopModelMappings: ClaudeModelMappings | null; apiKey?: string | null; }): Promise<{ revision: string; files: string[] }> =>
   invoke<{ revision: string; files: string[] }>('preview_agent_config_template', args);
 
 export const setCodexRemoteCompaction = (args: { enabled: boolean }) =>
   invoke<void>('set_codex_remote_compaction', args);
+
+export type CodexSubagentConfig = {
+  enabled: boolean;
+  maxConcurrentThreadsPerSession: number | null;
+  defaultSubagentModel: string | null;
+  defaultSubagentReasoningEffort: string | null;
+  interruptMessage: boolean;
+};
+
+export const getCodexSubagentConfig = (): Promise<CodexSubagentConfig> =>
+  invoke<CodexSubagentConfig>('get_codex_subagent_config');
+
+export const saveCodexSubagentConfig = (config: CodexSubagentConfig): Promise<AgentConfigActionResult> =>
+  invoke<AgentConfigActionResult>('save_codex_subagent_config', { config });

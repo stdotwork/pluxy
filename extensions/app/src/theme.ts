@@ -14,10 +14,16 @@ import { createThemeController, type ThemePreference } from './themeController';
 import { ThemePreferences } from './services/themePreferences';
 import { createThemeApplicator, themeWindowMaterial } from './themes/applyTheme';
 import { cacheFirstPaint, firstPaint } from './themes/firstPaint';
-import type { PlatformWindowMaterial } from './themes/types';
-import { builtinThemes, createThemeRegistry, themeRegistry, type ThemeRegistry } from './themes/registry';
-import { parseCustomThemes } from './themes/customThemes';
-
+import type { PlatformWindowMaterial, ThemeDefinition } from './themes/types';
+import { builtinThemes, createThemeRegistry, type ThemeRegistry } from './themes/registry';
+import {
+  ANIME_SAKURA_SKY_WALLPAPER,
+  ANIME_STARLIGHT_WALLPAPER,
+  withAnimeBackdrop,
+  type AnimeWallpaperPreset,
+} from './themes/anime';
+import { isThemeImageDataUrl } from './themes/resources';
+import { parseCustomThemes, type CustomThemeDiagnostic, type SkippedCustomTheme } from './themes/customThemes';
 export type { AppTheme, ThemePreference } from './themeController';
 
 const preferences = new ThemePreferences();
@@ -28,16 +34,112 @@ export function detectThemePreference(): ThemePreference {
   return preferences.get();
 }
 
-export type CustomThemeStatus = { loading: boolean; failed: boolean; skipped: readonly string[]; omitted: number };
+export type CustomThemeStatus = {
+  loading: boolean;
+  failed: boolean;
+  skipped: readonly SkippedCustomTheme[];
+  diagnostics: readonly CustomThemeDiagnostic[];
+  omitted: number;
+};
 
-let customRegistry = themeRegistry;
-let customStatus: CustomThemeStatus = { loading: false, failed: false, skipped: [], omitted: 0 };
+const ANIME_PRESET_KEY = 'easy-cli-proxy-api.anime-backdrop-preset.v1';
+const ANIME_IMAGE_KEY = 'easy-cli-proxy-api.anime-backdrop-image.v1';
+
+function readStorage(key: string): string | null {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string | null): boolean {
+  try {
+    if (typeof window === 'undefined') return false;
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let animePreset: AnimeWallpaperPreset = (() => {
+  const saved = readStorage(ANIME_PRESET_KEY);
+  return saved === 'sakura-sky' || saved === 'none' || saved === 'custom' ? saved : 'starlight';
+})();
+let customAnimeImage: string | null = (() => {
+  const saved = readStorage(ANIME_IMAGE_KEY);
+  return isThemeImageDataUrl(saved) ? saved : null;
+})();
+let loadedCustomThemes: ThemeDefinition[] = [];
+
+function resolveAnimeBackdropImage(): string | undefined {
+  if (animePreset === 'none') return undefined;
+  if (animePreset === 'sakura-sky') return ANIME_SAKURA_SKY_WALLPAPER;
+  if (animePreset === 'custom' && customAnimeImage) return customAnimeImage;
+  return ANIME_STARLIGHT_WALLPAPER;
+}
+
+function buildActiveRegistry(): ThemeRegistry {
+  const resolvedBuiltins = builtinThemes.map((theme) =>
+    theme.id === 'anime-light' ? withAnimeBackdrop(resolveAnimeBackdropImage()) : theme,
+  );
+  return createThemeRegistry([...resolvedBuiltins, ...loadedCustomThemes]);
+}
+
+let customRegistry = buildActiveRegistry();
+let customStatus: CustomThemeStatus = { loading: false, failed: false, skipped: [], diagnostics: [], omitted: 0 };
 let customLoads = 0;
 const customSubscribers = new Set<() => void>();
 
+function notifyThemeSubscribers() {
+  customSubscribers.forEach((listener) => listener());
+}
+
+function refreshActiveRegistry() {
+  customRegistry = buildActiveRegistry();
+  controller?.setRegistry(customRegistry);
+  notifyThemeSubscribers();
+}
+
+export function useAnimeBackdropState() {
+  return useSyncExternalStore(
+    subscribeCustomThemes,
+    () => `${animePreset}:${customAnimeImage ? '1' : '0'}`,
+  );
+}
+
+export function getAnimeBackdropInfo(): { preset: AnimeWallpaperPreset; hasCustomImage: boolean } {
+  return { preset: animePreset, hasCustomImage: Boolean(customAnimeImage) };
+}
+
+export function setAnimeBackdropPreset(preset: AnimeWallpaperPreset): boolean {
+  const next = preset === 'custom' && !customAnimeImage ? 'starlight' : preset;
+  if (!writeStorage(ANIME_PRESET_KEY, next)) return false;
+  animePreset = next;
+  refreshActiveRegistry();
+  return true;
+}
+
+export function setCustomAnimeBackdropImage(dataUrl: string | null): boolean {
+  if (dataUrl !== null && !isThemeImageDataUrl(dataUrl)) return false;
+  const nextPreset = dataUrl !== null ? 'custom' : animePreset === 'custom' ? 'starlight' : animePreset;
+  const previousImage = readStorage(ANIME_IMAGE_KEY);
+  if (!writeStorage(ANIME_IMAGE_KEY, dataUrl)) return false;
+  if (!writeStorage(ANIME_PRESET_KEY, nextPreset)) {
+    writeStorage(ANIME_IMAGE_KEY, previousImage);
+    return false;
+  }
+  customAnimeImage = dataUrl;
+  animePreset = nextPreset;
+  refreshActiveRegistry();
+  return true;
+}
+
 function reportCustomThemes(next: CustomThemeStatus) {
   customStatus = next;
-  customSubscribers.forEach((listener) => listener());
+  notifyThemeSubscribers();
 }
 
 async function loadCustomThemes() {
@@ -45,11 +147,12 @@ async function loadCustomThemes() {
   reportCustomThemes({ ...customStatus, loading: true });
   try {
     const { files, omitted } = await listCustomThemes();
-    const { themes, skipped } = parseCustomThemes(files);
+    const { themes, skipped, diagnostics } = parseCustomThemes(files);
     if (load !== customLoads) return;
-    customRegistry = createThemeRegistry([...builtinThemes, ...themes]);
+    loadedCustomThemes = themes;
+    customRegistry = buildActiveRegistry();
     controller?.setRegistry(customRegistry);
-    reportCustomThemes({ loading: false, failed: false, skipped, omitted });
+    reportCustomThemes({ loading: false, failed: false, skipped, diagnostics, omitted });
   } catch {
     if (load === customLoads) reportCustomThemes({ ...customStatus, loading: false, failed: true });
   }

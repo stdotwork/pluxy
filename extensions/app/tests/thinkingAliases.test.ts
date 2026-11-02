@@ -94,3 +94,15 @@ describe('思考别名来源', () => {
     expect(sources.find((source) => source.id === 'plain')?.supportsFast).toBe(false);
   });
 });
+
+ test('Ultra Fast generates a distinct alias and survives list merging', () => {
+   expect(defaultModelAlias('gpt-6.1-sol', 'high', true, 'ultrafast')).toBe('gpt-6.1-sol-high-ultrafast');
+   expect(defaultModelAlias('gpt-6.1-sol', '', true, 'ultrafast')).toBe('gpt-6.1-sol-ultrafast');
+   expect(defaultModelAlias('gpt-6.1-sol', '', false, 'ultrafast')).toBe('gpt-6.1-sol-alias');
+   const entries = combineModelAliasEntries([], [{
+     position: { section: 'oauth-model-alias', providerIndex: null, modelIndex: 0 },
+     sourceModel: 'gpt-6.1-sol', alias: 'sol-ultrafast', serviceTier: 'ultrafast',
+     provider: 'Codex OAuth', kind: 'codex-oauth', oauthChannel: 'codex',
+   }]);
+   expect(entries[0].serviceTier).toBe('ultrafast');
+ });

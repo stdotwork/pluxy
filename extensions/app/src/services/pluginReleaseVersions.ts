@@ -1,6 +1,7 @@
 import { buildRepositoryURL, getPluginRepositorySlug } from './pluginResources';
 import { invoke } from '@tauri-apps/api/core';
 import type { PluginStoreResponse } from './plugins';
+import { compareSemanticVersions } from './semanticVersion';
 
 export const supportsPluginVersionSelection = (installType: string): boolean =>
   installType.trim().toLowerCase() === 'github-release';
@@ -26,6 +27,8 @@ export function isNewerPluginRelease(installed: string, latest: string): boolean
   const current = installed.trim().replace(/^[vV]/, '');
   const next = latest.trim().replace(/^[vV]/, '');
   if (!current || !next || current === next) return false;
+  const semantic = compareSemanticVersions(next, current);
+  if (semantic !== null) return semantic > 0;
   if (!/^\d+(\.\d+)*$/.test(current) || !/^\d+(\.\d+)*$/.test(next)) return true;
   const a = current.split('.').map(Number);
   const b = next.split('.').map(Number);
@@ -55,4 +58,28 @@ export async function refreshPluginReleaseVersions(store: PluginStoreResponse): 
       && isNewerPluginRelease(entry.installedVersion, version) } : entry;
   });
   return { ...store, plugins, sourceErrors };
+}
+
+export function filterInstalledStorePlugins(
+  store: PluginStoreResponse,
+  installedPlugins: { id: string; metadata?: { version?: string } | null }[],
+): PluginStoreResponse {
+  const installedVersions = new Map(
+    installedPlugins.map(plugin => [plugin.id, plugin.metadata?.version?.trim() ?? ""]),
+  );
+  return {
+    ...store,
+    plugins: store.plugins
+      .filter(entry => installedVersions.has(entry.id) && entry.installed && ["matched", "assumed"].includes(entry.installSourceStatus))
+      .map(entry => {
+        const installedVersion = entry.installedVersion || installedVersions.get(entry.id) || "";
+        return installedVersion === entry.installedVersion
+          ? entry
+          : {
+              ...entry,
+              installedVersion,
+              updateAvailable: entry.updateAvailable || (Boolean(entry.version) && isNewerPluginRelease(installedVersion, entry.version)),
+            };
+      }),
+  };
 }

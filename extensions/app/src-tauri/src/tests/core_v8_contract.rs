@@ -11,6 +11,31 @@ struct TestCore {
     client: reqwest::Client,
 }
 
+#[tokio::test]
+#[ignore = "requires an explicitly prepared isolated CPA_DESKTOP_E2E_CONFIG; never use a production config"]
+async fn desktop_e2e_prepare_isolated_gateway_profile() {
+    let path = PathBuf::from(std::env::var_os("CPA_DESKTOP_E2E_CONFIG").expect("set isolated config path"));
+    let native: serde_json::Value = serde_norway::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let port = native["server"]["port"].as_u64().unwrap() as u16;
+    assert_ne!(port, 8317, "Never modify the production kernel");
+    assert_eq!(native["server"]["host"], "127.0.0.1");
+    let key = native["access"]["api-keys"][0].as_str().unwrap();
+    let gui = GuiConfigFile { port,
+        management_secret_key: "claude-e2e-local-management".into(),
+        api_keys: vec![GuiApiKeyEntry {key:key.into(),remark:String::new()}],
+        ..GuiConfigFile::default() };
+    let models = fetch_agent_models(port, key).await.unwrap();
+    let mappings = ClaudeDesktopModelMappings {
+        desktop_models: Some(vec![ClaudeDesktopModelMapping {
+            model:"grok-4.7-build-fast".into(), alias:"claude-sonnet-5-cc".into(), context_1m:true,
+        }]), ..ClaudeDesktopModelMappings::all("grok-4.7-build-fast") };
+    let profile = commit_agent_with_core(&gui, Some(mappings), &models, |mappings| {
+        build_claude_desktop_profile(None, &managed_core_loopback_origin(port), key,
+            "grok-4.7-build-fast", &models, mappings)
+    }).await.unwrap();
+    fs::write(path.parent().unwrap().join("desktop-profile.json"), profile).unwrap();
+}
+
 impl Drop for TestCore {
     fn drop(&mut self) {
         self.stop();

@@ -70,6 +70,8 @@ const path = require('node:path');
     await dialog.getByRole('radio', { name: 'Remote core' }).click();
     await dialog.getByLabel('Management URL').fill('https://other.example');
     await dialog.getByLabel('Management key', { exact: true }).fill('secret');
+    // This computer's tag cache for the local core must not leak into the remote core's credentials.
+    await page.evaluate(() => localStorage.setItem('easy-cli-proxy-api.credential-tags', JSON.stringify({ 'codex-idle.json': ['local-only'] })));
     await Promise.all([page.waitForEvent('load'), dialog.getByRole('button', { name: 'Save & connect', exact: true }).click()]);
     await page.locator('.app-shell').waitFor();
     assert.equal((await savedConnection()).managementOrigin, 'https://other.example');
@@ -89,6 +91,9 @@ const path = require('node:path');
       assert.equal(await button.getAttribute('title'), 'Managed on the remote host');
     }
     await page.locator('.home-access-panel').getByText('https://other.example/v1').waitFor();
+    assert.equal(await runtime.getByRole('button', { name: 'Install core', exact: true }).count(), 0, 'no local install action for a remote core');
+    assert.equal(await runtime.getByText(/Install a core/).count(), 0, 'no local install hint for a remote core');
+    await page.locator('.live-routing-panel').getByText('Not available in Remote mode yet', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Core connection settings', exact: true }).click();
     dialog = page.getByRole('dialog', { name: 'Core connection' });
     assert.equal(await dialog.getByRole('radio', { name: 'Remote core' }).getAttribute('aria-checked'), 'true');
@@ -99,7 +104,7 @@ const path = require('node:path');
     await page.waitForFunction(() => document.querySelector('.sidebar-easy-entry')?.disabled);
     for (const name of ['Agent Configuration', 'Usage', 'Version Management']) {
       assert.equal(await nav(name).isDisabled(), true, `${name} locked remotely`);
-      assert.equal(await nav(name).getAttribute('title'), 'Not available in Remote mode yet');
+      assert.equal(await nav(name).getAttribute('title'), `${name} — Not available in Remote mode yet`);
     }
     await page.locator('#nav-plugin-children').waitFor();
 
@@ -126,7 +131,40 @@ const path = require('node:path');
     const install = page.getByRole('button', { name: 'Install local plugin' });
     assert.equal(await install.isDisabled(), true, 'local plugin install shown but disabled remotely');
     assert.equal(await install.getAttribute('title'), 'Not available in Remote mode yet');
+    await nav('OAuth').click();
+    await page.getByRole('tab', { name: 'Authentication Files' }).click();
+    const remoteCard = page.locator('.auth-file-card').filter({ has: page.locator('.auth-card-filename[title="codex-idle.json"]') });
+    await remoteCard.waitFor();
+    assert.equal(await remoteCard.getByRole('button', { name: 'local-only', exact: true }).count(), 0, 'local credential tags are not shown for a remote core');
+    assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('easy-cli-proxy-api.credential-tags'))), { 'codex-idle.json': ['local-only'] }, 'local tags are kept for the local core');
+
+    // The Routing page shows the remote core's plan read-only, like Advanced Features, and writes nothing.
+    await page.evaluate(() => {
+      const internals = window.__TAURI_INTERNALS__;
+      const original = internals.invoke.bind(internals);
+      window.__managementWrites = [];
+      internals.invoke = (command, args, options) => {
+        const request = args && args.request;
+        if (command === 'management_request' && request && request.method !== 'GET') window.__managementWrites.push(`${request.method} ${request.path}`);
+        return original(command, args, options);
+      };
+    });
+    await nav('Routing').click();
+    const routing = page.locator('.routing-page');
+    const fillFirst = routing.getByRole('radio', { name: /Fill first/ });
+    await fillFirst.waitFor();
+    await routing.locator('.routing-board').waitFor();
+    assert.equal(await routing.locator('.routing-error').count(), 0, 'the remote routing board loaded completely');
+    assert.equal(await fillFirst.isDisabled(), true, 'routing strategy is read-only remotely');
+    await fillFirst.click({ force: true });
+    const apply = routing.getByRole('button', { name: 'Apply plan' });
+    assert.equal(await apply.isDisabled(), true, 'a remote routing plan cannot be applied');
+    assert.equal(await apply.getAttribute('title'), 'Not available in Remote mode yet');
+    await apply.click({ force: true });
+    await routing.getByText(/Showing the remote core's current settings/).waitFor();
+    assert.equal(await routing.getByRole('button', { name: 'Refresh' }).isEnabled(), true, 'the remote plan can be reloaded');
+    assert.deepEqual(await page.evaluate(() => window.__managementWrites), [], 'Remote routing sends no management writes');
     assert.deepEqual(errors, []);
-    console.log('PASS: one connection component on Home and in Advanced Features; Remote keeps the Local layout with remote values, read-only settings and in-place disabled local actions; Silent Launch hidden.');
+    console.log('PASS: one connection component on Home and in Advanced Features; Remote keeps the Local layout with remote values, read-only settings and Routing plan, no remote writes, and in-place disabled local actions; Silent Launch hidden.');
   } finally { await browser?.close(); await server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

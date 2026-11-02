@@ -5,7 +5,7 @@ import { I18nProvider } from '../../src/i18n';
 import { ThinkingAliasesPage } from '../../src/pages/ThinkingAliasesPage';
 import '../../src/styles/index.css';
 
-localStorage.setItem('easy-cli-proxy-api.locale', 'en');
+localStorage.setItem('easy-cli-proxy-api.locale', new URLSearchParams(location.search).get('locale') || 'en');
 const calls: { cmd: string; args: Record<string, unknown> }[] = [];
 (window as any).fixtureCalls = calls;
 (window as any).fixtureFailSave = false;
@@ -21,6 +21,7 @@ let entry = {
   kind: 'openai-compatible', oauthChannel: null,
 };
 let entries = [entry];
+let serviceTier = new URLSearchParams(location.search).has('ultrafast') ? 'ultrafast' : '';
 if (new URLSearchParams(location.search).has('duplicates')) {
   entries.push({ ...entry, position: position(1), sourceModel: 'second-upstream' });
 }
@@ -29,17 +30,18 @@ mockIPC(async (cmd, rawArgs) => {
   calls.push({ cmd, args });
   if (cmd === 'set_app_locale') return null;
   if (cmd === 'get_thinking_aliases') return entries;
-  if (cmd === 'get_speed_aliases') return [];
+  if (cmd === 'get_speed_aliases') return serviceTier ? [{ ...entry, serviceTier }] : [];
   if (['get_model_alias_sources', 'get_thinking_alias_sources', 'get_speed_alias_sources'].includes(cmd)) return [source];
   if (cmd === 'get_model_alias_edit_source') {
     entry = entries.find(item => item.sourceModel === args.entry.sourceModel && item.alias === args.alias)!;
     return {
     source: { ...source, id: `alias-edit:${args.alias}`, model: entry.sourceModel },
-    effort: (window as any).fixtureCurrentEffort ?? entry.effort, fast: false,
+    effort: (window as any).fixtureCurrentEffort ?? entry.effort, fast: serviceTier === 'priority', serviceTier,
     };
   }
   if (cmd === 'create_thinking_alias') {
     if ((window as any).fixtureFailSave) throw new Error('Save failed: configuration changed');
+    serviceTier = args.serviceTier ?? (args.fast ? 'priority' : '');
     entry = { ...entry, alias: args.alias, effort: args.effort };
     if (args.originalEntry) {
       entries = entries.map(item => item.sourceModel === args.originalEntry.sourceModel && item.alias === args.originalEntry.alias ? entry : item);

@@ -8,10 +8,10 @@ import { graphite } from '../src/themes/graphite';
 import { midnight } from '../src/themes/midnight';
 import { themeMaterialTokens, themeOverlayRules, themeOverlaySurface, themeOverlayPalette } from '../src/themes/materials';
 import { sakura } from '../src/themes/sakura';
-import { backdropImage } from '../src/themes/backdrop';
+import { anime } from '../src/themes/anime';
+import { backdropImage, themeBackdropImage } from '../src/themes/backdrop';
 
-const additionalThemes = [warmSand, graphite, midnight, sakura];
-
+const additionalThemes = [warmSand, graphite, midnight, sakura, anime];
 const custom: ThemeDefinition = { id: 'test-dark', nameKey: 'app.theme.dark', appearance: 'dark', order: 1,
   windowBackground: '#102030', tokens: { surface: '#203040', accent: '#abcdef', sidebarBackground: '#112233' } };
 const customControl: ThemeDefinition = { ...custom, id: 'test-control-dark',
@@ -94,11 +94,16 @@ describe('theme registry and application', () => {
       expect(themeRegistry.resolveSystem('dark', { ...remembered, dark: id }).id).toBe('dark');
     }
   });
-  test('rejects collisions, reserved IDs, invalid native colors', () => {
+  test('rejects collisions, reserved IDs and invalid native colors but drops invalid tokens', () => {
     for (const theme of [
       { ...custom, id: 'dark' }, { ...custom, id: 'system' }, { ...custom, id: '../bad' },
-      { ...custom, windowBackground: '#11223344' }, { ...custom, tokens: { surface: 'url(bad)' } },
+      { ...custom, windowBackground: '#11223344' },
     ]) expect(() => createThemeRegistry([...themeRegistry.themes, theme as ThemeDefinition])).toThrow();
+    const issues: string[] = [];
+    const dropped = normalizeTheme({ ...custom, tokens: { surface: 'url(bad)', spacing: '8px', accent: '#abcdef' } },
+      (issue) => issues.push(`${issue.code}:${issue.field}`));
+    expect(dropped.tokens).toEqual({ accent: '#abcdef' });
+    expect(issues).toEqual(['invalid-token:surface', 'unknown-token:spacing']);
   });
   test('removed themes leave the picker and safely fall back for saved selections', () => {
     for (const id of ['mist-blue-light', 'rose-paper-light', 'cyberpunk-dark', 'pine-dark']) {
@@ -168,16 +173,16 @@ describe('theme registry and application', () => {
     for (const defaultId of ['light', 'dark']) {
       apply(theme);
       expect(root.dataset).toEqual({ theme: theme.appearance, themeId: theme.id,
-        ...(theme.backdrop ? { themeBackdrop: 'gradient' } : {}),
+        ...(theme.backdrop || theme.backdropImage ? { themeBackdrop: theme.backdropImage ? 'image' : 'gradient' } : {}),
       });
-      if (theme.backdrop) expect(properties.get('--theme-backdrop-image')).toBe(backdropImage(theme.backdrop));
+      if (theme.backdrop || theme.backdropImage) expect(properties.get('--theme-backdrop-image')).toBe(themeBackdropImage(theme));
       if (theme.backdrop) expect(properties.get('--theme-sticky-background')).toContain('100vw 100vh no-repeat fixed');
       expect(properties.get('--theme-surface')).toBe(themeMaterialTokens(theme).surface);
       expect(properties.get('--sidebar-popover-bg')).toBe(themeOverlaySurface(theme));
       expect(styles.size).toBe(1);
       apply(theme);
       expect(styles.size).toBe(1);
-      expect(body.style.backgroundColor).toBe(theme.windowBackground);
+      expect(body.style.backgroundColor).toBe(theme.backdrop ? '' : theme.windowBackground);
       apply(themeRegistry.resolve(defaultId));
       expect(styles.size).toBe(0);
       expect([...properties]).toEqual([['--unrelated', 'keep']]);
@@ -285,7 +290,7 @@ describe('theme registry and application', () => {
       expect(contrast(tokens.focusRing!, tokens[surface]!)).toBeGreaterThanOrEqual(3);
     }
   });
-  test.each([sakura, midnight])('$id text and focus remain legible over the gradient and composited translucent surfaces', (theme) => {
+  test.each([sakura, midnight, anime])('$id text and focus remain legible over the gradient and composited translucent surfaces', (theme) => {
     const backdrop = theme.backdrop!;
     const colors = [theme.windowBackground, ...backdrop.layers.flatMap((layer) => layer.stops.map((stop) => stop.color))].map(rgb);
     const darkest = [0, 1, 2].map((channel) => Math.min(...colors.map((value) => value[channel])));

@@ -12,6 +12,7 @@ pub(crate) struct ModelAliasEditContext {
     pub(crate) source: ThinkingAliasSource,
     pub(crate) effort: Option<String>,
     pub(crate) fast: bool,
+    pub(crate) service_tier: Option<String>,
 }
 
 // Used by backup/template comparisons, not as an alias editor version lock.
@@ -62,6 +63,7 @@ pub(crate) fn model_alias_edit_context_for_mapping(
         effort: find_thinking_alias_effort(root, alias, &source.protocol),
         fast: find_speed_alias_service_tier(root, alias, &source.protocol).as_deref()
             == Some("priority"),
+        service_tier: find_speed_alias_service_tier(root, alias, &source.protocol),
         source,
     })
 }
@@ -311,6 +313,7 @@ pub(crate) fn edit_model_alias_in_yaml(
     edit_model_alias_in_yaml_for_mapping(content, original_alias, source, alias, effort, fast, None)
 }
 
+#[cfg(test)]
 pub(crate) fn edit_model_alias_in_yaml_for_mapping(
     content: &str,
     original_alias: &str,
@@ -320,6 +323,20 @@ pub(crate) fn edit_model_alias_in_yaml_for_mapping(
     fast: bool,
     entry: Option<&ThinkingAliasEntry>,
 ) -> Result<String, String> {
+    edit_model_alias_with_tier_in_yaml_for_mapping(content, original_alias, source, alias, effort, fast.then_some("priority"), entry)
+}
+
+pub(crate) fn edit_model_alias_with_tier_in_yaml_for_mapping(
+    content: &str,
+    original_alias: &str,
+    source: &ResolvedThinkingAliasSource,
+    alias: &str,
+    effort: &str,
+    service_tier: Option<&str>,
+    entry: Option<&ThinkingAliasEntry>,
+) -> Result<String, String> {
+    validate_alias_service_tier(service_tier)?;
+    let fast = service_tier.is_some();
     if fast && !alias_source_supports_fast(source) {
         return Err("Fast supports only OpenAI-compatible API, Codex API, or Codex OAuth model sources".to_string());
     }
@@ -408,7 +425,7 @@ pub(crate) fn edit_model_alias_in_yaml_for_mapping(
     let payload_edit = AliasPayloadEdit {
         source: &source.source,
         effort,
-        fast,
+        service_tier,
         change_effort: find_thinking_alias_effort(
             root,
             original_alias,
@@ -417,14 +434,14 @@ pub(crate) fn edit_model_alias_in_yaml_for_mapping(
         .as_deref()
         .unwrap_or("")
             != effort,
-        change_fast: (find_speed_alias_service_tier(
+        change_fast: find_speed_alias_service_tier(
             root,
             original_alias,
             &original.source.source.protocol,
         )
         .as_deref()
-            == Some("priority"))
-            != fast,
+        .filter(|tier| matches!(*tier, "priority" | "ultrafast"))
+            != service_tier,
     };
     if same_group
         && original.value.as_mapping() == Some(&replacement)
@@ -520,7 +537,7 @@ pub(crate) const ALIAS_EFFORT_KEYS: &[&str] = &[
 struct AliasPayloadEdit<'a> {
     source: &'a ThinkingAliasSource,
     effort: &'a str,
-    fast: bool,
+    service_tier: Option<&'a str>,
     change_effort: bool,
     change_fast: bool,
 }
@@ -655,10 +672,10 @@ fn edit_alias_payload(
                     }
                     if has_fast && edit.change_fast {
                         params.remove(yaml_key("service_tier"));
-                        if edit.fast {
+                        if let Some(tier) = edit.service_tier {
                             let replacement = serde_norway::Mapping::from_iter([(
                                 yaml_key("service_tier"),
-                                yaml_key("priority"),
+                                yaml_key(tier),
                             )]);
                             insert_alias_edit_params(params, replacement, raw)?;
                         }
@@ -697,8 +714,10 @@ fn edit_alias_payload(
     if edit.change_effort && !found_effort && !edit.effort.is_empty() {
         insert_thinking_effort_params(&mut params, edit.source, edit.effort)?;
     }
-    if edit.change_fast && !found_fast && edit.fast {
-        params.insert(yaml_key("service_tier"), yaml_key("priority"));
+    if edit.change_fast && !found_fast {
+        if let Some(tier) = edit.service_tier {
+            params.insert(yaml_key("service_tier"), yaml_key(tier));
+        }
     }
     append_alias_payload_override(root, alias, protocol, params)
 }

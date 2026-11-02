@@ -26,6 +26,7 @@ pub(crate) struct CodexRuntimeModel {
     context_source: &'static str,
     input_modalities: Option<Vec<String>>,
     default_reasoning_level: Option<String>,
+    reasoning_levels: Vec<String>,
     hidden: bool,
 }
 
@@ -237,6 +238,16 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
             },
             input_modalities: input_modalities.clone(),
             default_reasoning_level: default_reasoning_level.clone(),
+            reasoning_levels: value.get("supported_reasoning_levels")
+                .and_then(Value::as_array)
+                .into_iter().flatten()
+                .filter_map(|level| level.as_str().or_else(|| level.get("effort")?.as_str()))
+                .map(|level| level.trim().to_ascii_lowercase())
+                .filter(|level| is_allowed_reasoning_level(level))
+                .fold(Vec::new(), |mut levels, level| {
+                    if !levels.contains(&level) { levels.push(level); }
+                    levels
+                }),
             hidden,
         };
 
@@ -257,6 +268,25 @@ pub(crate) fn parse_runtime_models(payload: &Value) -> Result<Vec<CodexRuntimeMo
     Ok(models)
 }
 
+pub(crate) fn visible_agent_model_options(runtime_models: &[CodexRuntimeModel]) -> Vec<AgentModelOption> {
+    runtime_models
+        .iter()
+        .filter(|model| !model.hidden)
+        .map(|model| AgentModelOption {
+            name: model.slug.clone(),
+            alias: model
+                .display_name
+                .clone()
+                .filter(|name| !name.eq_ignore_ascii_case(&model.slug)),
+            is_alias: false,
+            context_window: model.context_window.or(model.max_context_window),
+            input_modalities: model.input_modalities.clone(),
+            harness_metadata: None,
+            reasoning_levels: Vec::new(),
+        })
+        .collect()
+}
+
 pub(crate) fn merge_runtime_context_windows(
     models: &mut [AgentModelOption],
     runtime_models: &[CodexRuntimeModel],
@@ -273,6 +303,19 @@ pub(crate) fn merge_runtime_context_windows(
             .or(runtime_model.max_context_window)
         {
             model.context_window = Some(context_window);
+        }
+    }
+}
+
+pub(crate) fn merge_zcode_reasoning_levels(
+    models: &mut [AgentModelOption],
+    runtime_models: &[CodexRuntimeModel],
+) {
+    for model in models {
+        if let Some(runtime) = runtime_models.iter()
+            .find(|runtime| runtime.slug.eq_ignore_ascii_case(&model.name))
+        {
+            model.reasoning_levels = runtime.reasoning_levels.clone();
         }
     }
 }
@@ -562,6 +605,7 @@ fn prepare_catalog_with_customizations(
         .iter()
         .map(|entry| AgentModelOption {
             input_modalities: None,
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
             name: string_value(&entry.value, "slug"),
             alias: optional_map_string(&entry.value, "display_name").filter(|display| {
@@ -955,8 +999,8 @@ mod tests {
         validate_embedded_catalog().unwrap();
         let state = catalog_state().unwrap().read().unwrap();
         let sources = &state.sources;
-        assert_eq!(sources.templates.len(), 10);
-        assert_eq!(sources.revision, 7);
+        assert_eq!(sources.templates.len(), 11);
+        assert_eq!(sources.revision, 8);
         let embedded: Value = serde_json::from_str(MODEL_CATALOG_JSON).unwrap();
         assert!(embedded.get("fallback_model").is_none());
         let fallback: Value = serde_json::from_str(FALLBACK_MODEL_JSON).unwrap();
@@ -985,6 +1029,7 @@ mod tests {
         assert_eq!(sources.fallback["truncation_policy"]["mode"], "bytes");
 
         let official_slugs = [
+            "gpt-6.1-terra",
             "gpt-6-astra",
             "gpt-6.1-sol",
             "gpt-6-sol",
@@ -1181,6 +1226,7 @@ mod tests {
         let mut models = vec![
             AgentModelOption {
                 input_modalities: None,
+                reasoning_levels: Vec::new(),
                 harness_metadata: None,
                 name: "GPT-Test".to_string(),
                 alias: None,
@@ -1189,6 +1235,7 @@ mod tests {
             },
             AgentModelOption {
                 input_modalities: None,
+                reasoning_levels: Vec::new(),
                 harness_metadata: None,
                 name: "unmatched".to_string(),
                 alias: None,
@@ -1197,6 +1244,7 @@ mod tests {
             },
             AgentModelOption {
                 input_modalities: None,
+                reasoning_levels: Vec::new(),
                 harness_metadata: None,
                 name: "max-only".to_string(),
                 alias: None,

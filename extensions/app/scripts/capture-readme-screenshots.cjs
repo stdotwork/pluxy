@@ -12,8 +12,8 @@ const pages = [
   { file: '1.png', navigationIndex: 0 },
   { file: '2.png', navigationIndex: 2 },
   { file: '3.png', navigationIndex: 1 },
-  { file: '4.png', navigationIndex: 4 },
-  { file: '5.png', navigationIndex: 3 },
+  { file: '4.png', navigationIndex: 5 },
+  { file: '5.png', navigationIndex: 4 },
 ];
 
 (async () => {
@@ -22,17 +22,14 @@ const pages = [
   let server;
   let browser;
   try {
-    try {
-      const response = await fetch(baseUrl);
-      if (!response.ok) throw new Error(String(response.status));
-    } catch {
+    {
       const react = (await import('@vitejs/plugin-react')).default;
       server = await createServer({
         configFile: false,
         root,
         plugins: [react()],
         logLevel: 'error',
-        server: { host: '127.0.0.1', port: 1420, strictPort: false },
+        server: { host: '127.0.0.1', port: 0, watch: null },
       });
       await server.listen();
       const address = server.httpServer.address();
@@ -53,6 +50,13 @@ const pages = [
         colorScheme: 'light',
       });
       const page = await context.newPage();
+      const renderErrors = [];
+      page.on('pageerror', error => renderErrors.push(String(error)));
+      page.on('console', message => {
+        if (message.type() === 'error' && message.text().includes('render failure')) {
+          renderErrors.push(message.text());
+        }
+      });
       await page.goto(`${baseUrl}?mock=running`, { waitUntil: 'commit' });
       await page.locator('.app-shell').waitFor();
       if (locale.value !== 'zh-CN') {
@@ -66,6 +70,9 @@ const pages = [
       for (const target of pages) {
         await page.locator('.nav-section button').nth(target.navigationIndex).click();
         await page.waitForTimeout(350);
+        await page.evaluate(() => document.fonts.ready);
+        if (renderErrors.length) throw new Error(renderErrors.join('\n'));
+        if (!await page.locator('.app-shell').isVisible()) throw new Error('App failed to render');
         await page.screenshot({
           path: path.join(outputDirectory, target.file),
           animations: 'disabled',

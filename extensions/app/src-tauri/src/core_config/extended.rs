@@ -89,6 +89,10 @@ const PATHS: &[(&str, &str)] = &[
         "routing/cooldown/transient-error-cooldown-seconds",
         "transient-error-cooldown-seconds",
     ),
+    (
+        "routing/cooldown/quota-response-mode",
+        "quota-cooldown-response-mode",
+    ),
     ("requests/proxy-url", "proxy-url"),
     ("requests/passthrough-headers", "passthrough-headers"),
     (
@@ -243,6 +247,13 @@ pub(crate) fn extended_config_view(document: &serde_norway::Value) -> Result<Jso
             set(&mut config, &legacy, None)?;
         }
     }
+    // Missing compatibility switches default to enabled; explicit false remains respected.
+    for field in ["enable-apply-patch", "optimize-multi-agent-v2"] {
+        let native = parts(&format!("client/codex/{field}"));
+        if at(&config, &native).is_none() {
+            set(&mut config, &native, Some(Json::Bool(true)))?;
+        }
+    }
     // Move narrow legacy fields first so broader provider blocks do not retain
     // fields which now belong to client.* or a separate header-defaults block.
     for (native, legacy) in PATHS {
@@ -327,6 +338,9 @@ const FIELD_GROUPS: &[(&str, &str, &str)] = &[
     ("routing", "bool", "session-affinity-subagents force-model-prefix"),
     ("routing/cooldown", "bool", "save-cooldown-status"),
     ("routing/cooldown", "int", "transient-error-cooldown-seconds"),
+    // Cores without this setting reject management config writes while the key
+    // is stored, so the settings page removes it when the default is chosen.
+    ("routing/cooldown", "quota-response-mode", "quota-response-mode"),
     ("requests", "bool", "passthrough-headers"),
     ("requests", "int", "nonstream-keepalive-interval"),
     ("requests/streaming", "int", "keepalive-seconds"),
@@ -725,6 +739,8 @@ fn validate_value(path: &[String], value: &Json, before: &Json) -> Result<(), St
             }) => {}
         Some("image-mode")
             if value.is_boolean() || matches!(value.as_str(), Some("chat" | "passthrough")) => {}
+        Some("quota-response-mode")
+            if matches!(value.as_str(), Some("retryable" | "usage-limit")) => {}
         Some("ice") => {
             for server in value.as_array().ok_or_else(error)? {
                 let object = server.as_object().ok_or_else(error)?;
@@ -1135,7 +1151,7 @@ pub(crate) fn save_extended_core_config(
     {
         next.plugins_enabled = at(&result.config, &parts("plugins/enabled"))
             .and_then(Json::as_bool)
-            .unwrap_or(false);
+            .unwrap_or(true);
     }
     if changes
         .iter()
@@ -1270,6 +1286,17 @@ client: {codex: {optimize-multi-agent-v2: false}}
     }
 
     #[test]
+    fn codex_compatibility_switches_default_on_only_when_missing() {
+        let document = serde_norway::from_str(
+            "config-version: 8\nclient: {codex: {enable-apply-patch: false}}\n",
+        )
+        .unwrap();
+        let view = extended_config_view(&document).unwrap();
+        assert_eq!(view["client"]["codex"]["enable-apply-patch"], false);
+        assert_eq!(view["client"]["codex"]["optimize-multi-agent-v2"], true);
+    }
+
+    #[test]
     fn extended_patch_preserves_comments_provider_groups_and_credentials() {
         let content = "# keep heading\nconfig-version: 8\nserver: {host: '', port: 8317}\napi-keys: {codex: [{name: group, keys: [{api-key: upstream-secret}]}]}\noauth:\n  providers:\n    codex:\n      live-media-relay:\n        enabled: false # preserve hint\n        ice-servers: [{urls: ['turn:example'], username: user, credential: 'turn-secret'}]\n";
         let changes = [
@@ -1294,6 +1321,93 @@ client: {codex: {optimize-multi-agent-v2: false}}
             "turn-secret"
         );
         assert!(result.restart_required);
+    }
+
+    #[test]
+    fn quota_response_mode_defaults_to_absent_and_reads_both_spellings() {
+        let path = parts("routing/cooldown/quota-response-mode");
+        for content in ["config-version: 8\n", "port: 8317\n"] {
+            let view = extended_config_view(&serde_norway::from_str(content).unwrap()).unwrap();
+            assert!(at(&view, &path).is_none(), "{content}");
+        }
+        for content in [
+            "config-version: 8\nrouting:\n  cooldown:\n    quota-response-mode: usage-limit\n",
+            "port: 8317\nquota-cooldown-response-mode: usage-limit\n",
+        ] {
+            let view = extended_config_view(&serde_norway::from_str(content).unwrap()).unwrap();
+            assert_eq!(at(&view, &path), Some(&json!("usage-limit")), "{content}");
+            assert!(
+                view.get("quota-cooldown-response-mode").is_none(),
+                "{content}"
+            );
+        }
+    }
+
+    #[test]
+    fn quota_response_mode_writes_the_file_layout_spelling_and_removes_both() {
+        let path = "routing/cooldown/quota-response-mode";
+        let v8 = "config-version: 8\nrouting:\n  cooldown:\n    disable-cooling: false\n";
+        let (rendered, result) =
+            prepare_patch(v8, &[change(v8, path, json!("usage-limit"), false)]).unwrap();
+        let document: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
+        assert_eq!(
+            document["routing"]["cooldown"]["quota-response-mode"],
+            "usage-limit"
+        );
+        assert_eq!(document["routing"]["cooldown"]["disable-cooling"], false);
+        assert!(document.get("quota-cooldown-response-mode").is_none());
+        assert_eq!(
+            result.config["routing"]["cooldown"]["quota-response-mode"],
+            "usage-limit"
+        );
+        assert!(
+            !result.restart_required,
+            "the core hot-reloads this setting"
+        );
+
+        let legacy = "port: 8317\ndisable-cooling: false\n";
+        let (rendered, _) =
+            prepare_patch(legacy, &[change(legacy, path, json!("usage-limit"), false)]).unwrap();
+        let document: serde_norway::Value = serde_norway::from_str(&rendered).unwrap();
+        assert_eq!(document["quota-cooldown-response-mode"], "usage-limit");
+        assert_eq!(document["disable-cooling"], false);
+        assert!(document.get("routing").is_none());
+
+        for content in [
+            "config-version: 8\nrouting:\n  cooldown:\n    disable-cooling: true\n    quota-response-mode: usage-limit\n",
+            "port: 8317\ndisable-cooling: true\nquota-cooldown-response-mode: usage-limit\n",
+        ] {
+            let (rendered, result) =
+                prepare_patch(content, &[change(content, path, Json::Null, true)]).unwrap();
+            assert!(!rendered.contains("quota-response-mode"), "{rendered}");
+            assert!(!rendered.contains("quota-cooldown-response-mode"), "{rendered}");
+            assert!(rendered.contains("disable-cooling: true"), "{rendered}");
+            assert!(at(&result.config, &parts(path)).is_none());
+        }
+    }
+
+    #[test]
+    fn quota_response_mode_accepts_only_core_values() {
+        let content = "config-version: 8\n";
+        let path = "routing/cooldown/quota-response-mode";
+        for value in [json!("retryable"), json!("usage-limit")] {
+            assert!(
+                prepare_patch(content, &[change(content, path, value.clone(), false)]).is_ok(),
+                "{value}"
+            );
+        }
+        for value in [
+            json!("Usage-Limit"),
+            json!("usage_limit"),
+            json!(""),
+            json!(true),
+            json!(1),
+        ] {
+            assert!(
+                prepare_patch(content, &[change(content, path, value.clone(), false)]).is_err(),
+                "{value}"
+            );
+        }
     }
 
     #[test]

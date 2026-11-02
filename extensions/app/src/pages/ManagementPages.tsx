@@ -124,7 +124,7 @@ export function OAuthManagementPage() {
 
   return (
     <section className="page oauth-management-page">
-      <Tabs className="agent-subpage-tabs oauth-subpage-tabs" aria-label={t('oauth.tabs.label')} value={activeSubpage}
+      <Tabs className="oauth-subpage-tabs secondary-page-tabs" aria-label={t('oauth.tabs.label')} value={activeSubpage}
         onChange={subpage => { setAuthFilesProvider(undefined); setActiveSubpage(subpage); }}
         items={oauthSubpages.map(subpage => ({ value: subpage.id, id: `oauth-subpage-tab-${subpage.id}`, panelId: 'oauth-subpage-panel', label: t(subpage.labelKey) }))} />
 
@@ -532,19 +532,20 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
       </header>
 
       <FloatingNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />
-      <aside className="oauth-intro" aria-label={t('oauth.intro.title')}>
-        <span className="oauth-intro-icon" aria-hidden="true"><Info size={18} /></span>
-        <div className="oauth-intro-text">
-          <strong>{t('oauth.intro.title')}</strong>
-          <p>{t('oauth.intro.body')}</p>
-        </div>
-        {onOpenAuthFiles ? (
+      <Notice
+        tone="info"
+        variant="box"
+        className="oauth-intro"
+        title={t('oauth.intro.title')}
+        action={onOpenAuthFiles ? (
           <button type="button" className="secondary-button compact-button oauth-intro-action" onClick={() => onOpenAuthFiles()}>
             <FileKey size={15} aria-hidden="true" />
             {t('oauth.intro.viewFiles')}
           </button>
         ) : null}
-      </aside>
+      >
+        <p>{t('oauth.intro.body')}</p>
+      </Notice>
       <div className="oauth-grid">
         {oauthProviders.map((provider) => {
           const state = states[provider.id] ?? { status: 'idle' as const };
@@ -589,8 +590,12 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
                   <ul className="oauth-account-list" aria-label={t('oauth.accounts.listLabel', { provider: provider.name })}>
                     {providerAccounts.slice(0, OAUTH_ACCOUNT_PREVIEW_LIMIT).map((account) => {
                       const label = privacy.text(account.label, account.identities);
+                      const itemClass = [
+                        account.disabled ? 'disabled' : '',
+                        account.tone ? `tone-${account.tone}` : '',
+                      ].filter(Boolean).join(' ') || undefined;
                       return (
-                        <li key={account.name} className={account.disabled ? 'disabled' : undefined} title={account.disabled ? `${label} · ${t('oauth.accounts.disabled')}` : label}>
+                        <li key={account.name} className={itemClass} title={account.disabled ? `${label} · ${t('oauth.accounts.disabled')}` : label}>
                           {label}
                         </li>
                       );
@@ -609,7 +614,7 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
                 ) : null}
                 <p className="oauth-hint">{t(provider.id === 'devin' ? 'oauth.devinHint' : provider.id === 'meta' ? 'oauth.metaHint' : 'oauth.hint')}</p>
                 {state.url ? (
-                  <div className="oauth-auth-url-box">
+                  <div className="oauth-auth-url-box surface-sunken">
                     <div className="oauth-auth-url-label">{t('oauth.authorizationLink')}</div>
                     <div className="oauth-auth-url-value" title={state.url}>{state.url}</div>
                     <div className="oauth-auth-url-actions">
@@ -657,8 +662,8 @@ export function OAuthLoginPage({ onOpenAuthFiles }: { onOpenAuthFiles?: (provide
               </div>
 
               <div className="button-row management-card-actions">
-                <button type="button" className="primary-button" disabled={Boolean(state.polling) || browsersLoading} onClick={() => void startLogin(provider.id)}>
-                  {state.polling ? <LoaderCircle size={16} className="spin" aria-hidden="true" /> : <LoginIcon size={16} aria-hidden="true" />}
+                <button type="button" className="primary-button" disabled={Boolean(state.polling) || browsersLoading} title={browsersLoading ? t('oauth.browser.detecting') : undefined} onClick={() => void startLogin(provider.id)}>
+                  {state.polling || browsersLoading ? <LoaderCircle size={16} className="spin" aria-hidden="true" /> : <LoginIcon size={16} aria-hidden="true" />}
                   {loginLabel}
                 </button>
                 {state.url ? (

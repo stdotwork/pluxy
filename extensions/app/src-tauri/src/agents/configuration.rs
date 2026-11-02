@@ -311,6 +311,248 @@ where
         .map_err(|error| format!("Failed to update {label}: {error}"))
 }
 
+pub(crate) fn is_cordis_patch_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("cordis.patch."))
+}
+
+pub(crate) fn is_cordis_patch_content(content: &str) -> bool {
+    let content = content.trim();
+    if content.starts_with('-') || content.starts_with("[]") {
+        return true;
+    }
+    serde_norway::from_str::<serde_norway::Value>(content).is_ok_and(|v| v.is_sequence())
+}
+
+pub(crate) fn is_cordis_patch(path: &Path, content: Option<&str>) -> bool {
+    is_cordis_patch_path(path) || content.is_some_and(is_cordis_patch_content)
+}
+
+pub(crate) const DEEPSEEK_HARNESS_CORDIS_PATCH_HEADER: &str = "\
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+";
+
+pub(crate) fn ensure_cordis_patch_header(content: &str) -> String {
+    if content
+        .trim_start()
+        .starts_with("# Your patch layer for this dsh profile")
+    {
+        content.to_string()
+    } else {
+        format!("{DEEPSEEK_HARNESS_CORDIS_PATCH_HEADER}{content}")
+    }
+}
+
+pub(crate) fn parse_agent_yaml_sequence(
+    content: Option<&str>,
+    label: &str,
+) -> Result<Vec<serde_norway::Value>, String> {
+    let Some(content) = content.map(str::trim).filter(|content| !content.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    serde_norway::from_str::<serde_norway::Value>(content)
+        .map_err(|error| format!("Invalid {label} YAML format: {error}"))?
+        .as_sequence()
+        .cloned()
+        .ok_or_else(|| format!("{label} root must be a YAML sequence"))
+}
+
+pub(crate) fn render_agent_yaml_sequence_update<F>(
+    existing: Option<&str>,
+    label: &str,
+    update: F,
+) -> Result<String, String>
+where
+    F: FnOnce(&mut Vec<serde_norway::Value>) -> Result<(), String>,
+{
+    let original_seq = parse_agent_yaml_sequence(existing, label)?;
+    let original = serde_norway::Value::Sequence(original_seq.clone());
+    let mut updated_seq = original_seq;
+    update(&mut updated_seq)?;
+    let updated = serde_norway::Value::Sequence(updated_seq);
+    if updated == original {
+        return Ok(existing.unwrap_or("[]\n").to_string());
+    }
+    let source = existing
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+        .map(|_| existing.unwrap_or_default())
+        .unwrap_or("[]\n");
+    if let Ok(mut document) = yaml_serde_edit::YamlValue::parse(source) {
+        document.set(updated.clone());
+        let rendered = document.get_string();
+        if let Ok(validated) = serde_norway::from_str::<serde_norway::Value>(&rendered) {
+            if validated == updated {
+                return Ok(rendered);
+            }
+        }
+    }
+    serde_norway::to_string(&updated).map_err(|e| format!("Failed to update {label}: {e}"))
+}
+
+pub(crate) fn update_cordis_subagent_allowed_models(
+    seq: &mut Vec<serde_norway::Value>,
+    model_ids: &[String],
+) -> Result<(), String> {
+    let subagent_entry = seq
+        .iter_mut()
+        .find(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("subagent-model-selection-settings"));
+    let subagent_item = match subagent_entry {
+        Some(entry) => entry,
+        None => {
+            let mut new_entry = serde_norway::Mapping::new();
+            new_entry.insert(yaml_key("id"), serde_norway::Value::String("subagent-model-selection-settings".to_string()));
+            new_entry.insert(yaml_key("name"), serde_norway::Value::String("@deepseek-ai/dsh-tool-subagent/model-selection-settings".to_string()));
+            new_entry.insert(yaml_key("config"), serde_norway::Value::Mapping(serde_norway::Mapping::new()));
+            seq.push(serde_norway::Value::Mapping(new_entry));
+            seq.last_mut().unwrap()
+        }
+    };
+    let item_map = subagent_item
+        .as_mapping_mut()
+        .ok_or_else(|| "Cordis patch subagent-model-selection-settings must be a mapping".to_string())?;
+    let config = item_map
+        .entry(yaml_key("config"))
+        .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+        .as_mapping_mut()
+        .ok_or_else(|| "Cordis patch subagent-model-selection-settings.config must be a mapping".to_string())?;
+    if !config.get(yaml_key("enabled")).is_some_and(serde_norway::Value::is_bool) {
+        config.insert(yaml_key("enabled"), serde_norway::Value::Bool(true));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut allowed = Vec::new();
+    if let Some(existing_allowed) = config.get(yaml_key("allowedModels")).and_then(serde_norway::Value::as_sequence) {
+        for item in existing_allowed {
+            if let Some(map) = item.as_mapping() {
+                let provider = map.get(yaml_key("provider")).and_then(serde_norway::Value::as_str).unwrap_or("");
+                let model = map.get(yaml_key("model")).and_then(serde_norway::Value::as_str).unwrap_or("");
+                if provider != DEEPSEEK_HARNESS_PROVIDER_ID {
+                    if seen.insert((provider.to_string(), model.to_string())) {
+                        allowed.push(item.clone());
+                    }
+                }
+            }
+        }
+    }
+    for model_id in model_ids {
+        if seen.insert((DEEPSEEK_HARNESS_PROVIDER_ID.to_string(), model_id.clone())) {
+            let mut entry = serde_norway::Mapping::new();
+            entry.insert(yaml_key("provider"), serde_norway::Value::String(DEEPSEEK_HARNESS_PROVIDER_ID.to_string()));
+            entry.insert(yaml_key("model"), serde_norway::Value::String(model_id.clone()));
+            allowed.push(serde_norway::Value::Mapping(entry));
+        }
+    }
+    config.insert(yaml_key("allowedModels"), serde_norway::Value::Sequence(allowed));
+    Ok(())
+}
+
+pub(crate) fn render_deepseek_harness_cordis_patch(
+    existing: Option<&str>,
+    base_url: &str,
+    model: &str,
+    published_models: serde_norway::Value,
+) -> Result<String, String> {
+    render_agent_yaml_sequence_update(existing, "DeepSeek Harness Cordis patch", |seq| {
+        let llm_entry = seq
+            .iter_mut()
+            .find(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("llm-pi-ai"));
+        let llm = match llm_entry {
+            Some(entry) => entry,
+            None => {
+                let mut new_entry = serde_norway::Mapping::new();
+                new_entry.insert(yaml_key("id"), serde_norway::Value::String("llm-pi-ai".to_string()));
+                new_entry.insert(yaml_key("name"), serde_norway::Value::String("@deepseek-ai/dsh-llm-pi-ai".to_string()));
+                new_entry.insert(yaml_key("config"), serde_norway::Value::Mapping(serde_norway::Mapping::new()));
+                seq.push(serde_norway::Value::Mapping(new_entry));
+                seq.last_mut().unwrap()
+            }
+        };
+        let llm_map = llm
+            .as_mapping_mut()
+            .ok_or_else(|| "Cordis patch llm-pi-ai must be a mapping".to_string())?;
+        let config = llm_map
+            .entry(yaml_key("config"))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "Cordis patch llm-pi-ai.config must be a mapping".to_string())?;
+        let providers = config.entry(yaml_key("providers"))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "Cordis patch llm-pi-ai.config.providers must be a mapping".to_string())?;
+        let provider = providers.entry(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID))
+            .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| "Cordis patch easy-cliproxyapi provider must be a mapping".to_string())?;
+        for (key, value) in [
+            ("displayName", "EasyCLIProxyAPI"),
+            ("apiKeyEnv", DEEPSEEK_HARNESS_CREDENTIAL),
+            ("api", "openai-completions"),
+            ("baseURL", base_url),
+        ] {
+            provider.insert(yaml_key(key), serde_norway::Value::String(value.to_string()));
+        }
+        provider.insert(yaml_key("models"), published_models.clone());
+
+        let default_index = seq
+            .iter()
+            .position(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("agent-default-model"));
+        let manage_default = default_index
+            .map(|index| {
+                seq[index]
+                    .get("config")
+                    .and_then(|config| config.get("provider"))
+                    .and_then(serde_norway::Value::as_str)
+                    == Some(DEEPSEEK_HARNESS_PROVIDER_ID)
+            })
+            .unwrap_or(true);
+        if manage_default {
+            let default_item = match default_index {
+                Some(index) => &mut seq[index],
+                None => {
+                    let mut new_entry = serde_norway::Mapping::new();
+                    new_entry.insert(yaml_key("id"), serde_norway::Value::String("agent-default-model".to_string()));
+                    new_entry.insert(yaml_key("name"), serde_norway::Value::String("@deepseek-ai/dsh-agent-default-model".to_string()));
+                    new_entry.insert(yaml_key("config"), serde_norway::Value::Mapping(serde_norway::Mapping::new()));
+                    seq.push(serde_norway::Value::Mapping(new_entry));
+                    seq.last_mut().unwrap()
+                }
+            };
+            let default_map = default_item
+                .as_mapping_mut()
+                .ok_or_else(|| "Cordis patch agent-default-model must be a mapping".to_string())?;
+            let default_config = default_map
+                .entry(yaml_key("config"))
+                .or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()))
+                .as_mapping_mut()
+                .ok_or_else(|| "Cordis patch agent-default-model.config must be a mapping".to_string())?;
+            let same_model = default_config.get(yaml_key("provider")).and_then(serde_norway::Value::as_str) == Some(DEEPSEEK_HARNESS_PROVIDER_ID)
+                && default_config.get(yaml_key("model")).and_then(serde_norway::Value::as_str) == Some(model);
+            default_config.insert(yaml_key("provider"), serde_norway::Value::String(DEEPSEEK_HARNESS_PROVIDER_ID.to_string()));
+            default_config.insert(yaml_key("model"), serde_norway::Value::String(model.to_string()));
+            if !same_model {
+                default_config.remove(yaml_key("reasoningEffort"));
+            }
+        }
+
+        let model_ids: Vec<String> = published_models.as_sequence()
+            .map(|models| {
+                models.iter().filter_map(|m| {
+                    m.as_mapping()
+                        .and_then(|m| m.get(yaml_key("id")))
+                        .and_then(serde_norway::Value::as_str)
+                        .map(str::to_string)
+                }).collect()
+            })
+            .unwrap_or_default();
+        update_cordis_subagent_allowed_models(seq, &model_ids)?;
+
+        Ok(())
+    })
+}
+
 pub(crate) fn build_deepseek_harness_models(
     models: &[AgentModelOption],
     selected_model: &str,
@@ -358,12 +600,26 @@ pub(crate) fn build_deepseek_harness_settings(
     )
 }
 
+pub(crate) fn build_deepseek_harness_cordis_patch_template(
+    base_url: &str,
+    model: &str,
+    models: &[AgentModelOption],
+) -> Result<String, String> {
+    // Seeding the sequence branch keeps the template in the Cordis patch
+    // shape instead of generating the legacy settings.yaml mapping.
+    let settings = build_deepseek_harness_settings(Some("[]\n"), base_url, model, models)?;
+    Ok(ensure_cordis_patch_header(&settings))
+}
+
 pub(crate) fn render_deepseek_harness_settings(
     existing: Option<&str>,
     base_url: &str,
     model: &str,
     published_models: serde_norway::Value,
 ) -> Result<String, String> {
+    if existing.is_some_and(is_cordis_patch_content) {
+        return render_deepseek_harness_cordis_patch(existing, base_url, model, published_models);
+    }
     render_agent_yaml_mapping_update(existing, "DeepSeek Harness settings", |root| {
         let llm = root
             .entry(yaml_key("llm-pi-ai"))
@@ -849,6 +1105,7 @@ pub(crate) fn ordered_agent_models(
     } else {
         ordered.push(AgentModelOption {
             input_modalities: None,
+            reasoning_levels: Vec::new(),
             harness_metadata: None,
             name: selected_model.to_string(),
             alias: None,
@@ -876,6 +1133,21 @@ pub(crate) fn build_claude_desktop_deployment_config(
     render_agent_json(root, "Claude Desktop configuration")
 }
 
+// Keep generation, removal and selective restoration in agreement. These keys
+// belong to CPA's gateway profile; all other preferences remain user-owned.
+pub(crate) const CLAUDE_DESKTOP_PROFILE_KEYS: &[&str] = &[
+    "disableDeploymentModeChooser",
+    "inferenceGatewayApiKey",
+    "inferenceGatewayAuthScheme",
+    "inferenceGatewayBaseUrl",
+    "inferenceProvider",
+    "inferenceCredentialKind",
+    "inferenceModels",
+    "modelDiscoveryEnabled",
+    "bootstrapEnabled",
+    "selfHostedUrl",
+];
+
 pub(crate) fn build_claude_desktop_profile(
     existing: Option<&str>,
     base_url: &str,
@@ -885,6 +1157,15 @@ pub(crate) fn build_claude_desktop_profile(
     mappings: Option<&ClaudeDesktopModelMappings>,
 ) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop gateway configuration")?;
+    // An explicit credential source prevents an old helper/SSO setting from
+    // taking precedence over the local proxy key. The full model IDs below
+    // are authoritative, so discovery must not resolve bare tier aliases.
+    root.insert("inferenceCredentialKind".into(), serde_json::json!("static"));
+    root.insert("modelDiscoveryEnabled".into(), serde_json::json!(false));
+    // Preserve bootstrap details for restoration, but don't fetch an overlay
+    // which could replace this gateway. A session host also overrides inference.
+    root.insert("bootstrapEnabled".into(), serde_json::json!(false));
+    root.remove("selfHostedUrl");
     root.insert(
         "disableDeploymentModeChooser".to_string(),
         serde_json::json!(true),
@@ -1023,6 +1304,10 @@ pub(crate) fn claude_desktop_family_tier(route_model: &str) -> Option<&'static s
         || route_model.eq_ignore_ascii_case(LEGACY_CLAUDE_DESKTOP_MODEL_IDS[2])
     {
         Some("haiku")
+    } else if lowered.starts_with("claude-fable-") || lowered.contains("-fable-") {
+        Some("fable")
+    } else if lowered.starts_with("claude-mythos-") || lowered.contains("-mythos-") {
+        Some("mythos")
     } else {
         None
     }
@@ -1030,6 +1315,9 @@ pub(crate) fn claude_desktop_family_tier(route_model: &str) -> Option<&'static s
 
 pub(crate) fn build_claude_desktop_meta(existing: Option<&str>) -> Result<String, String> {
     let mut root = parse_agent_json_object(existing, "Claude Desktop configuration index")?;
+    // Desktop resolves a hybrid pointer before appliedId. Match its own
+    // "apply locally" transition; transaction snapshots retain the old pointer.
+    root.remove("hybridPointer");
     repair_claude_desktop_meta_names(&mut root);
     let entries = ensure_json_array_entry(&mut root, "entries");
     let mut managed_entry = None;
@@ -1155,8 +1443,9 @@ pub(crate) fn prepare_claude_desktop_managed_removal(paths: &[PathBuf]) -> Resul
     }
     let meta = read_agent_json_or_empty(&paths[3], "Claude Desktop configuration index")?;
     let applied_id = meta.get("appliedId").and_then(serde_json::Value::as_str);
-    let managed_active = applied_id == Some(CLAUDE_DESKTOP_PROFILE_ID)
-        || (applied_id.is_none() && agent_has_managed_marker(AgentClient::ClaudeDesktop, paths)?);
+    let managed_active = !claude_desktop_has_hybrid_pointer(&meta)
+        && (applied_id == Some(CLAUDE_DESKTOP_PROFILE_ID)
+            || (applied_id.is_none() && agent_has_managed_marker(AgentClient::ClaudeDesktop, paths)?));
     let mut changed = Vec::new();
     for (path, label) in [
         (&paths[0], "Claude Desktop main configuration"),
@@ -1182,15 +1471,8 @@ pub(crate) fn prepare_claude_desktop_managed_removal(paths: &[PathBuf]) -> Resul
     if let Some(update) =
         prepare_agent_json_removal(&paths[2], "Claude Desktop gateway configuration", |root| {
             let mut updated = false;
-            for key in [
-                "disableDeploymentModeChooser",
-                "inferenceGatewayApiKey",
-                "inferenceGatewayAuthScheme",
-                "inferenceGatewayBaseUrl",
-                "inferenceProvider",
-                "inferenceModels",
-            ] {
-                updated |= root.remove(key).is_some();
+            for key in CLAUDE_DESKTOP_PROFILE_KEYS {
+                updated |= root.remove(*key).is_some();
             }
             updated
         })?
@@ -1806,6 +2088,73 @@ pub(crate) fn remove_deepseek_harness_settings_fields(root: &mut serde_norway::M
     changed
 }
 
+pub(crate) fn remove_deepseek_harness_cordis_patch_fields(seq: &mut Vec<serde_norway::Value>) -> bool {
+    let mut changed = false;
+    let mut remove_indices = Vec::new();
+
+    for (i, item) in seq.iter_mut().enumerate() {
+        let id = item.get("id").and_then(serde_norway::Value::as_str);
+        match id {
+            Some("llm-pi-ai") => {
+                if let Some(config) = item.get_mut("config").and_then(serde_norway::Value::as_mapping_mut) {
+                    if let Some(providers) = config.get_mut(yaml_key("providers")).and_then(serde_norway::Value::as_mapping_mut) {
+                        if providers.remove(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID)).is_some() {
+                            changed = true;
+                            if providers.is_empty() {
+                                config.remove(yaml_key("providers"));
+                            }
+                        }
+                    }
+                    if config.is_empty() {
+                        remove_indices.push(i);
+                    }
+                }
+            }
+            Some("agent-default-model") => {
+                let is_cpa = item.get("config")
+                    .and_then(serde_norway::Value::as_mapping)
+                    .and_then(|c| c.get(yaml_key("provider")))
+                    .and_then(serde_norway::Value::as_str)
+                    == Some(DEEPSEEK_HARNESS_PROVIDER_ID);
+                if is_cpa {
+                    changed = true;
+                    remove_indices.push(i);
+                }
+            }
+            Some("subagent-model-selection-settings") => {
+                if let Some(config) = item.get_mut("config").and_then(serde_norway::Value::as_mapping_mut) {
+                    if let Some(allowed) = config.get_mut(yaml_key("allowedModels")).and_then(serde_norway::Value::as_sequence_mut) {
+                        let original_len = allowed.len();
+                        allowed.retain(|entry| {
+                            entry.as_mapping()
+                                .and_then(|m| m.get(yaml_key("provider")))
+                                .and_then(serde_norway::Value::as_str)
+                                != Some(DEEPSEEK_HARNESS_PROVIDER_ID)
+                        });
+                        if allowed.len() != original_len {
+                            changed = true;
+                        }
+                        if allowed.is_empty() {
+                            config.remove(yaml_key("allowedModels"));
+                        }
+                    }
+                    if config.is_empty() || (config.len() == 1 && config.contains_key(yaml_key("enabled"))) {
+                        remove_indices.push(i);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for &i in remove_indices.iter().rev() {
+        seq.remove(i);
+        changed = true;
+    }
+
+    changed
+}
+
 pub(crate) fn prepare_deepseek_harness_managed_removal(
     paths: &[PathBuf],
 ) -> Result<Images, String> {
@@ -1817,19 +2166,34 @@ pub(crate) fn prepare_deepseek_harness_managed_removal(
         let current = fs::read_to_string(&paths[0])
             .map_err(|error| format!("Failed to read DeepSeek Harness settings: {error}"))?;
         let mut changed = false;
-        let rendered = render_agent_yaml_mapping_update(
-            Some(&current),
-            "DeepSeek Harness settings",
-            |root| {
-                changed = remove_deepseek_harness_settings_fields(root);
+        let rendered = if is_cordis_patch(&paths[0], Some(&current)) {
+            render_agent_yaml_sequence_update(Some(&current), "DeepSeek Harness Cordis patch", |seq| {
+                changed = remove_deepseek_harness_cordis_patch_fields(seq);
                 Ok(())
-            },
-        )?;
+            })?
+        } else {
+            render_agent_yaml_mapping_update(
+                Some(&current),
+                "DeepSeek Harness settings",
+                |root| {
+                    changed = remove_deepseek_harness_settings_fields(root);
+                    Ok(())
+                },
+            )?
+        };
         if changed {
-            let root = parse_agent_yaml_mapping(Some(&rendered), "DeepSeek Harness settings")?;
+            let is_empty = if is_cordis_patch(&paths[0], Some(&rendered)) {
+                parse_agent_yaml_sequence(Some(&rendered), "DeepSeek Harness Cordis patch")
+                    .map(|s| s.is_empty())
+                    .unwrap_or(false)
+            } else {
+                parse_agent_yaml_mapping(Some(&rendered), "DeepSeek Harness settings")
+                    .map(|m| m.is_empty())
+                    .unwrap_or(false)
+            };
             changed_paths.push((
                 paths[0].clone(),
-                (!root.is_empty()).then(|| rendered.into_bytes()),
+                (!is_empty).then(|| rendered.into_bytes()),
             ));
         }
     }
@@ -2018,19 +2382,13 @@ pub(crate) fn build_restored_claude_desktop_config(
     match index {
         0 | 1 => restore_json_key(&mut root, original_root.as_ref(), "deploymentMode"),
         2 => {
-            for key in [
-                "disableDeploymentModeChooser",
-                "inferenceGatewayApiKey",
-                "inferenceGatewayAuthScheme",
-                "inferenceGatewayBaseUrl",
-                "inferenceProvider",
-                "inferenceModels",
-            ] {
+            for key in CLAUDE_DESKTOP_PROFILE_KEYS {
                 restore_json_key(&mut root, original_root.as_ref(), key);
             }
         }
         3 => {
             restore_json_key(&mut root, original_root.as_ref(), "appliedId");
+            restore_json_key(&mut root, original_root.as_ref(), "hybridPointer");
             let mut entries = root
                 .remove("entries")
                 .and_then(|value| value.as_array().cloned())
@@ -2724,6 +3082,79 @@ pub(crate) fn build_restored_deepseek_harness_settings(
     current: &str,
     original: Option<&str>,
 ) -> Result<Option<String>, String> {
+    if is_cordis_patch_content(current) {
+        let original_seq = parse_agent_yaml_sequence(original, "Original DeepSeek Harness Cordis patch")?;
+        let original_provider = original_seq.iter()
+            .find(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("llm-pi-ai"))
+            .and_then(|item| item.get("config"))
+            .and_then(|c| c.get("providers"))
+            .and_then(|p| p.get(DEEPSEEK_HARNESS_PROVIDER_ID))
+            .cloned();
+        let original_default = original_seq.iter()
+            .find(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("agent-default-model"))
+            .and_then(|item| item.get("config"))
+            .cloned();
+        let original_subagent_allowed = original_seq.iter()
+            .find(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("subagent-model-selection-settings"))
+            .and_then(|item| item.get("config"))
+            .and_then(|c| c.get("allowedModels"))
+            .cloned();
+
+        let rendered = render_agent_yaml_sequence_update(Some(current), "Current DeepSeek Harness Cordis patch", |seq| {
+            let llm_entry = seq.iter_mut().find(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("llm-pi-ai"));
+            if let Some(entry) = llm_entry {
+                let entry_map = entry.as_mapping_mut().unwrap();
+                let config = entry_map.entry(yaml_key("config")).or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()));
+                let providers = config.as_mapping_mut().unwrap().entry(yaml_key("providers")).or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()));
+                if let Some(orig) = &original_provider {
+                    providers.as_mapping_mut().unwrap().insert(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID), orig.clone());
+                } else if let Some(map) = providers.as_mapping_mut() {
+                    map.remove(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID));
+                }
+            } else if let Some(orig) = &original_provider {
+                let mut new_entry = serde_norway::Mapping::new();
+                new_entry.insert(yaml_key("id"), serde_norway::Value::String("llm-pi-ai".into()));
+                new_entry.insert(yaml_key("name"), serde_norway::Value::String("@deepseek-ai/dsh-llm-pi-ai".into()));
+                let mut prov_map = serde_norway::Mapping::new();
+                prov_map.insert(yaml_key(DEEPSEEK_HARNESS_PROVIDER_ID), orig.clone());
+                let mut config = serde_norway::Mapping::new();
+                config.insert(yaml_key("providers"), serde_norway::Value::Mapping(prov_map));
+                new_entry.insert(yaml_key("config"), serde_norway::Value::Mapping(config));
+                seq.push(serde_norway::Value::Mapping(new_entry));
+            }
+
+            let default_pos = seq.iter().position(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("agent-default-model"));
+            if let Some(orig_def) = &original_default {
+                if let Some(pos) = default_pos {
+                    seq[pos].as_mapping_mut().unwrap().insert(yaml_key("config"), orig_def.clone());
+                } else {
+                    let mut new_entry = serde_norway::Mapping::new();
+                    new_entry.insert(yaml_key("id"), serde_norway::Value::String("agent-default-model".into()));
+                    new_entry.insert(yaml_key("name"), serde_norway::Value::String("@deepseek-ai/dsh-agent-default-model".into()));
+                    new_entry.insert(yaml_key("config"), orig_def.clone());
+                    seq.push(serde_norway::Value::Mapping(new_entry));
+                }
+            } else if let Some(pos) = default_pos {
+                seq.remove(pos);
+            }
+
+            let subagent_entry = seq.iter_mut().find(|item| item.get("id").and_then(serde_norway::Value::as_str) == Some("subagent-model-selection-settings"));
+            if let Some(entry) = subagent_entry {
+                let entry_map = entry.as_mapping_mut().unwrap();
+                let config = entry_map.entry(yaml_key("config")).or_insert_with(|| serde_norway::Value::Mapping(serde_norway::Mapping::new()));
+                if let Some(orig_allowed) = &original_subagent_allowed {
+                    config.as_mapping_mut().unwrap().insert(yaml_key("allowedModels"), orig_allowed.clone());
+                } else if let Some(map) = config.as_mapping_mut() {
+                    map.remove(yaml_key("allowedModels"));
+                }
+            }
+
+            Ok(())
+        })?;
+        let parsed = parse_agent_yaml_sequence(Some(&rendered), "Restored DeepSeek Harness Cordis patch")?;
+        return Ok((!parsed.is_empty() || original.is_some()).then_some(rendered));
+    }
+
     let original_root = parse_agent_yaml_mapping(original, "Original DeepSeek Harness settings")?;
     let rendered = render_agent_yaml_mapping_update(
         Some(current),
@@ -3278,6 +3709,8 @@ pub(crate) fn build_opencode_agent_config(
     }
 }
 
+const ZCODE_CPA_REASONING_MAP: &str = super::zcode::ZCODE_CPA_REASONING_MAP;
+
 pub(crate) fn build_zcode_agent_config(
     existing: Option<&str>,
     base_url: &str,
@@ -3317,8 +3750,8 @@ pub(crate) fn build_zcode_agent_config(
     api.insert("baseUrl".to_string(), serde_json::json!(base_url));
     let ordered = ordered_agent_models(available_models, model);
     let model_names = ordered.iter().map(|option| option.name.as_str()).collect::<Vec<_>>();
-    provider_config.insert("personalModelIds".to_string(), serde_json::json!(model_names));
-    provider_config.insert("modelOrder".to_string(), serde_json::json!(model_names));
+    provider_config.entry("personalModelIds").or_insert_with(|| serde_json::json!(model_names));
+    provider_config.entry("modelOrder").or_insert_with(|| serde_json::json!(model_names));
     rules.retain(|rule| {
         rule.get("providerId").and_then(serde_json::Value::as_str)
             != Some(MANAGED_AGENT_PROVIDER_ID)
@@ -3365,28 +3798,56 @@ pub(crate) fn build_zcode_agent_config(
     let mut manual_updates = Vec::new();
     for option in ordered {
         let manual = existing_manual_rules.get(&option.name);
-        if option.context_window.is_none()
-            && manual.is_none()
-            && !existing_rules.contains_key(&option.name)
-        {
-            continue;
-        }
         let mut rule = manual.or_else(|| existing_rules.get(&option.name))
             .cloned().unwrap_or_else(|| serde_json::json!({}));
         let entry = rule.as_object_mut().ok_or("ZCode model rule must be an object")?;
         entry.insert("providerId".to_string(), serde_json::json!(MANAGED_AGENT_PROVIDER_ID));
         entry.insert("modelId".to_string(), serde_json::json!(option.name));
-        let properties = ensure_json_object_entry(ensure_json_object_entry(entry, "config"), "properties");
-        if let Some(context_window) = option.context_window {
-            properties.insert("contextWindow".to_string(), serde_json::json!(context_window));
-        } else if manual.is_none() {
-            // Smart rules inherit ZCode defaults; manual rules require a complete
-            // config, including contextWindow, even when CPA has no runtime limit.
-            properties.remove("contextWindow");
+        let (inferred_cw, inferred_mot, _, _, _) = zcode::infer_zcode_model_knowledge_with_calibration(&option.name);
+        let config_obj = ensure_json_object_entry(entry, "config");
+        {
+            let properties = ensure_json_object_entry(config_obj, "properties");
+            ensure_json_object_entry(properties, "inputFormat")
+                .entry("supportsImage")
+                .or_insert(serde_json::json!(true));
+            properties.remove("maxOutputTokens");
+            let effective_cw = match option.context_window {
+                Some(500_000) | None => manual
+                    .and_then(|rule| rule.pointer("/config/properties/contextWindow"))
+                    .and_then(serde_json::Value::as_u64)
+                    .or(inferred_cw)
+                    .or(option.context_window),
+                Some(cw) => Some(cw).or(inferred_cw),
+            };
+            if let Some(context_window) = effective_cw {
+                properties.insert("contextWindow".to_string(), serde_json::json!(context_window));
+            } else if manual.is_none() {
+                properties.remove("contextWindow");
+            }
         }
-        if properties.is_empty() {
-            entry.get_mut("config").and_then(serde_json::Value::as_object_mut)
-                .expect("ZCode model config was created").remove("properties");
+        let specs = ensure_json_object_entry(config_obj, "optionSpecs");
+        if let Some(mot) = inferred_mot {
+            specs.entry("maxOutputTokens").or_insert_with(|| serde_json::json!({
+                "max": mot,
+                "map": "{\"max_tokens\": maxOutputTokens}",
+            }));
+        }
+        if !option.reasoning_levels.is_empty() {
+            let is_generated_map = |m: &str| {
+                m == ZCODE_CPA_REASONING_MAP || m == "reasoningLevel == \"none\" ? {\"thinking\": {\"type\": \"disabled\"}} : {\"thinking\": {\"type\": \"adaptive\"}, \"output_config\": {\"effort\": reasoningLevel}}"
+            };
+            let generated = manual.is_none() && specs.get("reasoningLevel")
+                .and_then(|spec| spec.get("map")).and_then(serde_json::Value::as_str)
+                .map(is_generated_map).unwrap_or(false);
+            if generated || !specs.contains_key("reasoningLevel") {
+                specs.insert("reasoningLevel".into(), serde_json::json!({
+                    "values": option.reasoning_levels,
+                    "map": ZCODE_CPA_REASONING_MAP,
+                }));
+            }
+        }
+        if specs.is_empty() {
+            config_obj.remove("optionSpecs");
         }
         if manual.is_some() {
             manual_updates.push(rule);

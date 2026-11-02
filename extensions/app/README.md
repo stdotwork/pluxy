@@ -25,14 +25,6 @@ quota inspection, usage records, model aliases, and agent client configuration i
 The application is built with Tauri, React, and Rust. It can carry a matching CLIProxyAPI core
 archive, making first-time setup and offline installation easier.
 
-## Sponsor
-
-[![https://go.apimart.ai/gh-easycliproxyapi](./assets/apimart-en.png)](https://go.apimart.ai/gh-easycliproxyapi)
-
-Thanks to APIMart for sponsoring this project!
-
-APIMart is a low-cost API platform for AI image & video generation — GPT-Image-2 from $0.006/image, 160+ images per dollar. One async API covers both image and video: submit a task, get an ID, fetch results via polling or callback. Batch tens of thousands of images without timeouts, switch models without changing code. Pay-as-you-go with no monthly fee — [sign up here](https://go.apimart.ai/gh-easycliproxyapi) to get started.
-
 ## Feature Tour
 
 ### Home dashboard and local API endpoints
@@ -137,6 +129,12 @@ For supported clients, the application can synchronize the available model catal
 default model, back up the original configuration before applying managed settings, and restore the
 previous configuration.
 
+In **Agents → Management → Configuration directory**, enter or browse to the directory containing
+the client's configuration files, such as `.claude` or `.codex` (not the home directory).
+Windows also accepts WSL UNC paths such as `\\wsl$\Ubuntu\home\user\.claude` and
+`\\wsl.localhost\Ubuntu\home\user\.codex`. Each client remembers its own directory; clearing it
+restores the default. This setting changes configuration access, not how executables are launched.
+
 Antigravity CLI connects through CPA's Gemini-compatible API. Launch the CLI from CPA to supply its endpoint and API key for that process. Running `agy` directly requires setting those environment variables yourself.
 
 Codex **Session Management → Edit Context (Experimental)** reads messages only after a session is selected.
@@ -152,44 +150,6 @@ Manually renamed files without a session ID in their filename or a database path
 - Upload, download, inspect, and manage authentication files.
 - Review provider quotas and account availability.
 - Keep the application available from the macOS menu bar or Windows system tray.
-
-## Custom Themes
-
-Put one theme per `.json` file in the `themes` folder of the application data directory: next to the executable on Windows and Linux, and `~/Library/Application Support/com.cpa.gui/themes` for the macOS app (next to the executable when run outside the `.app` bundle). The **Open themes folder** button at the bottom of the theme picker creates and opens it; **Reload** applies changes without restarting. Custom themes appear after the built-in themes in file name order. Up to 64 files of at most 64 KB each are read; an invalid file is skipped and its name is shown in the picker, along with the number of files beyond the limit.
-
-```json
-{
-  "id": "harbor-dark",
-  "name": { "en": "Harbor", "zh-CN": "港湾", "ja": "ハーバー" },
-  "description": "Deep teal surfaces with a sea-glass accent",
-  "appearance": "dark",
-  "windowBackground": "#0E1A1F",
-  "windowMaterial": "translucent",
-  "tokens": {
-    "workspaceBackground": "#0E1A1F",
-    "surface": "#14242B",
-    "textPrimary": "#E6F1F2",
-    "border": "#2A434C",
-    "accent": "#6FD3C1",
-    "accentContrast": "#0E1A1F",
-    "sidebarBackground": "#0B151A",
-    "windowMaterialWorkspaceOpacity": "72%",
-    "windowMaterialSidebarOpacity": "40%"
-  }
-}
-```
-
-- `id` (required): lowercase letters, digits and `-`, starting with a letter. It must not reuse a built-in ID (`light`, `dark`, `warm-sand-light`, `graphite-dark`, `midnight-dark`, `sakura-light`) or another custom theme's ID.
-- `name` (required) and `description`: a string or an object keyed by `en`, `zh-CN`, `zh-TW` and `ja`.
-- `appearance` (required): `light` or `dark`; the theme is listed in that group.
-- `windowBackground` (required): `#RRGGBB`, the native window color shown before the page paints.
-- `tokens` (required, may be empty): color tokens accept `#RRGGBB` or `#RRGGBBAA`; omitted colors keep the default light or dark value. The opacity tokens below accept percentages. Unknown or removed token keys are ignored.
-- `backdrop`: optional gradient background with the same structure as the built-in Midnight Blue and Sakura Blush themes.
-- `windowMaterial`: `solid` (default) or `translucent`. A translucent theme shows the native window material behind the sidebar and workspace: Liquid Glass on macOS 26 and later, vibrancy on earlier macOS, Mica on Windows 11 and Acrylic on Windows 10 1809 and later. Linux and older Windows versions have no material and render the theme exactly like a solid one, so keep `windowBackground` and the tokens complete. While a material is shown it replaces `backdrop`.
-- Optional opacity tokens in `tokens`: `windowMaterialWorkspaceOpacity` (workspace, default `"72%"`) and `windowMaterialSidebarOpacity` (sidebar, default `"40%"`). Each accepts a percentage string from `"0%"` (fully transparent) to `"100%"` (opaque), including decimals such as `"37.5%"`. These tokens only affect supported systems when `windowMaterial` is `translucent`; the root, body and shell stay transparent to expose the native material. Invalid values skip the file. This is part of the theme, with no separate material setting; built-in themes remain solid.
-- `$schema` is allowed and ignored; any other field makes the file invalid.
-
-Available token keys: `workspaceBackground`, `surface`, `softSurface`, `hoverBackground`, `textPrimary`, `textSecondary`, `textTertiary`, `textMuted`, `border`, `borderSubtle`, `borderStrong`, `borderHover`, `panelShadow`, `accent`, `accentStrong`, `accentSoft`, `accentContrast`, `accentShadow`, `primaryButtonBackground`, `primaryButtonHoverBackground`, `primaryButtonText`, `primaryButtonBorder`, `primaryButtonHoverBorder`, `controlActiveBackground`, `controlActiveThumb`, `focusRing`, `sidebarBackground`, `sidebarText`, `sidebarTextStrong`, `sidebarTextMuted`, `sidebarBorder`, `sidebarHover`, `sidebarSelected`, `sidebarSelectedBorder`, `sidebarSelectedShadow`, `popoverBackground`, `overlaySoftSurface`, `overlayHoverBackground`, `scrim`, `controlThumb`, `windowMaterialWorkspaceOpacity`, `windowMaterialSidebarOpacity`.
 
 ## Quick Start
 

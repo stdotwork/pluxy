@@ -869,3 +869,35 @@ fn devin_aliases_use_the_devin_channel_without_unsupported_overrides() {
         assert!(resolved_oauth_alias_sources("{}\n", &definitions, &available_models, capability).unwrap().is_empty());
     }
 }
+
+#[test]
+fn ultrafast_alias_round_trip_preserves_effort_and_can_switch_tiers() {
+    let source = test_codex_oauth_thinking_source("gpt-6.1-sol");
+    let created = add_model_alias_with_tier_to_yaml("debug: true\n", &source, "sol-ultrafast", "high", Some("ultrafast")).unwrap();
+    assert_eq!(speed_aliases_from_yaml(&created).unwrap()[0].service_tier, "ultrafast");
+    let context = model_alias_edit_context(&created, "sol-ultrafast", &[]).unwrap();
+    assert_eq!(context.service_tier.as_deref(), Some("ultrafast"));
+    assert_eq!(context.effort.as_deref(), Some("high"));
+    let resolved = resolve_model_alias_edit_source_for_mapping(&created, "sol-ultrafast", &[], None).unwrap();
+    let unchanged = edit_model_alias_with_tier_in_yaml_for_mapping(&created, "sol-ultrafast", &resolved, "sol-ultrafast", "high", Some("ultrafast"), None).unwrap();
+    assert_eq!(created, unchanged);
+    let fast = edit_model_alias_with_tier_in_yaml_for_mapping(&created, "sol-ultrafast", &resolved, "sol-fast", "high", Some("priority"), None).unwrap();
+    assert_eq!(speed_aliases_from_yaml(&fast).unwrap()[0].service_tier, "priority");
+    let disabled = edit_model_alias_with_tier_in_yaml_for_mapping(&created, "sol-ultrafast", &resolved, "sol-high", "high", None, None).unwrap();
+    assert!(speed_aliases_from_yaml(&disabled).unwrap().is_empty());
+    assert_eq!(thinking_aliases_from_yaml(&disabled).unwrap()[0].effort.as_deref(), Some("high"));
+    assert!(add_model_alias_with_tier_to_yaml("{}", &source, "invalid", "", Some("invalid")).is_err());
+    let removed = remove_thinking_alias_from_yaml(&created, "sol-ultrafast").unwrap();
+    assert!(!removed.contains("ultrafast"));
+    assert!(removed.contains("debug: true"));
+}
+
+#[test]
+fn ultrafast_alias_edits_raw_tier_without_changing_unrelated_params() {
+    let input = "oauth-model-alias:\n  codex: [{name: gpt-6.1-sol, alias: sol, fork: true}]\npayload:\n  override-raw:\n    - models: [{name: sol, protocol: codex}]\n      params: {service_tier: '\"priority\"', temperature: '0.2'}\n";
+    let source = resolve_model_alias_edit_source_for_mapping(input, "sol", &[], None).unwrap();
+    let updated = edit_model_alias_with_tier_in_yaml_for_mapping(input, "sol", &source, "sol", "", Some("ultrafast"), None).unwrap();
+    let value: serde_json::Value = serde_norway::from_str(&updated).unwrap();
+    assert_eq!(value["payload"]["override-raw"][0]["params"]["service_tier"], "\"ultrafast\"");
+    assert_eq!(value["payload"]["override-raw"][0]["params"]["temperature"], "0.2");
+}

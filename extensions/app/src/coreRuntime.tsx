@@ -1,6 +1,7 @@
 import { pollWhileActive, windowActivity } from './services/windowActivity';
 import { onCoreStatusChanged } from './services/events';
 import { getCoreStatus } from './services/coreLifecycle';
+import { setCredentialTagTarget } from './services/credentialTags';
 import type { CoreStatus } from './services/coreLifecycle';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
@@ -25,6 +26,7 @@ export function CoreRuntimeProvider({ children }: { children: ReactNode }) {
     ++statusRevision.current;
     setStatus((previous) => JSON.stringify(previous) === JSON.stringify(nextStatus) ? previous : nextStatus);
     if (nextStatus) {
+      setCredentialTagTarget(nextStatus.connectionMode === 'remote' ? nextStatus.remoteOrigin ?? '' : null);
       setStatusError('');
     }
   }, []);

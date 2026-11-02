@@ -5,7 +5,7 @@ import { getCoreConfigSettings, getCoreTlsSettings } from '../services/coreSetti
 import { getGuiSettings } from '../services/appSettings';
 import { useEffect, useRef, useState } from 'react';
 import { getVersion } from '../services/platform';
-import { LoaderCircle, Play, RefreshCw, RotateCw, Settings, Square } from 'lucide-react';
+import { Download, LoaderCircle, Play, RefreshCw, RotateCw, Settings, Square } from 'lucide-react';
 import { useCoreRuntime } from '../coreRuntime';
 import { clientApiProfiles, clientApiProfilesForOrigin } from '../services/clientAccess';
 import { useI18n } from '../i18n';
@@ -14,6 +14,7 @@ import { FloatingNotice, useAppNotice } from '../appNotice';
 import { VersionManagementPage, displayAppVersion } from './VersionManagementPage';
 import { HomeAccessPanel } from './HomeAccessPanel';
 import { HomeOverviewCards } from './HomeOverviewCards';
+import { RoutingPanel } from '../components/routing/RoutingPanel';
 import { CoreHealthPanel } from './CoreHealthPanel';
 import { CoreConnectionSettings } from './CoreConnectionSettings';
 import { useHomeOverview } from './useHomeOverview';
@@ -233,12 +234,13 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
         modelsError={overview.snapshot?.errors.models ?? ''}
         onRefreshModels={overview.refresh} contextKey={healthContext}
       />} />
+      <RoutingPanel coreReady={coreReady} />
       <div className="home-top-grid">
         <div className="panel surface-panel control-panel">
           <div className="panel-heading home-panel-heading">
             <div>
               <h2>{t('kernel.control.title')}</h2>
-              <p>{t(remoteMode ? coreReady ? 'connection.remoteReady' : 'connection.remoteUnreachable' : coreReady ? 'home.runtime.ready' : coreInstalled ? 'home.runtime.stopped' : 'home.runtime.notInstalled')}</p>
+              <p>{t(!coreStatus ? (statusError ? 'home.runtime.unknown' : 'home.runtime.checking') : remoteMode ? coreReady ? 'connection.remoteReady' : 'connection.remoteUnreachable' : coreReady ? 'home.runtime.ready' : coreInstalled ? 'home.runtime.stopped' : 'home.runtime.notInstalled')}</p>
             </div>
             <div className="home-runtime-actions">
               <button type="button" className="icon-button quiet ghost small-button" disabled={coreProcessBusy} onClick={() => void refreshStatus()} title={t('kernel.control.refresh')} aria-label={t('kernel.control.refresh')}><RefreshCw size={15} aria-hidden="true" /></button>
@@ -265,7 +267,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
               <dd>
                 <span className="mono-tag">
                   {currentVersion
-                    || (coreInstalled || remoteMode ? t('common.unavailable') : t('kernel.status.notInstalled'))}
+                    || (!coreStatus ? (statusError ? '—' : t('common.detecting')) : coreInstalled || remoteMode ? t('common.unavailable') : t('kernel.status.notInstalled'))}
                 </span>
               </dd>
             </div>
@@ -275,22 +277,33 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
             </div>
             <div className="panel-detail-row">
               <dt>{t('kernel.control.pid')}</dt>
-              <dd><span className="mono-tag" title={processTitle}>{remoteMode ? '—' : coreStatus?.processId || t('kernel.control.noPid')}</span></dd>
+              <dd><span className="mono-tag" title={processTitle}>{remoteMode ? '—' : coreStatus?.processId || (coreStatus ? t('kernel.control.noPid') : '—')}</span></dd>
             </div>
             <div className="panel-detail-row">
               <dt>{t('home.runtime.port')}</dt>
               <dd><span className="mono-tag">{!remoteMode ? customPort : remoteUrl ? remoteUrl.port || (remoteUrl.protocol === 'https:' ? '443' : '80') : '—'}</span></dd>
             </div>
           </dl>
-          {statusError && <Notice tone="error" variant="text">{statusError}</Notice>}
-          {remoteMode && !coreReady && coreStatus?.message ? <Notice tone="error" variant="text">{coreStatus.message}</Notice> : null}
+          {statusError && <Notice tone="error" variant="text" className="home-runtime-message">
+            <p>{t('home.runtime.unknownHint')}</p>
+            <details><summary>{t('home.runtime.errorDetails')}</summary><p>{statusError}</p></details>
+          </Notice>}
+          {!statusError && !coreStatus && <div className="home-runtime-message" aria-hidden="true" />}
+          {!statusError && coreStatus && !coreInstalled && !remoteMode && <Notice tone="info" variant="text" className="home-runtime-message">{t('home.runtime.installHint')}</Notice>}
+          {remoteMode && !coreReady && coreStatus?.message ? <Notice tone="error" variant="text" className="home-runtime-message">{coreStatus.message}</Notice> : null}
           {recovery && <Notice tone={recovery.phase === 'failed' ? 'error' : 'warn'} variant="text">
             <p>{t(recovery.phase === 'failed' ? 'kernel.recovery.failedHint' : recovery.phase === 'waiting' ? 'kernel.recovery.waitingHint' : 'kernel.recovery.restartingHint', { attempt: recovery.attempt, seconds: recovery.delaySeconds })}</p>
             {recovery.detail && <details><summary>{t('kernel.recovery.details')}</summary><p>{recovery.detail}</p></details>}
           </Notice>}
 
           <div className="button-row panel-action-row control-action-row">
-            <button
+            {statusError ? <button type="button" className="primary-button" disabled={coreProcessBusy} onClick={() => void refreshStatus()}>
+              <RefreshCw size={14} aria-hidden="true" />
+              {t('common.retry')}
+            </button> : coreStatus && !coreInstalled && !remoteMode ? <button type="button" className="primary-button" onClick={() => window.dispatchEvent(new CustomEvent('app:navigate', { detail: 'versions' }))}>
+              <Download size={14} aria-hidden="true" />
+              {t('home.runtime.installAction')}
+            </button> : <button
               type="button"
               className={canStop ? 'danger-button home-runtime-stop' : 'primary-button'}
               disabled={!coreInstalled || coreProcessBusy}
@@ -303,7 +316,7 @@ export function KernelPage({ view = 'home' }: { view?: KernelView }) {
             >
               {canStop ? <Square size={13} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
               {coreProcessBusy ? t('common.processing') : canStop ? t('kernel.action.stop') : t('kernel.action.start')}
-            </button>
+            </button>}
             <button
               type="button"
               className="secondary-button"

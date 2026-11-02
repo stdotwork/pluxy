@@ -91,9 +91,9 @@ function HealthStatus({ file, snapshot, nowMs, resetting = false, resetDisabled 
     : seconds < 3600 ? t('authFiles.health.minutes', { count: formatNumber(Math.ceil(seconds / 60)) })
       : t('authFiles.health.hours', { count: formatNumber(Math.ceil(seconds / 3600)) });
   const scope = cooldown.credentialWide
-    ? cooldown.modelCount ? t('authFiles.health.credentialModels', { count: cooldown.modelCount })
+    ? cooldown.modelCount ? t(cooldown.modelCount === 1 ? 'authFiles.health.credentialModelsOne' : 'authFiles.health.credentialModels', { count: cooldown.modelCount })
       : t('authFiles.health.credential')
-    : cooldown.modelCount ? t('authFiles.health.models', { count: cooldown.modelCount }) : '';
+    : cooldown.modelCount ? t(cooldown.modelCount === 1 ? 'authFiles.health.modelsOne' : 'authFiles.health.models', { count: cooldown.modelCount }) : '';
   const title = compact && snapshot?.records === null ? t('authFiles.health.unknownCooldown')
     : health.disabled && !compact ? t(health.label)
     : cooldown.elapsed ? t('authFiles.health.elapsed')
