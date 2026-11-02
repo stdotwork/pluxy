@@ -1,3 +1,4 @@
+@layer components {
 .core-connection-card, .core-connection-form { display: grid; gap: 14px; min-width: 0; }
 .core-connection-card { gap: 18px; }
 .core-connection-mode-field { display: grid; gap: 8px; }
@@ -15,4 +16,5 @@
 @media (max-width: 640px) {
   .core-connection-card .core-connection-fields { grid-template-columns: minmax(0, 1fr); }
   .core-connection-body { padding: 0 16px 16px; }
+}
 }

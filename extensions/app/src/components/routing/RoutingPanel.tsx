@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Pause, Play } from 'lucide-react';
 import { useI18n } from '../../i18n';
+import { useRemoteMode } from '../../coreRuntime';
 import { managementApi } from '../../services/managementApi';
 import { getUsageEvents, type UsageRecord } from '../../services/usage';
 import { pollWhileActive, windowActivity } from '../../services/windowActivity';
@@ -11,6 +12,7 @@ import './RoutingPanel.css';
 
 export function RoutingPanel({ coreReady = true }: { coreReady?: boolean }) {
   const { t, formatDate } = useI18n();
+  const remoteMode = useRemoteMode();
   const [paused, setPaused] = useState(false);
   const [records, setRecords] = useState<UsageRecord[]>([]);
   const [cooldowns, setCooldowns] = useState<RoutingCooldown[]>([]);
@@ -31,7 +33,8 @@ export function RoutingPanel({ coreReady = true }: { coreReady?: boolean }) {
       busy = true;
       try {
         const [events, credentials] = await Promise.allSettled([
-          getUsageEvents({ query: { page: 1, page_size: 200 } }),
+          // Usage is recorded on this computer only; in Remote mode those records are not the remote core's.
+          remoteMode ? Promise.reject(t('connection.remoteDisabledTitle')) : getUsageEvents({ query: { page: 1, page_size: 200 } }),
           coreReady ? managementApi.get<unknown>('/credentials') : Promise.reject(new Error('Core not running')),
         ]);
         if (disposed || !windowActivity.active()) return;
@@ -58,7 +61,7 @@ export function RoutingPanel({ coreReady = true }: { coreReady?: boolean }) {
     const stopPolling = pollWhileActive(() => { void refresh(); }, 3000, () => { seen = undefined; visibleSince = Date.now(); setPackets([]); });
     const stopClock = pollWhileActive(() => setNow(Date.now()), 1000);
     return () => { disposed = true; stopPolling(); stopClock(); stopEvents?.(); if (packetTimer) clearTimeout(packetTimer); };
-  }, [paused, coreReady]);
+  }, [paused, coreReady, remoteMode, t]);
   const view = useMemo(() => buildLiveRouting(records, cooldowns, now), [records, cooldowns, now]);
   return <section className={`panel surface-panel live-routing-panel${paused ? ' paused' : ''}`} aria-label={t('routing.live')}>
     <header className="live-routing-heading"><div><h2><Activity size={18} />{t('routing.live')}<span className="live-routing-count">{t('routing.requests', { count: view.records.length })}</span></h2><p>{t('routing.liveDescription')}</p></div>

@@ -89,6 +89,9 @@ const path = require('node:path');
       assert.equal(await button.getAttribute('title'), 'Managed on the remote host');
     }
     await page.locator('.home-access-panel').getByText('https://other.example/v1').waitFor();
+    assert.equal(await runtime.getByRole('button', { name: 'Install core', exact: true }).count(), 0, 'no local install action for a remote core');
+    assert.equal(await runtime.getByText(/Install a core/).count(), 0, 'no local install hint for a remote core');
+    await page.locator('.live-routing-panel').getByText('Not available in Remote mode yet', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Core connection settings', exact: true }).click();
     dialog = page.getByRole('dialog', { name: 'Core connection' });
     assert.equal(await dialog.getByRole('radio', { name: 'Remote core' }).getAttribute('aria-checked'), 'true');
