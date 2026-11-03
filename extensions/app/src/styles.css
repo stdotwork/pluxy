@@ -9385,6 +9385,7 @@ textarea:focus-visible {
 .usage-pricing-actions button,
 .usage-price-editor-actions button {
   flex: none;
+  width: auto;
   margin: 0;
   white-space: nowrap;
 }

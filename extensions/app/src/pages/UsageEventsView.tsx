@@ -1,4 +1,5 @@
 import { EmptyState } from '../components/EmptyState';
+import { scrollEdges } from '../components/scrollEdges';
 import { Checkbox } from '../components/Checkbox';
 import { Switch } from '../components/Switch';
 import { getUsageEvents, saveUsageEventsExport } from '../services/usage';
@@ -701,7 +702,7 @@ export function EventsView({
     <section className={`panel usage-events-panel usage-request-log${isCompactDefault ? ' usage-events-compact' : ''}${collapseErrors ? '' : ' usage-events-errors-expanded'}`} aria-label={t('usage.events.title')} aria-busy={loading}>
       <FloatingNotice key={feedback.revision} notice={feedback.notice} onDismiss={feedback.clearNotice} />
       {loading && events.items.length === 0 ? <EmptyState className="usage-empty" role="status" icon={<Database size={20} />}>{t('usage.loading')}</EmptyState> : events.items.length ? (
-        <div ref={tableWrapRef} className="usage-table-wrap" tabIndex={0} role="region" aria-label={t('usage.events.title')}>
+        <div ref={(element) => { tableWrapRef.current = element; return scrollEdges(element); }} className="usage-table-wrap" tabIndex={0} role="region" aria-label={t('usage.events.title')}>
           <table
             className="usage-events-table"
             style={{ width: `${totalTableWidth}px` }}
