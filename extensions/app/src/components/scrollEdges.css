@@ -1,0 +1,15 @@
+@layer components {
+/* Fade the edge of a horizontal scroller where content is hidden (scrollEdges.ts). The mask keeps the vertical scrollbar
+   (--scroll-edge-bar wide) fully visible; mask colours only set opacity, so currentColor stands for "opaque". */
+.scroll-edges { --scroll-edge-start: 0px; --scroll-edge-end: 0px; }
+.scroll-edges[data-scroll-start] { --scroll-edge-start: 28px; }
+.scroll-edges[data-scroll-end] { --scroll-edge-end: 28px; }
+.scroll-edges:is([data-scroll-start], [data-scroll-end]) {
+  mask-image: linear-gradient(to right,
+    transparent 0, currentColor var(--scroll-edge-start),
+    currentColor calc(100% - var(--scroll-edge-bar, 0px) - var(--scroll-edge-end)), transparent calc(100% - var(--scroll-edge-bar, 0px)),
+    currentColor calc(100% - var(--scroll-edge-bar, 0px)));
+}
+/* A mask also clips the focus outline drawn outside the box, so keyboard focus turns the fade off (after the mask rule, which has the same specificity). */
+.scroll-edges:focus-visible { mask-image: none; }
+}

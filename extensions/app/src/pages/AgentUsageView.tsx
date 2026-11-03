@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { scrollEdges } from '../components/scrollEdges';
 import { Database, RefreshCw, TriangleAlert } from 'lucide-react';
 import {
   AgentUsageActivity,
@@ -418,7 +419,7 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
         {ranking === 'models' ? (
           models.length ? (
             <>
-              <div className="agent-usage-table-wrap">
+              <div ref={scrollEdges} className="agent-usage-table-wrap">
                 <table className="agent-usage-table" data-table="models">
                   <thead><tr>
                     <th>{t('usage.agentUsage.models')}</th>
@@ -451,7 +452,7 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
         ) : null}
         {ranking === 'sources' ? (
           usedSources.length ? (
-            <div className="agent-usage-table-wrap">
+            <div ref={scrollEdges} className="agent-usage-table-wrap">
               <table className="agent-usage-table" data-table="sources">
                 <thead><tr>
                   <th>{t('usage.agentUsage.sources')}</th>
@@ -488,7 +489,7 @@ export function AgentUsageView({ refreshKey, onLoadingChange }: AgentUsageViewPr
         ) : null}
         {ranking === 'details' ? (
           detailRows.length ? (
-            <div className="agent-usage-table-wrap scroll" tabIndex={0} role="region" aria-label={t('usage.agentUsage.details')}>
+            <div ref={scrollEdges} className="agent-usage-table-wrap scroll" tabIndex={0} role="region" aria-label={t('usage.agentUsage.details')}>
               <table className="agent-usage-table" data-table="details">
                 <thead><tr>
                   <th>{t(`usage.agentUsage.bucketColumn.${report.bucket}`)}</th>
