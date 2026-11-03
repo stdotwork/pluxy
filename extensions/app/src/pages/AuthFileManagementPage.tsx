@@ -156,8 +156,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(() => new Set());
-  // Even rows is the page's look before the switch existed, so it stays the default.
-  const [layout, setLayout] = useCardLayout('cpa-gui.auth-files-layout.v1', 'even');
+  const [layout, setLayout] = useCardLayout('cpa-gui.auth-files-layout.v1');
   const [openGlances, toggleGlance] = useExpandedCards();
   const settledHeight = useSettledHeights();
   const [providerFilter, setProviderFilter] = useState(() => (
