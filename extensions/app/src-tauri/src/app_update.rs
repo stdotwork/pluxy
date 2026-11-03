@@ -310,26 +310,34 @@ async fn resolve_app_update(
         "Failed to create version check client",
     )?;
     let requested_source = config.selected_download_candidate();
+    let current_version = normalize_version(env!("CARGO_PKG_VERSION"));
+    let is_preview = current_version.to_ascii_lowercase().contains("preview");
     let (manifest, resolved_source) = fetch_portable_update_manifest(
         &client,
         requested_source.clone(),
         &config.custom_download_mirrors,
+        is_preview,
     )
     .await?;
-    persist_automatic_download_source_switch(
-        app,
-        gui_config_state,
-        &requested_source,
-        &resolved_source,
-    )?;
+    if !(is_preview && resolved_source.source == VersionDownloadSource::Gitcode) {
+        persist_automatic_download_source_switch(
+            app,
+            gui_config_state,
+            &requested_source,
+            &resolved_source,
+        )?;
+    }
     let latest_version = normalize_version(&manifest.version);
-    let current_version = normalize_version(env!("CARGO_PKG_VERSION"));
     let update_available = is_app_update_available(&current_version, &latest_version)?;
     let target = portable_update_target();
     let asset_catalog = manifest.full_assets.as_ref().unwrap_or(&manifest.assets);
     let asset = target.and_then(|(key, _)| asset_catalog.get(key)).cloned();
     let portable_support = target
-        .map(|(_, arch)| validate_local_portable_app_manifest(arch))
+        .map(|(_, arch)| {
+            validate_local_portable_app_manifest(arch)
+                .map(|supported| supported || is_preview)
+                .or_else(|error| if is_preview { Ok(true) } else { Err(error) })
+        })
         .transpose()?;
     let auto_update_supported = portable_support == Some(true) && asset.is_some();
     let unsupported_reason = if auto_update_supported {
@@ -368,11 +376,14 @@ pub(crate) async fn fetch_portable_update_manifest(
     client: &reqwest::Client,
     source: VersionDownloadCandidate,
     custom_mirrors: &[String],
+    is_preview: bool,
 ) -> Result<(PortableUpdateManifest, VersionDownloadCandidate), String> {
     let gitcode_repository = configured_gitcode_gui_repository();
+    // Preview builds only exist on GitHub releases, so GitCode never participates.
+    let gitcode_available = gitcode_repository.is_some() && !is_preview;
     let mut failures = Vec::new();
     for candidate in
-        version_download_source_candidates(source, gitcode_repository.is_some(), custom_mirrors)
+        version_download_source_candidates(source, gitcode_available, custom_mirrors)
     {
         let result = match candidate.source {
             VersionDownloadSource::Gitcode => {
@@ -384,12 +395,14 @@ pub(crate) async fn fetch_portable_update_manifest(
             }
             VersionDownloadSource::Github
             | VersionDownloadSource::GhProxy
-            | VersionDownloadSource::GhFast => {
-                let url = version_source_url(&candidate, APP_UPDATE_MANIFEST_URL);
-                fetch_portable_update_manifest_url(client, &url).await
-            }
-            VersionDownloadSource::Custom => {
-                let url = version_source_url(&candidate, APP_UPDATE_MANIFEST_URL);
+            | VersionDownloadSource::GhFast
+            | VersionDownloadSource::Custom => {
+                let manifest_url = if is_preview {
+                    APP_UPDATE_PREVIEW_MANIFEST_URL
+                } else {
+                    APP_UPDATE_MANIFEST_URL
+                };
+                let url = version_source_url(&candidate, manifest_url);
                 fetch_portable_update_manifest_url(client, &url).await
             }
         };
@@ -583,9 +596,10 @@ pub(crate) fn validate_portable_update_manifest(
         || release_url.password().is_some()
         || release_url.query().is_some()
         || release_url.fragment().is_some()
-        || !release_url
+        || (!release_url
             .path()
             .starts_with("/router-for-me/EasyCLIProxyAPI/releases/tag/v")
+            && release_url.path() != "/router-for-me/EasyCLIProxyAPI/releases/tag/only-preview")
     {
         return Err("Untrusted application update release URL".to_string());
     }
@@ -633,7 +647,12 @@ fn validate_portable_update_asset_catalog(
         return Err(format!("The application update manifest must include both {display_platform} architectures"));
     }
     let version = manifest.version.trim().trim_start_matches('v');
-    let tag = format!("v{version}");
+    let is_only_preview = manifest.release_url.ends_with("/only-preview");
+    let tag = if is_only_preview {
+        "only-preview".to_string()
+    } else {
+        format!("v{version}")
+    };
     for arch in ["amd64", "aarch64"] {
         let key = format!("{platform}-{arch}");
         let asset = assets
@@ -771,7 +790,9 @@ pub(crate) fn validate_local_portable_app_manifest(expected_arch: &str) -> Resul
         && Some(manifest.platform.as_str()) == portable_update_platform_key()
         && manifest.arch == expected_arch
         && manifest.auto_update
-        && normalize_version(&manifest.version) == normalize_version(env!("CARGO_PKG_VERSION")))
+        && (normalize_version(&manifest.version) == normalize_version(env!("CARGO_PKG_VERSION"))
+            || env!("CARGO_PKG_VERSION").to_ascii_lowercase().contains("preview")
+            || manifest.version.to_ascii_lowercase().contains("preview")))
 }
 
 #[tauri::command]
