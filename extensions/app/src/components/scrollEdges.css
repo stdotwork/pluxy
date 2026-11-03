@@ -10,4 +10,6 @@
     currentColor calc(100% - var(--scroll-edge-bar, 0px) - var(--scroll-edge-end)), transparent calc(100% - var(--scroll-edge-bar, 0px)),
     currentColor calc(100% - var(--scroll-edge-bar, 0px)));
 }
+/* A mask also clips the focus outline drawn outside the box, so keyboard focus turns the fade off (after the mask rule, which has the same specificity). */
+.scroll-edges:focus-visible { mask-image: none; }
 }

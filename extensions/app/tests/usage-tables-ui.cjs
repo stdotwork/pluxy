@@ -70,6 +70,16 @@ const checkScrollers = async (page, label, expected) => {
     await frames(page);
     const back = await handle.evaluate(element => [element.hasAttribute('data-scroll-start'), element.hasAttribute('data-scroll-end')]);
     assert.deepEqual(back, [false, true], `${where}: scrolling back restores the first state`);
+    // Keyboard focus turns the fade off: a mask would clip the focus outline drawn outside the box.
+    if (await handle.evaluate(element => element.tabIndex >= 0)) {
+      // Reach it with Tab, as a keyboard user would (focus set from script is not :focus-visible).
+      await handle.evaluate(element => { const before = [...document.querySelectorAll('button, [href], input, select, [tabindex]')].filter(node => node.tabIndex >= 0 && node.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING).pop(); before?.focus(); });
+      for (let step = 0; step < 5 && !(await handle.evaluate(element => document.activeElement === element)); step++) await page.keyboard.press('Tab');
+      await frames(page);
+      const focused = await handle.evaluate(element => [element.matches(':focus-visible'), getComputedStyle(element).maskImage === 'none']);
+      assert.deepEqual(focused, [true, true], `${where}: keyboard focus shows the focus ring unfaded`);
+      await handle.evaluate(element => element.blur());
+    }
   }
 };
 
