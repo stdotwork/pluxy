@@ -124,10 +124,14 @@ const openPage = async (page, base) => {
 
     // The chosen layout survives a reload.
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-    await context.addInitScript(() => { localStorage.setItem('easy-cli-proxy-api.locale', 'en'); localStorage.setItem('cpa-gui.auth-files-layout.v1', 'stacked'); });
+    await context.addInitScript(() => { localStorage.setItem('easy-cli-proxy-api.locale', 'en'); });
     const page = await context.newPage();
     await openPage(page, base);
-    assert.equal(await page.getByRole('radio', { name: 'Stacked', exact: true }).getAttribute('aria-checked'), 'true', 'a stored layout is restored');
+    // Choose a layout, reload, and the choice is still selected: covers the save as well as the read.
+    await page.getByRole('radio', { name: 'Stacked', exact: true }).click();
+    await page.unrouteAll();
+    await openPage(page, base);
+    assert.equal(await page.getByRole('radio', { name: 'Stacked', exact: true }).getAttribute('aria-checked'), 'true', 'a chosen layout survives a reload');
     await context.close();
     console.log(`Authentication Files layouts: ${displays.length} displays x ${layouts.length} layouts passed`);
   } finally {

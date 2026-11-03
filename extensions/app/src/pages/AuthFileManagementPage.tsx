@@ -10,7 +10,7 @@ import { QuotaActionFeedback } from '../components/QuotaActionFeedback';
 import { AuthFileQuotaPanel } from '../components/AuthFileQuotaPanel';
 import { AuthFileSettingsDialog } from '../components/AuthFileSettingsDialog';
 import { useQuotaReset } from '../components/useQuotaReset';
-import { CardLayoutGrid, CardLayoutSwitch, useCardLayout, useExpandedCards, type StackedColumns } from '../components/CardLayout';
+import { CardLayoutGrid, CardLayoutSwitch, useCardLayout, useExpandedCards, useSettledHeights, type StackedColumns } from '../components/CardLayout';
 import { estimateCredentialCardHeight, lowestQuotaRow } from '../services/quotaLayout';
 import './AuthFileManagementPage.css';
 import { MessageNotice, FloatingNotice, useAppNotice } from '../appNotice';
@@ -159,6 +159,7 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
   // Even rows is the page's look before the switch existed, so it stays the default.
   const [layout, setLayout] = useCardLayout('cpa-gui.auth-files-layout.v1', 'even');
   const [openGlances, toggleGlance] = useExpandedCards();
+  const settledHeight = useSettledHeights();
   const [providerFilter, setProviderFilter] = useState(() => (
     initialProvider ? providerName({ provider: initialProvider }) : 'all'
   ));
@@ -594,13 +595,13 @@ export function AuthFileManagementPage({ initialProvider }: { initialProvider?: 
             <span>{t('authFiles.list.actions')}</span>
           </div>
           <CardLayoutGrid layout={layout} className="auth-file-card-grid" role="list" aria-label={t('authFiles.title')} columns={credentialColumns}
-            heights={pageFiles.map((file) => estimateCredentialCardHeight({
+            heights={pageFiles.map((file) => settledHeight(quotaKey(file), estimateCredentialCardHeight({
               quota: quotas[quotaKey(file)] ?? idleQuota(),
               tags: normalizeAuthFileTags(file.tags).length > 0,
               cooldown: Boolean(normalizeAuthFileCooldowns(file.cooldowns, receivedAtMs, observedAt)?.records?.length),
               expanded: expandedFiles.has(quotaKey(file)),
               glance: layout === 'compact' && !openGlances.has(quotaKey(file)),
-            }))}>
+            }), (quotas[quotaKey(file)] ?? idleQuota()).status === 'loading'))}>
             {pageFiles.map((file) => {
               const name = fileName(file);
               const key = quotaKey(file);

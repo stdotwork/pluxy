@@ -44,7 +44,7 @@ import {
 } from '../services/quotaCache';
 import { dedupeAuthFiles, sortAuthFilesByPriority } from '../services/authFiles';
 import { estimateQuotaCardHeight } from '../services/quotaLayout';
-import { CardLayoutGrid, CardLayoutSwitch, useCardLayout, useExpandedCards, type StackedColumns } from '../components/CardLayout';
+import { CardLayoutGrid, CardLayoutSwitch, useCardLayout, useExpandedCards, useSettledHeights, type StackedColumns } from '../components/CardLayout';
 import { useI18n } from '../i18n';
 import { usePrivacyMask } from '../privacy';
 import './QuotaPage.css';
@@ -77,6 +77,7 @@ export function QuotaPage() {
   const [category, setCategory] = useState<'all' | QuotaDisplayProvider>('all');
   const [layout, setLayout] = useCardLayout('cpa-gui.quota-layout.v1');
   const [expanded, toggleExpanded] = useExpandedCards();
+  const settledHeight = useSettledHeights();
   const querying = Object.values(quotas).some((quota) => quota.status === 'loading');
 
   const loadFiles = useCallback(async () => {
@@ -197,7 +198,7 @@ export function QuotaPage() {
             <CardLayoutSwitch className="quota-layout-control" value={layout} onChange={setLayout} />
           </div>
           <CardLayoutGrid layout={layout} className="real-quota-grid" columns={quotaColumns}
-            heights={visibleItems.map(({ provider, file, quota }) => estimateQuotaCardHeight(quota, provider, glance(file)))}>{cards}</CardLayoutGrid>
+            heights={visibleItems.map(({ provider, file, quota }) => settledHeight(quotaKey(file), estimateQuotaCardHeight(quota, provider, glance(file)), quota.status === 'loading'))}>{cards}</CardLayoutGrid>
         </>
       )}
     </section>

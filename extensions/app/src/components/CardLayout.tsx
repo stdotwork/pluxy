@@ -38,6 +38,21 @@ export function useCardLayout(storageKey: string, fallback: CardLayout = 'grid')
   return [layout, setLayout];
 }
 
+/**
+ * Keeps each card's height estimate from its last settled state while it reloads, so a refresh (which empties a card's
+ * data while loading) does not move cards between Stacked or Compact columns and remount them.
+ */
+export function useSettledHeights(): (key: string, height: number, pending: boolean) => number {
+  const settled = useRef(new Map<string, number>());
+  return useCallback((key: string, height: number, pending: boolean) => {
+    if (!pending) {
+      settled.current.set(key, height);
+      return height;
+    }
+    return settled.current.get(key) ?? height;
+  }, []);
+}
+
 /** Keys of the cards a person expanded in Compact; not stored. */
 export function useExpandedCards(): [ReadonlySet<string>, (key: string) => void] {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());

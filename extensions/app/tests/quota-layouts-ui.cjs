@@ -116,13 +116,18 @@ const layouts = [['grid', 'Grid'], ['even', 'Even rows'], ['stacked', 'Stacked']
 
     // The chosen layout survives a reload.
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-    await context.addInitScript(() => { localStorage.setItem('easy-cli-proxy-api.locale', 'en'); localStorage.setItem('cpa-gui.quota-layout.v1', 'even'); });
+    await context.addInitScript(() => { localStorage.setItem('easy-cli-proxy-api.locale', 'en'); });
     const page = await context.newPage();
     await page.route('**/*', route => route.request().url().startsWith(`${base}/`) ? route.continue() : route.abort());
     await page.goto(`${base}/?mock=running`);
     await page.locator('.nav-section button').filter({ has: page.getByText('Quota Lookup', { exact: true }) }).click();
     await page.locator('.quota-page .real-quota-card').first().waitFor();
-    assert.equal(await page.getByRole('radio', { name: 'Even rows', exact: true }).getAttribute('aria-checked'), 'true', 'a stored layout is restored');
+    // Choose a layout, reload, and the choice is still selected: covers the save as well as the read.
+    await page.getByRole('radio', { name: 'Even rows', exact: true }).click();
+    await page.goto(`${base}/?mock=running`);
+    await page.locator('.nav-section button').filter({ has: page.getByText('Quota Lookup', { exact: true }) }).click();
+    await page.locator('.quota-page .real-quota-card').first().waitFor();
+    assert.equal(await page.getByRole('radio', { name: 'Even rows', exact: true }).getAttribute('aria-checked'), 'true', 'a chosen layout survives a reload');
     await context.close();
     console.log(`Quota layouts: ${displays.length} displays x ${layouts.length} layouts passed`);
   } finally {
