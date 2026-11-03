@@ -152,7 +152,10 @@
 .auth-list-usage .auth-file-usage-metric strong { font-size: 13px; line-height: 1.2; font-weight: 750; }
 .auth-list-usage .auth-file-usage-scope { display: none; }
 .auth-card-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--auth-border); }
-.auth-list-icon-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: max-content; }
+/* The action group keeps one row while it fits and wraps its buttons inside the card when it does not (phones). */
+.auth-list-icon-actions { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 6px; min-width: 0; }
+/* The phone rule in styles.css stretches every button to full width; card actions stay sized to their labels. */
+.auth-card-actions :is(.auth-list-icon-actions, .auth-list-main-actions) > button { width: auto; }
 .auth-list-icon-actions > button { flex: none; }
 .auth-list-main-actions { display: flex; align-items: center; justify-content: flex-end; flex: none; gap: 8px; margin-left: auto; padding-left: 0; border-left: 0; }
 .auth-list-details-button { min-width: 52px; }
