@@ -73,12 +73,33 @@ import { Dialog } from '../components/Dialog';
 import { UsageAnalysisView, type UsageAnalysis, type UsageCategory } from './UsageAnalysisView';
 import { Select } from '../components/Select';
 import { AgentUsageView } from './AgentUsageView';
+import {
+  clearAgentUsageHistory,
+  getAgentUsageStorage,
+  syncAgentUsage,
+  type AgentUsageStorage,
+} from '../services/agentUsage';
+import {
+  AGENT_USAGE_REFRESH_INTERVALS,
+  loadAgentUsageRefreshInterval,
+  saveAgentUsageRefreshInterval,
+  type AgentUsageRefreshInterval,
+} from '../services/agentUsagePreferences';
 
-type UsageTab = 'overview' | 'analysis' | 'events' | 'pricing' | 'agent-usage' | 'data-management';
+const AGENT_INTERVAL_LABELS = {
+  0: 'usage.agentUsage.refreshFrequency.off',
+  300000: 'usage.agentUsage.refreshFrequency.5m',
+  900000: 'usage.agentUsage.refreshFrequency.15m',
+  1800000: 'usage.agentUsage.refreshFrequency.30m',
+  3600000: 'usage.agentUsage.refreshFrequency.1h',
+} as const;
+
+type UsageTab = 'overview' | 'live-routing' | 'analysis' | 'events' | 'pricing' | 'agent-usage' | 'data-management';
 type UsageRange = '4h' | '24h' | 'today' | '7d' | '30d' | 'all' | 'custom';
 
 const USAGE_TABS = [
   { value: 'overview', labelKey: 'usage.tab.overview' },
+  { value: 'live-routing', labelKey: 'routing.live' },
   { value: 'analysis', labelKey: 'usage.tab.analysis' },
   { value: 'events', labelKey: 'usage.tab.events' },
   { value: 'pricing', labelKey: 'usage.tab.pricing' },
@@ -109,11 +130,33 @@ const loadPageSize = (): number => {
   }
 };
 const emptyAnalysis: UsageAnalysis = { models: [], providers: [], sources: [], apiKeys: [] };
+const emptyOverview: UsageOverview = {
+  totalRequests: 0,
+  successCount: 0,
+  failureCount: 0,
+  canceledCount: 0,
+  successRate: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  totalTokens: 0,
+  rpm: 0,
+  tpm: 0,
+  tps: 0,
+  tpsSampleCount: 0,
+  averageLatencyMs: 0,
+  cacheHitRate: 0,
+  estimatedCost: 0,
+  pricedRequests: 0,
+  timeline: [],
+};
 
 const loadTab = (): UsageTab => {
   try {
     const saved = usagePreferences.getItem(TAB_KEY);
-    return saved === 'analysis' || saved === 'events' || saved === 'pricing' || saved === 'agent-usage' || saved === 'data-management'
+    return saved === 'live-routing' || saved === 'analysis' || saved === 'events' || saved === 'pricing' || saved === 'agent-usage' || saved === 'data-management'
       ? saved
       : 'overview';
   } catch {
@@ -283,7 +326,7 @@ export function UsageRecordsPage() {
         const optionsRequest = refreshOptions
           ? getUsageAnalysis({ query: timeQuery })
           : Promise.resolve(null);
-        if (activeTab === 'overview') {
+        if (activeTab === 'overview' || activeTab === 'live-routing') {
           const [nextStatus, nextOptions, nextOverview] = await Promise.all([
             statusRequest,
             optionsRequest,
@@ -536,13 +579,18 @@ export function UsageRecordsPage() {
         role="tabpanel"
         aria-labelledby={`usage-tab-${activeTab}`}
       >
-      {activeTab !== 'data-management' && activeTab !== 'agent-usage' ? filterPanel : null}
+      {activeTab !== 'data-management' && activeTab !== 'agent-usage' && activeTab !== 'live-routing' ? filterPanel : null}
 
       {showInitialLoading && activeTab !== 'events' ? (
         <EmptyState className="usage-initial-loading" icon={<Database size={22} />}>{t('usage.loading')}</EmptyState>
       ) : null}
 
-      {activeTab === 'overview' && <RoutingPanel />}
+      {activeTab === 'live-routing' ? (
+        <div className="usage-live-routing-layout">
+          <UsageStatGrid overview={overview ?? emptyOverview} />
+          <RoutingPanel />
+        </div>
+      ) : null}
       {activeTab === 'overview' && overview ? <OverviewView overview={overview} range={overviewRange} /> : null}
       {activeTab === 'analysis' && (analysis || overview) ? <UsageAnalysisView analysis={analysis} overview={overview} range={overviewRange} /> : null}
       {activeTab === 'events' ? (
@@ -581,6 +629,17 @@ function UsageDataManagementView() {
   const [shrinkDraft, setShrinkDraft] = useState('');
   const [shrinking, setShrinking] = useState(false);
   const [storageNotice, setStorageNotice] = useState('');
+  const [agentStorage, setAgentStorage] = useState<AgentUsageStorage | null>(null);
+  const [agentSyncing, setAgentSyncing] = useState(false);
+  const [agentNotice, setAgentNotice] = useState('');
+  const [agentInterval, setAgentInterval] = useState<AgentUsageRefreshInterval>(loadAgentUsageRefreshInterval);
+
+  const changeAgentInterval = (value: string) => {
+    const next = Number(value) as AgentUsageRefreshInterval;
+    if (!AGENT_USAGE_REFRESH_INTERVALS.includes(next)) return;
+    setAgentInterval(next);
+    saveAgentUsageRefreshInterval(next);
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -600,6 +659,52 @@ function UsageDataManagementView() {
       disposed = true;
     };
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    getAgentUsageStorage()
+      .then((next) => {
+        if (!disposed) setAgentStorage(next);
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const syncAgentHistory = async () => {
+    setAgentSyncing(true);
+    setError('');
+    setAgentNotice('');
+    try {
+      await syncAgentUsage();
+      setAgentStorage(await getAgentUsageStorage());
+    } catch (requestError) {
+      setError(String(requestError));
+    } finally {
+      setAgentSyncing(false);
+    }
+  };
+
+  const clearAgentHistory = async () => {
+    const confirmed = await askConfirmation({
+      title: t('usage.dataManagement.agentStorageClearConfirmTitle'),
+      message: t('usage.dataManagement.agentStorageClearConfirm'),
+    });
+    if (!confirmed) return;
+    setAgentSyncing(true);
+    setError('');
+    setAgentNotice('');
+    try {
+      await clearAgentUsageHistory();
+      setAgentStorage(await getAgentUsageStorage());
+      setAgentNotice(t('usage.dataManagement.agentStorageCleared'));
+    } catch (requestError) {
+      setError(String(requestError));
+    } finally {
+      setAgentSyncing(false);
+    }
+  };
 
   const saveStorageLimit = async () => {
     const normalized = limitDraft.trim();
@@ -765,6 +870,45 @@ function UsageDataManagementView() {
 
       {storageNotice ? <MessageNotice tone="success" message={storageNotice} onDismiss={() => setStorageNotice('')} /> : null}
 
+      <div className="surface-card usage-data-management-action agent-usage-storage-action">
+        <div>
+          <strong>{t('usage.dataManagement.agentStorageTitle')}</strong>
+          <span>{t('usage.dataManagement.agentStorageDescription')}</span>
+          <small>
+            {[
+              agentStorage ? t('usage.dataManagement.agentStorageCurrent', {
+                size: formatStorageBytes(agentStorage.databaseSizeBytes),
+                daily: compactNumber(agentStorage.dailyRows),
+                hourly: compactNumber(agentStorage.hourlyRows),
+              }) : '',
+              agentStorage?.lastSyncAt
+                ? t('usage.dataManagement.agentStorageLastSync', {
+                  time: new Intl.DateTimeFormat(getCurrentLocale(), { dateStyle: 'short', timeStyle: 'short' }).format(new Date(agentStorage.lastSyncAt)),
+                })
+                : t('usage.dataManagement.agentStorageNeverSynced'),
+            ].filter(Boolean).join(' · ')}
+          </small>
+        </div>
+        <div className="usage-storage-limit-editor">
+          <label className="agent-usage-interval-setting">
+            <span>{t('usage.dataManagement.agentStorageInterval')}</span>
+            <Select value={agentInterval} onChange={(event) => changeAgentInterval(event.currentTarget.value)}>
+              {AGENT_USAGE_REFRESH_INTERVALS.map((interval) => (
+                <option key={interval} value={interval}>{t(AGENT_INTERVAL_LABELS[interval])}</option>
+              ))}
+            </Select>
+          </label>
+          <button type="button" className="primary-button" onClick={() => void syncAgentHistory()} disabled={agentSyncing}>
+            {agentSyncing ? t('usage.dataManagement.agentStorageSyncing') : t('usage.dataManagement.agentStorageSync')}
+          </button>
+          <button type="button" className="secondary-button" onClick={() => void clearAgentHistory()} disabled={agentSyncing}>
+            {t('usage.dataManagement.agentStorageClear')}
+          </button>
+        </div>
+      </div>
+
+      {agentNotice ? <MessageNotice tone="success" message={agentNotice} onDismiss={() => setAgentNotice('')} /> : null}
+
       <div className="surface-card usage-data-management-action">
         <div>
           <strong>{t('usage.dataManagement.actionTitle')}</strong>
@@ -791,7 +935,7 @@ function UsageDataManagementView() {
   );
 }
 
-function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pick<UsageQuery, 'start' | 'end'> }) {
+function UsageStatGrid({ overview }: { overview: UsageOverview }) {
   const { t } = useI18n();
   const cards = [
     {
@@ -866,15 +1010,23 @@ function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pi
   ];
 
   return (
+    <div className="surface-card usage-stat-grid">
+      {cards.map(({ key, tone, label, value, metaTitle }) => (
+        <article className={`panel usage-stat-card tone-${tone}`} key={key} title={metaTitle}>
+          <span className="usage-stat-card-label">{label}</span>
+          <strong className="usage-stat-card-value">{value}</strong>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function OverviewView({ overview, range }: { overview: UsageOverview; range?: Pick<UsageQuery, 'start' | 'end'> }) {
+  const { t } = useI18n();
+
+  return (
     <div className="usage-overview-layout">
-      <div className="surface-card usage-stat-grid">
-        {cards.map(({ key, tone, label, value, metaTitle }) => (
-          <article className={`panel usage-stat-card tone-${tone}`} key={key} title={metaTitle}>
-            <span className="usage-stat-card-label">{label}</span>
-            <strong className="usage-stat-card-value">{value}</strong>
-          </article>
-        ))}
-      </div>
+      <UsageStatGrid overview={overview} />
       <UsageOverviewPanels>
         <section className="panel surface-card usage-trend-panel">
           <div className="usage-section-heading">
