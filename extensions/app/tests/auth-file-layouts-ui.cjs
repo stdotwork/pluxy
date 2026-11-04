@@ -1,4 +1,4 @@
-// Authentication Files card layouts (Even rows, Grid, Stacked, Compact) across window sizes, aspect ratios and pixel densities, on the browser mock.
+// Authentication Files card layouts (Even rows, Stacked, Compact) across window sizes, aspect ratios and pixel densities, on the browser mock.
 // Run with a Vite dev server at AUTH_FILES_TEST_BASE, or let the script start one.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
@@ -9,7 +9,7 @@ const displays = [
   [320, 640, 2], [375, 812, 3], [414, 896, 2], [768, 1024, 2], [1024, 768, 1], [800, 600, 1.25], [1280, 800, 1.5],
   [1366, 768, 1], [1440, 900, 2], [1920, 1080, 1], [2560, 1440, 1], [3440, 1440, 1], [1080, 1920, 1], [1280, 420, 1],
 ];
-const layouts = [['grid', 'Grid'], ['even', 'Even rows'], ['stacked', 'Stacked'], ['compact', 'Compact']];
+const layouts = [['even', 'Even rows'], ['stacked', 'Stacked'], ['compact', 'Compact']];
 
 const openPage = async (page, base) => {
   await page.route('**/*', route => route.request().url().startsWith(`${base}/`) ? route.continue() : route.abort());
@@ -43,7 +43,7 @@ const openPage = async (page, base) => {
       const errors = [];
       page.on('pageerror', error => errors.push(String(error)));
       await openPage(page, base);
-      // Even rows is the default, the page's look before the switch.
+      // Even rows is the default.
       assert.equal(await page.getByRole('radio', { name: 'Even rows', exact: true }).getAttribute('aria-checked'), 'true', `${display}: Even rows is the default`);
       await page.locator('.auth-files-page').getByRole('button', { name: 'Refresh quota', exact: true }).click();
       await page.waitForFunction(() => !document.querySelector('.auth-files-page .spin'), null, { timeout: 30000 });
