@@ -124,14 +124,11 @@ const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIP
 #[cfg(target_os = "macos")]
 const APP_UPDATE_MANIFEST_URL: &str = "https://github.com/router-for-me/EasyCLIProxyAPI/releases/latest/download/portable-update-darwin-v2.json";
 #[cfg(windows)]
-const APP_UPDATE_PREVIEW_MANIFEST_URL: &str =
-    "https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/only-preview/portable-update-windows.json";
+const APP_UPDATE_MANIFEST_FILE: &str = "portable-update-windows.json";
 #[cfg(target_os = "linux")]
-const APP_UPDATE_PREVIEW_MANIFEST_URL: &str =
-    "https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/only-preview/portable-update-linux.json";
+const APP_UPDATE_MANIFEST_FILE: &str = "portable-update-linux.json";
 #[cfg(target_os = "macos")]
-const APP_UPDATE_PREVIEW_MANIFEST_URL: &str =
-    "https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/only-preview/portable-update-darwin-v2.json";
+const APP_UPDATE_MANIFEST_FILE: &str = "portable-update-darwin-v2.json";
 const APP_RELEASE_DOWNLOAD_PREFIX: &str =
     "https://github.com/router-for-me/EasyCLIProxyAPI/releases/download/";
 #[cfg(windows)]
@@ -481,9 +478,11 @@ struct AppUpdateInfo {
     release_url: String,
     release_notes: HashMap<String, String>,
     published_at: String,
+    current_build_at: Option<String>,
     auto_update_supported: bool,
     download_size_bytes: Option<u64>,
     unsupported_reason: Option<String>,
+    update_channel: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -521,6 +520,8 @@ struct PortableAppManifest {
     schema_version: u32,
     application: String,
     version: String,
+    #[serde(default)]
+    built_at: Option<String>,
     platform: String,
     arch: String,
     #[serde(default)]
@@ -662,6 +663,8 @@ struct GuiConfigFile {
     api_access_remarks: Vec<GuiApiAccessRemark>,
     management_secret_key: String,
     debug: bool,
+    #[serde(default = "default_update_channel")]
+    update_channel: String,
     commercial_mode: bool,
     logging_to_file: bool,
     logs_max_total_size_mb: u32,
@@ -984,6 +987,7 @@ impl Default for GuiConfigFile {
             api_access_remarks: Vec::new(),
             management_secret_key: LEGACY_DEFAULT_MANAGEMENT_SECRET_KEY.to_string(),
             debug: false,
+            update_channel: default_update_channel(),
             commercial_mode: false,
             logging_to_file: false,
             logs_max_total_size_mb: DEFAULT_LOGS_MAX_TOTAL_SIZE_MB,
@@ -1287,6 +1291,15 @@ fn default_claude_auto_compact_pct() -> u8 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_update_channel() -> String {
+    // A preview binary keeps following the preview channel until switched explicitly.
+    if env!("CARGO_PKG_VERSION").to_ascii_lowercase().contains("preview") {
+        "preview".to_string()
+    } else {
+        "stable".to_string()
+    }
 }
 
 impl ClaudeDesktopModelMappings {
@@ -2272,6 +2285,13 @@ impl GuiConfigState {
         self.set_download_candidate(VersionDownloadCandidate::builtin(download_source))
     }
 
+    fn set_update_channel(&self, update_channel: &str) -> Result<GuiConfigFile, String> {
+        self.update(|config| {
+            config.update_channel = update_channel.to_string();
+            Ok(())
+        })
+    }
+
     fn set_download_candidate(
         &self,
         candidate: VersionDownloadCandidate,
@@ -3035,6 +3055,8 @@ fn main() {
             add_custom_download_mirror,
             remove_custom_download_mirror,
             set_prefer_gitcode_downloads,
+            get_update_channel,
+            set_update_channel,
             check_app_update,
             get_app_update_task,
             start_app_update,
