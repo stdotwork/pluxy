@@ -1,5 +1,5 @@
 @layer components {
-/* Shared card layouts (CardLayout.tsx). Each page keeps its own grid rule for Grid; Stacked and Compact use columns.
+/* Shared card layouts (CardLayout.tsx). Even rows uses each page's own grid rule; Stacked and Compact use columns.
    Doubled classes outrank a page's scoped grid rule (such as `.quota-page .real-quota-grid`) and the shared two-column
    `.routing-segmented` rule, whatever the import order. */
 .card-layout-control.card-layout-control { flex: none; grid-template-columns: repeat(3, 36px); }
