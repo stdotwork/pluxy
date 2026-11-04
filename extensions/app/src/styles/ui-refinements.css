@@ -572,15 +572,7 @@ button.oauth-account-count:focus-visible {
   flex: 0 1 auto;
 }
 
-/* Stacked into a column on narrow containers, the description block of a data management card would keep its 260px row basis as a
-   height and leave a blank gap above the controls. */
-@container workspace (max-width: 540px) {
-  .usage-data-management-panel .usage-data-management-action > div:first-child {
-    flex: 0 0 auto;
-  }
-}
-
-/* On phones the shared rule gives every usage table a 70vh height; the price list takes its rows' height and caps there. */
+/* In windows up to 760px wide the shared rule gives every usage table a 70vh height; the price list takes its rows' height and caps there. */
 @media (max-width: 760px) {
   .usage-table-wrap.usage-pricing-table-wrap {
     height: auto;
