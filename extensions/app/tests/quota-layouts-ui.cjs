@@ -1,4 +1,4 @@
-// Quota page card layouts (Grid, Even rows, Stacked, Compact) across window sizes, aspect ratios and pixel densities, on the browser mock.
+// Quota page card layouts (Even rows, Stacked, Compact) across window sizes, aspect ratios and pixel densities, on the browser mock.
 // Run with a Vite dev server at QUOTA_TEST_BASE, or let the script start one.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
@@ -9,7 +9,7 @@ const displays = [
   [320, 640, 2], [375, 812, 3], [414, 896, 2], [768, 1024, 2], [1024, 768, 1], [800, 600, 1.25], [1280, 800, 1.5],
   [1366, 768, 1], [1440, 900, 2], [1920, 1080, 1], [2560, 1440, 1], [3440, 1440, 1], [1080, 1920, 1], [1280, 420, 1],
 ];
-const layouts = [['grid', 'Grid'], ['even', 'Even rows'], ['stacked', 'Stacked'], ['compact', 'Compact']];
+const layouts = [['even', 'Even rows'], ['stacked', 'Stacked'], ['compact', 'Compact']];
 
 (async () => {
   let server;
@@ -28,7 +28,8 @@ const layouts = [['grid', 'Grid'], ['even', 'Even rows'], ['stacked', 'Stacked']
     for (const [width, height, deviceScaleFactor] of displays) {
       const display = `${width}x${height}@${deviceScaleFactor}x`;
       const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor });
-      await context.addInitScript(() => localStorage.setItem('easy-cli-proxy-api.locale', 'en'));
+      // A layout stored before Grid was removed must fall back to Even rows.
+      await context.addInitScript(() => { localStorage.setItem('easy-cli-proxy-api.locale', 'en'); localStorage.setItem('cpa-gui.quota-layout.v1', 'grid'); });
       const page = await context.newPage();
       const errors = [];
       page.on('pageerror', error => errors.push(String(error)));
@@ -41,6 +42,9 @@ const layouts = [['grid', 'Grid'], ['even', 'Even rows'], ['stacked', 'Stacked']
       await page.locator('.quota-page').getByRole('button', { name: 'Refresh Quota', exact: true }).first().click();
       await page.waitForFunction(() => !document.querySelector('.quota-page .spin'), null, { timeout: 30000 });
 
+      // Even rows is the default; a stored layout that no longer exists (the removed Grid) also falls back to it.
+      assert.equal(await page.getByRole('radio', { name: 'Even rows', exact: true }).getAttribute('aria-checked'), 'true', `${display}: Even rows is the default`);
+      assert.equal(await page.getByRole('radio', { name: 'Grid', exact: true }).count(), 0, `${display}: no Grid layout`);
       for (const [layout, label] of layouts) {
         const context = `${display} ${layout}`;
         await page.getByRole('radio', { name: label, exact: true }).click();
@@ -123,11 +127,11 @@ const layouts = [['grid', 'Grid'], ['even', 'Even rows'], ['stacked', 'Stacked']
     await page.locator('.nav-section button').filter({ has: page.getByText('Quota Lookup', { exact: true }) }).click();
     await page.locator('.quota-page .real-quota-card').first().waitFor();
     // Choose a layout, reload, and the choice is still selected: covers the save as well as the read.
-    await page.getByRole('radio', { name: 'Even rows', exact: true }).click();
+    await page.getByRole('radio', { name: 'Stacked', exact: true }).click();
     await page.goto(`${base}/?mock=running`);
     await page.locator('.nav-section button').filter({ has: page.getByText('Quota Lookup', { exact: true }) }).click();
     await page.locator('.quota-page .real-quota-card').first().waitFor();
-    assert.equal(await page.getByRole('radio', { name: 'Even rows', exact: true }).getAttribute('aria-checked'), 'true', 'a chosen layout survives a reload');
+    assert.equal(await page.getByRole('radio', { name: 'Stacked', exact: true }).getAttribute('aria-checked'), 'true', 'a chosen layout survives a reload');
     await context.close();
     console.log(`Quota layouts: ${displays.length} displays x ${layouts.length} layouts passed`);
   } finally {
