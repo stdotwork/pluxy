@@ -78,6 +78,7 @@ export const jaOverrides = {
   'connection.remoteDisabled': 'このページは現在、このコンピューターで実行中のコアでのみ使用できます。',
   'connection.remoteManaged': 'リモートホストで管理されています',
   'connection.remoteSettingsNotice': 'リモートコアの現在の設定を表示しています。ここでは読み取り専用で、リモート設定の編集はまだ利用できません。',
+  'app.nav.mcpSkills': 'MCP & スキル',
   'app.nav.pluginPages': 'プラグインページ',
   'oauth.vertex.title': 'Vertex JSON ログイン',
   'oauth.vertex.locationPlaceholder': 'us-central1',

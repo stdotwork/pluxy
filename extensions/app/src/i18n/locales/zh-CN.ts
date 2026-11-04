@@ -63,6 +63,7 @@ export const zhCN = {
   'connection.remoteDisabled': '此页面目前仅适用于在这台电脑上运行的内核。',
   'connection.remoteManaged': '由远程主机管理',
   'connection.remoteSettingsNotice': '正在显示远程内核的当前设置。此处为只读，暂不支持编辑远程配置。',
+  'app.nav.mcpSkills': 'MCP 与技能',
   'app.nav.pluginPages': '插件页面',
   'oauth.vertex.title': 'Vertex JSON 登录',
   'oauth.vertex.locationPlaceholder': 'us-central1',
