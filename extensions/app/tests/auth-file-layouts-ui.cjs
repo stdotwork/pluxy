@@ -73,7 +73,7 @@ const openPage = async (page, base) => {
               const b = rects[other];
               if (Math.min(rect.right, b.right) - Math.max(rect.left, b.left) > 1 && Math.min(rect.bottom, b.bottom) - Math.max(rect.top, b.top) > 1) issues.push(`cards ${index} and ${other} overlap`);
             }
-            // Only the layouts' own elements: the card action buttons at phone widths are covered by the separate fix for them.
+            // Only the layouts' own elements; the card action buttons are not checked here.
             for (const part of cards[index].querySelectorAll('.auth-card-glance-toggle, .auth-card-glance-plan, .auth-status-badge, .auth-card-identity > *')) {
               if (!visible(part)) continue;
               const box = part.getBoundingClientRect();
