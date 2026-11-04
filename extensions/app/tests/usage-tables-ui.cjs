@@ -5,14 +5,14 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-// [width, height, deviceScaleFactor]: phones, tablets, laptops, desktops, ultrawide, portrait monitor and a short window.
+// [width, height, deviceScaleFactor]: the app's 640px minimum width, tablets, laptops, desktops, ultrawide, portrait monitor and a short window.
 const displays = [
-  [320, 640, 2], [375, 812, 3], [414, 896, 2], [768, 1024, 2], [1024, 768, 1], [800, 600, 1.25], [1280, 800, 1.5],
+  [640, 800, 2], [768, 1024, 2], [1024, 768, 1], [800, 600, 1.25], [1280, 800, 1.5],
   [1366, 768, 1], [1440, 900, 2], [1920, 1080, 1], [2560, 1440, 1], [3440, 1440, 1], [1080, 1920, 1], [1280, 420, 1],
 ];
 // Playwright hides scrollbars by default, like an overlay-scrollbar system; a second pass shows classic ones, as on Windows.
 const passes = [
-  { name: 'overlay scrollbars', showScrollbars: false, displays: displays.filter(([width]) => [375, 1024, 1440].includes(width)) },
+  { name: 'overlay scrollbars', showScrollbars: false, displays: displays.filter(([width]) => [640, 1024, 1440].includes(width)) },
   { name: 'classic scrollbars', showScrollbars: true, displays },
 ];
 
@@ -125,14 +125,6 @@ const emptyBelow = (page, selector) => page.evaluate(selector => {
           await page.locator('.usage-events-table tbody tr').first().waitFor();
           await frames(page);
           await checkScrollers(page, `${display} Request Details`, 1);
-          if (width <= 414) {
-            // Phones keep the first columns readable: the time and model headers sit inside the scroller, not cut off.
-            const visible = await page.evaluate(() => {
-              const wrap = document.querySelector('.usage-table-wrap').getBoundingClientRect();
-              return [...document.querySelectorAll('.usage-events-table thead th')].slice(0, 2).map(cell => { const box = cell.getBoundingClientRect(); return box.left >= wrap.left - 1 && box.right <= wrap.right + 1; });
-            });
-            assert.deepEqual(visible, [true, true], `${display}: Time and Model columns fit on a phone`);
-          }
 
           // Price Statistics
           await page.getByRole('tab', { name: 'Price Statistics', exact: true }).click();
