@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agents;
+mod agent_skills;
 mod agent_usage;
 mod agent_usage_store;
 mod app_settings;
@@ -18,6 +19,7 @@ mod instance_lock;
 #[cfg(any(target_os = "linux", test))]
 mod linux_graphics;
 mod management_api;
+mod mcp_servers;
 mod network_proxy;
 #[cfg(any(
     target_os = "linux",
@@ -31,6 +33,7 @@ mod plugins;
 mod privacy_mode;
 mod progress;
 mod provider_health;
+mod reverse_proxy;
 #[cfg(any(
     target_os = "linux",
     target_os = "macos",
@@ -2653,7 +2656,8 @@ fn main() {
             initial_window_size,
             initial_window_position,
         ))
-        .manage(AgentConfigStatusCache::default());
+        .manage(AgentConfigStatusCache::default())
+        .manage(reverse_proxy::ReverseProxyManagerState::default());
 
     let app = app.on_window_event(|window, event| {
         if window.label() != "main" {
@@ -2941,6 +2945,16 @@ fn main() {
             agent_usage::sync_agent_usage,
             agent_usage::get_agent_usage_storage,
             agent_usage::clear_agent_usage_history,
+            mcp_servers::list_mcp_servers,
+            mcp_servers::save_mcp_server,
+            mcp_servers::delete_mcp_server,
+            mcp_servers::set_mcp_server_enabled,
+            mcp_servers::import_mcp_servers_json,
+            mcp_servers::export_mcp_servers_json,
+            mcp_servers::open_mcp_skills_directory,
+            agent_skills::list_skills,
+            agent_skills::get_skill_detail,
+            agent_skills::set_skill_enabled,
             resolve_api_access_remarks,
             save_api_access_remark,
             set_app_locale,
@@ -3056,6 +3070,7 @@ fn main() {
             remove_custom_download_mirror,
             set_prefer_gitcode_downloads,
             get_update_channel,
+            list_update_channels,
             set_update_channel,
             check_app_update,
             get_app_update_task,
@@ -3092,7 +3107,11 @@ fn main() {
             codex_sessions::apply_codex_session_index_cleanup,
             codex_sessions::context::get_codex_session_context,
             codex_sessions::context::save_codex_session_context,
-            codex_sessions::context::open_codex_session_rollout
+            codex_sessions::context::open_codex_session_rollout,
+            reverse_proxy::reverse_proxy_get_state,
+            reverse_proxy::reverse_proxy_apply,
+            reverse_proxy::reverse_proxy_start,
+            reverse_proxy::reverse_proxy_stop
         ])
         .build(context)
         .expect("failed to build app");

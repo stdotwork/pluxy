@@ -37,8 +37,11 @@ export function RoutingPage() {
     window.addEventListener('beforeunload', unload);
     return () => { window.removeEventListener(APP_NAVIGATION_REQUEST_EVENT, navigate); window.removeEventListener('beforeunload', unload); };
   }, [busy, dirty, t]);
-  let valid = false;
-  if (board && diff) { try { validateRoutingPlan(board, diff.plan); valid = true; } catch { valid = false; } }
+  let invalidReason = '';
+  if (board && diff) {
+    try { validateRoutingPlan(board, diff.plan); }
+    catch (failure) { invalidReason = failure instanceof Error ? failure.message : String(failure); }
+  }
   const apply = async () => {
     if (!diff || busy || readOnly) return;
     setBusy(true); setError(''); setSaved(false);
@@ -57,7 +60,8 @@ export function RoutingPage() {
       })}</div></details>}
       <button type="button" className="secondary-button" disabled={busy} onClick={() => { if (!dirty || window.confirm(t('routing.leave'))) void refresh(); }}><RefreshCw size={15} />{t('routing.refresh')}</button>
       <button type="button" className="secondary-button" disabled={!dirty || busy || readOnly} onClick={() => { if (board) { setPlan(draftFromBoard(board)); setSaved(false); } }}>{t('routing.reset')}</button>
-      <button type="button" className="primary-button" disabled={disabled || !dirty || !valid} title={readOnly ? t('connection.remoteDisabledTitle') : undefined} onClick={() => void apply()}><Save size={15} />{t(busy ? 'routing.saving' : 'routing.apply')}</button>
+      <button type="button" className="primary-button" disabled={disabled || !dirty || !!invalidReason} title={readOnly ? t('connection.remoteDisabledTitle') : undefined} onClick={() => void apply()}><Save size={15} />{t(busy ? 'routing.saving' : 'routing.apply')}</button>
+      {dirty && invalidReason && <p className="routing-action-hint" role="status">{invalidReason}</p>}
     </div></header>
     {readOnly ? <Notice tone="info">{t('connection.remoteSettingsNotice')}</Notice> : null}
     {error && <p role="alert" className="routing-error">{error}</p>}

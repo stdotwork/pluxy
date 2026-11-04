@@ -20,7 +20,7 @@ const icons: Record<CardLayout, ReactNode> = {
   compact: <Grid3x3 size={16} aria-hidden="true" />,
 };
 
-/** The page's chosen layout, kept in localStorage under `storageKey` like other page preferences; `fallback` (Even rows unless given; also used for a stored layout that no longer exists, such as the removed Grid) when unset or unreadable. */
+/** The page's chosen layout, kept in localStorage under `storageKey` like other page preferences; `fallback` (Even rows unless given) when unset, unknown or unreadable. */
 export function useCardLayout(storageKey: string, fallback: CardLayout = 'even'): [CardLayout, (layout: CardLayout) => void] {
   const [layout, setLayoutState] = useState<CardLayout>(() => {
     try {
