@@ -626,7 +626,6 @@ export const en: Record<MessageKey, string> = {
   'quota.credentials.other': '{count} credentials',
   'quota.filter.label': 'Filter by category',
   'cardLayout.label': 'Card layout',
-  'cardLayout.grid': 'Grid',
   'cardLayout.even': 'Even rows',
   'cardLayout.stacked': 'Stacked',
   'cardLayout.compact': 'Compact',

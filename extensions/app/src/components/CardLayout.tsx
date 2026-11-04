@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { Grid3x3, LayoutDashboard, LayoutGrid, Rows3 } from 'lucide-react';
+import { Grid3x3, LayoutDashboard, Rows3 } from 'lucide-react';
 import { SegmentedControl } from './SegmentedControl';
 import { useI18n } from '../i18n';
 import { stackQuotaColumns } from '../services/quotaLayout';
@@ -7,22 +7,21 @@ import './CardLayout.css';
 
 /**
  * Card layouts for pages that list cards of uneven height.
- * Grid keeps each card at its own height; Even rows stretches cards to the row's tallest;
+ * Even rows (the default) stretches cards to the row's tallest;
  * Stacked packs cards into columns with no row gaps; Compact packs narrower glance cards that expand for detail.
  */
-export type CardLayout = 'grid' | 'even' | 'stacked' | 'compact';
-export const cardLayouts: readonly CardLayout[] = ['grid', 'even', 'stacked', 'compact'];
+export type CardLayout = 'even' | 'stacked' | 'compact';
+export const cardLayouts: readonly CardLayout[] = ['even', 'stacked', 'compact'];
 export type StackedColumns = Readonly<Record<'stacked' | 'compact', Readonly<{ minWidth: number; gap: number }>>>;
 
 const icons: Record<CardLayout, ReactNode> = {
-  grid: <LayoutGrid size={16} aria-hidden="true" />,
   even: <Rows3 size={16} aria-hidden="true" />,
   stacked: <LayoutDashboard size={16} aria-hidden="true" />,
   compact: <Grid3x3 size={16} aria-hidden="true" />,
 };
 
-/** The page's chosen layout, kept in localStorage under `storageKey` like other page preferences; `fallback` (Grid unless given) when unset or unreadable. */
-export function useCardLayout(storageKey: string, fallback: CardLayout = 'grid'): [CardLayout, (layout: CardLayout) => void] {
+/** The page's chosen layout, kept in localStorage under `storageKey` like other page preferences; `fallback` (Even rows unless given; also used for a stored layout that no longer exists, such as the removed Grid) when unset or unreadable. */
+export function useCardLayout(storageKey: string, fallback: CardLayout = 'even'): [CardLayout, (layout: CardLayout) => void] {
   const [layout, setLayoutState] = useState<CardLayout>(() => {
     try {
       const stored = window.localStorage.getItem(storageKey);
@@ -71,7 +70,7 @@ export function CardLayoutSwitch({ value, onChange, className = '' }: { value: C
 }
 
 /**
- * The card container for a layout. Grid and Even rows render one element with `data-layout`, styled by the page's own grid rule;
+ * The card container for a layout. Even rows renders one element with `data-layout`, styled by the page's own grid rule;
  * Stacked and Compact render columns whose count follows the container width (`columns` gives each layout's minimum card width
  * and gap), placing each card in the column with the least estimated height (`heights`, one per child).
  */

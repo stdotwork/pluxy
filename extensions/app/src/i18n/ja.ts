@@ -643,7 +643,6 @@ export const jaOverrides = {
   'quota.credentials.other': '認証情報 {count} 件',
   'quota.filter.label': 'カテゴリで絞り込む',
   'cardLayout.label': 'カードのレイアウト',
-  'cardLayout.grid': 'グリッド',
   'cardLayout.even': '高さを揃える',
   'cardLayout.stacked': '積み重ね',
   'cardLayout.compact': 'コンパクト',

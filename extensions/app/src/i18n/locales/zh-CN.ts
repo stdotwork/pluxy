@@ -611,7 +611,6 @@ export const zhCN = {
   'quota.credentials.other': '{count} 个凭据',
   'quota.filter.label': '按类别筛选',
   'cardLayout.label': '卡片布局',
-  'cardLayout.grid': '网格',
   'cardLayout.even': '等高行',
   'cardLayout.stacked': '堆叠',
   'cardLayout.compact': '紧凑',
