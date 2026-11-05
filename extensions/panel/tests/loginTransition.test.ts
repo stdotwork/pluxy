@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import i18n from '@/i18n';
@@ -38,8 +38,13 @@ const animationTotal = (css: string, name: string) => {
   return duration + delay;
 };
 
+let originalLanguage = i18n.language;
 beforeAll(async () => {
+  originalLanguage = i18n.language;
   await i18n.changeLanguage('en');
+});
+afterAll(async () => {
+  await i18n.changeLanguage(originalLanguage);
 });
 
 afterEach(() => {

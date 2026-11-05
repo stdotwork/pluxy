@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import i18n from '@/i18n';
@@ -30,8 +30,13 @@ const grant = (overrides: Partial<AnthropicResetGrant> = {}): AnthropicResetGran
 const render = (grants: AnthropicResetGrant[]) =>
   renderToStaticMarkup(createElement(ClaudeResetGrantDetails, { grants, classes }));
 
+let originalLanguage = i18n.language;
 beforeAll(async () => {
+  originalLanguage = i18n.language;
   await i18n.changeLanguage('en');
+});
+afterAll(async () => {
+  await i18n.changeLanguage(originalLanguage);
 });
 
 describe('Claude reset grant details', () => {
