@@ -2417,7 +2417,7 @@ func applyCloakingInternalDoc(
 
 	// Apply sensitive word obfuscation
 	if obfuscateSensitiveWords && len(settings.sensitiveWords) > 0 {
-		matcher := helps.BuildSensitiveWordMatcher(settings.sensitiveWords)
+		matcher := helps.SensitiveWordMatcherFor(settings.sensitiveWords)
 		helps.ObfuscateSensitiveWordsDoc(doc, matcher)
 	}
 
