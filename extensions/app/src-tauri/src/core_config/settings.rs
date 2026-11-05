@@ -1867,7 +1867,10 @@ pub(crate) fn restore_window_position_for_monitor(
         tauri::Position::Physical(fitted_physical)
     };
     #[cfg(not(target_os = "macos"))]
-    let target_position = tauri::Position::Physical(fitted_physical);
+    let target_position = {
+        let _ = scale_factor;
+        tauri::Position::Physical(fitted_physical)
+    };
 
     (fitted_physical, target_position)
 }
