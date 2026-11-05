@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AppReleaseNotes, releaseNotesUrl } from '../src/components/AppReleaseNotes';
 import { I18nProvider, supportedLocales, translate, type AppLocale } from '../src/i18n';
@@ -32,6 +32,12 @@ function renderNotes(overrides: Partial<Parameters<typeof AppReleaseNotes>[0]> =
     else Reflect.deleteProperty(globalThis, 'window');
   }
 }
+
+// I18nProvider stores the locale it renders in a module global that later test files share
+// (e.g. translated management errors). Render once with no window to put it back to English.
+afterEach(() => {
+  renderToStaticMarkup(<I18nProvider>{null}</I18nProvider>);
+});
 
 describe('localized release notes display', () => {
   test('renders versioned Markdown with date and release link without requiring an available update', () => {
