@@ -75,6 +75,20 @@ jobs:
         run: cargo check --locked
         working-directory: extensions/app/src-tauri
 
+      # The app manages agent config folders under HOME, so tests get an empty temporary
+      # HOME and XDG folders. CARGO_HOME and RUSTUP_HOME keep pointing at the installed toolchain.
       - name: Test Rust
-        run: cargo test --locked
+        run: |
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          test_home="$RUNNER_TEMP/app-test-home"
+          mkdir -p "$test_home/config" "$test_home/data" "$test_home/cache" "$test_home/state" "$test_home/runtime"
+          chmod 700 "$test_home/runtime"
+          export HOME="$test_home"
+          export XDG_CONFIG_HOME="$test_home/config"
+          export XDG_DATA_HOME="$test_home/data"
+          export XDG_CACHE_HOME="$test_home/cache"
+          export XDG_STATE_HOME="$test_home/state"
+          export XDG_RUNTIME_DIR="$test_home/runtime"
+          cargo test --locked
         working-directory: extensions/app/src-tauri
