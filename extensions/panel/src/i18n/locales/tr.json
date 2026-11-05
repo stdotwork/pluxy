@@ -1423,7 +1423,6 @@
           "title": "Ağ Yapılandırması",
           "description": "Proxy, Yeniden Deneme ve Yönlendirme Ayarları",
           "proxy_url": "Proxy URL",
-          "proxy_url_sponsor_hint": "Uygun Proxy Yok Mu?",
           "request_retry": "İstek Yeniden Deneme Sayısı",
           "max_retry_credentials": "En Fazla Yeniden Deneme Kimlik Bilgisi",
           "max_retry_credentials_hint": "Ayarlanmamış Bırakmak için Boş Bırak. Kullanılabilir Tüm Kimlik Bilgilerini Denemek için 0 veya Negatif Tam Sayı Ayarla.",

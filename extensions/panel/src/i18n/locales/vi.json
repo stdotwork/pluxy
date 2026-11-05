@@ -1246,7 +1246,6 @@
           "session_affinity": "Định tuyến Session Affinity",
           "ws_auth": "Xác thực WebSocket",
           "ws_auth_desc": "Bật xác thực WebSocket (/v1/ws)",
-          "proxy_url_sponsor_hint": "Chưa có proxy phù hợp?",
           "max_retry_interval_hint": "Đặt thành 0 hoặc số nguyên âm để bỏ qua thời gian chờ cooldown giữa các lượt thử lại."
         },
         "streaming": {
