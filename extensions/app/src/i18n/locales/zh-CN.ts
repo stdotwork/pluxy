@@ -2429,6 +2429,20 @@ export const zhCN = {
   'agents.zcode.catalog.restore': '恢复推荐配置',
   'agents.zcode.subagents.title': 'ZCode 子智能体设置',
   'agents.zcode.subagents.description': '配置 ZCode 子智能体（Sub-agent）的默认模型、思考强度，以及各智能体的专属模型映射。',
+  'agents.zcode.subagents.defaultModel': '全局默认子智能体模型',
+  'agents.zcode.subagents.inheritMainModel': '继承主会话默认模型',
+  'agents.zcode.subagents.inheritDefault': '继承默认',
+  'agents.zcode.subagents.defaultThoughtLevel': '全局默认思考强度 (thoughtLevel)',
+  'agents.zcode.subagents.detected': '已检测到的子智能体 ({count})',
+  'agents.zcode.subagents.detectedHint': '可为具体子智能体（如 visual-judge）指定特定的 CPA 模型或思考强度',
+  'agents.zcode.subagents.searchPlaceholder': '搜索智能体名称...',
+  'agents.zcode.subagents.empty': '未发现匹配的子智能体文件',
+  'agents.zcode.subagents.thought.inherit': '继承默认',
+  'agents.zcode.subagents.thought.disabled': '关闭思考',
+  'agents.zcode.subagents.thought.low': '低思考',
+  'agents.zcode.subagents.thought.medium': '中思考',
+  'agents.zcode.subagents.thought.high': '高思考',
+  'agents.zcode.subagents.thought.max': '最高思考',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
