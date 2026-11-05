@@ -433,7 +433,11 @@ func canonicalModelKey(model string) string {
 	return modelName
 }
 
-func authWebsocketsEnabled(auth *Auth) bool {
+// WebsocketsEnabled reports the effective upstream WebSocket setting for an auth.
+// Explicit account metadata wins. Codex OAuth accounts without a custom endpoint
+// default to the ChatGPT WebSocket transport; API-key and custom-base-URL accounts
+// remain opt-in. Other providers keep their existing opt-in behavior.
+func WebsocketsEnabled(auth *Auth) bool {
 	if auth == nil {
 		return false
 	}
@@ -445,24 +449,29 @@ func authWebsocketsEnabled(auth *Auth) bool {
 			}
 		}
 	}
-	if len(auth.Metadata) == 0 {
-		return false
-	}
-	raw, ok := auth.Metadata["websockets"]
-	if !ok || raw == nil {
-		return false
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v
-	case string:
-		parsed, errParse := strconv.ParseBool(strings.TrimSpace(v))
-		if errParse == nil {
-			return parsed
+	if len(auth.Metadata) > 0 {
+		if raw, ok := auth.Metadata["websockets"]; ok && raw != nil {
+			switch value := raw.(type) {
+			case bool:
+				return value
+			case string:
+				parsed, errParse := strconv.ParseBool(strings.TrimSpace(value))
+				if errParse == nil {
+					return parsed
+				}
+			}
 		}
-	default:
 	}
-	return false
+	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return false
+	}
+	if auth.AuthKind() == AuthKindAPIKey || authAttribute(auth, AttributeAPIKey) != "" || authMetadataString(auth, AttributeAPIKey) != "" {
+		return false
+	}
+	if authAttribute(auth, "base_url") != "" || authMetadataString(auth, "base_url") != "" {
+		return false
+	}
+	return true
 }
 
 func preferCodexWebsocketAuths(ctx context.Context, provider string, available []*Auth) []*Auth {
@@ -482,7 +491,7 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 	wsEnabled := make([]*Auth, 0, len(available))
 	for i := 0; i < len(available); i++ {
 		candidate := available[i]
-		if authWebsocketsEnabled(candidate) {
+		if WebsocketsEnabled(candidate) {
 			wsEnabled = append(wsEnabled, candidate)
 		}
 	}

@@ -473,6 +473,10 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context, pagination authFilesPagi
 					}
 				}
 			}
+			if strings.EqualFold(strings.TrimSpace(typeValue), "codex") {
+				metadata, _ := ojson.ParseBytes(data).Value().(map[string]any)
+				fileData["websockets"] = coreauth.WebsocketsEnabled(&coreauth.Auth{Provider: typeValue, Metadata: metadata})
+			}
 			if requestRetry, okRetry := authFileRequestRetryFromJSON(data); okRetry {
 				fileData["request_retry"] = requestRetry
 			}
@@ -933,6 +937,9 @@ func authWeightValue(auth *coreauth.Auth) (int64, bool) {
 func authWebsocketsValue(auth *coreauth.Auth) (bool, bool) {
 	if auth == nil {
 		return false, false
+	}
+	if strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return coreauth.WebsocketsEnabled(auth), true
 	}
 	if auth.Attributes != nil {
 		if raw := strings.TrimSpace(auth.Attributes["websockets"]); raw != "" {

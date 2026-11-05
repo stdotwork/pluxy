@@ -77,7 +77,7 @@ func TestResponsesWebsocketRequestLoggingLifecycle(t *testing.T) {
 			manager := coreauth.NewManager(nil, nil, nil)
 			manager.RegisterExecutor(executor)
 			authID := "websocket-log-" + name
-			if _, err := manager.Register(context.Background(), &coreauth.Auth{ID: authID, Provider: "codex", Status: coreauth.StatusActive}); err != nil {
+			if _, err := manager.Register(context.Background(), &coreauth.Auth{ID: authID, Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"websockets": "false"}}); err != nil {
 				t.Fatal(err)
 			}
 			registry.GetGlobalRegistry().RegisterClient(authID, "codex", []*registry.ModelInfo{{ID: "logging-model"}})

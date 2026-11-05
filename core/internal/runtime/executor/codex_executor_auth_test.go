@@ -641,6 +641,36 @@ func TestCodexExecutorRefreshSelectiveAndDual(t *testing.T) {
 	}
 }
 
+func TestCodexWebsocketsEnabledUsesCodexOAuthDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		auth *cliproxyauth.Auth
+		want bool
+	}{
+		{name: "oauth default", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"access_token": "token"}}, want: true},
+		{name: "api key", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"api_key": "key"}}, want: false},
+		{name: "custom base URL", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"base_url": "https://codex.example.com"}, Metadata: map[string]any{"access_token": "token"}}, want: false},
+		{name: "explicit true", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"websockets": "true"}}, want: true},
+		{name: "explicit false", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"websockets": "false"}, Metadata: map[string]any{"access_token": "token"}}, want: false},
+		{name: "metadata false", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"access_token": "token", "websockets": false}}, want: false},
+		{name: "metadata true on custom URL", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"base_url": "https://codex.example.com"}, Metadata: map[string]any{"websockets": true}}, want: true},
+		{name: "API key true", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"api_key": "key", "websockets": "true"}}, want: true},
+		{name: "API key kind", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"auth_kind": cliproxyauth.AuthKindAPIKey}}, want: false},
+		{name: "OAuth kind with API key", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"auth_kind": cliproxyauth.AuthKindOAuth, "api_key": "key"}}, want: false},
+		{name: "metadata base URL", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"base_url": "https://codex.example.com"}}, want: false},
+		{name: "metadata false string", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"websockets": " false "}}, want: false},
+		{name: "attribute wins", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"websockets": "false"}, Metadata: map[string]any{"websockets": true}}, want: false},
+		{name: "SIWC OAuth default", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"use_siwc": true}}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codexWebsocketsEnabled(tt.auth); got != tt.want {
+				t.Fatalf("codexWebsocketsEnabled() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCodexExecutorUseSIWCExecuteAndStream(t *testing.T) {
 	var gotPath string
 	var gotHeaders http.Header

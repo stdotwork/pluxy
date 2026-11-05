@@ -276,9 +276,7 @@ func (h *Host) listAuthFilesFromDisk() ([]pluginapi.HostAuthFileEntry, error) {
 				if baseURL, ok := metadata["base_url"].(string); ok {
 					fileEntry.BaseURL = strings.TrimSpace(baseURL)
 				}
-				if websockets, okWebsockets := parseWebsocketsValue(metadata["websockets"]); okWebsockets {
-					fileEntry.Websockets = websockets
-				}
+				fileEntry.Websockets = coreauth.WebsocketsEnabled(&coreauth.Auth{Provider: fileEntry.Provider, Metadata: metadata})
 				if disabled, okDisabled := parseBoolValue(metadata["disabled"]); okDisabled && disabled {
 					fileEntry.Disabled = true
 					fileEntry.Status = string(coreauth.StatusDisabled)
@@ -787,9 +785,7 @@ func (h *Host) buildHostAuthFileEntry(auth *coreauth.Auth) *pluginapi.HostAuthFi
 			entry.BaseURL = strings.TrimSpace(rawBaseURL)
 		}
 	}
-	if websockets, ok := authWebsocketsValue(auth); ok {
-		entry.Websockets = websockets
-	}
+	entry.Websockets = coreauth.WebsocketsEnabled(auth)
 	return entry
 }
 
@@ -872,24 +868,6 @@ func isRuntimeOnlyAuth(auth *coreauth.Auth) bool {
 	return strings.EqualFold(strings.TrimSpace(auth.Attributes["runtime_only"]), "true")
 }
 
-func authWebsocketsValue(auth *coreauth.Auth) (bool, bool) {
-	if auth == nil {
-		return false, false
-	}
-	if auth.Attributes != nil {
-		if raw := strings.TrimSpace(auth.Attributes["websockets"]); raw != "" {
-			parsed, errParse := strconv.ParseBool(raw)
-			if errParse == nil {
-				return parsed, true
-			}
-		}
-	}
-	if auth.Metadata == nil {
-		return false, false
-	}
-	return parseWebsocketsValue(auth.Metadata["websockets"])
-}
-
 func parsePriorityValue(raw any) (int, bool) {
 	switch v := raw.(type) {
 	case int:
@@ -920,10 +898,6 @@ func parseBoolValue(raw any) (bool, bool) {
 		}
 	}
 	return false, false
-}
-
-func parseWebsocketsValue(raw any) (bool, bool) {
-	return parseBoolValue(raw)
 }
 
 func bytesTrimSpace(raw []byte) []byte {
