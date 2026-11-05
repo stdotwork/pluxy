@@ -146,18 +146,6 @@ func stripConfigurationUpdatesDoc(doc *ojson.Doc, docValid bool) bool {
 	return doc.SetRaw("input", "["+strings.Join(kept, ",")+"]") == nil
 }
 
-// stripResponsesEffort leaves summary and unrelated reasoning fields intact.
-func stripResponsesEffort(body []byte) []byte {
-	if len(body) == 0 || !ojson.ValidBytes(body) {
-		return body
-	}
-	doc := ojson.NewDoc(body)
-	if !stripResponsesEffortDoc(doc, true) {
-		return body
-	}
-	return doc.Bytes()
-}
-
 func stripResponsesEffortDoc(doc *ojson.Doc, docValid bool) bool {
 	if doc == nil || !docValid || !doc.Get("reasoning.effort").Exists() {
 		return false

@@ -295,19 +295,9 @@ type DeviceFlowClient struct {
 	oauthHost  string
 }
 
-// NewDeviceFlowClient creates a new device flow client.
-func NewDeviceFlowClient(cfg *config.Config) *DeviceFlowClient {
-	return NewDeviceFlowClientWithDomain(cfg, KimiDefaultDomain)
-}
-
 // NewDeviceFlowClientWithDomain creates a new device flow client for the specified domain.
 func NewDeviceFlowClientWithDomain(cfg *config.Config, domain string) *DeviceFlowClient {
 	return NewDeviceFlowClientWithDomainDeviceIDAndProxyURL(cfg, domain, "", "")
-}
-
-// NewDeviceFlowClientWithDeviceID creates a new device flow client with the specified device ID.
-func NewDeviceFlowClientWithDeviceID(cfg *config.Config, deviceID string) *DeviceFlowClient {
-	return NewDeviceFlowClientWithDomainDeviceIDAndProxyURL(cfg, KimiDefaultDomain, deviceID, "")
 }
 
 // NewDeviceFlowClientWithDeviceIDAndProxyURL creates a new device flow client with a proxy override.

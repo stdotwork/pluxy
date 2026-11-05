@@ -198,11 +198,6 @@ func ApplySummaryConfigForModel(body []byte, format, model string, config Summar
 	return applySummaryConfigForModel(body, format, model, nil, config)
 }
 
-// ApplySummaryConfigForModelDoc writes canonical summary intent onto doc in place.
-func ApplySummaryConfigForModelDoc(doc *ojson.Doc, format, model string, config SummaryConfig) {
-	_ = applySummaryConfigForProviderDoc(doc, true, format, model, "", nil, config)
-}
-
 // CanRepresentSummaryConfigForModelDoc reports whether ApplySummaryConfigForModelDoc
 // would produce an explicit summary control on doc, without mutating or serializing doc.
 func CanRepresentSummaryConfigForModelDoc(doc *ojson.Doc, format, model string, config SummaryConfig) bool {
