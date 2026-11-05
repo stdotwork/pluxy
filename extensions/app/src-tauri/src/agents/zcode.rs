@@ -213,8 +213,11 @@ fn parse_zcode_rule_properties(rule: &Value) -> (Option<u64>, Option<u64>, bool,
 fn parse_zcode_rule_reasoning(rule: &Value) -> (Option<Vec<String>>, Option<String>) {
     let option_specs = rule.get("config").and_then(|c| c.get("optionSpecs"));
     let reasoning = option_specs.and_then(|o| o.get("reasoningLevel"));
-    let values = reasoning.and_then(|r| r.get("values")).and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect::<Vec<_>>());
+    let values = reasoning.map(|reasoning| {
+        reasoning.get("values").and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect::<Vec<_>>())
+            .unwrap_or_default()
+    });
     let map = reasoning.and_then(|r| r.get("map")).and_then(Value::as_str).map(String::from);
     (values, map)
 }
@@ -387,7 +390,7 @@ pub(crate) fn zcode_editor_snapshot(
         } else if let Some(prov_rule) = provider_rules.get(&option.name) {
             let (cw, mot, img, pdf, vid, json_out, search, sys) = parse_zcode_rule_properties(prov_rule);
             let (rl, map) = parse_zcode_rule_reasoning(prov_rule);
-            let effective_cw = if cw == Some(500000) || cw.is_none() { default_config.context_window } else { cw };
+            let effective_cw = cw.or(default_config.context_window);
             ZCodeModelConfig {
                 context_window: effective_cw,
                 max_output_tokens: mot.or(default_config.max_output_tokens),

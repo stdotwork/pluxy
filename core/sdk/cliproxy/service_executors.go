@@ -542,15 +542,6 @@ func (s *Service) appendPluginModels(providerKey string, models []*ModelInfo, ex
 	return out
 }
 
-func (s *Service) tryRegisterPluginModelsForAuth(ctx context.Context, a *coreauth.Auth, provider, authKind string, excluded []string) bool {
-	handled, _ := s.tryRegisterPluginModelsForAuthWithConfig(ctx, s.currentConfig(), a, provider, authKind, excluded)
-	return handled
-}
-
-func (s *Service) tryRegisterPluginModelsForAuthWithConfig(ctx context.Context, cfg *config.Config, a *coreauth.Auth, provider, authKind string, excluded []string) (bool, bool) {
-	return s.tryRegisterPluginModelsForAuthWithConfigFenced(ctx, cfg, a, newModelRegistrationFence(a, cfg), provider, authKind, excluded)
-}
-
 // tryRegisterPluginModelsForAuthWithConfigFenced returns whether a plugin
 // handled model registration for the auth and, when handled, whether the
 // publication fence rejected the result (reported as published=false).

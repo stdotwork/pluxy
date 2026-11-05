@@ -56,11 +56,6 @@ type authConnectMsg struct {
 	err error
 }
 
-// NewApp creates the root TUI application model targeting localhost on the given port.
-func NewApp(port int, secretKey string, hook *LogHook) App {
-	return NewAppWithBaseURL(fmt.Sprintf("http://127.0.0.1:%d", port), secretKey, hook)
-}
-
 // NewAppWithBaseURL creates the root TUI application model targeting the specified management base URL.
 func NewAppWithBaseURL(baseURL string, secretKey string, hook *LogHook) App {
 	standalone := hook != nil

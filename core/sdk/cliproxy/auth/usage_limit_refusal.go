@@ -17,9 +17,10 @@ import (
 // reset is this close or closer keeps the retryable model_cooldown response.
 const usageLimitMinResetIn = 5 * time.Minute
 
-// codexWeeklyWindowMinutes is the shortest window Codex reports in its
-// secondary rate-limit slot; shorter windows use the primary slot.
-const codexWeeklyWindowMinutes = 24 * 60
+// codexSecondaryWindowMinMinutes is the shortest window, one day, that Codex
+// reports in its secondary rate-limit slot (the weekly window is 10080
+// minutes); shorter windows use the primary slot.
+const codexSecondaryWindowMinMinutes = 24 * 60
 
 // usageLimitRefusal describes a pool whose every eligible credential is out of
 // quota: when the first one reopens and, when the upstream named it, the
@@ -81,7 +82,7 @@ func (r *usageLimitRefusal) headers() http.Header {
 	headers := http.Header{"X-Should-Retry": {"false"}}
 	if r.windowMinutes > 0 {
 		prefix := "X-Codex-Primary-"
-		if r.windowMinutes >= codexWeeklyWindowMinutes {
+		if r.windowMinutes >= codexSecondaryWindowMinMinutes {
 			prefix = "X-Codex-Secondary-"
 		}
 		headers.Set(prefix+"Used-Percent", "100")

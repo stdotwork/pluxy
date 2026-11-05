@@ -46,13 +46,6 @@ func lookupAPIKeyUpstreamModel(routing *apiKeyModelRoutingSnapshot, authID, requ
 	return ""
 }
 
-func isAPIKeyAuth(auth *Auth) bool {
-	if auth == nil {
-		return false
-	}
-	return auth.AuthKind() == AuthKindAPIKey
-}
-
 func isConfiguredOpenAICompatAuth(auth *Auth) bool {
 	if !isConfiguredModelRoutingAuth(auth) {
 		return false
@@ -317,12 +310,6 @@ func (m *Manager) filterExecutionModels(auth *Auth, routeModel string, candidate
 	return out
 }
 
-func (m *Manager) preparedExecutionModels(auth *Auth, routeModel string) ([]string, bool) {
-	candidates := m.executionModelCandidates(auth, routeModel)
-	pooled := len(candidates) > 1
-	return m.filterExecutionModels(auth, routeModel, candidates, pooled), pooled
-}
-
 func (m *Manager) preparedExecutionModelsWithAlias(auth *Auth, routeModel string) ([]string, bool, OAuthModelAliasResult, *apiKeyModelRoutingSnapshot) {
 	candidates, pooled, aliasResult, routing := m.executionModelCandidatesWithAlias(auth, routeModel)
 	return m.filterExecutionModels(auth, routeModel, candidates, pooled), pooled, aliasResult, routing
@@ -368,11 +355,6 @@ func (m *Manager) executionModelCandidatesWithAliasRotation(auth *Auth, routeMod
 	}
 	pooled := len(candidates) > 1
 	return candidates, pooled, aliasResult, routing
-}
-
-func (m *Manager) resolveExecutionAliasResult(auth *Auth, routeModel string) OAuthModelAliasResult {
-	requestedModel := rewriteModelForAuth(routeModel, auth)
-	return m.resolveExecutionAliasResultForRequested(auth, requestedModel)
 }
 
 func (m *Manager) resolveExecutionAliasResultForRequested(auth *Auth, requestedModel string) OAuthModelAliasResult {
@@ -533,11 +515,6 @@ func resolveAttemptAliasResult(routing *apiKeyModelRoutingSnapshot, auth *Auth, 
 		result.OriginalAlias = fallback.OriginalAlias
 	}
 	return result
-}
-
-func (m *Manager) prepareExecutionModels(auth *Auth, routeModel string) []string {
-	models, _ := m.preparedExecutionModels(auth, routeModel)
-	return models
 }
 
 func rewriteForceMappedResponse(resp *cliproxyexecutor.Response, aliasResult OAuthModelAliasResult) {

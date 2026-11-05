@@ -2781,7 +2781,7 @@ pub(crate) fn find_deepseek_harness_managed_executable(home: &Path) -> Option<Pa
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn find_deepseek_harness_managed_executable_in_roots(
     home: &Path,
     app_roots: &[PathBuf],
@@ -3108,6 +3108,14 @@ pub(crate) fn command_output_with_timeout(
     command: &mut Command,
     timeout: Duration,
 ) -> io::Result<Option<std::process::Output>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // Keep descendants in a private process group so a timed-out probe cannot
+        // leave a child holding the captured output pipes open.
+        command.process_group(0);
+    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -3167,6 +3175,13 @@ fn terminate_agent_probe_process(child: &mut Child) {
             .stderr(Stdio::null());
         configure_background_command(&mut command);
         let _ = command.status();
+    }
+    #[cfg(unix)]
+    {
+        let process_group = child.id() as libc::pid_t;
+        if process_group > 1 && process_group != unsafe { libc::getpgrp() } {
+            let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+        }
     }
     let _ = child.kill();
     let _ = child.wait();

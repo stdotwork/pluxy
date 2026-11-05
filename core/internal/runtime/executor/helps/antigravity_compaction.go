@@ -105,18 +105,6 @@ func ResponsesCompactionSourcePayload(req cliproxyexecutor.Request, opts cliprox
 	return payload
 }
 
-// DropForeignResponsesCompactionItems removes compaction items whose encrypted_content does not use the CPA capsule prefix.
-func DropForeignResponsesCompactionItems(payload []byte, provider string) []byte {
-	if len(payload) == 0 {
-		return payload
-	}
-	doc := ojson.NewDoc(payload)
-	if !DropForeignResponsesCompactionItemsDoc(doc, provider) {
-		return payload
-	}
-	return doc.Bytes()
-}
-
 // DropForeignResponsesCompactionItemsDoc removes non-CPA compaction items in place on doc.
 func DropForeignResponsesCompactionItemsDoc(doc *ojson.Doc, provider string) bool {
 	if doc == nil || doc.Len() == 0 {

@@ -182,15 +182,6 @@ func geminiInteractionsSameByteSlice(a, b []byte) bool {
 	return &a[0] == &b[0]
 }
 
-// ApplyGeminiInteractionsThinking applies thinking/reasoning configuration to the interactions payload.
-func ApplyGeminiInteractionsThinking(body []byte, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) ([]byte, error) {
-	fromFormat := opts.SourceFormat.String()
-	if strings.TrimSpace(fromFormat) == "" {
-		fromFormat = sdktranslator.FormatInteractions.String()
-	}
-	return ApplyRequestThinking(body, req, opts, fromFormat, sdktranslator.FormatInteractions.String(), "gemini")
-}
-
 // ApplyGeminiInteractionsThinkingDoc applies thinking/reasoning configuration to doc in place.
 func ApplyGeminiInteractionsThinkingDoc(doc *ojson.Doc, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) error {
 	fromFormat := opts.SourceFormat.String()

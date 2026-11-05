@@ -15,10 +15,6 @@ import { OAuthPage } from '@/features/oauth/OAuthPage';
 import { resolveCallbackUrl, XAI_CALLBACK_URL } from '@/features/oauth/callbackUrl';
 import { resolveFlowView, splitAuthUrl } from '@/features/oauth/flowView';
 import { buildPluginOAuthProviderCards, OAUTH_PROVIDERS } from '@/features/oauth/providers';
-import {
-  KIMI_CHINESE_AFFILIATE_URL,
-  KIMI_INTERNATIONAL_AFFILIATE_URL,
-} from '@/features/providers/kimi';
 import type { PluginListEntry } from '@/types';
 
 describe('OAuth dialog view resolution', () => {
@@ -206,7 +202,7 @@ describe('OAuth provider gallery', () => {
         createElement(MemoryRouter, null, createElement(OAuthPage))
       )
     );
-    for (const url of [KIMI_CHINESE_AFFILIATE_URL, KIMI_INTERNATIONAL_AFFILIATE_URL]) {
+    for (const url of ['https://platform.kimi.com/', 'https://platform.kimi.ai/']) {
       const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/&/g, '&amp;');
       expect(markup).toMatch(
         new RegExp(`href="${escaped}" target="_blank" rel="noopener noreferrer"`)

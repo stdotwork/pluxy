@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/MoeForge/moego/ojson"
@@ -57,6 +58,41 @@ func BuildSensitiveWordMatcher(words []string) *SensitiveWordMatcher {
 	return &SensitiveWordMatcher{regex: re}
 }
 
+// sensitiveWordMatcherCacheLimit bounds the number of distinct word lists kept in the cache.
+const sensitiveWordMatcherCacheLimit = 32
+
+var sensitiveWordMatchers = struct {
+	sync.RWMutex
+	byWords map[string]*SensitiveWordMatcher
+}{byWords: make(map[string]*SensitiveWordMatcher)}
+
+// SensitiveWordMatcherFor returns the matcher BuildSensitiveWordMatcher would build for
+// words, compiling each distinct word list only once. Matchers are immutable and safe to share.
+func SensitiveWordMatcherFor(words []string) *SensitiveWordMatcher {
+	if len(words) == 0 {
+		return nil
+	}
+	key := strings.Join(words, "\x00")
+	sensitiveWordMatchers.RLock()
+	m, ok := sensitiveWordMatchers.byWords[key]
+	sensitiveWordMatchers.RUnlock()
+	if ok {
+		return m
+	}
+
+	m = BuildSensitiveWordMatcher(words)
+	sensitiveWordMatchers.Lock()
+	defer sensitiveWordMatchers.Unlock()
+	if cached, ok := sensitiveWordMatchers.byWords[key]; ok {
+		return cached
+	}
+	if len(sensitiveWordMatchers.byWords) >= sensitiveWordMatcherCacheLimit {
+		clear(sensitiveWordMatchers.byWords)
+	}
+	sensitiveWordMatchers.byWords[key] = m
+	return m
+}
+
 // obfuscateWord inserts a zero-width space after the first grapheme.
 func obfuscateWord(word string) string {
 	if strings.Contains(word, zeroWidthSpace) {
@@ -91,19 +127,6 @@ func (m *SensitiveWordMatcher) Matches(text string) bool {
 // ObfuscateText replaces all sensitive words in the text.
 func (m *SensitiveWordMatcher) ObfuscateText(text string) string {
 	return m.obfuscateText(text)
-}
-
-// ObfuscateSensitiveWords processes the payload and obfuscates sensitive words
-// in system blocks and message content.
-func ObfuscateSensitiveWords(payload []byte, matcher *SensitiveWordMatcher) []byte {
-	if matcher == nil || matcher.regex == nil || len(payload) == 0 {
-		return payload
-	}
-	doc := ojson.NewDoc(payload)
-	if !ObfuscateSensitiveWordsDoc(doc, matcher) {
-		return payload
-	}
-	return doc.Bytes()
 }
 
 // ObfuscateSensitiveWordsDoc processes doc in place and obfuscates sensitive words

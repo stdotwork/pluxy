@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
@@ -72,12 +73,26 @@ func decodeRequestBody(raw []byte, encoding string, maxBytes int64) ([]byte, err
 	return body, nil
 }
 
+// zstdRequestDecoders pools single-goroutine decoders; creating one allocates its window and block buffers.
+var zstdRequestDecoders = sync.Pool{
+	New: func() any {
+		decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return nil
+		}
+		return decoder
+	},
+}
+
 func decodeZstdRequestBody(raw []byte, maxBytes int64) ([]byte, error) {
-	decoder, err := zstd.NewReader(bytes.NewReader(raw))
-	if err != nil {
+	decoder, _ := zstdRequestDecoders.Get().(*zstd.Decoder)
+	if decoder == nil {
+		return nil, errors.New("failed to create zstd request decoder")
+	}
+	if err := decoder.Reset(bytes.NewReader(raw)); err != nil {
+		decoder.Close()
 		return nil, fmt.Errorf("failed to create zstd request decoder: %w", err)
 	}
-	defer decoder.Close()
 
 	var reader io.Reader = decoder
 	if maxBytes > 0 && maxBytes < math.MaxInt64 {
@@ -85,10 +100,20 @@ func decodeZstdRequestBody(raw []byte, maxBytes int64) ([]byte, error) {
 	}
 	decoded, err := io.ReadAll(reader)
 	if err != nil {
+		// A decoder that failed mid-stream is discarded rather than reused.
+		decoder.Close()
 		return nil, fmt.Errorf("failed to decode zstd request body: %w", err)
 	}
 	if maxBytes > 0 && int64(len(decoded)) > maxBytes {
+		// The stream was not read to its end; discard the decoder as well.
+		decoder.Close()
 		return nil, &http.MaxBytesError{Limit: maxBytes}
+	}
+	// Drop the reference to the request body before pooling.
+	if err := decoder.Reset(nil); err == nil {
+		zstdRequestDecoders.Put(decoder)
+	} else {
+		decoder.Close()
 	}
 	return decoded, nil
 }

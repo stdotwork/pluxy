@@ -799,7 +799,7 @@ export function McpSkillsPage() {
               {/* Filter chips */}
               <SegmentedControl
                 className="mcp-filter-chips"
-                aria-label="Server filter"
+                aria-label={t('serverFilter')}
                 value={serverFilter}
                 onChange={setServerFilter}
                 buttonClassName="mcp-filter-chip"
@@ -1055,8 +1055,8 @@ export function McpSkillsPage() {
                         <table className="mcp-kv-table">
                           <thead>
                             <tr>
-                              <th>Key</th>
-                              <th>Value</th>
+                              <th>{t('columnKey')}</th>
+                              <th>{t('columnValue')}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1079,8 +1079,8 @@ export function McpSkillsPage() {
                         <table className="mcp-kv-table">
                           <thead>
                             <tr>
-                              <th>Header</th>
-                              <th>Value</th>
+                              <th>{t('columnHeader')}</th>
+                              <th>{t('columnValue')}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1173,7 +1173,7 @@ export function McpSkillsPage() {
                 {/* Source Filter chips */}
                 <SegmentedControl
                   className="mcp-filter-chips"
-                  aria-label="Skill source"
+                  aria-label={t('skillSourceFilter')}
                   value={skillSourceFilter}
                   onChange={setSkillSourceFilter}
                   buttonClassName="mcp-filter-chip"
@@ -1578,7 +1578,7 @@ export function McpSkillsPage() {
                       onClick={() =>
                         setFormEnv((prev) => prev.filter((_, idx) => idx !== index))
                       }
-                      aria-label="Remove"
+                      aria-label={t('removeRow')}
                     >
                       <X size={15} aria-hidden="true" />
                     </button>
@@ -1638,7 +1638,7 @@ export function McpSkillsPage() {
                       onClick={() =>
                         setFormHeaders((prev) => prev.filter((_, idx) => idx !== index))
                       }
-                      aria-label="Remove"
+                      aria-label={t('removeRow')}
                     >
                       <X size={15} aria-hidden="true" />
                     </button>

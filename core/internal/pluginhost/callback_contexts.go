@@ -85,11 +85,6 @@ func (r *callbackContextRegistry) pluginID(id string) string {
 	return pluginID
 }
 
-func (r *callbackContextRegistry) addCleanup(id string, cleanup func()) bool {
-	_, ok := r.addCleanupHandle(id, cleanup)
-	return ok
-}
-
 func (r *callbackContextRegistry) addCleanupHandle(id string, cleanup func()) (func(), bool) {
 	if r == nil || cleanup == nil {
 		return func() {}, false
@@ -166,16 +161,6 @@ func (h *Host) openCallbackContextForPluginInstance(ctx context.Context, pluginI
 		instance = hostCallbackInstanceFromContext(ctx)
 	}
 	return h.callbackContexts.open(ctx, pluginID, instance)
-}
-
-func (h *Host) addCallbackCleanup(id string, cleanup func()) bool {
-	if h == nil || h.callbackContexts == nil {
-		if id != "" && cleanup != nil {
-			cleanup()
-		}
-		return false
-	}
-	return h.callbackContexts.addCleanup(id, cleanup)
 }
 
 func (h *Host) addCallbackCleanupHandle(id string, cleanup func()) (func(), bool) {

@@ -175,14 +175,6 @@ func sanitizeAntigravityRequestSchemasForModelDoc(doc *ojson.Doc, useAntigravity
 	return changed
 }
 
-// sanitizeAntigravityToolSchemas applies the existing declaration rewrites to
-// a small document containing only request.tools, then replaces that subtree
-// once. This preserves rewrite order and bytes without copying the full request
-// for every declaration schema.
-func sanitizeAntigravityToolSchemas(payloadStr string, useAntigravitySchema bool) string {
-	return sanitizeAntigravityToolSchemasForModel(payloadStr, useAntigravitySchema, false)
-}
-
 func sanitizeAntigravityToolSchemasForModel(payloadStr string, useAntigravitySchema, isClaudeModel bool) string {
 	tools := ojson.Get(payloadStr, "request.tools")
 	if !tools.IsArray() {
@@ -223,10 +215,6 @@ func sanitizeAntigravityToolSchemasForModelDoc(doc *ojson.Doc, useAntigravitySch
 		return false
 	}
 	return true
-}
-
-func sanitizeAntigravityToolSchemaDocument(payloadStr string, useAntigravitySchema bool) string {
-	return sanitizeAntigravityToolSchemaDocumentForModel(payloadStr, useAntigravitySchema, false)
 }
 
 // antigravityDeclarationContainers lists both spellings of the declarations
@@ -494,33 +482,6 @@ func isParameterSchemaPath(schemaPath string) bool {
 	return strings.HasPrefix(key, "parameters")
 }
 
-func cleanAntigravitySchemasAtPaths(payloadStr string, schemaPaths []string, clean func(string) string) string {
-	var doc *ojson.Doc
-	changed := false
-	for _, schemaPath := range schemaPaths {
-		schema := ojson.Get(payloadStr, schemaPath)
-		if !schema.Exists() {
-			continue
-		}
-		cleanedSchema := clean(schema.Raw)
-		if cleanedSchema == schema.Raw {
-			continue
-		}
-		if doc == nil {
-			doc = ojson.NewDoc([]byte(payloadStr))
-		}
-		if errSet := doc.SetRawBytes(schemaPath, []byte(cleanedSchema)); errSet != nil {
-			log.Debugf("antigravity: failed to write cleaned schema at %s: %v", schemaPath, errSet)
-			continue
-		}
-		changed = true
-	}
-	if !changed || doc == nil {
-		return payloadStr
-	}
-	return string(doc.Bytes())
-}
-
 // antigravitySchemaWrapperKey nests a schema during cleaning. It is never sent upstream.
 const antigravitySchemaWrapperKey = "schema"
 
@@ -562,14 +523,6 @@ func antigravityFunctionDeclarationPaths(payloadStr string) []string {
 		}
 	}
 	return paths
-}
-
-// antigravitySchemaPaths returns every payload path that holds a JSON schema document.
-// A function declaration may carry a schema for its parameters and for its result, so all of
-// them must be cleaned; anything omitted here reaches the upstream API uncleaned.
-func antigravitySchemaPaths(payloadStr string) []string {
-	paths := antigravityDeclarationSchemaPaths(payloadStr)
-	return append(paths, antigravityGenerationSchemaPaths(payloadStr)...)
 }
 
 func antigravityDeclarationSchemaPaths(payloadStr string) []string {
@@ -713,12 +666,6 @@ func resolveCustomAntigravityBaseURL(auth *cliproxyauth.Auth) string {
 		}
 	}
 	return ""
-}
-
-func geminiToAntigravity(modelName string, payload []byte, projectID string, derivedSessionIDs ...string) []byte {
-	doc := ojson.NewDoc(payload)
-	geminiToAntigravityDoc(doc, modelName, projectID, derivedSessionIDs...)
-	return doc.Bytes()
 }
 
 func geminiToAntigravityDoc(doc *ojson.Doc, modelName string, projectID string, derivedSessionIDs ...string) {

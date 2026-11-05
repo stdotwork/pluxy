@@ -148,15 +148,6 @@ func GinLogrusRecovery() gin.HandlerFunc {
 	})
 }
 
-// SkipGinRequestLogging marks the provided Gin context so that GinLogrusLogger
-// will skip emitting a log line for the associated request.
-func SkipGinRequestLogging(c *gin.Context) {
-	if c == nil {
-		return
-	}
-	c.Set(skipGinLogKey, true)
-}
-
 func shouldSkipGinRequestLogging(c *gin.Context) bool {
 	if c == nil {
 		return false

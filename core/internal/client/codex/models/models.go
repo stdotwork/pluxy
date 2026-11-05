@@ -101,10 +101,6 @@ func MarshalCompact(payload any) ([]byte, error) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
-func buildCodexClientModels(models []map[string]any, providersForModel ProvidersForModelFunc, webSearchCapabilityForModel WebSearchCapabilityForModelFunc, optimizeMultiAgentV2 bool, clientVersion string) []map[string]any {
-	return buildCodexClientModelsWithToolCapabilities(models, providersForModel, nil, webSearchCapabilityForModel, nil, nil, optimizeMultiAgentV2, clientVersion)
-}
-
 func buildCodexClientModelsWithToolCapabilities(models []map[string]any, providersForModel, searchToolProvidersForModel ProvidersForModelFunc, webSearchCapabilityForModel WebSearchCapabilityForModelFunc, applyPatchCapabilityForModel ApplyPatchCapabilityForModelFunc, toolSearchCapabilityForModel ToolSearchCapabilityForModelFunc, optimizeMultiAgentV2 bool, clientVersion string) []map[string]any {
 	templates, defaultTemplate, errLoadCodexClientModelTemplates := loadCodexClientModelTemplates()
 	if errLoadCodexClientModelTemplates != nil || defaultTemplate == nil {

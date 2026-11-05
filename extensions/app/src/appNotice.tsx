@@ -155,5 +155,3 @@ export function MessageNotice({ message, tone = 'error', onDismiss, source }: {
   const owner = useId();
   return <FloatingNotice notice={message ? { owner, message, tone, source } : null} onDismiss={onDismiss} />;
 }
-
-export const ActionFeedback = FloatingNotice;

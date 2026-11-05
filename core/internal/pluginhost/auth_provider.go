@@ -547,14 +547,6 @@ func (h *Host) ParseAuths(ctx context.Context, req pluginapi.AuthParseRequest) (
 	return nil, false, nil
 }
 
-func (h *Host) callParseAuth(ctx context.Context, record capabilityRecord, req pluginapi.AuthParseRequest) (auth *coreauth.Auth, handled bool, err error) {
-	auths, handled, errParseAuths := h.callParseAuths(ctx, record, req)
-	if errParseAuths != nil || !handled || len(auths) == 0 {
-		return nil, handled, errParseAuths
-	}
-	return auths[0], true, nil
-}
-
 func (h *Host) callParseAuths(ctx context.Context, record capabilityRecord, req pluginapi.AuthParseRequest) (auths []*coreauth.Auth, handled bool, err error) {
 	if h == nil || !hasRecordAuthProvider(record) || h.isPluginFused(record.id) || !h.recordCurrent(record) {
 		return nil, false, nil

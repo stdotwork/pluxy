@@ -28,8 +28,8 @@ describe('Kimi quota ordering', () => {
     });
 
     expect(rows.map(({ id }) => id)).toEqual(['limit-0', 'summary']);
-    expect(rows[0]?.labelKey).toBe('kimi_quota.limit_window');
-    expect(rows[0]?.labelParams).toEqual({ duration: '5h' });
+    expect(rows[0]?.labelKey).toBe('quota_window.five_hour');
+    expect(rows[0]?.labelParams).toBeUndefined();
     expect(rows[0]?.periodHours).toBe(5);
     expect(rows[1]?.labelKey).toBe('kimi_quota.weekly_limit');
     expect(rows[1]?.periodHours).toBe(168);

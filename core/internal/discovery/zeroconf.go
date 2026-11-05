@@ -1401,14 +1401,6 @@ func isOnLinkSource(from net.Addr, ifIndex int, ifaces []net.Interface, configur
 	return false
 }
 
-func isValidMDNSResponseSource(from net.Addr, ifIndex int, ifaces []net.Interface, configuredIPs []string) bool {
-	uaddr, ok := from.(*net.UDPAddr)
-	if !ok || uaddr == nil || uaddr.Port != mdnsPort {
-		return false
-	}
-	return isOnLinkSource(from, ifIndex, ifaces, configuredIPs)
-}
-
 func isValidMDNSResponsePeer(from net.Addr, ifIndex int, ifaces []net.Interface, configuredIPs []string, isMulticastDst bool) bool {
 	uaddr, ok := from.(*net.UDPAddr)
 	if !ok || uaddr == nil || uaddr.Port != mdnsPort || uaddr.IP == nil {

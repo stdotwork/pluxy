@@ -4,7 +4,7 @@ import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useNotificationStore } from '@/stores';
 import { IconCheckCircle2, IconExternalLink, IconLoader2, IconPlus } from '@/components/ui/icons';
 import { PROVIDER_LOGOS } from '../brandLogos';
-import { APIKEY_FUN_AFFILIATE_URL, APIKEY_FUN_DASHBOARD_URL } from '../sponsor';
+import { APIKEY_FUN_REGISTER_URL, APIKEY_FUN_DASHBOARD_URL } from '../sponsor';
 import { isSponsorPartialMutationError } from '../sponsorMutationRecovery';
 import type { ProviderEntryFormInput, ProviderResource } from '../types';
 import type { UseProviderWorkbenchResult } from '../useProviderWorkbench';
@@ -103,7 +103,7 @@ export function SponsorQuickStartPanel({
             </button>
             <a
               className={`${styles.emptyActionButton} ${styles.emptyActionButtonEmphasis}`}
-              href={APIKEY_FUN_AFFILIATE_URL}
+              href={APIKEY_FUN_REGISTER_URL}
               target="_blank"
               rel="noreferrer"
             >
@@ -116,7 +116,7 @@ export function SponsorQuickStartPanel({
     );
   }
 
-  const actionHref = resource ? APIKEY_FUN_DASHBOARD_URL : APIKEY_FUN_AFFILIATE_URL;
+  const actionHref = resource ? APIKEY_FUN_DASHBOARD_URL : APIKEY_FUN_REGISTER_URL;
   const actionLabel = resource
     ? t('providersPage.sponsor.dashboardLink')
     : t('providersPage.sponsor.registerLink');

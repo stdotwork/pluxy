@@ -230,10 +230,6 @@ func (m dashboardModel) renderDashboard(cfg map[string]any, authFiles []map[stri
 	return sb.String()
 }
 
-func formatKV(key, value string) string {
-	return fmt.Sprintf("  %s %s\n", labelStyle.Render(key+":"), valueStyle.Render(value))
-}
-
 func getString(m map[string]any, key string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
@@ -270,23 +266,6 @@ func boolEmoji(b bool) string {
 		return T("bool_yes")
 	}
 	return T("bool_no")
-}
-
-func formatLargeNumber(n int64) string {
-	if n >= 1_000_000 {
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	}
-	if n >= 1_000 {
-		return fmt.Sprintf("%.1fK", float64(n)/1_000)
-	}
-	return fmt.Sprintf("%d", n)
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) > maxLen {
-		return s[:maxLen-3] + "..."
-	}
-	return s
 }
 
 func minInt(a, b int) int {

@@ -1142,13 +1142,6 @@ func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth, req 
 	return nil
 }
 
-func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byte {
-	if len(payload) == 0 || model == "" {
-		return payload
-	}
-	return helps.SetStringIfDifferent(payload, "model", model)
-}
-
 func openAICompatErrorEvent(eventName string) bool {
 	return strings.EqualFold(eventName, "error") || strings.EqualFold(eventName, "response.error") || strings.EqualFold(eventName, "response.failed")
 }

@@ -20,35 +20,6 @@ func openaiResponsesReasoningSummaryIsEmpty(summary ojson.Result) bool {
 	return summary.IsArray() && len(summary.Array()) == 0
 }
 
-func promoteOpenAIResponsesReasoningTextToSummary(itemRaw string, content ojson.Result) (string, error) {
-	var b strings.Builder
-	b.WriteByte('[')
-	n := 0
-	for _, part := range content.Array() {
-		if strings.TrimSpace(part.Get("type").String()) != "reasoning_text" {
-			continue
-		}
-		text := part.Get("text").String()
-		if text == "" {
-			continue
-		}
-		partJSON, err := ojson.Set(`{"type":"summary_text"}`, "text", text)
-		if err != nil {
-			return itemRaw, err
-		}
-		if n > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(partJSON)
-		n++
-	}
-	b.WriteByte(']')
-	if n == 0 {
-		return itemRaw, nil
-	}
-	return ojson.SetRaw(itemRaw, "summary", b.String())
-}
-
 func promoteOpenAIResponsesReasoningTextToSummaryDoc(itemDoc *ojson.Doc, content ojson.Result) error {
 	var b strings.Builder
 	b.WriteByte('[')
@@ -93,16 +64,8 @@ func sanitizeOpenAIResponsesReasoningEncryptedContent(ctx context.Context, provi
 	return sanitizeOpenAIResponsesReasoningEncryptedContentWithOptions(ctx, provider, body, false, false, metaSignatureForeign, signature.SignatureProviderUnknown, false)
 }
 
-func sanitizeOpenAIResponsesReasoningEncryptedContentDoc(ctx context.Context, provider string, doc *ojson.Doc) bool {
-	return sanitizeOpenAIResponsesReasoningEncryptedContentWithOptionsDoc(ctx, provider, doc, false, false, metaSignatureForeign, signature.SignatureProviderUnknown, false)
-}
-
 func sanitizeOpenAIResponsesReasoningEncryptedContentWithCompat(ctx context.Context, provider string, body []byte, isCompat bool) []byte {
 	return sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModel(ctx, provider, body, isCompat, "")
-}
-
-func sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatDoc(ctx context.Context, provider string, doc *ojson.Doc, isCompat bool) bool {
-	return sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelDoc(ctx, provider, doc, isCompat, "")
 }
 
 // sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModel is the
@@ -142,10 +105,6 @@ func sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModel(ctx context
 	return sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelAndBaseURL(ctx, provider, body, isCompat, targetModel, "")
 }
 
-func sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelDoc(ctx context.Context, provider string, doc *ojson.Doc, isCompat bool, targetModel string) bool {
-	return sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelAndBaseURLDoc(ctx, provider, doc, isCompat, targetModel, "")
-}
-
 func sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelAndBaseURL(ctx context.Context, provider string, body []byte, isCompat bool, targetModel string, baseURL string) []byte {
 	doc := ojson.NewDoc(body)
 	if !sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelAndBaseURLDoc(ctx, provider, doc, isCompat, targetModel, baseURL) {
@@ -169,10 +128,6 @@ func sanitizeOpenAIResponsesReasoningEncryptedContentWithCompatModelAndBaseURLDo
 
 func sanitizeOpenAIResponsesReasoningEncryptedContentKeepForeign(ctx context.Context, provider string, body []byte) []byte {
 	return sanitizeOpenAIResponsesReasoningEncryptedContentWithOptions(ctx, provider, body, false, true, metaSignatureForeign, signature.SignatureProviderUnknown, false)
-}
-
-func sanitizeOpenAIResponsesReasoningEncryptedContentKeepForeignDoc(ctx context.Context, provider string, doc *ojson.Doc) bool {
-	return sanitizeOpenAIResponsesReasoningEncryptedContentWithOptionsDoc(ctx, provider, doc, false, true, metaSignatureForeign, signature.SignatureProviderUnknown, false)
 }
 
 // sanitizeOpenAIResponsesReasoningEncryptedContentForMeta is the Meta-target
