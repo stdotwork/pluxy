@@ -1,0 +1,156 @@
+import { createHash } from 'node:crypto';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { readAppVersion, validateAppVersion } from './version.mjs';
+import { validateReleaseNotes } from './release-notes.mjs';
+
+export function portableUpdateManifestName(platform) {
+  const normalizedPlatform = String(platform).trim().toLowerCase();
+  if (!['windows', 'linux', 'darwin'].includes(normalizedPlatform)) {
+    throw new Error(`Unsupported update platform: ${platform}`);
+  }
+  // New macOS builds use a separate channel because the signed-bundle updater
+  // requires the newer update flow.
+  return normalizedPlatform === 'darwin'
+    ? 'portable-update-darwin-v2.json'
+    : `portable-update-${normalizedPlatform}.json`;
+}
+
+export function portableUpdateManifestNames(platform) {
+  const primaryName = portableUpdateManifestName(platform);
+  return primaryName === 'portable-update-darwin-v2.json'
+    ? [primaryName, 'portable-update-darwin.json']
+    : [primaryName];
+}
+
+export async function generatePortableUpdateManifest({
+  directory,
+  output,
+  platform = 'windows',
+  repository,
+  gitcodeRepository,
+  tag: rawTag,
+  version: requestedVersion,
+  publishedAt = new Date().toISOString(),
+  releaseNotes,
+}) {
+  const resolvedDirectory = resolve(directory ?? 'artifacts');
+  const platformSpecs = {
+    windows: { display: 'Windows', suffix: 'zip' },
+    linux: { display: 'Linux', suffix: 'tar.gz' },
+    darwin: { display: 'Darwin', suffix: 'dmg' },
+  };
+  const normalizedPlatform = String(platform).trim().toLowerCase();
+  const platformSpec = platformSpecs[normalizedPlatform];
+  if (!platformSpec) throw new Error(`Unsupported update platform: ${platform}`);
+  const resolvedOutput = resolve(output ?? join(
+    resolvedDirectory,
+    portableUpdateManifestName(normalizedPlatform),
+  ));
+  const resolvedRepository = repository ?? 'router-for-me/EasyCLIProxyAPI';
+  const resolvedGitcodeRepository = String(gitcodeRepository ?? '').trim();
+  const normalizedRawTag = String(rawTag ?? '').trim();
+  const isOnlyPreview = normalizedRawTag === 'only-preview';
+  const isPreviewChannel = isOnlyPreview || normalizedRawTag.startsWith('preview-');
+  const tag = isPreviewChannel
+    ? normalizedRawTag
+    : (normalizedRawTag.startsWith('v') ? normalizedRawTag : `v${normalizedRawTag}`);
+  const version = isPreviewChannel
+    ? (String(requestedVersion ?? '').trim() || await readAppVersion())
+    : tag.slice(1);
+  const packageTag = `v${version}`;
+
+  validateAppVersion(version, 'release tag');
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(resolvedRepository)) {
+    throw new Error(`Invalid GitHub repository: ${resolvedRepository}`);
+  }
+  if (resolvedGitcodeRepository
+    && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(resolvedGitcodeRepository)) {
+    throw new Error(`Invalid GitCode repository: ${resolvedGitcodeRepository}`);
+  }
+  if (Number.isNaN(Date.parse(publishedAt))) {
+    throw new Error(`Invalid publishedAt: ${publishedAt}`);
+  }
+  if (releaseNotes !== undefined) validateReleaseNotes(releaseNotes);
+
+  const assets = {};
+  for (const arch of ['amd64', 'aarch64']) {
+    const filename = `EasyCLIProxyAPI-${packageTag}-${platformSpec.display}-${arch}.${platformSpec.suffix}`;
+    const path = join(resolvedDirectory, filename);
+    const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
+    if (!metadata.isFile() || metadata.size === 0) {
+      throw new Error(`Portable release asset is empty or not a file: ${filename}`);
+    }
+    const asset = {
+      url: `https://github.com/${resolvedRepository}/releases/download/${tag}/${filename}`,
+      sha256: createHash('sha256').update(contents).digest('hex'),
+      sizeBytes: metadata.size,
+    };
+    if (resolvedGitcodeRepository && !isPreviewChannel) {
+      asset.fallbackUrls = [gitcodeReleaseAttachmentUrl(
+        resolvedGitcodeRepository,
+        tag,
+        filename,
+      )];
+    }
+    assets[`${normalizedPlatform}-${arch}`] = asset;
+  }
+
+  const manifest = {
+    schemaVersion: 1,
+    version,
+    publishedAt,
+    releaseUrl: `https://github.com/${resolvedRepository}/releases/tag/${tag}`,
+    ...(releaseNotes === undefined ? {} : { releaseNotes }),
+    assets,
+  };
+
+  await writeFile(resolvedOutput, `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
+}
+
+export function gitcodeReleaseAttachmentUrl(repository, tag, filename) {
+  const [owner, repo] = repository.split('/');
+  return `https://api.gitcode.com/api/v5/repos/${owner}/${repo}`
+    + `/releases/${tag}/attach_files/${filename}/download`;
+}
+
+async function main() {
+  const args = new Map();
+  for (let index = 2; index < process.argv.length; index += 2) {
+    args.set(process.argv[index], process.argv[index + 1]);
+  }
+  const directory = resolve(args.get('--directory') ?? 'artifacts');
+  const platform = args.get('--platform') ?? 'windows';
+  const requestedOutput = args.get('--output');
+  const outputs = requestedOutput
+    ? [resolve(requestedOutput)]
+    : portableUpdateManifestNames(platform).map((name) => join(directory, name));
+  const publishedAt = new Date().toISOString();
+  const releaseNotes = args.has('--release-notes')
+    ? JSON.parse(await readFile(resolve(args.get('--release-notes')), 'utf8'))
+    : undefined;
+  let manifest;
+  for (const output of outputs) {
+    manifest = await generatePortableUpdateManifest({
+      directory,
+      output,
+      platform,
+      repository: args.get('--repository'),
+      gitcodeRepository: args.get('--gitcode-repository'),
+      tag: args.get('--tag'),
+      version: args.get('--version'),
+      publishedAt,
+      releaseNotes,
+    });
+  }
+  console.log(
+    `Generated ${outputs.map((output) => basename(output)).join(', ')} for v${manifest.version}`,
+  );
+}
+
+const entryPoint = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : '';
+if (import.meta.url === entryPoint) {
+  await main();
+}

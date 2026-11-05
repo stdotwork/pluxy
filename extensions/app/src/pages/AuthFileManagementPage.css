@@ -1,0 +1,306 @@
+@layer components {
+.auth-files-page {
+  --auth-muted: var(--auth-file-muted);
+  --auth-text: var(--auth-file-text);
+  --auth-accent: var(--auth-file-accent);
+  --auth-border: var(--auth-file-border);
+  --auth-control: var(--auth-file-control);
+  --success-color: var(--auth-file-success-color);
+  gap: 12px;
+}
+.auth-files-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; min-height: 36px; }
+.auth-files-heading > div:first-child { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.auth-files-heading h2 { margin: 0; color: var(--auth-text); font-size: 16px; font-weight: 700; }
+.auth-files-heading p { margin: 0; color: var(--auth-muted); font-size: 12px; }
+.auth-files-heading-actions { display: flex; align-items: center; justify-content: flex-end; flex: 1 1 280px; flex-wrap: wrap; gap: 6px; }
+.auth-files-heading-actions > button { flex: none; width: auto; margin: 0; }
+.auth-files-page .auth-files-panel {
+  padding: 0;
+  min-height: 0;
+}
+.auth-files-page .auth-files-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 36px; margin-bottom: 4px; padding: 0; }
+.auth-files-search { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; max-width: 380px; color: var(--auth-text); background: var(--bg-card); border: 1px solid var(--auth-control); border-radius: var(--radius-md); padding: 0 10px; }
+.auth-files-search:focus-within { border-color: var(--auth-accent); }
+.auth-files-search > svg { flex: none; }
+.auth-files-page .auth-files-search input { width: 100%; min-width: 0; height: 32px; padding: 0; border: 0; outline: 0; box-shadow: none; background: transparent; color: var(--auth-text); font: inherit; font-size: 12px; }
+.auth-files-search input::placeholder { color: var(--auth-muted); }
+.auth-files-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.auth-card-tags-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+
+.auth-file-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.auth-tag-chip.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  padding: 2px 7px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 1.4;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  transition: all 0.15s ease;
+}
+
+.auth-tag-chip.filter-chip:hover {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+.auth-tag-chip.filter-chip.active {
+  border-color: var(--primary-color);
+  background: var(--bg-secondary);
+  color: var(--primary-color);
+  font-weight: var(--font-weight-medium);
+}
+
+.auth-active-tag-badge.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  height: 32px;
+  border: 1px solid var(--primary-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--primary-color);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-active-tag-badge.filter-chip:hover {
+  background: var(--bg-secondary);
+}
+
+.auth-files-page .auth-files-toolbar .auth-files-filters select { appearance: none; -webkit-appearance: none; width: auto; min-width: 0; max-width: 100%; height: 32px; padding: 0 30px 0 11px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); outline: 0; box-shadow: none; background-color: var(--color-surface); background-image: var(--select-arrow); background-repeat: no-repeat; background-position: right 9px center; background-size: 14px; color: var(--color-text-primary); font: inherit; font-size: 12px; font-weight: 650; line-height: 30px; cursor: pointer; }
+.auth-files-page .auth-files-toolbar .auth-files-filters select::-ms-expand { display: none; }
+.auth-files-page .auth-files-toolbar .auth-files-filters select:hover { border-color: var(--border-hover); }
+.auth-files-page .auth-files-toolbar .auth-files-filters select:focus,
+.auth-files-page .auth-files-toolbar .auth-files-filters select:focus-visible { border-color: var(--ui-accent); outline: 0; box-shadow: none; }
+.auth-file-table-scroll { min-width: 0; overflow: visible; padding: 0 0 2px; }
+.auth-file-list-head { display: none; }
+.auth-file-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); gap: 12px; align-items: stretch; min-width: 0; }
+.auth-file-card { display: flex; flex-direction: column; min-width: 0; padding: 12px 14px 10px; }
+.auth-credential-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "identity status" "plan plan" "recent recent" "usage usage" "quota quota" "actions actions"; align-items: start; gap: 8px 12px; min-height: 0; padding: 0; }
+.auth-list-cell { min-width: 0; }
+.auth-card-header { grid-area: identity; }
+.auth-list-plan { grid-area: plan; }
+.auth-list-status { grid-area: status; }
+.auth-list-recent { grid-area: recent; }
+.auth-list-usage { grid-area: usage; }
+.auth-list-quota { grid-area: quota; }
+.auth-card-actions { grid-area: actions; }
+/* Cards in one grid row share a height; keep their action rows on a common baseline. */
+.auth-file-card > .auth-credential-row { flex: 1 0 auto; grid-template-rows: auto auto auto auto 1fr auto; }
+/* An expanded cooldown list grows its card; do not stretch the neighbours' main rows with it. */
+.auth-file-card-grid:has(.auth-file-health-compact > details[open]) .auth-file-card > .auth-credential-row { flex: none; }
+/* Card layouts (components/CardLayout): only Even rows (the default) lines the action rows up across a row. */
+.auth-file-card-grid:not([data-layout='even']) .auth-file-card > .auth-credential-row { flex: none; }
+.auth-file-card-grid[data-layout='compact'] .auth-file-card { padding: 10px 12px; }
+/* Compact glance card: logo, name, plan and the lowest quota, with status; the rest opens from the toggle. */
+.auth-file-card[data-glance] > .auth-credential-row { grid-template-areas: "identity status"; grid-template-rows: auto; }
+.auth-file-card[data-glance] :is(.auth-list-plan, .auth-list-recent, .auth-list-usage, .auth-list-quota, .auth-card-actions, .auth-list-status small, .auth-card-filename, .auth-card-provider),
+.auth-file-card[data-glance] > :not(.auth-credential-row) { display: none; }
+.auth-file-card[data-glance] .auth-card-header .provider-logo { width: 28px; height: 28px; }
+.auth-file-card[data-glance] .auth-card-identity { gap: 4px; }
+.auth-card-glance-line { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--auth-muted); font-size: 12px; line-height: 18px; white-space: nowrap; }
+.auth-card-glance-line > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.auth-card-glance-line:empty { display: none; }
+.auth-card-glance-line > .auth-card-glance-plan { flex: none; max-width: 9em; text-transform: capitalize; }
+.auth-list-status .auth-card-glance-toggle { flex: none; width: auto; margin-top: 4px; }
+.auth-file-card[data-glance] .auth-list-status { flex-direction: row; align-items: center; gap: 6px; }
+.auth-file-card[data-glance] .auth-list-status .auth-card-glance-toggle { margin-top: 0; }
+.auth-file-card[data-glance] .auth-status-badge { padding: 1px 6px; font-size: 11px; }
+.auth-card-glance-toggle svg { transition: transform .15s ease; }
+.auth-card-glance-toggle[aria-expanded='true'] svg { transform: rotate(180deg); }
+.auth-files-toolbar .auth-files-layout-control { margin-left: auto; }
+/* The enable switch sits beside small buttons, so it uses their height instead of the 34px compact size. */
+.auth-list-main-actions .auth-card-toggle { min-height: auto; margin-top: 0; padding: 5px 10px; }
+.auth-card-header { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.auth-card-header .provider-logo { width: 35px; height: 35px; object-fit: contain; flex-shrink: 0; }
+[data-theme="dark"] .auth-card-header .provider-logo[data-provider="xai"] { filter: invert(1); }
+.auth-card-identity { min-width: 0; flex: 1; display: grid; gap: 5px; }
+.auth-card-identity strong { color: var(--auth-text); font-size: 14px; font-weight: 750; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-card-filename, .auth-card-provider { color: var(--auth-muted); font-size: 12px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-list-plan, .auth-list-status { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; }
+.auth-list-plan { flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 8px; text-align: left; }
+.auth-list-plan:not(:has(span, small)) { display: none; }
+.auth-list-status { align-items: flex-end; justify-self: end; text-align: right; gap: 2px; }
+.auth-list-plan > span { max-width: 100%; color: var(--auth-text); font-size: 13px; font-weight: 600; text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-list-plan small, .auth-list-status small { color: var(--auth-muted); font-size: 12px; line-height: 1.3; }
+.auth-list-status small { font-weight: 600; }
+.auth-status-badge { display: block; max-width: 100%; padding: 4px 9px; border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--auth-muted); font-size: 13px; line-height: 1.4; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-status-badge.success { color: var(--success-color); background: color-mix(in srgb, var(--success-color) 8%, var(--bg-card)); }
+.auth-status-badge.warning { color: var(--amber-text); background: color-mix(in srgb, var(--amber-text) 8%, var(--bg-card)); }
+.auth-status-badge.error { color: var(--failure-badge-text); background: color-mix(in srgb, var(--failure-badge-text) 7%, var(--bg-card)); }
+.auth-status-badge.info { color: var(--auth-accent); background: color-mix(in srgb, var(--auth-accent) 8%, var(--bg-card)); }
+.auth-status-badge.neutral { color: var(--auth-text); background: color-mix(in srgb, var(--auth-text) 8%, var(--bg-card)); }
+.auth-list-muted { color: var(--auth-muted); font-size: 12px; }
+.auth-list-recent, .auth-list-usage, .auth-list-quota { display: grid; gap: 4px; }
+.auth-list-recent::before, .auth-list-usage::before, .auth-list-quota::before { content: attr(data-label); color: var(--auth-text); font-size: 12px; font-weight: 700; line-height: 1.2; }
+.auth-list-recent .auth-file-requests { display: grid; grid-template-columns: max-content minmax(0, 1fr); grid-template-areas: "time bars" "empty empty"; align-items: center; gap: 4px 10px; }
+.auth-list-recent .auth-file-requests-latest { grid-area: time; color: var(--auth-muted); font-size: 12px; font-weight: 650; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.auth-list-recent .auth-file-requests-timeline { display: contents; }
+.auth-list-recent .auth-file-requests-chart { grid-area: bars; max-width: none; width: auto; min-width: 0; }
+.auth-list-recent .auth-file-requests-timeline > span { grid-area: empty; justify-self: start; color: var(--auth-muted); font-size: 12px; line-height: 1.4; }
+.auth-list-recent .auth-file-requests-blocks { gap: 2px; padding: 0; }
+.auth-list-recent .auth-file-request-block { height: 12px; border-radius: var(--radius-sm); }
+.auth-list-recent .auth-file-requests-timeline { gap: 5px; font-size: 11px; }
+.auth-list-recent .auth-file-requests-unavailable { grid-area: empty; justify-self: start; font-size: 12px; font-weight: 600; line-height: 1.4; text-align: left; color: var(--auth-text); }
+.auth-list-usage .auth-file-usage { color: var(--auth-text); }
+.auth-list-usage .auth-file-usage-metrics { grid-template-columns: repeat(auto-fit, minmax(92px, max-content)); grid-template-rows: none; gap: 4px 14px; justify-content: start; align-content: center; }
+.auth-list-usage .auth-file-usage-metric { gap: 5px; }
+.auth-list-usage .auth-file-usage-metric { min-height: 0; height: 20px; line-height: 1; }
+.auth-list-usage .auth-file-usage-metric svg { width: 12px; height: 12px; padding: 2px; }
+.auth-list-usage .auth-file-usage-metric svg { width: 12px; height: 12px; padding: 2px; border-radius: var(--radius-sm); }
+.auth-list-usage .auth-file-usage-metric.total svg { color: var(--auth-accent); background: color-mix(in srgb, var(--auth-accent) 9%, var(--bg-card)); }
+.auth-list-usage .auth-file-usage-metric strong { font-size: 13px; line-height: 1.2; font-weight: 750; }
+.auth-list-usage .auth-file-usage-scope { display: none; }
+.auth-card-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--auth-border); }
+.auth-list-icon-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: max-content; }
+.auth-list-icon-actions > button { flex: none; }
+.auth-list-main-actions { display: flex; align-items: center; justify-content: flex-end; flex: none; gap: 8px; margin-left: auto; padding-left: 0; border-left: 0; }
+.auth-list-details-button { min-width: 52px; }
+.auth-list-details { display: grid; gap: 12px; border-top: 1px solid var(--auth-border); padding: 12px 0; }
+.auth-list-details[hidden] { display: none; }
+.auth-list-details > .auth-file-requests-summary { max-width: 620px; }
+.auth-card-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--auth-muted); font-size: 11px; overflow-wrap: anywhere; }
+.auth-card-meta strong { flex-basis: 100%; color: var(--auth-text); font-weight: 500; }
+.auth-card-note { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12px; line-height: 1.5; }
+.auth-card-note > span { flex-shrink: 0; color: var(--auth-muted); }
+.auth-card-note p { min-width: 0; margin: 0; color: var(--auth-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.auth-file-card .auth-health-body, .auth-file-card .auth-health-summary { overflow-wrap: anywhere; }
+.auth-list-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; width: 100%; max-width: 100%; margin-left: auto; padding: 12px 0 0; color: var(--auth-muted); font-size: 12px; position: sticky; left: 0; }
+.auth-list-pagination > span { margin-right: auto; }
+.auth-list-pagination label { display: flex; align-items: center; gap: 6px; }
+.auth-list-pagination select { min-height: 30px; border: 1px solid var(--auth-border); border-radius: var(--radius-md); background: var(--bg-card); color: var(--auth-muted); padding: 3px 6px; font: inherit; }
+.credential-quota { padding: 0 0 0 20px; border: 0; border-left: 1px solid var(--border-color); border-radius: var(--radius-none); background: transparent; }
+.auth-detail-panels .credential-quota-rows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.auth-card-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-top: 14px; border-top: 1px solid var(--border-color); color: var(--auth-muted); font-size: 12px; overflow-wrap: anywhere; }
+.auth-card-meta strong { flex-basis: 100%; color: var(--text-secondary); font-weight: 400; }
+.auth-card-note { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12px; line-height: 1.6; }
+.auth-card-note > span { flex-shrink: 0; color: var(--auth-muted); }
+.auth-card-note p { min-width: 0; margin: 0; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.auth-file-card .auth-health-body, .auth-file-card .auth-health-summary { overflow-wrap: anywhere; }
+.auth-list-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--border-color); color: var(--auth-muted); font-size: 12px; }
+.auth-list-pagination > span { margin-right: auto; }
+.auth-list-pagination label { display: flex; align-items: center; gap: 8px; }
+.auth-list-pagination select { min-height: 32px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-card); color: var(--auth-muted); padding: 4px 8px; font: inherit; }
+.credential-quota { display: grid; gap: 12px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: color-mix(in srgb, var(--text-tertiary) 3%, var(--bg-card)); font-size: var(--font-size-meta); }
+.credential-quota-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.credential-quota-heading > strong { color: var(--text-secondary); font-size: var(--font-size-meta); font-weight: var(--font-weight-medium); }
+.credential-quota-plan { max-width: 100%; overflow-wrap: anywhere; padding: 2px 6px; border-radius: var(--radius-sm); font-size: var(--font-size-caption); background: var(--bg-secondary); color: var(--text-secondary); }
+.credential-quota-refresh { margin-left: auto; }
+.credential-quota-heading .credential-quota-reset { margin-left: auto; }
+.credential-quota-reset + .credential-quota-refresh { margin-left: 0; }
+.credential-quota-rows { display: grid; gap: 14px; }
+.credential-quota-row { --quota-color: var(--success-color); display: grid; gap: 5px; min-width: 0; }
+.credential-quota-row.medium { --quota-color: var(--amber-text); }
+.credential-quota-row.low { --quota-color: var(--failure-badge-text); }
+.credential-quota-label { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.credential-quota-label span { min-width: 0; overflow-wrap: anywhere; color: var(--text-secondary); }
+.credential-quota-label strong { flex-shrink: 0; font-variant-numeric: tabular-nums; font-size: var(--font-size-label); color: var(--quota-color); }
+.credential-quota-row.unknown strong { color: var(--text-tertiary); }
+.credential-quota-track { height: 6px; border-radius: var(--radius-sm); overflow: hidden; background: var(--border-color); }
+.credential-quota-track i { display: block; height: 100%; border-radius: inherit; background: var(--quota-color, var(--primary-color)); transition: width .25s ease; }
+.credential-quota-row.unknown .credential-quota-track { background: repeating-linear-gradient(115deg, var(--border-color) 0 4px, transparent 4px 8px); }
+.credential-quota small, .credential-quota-empty, .credential-quota-loading { font-size: var(--font-size-caption); line-height: 1.6; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.credential-quota-empty { margin: 0; }
+.auth-files-page .credential-quota-dense .credential-quota-empty { color: var(--auth-text); font-size: 12px; font-weight: 600; }
+.credential-quota-footnotes { display: grid; gap: 3px; }
+.credential-quota-footnotes:empty { display: none; }
+.credential-quota-error { display: grid; gap: 4px; color: var(--failure-badge-text); }
+.credential-quota-loading { display: grid; gap: 8px; }
+.credential-quota-track.indeterminate i { width: 35%; animation: credential-quota-pending 1.3s ease-in-out infinite alternate; }
+@keyframes credential-quota-pending { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .credential-quota-track.indeterminate i { animation: none; width: 100%; opacity: .3; } }
+
+
+@container credential-files (max-width: 1500px) {
+  .auth-file-table-scroll { overflow: visible; }
+  .auth-file-list-head { display: none; }
+  .auth-file-card-grid { min-width: 0; margin-top: 0; }
+  .auth-list-details-button { min-width: 48px; }
+}
+@container credential-files (max-width: 400px) {
+  .auth-files-search { flex-basis: 100%; max-width: none; }
+  .auth-files-filters { width: 100%; }
+  .auth-files-page .auth-files-toolbar .auth-files-filters select { flex: 1; width: 0; }
+  .auth-list-pagination > span { flex-basis: 100%; }
+  .auth-list-pagination label { margin-right: auto; }
+}
+@container workspace (max-width: 700px) {
+  .auth-files-heading { flex-wrap: wrap; }
+  .auth-files-heading-actions { margin-left: auto; }
+}
+
+/* Keep the quota column airy without the heavy framed inset used previously. */
+.auth-files-page .auth-list-quota {
+  min-width: 0;
+  padding: 2px 0 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.auth-files-page .auth-list-quota .credential-quota,
+.auth-files-page .auth-list-quota .credential-quota.credential-quota-compact,
+.auth-files-page .auth-list-quota .credential-quota.credential-quota-dense {
+  border: 0;
+  border-radius: var(--radius-none);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+.auth-files-page .credential-quota-dense {
+  width: 100%;
+  min-width: 0;
+  gap: 7px;
+}
+.auth-files-page .credential-quota-dense .credential-quota-rows {
+  width: 100%;
+  gap: 10px 18px;
+}
+.auth-files-page .credential-quota-dense .credential-quota-row {
+  min-width: 0;
+}
+.auth-files-page .credential-quota-dense .credential-quota-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.auth-files-page .credential-quota-dense .credential-quota-row:has(.credential-quota-row-detail) {
+  grid-column: 1 / -1;
+}
+.auth-files-page .credential-quota-dense .credential-quota-row-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.auth-files-page .auth-card-actions {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.auth-files-page .auth-list-icon-actions,
+.auth-files-page .auth-list-main-actions {
+  max-width: 100%;
+}
+
+}

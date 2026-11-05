@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "id": "aurora-dark",
+  "name": {
+    "zh-CN": "极光·暗色",
+    "zh-TW": "極光·暗色",
+    "ja": "オーロラ・ダーク",
+    "en": "Aurora Dark"
+  },
+  "description": {
+    "zh-CN": "深蓝夜空中的青绿极光",
+    "zh-TW": "深藍夜空中的青綠極光",
+    "ja": "夜空に揺らめく青緑のオーロラ",
+    "en": "Teal aurora over a deep blue night sky"
+  },
+  "appearance": "dark",
+  "windowBackground": "#0B1220",
+  "windowMaterial": "solid",
+  "backdrop": {
+    "layers": [
+      {
+        "kind": "radial",
+        "center": [
+          50,
+          22
+        ],
+        "size": [
+          90,
+          60
+        ],
+        "stops": [
+          {
+            "color": "#2DD4BF33",
+            "at": 0
+          },
+          {
+            "color": "#2DD4BF00",
+            "at": 100
+          }
+        ]
+      },
+      {
+        "kind": "linear",
+        "angle": 135,
+        "stops": [
+          {
+            "color": "#0B1220",
+            "at": 0
+          },
+          {
+            "color": "#101C2E",
+            "at": 55
+          },
+          {
+            "color": "#0E2A38",
+            "at": 100
+          }
+        ]
+      }
+    ],
+    "sidebar": "#08101C66",
+    "panel": "#16283D66",
+    "inset": "#7DD3FC14",
+    "hover": "#7DD3FC24",
+    "imagePosition": [
+      50,
+      50
+    ]
+  },
+  "tokens": {
+    "windowMaterialWorkspaceOpacity": "78%",
+    "windowMaterialSidebarOpacity": "64%",
+    "workspaceBackground": "#0B1220",
+    "surface": "#141E30",
+    "softSurface": "#1B2740",
+    "hoverBackground": "#223050",
+    "textPrimary": "#E8EEF7",
+    "textSecondary": "#C6D2E4",
+    "textTertiary": "#A9B8D0",
+    "textMuted": "#93A3BE",
+    "border": "#8FA8D626",
+    "borderSubtle": "#8FA8D614",
+    "borderStrong": "#5B6F94",
+    "borderHover": "#7FA0D4",
+    "panelShadow": "#02081426",
+    "accent": "#2DD4BF",
+    "accentStrong": "#5EEAD4",
+    "accentSoft": "#123A38",
+    "accentContrast": "#04201C",
+    "accentShadow": "#0B3B3426",
+    "focusRing": "#2DD4BF",
+    "meterLow": "#38BDF8",
+    "meterMedium": "#FBBF24",
+    "meterHigh": "#F87171",
+    "primaryButtonBackground": "#2DD4BF",
+    "primaryButtonHoverBackground": "#5EEAD4",
+    "primaryButtonText": "#04201C",
+    "primaryButtonBorder": "#2DD4BF00",
+    "primaryButtonHoverBorder": "#5EEAD400",
+    "controlActiveBackground": "#2DD4BF",
+    "controlActiveThumb": "#04201C",
+    "controlThumb": "#7FA0D4",
+    "sidebarBackground": "#0D1626",
+    "sidebarText": "#C6D2E4",
+    "sidebarTextStrong": "#E8EEF7",
+    "sidebarTextMuted": "#93A3BE",
+    "sidebarBorder": "#8FA8D61F",
+    "sidebarHover": "#1B2740",
+    "sidebarSelected": "#1E3247",
+    "sidebarSelectedBorder": "#2DD4BF3D",
+    "sidebarSelectedShadow": "#02081426",
+    "popoverBackground": "#141E30",
+    "overlaySoftSurface": "#1B2740",
+    "overlayHoverBackground": "#223050",
+    "scrim": "#02061480",
+    "radiusSmall": "6px",
+    "radiusMedium": "10px",
+    "radiusLarge": "14px",
+    "radiusFull": "9999px",
+    "controlBorderWidth": "1px",
+    "cardBorderWidth": "1px",
+    "shadowExtraSmall": "0 1px 2px #02081433",
+    "shadowSmall": "0 2px 4px #02081433, 0 1px 2px rgba(2, 8, 20, 0.16)",
+    "shadowMedium": "0 4px 12px #02081440, 0 2px 4px rgba(2, 8, 20, 0.2)",
+    "shadowLarge": "0 12px 32px #0208144D, 0 4px 8px rgba(2, 8, 20, 0.24)",
+    "shadowPopover": "0 8px 24px #02081459, 0 0 0 1px rgba(143, 168, 214, 0.1)",
+    "shadowDialog": "0 24px 64px #02081466, 0 0 0 1px rgba(143, 168, 214, 0.12)",
+    "shadowSpotlight": "0 0 0 1px rgba(45, 212, 191, 0.35), 0 0 24px rgba(45, 212, 191, 0.25)"
+  }
+}

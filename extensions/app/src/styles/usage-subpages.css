@@ -1,0 +1,326 @@
+/* Shared surfaces for usage subpages; the overview keeps its own chart palette. */
+.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']):not([aria-labelledby='usage-tab-live-routing']),
+.usage-price-sync-dialog,
+.usage-column-dialog {
+  --usage-page-text: var(--usage-subpage-text);
+  --usage-page-muted: var(--usage-subpage-muted);
+  --usage-page-border: var(--usage-subpage-border);
+  --text-primary: var(--usage-page-text);
+  --text-secondary: var(--usage-page-text);
+  --text-tertiary: var(--usage-page-muted);
+  --text-quaternary: var(--usage-page-muted);
+  --border-secondary: var(--usage-page-border);
+  --border-color: var(--usage-page-border);
+  --workspace-button-secondary-text: var(--usage-page-text);
+  --workspace-button-secondary-border: var(--usage-error-copy-border);
+  --workspace-icon-button-quiet-color: var(--usage-page-text);
+  --icon-button-quiet-border: var(--usage-error-copy-border);
+  color: var(--usage-page-text);
+}
+
+.usage-price-sync-dialog {
+  background: var(--bg-card);
+  border-color: var(--usage-page-border);
+  color: var(--usage-page-text);
+  box-shadow: var(--usage-price-sync-shadow);
+}
+
+.usage-records-page .usage-tab-panel .usage-pricing-table :is(th, td) {
+  background: var(--bg-card);
+  color: var(--usage-page-text);
+  border-bottom-color: var(--usage-page-border);
+}
+
+.usage-records-page .usage-tab-panel .usage-pricing-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.usage-records-page .usage-tab-panel .usage-pricing-table th {
+  font-weight: 650;
+}
+
+.usage-records-page .usage-tab-panel .usage-pricing-table :is(th, td:first-child) {
+  background: var(--theme-sticky-background, var(--bg-card));
+}
+
+.usage-records-page .usage-tab-panel .usage-pricing-table tbody tr:hover td:first-child {
+  background: var(--theme-sticky-hover-background, var(--bg-hover));
+}
+
+:root .usage-records-page .usage-tab-panel .usage-request-log {
+  --usage-log-text: var(--usage-page-text);
+  --usage-log-muted: var(--usage-page-muted);
+  --usage-log-line: var(--usage-page-border);
+}
+
+.usage-records-page .usage-tab-panel .usage-data-management-heading h2,
+.usage-records-page .usage-tab-panel .usage-data-management-action strong {
+  color: var(--usage-page-text);
+}
+
+.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) :is(
+  input:not([type='checkbox']):not([type='radio']), select,
+  .usage-price-row-actions button, .secondary-button
+),
+:root .app-dialog.usage-price-sync-dialog :is(input:not([type='checkbox']):not([type='radio']), .secondary-button),
+:root .app-dialog.usage-column-dialog :is(input:not([type='checkbox']):not([type='radio']), select, .secondary-button) {
+  background: var(--bg-card);
+  color: var(--usage-page-text);
+  border-color: var(--usage-page-border);
+}
+
+.usage-records-page .usage-tab-panel:not([aria-labelledby='usage-tab-overview']) input::placeholder,
+.usage-price-sync-dialog input::placeholder,
+.usage-column-dialog input::placeholder {
+  color: var(--usage-page-muted);
+  opacity: 1;
+}
+
+.usage-records-page .usage-tab-panel .usage-price-row-actions button:hover {
+  background: var(--bg-hover);
+}
+
+/* One fixed-width control per filter. The menu fills the outer field. */
+.usage-records-page .usage-filter-item {
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.usage-records-page .usage-filter-item .select-menu,
+.usage-records-page .usage-filter-item .select-menu-trigger {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.usage-records-page .usage-filter-item .select-menu-trigger {
+  grid-template-columns: minmax(0, 1fr) 16px;
+  padding: 0 10px 0 12px;
+}
+
+.usage-records-page .usage-filter-item .select-menu-trigger:hover:not(:disabled),
+.usage-records-page .usage-filter-item .select-menu.open .select-menu-trigger {
+  border-color: transparent;
+  background: transparent;
+}
+
+.usage-records-page .usage-filter-item select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 20px 0 0;
+  background-color: transparent;
+  color: var(--text-primary);
+  color-scheme: inherit;
+}
+
+.usage-records-page .usage-filter-item select option,
+.usage-records-page .usage-filter-item select optgroup {
+  background-color: var(--theme-overlay-surface, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+/* Request log reads as separate rounded cards, matching the reference layout. */
+.usage-records-page .usage-request-log {
+  --usage-log-canvas: transparent;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-none);
+  background: transparent;
+  box-shadow: none;
+}
+
+.usage-records-page .usage-request-log .usage-table-wrap,
+.usage-records-page .usage-request-log .usage-table-top-scrollbar {
+  background: transparent;
+}
+
+.usage-records-page .usage-request-log .usage-events-table {
+  border-collapse: separate;
+  border-spacing: 0 10px;
+  margin-top: -10px;
+}
+
+.usage-records-page .usage-request-log .usage-events-table th,
+.usage-records-page .usage-request-log .usage-events-table th .usage-th-content {
+  height: 44px;
+}
+
+.usage-records-page .usage-request-log .usage-events-table th {
+  position: sticky;
+  top: 0;
+  border: 0;
+  background: var(--theme-sticky-background, var(--bg-card));
+  color: var(--usage-th-color);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: .01em;
+  box-shadow: none;
+}
+
+.usage-records-page .usage-request-log .usage-events-table th .usage-th-content {
+  justify-content: center;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.usage-records-page .usage-request-log .usage-events-table :is(th, td),
+.usage-records-page .usage-request-log .usage-events-table :is(th, td).align-left {
+  text-align: center;
+}
+
+.usage-records-page .usage-request-log .usage-events-table thead th:first-child {
+  border-radius: var(--radius-lg) var(--radius-none) var(--radius-none) var(--radius-lg);
+}
+
+.usage-records-page .usage-request-log .usage-events-table thead th:last-child {
+  border-radius: var(--radius-none) var(--radius-lg) var(--radius-lg) var(--radius-none);
+}
+
+.usage-records-page .usage-request-log.usage-events-errors-expanded .usage-events-table td {
+  height: auto;
+  min-height: 78px;
+}
+
+.usage-records-page .usage-request-log .usage-events-table td {
+  height: 78px;
+  vertical-align: middle;
+  padding: 14px 16px;
+  border: 0;
+  background: var(--bg-card);
+  color: var(--usage-log-text);
+  box-shadow: inset 0 -1px 0 var(--usage-log-line);
+}
+
+.usage-records-page .usage-request-log .usage-latency-cell {
+  vertical-align: middle;
+}
+
+.usage-records-page .usage-request-log .usage-events-table .usage-event-error-row > td {
+  height: auto;
+  min-height: 0;
+  padding: 0 16px 12px;
+  text-align: left;
+}
+
+body.table-col-resizing .usage-records-page .usage-request-log .usage-events-table tbody tr {
+  pointer-events: none;
+}
+
+.usage-records-page .usage-request-log .usage-events-table tbody td:first-child {
+  border-radius: var(--radius-lg) var(--radius-none) var(--radius-none) var(--radius-lg);
+}
+
+.usage-records-page .usage-request-log .usage-events-table tbody td:last-child {
+  border-radius: var(--radius-none) var(--radius-lg) var(--radius-lg) var(--radius-none);
+}
+
+.usage-records-page .usage-request-log .usage-events-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.usage-records-page .usage-request-log .usage-th-total,
+.usage-records-page .usage-request-log .usage-td-total {
+  border-left: 0;
+}
+
+.usage-records-page .usage-request-log .usage-events-footer {
+  min-height: 48px;
+  margin-top: 2px;
+  padding: 8px 4px 2px;
+  border: 0;
+  border-radius: var(--radius-none);
+  background: transparent;
+}
+
+.usage-records-page .usage-request-log .usage-events-table td strong {
+  color: var(--usage-page-text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.usage-records-page .usage-request-log .usage-events-table td small {
+  line-height: 1.4;
+}
+
+.usage-records-page .usage-request-log .usage-model-badges > .usage-model-effort,
+.usage-records-page .usage-request-log .usage-access-type {
+  width: fit-content;
+  max-width: 100%;
+  margin: 5px auto 0;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--ui-accent) 24%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.usage-records-page .usage-request-log .usage-model-badges > .usage-model-effort,
+.usage-records-page .usage-request-log .usage-model-badges > .usage-model-fast {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.usage-records-page .usage-request-log .usage-access-type {
+  margin-top: 4px;
+}
+
+.usage-records-page .usage-request-log .usage-result {
+  display: flex;
+  width: fit-content;
+  margin-inline: auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.usage-records-page .usage-request-log .usage-result-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+}
+
+.usage-records-page .usage-request-log .usage-result.success {
+  border-color: var(--usage-log-result-success-border);
+  background: var(--usage-log-result-success-bg);
+  color: var(--success-badge-text);
+}
+
+.usage-records-page .usage-request-log .usage-result.failed {
+  background: var(--failure-badge-bg);
+  color: var(--failure-badge-text);
+}
+
+.usage-records-page .usage-request-log .usage-result.canceled {
+  background: var(--bg-tertiary);
+  color: var(--usage-page-muted);
+}
+
+.usage-records-page .usage-request-log .usage-event-metrics {
+  justify-content: center;
+  font-weight: 650;
+}
+
+.usage-records-page .usage-request-log .usage-event-metrics {
+  gap: 2px 7px;
+  margin-top: 2px;
+}
+
+.usage-records-page .usage-request-log.usage-events-compact .usage-cache-write {
+  display: none;
+}
+
+

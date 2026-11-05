@@ -1,0 +1,48 @@
+{
+  "name": "cpa-gui",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc && vite build",
+    "check": "tsc --noEmit",
+    "preview": "vite preview",
+    "test:ui:windows-titlebar": "node tests/windows-titlebar-ui.cjs",
+    "test:ui:accessibility": "node tests/app-shell-accessibility-ui.cjs",
+    "test:ui:api-provider-dialog": "node tests/api-provider-dialog-layout-ui.cjs",
+    "test:ui:api-access-layout": "node tests/api-access-layout-ui.cjs",
+    "test:ui:responsive": "node tests/responsive-layout-ui.cjs",
+    "test:ui:refinements": "node tests/ui-refinements-ui.cjs",
+    "test:ui:settings": "node tests/config-settings-ui.cjs",
+    "test:ui:browser-mock": "node tests/browser-mock-ui.cjs",
+    "test:ui:remote-core": "node tests/remote-core-ui.cjs",
+    "test:ui:agent-environment": "node tests/agent-environment-directory-ui.cjs",
+    "test:desktop:agent-environment": "node tests/agent-environment-desktop.cjs",
+    "test:ui:credential-tags": "node tests/credential-tags-ui.cjs",
+    "screenshots": "node scripts/capture-readme-screenshots.cjs",
+    "theme:schema": "bun scripts/theme-schema.mjs",
+    "sync:kernel-version": "node scripts/update-bundled-core.mjs",
+    "check:kernel-version": "node scripts/update-bundled-core.mjs --check",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-dialog": "2.8.3",
+    "lucide-react": "^1.24.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.3",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
+  }
+}

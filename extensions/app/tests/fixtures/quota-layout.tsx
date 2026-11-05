@@ -1,0 +1,54 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { I18nProvider } from '../../src/i18n';
+import { QuotaCard } from '../../src/pages/QuotaPage';
+import { parseAnthropicResetGrantStatus } from '../../src/services/claudeResetGrants';
+import { AuthFileQuotaPanel } from '../../src/components/AuthFileQuotaPanel';
+import { quotaRowsFor } from '../../src/services/quotaService';
+import '../../src/styles/index.css';
+
+localStorage.setItem('easy-cli-proxy-api.locale', 'en');
+const rows = quotaRowsFor('kimi', {
+  limits: [{ window: { duration: 5, timeUnit: 'TIME_UNIT_HOUR' }, detail: { limit: 100, remaining: 80 } }],
+  usage: { limit: 100, remaining: 60 },
+  usages: {
+    limit_month_total: { used_ratio: 0.2529, reset_time: '2099-10-22T00:00:00Z' },
+    limit_month_code: { used_ratio: 0.6, reset_time: '2099-10-23T00:00:00Z' },
+  },
+});
+
+const claudeFile = { name: 'claude.json', provider: 'claude', auth_index: 'claude-fixture' };
+const claudeQuota = { status: 'success' as const, rows, resetCredits: 2, claudeResetGrants: parseAnthropicResetGrantStatus({ eligible: true, at_limit: true, grants: [{ id: 'reserve', resets_total: 2, resets_left: 2, usable_now: true }] })! };
+
+createRoot(document.getElementById('root')!).render(
+  <I18nProvider>
+    <main className="content" style={{ width: 1100, padding: 0 }}>
+      <section className="page quota-page">
+        <div className="real-quota-grid">
+          {[1, 2, 3, 4, 5, 6].map((id) => <QuotaCard key={id} file={{ name: `kimi-${id}-long-credential-name@example.com.json`, provider: 'kimi' }} quota={{ status: 'success', rows }} onRefresh={() => {}} />)}
+        </div>
+        <div className="real-quota-grid">
+          <QuotaCard file={{ name: 'antigravity-example@gmail.com.json', provider: 'antigravity' }} quota={{ status: 'success', plan: 'Pro', rows: quotaRowsFor('antigravity', { groups: [
+            { displayName: 'Gemini Models', description: 'Models within this group: Gemini Flash, Gemini Pro, Gemini Argon', buckets: [
+              { displayName: 'Five Hour Limit Remaining', remainingFraction: 1, resetTime: new Date(Date.now() + 17640000).toISOString() },
+              { displayName: 'Weekly Limit Remaining', remainingFraction: 0.98, resetTime: new Date(Date.now() + 460800000).toISOString() },
+            ] },
+            { displayName: 'Claude and GPT Models', description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS', buckets: [
+              { displayName: 'Five Hour Limit Remaining', remainingFraction: 1, resetTime: new Date(Date.now() + 17640000).toISOString() },
+              { displayName: 'Weekly Limit Remaining', remainingFraction: 1, resetTime: new Date(Date.now() + 601200000).toISOString() },
+            ] },
+            { displayName: 'Gemini 4 Argon', description: 'For paid Pro plans, Argon quota is separate. Higher Argon quota (included as part of the larger Gemini quota bucket) is available on Ultra plans.', buckets: [
+              { displayName: 'Weekly Limit Remaining', remainingFraction: 1, resetTime: new Date(Date.now() + 601200000).toISOString() },
+            ] },
+          ] }) }} onRefresh={() => {}} />
+          <QuotaCard file={{ name: 'codex.json', provider: 'codex' }} quota={{ status: 'success', rows, resetCredits: 2, resetCreditsApplicable: 2, plan: 'team', subscriptionActiveUntil: '2030-10-17T13:58:00Z', resetCreditExpiries: ['2030-10-23T05:10:00Z', '2030-11-23T05:10:00Z'] }} onRefresh={() => {}} onReset={() => {}} />
+          <QuotaCard file={claudeFile} quota={claudeQuota} onRefresh={() => {}} onReset={() => {}} />
+          <QuotaCard file={{ name: 'failed.json', provider: 'kimi' }} quota={{ status: 'error', rows: [], error: 'Quota request failed' }} onRefresh={() => {}} />
+          <QuotaCard file={{ name: 'loading.json', provider: 'kimi' }} quota={{ status: 'loading', rows: [] }} onRefresh={() => {}} />
+          <QuotaCard file={{ name: 'idle.json', provider: 'kimi' }} quota={{ status: 'idle', rows: [] }} onRefresh={() => {}} />
+        </div>
+        <AuthFileQuotaPanel file={claudeFile} quota={claudeQuota} disabled={false} compact dense onRefresh={() => {}} onReset={() => {}} />
+      </section>
+    </main>
+  </I18nProvider>,
+);

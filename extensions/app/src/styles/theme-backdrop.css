@@ -1,0 +1,27 @@
+:root[data-theme-backdrop] #root {
+  background: var(--theme-backdrop-image) center / 100% 100% no-repeat var(--theme-backdrop-color);
+}
+
+:root[data-theme-backdrop='image'] #root {
+  background-size: cover;
+  background-position: var(--theme-backdrop-position, center);
+  background-repeat: no-repeat;
+}
+
+:root[data-theme-backdrop] :is(.immersive-window, .app-shell, .workspace),
+:root[data-theme-backdrop] .workspace .content {
+  background: transparent;
+}
+
+:root[data-theme-backdrop] .sidebar {
+  background: var(--theme-backdrop-sidebar);
+}
+
+:root[data-theme-backdrop='image'] .sidebar {
+  -webkit-backdrop-filter: blur(12px) saturate(1.15);
+  backdrop-filter: blur(12px) saturate(1.15);
+}
+
+:root[data-theme-backdrop] .immersive-window .window-titlebar {
+  background: var(--theme-backdrop-panel);
+}

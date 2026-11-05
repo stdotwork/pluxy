@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Binary controls fixture</title></head>
+<body><div id="root" class="workspace"></div><script type="module">
+import React, { useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Switch } from '/src/components/Switch.tsx';
+import { Checkbox } from '/src/components/Checkbox.tsx';
+import { ProviderField, ProviderErrorRules, ProviderModelFields } from '/src/components/ProviderTemplateFields.tsx';
+import { I18nProvider } from '/src/i18n/index.tsx';
+import '/src/styles/index.css';
+const h = React.createElement;
+function Fixture() {
+  const [checked, setChecked] = useState(false);
+  const [mixed, setMixed] = useState(true);
+  const [value, setValue] = useState({});
+  const onChange = event => { window.binaryEvent = { checked: event.currentTarget.checked, type: event.currentTarget.type }; setChecked(event.currentTarget.checked); };
+  return h(React.Fragment, null,
+    h(Switch, { id: 'setting', label: 'Setting', checked, onChange, invalid: true, 'aria-describedby': 'hint' }),
+    h('p', { id: 'hint' }, 'Setting description'),
+    h(Switch, { label: 'Locked', checked: true, onChange, disabled: true }),
+    h(Switch, { label: 'Controlled', checked: false, onChange: event => { window.rejected = event.currentTarget.checked; } }),
+    h(Checkbox, { label: 'Selection', checked, indeterminate: mixed, invalid: true, onChange: event => { onChange(event); setMixed(false); } }),
+    h(Checkbox, { label: 'Locked selection', checked: false, disabled: true, onChange }),
+    h(Checkbox, { label: 'Controlled mixed', checked: false, indeterminate: true, onChange: () => {} }),
+    h(Checkbox, { label: 'Controlled selection', checked: false, onChange: event => { window.rejected = event.currentTarget.checked; } }),
+    h('div', { id: 'provider-fields' },
+      h(ProviderField, { value, onChange: setValue, field: 'max-context-length', kind: 'number', label: 'context', initial: 0 }),
+      h(ProviderErrorRules, { value, onChange: setValue, inherited: [{ status: 429, action: 'stop' }] }),
+      h(ProviderModelFields, { value, onChange: setValue, section: 'openai-compatibility' })),
+    h('output', { id: 'value' }, JSON.stringify(value)),
+    h('div', { id: 'samples' }, ...[false,true].flatMap(fast => [false,true].flatMap(checked => [false,true].map(disabled => h(Switch, { key: `${fast}-${checked}-${disabled}`, checked, disabled, size: fast ? 'sm' : 'md', className: fast ? 'thinking-fast-switch' : undefined, onChange: () => {} }))))));
+}
+createRoot(document.getElementById('root')).render(h(I18nProvider, null, h(Fixture)));
+</script></body>
+</html>
