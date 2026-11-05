@@ -86,16 +86,16 @@ func BenchmarkManagerPickNext500(b *testing.B) {
 	ctx := context.Background()
 	opts := cliproxyexecutor.Options{}
 	tried := map[string]struct{}{}
-	if _, _, errWarm := manager.pickNext(ctx, "gemini", model, opts, tried); errWarm != nil {
-		b.Fatalf("warmup pickNext error = %v", errWarm)
+	if _, _, _, errWarm := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried); errWarm != nil {
+		b.Fatalf("warmup pickNextMixed error = %v", errWarm)
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		auth, exec, errPick := manager.pickNext(ctx, "gemini", model, opts, tried)
+		auth, exec, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried)
 		if errPick != nil || auth == nil || exec == nil {
-			b.Fatalf("pickNext failed: auth=%v exec=%v err=%v", auth, exec, errPick)
+			b.Fatalf("pickNextMixed failed: auth=%v exec=%v err=%v", auth, exec, errPick)
 		}
 	}
 }
@@ -105,16 +105,16 @@ func BenchmarkManagerPickNext1000(b *testing.B) {
 	ctx := context.Background()
 	opts := cliproxyexecutor.Options{}
 	tried := map[string]struct{}{}
-	if _, _, errWarm := manager.pickNext(ctx, "gemini", model, opts, tried); errWarm != nil {
-		b.Fatalf("warmup pickNext error = %v", errWarm)
+	if _, _, _, errWarm := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried); errWarm != nil {
+		b.Fatalf("warmup pickNextMixed error = %v", errWarm)
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		auth, exec, errPick := manager.pickNext(ctx, "gemini", model, opts, tried)
+		auth, exec, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried)
 		if errPick != nil || auth == nil || exec == nil {
-			b.Fatalf("pickNext failed: auth=%v exec=%v err=%v", auth, exec, errPick)
+			b.Fatalf("pickNextMixed failed: auth=%v exec=%v err=%v", auth, exec, errPick)
 		}
 	}
 }
@@ -124,16 +124,16 @@ func BenchmarkManagerPickNextPriority500(b *testing.B) {
 	ctx := context.Background()
 	opts := cliproxyexecutor.Options{}
 	tried := map[string]struct{}{}
-	if _, _, errWarm := manager.pickNext(ctx, "gemini", model, opts, tried); errWarm != nil {
-		b.Fatalf("warmup pickNext error = %v", errWarm)
+	if _, _, _, errWarm := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried); errWarm != nil {
+		b.Fatalf("warmup pickNextMixed error = %v", errWarm)
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		auth, exec, errPick := manager.pickNext(ctx, "gemini", model, opts, tried)
+		auth, exec, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried)
 		if errPick != nil || auth == nil || exec == nil {
-			b.Fatalf("pickNext failed: auth=%v exec=%v err=%v", auth, exec, errPick)
+			b.Fatalf("pickNextMixed failed: auth=%v exec=%v err=%v", auth, exec, errPick)
 		}
 	}
 }
@@ -143,16 +143,16 @@ func BenchmarkManagerPickNextPriority1000(b *testing.B) {
 	ctx := context.Background()
 	opts := cliproxyexecutor.Options{}
 	tried := map[string]struct{}{}
-	if _, _, errWarm := manager.pickNext(ctx, "gemini", model, opts, tried); errWarm != nil {
-		b.Fatalf("warmup pickNext error = %v", errWarm)
+	if _, _, _, errWarm := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried); errWarm != nil {
+		b.Fatalf("warmup pickNextMixed error = %v", errWarm)
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		auth, exec, errPick := manager.pickNext(ctx, "gemini", model, opts, tried)
+		auth, exec, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried)
 		if errPick != nil || auth == nil || exec == nil {
-			b.Fatalf("pickNext failed: auth=%v exec=%v err=%v", auth, exec, errPick)
+			b.Fatalf("pickNextMixed failed: auth=%v exec=%v err=%v", auth, exec, errPick)
 		}
 	}
 }
@@ -200,16 +200,16 @@ func BenchmarkManagerPickNextAndMarkResult1000(b *testing.B) {
 	ctx := context.Background()
 	opts := cliproxyexecutor.Options{}
 	tried := map[string]struct{}{}
-	if _, _, errWarm := manager.pickNext(ctx, "gemini", model, opts, tried); errWarm != nil {
-		b.Fatalf("warmup pickNext error = %v", errWarm)
+	if _, _, _, errWarm := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried); errWarm != nil {
+		b.Fatalf("warmup pickNextMixed error = %v", errWarm)
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		auth, _, errPick := manager.pickNext(ctx, "gemini", model, opts, tried)
+		auth, _, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried)
 		if errPick != nil || auth == nil {
-			b.Fatalf("pickNext failed: auth=%v err=%v", auth, errPick)
+			b.Fatalf("pickNextMixed failed: auth=%v err=%v", auth, errPick)
 		}
 		manager.MarkResult(ctx, Result{AuthID: auth.ID, Provider: "gemini", Model: model, Success: true})
 	}
