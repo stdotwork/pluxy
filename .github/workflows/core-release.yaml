@@ -1,10 +1,10 @@
-name: release
+name: Core release
 
 on:
   push:
     # run only against tags
     tags:
-      - '*'
+      - 'core-v*'
 
 permissions:
   contents: write
@@ -12,6 +12,10 @@ permissions:
 env:
   GH_REPO: ${{ github.repository }}
   GO_VERSION: '1.26.10'
+
+defaults:
+  run:
+    working-directory: core
 
 jobs:
   prepare-release:
@@ -49,14 +53,14 @@ jobs:
 
           git fetch --force --tags
           previous_tag=""
-          if previous_tag_value="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null)"; then
+          if previous_tag_value="$(git describe --tags --match 'core-v*' --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null)"; then
             previous_tag="$previous_tag_value"
             changelog_range="${previous_tag}..${GITHUB_REF_NAME}"
           else
             changelog_range="$GITHUB_REF_NAME"
           fi
 
-          git log --reverse --pretty=format:'- %s (%h)' "$changelog_range" |
+          git log --reverse --pretty=format:'- %s (%h)' "$changelog_range" -- . |
             grep -Ev '^- (docs:|test:)' > "$changelog_entries_file" || true
 
           gh api "repos/${GH_REPO}/releases/generate-notes" \
@@ -131,6 +135,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: core/go.sum
       - name: Refresh models catalog
         shell: bash
         run: bash .github/scripts/refresh-model-catalogs.sh
@@ -142,7 +147,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ hashFiles('go.sum') }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ hashFiles('core/go.sum') }}
           restore-keys: |
             go-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-
             go-${{ runner.os }}-${{ runner.arch }}-
@@ -150,7 +155,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${GITHUB_REF_NAME#core-v}" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build archive
@@ -186,7 +191,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/CLIProxyAPI_*
+          path: core/dist/CLIProxyAPI_*
           if-no-files-found: error
       - name: Upload release assets
         shell: bash
@@ -258,6 +263,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: core/go.sum
       - name: Refresh models catalog
         shell: bash
         run: bash .github/scripts/refresh-model-catalogs.sh
@@ -268,7 +274,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${GITHUB_REF_NAME#core-v}" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build archive
@@ -322,7 +328,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/CLIProxyAPI_*
+          path: core/dist/CLIProxyAPI_*
           if-no-files-found: error
       - name: Upload release assets
         shell: bash
@@ -390,6 +396,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: core/go.sum
       - name: Refresh models catalog
         shell: bash
         run: bash .github/scripts/refresh-model-catalogs.sh
@@ -401,7 +408,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-linux-no-plugin-${{ matrix.goarch }}-${{ hashFiles('go.sum') }}
+          key: go-linux-no-plugin-${{ matrix.goarch }}-${{ hashFiles('core/go.sum') }}
           restore-keys: |
             go-linux-no-plugin-${{ matrix.goarch }}-
             go-linux-no-plugin-
@@ -409,7 +416,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "RELEASE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${GITHUB_REF_NAME#core-v}" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
       - name: Build archive
@@ -441,7 +448,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/CLIProxyAPI_*
+          path: core/dist/CLIProxyAPI_*
           if-no-files-found: error
       - name: Upload release assets
         shell: bash
@@ -518,6 +525,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: core/go.sum
       - name: Refresh models catalog
         run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Fetch tags
@@ -527,7 +535,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-freebsd-${{ matrix.goarch }}-${{ hashFiles('go.sum') }}
+          key: go-freebsd-${{ matrix.goarch }}-${{ hashFiles('core/go.sum') }}
           restore-keys: |
             go-freebsd-${{ matrix.goarch }}-
             go-freebsd-
@@ -535,7 +543,7 @@ jobs:
         id: metadata
         run: |
           set -euo pipefail
-          release_version="${GITHUB_REF_NAME#v}"
+          release_version="${GITHUB_REF_NAME#core-v}"
           commit="$(git rev-parse --short HEAD)"
           build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "RELEASE_VERSION=$release_version" >> "$GITHUB_ENV"
@@ -642,7 +650,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: dist/CLIProxyAPI_*
+          path: core/dist/CLIProxyAPI_*
           if-no-files-found: error
       - name: Upload release assets
         shell: bash
@@ -699,7 +707,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: dist
+          path: core/dist
           merge-multiple: true
       - name: Publish final checksums
         env:

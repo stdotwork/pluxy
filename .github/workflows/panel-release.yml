@@ -1,9 +1,13 @@
-name: Build and Release
+name: Panel release
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'panel-v*'
+
+defaults:
+  run:
+    working-directory: extensions/panel
 
 jobs:
   build-and-release:
@@ -32,10 +36,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Resolve panel version
+        run: echo "VERSION=${GITHUB_REF_NAME#panel-}" >> "$GITHUB_ENV"
+
       - name: Build all-in-one HTML
         run: bun run build
-        env:
-          VERSION: ${{ github.ref_name }}
 
       - name: Prepare release assets
         run: |
@@ -47,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           current_tag="${GITHUB_REF_NAME}"
-          previous_tag="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${current_tag}$" | head -n 1 || true)"
+          previous_tag="$(git tag --list 'panel-v*' --sort=-v:refname | grep -v "^${current_tag}$" | head -n 1 || true)"
           if [ -n "${previous_tag}" ]; then
             range="${previous_tag}..${current_tag}"
           else
@@ -55,13 +60,13 @@ jobs:
           fi
 
           : > release-notes.md
-          git log --pretty=format:"- %h %s" "${range}" >> release-notes.md
+          git log --pretty=format:"- %h %s" "${range}" -- . >> release-notes.md
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: dist/management.html
-          body_path: release-notes.md
+          files: extensions/panel/dist/management.html
+          body_path: extensions/panel/release-notes.md
           draft: false
           prerelease: false
         env:

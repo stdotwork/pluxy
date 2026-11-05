@@ -1,10 +1,17 @@
-name: pr-test-build
+name: Core PR build
 
 on:
   pull_request:
+    paths:
+      - 'core/**'
+      - '.github/workflows/core-pr-test-build.yml'
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    working-directory: core
 
 jobs:
   build:
@@ -15,8 +22,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: core/go.mod
           cache: true
+          cache-dependency-path: core/go.sum
       - name: Refresh models catalog
         run: bash .github/scripts/refresh-model-catalogs.sh
       - name: Build
