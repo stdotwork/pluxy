@@ -1366,6 +1366,11 @@ func TestServicePreservesActiveScopeDuringPreACKFailoverRetries(t *testing.T) {
 	scope.End("completed")
 }
 
+// registryTestFailureDeadline only bounds a broken test; passing runs return as
+// soon as the awaited event happens. The first reconnect is delayed by 0.5-1s of
+// jitter, so a deadline near that delay fails on a loaded machine.
+const registryTestFailureDeadline = 10 * time.Second
+
 func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 	listener, errListen := net.Listen("tcp", "127.0.0.1:0")
 	if errListen != nil {
@@ -1420,10 +1425,10 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 
 	select {
 	case <-firstAck:
-	case <-time.After(time.Second):
+	case <-time.After(registryTestFailureDeadline):
 		t.Fatal("first subscription was not acknowledged")
 	}
-	registry := waitForServiceRegistry(t, service, time.Second)
+	registry := waitForServiceRegistry(t, service, registryTestFailureDeadline)
 	pending, errBegin := registry.BeginDispatch()
 	if errBegin != nil {
 		t.Fatal(errBegin)
@@ -1450,7 +1455,7 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 	}
 	select {
 	case <-secondSubscribe:
-	case <-time.After(time.Second):
+	case <-time.After(registryTestFailureDeadline):
 		t.Fatal("new subscription did not start while the old scope remained active")
 	}
 	service.homeMu.Lock()
@@ -1460,7 +1465,7 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 		t.Fatal("registry was exposed before the replacement ACK")
 	}
 	close(allowSecondAck)
-	if nextRegistry := waitForServiceRegistry(t, service, time.Second); nextRegistry != registry {
+	if nextRegistry := waitForServiceRegistry(t, service, registryTestFailureDeadline); nextRegistry != registry {
 		t.Fatal("heartbeat failover replaced the registry containing the active scope")
 	}
 	select {

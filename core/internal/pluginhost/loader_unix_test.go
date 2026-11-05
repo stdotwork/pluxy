@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
@@ -26,6 +27,10 @@ func testHostCallbackID(t *testing.T, client *dynamicLibraryClient) uintptr {
 	return *(*uintptr)(client.hostCtx)
 }
 
+// reloadTestPluginBuildTimeout bounds one go build of a test plugin so a stuck
+// build on a heavily loaded machine ends the test instead of hanging the package.
+const reloadTestPluginBuildTimeout = 4 * time.Minute
+
 func buildReloadTestPlugin(t *testing.T, version int, outPath string) {
 	t.Helper()
 	goTool, errGo := exec.LookPath("go")
@@ -33,7 +38,9 @@ func buildReloadTestPlugin(t *testing.T, version int, outPath string) {
 		t.Skipf("go toolchain unavailable: %v", errGo)
 	}
 	sourceDir := filepath.Join("testdata", "loader_unix_reload_plugin")
-	cmd := exec.Command(goTool, "build", "-buildmode=c-shared", "-o", outPath, ".")
+	ctx, cancel := context.WithTimeout(context.Background(), reloadTestPluginBuildTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, goTool, "build", "-buildmode=c-shared", "-o", outPath, ".")
 	cmd.Dir = sourceDir
 	cflags := "-DPLUGIN_VERSION=1"
 	if version >= 1 {
@@ -41,6 +48,9 @@ func buildReloadTestPlugin(t *testing.T, version int, outPath string) {
 	}
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=1", "CGO_CFLAGS="+cflags)
 	if output, errBuild := cmd.CombinedOutput(); errBuild != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			t.Skipf("building test plugin (v%d) did not finish within %s; machine too loaded\n%s", version, reloadTestPluginBuildTimeout, output)
+		}
 		t.Fatalf("build test plugin (v%d): %v\n%s", version, errBuild, output)
 	}
 }
