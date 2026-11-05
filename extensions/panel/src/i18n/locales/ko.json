@@ -1423,7 +1423,6 @@
           "title": "네트워크 설정",
           "description": "프록시, 재시도 및 라우팅 설정",
           "proxy_url": "프록시 URL",
-          "proxy_url_sponsor_hint": "적합한 프록시가 없나요?",
           "request_retry": "요청 재시도 횟수",
           "max_retry_credentials": "최대 재시도 자격 증명 수",
           "max_retry_credentials_hint": "설정하지 않으려면 비워 두세요. 사용 가능한 모든 자격 증명을 시도하려면 0 또는 음의 정수를 입력하세요.",
