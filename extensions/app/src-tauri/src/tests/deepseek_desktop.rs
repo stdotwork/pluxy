@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use super::support::agent_test_home;
 use super::*;
 

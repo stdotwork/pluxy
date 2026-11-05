@@ -78,7 +78,7 @@ pub(crate) fn read_deepseek_harness_desktop_version(application: &Path) -> Optio
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn find_macos_deepseek_harness_desktop_in_roots(roots: &[PathBuf]) -> Option<PathBuf> {
     roots
         .iter()
