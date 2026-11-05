@@ -1,4 +1,4 @@
-name: Core PR build
+name: Core CI
 
 on:
   workflow_dispatch:
@@ -6,16 +6,29 @@ on:
     paths:
       - 'core/**'
       - '.github/workflows/core-pr-test-build.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'core/**'
+      - '.github/workflows/core-pr-test-build.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
+
+env:
+  CGO_ENABLED: 1
 
 defaults:
   run:
     working-directory: core
 
 jobs:
-  build:
+  core:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,3 +45,7 @@ jobs:
         run: |
           go build -o test-output ./cmd/server
           rm -f test-output
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -p 4 -count=1 ./...
