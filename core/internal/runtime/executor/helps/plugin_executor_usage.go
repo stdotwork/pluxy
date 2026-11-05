@@ -132,21 +132,6 @@ func parseClaudePayloadUsage(payload []byte) usage.Detail {
 	return detail
 }
 
-func parseClaudeStreamLine(line []byte) (usage.Detail, bool) {
-	payload := ExtractStreamJSONPayload(line)
-	if len(payload) == 0 || !ojson.ValidBytes(payload) {
-		return usage.Detail{}, false
-	}
-	usageNode := ojson.GetBytesNoCopy(payload, "usage")
-	if !usageNode.Exists() {
-		usageNode = ojson.GetBytesNoCopy(payload, "message.usage")
-	}
-	if !usageNode.Exists() {
-		return usage.Detail{}, false
-	}
-	return parseClaudeUsageNode(usageNode), true
-}
-
 // ObserveMergedStreamUsage updates buffer with merged usage details.
 func ObserveMergedStreamUsage(buffer *StreamUsageBuffer, update usage.Detail) {
 	if buffer == nil {

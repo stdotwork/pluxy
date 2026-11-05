@@ -10,7 +10,6 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 )
 
@@ -507,29 +506,6 @@ func payloadPathExistsDoc(doc *ojson.Doc, path string) bool {
 	return false
 }
 
-func payloadPathMatchesValue(payload []byte, path string, value any) bool {
-	for _, resolvedPath := range resolvePayloadRulePaths(payload, path) {
-		result := ojson.GetBytesNoCopy(payload, resolvedPath)
-		if !result.Exists() {
-			continue
-		}
-		if payloadResultEquals(result, value) {
-			return true
-		}
-	}
-	return false
-}
-
-func payloadPathExists(payload []byte, path string) bool {
-	for _, resolvedPath := range resolvePayloadRulePaths(payload, path) {
-		result := ojson.GetBytesNoCopy(payload, resolvedPath)
-		if result.Exists() && result.Type != ojson.Null {
-			return true
-		}
-	}
-	return false
-}
-
 func payloadResultEquals(result ojson.Result, value any) bool {
 	actual, ok := normalizedPayloadResult(result)
 	if !ok {
@@ -706,12 +682,6 @@ func resolvePayloadRulePathsDoc(doc *ojson.Doc, path string) []string {
 	return resolvePayloadRulePathsFromGetter(doc.Get, path)
 }
 
-func resolvePayloadRulePaths(payload []byte, path string) []string {
-	return resolvePayloadRulePathsFromGetter(func(p string) ojson.Result {
-		return payloadValueAtPath(payload, p)
-	}, path)
-}
-
 func resolvePayloadRulePathsFromGetter(get func(string) ojson.Result, path string) []string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -863,13 +833,6 @@ func appendPayloadPathPart(path, part string) string {
 		return path
 	}
 	return path + "." + part
-}
-
-func payloadValueAtPath(payload []byte, path string) ojson.Result {
-	if path == "" {
-		return util.ParseGJSONBytesNoCopy(payload)
-	}
-	return ojson.GetBytesNoCopy(payload, path)
 }
 
 func payloadQueryMatches(item ojson.Result, query string) bool {

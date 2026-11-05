@@ -475,25 +475,6 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 
 const antigravityPartsPlaceholder = `"__cpa_parts_placeholder__"`
 
-func (e *AntigravityExecutor) convertStreamToNonStream(stream []byte) []byte {
-	var chunks [][]byte
-	remaining := stream
-	for len(remaining) > 0 {
-		var line []byte
-		if nl := bytes.IndexByte(remaining, '\n'); nl >= 0 {
-			line = remaining[:nl]
-			remaining = remaining[nl+1:]
-		} else {
-			line = remaining
-			remaining = nil
-		}
-		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
-			chunks = append(chunks, trimmed)
-		}
-	}
-	return e.convertStreamChunksToNonStream(chunks)
-}
-
 func (e *AntigravityExecutor) convertStreamChunksToNonStream(chunks [][]byte) []byte {
 	var (
 		responseNodeRaw    string

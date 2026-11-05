@@ -513,50 +513,11 @@ func sanitizeAntigravityGeminiRequestSignaturesDoc(modelName string, doc *ojson.
 	normalizeAntigravityGeminiFunctionResponseRolesDoc(doc)
 }
 
-// ensureAntigravityGeminiLeadingUserContent prepends a synthetic empty user turn
-// after every contents rewrite, including reasoning replay. Claude targets are
-// left unchanged because the adapter rejects empty text parts.
-func ensureAntigravityGeminiLeadingUserContent(modelName string, payload []byte) []byte {
-	if strings.Contains(strings.ToLower(modelName), "claude") {
-		return payload
-	}
-	return helps.EnsureGeminiLeadingUserContent(payload, "request.contents")
-}
-
 func ensureAntigravityGeminiLeadingUserContentDoc(modelName string, doc *ojson.Doc) bool {
 	if doc == nil || strings.Contains(strings.ToLower(modelName), "claude") {
 		return false
 	}
 	return helps.EnsureGeminiLeadingUserContentDoc(doc, "request.contents")
-}
-
-// ensureAntigravityGeminiTrailingUserContent appends a synthetic empty user turn
-// if the final turn is a model turn. Claude targets are left unchanged because
-// the adapter rejects empty text parts.
-func ensureAntigravityGeminiTrailingUserContent(modelName string, payload []byte) []byte {
-	if strings.Contains(strings.ToLower(modelName), "claude") {
-		return payload
-	}
-	return helps.EnsureGeminiTrailingUserContent(payload, "request.contents")
-}
-
-func ensureAntigravityGeminiTrailingUserContentDoc(modelName string, doc *ojson.Doc) bool {
-	if doc == nil || strings.Contains(strings.ToLower(modelName), "claude") {
-		return false
-	}
-	return helps.EnsureGeminiTrailingUserContentDoc(doc, "request.contents")
-}
-
-// ensureAntigravityGeminiBoundaryUserContent normalizes both leading and trailing
-// turns for Gemini targets. A trailing reasoning-only model turn is dropped first
-// so the request does not rely only on a synthetic empty user turn (#6530).
-// Claude targets are left unchanged.
-func ensureAntigravityGeminiBoundaryUserContent(modelName string, payload []byte) []byte {
-	if strings.Contains(strings.ToLower(modelName), "claude") {
-		return payload
-	}
-	payload = helps.DropGeminiTrailingThoughtOnlyContent(payload, "request.contents")
-	return helps.EnsureGeminiBoundaryUserContent(payload, "request.contents")
 }
 
 func ensureAntigravityGeminiBoundaryUserContentDoc(modelName string, doc *ojson.Doc) bool {
