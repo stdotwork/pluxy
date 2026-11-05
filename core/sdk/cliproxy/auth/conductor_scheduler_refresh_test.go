@@ -370,15 +370,15 @@ func TestManager_PickNext_RebuildsSchedulerAfterModelCooldownError(t *testing.T)
 		t.Fatalf("pickSingle() before sync auth = %v, want nil", got)
 	}
 
-	got, executor, errPick := manager.pickNext(ctx, "gemini", "scheduler-cooldown-rebuild-model", cliproxyexecutor.Options{}, nil)
+	got, executor, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, "scheduler-cooldown-rebuild-model", cliproxyexecutor.Options{}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext() error = %v", errPick)
+		t.Fatalf("pickNextMixed() error = %v", errPick)
 	}
 	if executor == nil {
-		t.Fatal("pickNext() executor = nil")
+		t.Fatal("pickNextMixed() executor = nil")
 	}
 	if got == nil || got.ID != newAuth.ID {
-		t.Fatalf("pickNext() auth = %v, want %q", got, newAuth.ID)
+		t.Fatalf("pickNextMixed() auth = %v, want %q", got, newAuth.ID)
 	}
 }
 
