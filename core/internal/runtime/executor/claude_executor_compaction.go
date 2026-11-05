@@ -23,10 +23,6 @@ func expandClaudeResponsesCompaction(req *cliproxyexecutor.Request, opts *clipro
 	return helps.ExpandResponsesCompactionCapsules(req, opts, "claude")
 }
 
-func dropForeignClaudeCompactionItems(payload []byte) []byte {
-	return helps.DropForeignResponsesCompactionItems(payload, "claude")
-}
-
 func claudeResponsesCompactionRequested(req cliproxyexecutor.Request, opts cliproxyexecutor.Options) bool {
 	return opts.Alt == "responses/compact" || helps.HasResponsesCompactionTriggerRequest(req, opts)
 }
@@ -138,18 +134,6 @@ func prepareClaudeCompactionSummaryPayload(payload []byte, modelName string) []b
 	return doc.Bytes()
 }
 
-// finalizeClaudeCompactionSummaryBody runs after built-in translation and before
-// user payload rules. Tool history stays structured when definitions exist, and
-// tool_choice none stops the summary turn from calling a tool. History without
-// definitions is flattened so Anthropic does not reject orphan tool blocks.
-func finalizeClaudeCompactionSummaryBody(body []byte) []byte {
-	doc := ojson.NewDoc(body)
-	if !finalizeClaudeCompactionSummaryBodyDoc(doc) {
-		return body
-	}
-	return doc.Bytes()
-}
-
 func finalizeClaudeCompactionSummaryBodyDoc(doc *ojson.Doc) bool {
 	if doc == nil {
 		return false
@@ -160,25 +144,12 @@ func finalizeClaudeCompactionSummaryBodyDoc(doc *ojson.Doc) bool {
 	return flattenClaudeToolBlocksForCompactionDoc(doc)
 }
 
-func claudeBodyHasToolDefinitions(body []byte) bool {
-	tools := ojson.GetBytesNoCopy(body, "tools")
-	return tools.IsArray() && len(tools.Array()) > 0
-}
-
 func claudeDocHasToolDefinitions(doc *ojson.Doc) bool {
 	if doc == nil {
 		return false
 	}
 	tools := doc.Get("tools")
 	return tools.IsArray() && len(tools.Array()) > 0
-}
-
-func flattenClaudeToolBlocksForCompaction(body []byte) []byte {
-	doc := ojson.NewDoc(body)
-	if !flattenClaudeToolBlocksForCompactionDoc(doc) {
-		return body
-	}
-	return doc.Bytes()
 }
 
 func flattenClaudeToolBlocksForCompactionDoc(doc *ojson.Doc) bool {

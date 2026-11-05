@@ -5,15 +5,13 @@ import {
 } from '../src/components/providers/utils';
 import {
   KIMI_ANTHROPIC_BASE_URL,
-  KIMI_CHINESE_AFFILIATE_URL,
   KIMI_DOMESTIC_ANTHROPIC_BASE_URL,
   KIMI_DOMESTIC_BASE_URL,
   KIMI_DOMESTIC_OPENAI_BASE_URL,
-  KIMI_INTERNATIONAL_AFFILIATE_URL,
   KIMI_LEGACY_OPENAI_BASE_URL,
   KIMI_OPENAI_BASE_URL,
   buildKimiRaw,
-  getKimiAffiliateUrl,
+  getKimiPlatformUrl,
   getKimiProtocolUrls,
   isKimiClaudeProvider,
   isKimiCodexProvider,
@@ -96,10 +94,10 @@ describe('Kimi provider', () => {
   });
 
   test('uses the domestic registration link for Chinese and the international link otherwise', () => {
-    expect(getKimiAffiliateUrl('zh-CN')).toBe(KIMI_CHINESE_AFFILIATE_URL);
-    expect(getKimiAffiliateUrl('zh-TW')).toBe(KIMI_CHINESE_AFFILIATE_URL);
-    expect(getKimiAffiliateUrl('en')).toBe(KIMI_INTERNATIONAL_AFFILIATE_URL);
-    expect(getKimiAffiliateUrl('ru')).toBe(KIMI_INTERNATIONAL_AFFILIATE_URL);
+    expect(getKimiPlatformUrl('zh-CN')).toBe('https://platform.kimi.com/');
+    expect(getKimiPlatformUrl('zh-TW')).toBe('https://platform.kimi.com/');
+    expect(getKimiPlatformUrl('en')).toBe('https://platform.kimi.ai/');
+    expect(getKimiPlatformUrl('ru')).toBe('https://platform.kimi.ai/');
   });
 
   test('uses the OAuth-style theme surface for its provider icon', () => {

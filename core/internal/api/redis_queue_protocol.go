@@ -454,10 +454,6 @@ func readRESPArray(reader *bufio.Reader) ([]string, error) {
 	return args, nil
 }
 
-func readRESPString(reader *bufio.Reader) (string, error) {
-	return readRESPStringWithBudget(reader, nil)
-}
-
 func readRESPStringWithBudget(reader *bufio.Reader, remainingBytes *int) (string, error) {
 	prefix, errRead := reader.ReadByte()
 	if errRead != nil {

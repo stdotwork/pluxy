@@ -345,17 +345,6 @@ func (s *Service) registerModelsForAuthWithConfigAndCache(ctx context.Context, c
 	return published
 }
 
-// refreshModelRegistrationForAuth re-applies the latest model registration for
-// one auth and reconciles any concurrent auth changes that race with the
-// refresh. Callers are expected to pre-filter provider membership.
-//
-// Re-registration is deliberate: most providers start a fresh registry snapshot.
-// Native Antigravity catalogs instead use fenced replacement to preserve quota
-// and suspension state while account entitlement refreshes are pending.
-func (s *Service) refreshModelRegistrationForAuth(current *coreauth.Auth) bool {
-	return s.refreshModelRegistrationForAuthWithContext(context.Background(), current, nil)
-}
-
 func (s *Service) refreshModelRegistrationForAuthWithCache(current *coreauth.Auth, compatCache *openAICompatibilityRegistrationCache) bool {
 	return s.refreshModelRegistrationForAuthWithContext(context.Background(), current, compatCache)
 }
@@ -478,10 +467,6 @@ func resolveConfigClaudeKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *c
 	return nil
 }
 
-func (s *Service) resolveConfigGeminiKey(auth *coreauth.Auth) *config.GeminiKey {
-	return resolveConfigGeminiKeyForConfig(s.currentConfig(), auth)
-}
-
 func resolveConfigGeminiKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *config.GeminiKey {
 	if cfg == nil {
 		return nil
@@ -489,19 +474,11 @@ func resolveConfigGeminiKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *c
 	return resolveConfigGeminiKeyEntryForConfig(cfg, auth, cfg.GeminiKey)
 }
 
-func (s *Service) resolveConfigInteractionsKey(auth *coreauth.Auth) *config.GeminiKey {
-	return resolveConfigInteractionsKeyForConfig(s.currentConfig(), auth)
-}
-
 func resolveConfigInteractionsKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *config.GeminiKey {
 	if cfg == nil {
 		return nil
 	}
 	return resolveConfigGeminiKeyEntryForConfig(cfg, auth, cfg.InteractionsKey)
-}
-
-func (s *Service) resolveConfigGeminiKeyEntry(auth *coreauth.Auth, entries []config.GeminiKey) *config.GeminiKey {
-	return resolveConfigGeminiKeyEntryForConfig(s.currentConfig(), auth, entries)
 }
 
 func resolveConfigGeminiKeyEntryForConfig(cfg *config.Config, auth *coreauth.Auth, entries []config.GeminiKey) *config.GeminiKey {
@@ -531,10 +508,6 @@ func resolveConfigGeminiKeyEntryForConfig(cfg *config.Config, auth *coreauth.Aut
 		}
 	}
 	return nil
-}
-
-func (s *Service) resolveConfigVertexCompatKey(auth *coreauth.Auth) *config.VertexCompatKey {
-	return resolveConfigVertexCompatKeyForConfig(s.currentConfig(), auth)
 }
 
 func resolveConfigVertexCompatKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *config.VertexCompatKey {
@@ -574,10 +547,6 @@ func resolveConfigVertexCompatKeyForConfig(cfg *config.Config, auth *coreauth.Au
 	return nil
 }
 
-func (s *Service) resolveConfigCodexKey(auth *coreauth.Auth) *config.CodexKey {
-	return resolveConfigCodexKeyForConfig(s.currentConfig(), auth)
-}
-
 func resolveConfigCodexKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *config.CodexKey {
 	if cfg == nil {
 		return nil
@@ -585,19 +554,11 @@ func resolveConfigCodexKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *co
 	return resolveConfigCodexStyleKey(auth, cfg.CodexKey, true)
 }
 
-func (s *Service) resolveConfigXAIKey(auth *coreauth.Auth) *config.XAIKey {
-	return resolveConfigXAIKeyForConfig(s.currentConfig(), auth)
-}
-
 func resolveConfigXAIKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *config.XAIKey {
 	if cfg == nil {
 		return nil
 	}
 	return resolveConfigCodexStyleKey(auth, cfg.XAIKey, false)
-}
-
-func (s *Service) resolveConfigMetaKey(auth *coreauth.Auth) *config.MetaKey {
-	return resolveConfigMetaKeyForConfig(s.currentConfig(), auth)
 }
 
 func resolveConfigMetaKeyForConfig(cfg *config.Config, auth *coreauth.Auth) *config.MetaKey {
@@ -636,10 +597,6 @@ func resolveConfigCodexStyleKey(auth *coreauth.Auth, entries []config.CodexKey, 
 		}
 	}
 	return nil
-}
-
-func (s *Service) oauthExcludedModels(provider, authKind string) []string {
-	return oauthExcludedModelsForConfig(s.currentConfig(), provider, authKind)
 }
 
 func oauthExcludedModelsForConfig(cfg *config.Config, provider, authKind string) []string {

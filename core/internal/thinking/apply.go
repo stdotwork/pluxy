@@ -179,16 +179,6 @@ func ApplyThinkingWithSourceAndSummary(body, sourceBody []byte, model, fromForma
 	return applyThinking(body, sourceBody, model, fromFormat, toFormat, providerKey, nil, false, summaryConfig, normalizedUpdatesChanged...)
 }
 
-// ApplyThinkingWithSourceAndSummaryDoc applies thinking onto doc in place using
-// the original source request.
-func ApplyThinkingWithSourceAndSummaryDoc(doc *ojson.Doc, sourceBody []byte, model, fromFormat, toFormat, providerKey string, summaryConfig SummaryConfig, normalizedUpdatesChanged ...bool) error {
-	if doc == nil {
-		return nil
-	}
-	_, err := applyThinkingDocCore(doc, doc.Len() > 0, sourceBody, model, fromFormat, toFormat, providerKey, nil, false, summaryConfig, normalizedUpdatesChanged...)
-	return err
-}
-
 // ApplyThinkingWithFallbackModelInfoAndSummary applies thinking using the global
 // registry first and falls back to fallbackModelInfo when the registry has no
 // entry for the model.
@@ -215,19 +205,6 @@ func ApplyThinkingWithModelInfo(body, sourceBody []byte, model string, fromForma
 		summaryConfig = ExtractSummaryConfig(body, toFormat)
 	}
 	return ApplyThinkingWithModelInfoAndSummary(body, sourceBody, model, fromFormat, toFormat, providerKey, modelInfo, summaryConfig)
-}
-
-// ApplyThinkingWithModelInfoDoc applies thinking onto doc in place with the exact
-// configured model definition.
-func ApplyThinkingWithModelInfoDoc(doc *ojson.Doc, sourceBody []byte, model string, fromFormat string, toFormat string, providerKey string, modelInfo *registry.ModelInfo) error {
-	if doc == nil {
-		return nil
-	}
-	summaryConfig := ExtractSummaryConfig(sourceBody, fromFormat)
-	if len(sourceBody) == 0 {
-		summaryConfig = ExtractSummaryConfigDoc(doc, toFormat)
-	}
-	return ApplyThinkingWithModelInfoAndSummaryDoc(doc, sourceBody, model, fromFormat, toFormat, providerKey, modelInfo, summaryConfig)
 }
 
 // ApplyThinkingWithModelInfoAndSummary applies the exact configured model
@@ -820,12 +797,6 @@ func reasoningEffortFromConfig(config ThinkingConfig) string {
 	}
 }
 
-func extractClaudeConfig(body []byte) ThinkingConfig {
-	return extractClaudeConfigFromGetter(func(path string) ojson.Result {
-		return ojson.GetBytesNoCopy(body, path)
-	})
-}
-
 func extractClaudeConfigFromGetter(get func(string) ojson.Result) ThinkingConfig {
 	thinkingType := get("thinking.type").String()
 	if thinkingType == "disabled" {
@@ -881,12 +852,6 @@ func extractClaudeConfigFromGetter(get func(string) ojson.Result) ThinkingConfig
 	return ThinkingConfig{}
 }
 
-func extractGeminiConfig(body []byte, provider string) ThinkingConfig {
-	return extractGeminiConfigFromGetter(func(path string) ojson.Result {
-		return ojson.GetBytesNoCopy(body, path)
-	}, provider)
-}
-
 func extractGeminiConfigFromGetter(get func(string) ojson.Result, provider string) ThinkingConfig {
 	prefix := "generationConfig.thinkingConfig"
 	if provider == "antigravity" {
@@ -926,12 +891,6 @@ func extractGeminiConfigFromGetter(get func(string) ojson.Result, provider strin
 	}
 
 	return ThinkingConfig{}
-}
-
-func extractInteractionsConfig(body []byte) ThinkingConfig {
-	return extractInteractionsConfigFromGetter(func(path string) ojson.Result {
-		return ojson.GetBytesNoCopy(body, path)
-	})
 }
 
 func extractInteractionsConfigFromGetter(get func(string) ojson.Result) ThinkingConfig {
@@ -999,12 +958,6 @@ func extractOpenAIConfigFromGetter(get func(string) ojson.Result) ThinkingConfig
 		return ThinkingConfig{Mode: ModeLevel, Level: ThinkingLevel(value)}
 	}
 	return ThinkingConfig{}
-}
-
-func extractKimiConfig(body []byte) ThinkingConfig {
-	return extractKimiConfigFromGetter(func(path string) ojson.Result {
-		return ojson.GetBytesNoCopy(body, path)
-	})
 }
 
 func extractKimiConfigFromGetter(get func(string) ojson.Result) ThinkingConfig {

@@ -2349,3 +2349,50 @@ fn explicitly_selected_auth_directory_is_not_moved_on_restart() {
     assert!(selected.join("account.json").exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+fn corrupt_backups(directory: &Path) -> Vec<PathBuf> {
+    let mut backups = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("config.toml.corrupt-"))
+        })
+        .collect::<Vec<_>>();
+    backups.sort();
+    backups
+}
+
+#[test]
+fn unparseable_gui_config_is_backed_up_before_defaults_replace_it() {
+    let directory = agent_test_home("gui-config-corrupt");
+    let config_path = directory.join("config.toml");
+    let broken = b"port = 9000\napi-keys = [\"example-key\"\nmanagement-secret-key = ";
+    fs::write(&config_path, broken).unwrap();
+
+    let (config, _, parse_failed) = read_gui_config_file(&config_path).unwrap();
+
+    assert!(parse_failed);
+    assert_eq!(config.port, GuiConfigFile::default().port);
+    let backups = corrupt_backups(&directory);
+    assert_eq!(backups.len(), 1, "{backups:?}");
+    assert_eq!(fs::read(&backups[0]).unwrap(), broken);
+    assert_eq!(fs::read(&config_path).unwrap(), broken);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn parseable_gui_config_is_read_without_a_backup() {
+    let directory = agent_test_home("gui-config-valid");
+    let config_path = directory.join("config.toml");
+    fs::write(&config_path, "plugins-enabled = false\nport = 9000\n").unwrap();
+
+    let (config, _, parse_failed) = read_gui_config_file(&config_path).unwrap();
+
+    assert!(!parse_failed);
+    assert_eq!(config.port, 9000);
+    assert!(!config.plugins_enabled);
+    assert!(corrupt_backups(&directory).is_empty());
+    fs::remove_dir_all(directory).unwrap();
+}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -2642,9 +2643,12 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 	serverPongCh := make(chan string, 1)
 	inWriteHook := make(chan struct{})
 	pongDeliveredDuringWrite := make(chan struct{})
+	var inWriteHookOnce, pongDeliveredOnce sync.Once
 
 	testWebsocketWritePayloadHook = func(conn *websocket.Conn) {
-		close(inWriteHook)
+		// The hook runs for every payload write, including any repeated write,
+		// and a second close would panic the whole package run.
+		inWriteHookOnce.Do(func() { close(inWriteHook) })
 		// Wait until server confirms pong was received before allowing write to finish.
 		select {
 		case <-pongDeliveredDuringWrite:
@@ -2695,7 +2699,7 @@ func TestCodexWebsockets_KeepalivePingDuringUpload_WithSession(t *testing.T) {
 			if got != "session-ping" {
 				t.Errorf("unexpected pong payload: got %q, want session-ping", got)
 			}
-			close(pongDeliveredDuringWrite)
+			pongDeliveredOnce.Do(func() { close(pongDeliveredDuringWrite) })
 		case <-time.After(2 * time.Second):
 			t.Errorf("pong was not received while payload write was in progress")
 			return

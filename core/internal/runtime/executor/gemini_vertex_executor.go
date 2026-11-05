@@ -1509,11 +1509,6 @@ func vertexAccessToken(ctx context.Context, cfg *config.Config, auth *cliproxyau
 	return tok.AccessToken, nil
 }
 
-// resolveVertexConfig finds the matching vertex-api-key configuration entry for the given auth.
-func (e *GeminiVertexExecutor) resolveVertexConfig(auth *cliproxyauth.Auth) *config.VertexCompatKey {
-	return helps.ResolveVertexCompatConfig(e.cfg, auth)
-}
-
 // SupportsApplyPatch reports the actual executor contract, independent of its provider name.
 func (e *GeminiVertexExecutor) SupportsApplyPatch() bool { return e != nil }
 

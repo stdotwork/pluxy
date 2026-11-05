@@ -79,13 +79,6 @@ func (s *Service) registerPluginAuthParser() {
 	}
 }
 
-func (s *Service) syncPluginRuntime(ctx context.Context) {
-	if !s.syncPluginRuntimeConfig(ctx) {
-		return
-	}
-	s.syncPluginModelRuntime(ctx)
-}
-
 func (s *Service) syncPluginRuntimeConfig(ctx context.Context) bool {
 	if s == nil {
 		sdkAuth.RegisterPluginAuthParser(nil)

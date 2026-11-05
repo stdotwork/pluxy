@@ -355,13 +355,6 @@ func claudeThinkingTypeAcceptsBlockBinding(model, thinkingType string) bool {
 	}
 }
 
-// claudeBodyHasSignedThinkingBlock reports whether any assistant message
-// carries a replayed thinking block with a signature or a redacted_thinking
-// block, i.e. history Anthropic subjects to prefix binding validation.
-func claudeBodyHasSignedThinkingBlock(body []byte) bool {
-	return claudeMessagesHaveSignedThinkingBlock(ojson.GetBytesNoCopy(body, "messages"))
-}
-
 func claudeDocHasSignedThinkingBlock(doc *ojson.Doc) bool {
 	if doc == nil {
 		return false
@@ -384,29 +377,6 @@ func claudeMessagesHaveSignedThinkingBlock(messages ojson.Result) bool {
 		return !found
 	})
 	return found
-}
-
-// applyClaudePreservedThinkingBinding makes relayed or reshaped histories
-// survivable on preserved-thinking models: when the request replays signed
-// thinking blocks, default thinking.block_binding.prefix_mismatch_behavior to
-// drop_block so a prefix mismatch (client reconnect resending history, a
-// changed tools list, reconstructed server-tool blocks) drops the bound
-// blocks instead of failing the whole request with a 400. On preserved-thinking
-// models, an omitted thinking field runs adaptive thinking and is equivalent to
-// {"type":"adaptive"}, so synthesize that adaptive thinking object unless
-// tool_choice forces tool use. A thinking object without a type and any
-// caller-supplied prefix_mismatch_behavior stay untouched. This must run before
-// user payload rules, which stay the final semantic barrier and may override or
-// filter the injected value.
-func applyClaudePreservedThinkingBinding(body []byte) []byte {
-	if len(body) == 0 {
-		return body
-	}
-	doc := ojson.NewDoc(body)
-	if !applyClaudePreservedThinkingBindingDoc(doc) {
-		return body
-	}
-	return doc.Bytes()
 }
 
 func applyClaudePreservedThinkingBindingDoc(doc *ojson.Doc) bool {
@@ -946,11 +916,6 @@ func extractAndRemoveBetasDoc(doc *ojson.Doc) ([]string, bool) {
 		betas = append(betas, strings.Clone(s))
 	}
 	return betas, doc.Delete("betas") == nil
-}
-
-func claudeToolChoiceForcesToolUse(body []byte) bool {
-	toolChoiceType := ojson.GetBytesNoCopy(body, "tool_choice.type").String()
-	return toolChoiceType == "any" || toolChoiceType == "tool"
 }
 
 func claudeToolChoiceForcesToolUseDoc(doc *ojson.Doc) bool {
@@ -1686,13 +1651,6 @@ func claudePayloadHasMidSystemMessage(payload []byte) bool {
 	return claudeMessagesHaveMidSystemMessage(ojson.GetBytesNoCopy(payload, "messages"))
 }
 
-func claudeDocHasMidSystemMessage(doc *ojson.Doc) bool {
-	if doc == nil {
-		return false
-	}
-	return claudeMessagesHaveMidSystemMessage(doc.Get("messages"))
-}
-
 func claudeMessagesHaveMidSystemMessage(messages ojson.Result) bool {
 	if !messages.IsArray() {
 		return false
@@ -1706,14 +1664,6 @@ func claudeMessagesHaveMidSystemMessage(messages ojson.Result) bool {
 		return true
 	})
 	return found
-}
-
-func rebuildMidSystemMessagesToTopLevel(payload []byte) []byte {
-	doc := ojson.NewDoc(payload)
-	if !rebuildMidSystemMessagesToTopLevelDoc(doc) {
-		return payload
-	}
-	return doc.Bytes()
 }
 
 func rebuildMidSystemMessagesToTopLevelDoc(doc *ojson.Doc) bool {

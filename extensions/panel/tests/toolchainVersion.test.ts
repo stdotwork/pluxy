@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 
 const readProjectFile = (path: string) =>
   readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+const readRepoFile = (path: string) =>
+  readFileSync(new URL(`../../../${path}`, import.meta.url), 'utf8');
 const packageJson = JSON.parse(readProjectFile('package.json')) as { packageManager: string };
 const bunVersion = packageJson.packageManager.match(/^bun@(\d+\.\d+\.\d+)$/)?.[1];
 
@@ -11,10 +13,10 @@ describe('Bun toolchain version', () => {
     expect(bunVersion).toBeDefined();
   });
 
-  test.each(['.github/workflows/ci.yml', '.github/workflows/release.yml'])(
+  test.each(['.github/workflows/panel-ci.yml', '.github/workflows/panel-release.yml'])(
     '%s uses the pinned Bun release',
     (path) => {
-      expect(readProjectFile(path)).toContain(`bun-version: '${bunVersion}'`);
+      expect(readRepoFile(path)).toContain(`bun-version: '${bunVersion}'`);
     }
   );
 

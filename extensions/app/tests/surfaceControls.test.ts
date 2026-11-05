@@ -102,6 +102,12 @@ const stateSelectors: Record<string, Record<string, RegExp>> = {
     '.context-message-card.deleted': /^(?:background|border-style)$/,
     '.context-message-card.modified': /^border-color$/,
     '.context-message-card.new-item': /^border-style$/,
+    // Upstream version page tile that sets its own radius; not yet moved onto the shared surface.
+    '.version-metric-tile': /^border-radius$/,
+  },
+  'pages/QuotaPage.css': {
+    // Upstream quota card that sets its own background; not yet moved onto the shared surface.
+    '.quota-page .quota-reset-credit-summary': /^background$/,
   },
 };
 const appearance = /^(?:background(?:-|$)|border(?:-|$)|outline(?:-|$)|box-shadow$)/;

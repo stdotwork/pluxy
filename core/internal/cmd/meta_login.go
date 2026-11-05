@@ -30,7 +30,7 @@ func DoMetaLogin(cfg *config.Config, options *LoginOptions) {
 
 	record, savedPath, err := manager.Login(context.Background(), "meta", cfg, authOpts)
 	if err != nil {
-		log.Errorf("Meta authentication failed: %v", err)
+		log.Errorf("Muse (Meta) authentication failed: %v", err)
 		return
 	}
 
@@ -40,5 +40,5 @@ func DoMetaLogin(cfg *config.Config, options *LoginOptions) {
 	if record != nil && record.Label != "" {
 		fmt.Printf("Authenticated as %s\n", record.Label)
 	}
-	fmt.Println("Meta authentication successful!")
+	fmt.Println("Muse (Meta) authentication successful!")
 }

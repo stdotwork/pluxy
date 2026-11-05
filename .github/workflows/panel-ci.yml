@@ -1,6 +1,7 @@
 name: Panel CI
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'extensions/panel/**'
@@ -36,12 +37,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      - name: Provide workflow paths used by upstream tests
-        run: |
-          mkdir -p .github/workflows
-          cp ../../.github/workflows/panel-ci.yml .github/workflows/ci.yml
-          cp ../../.github/workflows/panel-release.yml .github/workflows/release.yml
 
       - name: Verify
         run: bun run verify

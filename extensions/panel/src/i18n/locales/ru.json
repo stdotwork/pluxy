@@ -116,6 +116,7 @@
     "operate": "Работа",
     "gateway": "Шлюз",
     "observe": "Наблюдение",
+    "plugin_pages": "Плагины",
     "control": "Управление"
   },
   "nav_meta": {
@@ -496,7 +497,7 @@
     "seven_day_sonnet": "Sonnet: недельный лимит",
     "seven_day_cowork": "Cowork: недельный лимит",
     "iguana_necktie": "Iguana Necktie",
-    "seven_day_fable": "Fable 5: недельный лимит",
+    "seven_day_fable": "Fable: недельный лимит",
     "cloud_session_credits": "Кредиты облачных сессий",
     "extra_usage_label": "Дополнительное использование",
     "extra_usage_enabled": "Включено",
@@ -604,8 +605,6 @@
     "active": "Подписка активна",
     "inactive": "Подписка неактивна",
     "window": "Лимит использования",
-    "window_duration": "Лимит на {{minutes}} мин.",
-    "window_duration_hours": "Лимит на {{hours}} ч.",
     "weekly": "Недельный лимит",
     "unknown": "Неизвестно",
     "remaining": "Осталось {{percent}}%"
@@ -622,6 +621,28 @@
     "empty_data": "Нет доступных данных о квоте",
     "plan_label": "План",
     "remaining_percent": "Осталось {{percent}}%"
+  },
+  "quota_window": {
+    "five_hour": "Лимит на 5 часов",
+    "daily": "Дневной лимит",
+    "weekly": "Недельный лимит",
+    "monthly": "Месячный лимит",
+    "days_one": "Лимит на {{count}} день",
+    "days_few": "Лимит на {{count}} дня",
+    "days_many": "Лимит на {{count}} дней",
+    "days_other": "Лимит на {{count}} дня",
+    "hours_one": "Лимит на {{count}} час",
+    "hours_few": "Лимит на {{count}} часа",
+    "hours_many": "Лимит на {{count}} часов",
+    "hours_other": "Лимит на {{count}} часа",
+    "minutes_one": "Лимит на {{count}} минуту",
+    "minutes_few": "Лимит на {{count}} минуты",
+    "minutes_many": "Лимит на {{count}} минут",
+    "minutes_other": "Лимит на {{count}} минуты",
+    "seconds_one": "Лимит на {{count}} секунду",
+    "seconds_few": "Лимит на {{count}} секунды",
+    "seconds_many": "Лимит на {{count}} секунд",
+    "seconds_other": "Лимит на {{count}} секунды"
   },
   "kimi_quota": {
     "plan_label": "Тариф",
@@ -640,7 +661,6 @@
     "fetch_all": "Получить все",
     "weekly_limit": "Недельный лимит",
     "monthly_limit": "Месячный лимит",
-    "limit_window": "Лимит {{duration}}",
     "limit_index": "Лимит #{{index}}",
     "reset_hint": "сброс через {{hint}}"
   },
@@ -1424,7 +1444,6 @@
           "title": "Сетевые настройки",
           "description": "Параметры прокси, повторов и маршрутизации",
           "proxy_url": "URL прокси",
-          "proxy_url_sponsor_hint": "Нет подходящего прокси?",
           "request_retry": "Количество повторов запросов",
           "max_retry_credentials": "Максимум учётных данных для повторов",
           "max_retry_credentials_hint": "Оставьте пустым, чтобы не задавать поле. Значение 0 или отрицательное целое число позволяет перебрать все доступные учётные данные.",
@@ -1894,6 +1913,15 @@
     "gate_step3_action": "Установить этот плагин",
     "gate_step3_hint": "Введите точный идентификатор, показанный выше, чтобы включить установку."
   },
+  "plugin_resource": {
+    "page_count": "Страниц: {{count}}",
+    "load_failed": "Не удалось загрузить страницу плагина",
+    "unavailable": "Страница плагина недоступна",
+    "not_found": "Страница плагина не найдена",
+    "not_found_desc": "Эта страница плагина не объявлена в текущем списке плагинов backend.",
+    "empty_src": "URL страницы плагина пуст",
+    "empty_src_desc": "Это меню плагина не предоставляет URL страницы для встраивания."
+  },
   "system_info": {
     "title": "Информация о центре управления",
     "about_title": "CLI Proxy API Management Center",
@@ -2186,14 +2214,6 @@
         "openai": "OpenAI-compatible",
         "gemini": "Gemini",
         "codexResponses": "Codex API (Responses)"
-      },
-      "double11": {
-        "badge": "Акция 11.11 · Ограничено",
-        "title": "{{provider}}: бонус к пополнению на 11.11",
-        "description": "Пополните баланс {{provider}} во время акции и получите дополнительно {{percent}}% от суммы пополнения.",
-        "bonus": "Бонус к пополнению",
-        "cta": "Участвовать",
-        "ctaAria": "Участвовать в акции 11.11 от {{provider}} (откроется в новой вкладке)"
       }
     },
     "status": {

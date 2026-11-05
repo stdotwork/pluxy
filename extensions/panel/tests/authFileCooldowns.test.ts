@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import i18n from '../src/i18n/index';
@@ -202,6 +202,16 @@ describe('cooldown timer semantics', () => {
 });
 
 describe('cooldown section rendering', () => {
+  // Markup HTML-escapes text, so the assertions below read the English copy, not the default zh-CN.
+  let originalLanguage = i18n.language;
+  beforeAll(async () => {
+    originalLanguage = i18n.language;
+    await i18n.changeLanguage('en');
+  });
+  afterAll(async () => {
+    await i18n.changeLanguage(originalLanguage);
+  });
+
   test('does not add a panel for old servers or known-empty state', () => {
     expect(render()).toBe('');
     expect(render(normalize([]))).toBe('');
@@ -225,7 +235,8 @@ describe('cooldown section rendering', () => {
 
     const available = render(snapshot, { onReset: () => {} });
     expect(available).toContain(i18n.t('auth_files.cooldown_reset_button'));
-    expect(available).toContain(i18n.t('auth_files.cooldown_reset_hint'));
+    // The hint is the button's title; React escapes the apostrophe in the attribute.
+    expect(available).toContain('title="Clear this credential&#x27;s local routing cooldown"');
     expect(available).not.toContain('disabled=""');
 
     const pending = render(snapshot, { onReset: () => {}, resetting: true });

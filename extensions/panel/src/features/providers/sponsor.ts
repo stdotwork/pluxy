@@ -3,7 +3,7 @@ import type { SponsorProviderRaw } from './types';
 
 export const APIKEY_FUN_PROVIDER_NAME = 'apikeyFun';
 export const APIKEY_FUN_DISPLAY_NAME = 'APIKEY.FUN';
-export const APIKEY_FUN_AFFILIATE_URL = 'https://apikey.fan/register?aff=AKCPA';
+export const APIKEY_FUN_REGISTER_URL = 'https://apikey.fan/register';
 export const APIKEY_FUN_DASHBOARD_URL = 'https://apikey.fan/dashboard';
 export const APIKEY_FUN_STANDARD_BASE_URL = 'https://api.apikey.fan';
 export const APIKEY_FUN_DIRECT_BASE_URL = 'https://slb.apikey.fan';
@@ -12,15 +12,6 @@ export const APIKEY_FUN_CODEX_BASE_URL = APIKEY_FUN_OPENAI_BASE_URL;
 export const APIKEY_FUN_ANTHROPIC_BASE_URL = APIKEY_FUN_STANDARD_BASE_URL;
 export const APIKEY_FUN_GEMINI_BASE_URL = APIKEY_FUN_STANDARD_BASE_URL;
 export const APIKEY_FUN_USAGE_PATH = '/v1/usage';
-
-/** 双 11 充值赠送活动：赠送比例与推广链接。 */
-export const APIKEY_FUN_DOUBLE11_URL = 'https://apikey.fan/activities/double11-2026?aff=AKCPA';
-export const APIKEY_FUN_DOUBLE11_BONUS_PERCENT = '11.11';
-/** 活动卡片在北京时间 2026-11-12 00:00 后自动下线，避免过期宣传残留。 */
-export const APIKEY_FUN_DOUBLE11_ENDS_AT = Date.parse('2026-11-12T00:00:00+08:00');
-
-export const isApiKeyFunDouble11Active = (now: number = Date.now()): boolean =>
-  now < APIKEY_FUN_DOUBLE11_ENDS_AT;
 
 export const APIKEY_FUN_BASE_URL_OPTIONS = [
   {

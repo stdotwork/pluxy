@@ -1,7 +1,6 @@
 package registry
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -64,13 +63,6 @@ func init() {
 	if err := loadModelsFromBytes(embeddedModelsJSON, "embed"); err != nil {
 		log.Warnf("registry: failed to parse embedded models.json (embedded catalog may be incomplete or invalid; continuing startup and will rely on remote model refresh): %v", err)
 	}
-}
-
-// StartModelsUpdater starts a background updater that fetches models
-// immediately on startup and then refreshes the model catalog every 3 hours.
-// Safe to call multiple times; only one updater will run.
-func StartModelsUpdater(ctx context.Context) {
-	generalCatalogUpdater.configure(ctx, "")
 }
 
 // detectChangedProviders compares two model catalogs and returns provider names

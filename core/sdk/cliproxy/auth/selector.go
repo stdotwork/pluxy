@@ -472,7 +472,10 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 	if !cliproxyexecutor.DownstreamWebsocket(ctx) {
 		return available
 	}
-	if !strings.EqualFold(strings.TrimSpace(provider), "codex") {
+	provider = strings.TrimSpace(provider)
+	// The mixed-provider selection path passes "mixed"; apply the preference there too when
+	// every candidate is a Codex credential, matching the scheduler's single-provider path.
+	if !strings.EqualFold(provider, "codex") && (!strings.EqualFold(provider, "mixed") || !allCodexAuths(available)) {
 		return available
 	}
 
@@ -487,6 +490,15 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 		return wsEnabled
 	}
 	return available
+}
+
+func allCodexAuths(auths []*Auth) bool {
+	for _, auth := range auths {
+		if canonicalSchedulingProvider(executorKeyFromAuth(auth)) != "codex" {
+			return false
+		}
+	}
+	return true
 }
 
 func collectAvailableByPriority(auths []*Auth, model string, now time.Time) (available map[int][]*Auth, cooldownCount int, earliest time.Time) {
@@ -537,10 +549,6 @@ func getSelectorAvailableAuthsWithPriorityMode(ctx context.Context, auths []*Aut
 		}
 	}
 	return getAvailableAuthsWithPriorityMode(auths, provider, model, now, allPriorities)
-}
-
-func getAvailableAuthsAcrossPriorities(auths []*Auth, provider, model string, now time.Time) ([]*Auth, error) {
-	return getAvailableAuthsWithPriorityMode(auths, provider, model, now, true)
 }
 
 func getAvailableAuthsWithPriorityMode(auths []*Auth, provider, model string, now time.Time, allPriorities bool) ([]*Auth, error) {

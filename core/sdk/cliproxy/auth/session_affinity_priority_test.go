@@ -18,14 +18,6 @@ func TestManagerSessionAffinityPreservesBindingAcrossHigherPriorityRecovery(t *t
 		pick           func(*Manager, context.Context, string, string, cliproxyexecutor.Options) (*Auth, error)
 	}{
 		{
-			name:           "single provider",
-			providerSuffix: "single",
-			pick: func(manager *Manager, ctx context.Context, provider, model string, opts cliproxyexecutor.Options) (*Auth, error) {
-				auth, _, errPick := manager.pickNext(ctx, provider, model, opts, nil)
-				return auth, errPick
-			},
-		},
-		{
 			name:           "mixed provider",
 			providerSuffix: "mixed",
 			pick: func(manager *Manager, ctx context.Context, provider, model string, opts cliproxyexecutor.Options) (*Auth, error) {
@@ -184,14 +176,6 @@ func TestManagerSessionAffinityRebindOnQuotaPreservesBindingAcrossTransientFailo
 		providerSuffix string
 		pick           func(*Manager, context.Context, string, string, cliproxyexecutor.Options) (*Auth, error)
 	}{
-		{
-			name:           "single provider",
-			providerSuffix: "single",
-			pick: func(manager *Manager, ctx context.Context, provider, model string, opts cliproxyexecutor.Options) (*Auth, error) {
-				auth, _, errPick := manager.pickNext(ctx, provider, model, opts, nil)
-				return auth, errPick
-			},
-		},
 		{
 			name:           "mixed provider",
 			providerSuffix: "mixed",
@@ -391,7 +375,7 @@ func TestManagerSessionAffinityRebindOnQuotaLCPPreservesBindingAcrossTransientFa
 	}
 
 	turn1 := makeTurnOpts(`{"messages":[{"role":"user","content":"turn 1 hello"}]}`)
-	got1, _, errPick := manager.pickNext(ctx, provider, model, turn1, nil)
+	got1, _, _, errPick := manager.pickNextMixed(ctx, []string{provider}, model, turn1, nil)
 	if errPick != nil || got1 == nil || got1.ID != highID {
 		t.Fatalf("turn 1 pick = %v (err=%v), want %q", got1, errPick, highID)
 	}
@@ -399,7 +383,7 @@ func TestManagerSessionAffinityRebindOnQuotaLCPPreservesBindingAcrossTransientFa
 
 	// Turn 2 hits highID, fails with transient 502, fails over to lowID, and succeeds on lowID.
 	turn2 := makeTurnOpts(`{"messages":[{"role":"user","content":"turn 1 hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"turn 2 question"}]}`)
-	got2Attempt1, _, errPick := manager.pickNext(ctx, provider, model, turn2, nil)
+	got2Attempt1, _, _, errPick := manager.pickNextMixed(ctx, []string{provider}, model, turn2, nil)
 	if errPick != nil || got2Attempt1 == nil || got2Attempt1.ID != highID {
 		t.Fatalf("turn 2 attempt 1 pick = %v (err=%v), want %q", got2Attempt1, errPick, highID)
 	}
@@ -413,7 +397,7 @@ func TestManagerSessionAffinityRebindOnQuotaLCPPreservesBindingAcrossTransientFa
 	})
 
 	turn2Failover := makeTurnOpts(`{"messages":[{"role":"user","content":"turn 1 hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"turn 2 question"}]}`)
-	got2Attempt2, _, errPick := manager.pickNext(ctx, provider, model, turn2Failover, map[string]struct{}{highID: {}})
+	got2Attempt2, _, _, errPick := manager.pickNextMixed(ctx, []string{provider}, model, turn2Failover, map[string]struct{}{highID: {}})
 	if errPick != nil || got2Attempt2 == nil || got2Attempt2.ID != lowID {
 		t.Fatalf("turn 2 failover pick = %v (err=%v), want %q", got2Attempt2, errPick, lowID)
 	}
@@ -422,7 +406,7 @@ func TestManagerSessionAffinityRebindOnQuotaLCPPreservesBindingAcrossTransientFa
 	// Once highID recovers from transient cooldown, turn 3 must return to highID.
 	expireSessionAffinityPriorityModelCooldown(t, manager, highID, model)
 	turn3 := makeTurnOpts(`{"messages":[{"role":"user","content":"turn 1 hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"turn 2 question"},{"role":"assistant","content":"turn 2 answer"},{"role":"user","content":"turn 3 follow-up"}]}`)
-	got3, _, errPick := manager.pickNext(ctx, provider, model, turn3, nil)
+	got3, _, _, errPick := manager.pickNextMixed(ctx, []string{provider}, model, turn3, nil)
 	if errPick != nil || got3 == nil || got3.ID != highID {
 		t.Fatalf("turn 3 pick after transient recovery = %v (err=%v), want %q", got3, errPick, highID)
 	}
@@ -430,7 +414,7 @@ func TestManagerSessionAffinityRebindOnQuotaLCPPreservesBindingAcrossTransientFa
 
 	// Now turn 4 fails on highID with 429 quota, fails over to lowID, and must stay on lowID after highID recovers.
 	turn4 := makeTurnOpts(`{"messages":[{"role":"user","content":"turn 1 hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"turn 2 question"},{"role":"assistant","content":"turn 2 answer"},{"role":"user","content":"turn 3 follow-up"},{"role":"assistant","content":"turn 3 answer"},{"role":"user","content":"turn 4 quota"}]}`)
-	got4Attempt1, _, errPick := manager.pickNext(ctx, provider, model, turn4, nil)
+	got4Attempt1, _, _, errPick := manager.pickNextMixed(ctx, []string{provider}, model, turn4, nil)
 	if errPick != nil || got4Attempt1 == nil || got4Attempt1.ID != highID {
 		t.Fatalf("turn 4 attempt 1 pick = %v (err=%v), want %q", got4Attempt1, errPick, highID)
 	}
@@ -443,7 +427,7 @@ func TestManagerSessionAffinityRebindOnQuotaLCPPreservesBindingAcrossTransientFa
 		Options:  turn4,
 	})
 	turn4Failover := makeTurnOpts(`{"messages":[{"role":"user","content":"turn 1 hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"turn 2 question"},{"role":"assistant","content":"turn 2 answer"},{"role":"user","content":"turn 3 follow-up"},{"role":"assistant","content":"turn 3 answer"},{"role":"user","content":"turn 4 quota"}]}`)
-	got4Attempt2, _, errPick := manager.pickNext(ctx, provider, model, turn4Failover, map[string]struct{}{highID: {}})
+	got4Attempt2, _, _, errPick := manager.pickNextMixed(ctx, []string{provider}, model, turn4Failover, map[string]struct{}{highID: {}})
 	if errPick != nil || got4Attempt2 == nil || got4Attempt2.ID != lowID {
 		t.Fatalf("turn 4 quota failover pick = %v (err=%v), want %q", got4Attempt2, errPick, lowID)
 	}
@@ -451,7 +435,7 @@ func TestManagerSessionAffinityRebindOnQuotaLCPPreservesBindingAcrossTransientFa
 
 	expireSessionAffinityPriorityModelCooldown(t, manager, highID, model)
 	turn5 := makeTurnOpts(`{"messages":[{"role":"user","content":"turn 1 hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"turn 2 question"},{"role":"assistant","content":"turn 2 answer"},{"role":"user","content":"turn 3 follow-up"},{"role":"assistant","content":"turn 3 answer"},{"role":"user","content":"turn 4 quota"},{"role":"assistant","content":"turn 4 answer"},{"role":"user","content":"turn 5 after quota recovery"}]}`)
-	got5, _, errPick := manager.pickNext(ctx, provider, model, turn5, nil)
+	got5, _, _, errPick := manager.pickNextMixed(ctx, []string{provider}, model, turn5, nil)
 	if errPick != nil || got5 == nil || got5.ID != lowID {
 		t.Fatalf("turn 5 pick after quota recovery = %v (err=%v), want sticky %q", got5, errPick, lowID)
 	}

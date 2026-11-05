@@ -231,6 +231,29 @@ fn atomic_configuration_write_replaces_existing_contents() {
     fs::remove_dir_all(home).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn atomic_configuration_write_keeps_the_existing_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = agent_test_home("directory-atomic-write-mode");
+    for mode in [0o600, 0o640, 0o755] {
+        let path = home.join(format!("settings-{mode:o}.json"));
+        fs::write(&path, b"old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+
+        write_bytes_atomically(&path, b"new").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            mode,
+            "mode {mode:o} was not kept"
+        );
+    }
+    fs::remove_dir_all(home).unwrap();
+}
+
 #[cfg(windows)]
 #[test]
 #[ignore = "Requires a writable WSL UNC directory in ECPA_TEST_WSL_CONFIG_ROOT"]

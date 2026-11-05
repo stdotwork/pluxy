@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	log "github.com/sirupsen/logrus"
 )
@@ -100,61 +99,6 @@ func ResolveAutoModel(modelName string) string {
 
 	log.Infof("Resolved 'auto' model to: %s", firstModel)
 	return firstModel
-}
-
-// IsOpenAICompatibilityAlias checks if the given model name is an alias
-// configured for OpenAI compatibility routing.
-//
-// Parameters:
-//   - modelName: The model name to check
-//   - cfg: The application configuration containing OpenAI compatibility settings
-//
-// Returns:
-//   - bool: True if the model name is an OpenAI compatibility alias, false otherwise
-func IsOpenAICompatibilityAlias(modelName string, cfg *config.Config) bool {
-	if cfg == nil {
-		return false
-	}
-
-	for _, compat := range cfg.OpenAICompatibility {
-		if compat.Disabled {
-			continue
-		}
-		for _, model := range compat.Models {
-			if model.Alias == modelName {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// GetOpenAICompatibilityConfig returns the OpenAI compatibility configuration
-// and model details for the given alias.
-//
-// Parameters:
-//   - alias: The model alias to find configuration for
-//   - cfg: The application configuration containing OpenAI compatibility settings
-//
-// Returns:
-//   - *config.OpenAICompatibility: The matching compatibility configuration, or nil if not found
-//   - *config.OpenAICompatibilityModel: The matching model configuration, or nil if not found
-func GetOpenAICompatibilityConfig(alias string, cfg *config.Config) (*config.OpenAICompatibility, *config.OpenAICompatibilityModel) {
-	if cfg == nil {
-		return nil, nil
-	}
-
-	for _, compat := range cfg.OpenAICompatibility {
-		if compat.Disabled {
-			continue
-		}
-		for _, model := range compat.Models {
-			if model.Alias == alias {
-				return &compat, &model
-			}
-		}
-	}
-	return nil, nil
 }
 
 // InArray checks if a string exists in a slice of strings.

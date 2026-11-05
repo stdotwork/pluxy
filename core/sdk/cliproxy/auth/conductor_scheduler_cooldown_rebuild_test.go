@@ -58,18 +58,18 @@ func TestScheduler_ModelCooldown_DoesNotTriggerRebuild(t *testing.T) {
 		t.Fatalf("shouldRetrySchedulerPick returned true for modelCooldownError; cooldown must not trigger scheduler rebuild")
 	}
 
-	// Capture scheduler provider pointer before pickNext.
+	// Capture scheduler provider pointer before pickNextMixed.
 	manager.scheduler.mu.Lock()
 	providerSchedulerBefore := manager.scheduler.providers["gemini"]
 	manager.scheduler.mu.Unlock()
 
-	// Calling pickNext on a cooled down model should return modelCooldownError without rebuilding.
-	_, _, errPickNext := manager.pickNext(ctx, "gemini", model, cliproxyexecutor.Options{}, nil)
+	// Calling pickNextMixed on a cooled down model should return modelCooldownError without rebuilding.
+	_, _, _, errPickNext := manager.pickNextMixed(ctx, []string{"gemini"}, model, cliproxyexecutor.Options{}, nil)
 	if errPickNext == nil {
-		t.Fatal("expected pickNext to fail with cooldown error, got nil")
+		t.Fatal("expected pickNextMixed to fail with cooldown error, got nil")
 	}
 	if !errors.As(errPickNext, &targetCooldownErr) {
-		t.Fatalf("expected pickNext error to be *modelCooldownError, got: %v", errPickNext)
+		t.Fatalf("expected pickNextMixed error to be *modelCooldownError, got: %v", errPickNext)
 	}
 
 	manager.scheduler.mu.Lock()
@@ -78,7 +78,7 @@ func TestScheduler_ModelCooldown_DoesNotTriggerRebuild(t *testing.T) {
 
 	// In the buggy implementation, syncScheduler re-allocates providers map and providerScheduler during rebuild.
 	if providerSchedulerBefore != providerSchedulerAfter {
-		t.Fatalf("pickNext unexpectedly triggered a full scheduler rebuild on cooldown error")
+		t.Fatalf("pickNextMixed unexpectedly triggered a full scheduler rebuild on cooldown error")
 	}
 
 	// Verify that syncedVersion has caught up to currentVersion so subsequent picks take the fast-path.
@@ -86,10 +86,10 @@ func TestScheduler_ModelCooldown_DoesNotTriggerRebuild(t *testing.T) {
 		t.Fatalf("syncedVersion (%d) did not advance to currentVersion (%d)", manager.syncedVersion.Load(), manager.currentVersion())
 	}
 
-	// Subsequent pickNext call must take the fast path without scanning.
-	_, _, errSubsequent := manager.pickNext(ctx, "gemini", model, cliproxyexecutor.Options{}, nil)
+	// Subsequent pickNextMixed call must take the fast path without scanning.
+	_, _, _, errSubsequent := manager.pickNextMixed(ctx, []string{"gemini"}, model, cliproxyexecutor.Options{}, nil)
 	if !errors.As(errSubsequent, &targetCooldownErr) {
-		t.Fatalf("expected subsequent pickNext error to be *modelCooldownError, got: %v", errSubsequent)
+		t.Fatalf("expected subsequent pickNextMixed error to be *modelCooldownError, got: %v", errSubsequent)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestScheduler_ConcurrentCooldownPicks_DoNotBlockHealthyModel(t *testing.T) 
 		go func() {
 			defer wg.Done()
 			<-startGate
-			_, _, _ = manager.pickNext(ctx, "gemini", cooledModel, cliproxyexecutor.Options{}, nil)
+			_, _, _, _ = manager.pickNextMixed(ctx, []string{"gemini"}, cooledModel, cliproxyexecutor.Options{}, nil)
 		}()
 	}
 
@@ -149,7 +149,7 @@ func TestScheduler_ConcurrentCooldownPicks_DoNotBlockHealthyModel(t *testing.T) 
 	healthyDone := make(chan struct{})
 	go func() {
 		<-startGate
-		picked, exec, errPick := manager.pickNext(ctx, "gemini", healthyModel, cliproxyexecutor.Options{}, nil)
+		picked, exec, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, healthyModel, cliproxyexecutor.Options{}, nil)
 		if errPick != nil || picked == nil || exec == nil {
 			t.Errorf("healthy pick failed: picked=%v, err=%v", picked, errPick)
 		}
@@ -247,7 +247,7 @@ func TestScheduler_InterleavedMarkResult_DoesNotTriggerRebuild(t *testing.T) {
 		}()
 	}
 
-	// Concurrent workers attempting pickNext on modelCooldown while MarkResult is actively mutating generations.
+	// Concurrent workers attempting pickNextMixed on modelCooldown while MarkResult is actively mutating generations.
 	const pickWorkers = 20
 	pickDone := make(chan struct{})
 	go func() {
@@ -257,9 +257,9 @@ func TestScheduler_InterleavedMarkResult_DoesNotTriggerRebuild(t *testing.T) {
 			go func() {
 				defer pickWg.Done()
 				for j := 0; j < 10; j++ {
-					_, _, errPick := manager.pickNext(ctx, "gemini", modelCooldown, cliproxyexecutor.Options{}, nil)
+					_, _, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, modelCooldown, cliproxyexecutor.Options{}, nil)
 					if errPick == nil {
-						t.Errorf("expected pickNext on cooldown model to fail")
+						t.Errorf("expected pickNextMixed on cooldown model to fail")
 					}
 				}
 			}()
@@ -359,13 +359,13 @@ func TestScheduler_LargeCredentialSet_CooldownDoesNotLockStarve(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-startGate
-			_, _, errPick := manager.pickNext(ctx, "antigravity", targetModel, cliproxyexecutor.Options{}, nil)
+			_, _, _, errPick := manager.pickNextMixed(ctx, []string{"antigravity"}, targetModel, cliproxyexecutor.Options{}, nil)
 			if errPick == nil {
-				t.Errorf("expected pickNext on targetModel to fail with cooldown error")
+				t.Errorf("expected pickNextMixed on targetModel to fail with cooldown error")
 			}
 			var cdErr *modelCooldownError
 			if !errors.As(errPick, &cdErr) {
-				t.Errorf("expected pickNext error to be *modelCooldownError, got: %v", errPick)
+				t.Errorf("expected pickNextMixed error to be *modelCooldownError, got: %v", errPick)
 			}
 		}()
 	}
@@ -373,7 +373,7 @@ func TestScheduler_LargeCredentialSet_CooldownDoesNotLockStarve(t *testing.T) {
 	healthyDone := make(chan struct{})
 	go func() {
 		<-startGate
-		picked, _, errPick := manager.pickNext(ctx, "antigravity", siblingModel, cliproxyexecutor.Options{}, nil)
+		picked, _, _, errPick := manager.pickNextMixed(ctx, []string{"antigravity"}, siblingModel, cliproxyexecutor.Options{}, nil)
 		if errPick != nil || picked == nil {
 			t.Errorf("sibling model pick failed: picked=%v, err=%v", picked, errPick)
 		}
@@ -736,13 +736,13 @@ func TestScheduler_RegisterClient_InvalidatesFastPath(t *testing.T) {
 		t.Fatalf("currentVersion (%d) did not increase after RegisterClient (syncedVersion=%d)", manager.currentVersion(), manager.syncedVersion.Load())
 	}
 
-	// pickNext on dynamicModel must succeed by discovering the new model.
-	picked, exec, errPick := manager.pickNext(ctx, "gemini", dynamicModel, cliproxyexecutor.Options{}, nil)
+	// pickNextMixed on dynamicModel must succeed by discovering the new model.
+	picked, exec, _, errPick := manager.pickNextMixed(ctx, []string{"gemini"}, dynamicModel, cliproxyexecutor.Options{}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext failed to discover dynamically registered model: %v", errPick)
+		t.Fatalf("pickNextMixed failed to discover dynamically registered model: %v", errPick)
 	}
 	if picked == nil || picked.ID != auth.ID || exec == nil {
-		t.Fatalf("pickNext returned unexpected auth=%v, exec=%v", picked, exec)
+		t.Fatalf("pickNextMixed returned unexpected auth=%v, exec=%v", picked, exec)
 	}
 }
 
@@ -786,9 +786,9 @@ func TestScheduler_UnschedulableAuth_DoesNotTriggerRebuildLoop(t *testing.T) {
 	})
 
 	// Initial pick on model should sync once and converge.
-	_, _, errPickInitial := manager.pickNext(ctx, "gemini", model, cliproxyexecutor.Options{}, nil)
+	_, _, _, errPickInitial := manager.pickNextMixed(ctx, []string{"gemini"}, model, cliproxyexecutor.Options{}, nil)
 	if errPickInitial == nil {
-		t.Fatal("expected pickNext to fail with cooldown error")
+		t.Fatal("expected pickNextMixed to fail with cooldown error")
 	}
 
 	// Synced version must have converged to currentVersion despite the unschedulable auth.
@@ -803,7 +803,7 @@ func TestScheduler_UnschedulableAuth_DoesNotTriggerRebuildLoop(t *testing.T) {
 
 	// Subsequent pick attempts on the cooling model MUST NOT trigger rebuilds.
 	for i := 0; i < 5; i++ {
-		_, _, _ = manager.pickNext(ctx, "gemini", model, cliproxyexecutor.Options{}, nil)
+		_, _, _, _ = manager.pickNextMixed(ctx, []string{"gemini"}, model, cliproxyexecutor.Options{}, nil)
 	}
 
 	manager.scheduler.mu.Lock()

@@ -2781,7 +2781,7 @@ pub(crate) fn find_deepseek_harness_managed_executable(home: &Path) -> Option<Pa
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn find_deepseek_harness_managed_executable_in_roots(
     home: &Path,
     app_roots: &[PathBuf],
