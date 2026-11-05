@@ -49,9 +49,8 @@ CGO_ENABLED=1 go vet ./...
 gofmt -l .                                                           # must not list files you touched
 ```
 
-Known state on `main` today: `go vet ./...` fails on a copied lock at
-`internal/pluginhost/host_test.go:1637` (a fix is in progress), and `gofmt -l .` lists two
-inherited test files under `internal/runtime/executor/`. Some `internal/runtime/executor` tests
+`gofmt -l .` lists two inherited test files under `internal/runtime/executor/`; leave them
+unless your change touches them. Some `internal/runtime/executor` tests
 are sensitive to machine load and to repeated runs (`-count` above 1); rerun a failure there
 before assuming your change caused it.
 
@@ -68,21 +67,10 @@ bun run build         # tsc + Vite; writes dist/index.html
 bun run verify        # test + lint + build, what CI runs
 ```
 
-Two tests in `tests/toolchainVersion.test.ts` read `.github/workflows/ci.yml` and `release.yml`
-inside the panel folder. Today those files live at the repo root as `panel-ci.yml` and
-`panel-release.yml`, and CI copies them in before testing. To run the full suite locally, do the
-same copy first and delete the copies afterwards:
-
-```bash
-mkdir -p .github/workflows
-cp ../../.github/workflows/panel-ci.yml .github/workflows/ci.yml
-cp ../../.github/workflows/panel-release.yml .github/workflows/release.yml
-```
-
 ### `extensions/app/`
 
-Bun `1.3.14` (`packageManager` in `package.json`) and a stable Rust toolchain (no version is
-pinned in the tree). Building the Rust side on Linux needs the WebKitGTK 4.1 development
+Bun `1.3.14` (`packageManager` in `package.json`) and a stable Rust toolchain (none is pinned in
+the tree; CI uses 1.97.0). Building the Rust side on Linux needs the WebKitGTK 4.1 development
 packages.
 
 ```bash
@@ -91,12 +79,8 @@ bun run check         # tsc --noEmit
 bun run build         # tsc + Vite; writes dist/, which the Rust build embeds
 ```
 
-Tests use `bun test` (there is no `test` script). On `main` today the suite does not pass: two
-test files read upstream workflow files that were removed when the app moved here (a fix is in
-progress); a few files, such as `tests/cssLayers.test.ts` and `tests/i18n.test.ts`, fail on
-their own; and many more tests fail only when the whole suite runs together but pass when their
-file runs alone. Run the test files for the code you change, for example
-`bun test tests/plugins.test.ts`, and compare against `main` before blaming your change.
+Tests use `bun test` (there is no `test` script); CI runs the whole suite. While working, run
+the test files for the code you change, for example `bun test tests/plugins.test.ts`.
 
 Rust tests run from `extensions/app/src-tauri` (build the front end first so `dist/` exists):
 
@@ -107,7 +91,8 @@ cargo test --locked
 The app manages agent configuration folders under your home directory (such as `~/.claude`
 and `~/.codex`) and starts and stops processes, and not every test has been checked to keep to
 temporary folders. Run these tests in CI or a throwaway machine or container, not on a machine
-with live agent sessions or a running core.
+with live agent sessions or a running core. CI runs them with an empty temporary `HOME` and XDG
+folders.
 
 The `test:ui:*` and `test:desktop:*` scripts in `package.json` drive a browser or the desktop
 app; they are not part of the routine checks above.
@@ -118,12 +103,13 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
-| `core-pr-test-build.yml` | PRs touching `core/` | Refreshes the model catalog, then `go build ./cmd/server` |
+| `core-pr-test-build.yml` | PRs and pushes to `main` touching `core/` | Refreshes the model catalog, then `go build ./cmd/server`, `go vet ./...` and `go test ./...` |
 | `core-release.yaml` | `core-v*` tags | Builds release archives and creates the GitHub release |
 | `panel-ci.yml` | PRs and pushes to `main` touching `extensions/panel/` | `bun install --frozen-lockfile`, then `bun run verify` |
 | `panel-release.yml` | `panel-v*` tags | `bun run build`, publishes `management.html` |
+| `app-ci.yml` | PRs and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
 
-The app has no CI workflow yet. When you add a workflow, add a row here.
+When you add a workflow, add a row here.
 
 ## How changes flow
 
