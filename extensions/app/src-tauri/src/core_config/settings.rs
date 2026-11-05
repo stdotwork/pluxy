@@ -826,6 +826,12 @@ pub(crate) fn write_bytes_atomically(path: &Path, content: &[u8]) -> Result<(), 
 
     let write_result = (|| -> io::Result<()> {
         let mut file = File::create(&temporary_path)?;
+        // Keep the replaced file's mode (a 0600 file must not become 0644). Set it before
+        // any content is written so the new bytes are never readable with a wider mode.
+        #[cfg(unix)]
+        if let Ok(existing) = fs::metadata(path) {
+            file.set_permissions(existing.permissions())?;
+        }
         file.write_all(content)?;
         file.sync_all()?;
         drop(file);
