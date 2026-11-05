@@ -666,9 +666,14 @@ func TestCodexAutoExecutorUsesCodexOAuthWebsocketDefault(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.auth.ID = t.Name()
-			tt.auth.ProxyURL = "direct"
+			requests := make(chan struct{}, 4)
 			upgrader := websocket.Upgrader{}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodConnect {
+					t.Errorf("unexpected upstream dial through test proxy: %s", r.Host)
+					http.Error(w, "external dials are disabled in this test", http.StatusBadGateway)
+					return
+				}
 				conn, errUpgrade := upgrader.Upgrade(w, r, nil)
 				if errUpgrade != nil {
 					t.Errorf("upgrade: %v", errUpgrade)
@@ -680,6 +685,7 @@ func TestCodexAutoExecutorUsesCodexOAuthWebsocketDefault(t *testing.T) {
 					if errRead != nil {
 						return
 					}
+					requests <- struct{}{}
 					if got := ojson.GetBytes(payload, "type").String(); got != "response.create" {
 						t.Errorf("upstream event = %q, want response.create", got)
 					}
@@ -689,6 +695,8 @@ func TestCodexAutoExecutorUsesCodexOAuthWebsocketDefault(t *testing.T) {
 				}
 			}))
 			defer server.Close()
+			// Any unexpected dial is sent to this loopback server, which refuses CONNECT.
+			tt.auth.ProxyURL = server.URL
 			conn, _, errDial := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
 			if errDial != nil {
 				t.Fatalf("dial test upstream: %v", errDial)
@@ -708,8 +716,8 @@ func TestCodexAutoExecutorUsesCodexOAuthWebsocketDefault(t *testing.T) {
 			sess := exec.wsExec.getOrCreateSession(t.Name())
 			sess.conn = conn
 			sess.connCloser = newWebsocketConnectionCloser(conn)
-			sess.authID, sess.wsURL, sess.proxyURL = tt.auth.ID, wsURL, "direct"
-			if _, _, _, errConn := exec.wsExec.ensureUpstreamConn(context.Background(), tt.auth, sess, tt.auth.ID, wsURL, nil); errConn != nil {
+			sess.authID, sess.wsURL, sess.proxyURL = tt.auth.ID, wsURL, server.URL
+			if preparedConn, _, _, errConn := exec.wsExec.ensureUpstreamConn(context.Background(), tt.auth, sess, tt.auth.ID, wsURL, nil); errConn != nil || preparedConn != conn {
 				t.Fatalf("prepare test connection: %v", errConn)
 			}
 			ctx := cliproxyexecutor.WithRequiredUpstreamWebsocket(cliproxyexecutor.WithDownstreamWebsocket(context.Background()))
@@ -737,6 +745,13 @@ func TestCodexAutoExecutorUsesCodexOAuthWebsocketDefault(t *testing.T) {
 				} else if !cliproxyexecutor.IsUpstreamWebsocketReplayRequired(errExecute) {
 					t.Fatalf("stream=%t: error = %v, want HTTP replay signal", stream, errExecute)
 				}
+			}
+			wantRequests := 0
+			if tt.want {
+				wantRequests = 2
+			}
+			if got := len(requests); got != wantRequests {
+				t.Fatalf("loopback WebSocket requests = %d, want %d", got, wantRequests)
 			}
 		})
 	}

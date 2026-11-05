@@ -434,7 +434,7 @@ func canonicalModelKey(model string) string {
 }
 
 // WebsocketsEnabled reports the effective upstream WebSocket setting for an auth.
-// Explicit account metadata wins. Codex OAuth accounts without a custom endpoint
+// Explicit attributes win over metadata. Codex OAuth accounts without a custom endpoint
 // default to the ChatGPT WebSocket transport; API-key and custom-base-URL accounts
 // remain opt-in. Other providers keep their existing opt-in behavior.
 func WebsocketsEnabled(auth *Auth) bool {
