@@ -557,7 +557,8 @@ func TestTriggerServerUpdateCancelsPendingTimerOnImmediate(t *testing.T) {
 	}
 
 	w.serverUpdateMu.Lock()
-	if !w.serverUpdatePend || w.serverUpdateTimer == nil {
+	pending := w.serverUpdateTimer
+	if !w.serverUpdatePend || pending == nil {
 		w.serverUpdateMu.Unlock()
 		t.Fatal("expected a pending server update timer")
 	}
@@ -569,9 +570,16 @@ func TestTriggerServerUpdateCancelsPendingTimerOnImmediate(t *testing.T) {
 		t.Fatalf("expected immediate reload once, got %d", got)
 	}
 
-	time.Sleep(250 * time.Millisecond)
-	if got := atomic.LoadInt32(&reloads); got != 1 {
-		t.Fatalf("expected pending timer to be cancelled, got %d reloads", got)
+	// The immediate reload must stop the pending timer and clear its state.
+	// Stop reports false when the timer is no longer scheduled, so a timer that
+	// was left running (it still has about 100ms to go) makes this fail.
+	if pending.Stop() {
+		t.Fatal("expected the pending timer to be stopped by the immediate reload")
+	}
+	w.serverUpdateMu.Lock()
+	defer w.serverUpdateMu.Unlock()
+	if w.serverUpdatePend || w.serverUpdateTimer != nil {
+		t.Fatalf("expected pending state to be cleared, got pend=%v timer=%v", w.serverUpdatePend, w.serverUpdateTimer)
 	}
 }
 
@@ -824,24 +832,34 @@ func TestPersistAsyncEarlyReturns(t *testing.T) {
 type errorPersister struct {
 	configCalls int32
 	authCalls   int32
+	configDone  chan struct{}
+	authDone    chan struct{}
 }
 
 func (p *errorPersister) PersistConfig(context.Context) error {
 	atomic.AddInt32(&p.configCalls, 1)
+	p.configDone <- struct{}{}
 	return fmt.Errorf("persist config error")
 }
 
 func (p *errorPersister) PersistAuthFiles(context.Context, string, ...string) error {
 	atomic.AddInt32(&p.authCalls, 1)
+	p.authDone <- struct{}{}
 	return fmt.Errorf("persist auth error")
 }
 
 func TestPersistAsyncErrorPaths(t *testing.T) {
-	p := &errorPersister{}
+	p := &errorPersister{configDone: make(chan struct{}, 2), authDone: make(chan struct{}, 2)}
 	w := &Watcher{storePersister: p}
 	w.persistConfigAsync()
 	w.persistAuthAsync("msg", "a")
-	time.Sleep(30 * time.Millisecond)
+	for name, done := range map[string]chan struct{}{"PersistConfig": p.configDone, "PersistAuthFiles": p.authDone} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s to be called", name)
+		}
+	}
 	if atomic.LoadInt32(&p.configCalls) != 1 {
 		t.Fatalf("expected PersistConfig to be called once, got %d", p.configCalls)
 	}
@@ -856,7 +874,6 @@ func TestStopConfigReloadTimerSafeWhenNil(t *testing.T) {
 	w.configReloadMu.Lock()
 	w.configReloadTimer = time.AfterFunc(10*time.Millisecond, func() {})
 	w.configReloadMu.Unlock()
-	time.Sleep(1 * time.Millisecond)
 	w.stopConfigReloadTimer()
 }
 
@@ -1051,9 +1068,15 @@ func TestHandleEventConfigChangeSchedulesReload(t *testing.T) {
 
 	w.handleEvent(fsnotify.Event{Name: configPath, Op: fsnotify.Write})
 
-	time.Sleep(400 * time.Millisecond)
-	if atomic.LoadInt32(&reloads) != 1 {
-		t.Fatalf("expected config change to trigger reload once, got %d", reloads)
+	deadline := time.Now().Add(5 * time.Second)
+	for atomic.LoadInt32(&reloads) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the debounced config reload")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&reloads); got != 1 {
+		t.Fatalf("expected config change to trigger reload once, got %d", got)
 	}
 }
 
