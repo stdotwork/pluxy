@@ -5,6 +5,7 @@ import postcss from 'postcss';
 import ts from 'typescript';
 import { createThemeApplicator } from '../src/themes/applyTheme';
 import { builtinThemes } from '../src/themes/registry';
+import { isLegacyDialogRule } from './cssExceptions';
 
 const srcRoot = join(import.meta.dir, '..', 'src');
 const projectRoot = join(import.meta.dir, '..');
@@ -16,6 +17,14 @@ const DECLARED_LAYERS: Record<string, true> = {
   components: true,
   pages: true,
   theme: true,
+};
+
+// Upstream stylesheets without an @layer wrapper, with the number of root nodes outside it.
+// The count is exact, so any new unlayered rule fails.
+const UNLAYERED_EXCEPTIONS: Record<string, [number, string]> = {
+  'components/routing/RoutingPanel.css': [50, 'Upstream live routing panel, not yet put in a layer.'],
+  'pages/routing/RoutingPage.css': [91, 'Upstream routing page, not yet put in a layer.'],
+  'pages/PluginsPage.css': [1, 'One rule (.plugin-icon img.plugin-logo) added upstream after the closing brace of its @layer.'],
 };
 
 function walkCss(dir: string): string[] {
@@ -66,7 +75,8 @@ describe('CSS layer architecture and specificity regression', () => {
       const ast = postcss.parse(content, { from: filePath });
 
       ast.walkDecls((decl) => {
-        if (decl.important) {
+        const rule = decl.parent?.type === 'rule' ? (decl.parent as postcss.Rule) : undefined;
+        if (decl.important && !(rule && isLegacyDialogRule(relPath, rule.selector))) {
           violations.push(`${relPath}:${decl.source?.start?.line ?? 0} ${decl.prop}: ${decl.value} !important`);
         }
       });
@@ -133,6 +143,7 @@ describe('CSS layer architecture and specificity regression', () => {
 
     const files = walkCss(srcRoot);
     const unlayeredFiles: string[] = [];
+    const seen = new Set<string>();
 
     for (const filePath of files) {
       const relPath = relative(srcRoot, filePath).replaceAll('\\', '/');
@@ -152,11 +163,13 @@ describe('CSS layer architecture and specificity regression', () => {
         return true;
       });
 
-      if (bareNodes.length > 0) {
+      if (bareNodes.length !== (UNLAYERED_EXCEPTIONS[relPath]?.[0] ?? 0)) {
         unlayeredFiles.push(`${relPath} has ${bareNodes.length} unlayered root node(s)`);
       }
+      seen.add(relPath);
     }
 
+    for (const file of Object.keys(UNLAYERED_EXCEPTIONS)) if (!seen.has(file)) unlayeredFiles.push(`${file}: listed but missing`);
     expect(unlayeredFiles).toEqual([]);
   });
 

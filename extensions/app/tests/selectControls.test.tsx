@@ -10,6 +10,7 @@ const popupRoles = ['listbox', 'combobox'];
 const popupOwners = [
   'components/SelectMenu.tsx', 'components/AgentModelPicker.tsx', 'pages/ThinkingAliasesPage.tsx',
   'App.tsx', 'pages/EasyModePage.tsx', 'pages/CodexModelCatalogDialog.tsx', 'pages/DeepSeekHarnessCatalogDialog.tsx',
+  'pages/ZCodeModelCatalogDialog.tsx', // upstream dialog with its own model listbox, same pattern as the Codex catalog dialog
 ];
 const tagName = (node: ts.JsxOpeningLikeElement) => node.tagName.getText();
 const fileViolations = (path: string, text: string) => {
