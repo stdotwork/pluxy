@@ -22,6 +22,9 @@ const emptyExceptions: Record<string, string> = {
   'usage-analysis-muted': 'Inline muted text inside an analysis card.',
   'usage-activity-empty': 'Overlay positioned on the chart plot area.',
   'usage-trend-tooltip-empty': 'Chart tooltip content.',
+  'routing-empty': 'Upstream routing tier ladder, not yet migrated to EmptyState.',
+  'mcp-detail-empty': 'Upstream MCP & Skills detail placeholder, not yet migrated to EmptyState.',
+  'pages/AgentUsageView.tsx empty': 'Modifier on an empty sparkline (.agent-usage-sparkline.empty), not an empty state.',
 };
 const noticeHooks = [
   'plugin-banner', 'plugin-oauth-provider-status', 'template-config-notice', 'codex-session-notice', 'codex-session-notice-message', 'claude-code-model-error',
@@ -37,6 +40,8 @@ const roleExceptions: Record<string, [number, number, string]> = {
   'components/AppReleaseNotes.tsx': [0, 1, 'Release notes empty message.'],
   'components/AuthFileQuotaPanel.tsx': [0, 2, 'Dense credential quota cell loading and error lines.'],
   'components/AuthFileSettingsDialog.tsx': [0, 1, 'Catalog loading text.'],
+  'components/WindowFrame.tsx': [1, 0, 'Window chrome error text.'],
+  'components/routing/RoutingPanel.tsx': [0, 2, 'Upstream live routing panel, not yet migrated to Notice: running state and warning line.'],
   'components/StructuredConfigEditor.tsx': [1, 0, 'Field-level key error.'],
   'components/TemplateConfigSection.tsx': [1, 2, 'Field-level validation error, loading text and save status.'],
   'components/claude-code/ClaudeCodeModelInputs.tsx': [0, 1, 'Field hint.'],
@@ -52,8 +57,11 @@ const roleExceptions: Record<string, [number, number, string]> = {
   'pages/PluginResourcePage.tsx': [0, 1, 'Loading text.'],
   'pages/PluginSettingsPanel.tsx': [0, 1, 'Loading text.'],
   'pages/PluginsPage.tsx': [0, 2, 'Loading text.'],
+  'pages/routing/PolicyStrip.tsx': [1, 0, 'Upstream routing policy field-level TTL error.'],
+  'pages/routing/RoutingPage.tsx': [2, 2, 'Upstream routing page, not yet migrated to Notice: action hint, load errors and save status.'],
   'pages/UsageEventsView.tsx': [0, 1, 'Role passed to EmptyState for the loading placeholder.'],
   'pages/VertexLoginCard.tsx': [0, 1, 'Login result summary.'],
+  'pages/ZCodeSubagentConfigDialog.tsx': [1, 1, 'Role passed to EmptyState for the load error and loading placeholder.'],
 };
 const appearance = /^(background(-color|-image)?|border(-(top|right|bottom|left|color|style|width|radius|inline|block)[a-z-]*)?|border-radius|color|font-size|font-weight|box-shadow|opacity)$/;
 
@@ -138,7 +146,7 @@ describe('shared empty states and notices', () => {
       if (file === 'components/EmptyState.tsx') continue;
       if (token.startsWith('empty-state')) violations.push(`${file}:${item.line} uses ${token}`);
       if (emptyHooks.includes(token) && item.tag !== 'EmptyState') violations.push(`${file}:${item.line} <${item.tag} className="${token}"> must be an EmptyState`);
-      if (/(^|-)empty(-list)?$/.test(token) && !emptyHooks.includes(token) && !(token in emptyExceptions)) violations.push(`${file}:${item.line} unknown empty class ${token}`);
+      if (/(^|-)empty(-list)?$/.test(token) && !emptyHooks.includes(token) && !(token in emptyExceptions) && !(`${file} ${token}` in emptyExceptions)) violations.push(`${file}:${item.line} unknown empty class ${token}`);
     }
     expect(violations).toEqual([]);
   });
