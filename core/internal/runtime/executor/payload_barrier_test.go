@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/MoeForge/moego/ojson"
@@ -512,4 +513,144 @@ func TestPayloadBarrierMultiExecutorSingleDocConsistency(t *testing.T) {
 			t.Fatalf("filtered_out should be removed by finalizer: %s", out)
 		}
 	})
+}
+
+const payloadRuleProbeKey = "payload_rule_probe"
+
+// payloadRuleProbeConfig returns a config whose rules apply to every model: an override that adds
+// payloadRuleProbeKey and a filter that removes the given field.
+func payloadRuleProbeConfig(filtered string) *config.Config {
+	models := []config.PayloadModelRule{{Name: "*"}}
+	return &config.Config{Payload: config.PayloadConfig{
+		Override: []config.PayloadRule{{Models: models, Params: map[string]any{payloadRuleProbeKey: "configured"}}},
+		Filter:   []config.PayloadFilterRule{{Models: models, Params: []string{filtered}}},
+	}}
+}
+
+// newPayloadCaptureServer starts an upstream that records the body of every request except the
+// service-account token exchange and answers through respond. The returned func reports the body
+// of the most recent captured request.
+func newPayloadCaptureServer(t *testing.T, respond http.HandlerFunc) (*httptest.Server, func() []byte) {
+	t.Helper()
+	var mu sync.Mutex
+	var last []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"probe-token","token_type":"Bearer","expires_in":3600}`))
+			return
+		}
+		body, errRead := io.ReadAll(r.Body)
+		if errRead != nil {
+			t.Errorf("read upstream request body: %v", errRead)
+			return
+		}
+		mu.Lock()
+		last = body
+		mu.Unlock()
+		respond(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server, func() []byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return bytes.Clone(last)
+	}
+}
+
+// assertPayloadRulesApplyOnPath checks that user payload rules reach the upstream on one request
+// path. run performs the request against a fresh executor built from cfg and returns the body the
+// upstream received. A control run without rules first proves the filtered field is really sent,
+// so its later absence can only come from the filter rule.
+func assertPayloadRulesApplyOnPath(t *testing.T, filtered string, run func(cfg *config.Config) []byte) {
+	t.Helper()
+	control := run(&config.Config{})
+	if !ojson.GetBytes(control, filtered).Exists() || ojson.GetBytes(control, payloadRuleProbeKey).Exists() {
+		t.Fatalf("control request without rules must carry %q and no probe key: %s", filtered, control)
+	}
+	got := run(payloadRuleProbeConfig(filtered))
+	if value := ojson.GetBytes(got, payloadRuleProbeKey).String(); value != "configured" {
+		t.Fatalf("override %q = %q, want configured: %s", payloadRuleProbeKey, value, got)
+	}
+	if ojson.GetBytes(got, filtered).Exists() {
+		t.Fatalf("filtered field %q reached the upstream: %s", filtered, got)
+	}
+}
+
+// Local token counters never reach an upstream, so the rules are checked through the count: the
+// count with rules must equal the count of a rule-free request that literally carries the final
+// content, and must differ from the count of the request as the client sent it.
+func TestPayloadBarrierLocalTokenCountsApplyPayloadRules(t *testing.T) {
+	const longText = "a much longer configured prompt that is certain to take more tokens than the short original one it replaces"
+	messageItem := func(text string) string {
+		return `{"type":"message","role":"user","content":[{"type":"input_text","text":"` + text + `"}]}`
+	}
+	tests := []struct {
+		name      string
+		model     string
+		format    sdktranslator.Format
+		countPath string
+		override  map[string]any
+		filter    string
+		original  string
+		final     string
+		count     func(cfg *config.Config, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error)
+	}{
+		{
+			name:      "openai compat",
+			model:     "gpt-5.4",
+			format:    sdktranslator.FormatOpenAI,
+			countPath: "usage.prompt_tokens",
+			override:  map[string]any{"messages.0.content": longText},
+			filter:    "messages.1",
+			original:  `{"messages":[{"role":"user","content":"hi"},{"role":"user","content":"dropped second turn"}]}`,
+			final:     `{"messages":[{"role":"user","content":"` + longText + `"}]}`,
+			count: func(cfg *config.Config, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+				return NewOpenAICompatExecutor("openai-compatibility", cfg).CountTokens(context.Background(), nil, req, opts)
+			},
+		},
+		{
+			name:      "codex",
+			model:     "gpt-5.4",
+			format:    sdktranslator.FormatOpenAIResponse,
+			countPath: "response.usage.input_tokens",
+			override:  map[string]any{"instructions": longText},
+			filter:    "input.1",
+			original:  `{"input":[` + messageItem("hi") + `,` + messageItem("dropped second turn") + `]}`,
+			final:     `{"instructions":"` + longText + `","input":[` + messageItem("hi") + `]}`,
+			count: func(cfg *config.Config, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+				return NewCodexExecutor(cfg).CountTokens(context.Background(), nil, req, opts)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			count := func(cfg *config.Config, payload string) int64 {
+				t.Helper()
+				resp, errCount := tt.count(cfg, cliproxyexecutor.Request{Model: tt.model, Payload: []byte(payload)}, cliproxyexecutor.Options{SourceFormat: tt.format})
+				if errCount != nil {
+					t.Fatalf("CountTokens() error = %v", errCount)
+				}
+				value := ojson.GetBytes(resp.Payload, tt.countPath)
+				if !value.Exists() || value.Int() <= 0 {
+					t.Fatalf("missing token count at %s: %s", tt.countPath, resp.Payload)
+				}
+				return value.Int()
+			}
+			models := []config.PayloadModelRule{{Name: "*"}}
+			rules := &config.Config{Payload: config.PayloadConfig{
+				Override: []config.PayloadRule{{Models: models, Params: tt.override}},
+				Filter:   []config.PayloadFilterRule{{Models: models, Params: []string{tt.filter}}},
+			}}
+
+			unruled := count(&config.Config{}, tt.original)
+			want := count(&config.Config{}, tt.final)
+			if want == unruled {
+				t.Fatalf("fixture cannot detect skipped rules: final and original both count %d", want)
+			}
+			if got := count(rules, tt.original); got != want {
+				t.Fatalf("count with payload rules = %d, want %d (rule-free count of the final payload; unmodified request counts %d)", got, want, unruled)
+			}
+		})
+	}
 }
