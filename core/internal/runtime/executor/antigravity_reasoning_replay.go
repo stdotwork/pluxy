@@ -433,15 +433,6 @@ func clearAntigravityReasoningReplayOnInvalidSignature(ctx context.Context, scop
 	return errDelete
 }
 
-func applyAntigravityReasoningReplayCache(ctx context.Context, modelName string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, payload []byte) ([]byte, antigravityReasoningReplayScope, bool, error) {
-	doc := ojson.NewDoc(payload)
-	scope, changed, err := applyAntigravityReasoningReplayCacheDoc(ctx, modelName, req, opts, doc)
-	if err != nil || !changed {
-		return payload, scope, false, err
-	}
-	return doc.Bytes(), scope, true, nil
-}
-
 func applyAntigravityReasoningReplayCacheDoc(ctx context.Context, modelName string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, doc *ojson.Doc) (antigravityReasoningReplayScope, bool, error) {
 	if doc == nil {
 		return antigravityReasoningReplayScope{}, false, nil
@@ -1029,28 +1020,6 @@ func filterAntigravityReasoningReplayItemsForRequestWithIndex(
 	return filtered
 }
 
-func antigravityExistingToolCallKeys(payload []byte) map[string]bool {
-	existing := make(map[string]bool)
-	contents := util.GetGJSONBytesNoCopy(payload, "request.contents")
-	if !contents.IsArray() {
-		return existing
-	}
-	for _, content := range contents.Array() {
-		parts := content.Get("parts")
-		if !parts.IsArray() {
-			continue
-		}
-		for _, part := range parts.Array() {
-			if fc := part.Get("functionCall"); fc.Exists() {
-				for _, key := range antigravityReplayToolCallKeysFromPart(fc) {
-					existing[key] = true
-				}
-			}
-		}
-	}
-	return existing
-}
-
 func antigravityReplayToolCallKeys(itemResult ojson.Result) []string {
 	callID := strings.TrimSpace(itemResult.Get("call_id").String())
 	if callID == "" {
@@ -1082,15 +1051,6 @@ func antigravityFunctionCallKey(name, argsRaw, callID string) string {
 	}
 	h := sha256.Sum256([]byte(strings.Join([]string{name, argsRaw, callID}, "\x00")))
 	return fmt.Sprintf("fc:%x", h[:8])
-}
-
-func antigravityAnyKeyExists(existing map[string]bool, keys []string) bool {
-	for _, key := range keys {
-		if existing[key] {
-			return true
-		}
-	}
-	return false
 }
 
 func restoreAntigravityFunctionResponseReplayIdentity(payload []byte, currentID, nativeID, nativeName string) []byte {
@@ -3049,14 +3009,6 @@ func cacheAntigravityReasoningReplayFromResponse(ctx context.Context, scope anti
 		acc.terminal = true
 	}
 	acc.Commit(ctx)
-}
-
-func applyAntigravityNativeSignatureReplayIfNeeded(modelName string, payload []byte) []byte {
-	if antigravityUsesReasoningReplayCache(modelName) {
-		return payload
-	}
-	// Native per-part signature replay is not on upstream/dev; Gemini uses HOME replay only.
-	return payload
 }
 
 func applyAntigravityNativeSignatureReplayIfNeededDoc(modelName string, doc *ojson.Doc) {

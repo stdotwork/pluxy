@@ -17,7 +17,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
@@ -165,14 +164,6 @@ func codexWebsocketTurnEventID(err error, payload []byte) error {
 	withID := *turnErr
 	withID.EventID = strings.Clone(ojson.GetBytesNoCopy(payload, "event_id").String())
 	return &withID
-}
-
-func normalizeCodexWebsocketParallelToolCalls(body []byte, headers http.Header) []byte {
-	if !util.IsCodexResponsesLiteRequest(body, headers) {
-		return body
-	}
-	body = helps.SetBoolIfDifferent(body, "parallel_tool_calls", false)
-	return body
 }
 
 func normalizeCodexWebsocketParallelToolCallsDoc(doc *ojson.Doc, headers http.Header) bool {

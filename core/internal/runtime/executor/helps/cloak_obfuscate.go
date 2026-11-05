@@ -93,19 +93,6 @@ func (m *SensitiveWordMatcher) ObfuscateText(text string) string {
 	return m.obfuscateText(text)
 }
 
-// ObfuscateSensitiveWords processes the payload and obfuscates sensitive words
-// in system blocks and message content.
-func ObfuscateSensitiveWords(payload []byte, matcher *SensitiveWordMatcher) []byte {
-	if matcher == nil || matcher.regex == nil || len(payload) == 0 {
-		return payload
-	}
-	doc := ojson.NewDoc(payload)
-	if !ObfuscateSensitiveWordsDoc(doc, matcher) {
-		return payload
-	}
-	return doc.Bytes()
-}
-
 // ObfuscateSensitiveWordsDoc processes doc in place and obfuscates sensitive words
 // in system blocks and message content.
 func ObfuscateSensitiveWordsDoc(doc *ojson.Doc, matcher *SensitiveWordMatcher) bool {

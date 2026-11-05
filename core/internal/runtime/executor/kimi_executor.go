@@ -1394,14 +1394,6 @@ func normalizeKimiToolsDoc(doc *ojson.Doc) bool {
 	return changed
 }
 
-func normalizeKimiToolList(body []byte, arrayKey string, isTools bool) []byte {
-	doc := ojson.NewDoc(body)
-	if !normalizeKimiToolListDoc(doc, arrayKey, isTools) {
-		return body
-	}
-	return doc.Bytes()
-}
-
 func normalizeKimiToolListDoc(doc *ojson.Doc, arrayKey string, isTools bool) bool {
 	if doc == nil {
 		return false
