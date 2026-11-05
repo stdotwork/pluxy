@@ -7,7 +7,7 @@
  * zero-limit/zero-used monthly row is hidden only while weekly data exists.
  */
 
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import i18n from '@/i18n';
@@ -65,8 +65,13 @@ const quotaFor = (
 const render = (quota: XaiQuotaState): string =>
   renderToStaticMarkup(createElement(XaiQuotaBody, { quota, classes }));
 
+let originalLanguage = i18n.language;
 beforeAll(async () => {
+  originalLanguage = i18n.language;
   await i18n.changeLanguage('en');
+});
+afterAll(async () => {
+  await i18n.changeLanguage(originalLanguage);
 });
 
 describe('resolveXaiSubscriptionPlan', () => {
