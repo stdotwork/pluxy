@@ -172,7 +172,7 @@ If you are running v0.2.5 or earlier, perform one manual migration: exit EasyCLI
 
 ## Supported Platforms
 
-GitHub Actions builds the following release packages:
+The app supports the following platforms and package formats:
 
 | Operating System | Architecture | Package |
 | --- | --- | --- |
