@@ -539,10 +539,6 @@ func getSelectorAvailableAuthsWithPriorityMode(ctx context.Context, auths []*Aut
 	return getAvailableAuthsWithPriorityMode(auths, provider, model, now, allPriorities)
 }
 
-func getAvailableAuthsAcrossPriorities(auths []*Auth, provider, model string, now time.Time) ([]*Auth, error) {
-	return getAvailableAuthsWithPriorityMode(auths, provider, model, now, true)
-}
-
 func getAvailableAuthsWithPriorityMode(auths []*Auth, provider, model string, now time.Time, allPriorities bool) ([]*Auth, error) {
 	if len(auths) == 0 {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth candidates"}

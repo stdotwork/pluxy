@@ -904,34 +904,6 @@ func (m *Manager) rememberHomeRuntimeAuth(sessionID string, auth *Auth) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) homeRuntimeAuthByID(sessionID string, authID string) (*Auth, ProviderExecutor, string, bool) {
-	sessionID = strings.TrimSpace(sessionID)
-	authID = strings.TrimSpace(authID)
-	if m == nil || sessionID == "" || authID == "" {
-		return nil, nil, "", false
-	}
-	m.mu.RLock()
-	sessionAuths := m.homeRuntimeAuths[sessionID]
-	auth := sessionAuths[authID]
-	m.mu.RUnlock()
-	if auth == nil || !authWebsocketsEnabled(auth) {
-		return nil, nil, "", false
-	}
-	logicalProvider := strings.ToLower(strings.TrimSpace(auth.Provider))
-	executorKey := executorKeyFromAuth(auth)
-	if logicalProvider == "" || executorKey == "" {
-		return nil, nil, "", false
-	}
-	executor, ok := m.Executor(executorKey)
-	if !ok && auth.Attributes != nil && strings.TrimSpace(auth.Attributes["base_url"]) != "" {
-		executor, ok = m.Executor("openai-compatibility")
-	}
-	if !ok {
-		return nil, nil, "", false
-	}
-	return auth.Clone(), executor, logicalProvider, true
-}
-
 func (m *Manager) pickNextViaHome(ctx context.Context, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	if m == nil {
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}

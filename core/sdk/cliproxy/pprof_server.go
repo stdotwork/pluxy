@@ -171,10 +171,6 @@ func (p *pprofServer) clearFailedServer(server *http.Server) {
 	p.mu.Unlock()
 }
 
-func (p *pprofServer) stopServer(server *http.Server, addr string, reason string) {
-	_ = p.stopServerWithContext(context.Background(), server, addr, reason)
-}
-
 func (p *pprofServer) stopOwnedServerWithContext(ctx context.Context, server *http.Server, addr string, reason string, owner uint64) error {
 	if p == nil || server == nil {
 		return nil

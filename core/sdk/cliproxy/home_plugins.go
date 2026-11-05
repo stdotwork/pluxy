@@ -115,16 +115,6 @@ func (s *Service) markHomePluginsSynced(syncKey string) {
 	s.homePluginSyncMu.Unlock()
 }
 
-func (s *Service) reportHomePluginStatus(ctx context.Context, cfg *config.Config, report homeplugins.SyncReport) {
-	s.reportHomePluginStatusWithClient(ctx, cfg, report, nil)
-}
-
-func (s *Service) reportHomePluginStatusWithClient(ctx context.Context, cfg *config.Config, report homeplugins.SyncReport, client *home.Client) {
-	if errReport := s.pushHomePluginStatusWithClient(ctx, cfg, report, client); errReport != nil {
-		log.Warnf("failed to report home plugin status: %v", errReport)
-	}
-}
-
 func (s *Service) pushHomePluginStatusWithClient(ctx context.Context, cfg *config.Config, report homeplugins.SyncReport, client *home.Client) error {
 	if s == nil || cfg == nil {
 		return nil
@@ -156,22 +146,6 @@ func (s *Service) pushHomePluginStatusWithClient(ctx context.Context, cfg *confi
 		return fmt.Errorf("push home plugin status: %w", errReport)
 	}
 	return nil
-}
-
-func (s *Service) processHomePluginTasks(ctx context.Context, cfg *config.Config) {
-	s.processHomePluginTasksWithClient(ctx, cfg, nil)
-}
-
-func (s *Service) processHomePluginTasksWithClient(ctx context.Context, cfg *config.Config, client *home.Client) {
-	tasks, errStage := s.stageHomePluginTasksWithClient(ctx, cfg, client)
-	if errStage != nil {
-		log.Warnf("failed to fetch home plugin tasks: %v", errStage)
-		return
-	}
-	work := &homePluginFinalization{taskWork: tasks}
-	if errFinalize := s.finalizeHomePluginWork(ctx, client, work); errFinalize != nil {
-		log.Warnf("failed to finalize home plugin tasks: %v", errFinalize)
-	}
 }
 
 func (s *Service) stageHomePluginTasksWithClient(ctx context.Context, cfg *config.Config, client *home.Client) ([]homePluginTaskWork, error) {
