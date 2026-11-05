@@ -507,12 +507,6 @@ func appendXAIImagesEditRefsDoc(doc *ojson.Doc, images []string) {
 	}
 }
 
-func appendXAIImagesEditRefs(req []byte, images []string) []byte {
-	doc := ojson.NewDoc(req)
-	appendXAIImagesEditRefsDoc(doc, images)
-	return doc.Bytes()
-}
-
 func buildXAIImagesEditRequest(model string, prompt string, images []string, responseFormat string, aspectRatio string, resolution string, quality string, n int64) []byte {
 	doc := buildXAIImagesOriginalBaseRequestDoc(model, prompt, normalizeImagesResponseFormat(responseFormat), aspectRatio, resolution, quality, n)
 	appendXAIImagesEditRefsDoc(doc, images)
