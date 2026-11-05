@@ -160,8 +160,7 @@ const buildAccounts = (): MockAccount[] => [
       rows: [
         {
           id: 'five-hour',
-          labelKey: 'kimi_quota.limit_window',
-          labelParams: { duration: '5h' },
+          labelKey: 'quota_window.five_hour',
           used: 25,
           limit: 100,
           resetAtMs: Date.now() + 2 * HOUR_MS,

@@ -40,6 +40,8 @@ type SessionCache struct {
 	stopOnce         sync.Once
 	sessionGroups    map[string]map[string]struct{}
 	bindingSequence  uint64
+	// now is a test seam for the clock; nil means time.Now. Read and written only under mu.
+	now func() time.Time
 }
 
 // NewSessionCache creates a cache with the specified TTL.
@@ -69,6 +71,14 @@ func NewSessionCacheWithCapacity(ttl time.Duration, maxEntries int) *SessionCach
 	return c
 }
 
+// currentTimeLocked returns the cache clock reading. Callers must hold c.mu.
+func (c *SessionCache) currentTimeLocked() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
 func (c *SessionCache) ensureInitializedLocked() {
 	if c.sessionGroups == nil {
 		c.sessionGroups = make(map[string]map[string]struct{})
@@ -94,7 +104,7 @@ func (c *SessionCache) Get(sessionID string) (string, bool) {
 		return "", false
 	}
 	c.mu.RLock()
-	now := time.Now()
+	now := c.currentTimeLocked()
 	entry, ok := c.entries[sessionID]
 	if ok && now.Before(entry.expiresAt) {
 		c.mu.RUnlock()
@@ -112,7 +122,7 @@ func (c *SessionCache) Get(sessionID string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if time.Now().Before(entry.expiresAt) {
+	if c.currentTimeLocked().Before(entry.expiresAt) {
 		return entry.authID, true
 	}
 	c.removeAliasGroupLocked(entry)
@@ -132,7 +142,7 @@ func (c *SessionCache) GetAndRefresh(sessionID string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	now := time.Now()
+	now := c.currentTimeLocked()
 	if !now.Before(entry.expiresAt) {
 		c.removeAliasGroupLocked(entry)
 		return "", false
@@ -170,7 +180,7 @@ func (c *SessionCache) setAliases(authID string, binding sessionBinding, session
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ensureInitializedLocked()
-	now := time.Now()
+	now := c.currentTimeLocked()
 
 	aliases := mergeSessionAliases(nil, sessionIDs...)
 	previousGroups := make([]sessionEntry, 0, len(sessionIDs))
@@ -362,7 +372,7 @@ func (c *SessionCache) latestSessionAuth(sessionID string, providers map[string]
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	now := time.Now()
+	now := c.currentTimeLocked()
 	var latest sessionEntry
 	for key := range c.sessionGroups[sessionID] {
 		entry := c.groups[key]
@@ -384,7 +394,7 @@ func (c *SessionCache) Touch(sessionID, expectedAuthID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ensureInitializedLocked()
-	now := time.Now()
+	now := c.currentTimeLocked()
 	entry, ok := c.entries[sessionID]
 	if !ok || entry.authID != expectedAuthID || !now.Before(entry.expiresAt) {
 		return false
@@ -502,9 +512,9 @@ func (c *SessionCache) Len() int {
 }
 
 func (c *SessionCache) cleanup() {
-	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := c.currentTimeLocked()
 	c.ensureInitializedLocked()
 	for _, group := range c.groups {
 		if !now.Before(group.expiresAt) {

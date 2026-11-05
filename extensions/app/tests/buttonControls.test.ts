@@ -11,14 +11,34 @@ const trunkFiles = ['styles.css', 'styles/ui-refinements.css', 'styles/workspace
 const trunkOverrides: Record<string, string> = {
   'styles/usage-subpages.css': 'Usage panels recolor secondary buttons with page tokens (usage-page-*); moves into semantic tokens in stage 2.',
 };
+const mcpPage = 'Upstream MCP & Skills page, not yet migrated to shared button controls.';
 const allowedSelectors: Record<string, string> = {
   '.usage-records-page .usage-tab-panel .usage-price-row-actions button:hover': 'Keeps the page-token hover on the price table actions that the usage panel recolors above.',
+  // Upstream pages that predate the shared button controls. Selectors are listed exactly, so a new rule still fails.
+  '.live-routing-heading .icon-button': 'Upstream live routing panel, not yet migrated to shared controls: sets the icon button height.',
+  '.mcp-header-actions button': mcpPage,
+  '.mcp-sidebar-top .primary-button': mcpPage,
+  '.mcp-server-row-button': mcpPage,
+  '.mcp-server-row-button:hover': mcpPage,
+  '.mcp-server-row-button.active': mcpPage,
+  '.mcp-detail-actions button': mcpPage,
+  '.mcp-delete-confirm-actions button': mcpPage,
+  '.mcp-copy-json-btn': mcpPage,
+  '.mcp-copy-json-btn:hover': mcpPage,
+  '.skill-card': mcpPage,
+  '.skill-card:hover': mcpPage,
+  '.skill-card.active': mcpPage,
+  '.skill-copy-path-btn': mcpPage,
+  '.skill-copy-path-btn:hover': mcpPage,
+  '.mcp-transport-option': mcpPage,
+  '.mcp-transport-option:hover': mcpPage,
+  '.mcp-transport-option.selected': mcpPage,
 };
 const rowButtons: Record<string, [number, string]> = {
   'components/WindowFrame.tsx': [2, 'Native window chrome uses caption button dimensions.'],
   'App.tsx': [2, 'Sidebar navigation items and language list rows (.nav-section, .sidebar-language-list).'],
   'pages/EasyModePage.tsx': [1, 'Language menu items (.simple-mode-lang-menu).'],
-  'pages/ThinkingAliasesPage.tsx': [3, 'Model list rows and effort options (.thinking-model-list, .thinking-effort-options).'],
+  'pages/ThinkingAliasesPage.tsx': [5, 'Model list rows, effort options and speed tier options (.thinking-model-list, .thinking-effort-options, .thinking-speed-options).'],
   'pages/AgentClientList.tsx': [1, 'Client list rows (.agent-list-items).'],
   'pages/AgentsPage.tsx': [1, 'Launch directory history rows (.agent-launch-directory-history-list).'],
   'pages/ApiAccessPage.tsx': [2, 'Provider category rows and the thinking level tag remove control (.provider-category-panel, .thinking-level-tags).'],
@@ -26,6 +46,8 @@ const rowButtons: Record<string, [number, string]> = {
   'pages/ConfigPanel.tsx': [1, 'Settings search result rows (.config-search-result-list).'],
   'pages/AgentConfigBackupDialog.tsx': [1, 'Backup version rows (.agent-backup-columns nav).'],
   'pages/DeepSeekHarnessCatalogDialog.tsx': [1, 'Harness model rows.'],
+  'pages/ZCodeModelCatalogDialog.tsx': [1, 'Catalog model rows (.codex-catalog-models), same as the Codex catalog dialog.'],
+  'pages/McpSkillsPage.tsx': [5, 'Upstream MCP & Skills page, not yet migrated to shared controls: server rows, skill cards, transport options and copy buttons.'],
 };
 const removed = [
   'auth-list-action', 'auth-toolbar-quiet', 'oauth-toolbar-quiet', 'usage-page-nav-btn', 'usage-events-export-btn', 'home-runtime-refresh', 'core-health-row-check',

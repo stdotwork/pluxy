@@ -826,6 +826,12 @@ pub(crate) fn write_bytes_atomically(path: &Path, content: &[u8]) -> Result<(), 
 
     let write_result = (|| -> io::Result<()> {
         let mut file = File::create(&temporary_path)?;
+        // Keep the replaced file's mode (a 0600 file must not become 0644). Set it before
+        // any content is written so the new bytes are never readable with a wider mode.
+        #[cfg(unix)]
+        if let Ok(existing) = fs::metadata(path) {
+            file.set_permissions(existing.permissions())?;
+        }
         file.write_all(content)?;
         file.sync_all()?;
         drop(file);
@@ -1406,6 +1412,44 @@ pub(crate) fn file_modified_time(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).ok()?.modified().ok()
 }
 
+/// Reads the GUI `config.toml`. The last value is true when the file could not be parsed and
+/// the defaults were returned instead; the unreadable file is first copied to
+/// `config.toml.corrupt-<unix milliseconds>` next to it, and the read fails if that copy fails,
+/// so the user's settings are never replaced without a copy.
+pub(crate) fn read_gui_config_file(
+    config_path: &Path,
+) -> Result<(GuiConfigFile, GuiConfigPresence, bool), String> {
+    let content = fs::read_to_string(config_path)
+        .map_err(|err| format!("Failed to read GUI configuration {}: {err}", path_to_string(config_path)))?;
+    match (
+        toml::from_str::<GuiConfigFile>(&content),
+        toml::from_str::<GuiConfigPresence>(&content),
+    ) {
+        (Ok(config), Ok(presence)) => Ok((config, presence, false)),
+        _ => {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis());
+            let mut backup_name = config_path.as_os_str().to_os_string();
+            backup_name.push(format!(".corrupt-{timestamp}"));
+            let backup_path = PathBuf::from(backup_name);
+            fs::copy(config_path, &backup_path).map_err(|err| {
+                format!(
+                    "Failed to back up unreadable GUI configuration {} to {}: {err}",
+                    path_to_string(config_path),
+                    path_to_string(&backup_path)
+                )
+            })?;
+            eprintln!(
+                "GUI configuration {} could not be parsed; a copy was saved to {} and defaults are used",
+                path_to_string(config_path),
+                path_to_string(&backup_path)
+            );
+            Ok((GuiConfigFile::default(), GuiConfigPresence::default(), true))
+        }
+    }
+}
+
 pub(crate) fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     let config_path = gui_config_path()?;
     let legacy_config_path = legacy_gui_config_path()?;
@@ -1414,20 +1458,8 @@ pub(crate) fn load_or_create_gui_config() -> Result<GuiConfigFile, String> {
     let had_existing_gui_config = gui_config_exists || legacy_config_exists;
 
     let (mut config, presence, mut changed, gui_parse_failed) = if gui_config_exists {
-        let content = fs::read_to_string(&config_path)
-            .map_err(|err| format!("Failed to read GUI configuration {}: {err}", path_to_string(&config_path)))?;
-        match (
-            toml::from_str::<GuiConfigFile>(&content),
-            toml::from_str::<GuiConfigPresence>(&content),
-        ) {
-            (Ok(config), Ok(presence)) => (config, presence, false, false),
-            _ => (
-                GuiConfigFile::default(),
-                GuiConfigPresence::default(),
-                true,
-                true,
-            ),
-        }
+        let (config, presence, parse_failed) = read_gui_config_file(&config_path)?;
+        (config, presence, parse_failed, parse_failed)
     } else if legacy_config_exists {
         let content = fs::read_to_string(&legacy_config_path).map_err(|err| {
             format!(
@@ -1867,7 +1899,10 @@ pub(crate) fn restore_window_position_for_monitor(
         tauri::Position::Physical(fitted_physical)
     };
     #[cfg(not(target_os = "macos"))]
-    let target_position = tauri::Position::Physical(fitted_physical);
+    let target_position = {
+        let _ = scale_factor;
+        tauri::Position::Physical(fitted_physical)
+    };
 
     (fitted_physical, target_position)
 }

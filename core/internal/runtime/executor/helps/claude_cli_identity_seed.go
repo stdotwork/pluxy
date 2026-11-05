@@ -21,11 +21,6 @@ func stableClaudeCLIDeviceID(seed string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// StableClaudeCLIDeviceID returns a deterministic device ID derived from a seed.
-func StableClaudeCLIDeviceID(seed string) string {
-	return stableClaudeCLIDeviceID(seed)
-}
-
 func stableClaudeCLIAccountUUID(seed string) string {
 	return uuid.NewSHA1(claudeCLIIdentityNamespace, []byte("cpa-claude-code-cli-account|"+seed)).String()
 }

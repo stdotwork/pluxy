@@ -36,10 +36,6 @@ export interface XaiBillingConfig {
   billing_period_end?: string;
 }
 
-export interface XaiBillingPayload {
-  config?: XaiBillingConfig | null;
-}
-
 export type XaiBillingPeriodType = 'weekly' | 'monthly' | 'unknown';
 
 export interface XaiProductUsageSummary {

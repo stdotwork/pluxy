@@ -250,7 +250,7 @@ requests:
   # Connection pooling has no global switch: it is enabled per api-key credential with
   # `connection-pool` on an api-keys entry (group level, overridable per key). See the
   # api-keys section below. OAuth credentials are never pooled by this setting;
-  # Antigravity keeps its own antigravity.connection-pool switch.
+  # Antigravity keeps its own oauth.providers.antigravity.connection-pool switch.
 
   # Maximum time, in seconds, for upstream TLS handshakes made by the shared built-in
   # uTLS client. It applies to both the Claude Code Anthropic transport and the Chrome
@@ -667,7 +667,6 @@ upstream:
 #       base-url: "https://example.com/api"         # optional, e.g. https://zenmux.ai/api; falls back to Google Vertex when omitted
 #       proxy-url: "socks5://proxy.example.com:1080" # optional per-key proxy override
 #       # proxy-url: "direct" # optional: explicit direct connect for this credential
-#       # interactions: true                        # optional: opt into native Vertex Interactions API routing (/v1beta1/interactions). For service account JSON files under auths/, add "interactions": true at the root of the file.
 #       headers:
 #         X-Custom-Header: "custom-value"
 #         # Values starting with "$" dynamically copy the header value from downstream client requests.
@@ -677,6 +676,7 @@ upstream:
 #         - name: "gemini-2.5-flash"                # upstream model name
 #           alias: "vertex-flash"                   # client-visible alias
 #           display-name: "Vertex Flash"            # optional catalog display name
+#           # openapi: false                        # optional: per-model override of the key-level openapi setting
 #           thinking:                                # optional: exact thinking capability for this configured model
 #             levels: ["high", "medium", "low", "none", "auto"]
 #         - name: "gemini-2.5-pro"
@@ -687,6 +687,9 @@ upstream:
 #       keys:
 #         - api-key: "vk-123..."                        # x-goog-api-key header
 #           weight: 5                                    # optional: weighted-round-robin share; omitted defaults to 1; maximum 1,000,000
+#           # interactions: true                         # optional: opt into native Vertex Interactions API routing (/v1beta1/interactions). For service account JSON files under auths/, add "interactions": true at the root of the file.
+#           # openapi: true                              # optional: true sends this key's requests through Vertex's OpenAI-compatible endpoints/openapi route, false keeps the Gemini route; omit to pick per model (non-Google "publisher/model" ids use openapi)
+#           # openapi-location: "global"                 # optional: location used when building the endpoints/openapi URL
 #
 #   # Codex API keys
 #
@@ -1001,6 +1004,7 @@ oauth:
   #   fork: true                  # keep the upstream model and also expose the alias as a separate client-visible model
   #   display-name: "Model Name" # override the human-readable name shown in model catalogs
   #   force-mapping: true         # rewrite upstream response model fields back to the client-visible alias (example below uses antigravity only)
+  #   openapi: true               # vertex only: true routes this model through Vertex's OpenAI-compatible endpoints/openapi route, false keeps the Gemini route
   # Per-auth OAuth aliases can also be stored in an OAuth auth JSON file as "model_aliases".
   # Legacy "model-aliases" credentials remain supported and are normalized at load time.
   # They apply only to that selected auth and take precedence over global aliases for the same client-visible alias.
@@ -1333,7 +1337,7 @@ plugins:
 #   proxy-url: ""                    # now requests.proxy-url
 #   auth-dir: "~/.cli-proxy-api"     # now oauth.auth-dir
 #   codex:                           # now oauth.providers.codex
-#     disable-codex-cloaking: false
+#     disable-codex-cloaking: false  # except this one: now upstream.codex.disable-codex-cloaking
 #   codex-api-key:                   # now api-keys.codex groups with keys
 #     - api-key: "your-upstream-key"
 #       base-url: "https://codex.example.com"

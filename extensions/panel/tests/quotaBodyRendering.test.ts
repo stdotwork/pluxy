@@ -7,7 +7,7 @@
  * a formatter's return value.
  */
 
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import i18n from '@/i18n';
@@ -31,8 +31,13 @@ const classes = bindQuotaClasses(
 const now = Date.now();
 
 // The i18n fallback is zh-CN; pin English so the countdown assertions read.
+let originalLanguage = i18n.language;
 beforeAll(async () => {
+  originalLanguage = i18n.language;
   await i18n.changeLanguage('en');
+});
+afterAll(async () => {
+  await i18n.changeLanguage(originalLanguage);
 });
 
 describe('CodexQuotaBody', () => {

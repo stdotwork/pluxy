@@ -37,13 +37,6 @@ const (
 	// KimiAIOAuthHost is the OAuth server endpoint for Kimi.ai.
 	KimiAIOAuthHost = "https://auth.kimi.ai"
 
-	// kimiOAuthHost is kept for internal backward compatibility.
-	kimiOAuthHost = KimiOAuthHost
-	// kimiDeviceCodeURL is the endpoint for requesting device codes for Kimi (.com).
-	kimiDeviceCodeURL = kimiOAuthHost + "/api/oauth/device_authorization"
-	// kimiTokenURL is the endpoint for exchanging device codes for tokens for Kimi (.com).
-	kimiTokenURL = kimiOAuthHost + "/api/oauth/token"
-
 	// KimiAPIBaseURL is the base URL for Kimi (.com) API requests.
 	KimiAPIBaseURL = "https://api.kimi.com/coding"
 	// KimiAIAPIBaseURL is the base URL for Kimi.ai API requests.
@@ -295,19 +288,9 @@ type DeviceFlowClient struct {
 	oauthHost  string
 }
 
-// NewDeviceFlowClient creates a new device flow client.
-func NewDeviceFlowClient(cfg *config.Config) *DeviceFlowClient {
-	return NewDeviceFlowClientWithDomain(cfg, KimiDefaultDomain)
-}
-
 // NewDeviceFlowClientWithDomain creates a new device flow client for the specified domain.
 func NewDeviceFlowClientWithDomain(cfg *config.Config, domain string) *DeviceFlowClient {
 	return NewDeviceFlowClientWithDomainDeviceIDAndProxyURL(cfg, domain, "", "")
-}
-
-// NewDeviceFlowClientWithDeviceID creates a new device flow client with the specified device ID.
-func NewDeviceFlowClientWithDeviceID(cfg *config.Config, deviceID string) *DeviceFlowClient {
-	return NewDeviceFlowClientWithDomainDeviceIDAndProxyURL(cfg, KimiDefaultDomain, deviceID, "")
 }
 
 // NewDeviceFlowClientWithDeviceIDAndProxyURL creates a new device flow client with a proxy override.

@@ -71,13 +71,6 @@ func QualifyResponsesNamespaceToolName(namespaceName, childName string) string {
 	return namespaceName + "__" + childName
 }
 
-func responsesToolSources(root ojson.Result, includeClientToolSearch bool) []struct {
-	tools    ojson.Result
-	priority int
-} {
-	return responsesToolSourcesFromGetter(root.Get, includeClientToolSearch)
-}
-
 func responsesToolSourcesFromGetter(get func(string) ojson.Result, includeClientToolSearch bool) []struct {
 	tools    ojson.Result
 	priority int

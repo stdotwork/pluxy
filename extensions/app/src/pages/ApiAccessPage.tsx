@@ -103,7 +103,6 @@ export type { ProviderSection } from '../services/apiAccessRemarks';
 
 export type ProviderCategory = ProviderSection | 'deepseek';
 
-export const OPENAI_THINKING_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 export { DEEPSEEK_BASE_URL };
 
 type ProviderDefinition = {

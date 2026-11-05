@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -537,6 +538,91 @@ func TestVertexBaseURL(t *testing.T) {
 			if got := helps.VertexOpenAPIHostBaseURL(tc.location); got != tc.want {
 				t.Errorf("helps.VertexOpenAPIHostBaseURL(%q) = %q, want %q", tc.location, got, tc.want)
 			}
+		})
+	}
+}
+
+func TestGeminiVertexExecutorPayloadRulesApplyOnCountTokensAndInteractionsStream(t *testing.T) {
+	const geminiPayload = `{"systemInstruction":{"parts":[{"text":"filtered system"}]},"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`
+	const interactionsPayload = `{"model":"gemini-3.8-flash","system_instruction":"filtered system","input":"hello"}`
+	const interactionsStream = "event: interaction.completed\ndata: {\"id\":\"interaction_1\",\"object\":\"interaction\",\"status\":\"completed\",\"steps\":[{\"type\":\"model_output\",\"content\":[{\"text\":\"ok\"}]}]}\n\n"
+
+	// serviceAccountAuth points the fixed Vertex host and the token exchange at the capture server.
+	serviceAccountAuth := func(t *testing.T, serverURL string) (context.Context, *cliproxyauth.Auth) {
+		t.Helper()
+		target, errParse := url.Parse(serverURL)
+		if errParse != nil {
+			t.Fatal(errParse)
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		t.Cleanup(transport.CloseIdleConnections)
+		ctx := context.WithValue(t.Context(), "cliproxy.roundtripper", issue6258RedirectTransport{target: target, base: transport})
+		var sa map[string]any
+		if errUnmarshal := json.Unmarshal(testVertexServiceAccountJSON(t, serverURL+"/token"), &sa); errUnmarshal != nil {
+			t.Fatal(errUnmarshal)
+		}
+		return ctx, &cliproxyauth.Auth{ID: t.Name(), Provider: "vertex", Metadata: map[string]any{"project_id": "proxy-test", "location": "global", "service_account": sa}}
+	}
+	countResponse := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"totalTokens":7}`)
+	}
+
+	tests := []struct {
+		name     string
+		filtered string
+		run      func(t *testing.T, cfg *config.Config) []byte
+	}{
+		{
+			name:     "count tokens service account",
+			filtered: "systemInstruction",
+			run: func(t *testing.T, cfg *config.Config) []byte {
+				server, captured := newPayloadCaptureServer(t, countResponse)
+				ctx, auth := serviceAccountAuth(t, server.URL)
+				_, errCount := NewGeminiVertexExecutor(cfg).CountTokens(ctx, auth, cliproxyexecutor.Request{Model: "gemini-3.7-flash", Payload: []byte(geminiPayload)}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatGemini})
+				if errCount != nil {
+					t.Fatalf("CountTokens() error = %v", errCount)
+				}
+				return captured()
+			},
+		},
+		{
+			name:     "count tokens api key",
+			filtered: "systemInstruction",
+			run: func(t *testing.T, cfg *config.Config) []byte {
+				server, captured := newPayloadCaptureServer(t, countResponse)
+				auth := &cliproxyauth.Auth{ID: t.Name(), Provider: "vertex", Attributes: map[string]string{"api_key": "test-key", "base_url": server.URL}}
+				_, errCount := NewGeminiVertexExecutor(cfg).CountTokens(t.Context(), auth, cliproxyexecutor.Request{Model: "gemini-3.7-flash", Payload: []byte(geminiPayload)}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatGemini})
+				if errCount != nil {
+					t.Fatalf("CountTokens() error = %v", errCount)
+				}
+				return captured()
+			},
+		},
+		{
+			name:     "interactions stream",
+			filtered: "system_instruction",
+			run: func(t *testing.T, cfg *config.Config) []byte {
+				server, captured := newPayloadCaptureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, interactionsStream)
+				})
+				auth := &cliproxyauth.Auth{ID: t.Name(), Provider: "vertex", Attributes: map[string]string{"api_key": "test-key", "base_url": server.URL, "interactions": "true"}}
+				result, errStream := NewGeminiVertexExecutor(cfg).ExecuteStream(t.Context(), auth, cliproxyexecutor.Request{Model: "gemini-3.8-flash", Payload: []byte(interactionsPayload)}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatInteractions, ResponseFormat: sdktranslator.FormatInteractions, Stream: true})
+				if errStream != nil {
+					t.Fatalf("ExecuteStream() error = %v", errStream)
+				}
+				if _, errDrain := drainChunks(result); errDrain != nil {
+					t.Fatalf("stream error = %v", errDrain)
+				}
+				return captured()
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertPayloadRulesApplyOnPath(t, tt.filtered, func(cfg *config.Config) []byte { return tt.run(t, cfg) })
 		})
 	}
 }

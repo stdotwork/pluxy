@@ -260,10 +260,6 @@ func codexReasoningReplaySessionKeyFromTurnMetadata(turnMetadata string) string 
 	return ""
 }
 
-func codexInputHasValidReasoningEncryptedContent(body []byte) bool {
-	return codexInputResultHasValidReasoningEncryptedContent(ojson.GetBytesNoCopy(body, "input"))
-}
-
 func codexInputResultHasValidReasoningEncryptedContent(input ojson.Result) bool {
 	if !input.IsArray() {
 		return false
@@ -290,14 +286,6 @@ type codexReasoningReplayTurn struct {
 	requestFingerprint   string
 	callIDs              []string
 	items                [][]byte
-}
-
-func insertCodexReasoningReplayTurns(body []byte, replayItems [][]byte) ([]byte, bool) {
-	doc := ojson.NewDoc(body)
-	if !insertCodexReasoningReplayTurnsDoc(doc, replayItems) {
-		return body, false
-	}
-	return doc.Bytes(), true
 }
 
 func insertCodexReasoningReplayTurnsDoc(doc *ojson.Doc, replayItems [][]byte) bool {
@@ -594,10 +582,6 @@ func (f *codexReplayPrefixFingerprints) at(end int) string {
 		f.sums = append(f.sums, hex.EncodeToString(f.hasher.Sum(nil)))
 	}
 	return f.sums[end]
-}
-
-func filterCodexReasoningReplayItemsForInput(body []byte, items [][]byte) [][]byte {
-	return filterCodexReasoningReplayItemsForInputResult(ojson.GetBytesNoCopy(body, "input"), items)
 }
 
 func filterCodexReasoningReplayItemsForInputResult(input ojson.Result, items [][]byte) [][]byte {

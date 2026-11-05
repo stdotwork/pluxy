@@ -1847,3 +1847,45 @@ func TestGeminiAndVertexOpenAIStreamTruncationReturnsError(t *testing.T) {
 		}
 	}
 }
+
+func TestGeminiExecutorPayloadRulesApplyOnStreamAndCountTokens(t *testing.T) {
+	const payload = `{"systemInstruction":{"parts":[{"text":"filtered system"}]},"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`
+	tests := []struct {
+		name     string
+		stream   bool
+		response string
+	}{
+		{name: "stream", stream: true, response: "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n"},
+		{name: "count tokens", response: `{"totalTokens":7}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertPayloadRulesApplyOnPath(t, "systemInstruction", func(cfg *config.Config) []byte {
+				server, captured := newPayloadCaptureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+					if tt.stream {
+						w.Header().Set("Content-Type", "text/event-stream")
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+					}
+					_, _ = io.WriteString(w, tt.response)
+				})
+				executor := NewGeminiExecutor(cfg)
+				auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "test-key", "base_url": server.URL}}
+				req := cliproxyexecutor.Request{Model: "gemini-3.7-flash", Payload: []byte(payload)}
+				opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatGemini}
+				if tt.stream {
+					result, errStream := executor.ExecuteStream(t.Context(), auth, req, opts)
+					if errStream != nil {
+						t.Fatalf("ExecuteStream() error = %v", errStream)
+					}
+					if _, errDrain := drainChunks(result); errDrain != nil {
+						t.Fatalf("stream error = %v", errDrain)
+					}
+				} else if _, errCount := executor.CountTokens(t.Context(), auth, req, opts); errCount != nil {
+					t.Fatalf("CountTokens() error = %v", errCount)
+				}
+				return captured()
+			})
+		})
+	}
+}

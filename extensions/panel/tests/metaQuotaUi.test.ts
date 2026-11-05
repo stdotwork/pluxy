@@ -59,8 +59,6 @@ describe('Muse quota UI integration', () => {
         'active',
         'inactive',
         'window',
-        'window_duration',
-        'window_duration_hours',
         'weekly',
         'unknown',
         'remaining',
@@ -84,8 +82,8 @@ describe('Muse quota UI integration', () => {
     );
     expect(markup).toContain('Muse fixture plan');
     expect(markup).not.toContain(i18n.t('meta_quota.active'));
-    expect(markup).toContain(i18n.t('meta_quota.window_duration_hours', { hours: 5 }));
-    expect(markup).not.toContain(i18n.t('meta_quota.window_duration', { minutes: 300 }));
+    expect(markup).toContain(i18n.t('quota_window.five_hour'));
+    expect(markup).not.toContain(i18n.t('quota_window.minutes', { count: 300 }));
     expect(markup).toContain(i18n.t('meta_quota.weekly'));
     expect(markup.match(/role="meter"/g)).toHaveLength(2);
     expect(markup).toContain('aria-valuenow="100"');
@@ -108,7 +106,15 @@ describe('Muse quota UI integration', () => {
     const quota = snapshot();
     quota.data!.windows[0].durationMinutes = 90;
     const markup = renderToStaticMarkup(createElement(MetaQuotaBody, { quota, classes }));
-    expect(markup).toContain(i18n.t('meta_quota.window_duration', { minutes: 90 }));
+    expect(markup).toContain(i18n.t('quota_window.minutes', { count: 90 }));
+  });
+
+  test('names a 24-hour window as the daily limit, like every other provider', () => {
+    const quota = snapshot();
+    quota.data!.windows[0].durationMinutes = 1440;
+    const markup = renderToStaticMarkup(createElement(MetaQuotaBody, { quota, classes }));
+    expect(markup).toContain(i18n.t('quota_window.daily'));
+    expect(markup).not.toContain(i18n.t('quota_window.hours', { count: 24 }));
   });
 
   test('distinguishes unknown and exhausted quotas', () => {

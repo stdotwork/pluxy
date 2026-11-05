@@ -508,7 +508,7 @@
     "seven_day_sonnet": "Sonnet Haftalık Sınır",
     "seven_day_cowork": "Cowork Haftalık Sınır",
     "iguana_necktie": "Iguana Necktie",
-    "seven_day_fable": "Fable 5 Haftalık Sınır",
+    "seven_day_fable": "Fable Haftalık Sınır",
     "cloud_session_credits": "Bulut Oturum Kredileri",
     "extra_usage_label": "Ek Kullanım",
     "extra_usage_enabled": "Etkin",
@@ -616,11 +616,19 @@
     "active": "Abonelik Aktif",
     "inactive": "Abonelik Aktif Değil",
     "window": "Kullanım Sınırı",
-    "window_duration": "{{minutes}} Dakikalık Sınır",
-    "window_duration_hours": "{{hours}} Saatlik Sınır",
     "weekly": "Haftalık Sınır",
     "unknown": "Bilinmiyor",
     "remaining": "%{{percent}} Kaldı"
+  },
+  "quota_window": {
+    "five_hour": "5 Saatlik Sınır",
+    "daily": "Günlük Sınır",
+    "weekly": "Haftalık Sınır",
+    "monthly": "Aylık Sınır",
+    "days": "{{count}} Günlük Sınır",
+    "hours": "{{count}} Saatlik Sınır",
+    "minutes": "{{count}} Dakikalık Sınır",
+    "seconds": "{{count}} Saniyelik Sınır"
   },
   "kimi_quota": {
     "plan_label": "Plan",
@@ -639,7 +647,6 @@
     "fetch_all": "Tümünü Getir",
     "weekly_limit": "Haftalık Sınır",
     "monthly_limit": "Aylık Sınır",
-    "limit_window": "{{duration}} Sınırı",
     "limit_index": "Sınır #{{index}}",
     "reset_hint": "{{hint}} Sonra Sıfırlanır"
   },
@@ -1423,7 +1430,6 @@
           "title": "Ağ Yapılandırması",
           "description": "Proxy, Yeniden Deneme ve Yönlendirme Ayarları",
           "proxy_url": "Proxy URL",
-          "proxy_url_sponsor_hint": "Uygun Proxy Yok Mu?",
           "request_retry": "İstek Yeniden Deneme Sayısı",
           "max_retry_credentials": "En Fazla Yeniden Deneme Kimlik Bilgisi",
           "max_retry_credentials_hint": "Ayarlanmamış Bırakmak için Boş Bırak. Kullanılabilir Tüm Kimlik Bilgilerini Denemek için 0 veya Negatif Tam Sayı Ayarla.",
@@ -2194,14 +2200,6 @@
         "openai": "OpenAI Uyumlu",
         "gemini": "Gemini",
         "codexResponses": "Codex API (Responses)"
-      },
-      "double11": {
-        "badge": "11.11 · Sınırlı süre",
-        "title": "{{provider}} 11.11 Yükleme Bonusu",
-        "description": "Kampanya süresince {{provider}} hesabınıza yükleme yapın, yükleme tutarının %{{percent}} kadarını ek kredi olarak kazanın.",
-        "bonus": "Yükleme bonusu",
-        "cta": "Hemen katıl",
-        "ctaAria": "Hemen katıl: {{provider}} 11.11 yükleme kampanyası (yeni sekmede açılır)"
       }
     },
     "status": {

@@ -2040,11 +2040,32 @@ func TestSessionAffinitySelector_CrossProviderIsolation(t *testing.T) {
 	}
 }
 
+// setSessionCacheClock replaces the cache clock. The cleanup goroutine also reads
+// it, so the swap happens under the cache lock.
+func setSessionCacheClock(cache *SessionCache, now func() time.Time) {
+	cache.mu.Lock()
+	cache.now = now
+	cache.mu.Unlock()
+}
+
 func TestSessionCache_GetAndRefresh(t *testing.T) {
 	t.Parallel()
 
 	cache := NewSessionCache(100 * time.Millisecond)
 	defer cache.Stop()
+
+	var clockMu sync.Mutex
+	current := time.Unix(1_700_000_000, 0)
+	setSessionCacheClock(cache, func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return current
+	})
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		current = current.Add(d)
+		clockMu.Unlock()
+	}
 
 	cache.Set("session1", "auth1")
 
@@ -2054,23 +2075,23 @@ func TestSessionCache_GetAndRefresh(t *testing.T) {
 		t.Fatalf("GetAndRefresh() = %q, %v, want auth1, true", got, ok)
 	}
 
-	// Wait half TTL and access again (should refresh)
-	time.Sleep(60 * time.Millisecond)
+	// Advance half TTL and access again (should refresh)
+	advance(60 * time.Millisecond)
 	got, ok = cache.GetAndRefresh("session1")
 	if !ok || got != "auth1" {
 		t.Fatalf("GetAndRefresh() after 60ms = %q, %v, want auth1, true", got, ok)
 	}
 
-	// Wait another 60ms (total 120ms from original, but TTL refreshed at 60ms)
+	// Advance another 60ms (total 120ms from original, but TTL refreshed at 60ms)
 	// Entry should still be valid because TTL was refreshed
-	time.Sleep(60 * time.Millisecond)
+	advance(60 * time.Millisecond)
 	got, ok = cache.GetAndRefresh("session1")
 	if !ok || got != "auth1" {
 		t.Fatalf("GetAndRefresh() after refresh = %q, %v, want auth1, true (TTL should have been refreshed)", got, ok)
 	}
 
-	// Now wait full TTL without access
-	time.Sleep(110 * time.Millisecond)
+	// Now advance past the full TTL without access
+	advance(110 * time.Millisecond)
 	got, ok = cache.GetAndRefresh("session1")
 	if ok {
 		t.Fatalf("GetAndRefresh() after expiry = %q, %v, want '', false", got, ok)

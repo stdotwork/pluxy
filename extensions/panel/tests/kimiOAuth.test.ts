@@ -4,10 +4,6 @@ import { apiClient } from '@/services/api/client';
 import { oauthApi } from '@/services/api/oauth';
 import { createOAuthAttempts } from '@/features/oauth/oauthAttempts';
 import { isSponsor, OAUTH_PROVIDERS } from '@/features/oauth/providers';
-import {
-  KIMI_CHINESE_AFFILIATE_URL,
-  KIMI_INTERNATIONAL_AFFILIATE_URL,
-} from '@/features/providers/kimi';
 
 describe('Kimi regional login', () => {
   test('uses separate provider parameters and preserves cancellation', async () => {
@@ -47,16 +43,14 @@ describe('Kimi regional login', () => {
     const kimiAi = OAUTH_PROVIDERS.find((provider) => provider.id === 'kimi-ai');
     expect(kimi).toMatchObject({ flow: 'device', domain: 'kimi.com' });
     expect(kimiAi).toMatchObject({ flow: 'device', domain: 'kimi.ai' });
-    expect(kimi?.sponsor?.signUpUrl).toBe(KIMI_CHINESE_AFFILIATE_URL);
-    expect(kimiAi?.sponsor?.signUpUrl).toBe(KIMI_INTERNATIONAL_AFFILIATE_URL);
+    expect(kimi?.sponsor?.signUpUrl).toBe('https://platform.kimi.com/');
+    expect(kimiAi?.sponsor?.signUpUrl).toBe('https://platform.kimi.ai/');
     // 赞助商：两站排在画廊最前，且只有它们是赞助位
     expect(OAUTH_PROVIDERS.slice(0, 2).map((provider) => provider.id)).toEqual(['kimi', 'kimi-ai']);
     expect(OAUTH_PROVIDERS.filter(isSponsor).map((provider) => provider.id)).toEqual([
       'kimi',
       'kimi-ai',
     ]);
-    expect(new URL(KIMI_CHINESE_AFFILIATE_URL).hostname).toBe('platform.kimi.com');
-    expect(new URL(KIMI_INTERNATIONAL_AFFILIATE_URL).hostname).toBe('platform.kimi.ai');
   });
 
   for (const locale of ['en', 'zh-CN', 'zh-TW', 'ru']) {

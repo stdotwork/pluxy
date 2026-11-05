@@ -158,17 +158,6 @@ func (s *xaiWebsocketIDState) snapshotTranscriptInput() []byte {
 	return xaiMarshalRawMessages(s.transcriptInput)
 }
 
-func (s *xaiWebsocketIDState) prependTranscriptInput(payload []byte) []byte {
-	if s == nil || len(payload) == 0 {
-		return payload
-	}
-	doc := ojson.NewDoc(payload)
-	if !s.prependTranscriptInputDoc(doc) {
-		return payload
-	}
-	return doc.Bytes()
-}
-
 func (s *xaiWebsocketIDState) prependTranscriptInputDoc(doc *ojson.Doc) bool {
 	if s == nil || doc == nil {
 		return false
@@ -223,17 +212,6 @@ func (s *xaiWebsocketIDState) replaceTranscriptWithItems(items ...[]byte) {
 	s.transcriptInput = next
 	s.replayCompactedTranscriptOnReset = len(next) > 0
 	s.mu.Unlock()
-}
-
-func (s *xaiWebsocketIDState) prependCompactedTranscriptOnReset(payload []byte) ([]byte, bool) {
-	if s == nil || len(payload) == 0 {
-		return payload, false
-	}
-	doc := ojson.NewDoc(payload)
-	if !s.prependCompactedTranscriptOnResetDoc(doc) {
-		return payload, false
-	}
-	return doc.Bytes(), true
 }
 
 func (s *xaiWebsocketIDState) prependCompactedTranscriptOnResetDoc(doc *ojson.Doc) bool {
@@ -1159,17 +1137,6 @@ func xaiBareWebsocketErrorStatus(payload []byte) int {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
-}
-
-func (e *XAIWebsocketsExecutor) prepareResponsesWebsocketRequest(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*xaiPreparedRequest, error) {
-	prepared, err := e.prepareResponsesWebsocketRequestDoc(ctx, req, opts)
-	if err != nil {
-		return nil, err
-	}
-	if prepared.doc != nil {
-		prepared.body = prepared.doc.Bytes()
-	}
-	return prepared, nil
 }
 
 func (e *XAIWebsocketsExecutor) prepareResponsesWebsocketRequestDoc(ctx context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*xaiPreparedRequest, error) {

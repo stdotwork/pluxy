@@ -2201,3 +2201,53 @@ func TestKimiExecutor_ResponsesCompactionTriggerAndReplay_Issue6781(t *testing.T
 	}
 	assertStatusErr(t, errIncStream, http.StatusBadGateway)
 }
+
+func TestKimiExecutorPayloadRulesApplyOnEveryRequestPath(t *testing.T) {
+	const chatResponse = `{"id":"chat_1","object":"chat.completion","model":"k3","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
+	const chatStream = "data: {\"id\":\"chat_1\",\"object\":\"chat.completion.chunk\",\"model\":\"k3\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\ndata: [DONE]\n\n"
+	const responsesResponse = `{"id":"resp_1","object":"response","status":"completed","model":"k3","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+	const responsesStream = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"model\":\"k3\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+
+	tests := []struct {
+		name     string
+		format   sdktranslator.Format
+		stream   bool
+		payload  string
+		response string
+	}{
+		{name: "chat execute", format: sdktranslator.FormatOpenAI, payload: `{"model":"kimi-k3","user":"filtered-user","messages":[{"role":"user","content":"hello"}]}`, response: chatResponse},
+		{name: "chat stream", format: sdktranslator.FormatOpenAI, stream: true, payload: `{"model":"kimi-k3","user":"filtered-user","messages":[{"role":"user","content":"hello"}]}`, response: chatStream},
+		{name: "responses execute", format: sdktranslator.FormatOpenAIResponse, payload: `{"model":"kimi-k3","user":"filtered-user","input":[{"type":"message","role":"user","content":"hello"}]}`, response: responsesResponse},
+		{name: "responses stream", format: sdktranslator.FormatOpenAIResponse, stream: true, payload: `{"model":"kimi-k3","user":"filtered-user","input":[{"type":"message","role":"user","content":"hello"}]}`, response: responsesStream},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertPayloadRulesApplyOnPath(t, "user", func(cfg *config.Config) []byte {
+				server, captured := newPayloadCaptureServer(t, func(w http.ResponseWriter, _ *http.Request) {
+					if tt.stream {
+						w.Header().Set("Content-Type", "text/event-stream")
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+					}
+					_, _ = io.WriteString(w, tt.response)
+				})
+				executor := NewKimiExecutor(cfg)
+				auth := &cliproxyauth.Auth{Provider: "kimi", Attributes: map[string]string{"api_key": "test-kimi-key", "base_url": server.URL}}
+				req := cliproxyexecutor.Request{Model: "kimi-k3", Payload: []byte(tt.payload)}
+				opts := cliproxyexecutor.Options{SourceFormat: tt.format, Stream: tt.stream}
+				if tt.stream {
+					result, errStream := executor.ExecuteStream(t.Context(), auth, req, opts)
+					if errStream != nil {
+						t.Fatalf("ExecuteStream() error = %v", errStream)
+					}
+					if _, errDrain := drainChunks(result); errDrain != nil {
+						t.Fatalf("stream error = %v", errDrain)
+					}
+				} else if _, errExecute := executor.Execute(t.Context(), auth, req, opts); errExecute != nil {
+					t.Fatalf("Execute() error = %v", errExecute)
+				}
+				return captured()
+			})
+		})
+	}
+}

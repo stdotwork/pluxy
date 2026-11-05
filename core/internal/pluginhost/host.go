@@ -1482,7 +1482,3 @@ func validPlugin(plugin pluginapi.Plugin) bool {
 		caps.ManagementAPI != nil ||
 		caps.QuotaProvider != nil
 }
-
-func typeName(v any) string {
-	return fmt.Sprintf("%T", v)
-}

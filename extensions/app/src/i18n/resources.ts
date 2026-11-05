@@ -16,8 +16,7 @@ export const zhTW: Record<MessageKey, string> = {
   ...themeDiyZhTW,
   ...authFileTagsZhTW,
   'app.nav.mcpSkills': 'MCP 與技能',
-  'quota.service.kimi.monthlyTotal': '月總額度',
-  'quota.service.kimi.monthlyCode': '月程式設計額度',
+  'quota.service.kimi.monthlyCode': '月程式設計限額',
   'quota.service.kimi.domainUnavailable': '無法讀取 Kimi 憑證以確定額度查詢網域',
   'quota.service.kimi.staleRequest': '連線或憑證已變更，請重新查詢 Kimi 額度',
   "app.theme.lightGroup": "淺色主題",
@@ -133,5 +132,8 @@ export const zhTW: Record<MessageKey, string> = {
   'home.runtime.unknownHint': '核心狀態未知，讀取成功前無法啟動或重新啟動。',
   'home.runtime.errorDetails': '錯誤詳細資訊',
   'home.runtime.installHint': '安裝核心後即可啟動；鎖定的頁面會在核心執行後開放。',
+  // The converter leaves 视 unchanged and turns 视频 into 视頻.
+  'agents.zcode.catalog.vision': '視覺',
+  'agents.zcode.catalog.video': '影片',
 };
 export const ja: Record<MessageKey, string> = jaOverrides;

@@ -208,10 +208,6 @@ func openAIResponsesStreamErrorDetail(status int, errText, code, message string)
 	return detail
 }
 
-func openAIResponsesStreamFailedErrorDetail(status int, errText, code, message string) map[string]any {
-	return openAIResponsesStreamErrorDetail(status, errText, code, message)
-}
-
 // BuildOpenAIResponsesStreamFailedChunk builds the terminal Responses event used by official Codex clients.
 // It is intentionally separate from BuildOpenAIResponsesStreamErrorChunk so existing clients keep the legacy shape.
 func BuildOpenAIResponsesStreamFailedChunk(status int, errText string, sequenceNumber int) []byte {

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nextProvider } from 'react-i18next';
@@ -21,8 +21,13 @@ const classes = bindQuotaClasses(
   'test-host'
 );
 
+let originalLanguage = i18n.language;
 beforeAll(async () => {
+  originalLanguage = i18n.language;
   await i18n.changeLanguage('en');
+});
+afterAll(async () => {
+  await i18n.changeLanguage(originalLanguage);
 });
 
 describe('stacked packing', () => {

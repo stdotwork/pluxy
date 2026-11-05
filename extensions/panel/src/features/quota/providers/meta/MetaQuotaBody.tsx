@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MetaQuotaState } from '@/types';
 import { useNow } from '@/hooks/useNow';
-import { buildResetDisplay } from '@/utils/quota';
+import { buildResetDisplay, quotaWindowLabel } from '@/utils/quota';
 import { QuotaMeter } from '../../components/QuotaMeter';
 import { QuotaResetLabel } from '../../components/QuotaResetLabel';
 import { collectQuotaRowInstants, pickUrgentRowId } from '../../resetSchedule';
@@ -40,12 +40,13 @@ export function MetaQuotaBody({ quota, classes }: QuotaBodyProps<MetaQuotaState>
           i18n.resolvedLanguage
         );
         const soon = window.id === soonestRowId;
-        const label =
+        const windowLabel =
           window.id === 'window' && window.durationMinutes
-            ? window.durationMinutes % 60 === 0
-              ? t('meta_quota.window_duration_hours', { hours: window.durationMinutes / 60 })
-              : t('meta_quota.window_duration', { minutes: window.durationMinutes })
-            : t(`meta_quota.${window.id}`);
+            ? quotaWindowLabel(window.durationMinutes * 60)
+            : null;
+        const label = windowLabel
+          ? t(windowLabel.labelKey, windowLabel.labelParams)
+          : t(`meta_quota.${window.id}`);
         return (
           <div key={window.id} className={classes.quotaRow}>
             <div className={classes.quotaRowHeader}>

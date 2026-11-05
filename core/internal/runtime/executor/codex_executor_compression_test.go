@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -535,5 +536,26 @@ func TestCodexUpstreamCompression_DirectImagePayloadRewrite(t *testing.T) {
 				t.Fatalf("upstream calls=%d, want 1", calls)
 			}
 		})
+	}
+}
+
+func BenchmarkCodexUpstreamCompression(b *testing.B) {
+	executor := NewCodexExecutor(codexCompressionConfig())
+	var text strings.Builder
+	for i := 0; text.Len() < 256<<10; i++ {
+		text.WriteString("call_" + strconv.FormatUint(uint64(i)*2654435761, 36) + " summarise the previous tool output. ")
+	}
+	payload := []byte(`{"model":"gpt-5.4","input":[{"role":"user","content":"` + text.String() + `"}]}`)
+	target := "https://chatgpt.com/backend-api/codex/responses"
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		req, _, errCache := executor.cacheHelper(b.Context(), sdktranslator.FormatOpenAIResponse, target, cliproxyexecutor.Request{Payload: payload}, payload, codexCompressionAuth())
+		if errCache != nil {
+			b.Fatal(errCache)
+		}
+		wire, _ := io.ReadAll(req.Body)
+		if i == 0 {
+			b.Logf("wire bytes=%d sha256=%x", len(wire), sha256.Sum256(wire))
+		}
 	}
 }

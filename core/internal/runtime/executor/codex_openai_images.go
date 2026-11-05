@@ -637,14 +637,6 @@ func codexRewriteOpenAIImageEditMultipartToJSON(payload []byte, model string, bo
 	return doc.Bytes(), "application/json", nil
 }
 
-func codexSetOpenAIImageEditFormValues(out []byte, key string, values []string) []byte {
-	doc := ojson.NewDoc(out)
-	if !codexSetOpenAIImageEditFormValuesDoc(doc, key, values) {
-		return out
-	}
-	return doc.Bytes()
-}
-
 func codexSetOpenAIImageEditFormValuesDoc(doc *ojson.Doc, key string, values []string) bool {
 	if doc == nil || len(values) == 0 {
 		return false
@@ -661,12 +653,6 @@ func codexSetOpenAIImageEditFormValuesDoc(doc *ojson.Doc, key string, values []s
 		items = append(items, codexOpenAIImageEditFormJSONValue(key, value))
 	}
 	return doc.SetRawBytes(path, helps.JoinRawJSONArray(items)) == nil
-}
-
-func codexSetOpenAIImageEditFormValue(out []byte, path string, value string) []byte {
-	item := codexOpenAIImageEditFormJSONValue(path, value)
-	out, _ = ojson.SetRawBytes(out, path, item)
-	return out
 }
 
 func codexSetOpenAIImageEditFormValueDoc(doc *ojson.Doc, path string, value string) bool {
@@ -762,14 +748,6 @@ func codexIsDirectOpenAIImageModel(model string) bool {
 	default:
 		return false
 	}
-}
-
-func (e *CodexExecutor) prepareCodexOpenAIImageBody(ctx context.Context, auth *cliproxyauth.Auth, body []byte, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, mainModel string) ([]byte, error) {
-	doc, err := e.prepareCodexOpenAIImageDoc(ctx, auth, body, req, opts, mainModel)
-	if err != nil {
-		return nil, err
-	}
-	return doc.Bytes(), nil
 }
 
 func (e *CodexExecutor) prepareCodexOpenAIImageDoc(ctx context.Context, auth *cliproxyauth.Auth, body []byte, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, mainModel string) (*ojson.Doc, error) {

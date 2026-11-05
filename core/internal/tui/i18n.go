@@ -5,18 +5,6 @@ package tui
 
 var currentLocale = "en"
 
-// SetLocale changes the active locale.
-func SetLocale(locale string) {
-	if _, ok := locales[locale]; ok {
-		currentLocale = locale
-	}
-}
-
-// CurrentLocale returns the active locale code.
-func CurrentLocale() string {
-	return currentLocale
-}
-
 // ToggleLocale switches between zh and en.
 func ToggleLocale() {
 	if currentLocale == "zh" {
@@ -100,7 +88,7 @@ var zhStrings = map[string]string{
 	"connected":        "● 已连接",
 	"mgmt_keys":        "管理密钥",
 	"auth_files_label": "认证文件",
-	"active_suffix":    "活跃",
+	"active_suffix":    "已启用",
 	"total_requests":   "请求",
 	"success_label":    "成功",
 	"failure_label":    "失败",
@@ -145,7 +133,7 @@ var zhStrings = map[string]string{
 	"refreshed_auth":  "已刷新凭证 %s",
 	"refreshed_all":   "已刷新所有凭证",
 	"updated_field":   "已更新 %s 的 %s",
-	"status_active":   "活跃",
+	"status_active":   "可用",
 	"status_disabled": "已停用",
 
 	// ── API Keys ──
@@ -169,7 +157,7 @@ var zhStrings = map[string]string{
 	"oauth_select":         "  选择提供商并按 [Enter] 开始 OAuth 登录:",
 	"oauth_help":           "  [↑↓/jk] 导航 • [Enter] 登录 • [Esc] 清除状态",
 	"oauth_initiating":     "⏳ 正在初始化 %s 登录...",
-	"oauth_success":        "认证成功! 请刷新 Auth Files 标签查看新凭证。",
+	"oauth_success":        "认证成功! 请刷新认证文件标签查看新凭证。",
 	"oauth_completed":      "认证流程已完成。",
 	"oauth_failed":         "认证失败",
 	"oauth_timeout":        "OAuth 流程超时",
@@ -257,7 +245,7 @@ var enStrings = map[string]string{
 	"connected":        "● Connected",
 	"mgmt_keys":        "Mgmt Keys",
 	"auth_files_label": "Auth Files",
-	"active_suffix":    "active",
+	"active_suffix":    "enabled",
 	"total_requests":   "Requests",
 	"success_label":    "Success",
 	"failure_label":    "Failed",
@@ -302,7 +290,7 @@ var enStrings = map[string]string{
 	"refreshed_auth":  "Refreshed credential %s",
 	"refreshed_all":   "Refreshed all credentials",
 	"updated_field":   "Updated %s on %s",
-	"status_active":   "active",
+	"status_active":   "available",
 	"status_disabled": "disabled",
 
 	// ── API Keys ──

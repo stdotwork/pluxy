@@ -13,7 +13,6 @@ import (
 	"sync"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
-	log "github.com/sirupsen/logrus"
 )
 
 var codexFileLocks sync.Map
@@ -59,43 +58,13 @@ func WithFileLock(authFilePath string, fn func() error) error {
 	return fn()
 }
 
-// WriteJSONFileAtomic writes data as JSON to authFilePath atomically via a temporary file in the same directory.
+// WriteJSONFileAtomic writes data as compact JSON to authFilePath atomically with mode 0600.
 func WriteJSONFileAtomic(authFilePath string, data map[string]any) error {
-	dir := filepath.Dir(authFilePath)
-	tmpFile, errTmp := os.CreateTemp(dir, filepath.Base(authFilePath)+".tmp.*")
-	if errTmp != nil {
-		return fmt.Errorf("failed to create temp credential file: %w", errTmp)
-	}
-	tmpPath := tmpFile.Name()
-	cleanupTmp := true
-	defer func() {
-		if cleanupTmp {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-
-	if errChmod := tmpFile.Chmod(0o600); errChmod != nil {
-		_ = tmpFile.Close()
-		return fmt.Errorf("failed to chmod temp credential file: %w", errChmod)
-	}
 	raw, errMarshal := json.Marshal(data)
 	if errMarshal != nil {
-		_ = tmpFile.Close()
 		return fmt.Errorf("failed to marshal token data: %w", errMarshal)
 	}
-	if _, errWrite := tmpFile.Write(raw); errWrite != nil {
-		_ = tmpFile.Close()
-		return fmt.Errorf("failed to write token to temp file: %w", errWrite)
-	}
-	if errClose := tmpFile.Close(); errClose != nil {
-		log.Errorf("codex token storage: close temp token file error: %v", errClose)
-		return fmt.Errorf("failed to close temp credential file: %w", errClose)
-	}
-	if errRename := os.Rename(tmpPath, authFilePath); errRename != nil {
-		return fmt.Errorf("failed to replace credential file: %w", errRename)
-	}
-	cleanupTmp = false
-	return nil
+	return misc.WriteFileAtomic(authFilePath, raw)
 }
 
 var codexOuterCredentialKeys = []string{
