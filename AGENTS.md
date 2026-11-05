@@ -101,9 +101,10 @@ Rust tests run from `extensions/app/src-tauri` (build the front end first so `di
 cargo test --locked
 ```
 
-These tests read and write agent configuration folders under your home directory (such as
-`~/.claude` and `~/.codex`) and start and stop core processes. Run them in CI or a throwaway
-machine or container, not on a machine with live agent sessions or a running core.
+The app manages agent configuration folders under your home directory (such as `~/.claude`
+and `~/.codex`) and starts and stops processes, and not every test has been checked to keep to
+temporary folders. Run these tests in CI or a throwaway machine or container, not on a machine
+with live agent sessions or a running core.
 
 The `test:ui:*` and `test:desktop:*` scripts in `package.json` drive a browser or the desktop
 app; they are not part of the routine checks above.
