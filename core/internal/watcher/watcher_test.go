@@ -20,6 +20,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher/synthesizer"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 	"gopkg.in/yaml.v3"
 )
 
@@ -665,28 +667,88 @@ func TestReloadClientsCachesAuthHashes(t *testing.T) {
 	}
 }
 
-func TestReloadClientsLogsConfigDiffs(t *testing.T) {
-	tmpDir := t.TempDir()
-	oldCfg := &config.Config{AuthDir: tmpDir, Port: 1, Debug: false}
-	newCfg := &config.Config{AuthDir: tmpDir, Port: 2, Debug: true}
-
-	w := &Watcher{
-		authDir: tmpDir,
-		config:  oldCfg,
-	}
-	w.SetConfig(oldCfg)
-	w.oldConfigYaml, _ = yaml.Marshal(oldCfg)
-
-	w.clientsMutex.Lock()
-	w.config = newCfg
-	w.clientsMutex.Unlock()
-
-	w.reloadClients(false, nil, false)
+// captureLogs records every log entry written to the global logger for the
+// rest of the test and restores the previous hooks and level afterwards.
+func captureLogs(t *testing.T) *logtest.Hook {
+	t.Helper()
+	logger := log.StandardLogger()
+	hook := new(logtest.Hook)
+	previousHooks := logger.ReplaceHooks(make(log.LevelHooks))
+	logger.AddHook(hook)
+	previousLevel := logger.GetLevel()
+	t.Cleanup(func() {
+		logger.ReplaceHooks(previousHooks)
+		logger.SetLevel(previousLevel)
+	})
+	return hook
 }
 
+func logMessages(hook *logtest.Hook) []string {
+	entries := hook.AllEntries()
+	messages := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		messages = append(messages, entry.Message)
+	}
+	return messages
+}
+
+func hasLogMessage(hook *logtest.Hook, want string) bool {
+	for _, message := range logMessages(hook) {
+		if message == want {
+			return true
+		}
+	}
+	return false
+}
+
+// The config diff is logged by reloadConfig (not reloadClients): a reload must
+// tell the operator which fields changed.
+func TestReloadConfigLogsConfigDiffs(t *testing.T) {
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auth")
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		t.Fatalf("failed to create auth dir: %v", err)
+	}
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("port: 2\nauth_dir: "+authDir+"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	w := &Watcher{
+		configPath:      configPath,
+		authDir:         authDir,
+		mirroredAuthDir: authDir,
+	}
+	w.SetConfig(&config.Config{AuthDir: authDir, Port: 1})
+
+	hook := captureLogs(t)
+	if ok := w.reloadConfig(); !ok {
+		t.Fatal("expected reloadConfig to succeed")
+	}
+
+	for _, want := range []string{"config changes detected:", "  port: 1 -> 2"} {
+		if !hasLogMessage(hook, want) {
+			t.Fatalf("expected log message %q, got %q", want, logMessages(hook))
+		}
+	}
+}
+
+// A nil config must be refused before anything is loaded: no panic, an error
+// log, and no auth state written.
 func TestReloadClientsHandlesNilConfig(t *testing.T) {
+	hook := captureLogs(t)
 	w := &Watcher{}
+
 	w.reloadClients(true, nil, false)
+
+	if !hasLogMessage(hook, "config is nil, cannot reload clients") {
+		t.Fatalf("expected nil-config error log, got %q", logMessages(hook))
+	}
+	w.clientsMutex.RLock()
+	defer w.clientsMutex.RUnlock()
+	if w.lastAuthHashes != nil || w.currentAuths != nil {
+		t.Fatalf("expected no auth state after nil-config reload, got hashes=%v auths=%v", w.lastAuthHashes, w.currentAuths)
+	}
 }
 
 func TestReloadClientsNotifiesUsageSubscribersToRefresh(t *testing.T) {
@@ -1360,11 +1422,23 @@ func TestReloadConfigIfChangedHandlesMissingAndEmpty(t *testing.T) {
 		t.Fatalf("failed to create auth dir: %v", err)
 	}
 
+	reloads := 0
 	w := &Watcher{
-		configPath: filepath.Join(tmpDir, "missing.yaml"),
-		authDir:    authDir,
+		configPath:     filepath.Join(tmpDir, "missing.yaml"),
+		authDir:        authDir,
+		reloadCallback: func(*config.Config) { reloads++ },
 	}
+	assertNotReloaded := func(step string) {
+		t.Helper()
+		w.clientsMutex.RLock()
+		defer w.clientsMutex.RUnlock()
+		if reloads != 0 || w.config != nil || w.lastConfigHash != "" {
+			t.Fatalf("%s: expected no reload and no recorded state, got reloads=%d config=%v hash=%q", step, reloads, w.config, w.lastConfigHash)
+		}
+	}
+
 	w.reloadConfigIfChanged() // missing file -> log + return
+	assertNotReloaded("missing file")
 
 	emptyPath := filepath.Join(tmpDir, "empty.yaml")
 	if err := os.WriteFile(emptyPath, []byte(""), 0o644); err != nil {
@@ -1372,6 +1446,21 @@ func TestReloadConfigIfChangedHandlesMissingAndEmpty(t *testing.T) {
 	}
 	w.configPath = emptyPath
 	w.reloadConfigIfChanged() // empty file -> early return
+	assertNotReloaded("empty file")
+
+	// Positive control: the same watcher does reload once the file has content,
+	// so the checks above are not passing because the callback is unreachable.
+	data, err := yaml.Marshal(&config.Config{Port: 8080, AuthDir: authDir, CredentialInFlight: config.DefaultCredentialInFlightConfig()})
+	if err != nil {
+		t.Fatalf("failed to marshal config: %v", err)
+	}
+	if err = os.WriteFile(emptyPath, data, 0o644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	w.reloadConfigIfChanged()
+	if reloads != 1 {
+		t.Fatalf("expected a non-empty config to trigger one reload, got %d", reloads)
+	}
 }
 
 func TestReloadConfigUsesMirroredAuthDir(t *testing.T) {
