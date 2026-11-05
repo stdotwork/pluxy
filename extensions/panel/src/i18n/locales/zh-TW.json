@@ -493,7 +493,7 @@
     "seven_day_sonnet": "Sonnet 週限額",
     "seven_day_cowork": "Cowork 週限額",
     "iguana_necktie": "Iguana Necktie",
-    "seven_day_fable": "Fable 5 週限額",
+    "seven_day_fable": "Fable 週限額",
     "cloud_session_credits": "雲端工作階段額度",
     "extra_usage_label": "額外用量",
     "extra_usage_enabled": "已啟用",
@@ -602,8 +602,6 @@
     "active": "訂閱有效",
     "inactive": "訂閱未啟用",
     "window": "使用限額",
-    "window_duration": "{{minutes}} 分鐘限額",
-    "window_duration_hours": "{{hours}} 小時限額",
     "weekly": "週限額",
     "unknown": "未知",
     "remaining": "剩餘 {{percent}}%"
@@ -620,6 +618,16 @@
     "empty_data": "暫無可用配額資料",
     "plan_label": "方案",
     "remaining_percent": "剩餘 {{percent}}%"
+  },
+  "quota_window": {
+    "five_hour": "5 小時限額",
+    "daily": "日限額",
+    "weekly": "週限額",
+    "monthly": "月限額",
+    "days": "{{count}} 天限額",
+    "hours": "{{count}} 小時限額",
+    "minutes": "{{count}} 分鐘限額",
+    "seconds": "{{count}} 秒限額"
   },
   "kimi_quota": {
     "plan_label": "方案",
@@ -638,7 +646,6 @@
     "fetch_all": "取得全部",
     "weekly_limit": "週限額",
     "monthly_limit": "月限額",
-    "limit_window": "{{duration}} 限額",
     "limit_index": "限額 #{{index}}",
     "reset_hint": "{{hint}} 後重置"
   },
