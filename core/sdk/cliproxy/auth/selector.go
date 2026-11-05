@@ -433,7 +433,11 @@ func canonicalModelKey(model string) string {
 	return modelName
 }
 
-func authWebsocketsEnabled(auth *Auth) bool {
+// WebsocketsEnabled reports whether the auth opts into websocket transport.
+// The "websockets" attribute wins when it parses as a bool; otherwise the
+// "websockets" metadata value (bool or bool string) is used. Anything else
+// is false.
+func WebsocketsEnabled(auth *Auth) bool {
 	if auth == nil {
 		return false
 	}
@@ -479,7 +483,7 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 	wsEnabled := make([]*Auth, 0, len(available))
 	for i := 0; i < len(available); i++ {
 		candidate := available[i]
-		if authWebsocketsEnabled(candidate) {
+		if WebsocketsEnabled(candidate) {
 			wsEnabled = append(wsEnabled, candidate)
 		}
 	}

@@ -1056,7 +1056,7 @@ func buildScheduledAuthMetaWithModelSet(auth *Auth, modelSet map[string]struct{}
 		providerKey:       providerKey,
 		priority:          authPriority(auth),
 		weight:            authWeight(auth),
-		websocketEnabled:  authWebsocketsEnabled(auth),
+		websocketEnabled:  WebsocketsEnabled(auth),
 		supportedModelSet: modelSet,
 		registryEpoch:     regEpoch,
 	}

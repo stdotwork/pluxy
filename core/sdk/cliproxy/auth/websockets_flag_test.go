@@ -2,7 +2,7 @@ package auth
 
 import "testing"
 
-func TestAuthWebsocketsEnabled(t *testing.T) {
+func TestWebsocketsEnabled(t *testing.T) {
 	tests := []struct {
 		name string
 		auth *Auth
@@ -58,8 +58,8 @@ func TestAuthWebsocketsEnabled(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := authWebsocketsEnabled(tt.auth); got != tt.want {
-				t.Fatalf("authWebsocketsEnabled() = %v, want %v", got, tt.want)
+			if got := WebsocketsEnabled(tt.auth); got != tt.want {
+				t.Fatalf("WebsocketsEnabled() = %v, want %v", got, tt.want)
 			}
 		})
 	}

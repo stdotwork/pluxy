@@ -1904,7 +1904,7 @@ func (e *XAIAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.
 	if e == nil || e.httpExec == nil || e.wsExec == nil {
 		return nil, fmt.Errorf("xai auto executor: executor is nil")
 	}
-	if cliproxyexecutor.DownstreamWebsocket(ctx) && xaiWebsocketsEnabled(auth) {
+	if cliproxyexecutor.DownstreamWebsocket(ctx) && cliproxyauth.WebsocketsEnabled(auth) {
 		return e.wsExec.ExecuteStream(ctx, auth, req, opts)
 	}
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
@@ -1953,38 +1953,6 @@ func (e *XAIAutoExecutor) UpstreamDisconnectChan(sessionID string) <-chan error 
 		return nil
 	}
 	return e.wsExec.UpstreamDisconnectChan(sessionID)
-}
-
-func xaiWebsocketsEnabled(auth *cliproxyauth.Auth) bool {
-	if auth == nil {
-		return false
-	}
-	if len(auth.Attributes) > 0 {
-		if raw := strings.TrimSpace(auth.Attributes["websockets"]); raw != "" {
-			parsed, errParse := strconv.ParseBool(raw)
-			if errParse == nil {
-				return parsed
-			}
-		}
-	}
-	if len(auth.Metadata) == 0 {
-		return false
-	}
-	raw, ok := auth.Metadata["websockets"]
-	if !ok || raw == nil {
-		return false
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v
-	case string:
-		parsed, errParse := strconv.ParseBool(strings.TrimSpace(v))
-		if errParse == nil {
-			return parsed
-		}
-	default:
-	}
-	return false
 }
 
 // SupportsApplyPatch requires both selectable transports to support the tool.
