@@ -25,7 +25,7 @@ func TestOAuthProviderNamesUseGlossaryDisplayNames(t *testing.T) {
 }
 
 func TestAuthStatusWordingUsesGlossaryTerms(t *testing.T) {
-	previous := CurrentLocale()
+	previous := currentLocale
 	t.Cleanup(func() { SetLocale(previous) })
 
 	cases := []struct {
