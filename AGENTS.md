@@ -30,6 +30,9 @@ The upstream process rules in those files and in upstream tooling do not apply i
 - `extensions/panel/AGENTS.md`: the backend it calls `../CLIProxyAPI` is `core/` in this repo,
   and panel releases use `panel-v*` tags, not `vX.Y.Z`.
 
+If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
+Confirmed plans, decisions and major tradeoffs are written up in `docs/`.
+
 ## Build and test
 
 Run each command from the folder named in its heading.
