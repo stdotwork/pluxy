@@ -470,7 +470,7 @@ func (e *GeminiVertexExecutor) executeWithServiceAccount(ctx context.Context, au
 		helps.DropGeminiTrailingThoughtOnlyContentDoc(doc, "contents")
 		helps.EnsureGeminiTrailingUserContentDoc(doc, "contents")
 	}
-	baseURL := vertexBaseURL(location)
+	baseURL := helps.VertexOpenAPIHostBaseURL(location)
 	url := fmt.Sprintf("%s/%s/projects/%s/locations/%s/publishers/google/models/%s:%s", baseURL, vertexAPIVersion, projectID, location, baseModel, action)
 	if opts.Alt != "" && action != "countTokens" {
 		url = url + fmt.Sprintf("?$alt=%s", opts.Alt)
@@ -762,7 +762,7 @@ func (e *GeminiVertexExecutor) executeStreamWithServiceAccount(ctx context.Conte
 	action := getVertexAction(baseModel, true)
 	helps.DropGeminiTrailingThoughtOnlyContentDoc(doc, "contents")
 	helps.EnsureGeminiBoundaryUserContentDoc(doc, "contents")
-	baseURL := vertexBaseURL(location)
+	baseURL := helps.VertexOpenAPIHostBaseURL(location)
 	url := fmt.Sprintf("%s/%s/projects/%s/locations/%s/publishers/google/models/%s:%s", baseURL, vertexAPIVersion, projectID, location, baseModel, action)
 	// Imagen models don't support streaming, skip SSE params
 	if !isImagenModel(baseModel) {
@@ -1202,7 +1202,7 @@ func (e *GeminiVertexExecutor) countTokensWithServiceAccount(ctx context.Context
 	internalsignature.SanitizeGeminiRequestThoughtSignaturesDoc(doc, "contents")
 	helps.EnsureGeminiLeadingUserContentDoc(doc, "contents")
 
-	baseURL := vertexBaseURL(location)
+	baseURL := helps.VertexOpenAPIHostBaseURL(location)
 	url := fmt.Sprintf("%s/%s/projects/%s/locations/%s/publishers/google/models/%s:%s", baseURL, vertexAPIVersion, projectID, location, baseModel, "countTokens")
 
 	ctxWithFinalizer := helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, to.String(), "", originalTranslatedForPayload, req, opts))
@@ -1478,16 +1478,6 @@ func vertexAPIVersionSuffix(base string) bool {
 		}
 	}
 	return hasDigit
-}
-
-func vertexBaseURL(location string) string {
-	loc := strings.TrimSpace(location)
-	if loc == "" || strings.EqualFold(loc, "global") {
-		return "https://aiplatform.googleapis.com"
-	} else if strings.EqualFold(loc, "us") || strings.EqualFold(loc, "eu") {
-		return fmt.Sprintf("https://aiplatform.%s.rep.googleapis.com", strings.ToLower(loc))
-	}
-	return fmt.Sprintf("https://%s-aiplatform.googleapis.com", loc)
 }
 
 func vertexAccessToken(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, saJSON []byte) (string, error) {

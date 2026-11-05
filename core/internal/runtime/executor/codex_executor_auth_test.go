@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	codexauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	fileauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -1558,7 +1559,7 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 			if got := preparedWS.wsHeaders.Get("Authorization"); got != "Bearer outer-non-siwc-token" {
 				t.Fatalf("wsHeaders Authorization = %q, want Bearer outer-non-siwc-token", got)
 			}
-			if got := headerValueCaseInsensitive(preparedWS.wsHeaders, "ChatGPT-Account-ID"); got != "acct-non-siwc" {
+			if got := helps.HeaderValueCaseInsensitive(preparedWS.wsHeaders, "ChatGPT-Account-ID"); got != "acct-non-siwc" {
 				t.Fatalf("wsHeaders ChatGPT-Account-ID = %q, want acct-non-siwc", got)
 			}
 
