@@ -1,8 +1,8 @@
 import type { BuiltInOAuthProvider } from '@/services/api';
 import { getPluginTitle, resolvePluginAssetURL } from '@/features/plugins/pluginResources';
 import {
-  KIMI_CHINESE_AFFILIATE_URL,
-  KIMI_INTERNATIONAL_AFFILIATE_URL,
+  KIMI_CHINESE_PLATFORM_URL,
+  KIMI_INTERNATIONAL_PLATFORM_URL,
 } from '@/features/providers/kimi';
 import type { PluginListEntry } from '@/types';
 import iconMeta from '@/assets/icons/meta.svg';
@@ -64,7 +64,7 @@ export const OAUTH_PROVIDERS: BuiltInOAuthProviderCard[] = [
     icon: { light: iconKimiTileBlack, dark: iconKimiTileWhite },
     flow: 'device',
     domain: 'kimi.com',
-    sponsor: { signUpUrl: KIMI_CHINESE_AFFILIATE_URL, siteKey: 'auth_login.sponsor_site_china' },
+    sponsor: { signUpUrl: KIMI_CHINESE_PLATFORM_URL, siteKey: 'auth_login.sponsor_site_china' },
   },
   {
     kind: 'builtin',
@@ -75,7 +75,7 @@ export const OAUTH_PROVIDERS: BuiltInOAuthProviderCard[] = [
     flow: 'device',
     domain: 'kimi.ai',
     sponsor: {
-      signUpUrl: KIMI_INTERNATIONAL_AFFILIATE_URL,
+      signUpUrl: KIMI_INTERNATIONAL_PLATFORM_URL,
       siteKey: 'auth_login.sponsor_site_international',
     },
   },
