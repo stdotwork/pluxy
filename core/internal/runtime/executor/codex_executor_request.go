@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
@@ -35,6 +36,12 @@ const (
 )
 
 var dataTag = []byte("data:")
+
+// codexRequestEncoder is shared by all requests: building a zstd encoder allocates its
+// window and match tables, and EncodeAll is safe for concurrent use.
+var codexRequestEncoder = sync.OnceValues(func() (*zstd.Encoder, error) {
+	return zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+})
 
 func translateCodexRequestPair(from, to sdktranslator.Format, model string, originalPayload, payload []byte, stream bool, preserveEmptyThinkingBlocks ...bool) ([]byte, []byte) {
 	original, body, _, _ := translateCodexRequestPairWithUpdateIntent(from, to, model, originalPayload, payload, stream, preserveEmptyThinkingBlocks...)
@@ -176,12 +183,8 @@ func (e *CodexExecutor) cacheHelperDoc(ctx context.Context, from sdktranslator.F
 		len(rawJSON) >= e.cfg.Codex.RequestCompressionMinBytes() {
 		parsedURL, errParse := neturl.Parse(url)
 		if errParse == nil && strings.EqualFold(parsedURL.Hostname(), "chatgpt.com") && strings.HasPrefix(parsedURL.Path, "/backend-api/codex/") {
-			encoder, errNewWriter := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
-			if errNewWriter == nil {
-				compressed := encoder.EncodeAll(rawJSON, nil)
-				if errClose := encoder.Close(); errClose != nil {
-					log.Errorf("codex executor: close request encoder error: %v", errClose)
-				} else if len(compressed) < len(rawJSON) {
+			if encoder, errNewWriter := codexRequestEncoder(); errNewWriter == nil {
+				if compressed := encoder.EncodeAll(rawJSON, nil); len(compressed) < len(rawJSON) {
 					wireBody = compressed
 				}
 			}
