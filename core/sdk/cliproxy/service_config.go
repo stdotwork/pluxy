@@ -42,10 +42,6 @@ func (s *Service) setWatcher(w *WatcherWrapper) {
 	s.cfgMu.Unlock()
 }
 
-func (s *Service) applyConfigUpdate(newCfg *config.Config) {
-	s.applyConfigUpdateWithAuthSynthesis(context.Background(), newCfg, true)
-}
-
 func (s *Service) applyWatcherConfigUpdate(newCfg *config.Config) {
 	s.applyConfigUpdateWithAuthSynthesis(context.Background(), newCfg, false)
 }

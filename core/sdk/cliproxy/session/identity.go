@@ -871,15 +871,6 @@ func firstNormalizedMetadataID(key string, metadataSets ...map[string]any) strin
 	return ""
 }
 
-func firstMetadataString(key string, metadataSets ...map[string]any) string {
-	for _, metadata := range metadataSets {
-		if value := metadataString(metadata, key); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func metadataString(metadata map[string]any, key string) string {
 	if metadata == nil {
 		return ""
