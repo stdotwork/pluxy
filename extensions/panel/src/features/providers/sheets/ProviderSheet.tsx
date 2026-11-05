@@ -243,7 +243,7 @@ export function ProviderSheet({
           state.brand === 'openaiCompatibility'
             ? '/ai-providers/openai'
             : state.brand === 'apikeyFun'
-              ? '/quick-start'
+              ? '/ai-providers/apikeyfun'
               : state.brand === 'fennoAI'
                 ? '/ai-providers/fennoai'
                 : state.brand === 'qiniuCloud'

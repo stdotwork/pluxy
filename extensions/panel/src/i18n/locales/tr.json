@@ -101,7 +101,6 @@
   },
   "nav": {
     "dashboard": "Pano",
-    "quick_start": "Hızlı Başlangıç",
     "ai_providers": "AI Sağlayıcıları",
     "auth_files": "Kimlik Dosyaları",
     "oauth": "OAuth Girişi",
@@ -122,7 +121,6 @@
   },
   "nav_meta": {
     "dashboard": "İşletim Özeti",
-    "quick_start": "APIKEY.FUN Kurulumu",
     "ai_providers": "Yukarı Akış Model Yönlendirmesi",
     "auth_files": "Kimlik Dosyaları ve Kimlik Bilgileri",
     "oauth": "OAuth Yetkilendirmesi",
