@@ -783,7 +783,7 @@ func (m *Manager) bindHomeSelectionRuntimeAuth(ctx context.Context, opts cliprox
 		return nil
 	}
 	selectionAuth := selection.CloneAuth()
-	if selectionAuth == nil || !authWebsocketsEnabled(selectionAuth) {
+	if selectionAuth == nil || !WebsocketsEnabled(selectionAuth) {
 		return nil
 	}
 	sessionID := homeExecutionSessionIDFromMetadata(opts.Metadata)
@@ -888,7 +888,7 @@ func (m *Manager) rememberHomeRuntimeAuth(sessionID string, auth *Auth) {
 	if auth != nil {
 		authID = strings.TrimSpace(auth.ID)
 	}
-	if m == nil || auth == nil || sessionID == "" || authID == "" || !authWebsocketsEnabled(auth) {
+	if m == nil || auth == nil || sessionID == "" || authID == "" || !WebsocketsEnabled(auth) {
 		return
 	}
 	m.mu.Lock()
