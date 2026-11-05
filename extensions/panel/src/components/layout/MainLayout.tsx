@@ -25,7 +25,6 @@ import {
   IconSidebarOauth,
   IconSidebarPlugins,
   IconSidebarProviders,
-  IconSidebarQuickStart,
   IconSidebarQuota,
   IconSidebarRouting,
   IconSidebarStore,
@@ -48,7 +47,6 @@ import {
   resolvePluginAssetURL,
   type PluginResourceEntry,
 } from '@/features/plugins/pluginResources';
-import { APIKEY_FUN_DISPLAY_NAME, hasApiKeyFunConfig } from '@/features/providers/sponsor';
 import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER } from '@/utils/constants';
 import { isSupportedLanguage } from '@/utils/language';
@@ -57,7 +55,6 @@ import type { Theme } from '@/types';
 
 const sidebarIcons: Record<string, ReactNode> = {
   dashboard: <IconSidebarDashboard size={18} />,
-  quickStart: <IconSidebarQuickStart size={18} />,
   aiProviders: <IconSidebarProviders size={18} />,
   authFiles: <IconSidebarAuthFiles size={18} />,
   oauth: <IconSidebarOauth size={18} />,
@@ -321,7 +318,6 @@ export function MainLayout() {
 
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
   const clearCache = useConfigStore((state) => state.clearCache);
-  const config = useConfigStore((state) => state.config);
 
   const theme = useThemeStore((state) => state.theme);
   const setTheme = useThemeStore((state) => state.setTheme);
@@ -587,15 +583,6 @@ export function MainLayout() {
       })
     : [];
 
-  const isApiKeyFunConfigured = hasApiKeyFunConfig(config);
-  const quickStartNavItem: SidebarNavLinkItem = {
-    path: '/quick-start',
-    label: isApiKeyFunConfigured ? APIKEY_FUN_DISPLAY_NAME : undefined,
-    labelKey: isApiKeyFunConfigured ? undefined : 'nav.quick_start',
-    metaKey: 'nav_meta.quick_start',
-    icon: sidebarIcons.quickStart,
-  };
-
   const navGroups: SidebarNavGroup[] = [
     {
       id: 'operate',
@@ -607,7 +594,6 @@ export function MainLayout() {
           metaKey: 'nav_meta.dashboard',
           icon: sidebarIcons.dashboard,
         },
-        ...(!isApiKeyFunConfigured ? [quickStartNavItem] : []),
       ],
     },
     {
@@ -643,7 +629,6 @@ export function MainLayout() {
           metaKey: 'nav_meta.routing',
           icon: sidebarIcons.routing,
         },
-        ...(isApiKeyFunConfigured ? [quickStartNavItem] : []),
       ],
     },
     {
