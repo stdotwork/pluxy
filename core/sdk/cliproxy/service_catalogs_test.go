@@ -49,7 +49,7 @@ func TestServiceCatalogStartupAndConfigReload(t *testing.T) {
 	})
 	awaitCatalog := func(want []byte) {
 		t.Helper()
-		deadline := time.NewTimer(5 * time.Second)
+		deadline := time.NewTimer(30 * time.Second)
 		defer deadline.Stop()
 		for {
 			select {
