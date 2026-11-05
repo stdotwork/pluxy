@@ -934,10 +934,8 @@ fn claude_desktop_detects_windows_variant_config_directories() {
 #[test]
 fn claude_desktop_uses_linux_beta_config_paths() {
     let home = agent_test_home("claude-desktop-linux-paths");
-    let config_home = env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .unwrap_or_else(|| home.join(".config"));
+    // Test builds deliberately ignore inherited configuration environment variables.
+    let config_home = home.join(".config");
     let paths = claude_desktop_config_paths(&home);
 
     assert!(AgentClient::ClaudeDesktop.supported_platform());

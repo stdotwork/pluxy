@@ -461,6 +461,14 @@ export const buildProviderGroups = (config: Config): ProviderGroup[] =>
     return groups;
   }, []);
 
+/**
+ * Groups the providers page lists. The APIKEY.FUN preset group is listed only when the config
+ * already has providers for it: they are removed from the generic protocol groups, so hiding the
+ * group would make them invisible and uneditable.
+ */
+export const listProviderGroups = (groups: ProviderGroup[]): ProviderGroup[] =>
+  groups.filter((group) => group.id !== 'apikeyFun' || group.resources.length > 0);
+
 /* -------------------------------------------------------------------------- */
 /* hook                                                                       */
 /* -------------------------------------------------------------------------- */

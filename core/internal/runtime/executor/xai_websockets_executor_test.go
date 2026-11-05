@@ -30,8 +30,8 @@ func TestXAIWebsocketsEnabledForConfigAPIKey(t *testing.T) {
 			"websockets": "true",
 		},
 	}
-	if !xaiWebsocketsEnabled(auth) {
-		t.Fatal("xaiWebsocketsEnabled() = false, want true")
+	if !cliproxyauth.WebsocketsEnabled(auth) {
+		t.Fatal("cliproxyauth.WebsocketsEnabled() = false, want true")
 	}
 }
 

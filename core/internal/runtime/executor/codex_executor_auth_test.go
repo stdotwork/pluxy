@@ -15,9 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	codexauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	fileauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -641,7 +643,7 @@ func TestCodexExecutorRefreshSelectiveAndDual(t *testing.T) {
 	}
 }
 
-func TestCodexWebsocketsEnabledUsesCodexOAuthDefault(t *testing.T) {
+func TestCodexAutoExecutorUsesCodexOAuthWebsocketDefault(t *testing.T) {
 	tests := []struct {
 		name string
 		auth *cliproxyauth.Auth
@@ -660,12 +662,81 @@ func TestCodexWebsocketsEnabledUsesCodexOAuthDefault(t *testing.T) {
 		{name: "metadata base URL", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"base_url": "https://codex.example.com"}}, want: false},
 		{name: "metadata false string", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"websockets": " false "}}, want: false},
 		{name: "attribute wins", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"websockets": "false"}, Metadata: map[string]any{"websockets": true}}, want: false},
-		{name: "SIWC OAuth default", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"use_siwc": true}}, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := codexWebsocketsEnabled(tt.auth); got != tt.want {
-				t.Fatalf("codexWebsocketsEnabled() = %t, want %t", got, tt.want)
+			tt.auth.ID = t.Name()
+			tt.auth.ProxyURL = "direct"
+			upgrader := websocket.Upgrader{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, errUpgrade := upgrader.Upgrade(w, r, nil)
+				if errUpgrade != nil {
+					t.Errorf("upgrade: %v", errUpgrade)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				for {
+					_, payload, errRead := conn.ReadMessage()
+					if errRead != nil {
+						return
+					}
+					if got := ojson.GetBytes(payload, "type").String(); got != "response.create" {
+						t.Errorf("upstream event = %q, want response.create", got)
+					}
+					if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp-default","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}`)); errWrite != nil {
+						return
+					}
+				}
+			}))
+			defer server.Close()
+			conn, _, errDial := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if errDial != nil {
+				t.Fatalf("dial test upstream: %v", errDial)
+			}
+			defer func() { _ = conn.Close() }()
+
+			exec := NewCodexAutoExecutor(&config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}})
+			exec.wsExec.store = &codexWebsocketSessionStore{sessions: make(map[string]*codexWebsocketSession)}
+			defer exec.CloseExecutionSession(t.Name())
+			baseURL := tt.auth.Attributes["base_url"]
+			if baseURL == "" {
+				baseURL = "https://chatgpt.com/backend-api/codex"
+			}
+			wsURL := "wss" + strings.TrimPrefix(baseURL, "https") + "/responses"
+			// Reuse a loopback socket for the real ChatGPT target, so OAuth has no
+			// custom base_url and this test cannot contact the external upstream.
+			sess := exec.wsExec.getOrCreateSession(t.Name())
+			sess.conn = conn
+			sess.connCloser = newWebsocketConnectionCloser(conn)
+			sess.authID, sess.wsURL, sess.proxyURL = tt.auth.ID, wsURL, "direct"
+			if _, _, _, errConn := exec.wsExec.ensureUpstreamConn(context.Background(), tt.auth, sess, tt.auth.ID, wsURL, nil); errConn != nil {
+				t.Fatalf("prepare test connection: %v", errConn)
+			}
+			ctx := cliproxyexecutor.WithRequiredUpstreamWebsocket(cliproxyexecutor.WithDownstreamWebsocket(context.Background()))
+			req := cliproxyexecutor.Request{Model: "gpt-5.4", Payload: []byte(`{"model":"gpt-5.4","input":[]}`)}
+			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatCodex, Metadata: map[string]any{cliproxyexecutor.ExecutionSessionMetadataKey: t.Name()}}
+			for _, stream := range []bool{false, true} {
+				var errExecute error
+				if stream {
+					var result *cliproxyexecutor.StreamResult
+					result, errExecute = exec.ExecuteStream(ctx, tt.auth, req, opts)
+					if errExecute == nil {
+						for chunk := range result.Chunks {
+							if chunk.Err != nil {
+								t.Fatalf("stream chunk: %v", chunk.Err)
+							}
+						}
+					}
+				} else {
+					_, errExecute = exec.Execute(ctx, tt.auth, req, opts)
+				}
+				if tt.want {
+					if errExecute != nil {
+						t.Fatalf("stream=%t: WebSocket execution: %v", stream, errExecute)
+					}
+				} else if !cliproxyexecutor.IsUpstreamWebsocketReplayRequired(errExecute) {
+					t.Fatalf("stream=%t: error = %v, want HTTP replay signal", stream, errExecute)
+				}
 			}
 		})
 	}
@@ -708,8 +779,8 @@ func TestCodexExecutorUseSIWCExecuteAndStream(t *testing.T) {
 	if !codexUseSIWC(auth) {
 		t.Fatal("expected codexUseSIWC(auth) == true")
 	}
-	if !codexWebsocketsEnabled(auth) {
-		t.Fatal("expected codexWebsocketsEnabled(auth) == true when use_siwc is true and websockets is enabled")
+	if !cliproxyauth.WebsocketsEnabled(auth) {
+		t.Fatal("expected cliproxyauth.WebsocketsEnabled(auth) == true when use_siwc is true and websockets is enabled")
 	}
 	// Default baseURL when base_url attribute is empty must be https://api.openai.com/v1
 	authDefaultURL := auth.Clone()
@@ -1588,7 +1659,7 @@ func TestCodexExecutorCodexClientIgnoresUseSIWC(t *testing.T) {
 			if got := preparedWS.wsHeaders.Get("Authorization"); got != "Bearer outer-non-siwc-token" {
 				t.Fatalf("wsHeaders Authorization = %q, want Bearer outer-non-siwc-token", got)
 			}
-			if got := headerValueCaseInsensitive(preparedWS.wsHeaders, "ChatGPT-Account-ID"); got != "acct-non-siwc" {
+			if got := helps.HeaderValueCaseInsensitive(preparedWS.wsHeaders, "ChatGPT-Account-ID"); got != "acct-non-siwc" {
 				t.Fatalf("wsHeaders ChatGPT-Account-ID = %q, want acct-non-siwc", got)
 			}
 

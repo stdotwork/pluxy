@@ -236,15 +236,15 @@ func codexReasoningReplaySessionKeyFromHeaders(headers http.Header) string {
 			return key
 		}
 	}
-	if windowID := strings.TrimSpace(headerValueCaseInsensitive(headers, "X-Codex-Window-Id")); windowID != "" {
+	if windowID := strings.TrimSpace(helps.HeaderValueCaseInsensitive(headers, "X-Codex-Window-Id")); windowID != "" {
 		return "window:" + windowID
 	}
 	for _, headerName := range []string{"Session_id", "session_id", "Session-Id"} {
-		if value := strings.TrimSpace(headerValueCaseInsensitive(headers, headerName)); value != "" {
+		if value := strings.TrimSpace(helps.HeaderValueCaseInsensitive(headers, headerName)); value != "" {
 			return "session-id:" + value
 		}
 	}
-	if conversationID := strings.TrimSpace(headerValueCaseInsensitive(headers, "Conversation_id")); conversationID != "" {
+	if conversationID := strings.TrimSpace(helps.HeaderValueCaseInsensitive(headers, "Conversation_id")); conversationID != "" {
 		return "conversation_id:" + conversationID
 	}
 	return ""
