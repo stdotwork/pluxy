@@ -133,5 +133,8 @@ export const zhTW: Record<MessageKey, string> = {
   'home.runtime.unknownHint': '核心狀態未知，讀取成功前無法啟動或重新啟動。',
   'home.runtime.errorDetails': '錯誤詳細資訊',
   'home.runtime.installHint': '安裝核心後即可啟動；鎖定的頁面會在核心執行後開放。',
+  // The converter leaves 视 unchanged and turns 视频 into 视頻.
+  'agents.zcode.catalog.vision': '視覺',
+  'agents.zcode.catalog.video': '影片',
 };
 export const ja: Record<MessageKey, string> = jaOverrides;
