@@ -110,37 +110,3 @@ func IsAvailable() bool {
 		return false
 	}
 }
-
-// GetPlatformInfo returns a map containing details about the current platform's
-// browser opening capabilities, including the OS, architecture, and available commands.
-//
-// Returns:
-//   - A map with platform-specific browser support information.
-func GetPlatformInfo() map[string]interface{} {
-	info := map[string]interface{}{
-		"os":        runtime.GOOS,
-		"arch":      runtime.GOARCH,
-		"available": IsAvailable(),
-	}
-
-	switch runtime.GOOS {
-	case "darwin":
-		info["default_command"] = "open"
-	case "windows":
-		info["default_command"] = "rundll32"
-	case "linux":
-		browsers := []string{"xdg-open", "x-www-browser", "www-browser", "firefox", "chromium", "google-chrome"}
-		var availableBrowsers []string
-		for _, browser := range browsers {
-			if _, err := exec.LookPath(browser); err == nil {
-				availableBrowsers = append(availableBrowsers, browser)
-			}
-		}
-		info["available_browsers"] = availableBrowsers
-		if len(availableBrowsers) > 0 {
-			info["default_command"] = availableBrowsers[0]
-		}
-	}
-
-	return info
-}

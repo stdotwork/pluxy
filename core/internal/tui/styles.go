@@ -109,18 +109,3 @@ var (
 				Background(colorPrimary).
 				Bold(true)
 )
-
-func logLevelStyle(level string) lipgloss.Style {
-	switch level {
-	case "debug":
-		return logDebugStyle
-	case "info":
-		return logInfoStyle
-	case "warn", "warning":
-		return logWarnStyle
-	case "error", "fatal", "panic":
-		return logErrorStyle
-	default:
-		return logInfoStyle
-	}
-}

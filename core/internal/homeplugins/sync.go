@@ -478,17 +478,6 @@ func deletePluginArtifact(ctx context.Context, root string, id string, pluginRun
 	return paths[0], deleted, nil
 }
 
-func currentPluginFilePath(root string, id string) (string, error) {
-	paths, errPaths := pluginFilePaths(root, id)
-	if errPaths != nil {
-		return "", errPaths
-	}
-	if len(paths) == 0 {
-		return "", nil
-	}
-	return paths[0], nil
-}
-
 func pluginFilePaths(root string, id string) ([]string, error) {
 	files, errFiles := pluginFileInfos(root, id)
 	if errFiles != nil {
@@ -570,21 +559,6 @@ func pluginCandidateDirs(root string, goos string, goarch string) []string {
 	dirs = append(dirs, filepath.Join(root, goos, goarch))
 	dirs = append(dirs, root)
 	return dirs
-}
-
-func pluginIDFromPath(path string) string {
-	file, ok := pluginFileFromPath(path, "")
-	if ok {
-		return file.ID
-	}
-	base := filepath.Base(path)
-	lowerBase := strings.ToLower(base)
-	for _, extension := range []string{".so", ".dylib", ".dll"} {
-		if strings.HasSuffix(lowerBase, extension) {
-			return base[:len(base)-len(extension)]
-		}
-	}
-	return base
 }
 
 func pluginFileFromPath(filePath string, requiredExtension string) (pluginFileInfo, bool) {

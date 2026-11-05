@@ -5,18 +5,6 @@ package tui
 
 var currentLocale = "en"
 
-// SetLocale changes the active locale.
-func SetLocale(locale string) {
-	if _, ok := locales[locale]; ok {
-		currentLocale = locale
-	}
-}
-
-// CurrentLocale returns the active locale code.
-func CurrentLocale() string {
-	return currentLocale
-}
-
 // ToggleLocale switches between zh and en.
 func ToggleLocale() {
 	if currentLocale == "zh" {

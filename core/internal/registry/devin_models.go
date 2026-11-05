@@ -130,13 +130,6 @@ func GetDevinModelsJSON() []byte {
 	return data
 }
 
-// GetDevinModelsRevision returns the revision counter of the Devin model catalog.
-func GetDevinModelsRevision() uint64 {
-	devinCatalogStore.mu.RLock()
-	defer devinCatalogStore.mu.RUnlock()
-	return devinCatalogStore.revision
-}
-
 // GetDevinModelsSnapshot returns a copy of raw JSON and current catalog revision.
 func GetDevinModelsSnapshot() ([]byte, uint64) {
 	devinCatalogStore.mu.RLock()

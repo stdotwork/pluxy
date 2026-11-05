@@ -908,17 +908,6 @@ func restoreCodexCollaborationValue(value any) bool {
 	return changed
 }
 
-func rewriteCodexAgentMessageInput(payload []byte, optimizeEnabled bool, compatMode bool) []byte {
-	if len(payload) == 0 {
-		return payload
-	}
-	doc := ojson.NewDoc(payload)
-	if !rewriteCodexAgentMessageInputDoc(doc, optimizeEnabled, compatMode) {
-		return payload
-	}
-	return doc.Bytes()
-}
-
 func rewriteCodexAgentMessageInputDoc(doc *ojson.Doc, optimizeEnabled bool, compatMode bool) bool {
 	if doc == nil {
 		return false
@@ -968,17 +957,6 @@ func rewriteCodexAgentMessageInputDoc(doc *ojson.Doc, optimizeEnabled bool, comp
 		}
 	}
 	return changed
-}
-
-func rewriteCodexAgentMessageContent(payload []byte) []byte {
-	if len(payload) == 0 {
-		return payload
-	}
-	doc := ojson.NewDoc(payload)
-	if !rewriteCodexAgentMessageContentDoc(doc) {
-		return payload
-	}
-	return doc.Bytes()
 }
 
 func rewriteCodexAgentMessageContentDoc(doc *ojson.Doc) bool {

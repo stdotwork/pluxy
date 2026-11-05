@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -820,18 +819,4 @@ func (a rpcQuotaProvider) ResetQuota(ctx context.Context, req pluginapi.QuotaRes
 		QuotaResetRequest: req,
 		HostCallbackID:    callbackID,
 	})
-}
-
-func httpResponseFromPlugin(resp pluginapi.ExecutorHTTPResponse, req *http.Request) *http.Response {
-	status := resp.StatusCode
-	if status == 0 {
-		status = http.StatusOK
-	}
-	return &http.Response{
-		StatusCode: status,
-		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
-		Header:     cloneHeader(resp.Headers),
-		Body:       io.NopCloser(bytes.NewReader(bytes.Clone(resp.Body))),
-		Request:    req,
-	}
 }
