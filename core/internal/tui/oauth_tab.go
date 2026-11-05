@@ -20,13 +20,13 @@ type oauthProvider struct {
 }
 
 var oauthProviders = []oauthProvider{
-	{"Claude (Anthropic)", "anthropic-auth-url", "🟧", false},
-	{"Codex (OpenAI)", "codex-auth-url", "🟩", false},
+	{"Claude", "anthropic-auth-url", "🟧", false},
+	{"Codex", "codex-auth-url", "🟩", false},
 	{"Antigravity", "antigravity-auth-url", "🟪", false},
 	{"Kimi (kimi.com)", "kimi-auth-url", "🟫", true},
 	{"Kimi (kimi.ai)", "kimi-ai-auth-url", "🟫", true},
 	{"xAI", "xai-auth-url", "⬛", true},
-	{"Meta", "meta-auth-url", "🔵", true},
+	{"Muse (Meta)", "meta-auth-url", "🔵", true},
 }
 
 // oauthTabModel handles OAuth login flows.
