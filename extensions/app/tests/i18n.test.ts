@@ -143,7 +143,10 @@ describe('i18n', () => {
   });
 
   it('does not include untranslated Chinese prose in English messages', () => {
-    expect(Object.entries(en).filter(([, message]) => /\p{Script=Han}/u.test(message))).toEqual([]);
+    // 'app.theme.anime.name' is the theme's proper name, shown as is in every language.
+    const properNames = new Set<string>(['app.theme.anime.name']);
+    expect(Object.entries(en).filter(([key, message]) =>
+      !properNames.has(key) && /\p{Script=Han}/u.test(message))).toEqual([]);
   });
 
   it('names the actual add action in the empty API access prompt', () => {
