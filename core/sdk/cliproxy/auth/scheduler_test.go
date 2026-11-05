@@ -312,9 +312,9 @@ func TestManagerLegacyWeightedRoundRobinKeepsIndependentAliasPrefixedModelState(
 	counts := make(map[string]int)
 	for index := 0; index < 40; index++ {
 		for _, model := range []string{"team-a/shared", "team-b/shared"} {
-			got, _, errPick := manager.pickNext(context.Background(), "gemini", model, cliproxyexecutor.Options{}, nil)
+			got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, model, cliproxyexecutor.Options{}, nil)
 			if errPick != nil {
-				t.Fatalf("pickNext(%q) #%d error = %v", model, index, errPick)
+				t.Fatalf("pickNextMixed(%q) #%d error = %v", model, index, errPick)
 			}
 			counts[got.ID]++
 		}
@@ -962,15 +962,15 @@ func TestManagerPluginSchedulerSelectsAuthID(t *testing.T) {
 	}
 	manager.SetPluginScheduler(scheduler)
 
-	got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{Stream: true}, nil)
+	got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{Stream: true}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext() error = %v", errPick)
+		t.Fatalf("pickNextMixed() error = %v", errPick)
 	}
 	if got == nil {
-		t.Fatalf("pickNext() auth = nil")
+		t.Fatalf("pickNextMixed() auth = nil")
 	}
 	if got.ID != "auth-b" {
-		t.Fatalf("pickNext() auth.ID = %q, want %q", got.ID, "auth-b")
+		t.Fatalf("pickNextMixed() auth.ID = %q, want %q", got.ID, "auth-b")
 	}
 	if scheduler.calls != 1 {
 		t.Fatalf("scheduler.calls = %d, want %d", scheduler.calls, 1)
@@ -1002,9 +1002,9 @@ func TestManagerPluginSchedulerAcrossPriorities(t *testing.T) {
 	}
 	manager.SetPluginScheduler(scheduler)
 
-	got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext() error = %v", errPick)
+		t.Fatalf("pickNextMixed() error = %v", errPick)
 	}
 	if len(scheduler.requests) != 1 {
 		t.Fatalf("len(scheduler.requests) = %d, want 1", len(scheduler.requests))
@@ -1074,9 +1074,9 @@ func TestManagerPluginSchedulerDefaultHighestPriorityOnly(t *testing.T) {
 	}
 	manager.SetPluginScheduler(scheduler)
 
-	got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext() error = %v", errPick)
+		t.Fatalf("pickNextMixed() error = %v", errPick)
 	}
 	if len(scheduler.requests) != 1 {
 		t.Fatalf("len(scheduler.requests) = %d, want 1", len(scheduler.requests))
@@ -1107,9 +1107,9 @@ func TestManagerPluginSchedulerAcrossPrioritiesUnhandledFallsBackToHighestPriori
 	}
 	manager.SetPluginScheduler(scheduler)
 
-	got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext() error = %v", errPick)
+		t.Fatalf("pickNextMixed() error = %v", errPick)
 	}
 	if len(scheduler.requests) != 1 {
 		t.Fatalf("len(scheduler.requests) = %d, want 1", len(scheduler.requests))
@@ -1154,9 +1154,9 @@ func TestManagerPluginSchedulerAcrossPrioritiesAttributesAndCooldownFilter(t *te
 	}
 	manager.SetPluginScheduler(scheduler)
 
-	got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext() error = %v", errPick)
+		t.Fatalf("pickNextMixed() error = %v", errPick)
 	}
 	if got == nil || got.ID != "low-act" {
 		t.Fatalf("picked auth = %v, want low-act", got)
@@ -1373,7 +1373,7 @@ func TestManagerWeightedRoundRobinDisallowFreeAuthIgnoresFreeWeight(t *testing.T
 				if tt.mixed {
 					selected, _, _, errPick = manager.pickNextMixed(context.Background(), []string{"codex", "gemini"}, "", opts, nil)
 				} else {
-					selected, _, errPick = manager.pickNext(context.Background(), "codex", "", opts, nil)
+					selected, _, _, errPick = manager.pickNextMixed(context.Background(), []string{"codex"}, "", opts, nil)
 				}
 				if errPick != nil {
 					t.Fatalf("weighted pick #%d error = %v", index, errPick)
@@ -1655,7 +1655,7 @@ func TestManagerPluginSchedulerSkippedWhenHomeEnabled(t *testing.T) {
 	}
 	manager.SetPluginScheduler(scheduler)
 
-	_, _, _ = manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	_, _, _, _ = manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 
 	if scheduler.calls != 0 {
 		t.Fatalf("scheduler.calls = %d, want %d", scheduler.calls, 0)
@@ -1675,16 +1675,16 @@ func TestManagerInactivePluginSchedulerKeepsFastPath(t *testing.T) {
 	scheduler := &inactivePluginScheduler{}
 	manager.SetPluginScheduler(scheduler)
 
-	gotA, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	gotA, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext() first error = %v", errPick)
+		t.Fatalf("pickNextMixed() first error = %v", errPick)
 	}
-	gotB, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	gotB, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 	if errPick != nil {
-		t.Fatalf("pickNext() second error = %v", errPick)
+		t.Fatalf("pickNextMixed() second error = %v", errPick)
 	}
 	if gotA == nil || gotB == nil {
-		t.Fatalf("pickNext() auths = %v, %v; want non-nil", gotA, gotB)
+		t.Fatalf("pickNextMixed() auths = %v, %v; want non-nil", gotA, gotB)
 	}
 	if gotA.ID != "auth-a" || gotB.ID != "auth-b" {
 		t.Fatalf("fast path picks = %q, %q; want auth-a, auth-b", gotA.ID, gotB.ID)
@@ -1730,20 +1730,6 @@ func TestManagerPluginSchedulerCalledOutsideManagerLock(t *testing.T) {
 		}
 	})
 
-	t.Run("pickNext", func(t *testing.T) {
-		currentTest = t
-		got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
-		if errPick != nil {
-			t.Fatalf("pickNext() error = %v", errPick)
-		}
-		if got == nil {
-			t.Fatalf("pickNext() auth = nil")
-		}
-		if got.ID != "auth-a" {
-			t.Fatalf("pickNext() auth.ID = %q, want auth-a", got.ID)
-		}
-	})
-
 	t.Run("pickNextMixed", func(t *testing.T) {
 		currentTest = t
 		gotMixed, _, _, errPickMixed := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
@@ -1758,16 +1744,16 @@ func TestManagerPluginSchedulerCalledOutsideManagerLock(t *testing.T) {
 		}
 	})
 
-	if scheduler.calls != 2 {
-		t.Fatalf("scheduler.calls = %d, want %d", scheduler.calls, 2)
+	if scheduler.calls != 1 {
+		t.Fatalf("scheduler.calls = %d, want %d", scheduler.calls, 1)
 	}
-	if acrossCalls != 3 {
-		t.Fatalf("acrossCalls = %d, want %d", acrossCalls, 3)
+	if acrossCalls != 2 {
+		t.Fatalf("acrossCalls = %d, want %d", acrossCalls, 2)
 	}
 }
 
 func TestManagerPluginSchedulerSnapshotConsistencyAcrossSwap(t *testing.T) {
-	for _, mode := range []string{"single", "mixed"} {
+	for _, mode := range []string{"mixed"} {
 		t.Run(mode, func(t *testing.T) {
 			manager := NewManager(nil, &RoundRobinSelector{}, nil)
 			manager.executors["gemini"] = schedulerTestExecutor{}
@@ -1813,22 +1799,12 @@ func TestManagerPluginSchedulerSnapshotConsistencyAcrossSwap(t *testing.T) {
 			}
 			manager.SetPluginScheduler(schedulerA)
 
-			if mode == "single" {
-				got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
-				if errPick != nil {
-					t.Fatalf("pickNext() error = %v", errPick)
-				}
-				if got == nil || got.ID != "auth-low" {
-					t.Fatalf("pickNext() auth = %#v, want auth-low", got)
-				}
-			} else {
-				got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
-				if errPick != nil {
-					t.Fatalf("pickNextMixed() error = %v", errPick)
-				}
-				if got == nil || got.ID != "auth-low" {
-					t.Fatalf("pickNextMixed() auth = %#v, want auth-low", got)
-				}
+			got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
+			if errPick != nil {
+				t.Fatalf("pickNextMixed() error = %v", errPick)
+			}
+			if got == nil || got.ID != "auth-low" {
+				t.Fatalf("pickNextMixed() auth = %#v, want auth-low", got)
 			}
 		})
 	}
@@ -1847,15 +1823,15 @@ func TestManagerPluginSchedulerErrorStopsPick(t *testing.T) {
 	}
 	manager.SetPluginScheduler(scheduler)
 
-	got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 	if errPick == nil {
-		t.Fatalf("pickNext() error = nil, want tenant denied")
+		t.Fatalf("pickNextMixed() error = nil, want tenant denied")
 	}
 	if errPick.Error() != "tenant denied" {
-		t.Fatalf("pickNext() error = %v, want tenant denied", errPick)
+		t.Fatalf("pickNextMixed() error = %v, want tenant denied", errPick)
 	}
 	if got != nil {
-		t.Fatalf("pickNext() auth = %v, want nil", got)
+		t.Fatalf("pickNextMixed() auth = %v, want nil", got)
 	}
 }
 
@@ -1889,15 +1865,15 @@ func TestManagerPluginSchedulerFallsBackWhenUnhandledOrUnknown(t *testing.T) {
 			scheduler := &fakePluginScheduler{resp: tc.resp, handled: tc.handled}
 			manager.SetPluginScheduler(scheduler)
 
-			got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+			got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 			if errPick != nil {
-				t.Fatalf("pickNext() error = %v", errPick)
+				t.Fatalf("pickNextMixed() error = %v", errPick)
 			}
 			if got == nil {
-				t.Fatalf("pickNext() auth = nil")
+				t.Fatalf("pickNextMixed() auth = nil")
 			}
 			if got.ID != "auth-a" {
-				t.Fatalf("pickNext() auth.ID = %q, want %q", got.ID, "auth-a")
+				t.Fatalf("pickNextMixed() auth.ID = %q, want %q", got.ID, "auth-a")
 			}
 		})
 	}
@@ -1918,16 +1894,16 @@ func TestManagerPluginSchedulerDelegatesBuiltin(t *testing.T) {
 			handled: true,
 		})
 
-		gotA, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+		gotA, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 		if errPick != nil {
-			t.Fatalf("pickNext() first error = %v", errPick)
+			t.Fatalf("pickNextMixed() first error = %v", errPick)
 		}
-		gotB, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+		gotB, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 		if errPick != nil {
-			t.Fatalf("pickNext() second error = %v", errPick)
+			t.Fatalf("pickNextMixed() second error = %v", errPick)
 		}
 		if gotA == nil || gotB == nil {
-			t.Fatalf("pickNext() auths = %v, %v; want non-nil", gotA, gotB)
+			t.Fatalf("pickNextMixed() auths = %v, %v; want non-nil", gotA, gotB)
 		}
 		if gotA.ID != "auth-a" || gotB.ID != "auth-b" {
 			t.Fatalf("round-robin picks = %q, %q; want auth-a, auth-b", gotA.ID, gotB.ID)
@@ -1957,16 +1933,16 @@ func TestManagerPluginSchedulerDelegatesBuiltin(t *testing.T) {
 			handled: true,
 		})
 
-		gotModelA, _, errPick := manager.pickNext(context.Background(), "gemini", "model-a", cliproxyexecutor.Options{}, nil)
+		gotModelA, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "model-a", cliproxyexecutor.Options{}, nil)
 		if errPick != nil {
-			t.Fatalf("pickNext(model-a) error = %v", errPick)
+			t.Fatalf("pickNextMixed(model-a) error = %v", errPick)
 		}
-		gotModelB, _, errPick := manager.pickNext(context.Background(), "gemini", "model-b", cliproxyexecutor.Options{}, nil)
+		gotModelB, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "model-b", cliproxyexecutor.Options{}, nil)
 		if errPick != nil {
-			t.Fatalf("pickNext(model-b) error = %v", errPick)
+			t.Fatalf("pickNextMixed(model-b) error = %v", errPick)
 		}
 		if gotModelA == nil || gotModelB == nil {
-			t.Fatalf("pickNext() auths = %v, %v; want non-nil", gotModelA, gotModelB)
+			t.Fatalf("pickNextMixed() auths = %v, %v; want non-nil", gotModelA, gotModelB)
 		}
 		if gotModelA.ID != "auth-a" || gotModelB.ID != "auth-a" {
 			t.Fatalf("model-scoped round-robin picks = %q, %q; want auth-a, auth-a", gotModelA.ID, gotModelB.ID)
@@ -1987,12 +1963,12 @@ func TestManagerPluginSchedulerDelegatesBuiltin(t *testing.T) {
 			handled: true,
 		})
 
-		got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+		got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil)
 		if errPick != nil {
-			t.Fatalf("pickNext() error = %v", errPick)
+			t.Fatalf("pickNextMixed() error = %v", errPick)
 		}
 		if got == nil {
-			t.Fatalf("pickNext() auth = nil")
+			t.Fatalf("pickNextMixed() auth = nil")
 		}
 		if got.ID != "auth-a" {
 			t.Fatalf("fill-first pick = %q, want auth-a", got.ID)
@@ -2161,8 +2137,8 @@ func TestManagerPluginSchedulerCandidatesAreSafeCopies(t *testing.T) {
 	}
 	manager.SetPluginScheduler(scheduler)
 
-	if _, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil); errPick != nil {
-		t.Fatalf("pickNext() error = %v", errPick)
+	if _, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, nil); errPick != nil {
+		t.Fatalf("pickNextMixed() error = %v", errPick)
 	}
 
 	manager.mu.RLock()
@@ -2186,12 +2162,12 @@ func TestManagerCustomSelector_FallsBackToLegacyPath(t *testing.T) {
 	manager.auths["auth-a"] = &Auth{ID: "auth-a", Provider: "gemini"}
 	manager.auths["auth-b"] = &Auth{ID: "auth-b", Provider: "gemini"}
 
-	got, _, errPick := manager.pickNext(context.Background(), "gemini", "", cliproxyexecutor.Options{}, map[string]struct{}{})
+	got, _, _, errPick := manager.pickNextMixed(context.Background(), []string{"gemini"}, "", cliproxyexecutor.Options{}, map[string]struct{}{})
 	if errPick != nil {
-		t.Fatalf("pickNext() error = %v", errPick)
+		t.Fatalf("pickNextMixed() error = %v", errPick)
 	}
 	if got == nil {
-		t.Fatalf("pickNext() auth = nil")
+		t.Fatalf("pickNextMixed() auth = nil")
 	}
 	if selector.calls != 1 {
 		t.Fatalf("selector.calls = %d, want %d", selector.calls, 1)
@@ -2200,7 +2176,7 @@ func TestManagerCustomSelector_FallsBackToLegacyPath(t *testing.T) {
 		t.Fatalf("len(selector.lastAuthID) = %d, want %d", len(selector.lastAuthID), 2)
 	}
 	if got.ID != selector.lastAuthID[len(selector.lastAuthID)-1] {
-		t.Fatalf("pickNext() auth.ID = %q, want selector-picked %q", got.ID, selector.lastAuthID[len(selector.lastAuthID)-1])
+		t.Fatalf("pickNextMixed() auth.ID = %q, want selector-picked %q", got.ID, selector.lastAuthID[len(selector.lastAuthID)-1])
 	}
 }
 
