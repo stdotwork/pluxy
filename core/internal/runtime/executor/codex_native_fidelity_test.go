@@ -12,6 +12,7 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
@@ -110,7 +111,7 @@ func testCodexNativeStreamFidelity(t *testing.T, source sdktranslator.Format) {
 						if got := upstreamHeaders.Get(codexResponsesLiteHeader); got != wantLiteHeader {
 							t.Errorf("upstream Lite header = %q, want %q", got, wantLiteHeader)
 						}
-						alias := headerValueCaseInsensitive(upstreamHeaders, "session_id")
+						alias := helps.HeaderValueCaseInsensitive(upstreamHeaders, "session_id")
 						t.Logf("upstream session alias: %q", alias)
 						if (alias == "") != native {
 							t.Errorf("session alias = %q, native = %t", alias, native)

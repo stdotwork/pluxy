@@ -207,7 +207,7 @@ func ensureCodexWebsocketSessionHeader(target http.Header, source http.Header, f
 
 func codexSessionHeaderValue(headers http.Header) string {
 	for _, key := range []string{"Session-Id", "Session_id", "session_id"} {
-		if value := strings.TrimSpace(headerValueCaseInsensitive(headers, key)); value != "" {
+		if value := strings.TrimSpace(helps.HeaderValueCaseInsensitive(headers, key)); value != "" {
 			return value
 		}
 	}
@@ -231,11 +231,11 @@ func ensureHeaderCasePreserved(target http.Header, source http.Header, key, conf
 	if target == nil {
 		return
 	}
-	if strings.TrimSpace(headerValueCaseInsensitive(target, key)) != "" {
+	if strings.TrimSpace(helps.HeaderValueCaseInsensitive(target, key)) != "" {
 		return
 	}
 	if source != nil {
-		if val := strings.TrimSpace(headerValueCaseInsensitive(source, key)); val != "" {
+		if val := strings.TrimSpace(helps.HeaderValueCaseInsensitive(source, key)); val != "" {
 			setHeaderCasePreserved(target, key, val)
 			return
 		}
@@ -301,27 +301,6 @@ func codexSessionHeaderKey(key string) bool {
 
 func codexSessionHeaderKeyUsesUnderscore(key string) bool {
 	return strings.ToLower(strings.TrimSpace(key)) == "session_id"
-}
-
-func headerValueCaseInsensitive(headers http.Header, key string) string {
-	key = strings.TrimSpace(key)
-	if headers == nil || key == "" {
-		return ""
-	}
-	if val := strings.TrimSpace(headers.Get(key)); val != "" {
-		return val
-	}
-	for existingKey, values := range headers {
-		if !strings.EqualFold(existingKey, key) {
-			continue
-		}
-		for _, value := range values {
-			if trimmed := strings.TrimSpace(value); trimmed != "" {
-				return trimmed
-			}
-		}
-	}
-	return ""
 }
 
 func deleteHeaderCaseInsensitive(headers http.Header, key string) {

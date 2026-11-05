@@ -20,6 +20,7 @@ import (
 	internalcache "github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
@@ -1208,10 +1209,10 @@ func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeadersWhenCloakin
 	if got := headers.Get("X-Client-Request-Id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
 		t.Fatalf("X-Client-Request-Id = %s, want %s", got, "019d2233-e240-7162-992d-38df0a2a0e0d")
 	}
-	if got := headerValueCaseInsensitive(headers, "session_id"); got != "" {
+	if got := helps.HeaderValueCaseInsensitive(headers, "session_id"); got != "" {
 		t.Fatalf("unexpected session_id = %q", got)
 	}
-	if got := headerValueCaseInsensitive(headers, "conversation_id"); got != "" {
+	if got := helps.HeaderValueCaseInsensitive(headers, "conversation_id"); got != "" {
 		t.Fatalf("unexpected conversation_id = %q", got)
 	}
 	for key, want := range map[string]string{"Session-Id": "legacy-session", "Thread-Id": "thread-1", "X-Codex-Routing-Hint": "route-1", "X-Codex-Window-Id": "window-1"} {
@@ -1295,10 +1296,10 @@ func TestApplyCodexWebsocketHeadersNativeSessionCombinations(t *testing.T) {
 					t.Errorf("unexpected Thread-Id = %q", val)
 				}
 
-				if hasSessionAlias := headerValueCaseInsensitive(got, "session_id"); hasSessionAlias != "" {
+				if hasSessionAlias := helps.HeaderValueCaseInsensitive(got, "session_id"); hasSessionAlias != "" {
 					t.Errorf("unexpected synthesized session_id alias = %q", hasSessionAlias)
 				}
-				if hasConversationAlias := headerValueCaseInsensitive(got, "conversation_id"); hasConversationAlias != "" {
+				if hasConversationAlias := helps.HeaderValueCaseInsensitive(got, "conversation_id"); hasConversationAlias != "" {
 					t.Errorf("unexpected synthesized conversation_id alias = %q", hasConversationAlias)
 				}
 			})
@@ -1455,7 +1456,7 @@ func TestApplyCodexWebsocketHeadersUsesCanonicalAccountHeader(t *testing.T) {
 
 	headers := applyCodexWebsocketHeaders(context.Background(), http.Header{}, auth, "", nil, false)
 
-	if got := headerValueCaseInsensitive(headers, "ChatGPT-Account-ID"); got != "acct-1" {
+	if got := helps.HeaderValueCaseInsensitive(headers, "ChatGPT-Account-ID"); got != "acct-1" {
 		t.Fatalf("ChatGPT-Account-ID = %s, want acct-1", got)
 	}
 	values, ok := headers["ChatGPT-Account-ID"]

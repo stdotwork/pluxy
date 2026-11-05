@@ -13,6 +13,7 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
@@ -533,8 +534,8 @@ func TestVertexBaseURL(t *testing.T) {
 		tc := tc
 		t.Run(tc.location, func(t *testing.T) {
 			t.Parallel()
-			if got := vertexBaseURL(tc.location); got != tc.want {
-				t.Errorf("vertexBaseURL(%q) = %q, want %q", tc.location, got, tc.want)
+			if got := helps.VertexOpenAPIHostBaseURL(tc.location); got != tc.want {
+				t.Errorf("helps.VertexOpenAPIHostBaseURL(%q) = %q, want %q", tc.location, got, tc.want)
 			}
 		})
 	}
