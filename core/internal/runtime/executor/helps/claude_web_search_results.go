@@ -88,12 +88,6 @@ func RestoreClaudeWebSearchResults(body []byte, sessionKey string, ttl ...time.D
 	return RestoreClaudeWebSearchResultsContext(context.Background(), body, sessionKey, ttl...)
 }
 
-// RestoreClaudeWebSearchResultsDoc fills assistant web_search_tool_result blocks
-// in doc whose content is missing or empty with the content stored for sessionKey.
-func RestoreClaudeWebSearchResultsDoc(doc *ojson.Doc, sessionKey string, ttl ...time.Duration) bool {
-	return RestoreClaudeWebSearchResultsContextDoc(context.Background(), doc, sessionKey, ttl...)
-}
-
 // RestoreClaudeWebSearchResultsContext fills assistant web_search_tool_result
 // blocks whose content is missing or empty with the content stored for
 // sessionKey using ctx for Home KV operations.

@@ -67,7 +67,7 @@ describe('quotaRowsFor', () => {
     expect(rows.map((row) => row.label)).toEqual([
       '5-hour limit',
       'Monthly limit',
-      'Enhanced code review Weekly limit',
+      'Enhanced code review weekly limit',
     ]);
   });
 
@@ -244,7 +244,7 @@ describe('quotaRowsFor', () => {
         { window: { duration: 90, timeUnit: 'TIME_UNIT_SECOND' }, detail: { limit: 100, used: 0 } },
       ],
     });
-    expect(rows.map((row) => row.label)).toEqual(['5 hours limit', '7 days limit', '5 hours limit', '90 seconds limit', 'Weekly limit']);
+    expect(rows.map((row) => row.label)).toEqual(['5-hour limit', 'Weekly limit', '5-hour limit', '90-second limit', 'Weekly limit']);
     expect(rows.at(-1)?.remainingPercent).toBeCloseTo(0.5);
     expect(rows[0].remainingPercent).toBe(80);
     expect(rows[0].resetAtMs).toBeGreaterThan(Date.now());

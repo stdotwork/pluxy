@@ -117,14 +117,6 @@ func ResetClaudeDeviceProfileCache() {
 	claudeDeviceProfileCacheMu.Unlock()
 }
 
-func MapStainlessOS() string {
-	return mapStainlessOS()
-}
-
-func MapStainlessArch() string {
-	return mapStainlessArch()
-}
-
 func defaultClaudeDeviceProfile(cfg *config.Config) ClaudeDeviceProfile {
 	hdrDefault := func(cfgVal, fallback string) string {
 		if strings.TrimSpace(cfgVal) != "" {

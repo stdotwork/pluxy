@@ -359,20 +359,6 @@ func (s *authScheduler) recordRemovalTombstoneLocked(authID string, tombstoneEpo
 	s.removeAuthFromProvidersLocked(authID)
 }
 
-// removeAuth deletes one auth from every scheduler shard that references it.
-func (s *authScheduler) removeAuth(authID string) {
-	if s == nil {
-		return
-	}
-	authID = strings.TrimSpace(authID)
-	if authID == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.removeAuthLocked(authID)
-}
-
 // ResetAuthGeneration clears recorded generation/tombstone metadata for authID.
 func (s *authScheduler) ResetAuthGeneration(authID string) {
 	if s == nil {
@@ -1033,16 +1019,6 @@ func (s *authScheduler) ensureProviderLocked(providerKey string) *providerSchedu
 		s.providers[providerKey] = providerState
 	}
 	return providerState
-}
-
-// buildScheduledAuthMeta extracts the scheduling metadata needed for shard bookkeeping.
-func buildScheduledAuthMeta(auth *Auth) *scheduledAuthMeta {
-	var authID string
-	if auth != nil {
-		authID = auth.ID
-	}
-	regEpoch := registry.GetGlobalRegistry().ClientRegistrationEpoch(authID)
-	return buildScheduledAuthMetaWithModelSet(auth, supportedModelSetForAuth(authID), regEpoch)
 }
 
 func buildScheduledAuthMetaWithModelSet(auth *Auth, modelSet map[string]struct{}, regEpoch uint64) *scheduledAuthMeta {

@@ -266,19 +266,6 @@ func OptimizeCodexMultiAgentV2RequestDoc(doc *ojson.Doc, ctx context.Context, he
 	return multiagentv2.OptimizeCodexMultiAgentV2RequestDoc(doc, ctx, headers, cfg)
 }
 
-// OptimizeCodexMultiAgentV2RequestForAuth applies the standard Codex MultiAgentV2
-// request optimization and uses the execution attempt's resolved compatibility
-// flag to convert agent_message items into portable message/user input,
-// proactively stripping author, recipient, and internal passthrough metadata.
-func OptimizeCodexMultiAgentV2RequestForAuth(ctx context.Context, headers http.Header, payload []byte, cfg *config.Config, auth *cliproxyauth.Auth, isCompat bool) ([]byte, bool) {
-	if len(payload) == 0 {
-		return payload, false
-	}
-	doc := ojson.NewDoc(payload)
-	optimized := OptimizeCodexMultiAgentV2RequestForAuthDoc(doc, ctx, headers, cfg, auth, isCompat)
-	return doc.Bytes(), optimized
-}
-
 // OptimizeCodexMultiAgentV2RequestForAuthDoc applies the standard Codex MultiAgentV2
 // request optimization in place on doc and reports whether the collaboration namespace
 // was renamed for upstream use.

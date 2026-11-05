@@ -330,10 +330,6 @@ func normalizeXAIInputNamespaceToolCalls(body []byte) []byte {
 	return normalizeXAIInputNamespaceToolCallsWithFold(body, xaiShouldFoldNamespaceTools(body, false))
 }
 
-func normalizeXAIInputNamespaceToolCallsDoc(doc *ojson.Doc) bool {
-	return normalizeXAIInputNamespaceToolCallsWithFoldDoc(doc, xaiShouldFoldNamespaceToolsDoc(doc, false))
-}
-
 func normalizeXAIInputNamespaceToolCallsWithFold(body []byte, shouldFold bool) []byte {
 	if !ojson.ValidBytes(body) {
 		return body
@@ -482,14 +478,6 @@ func (r *xaiNamespaceRestorer) restore(data []byte) []byte {
 		}
 		return doc.Bytes()
 	}
-}
-
-func (r *xaiNamespaceRestorer) restoreAtPath(data []byte, path string) []byte {
-	doc := ojson.NewDoc(data)
-	if !r.restoreAtPathDoc(doc, path) {
-		return data
-	}
-	return doc.Bytes()
 }
 
 func (r *xaiNamespaceRestorer) restoreAtPathDoc(doc *ojson.Doc, path string) bool {
@@ -675,21 +663,6 @@ func restoreXAIClientWebSearchName(data []byte, alias string) []byte {
 	return doc.Bytes()
 }
 
-// normalizeXAIObjectRootUnionBranchTypes makes untyped root union branches
-// explicitly object-only when the parameter root already permits only objects.
-// This preserves the original schema semantics while satisfying xAI validation.
-func normalizeXAIObjectRootUnionBranchTypes(tool []byte) ([]byte, bool, bool) {
-	doc := ojson.NewDoc(tool)
-	changed, ok := normalizeXAIObjectRootUnionBranchTypesDoc(doc)
-	if !ok {
-		return tool, false, false
-	}
-	if !changed {
-		return tool, false, true
-	}
-	return doc.Bytes(), true, true
-}
-
 func normalizeXAIObjectRootUnionBranchTypesDoc(doc *ojson.Doc) (bool, bool) {
 	if doc == nil {
 		return false, false
@@ -790,10 +763,6 @@ func xaiFunctionParametersNeedSimplificationFields(toolType, toolName string, pa
 
 func sanitizeXAIInputEncryptedContent(body []byte) []byte {
 	return sanitizeXAIInputEncryptedContentWithOptions(body, false)
-}
-
-func sanitizeXAIInputEncryptedContentDoc(doc *ojson.Doc) bool {
-	return sanitizeXAIInputEncryptedContentWithOptionsDoc(doc, false)
 }
 
 func sanitizeXAIInputEncryptedContentForBaseURL(body []byte, baseURL string) []byte {
@@ -948,14 +917,6 @@ func normalizeXAIInputReasoningItemsDoc(doc *ojson.Doc) bool {
 		changed = true
 	}
 	return changed
-}
-
-func mergeAdjacentXAIInputReasoningSummaries(body []byte) []byte {
-	doc := ojson.NewDoc(body)
-	if !mergeAdjacentXAIInputReasoningSummariesDoc(doc) {
-		return body
-	}
-	return doc.Bytes()
 }
 
 func mergeAdjacentXAIInputReasoningSummariesDoc(doc *ojson.Doc) bool {
@@ -1143,14 +1104,6 @@ func xaiNormalizeReasoningSummaryDataEvents(eventData []byte) [][]byte {
 	textDone := textDoneDoc.Bytes()
 	partDone := xaiNormalizeReasoningSummaryData(eventData)
 	return [][]byte{textDone, partDone}
-}
-
-func xaiNormalizeReasoningSummaryIndex(eventData []byte) []byte {
-	doc := ojson.NewDoc(eventData)
-	if !xaiNormalizeReasoningSummaryIndexDoc(doc) {
-		return eventData
-	}
-	return doc.Bytes()
 }
 
 func xaiNormalizeReasoningSummaryIndexDoc(doc *ojson.Doc) bool {

@@ -50,10 +50,6 @@ func codexUseSIWCForRequest(ctx context.Context, auth *cliproxyauth.Auth, client
 	return cliproxyauth.IsCodexUseSIWCForRequest(ctx, auth, clientHeaders...)
 }
 
-func ensureCodexSIWCCredentials(auth *cliproxyauth.Auth, apiKey string) error {
-	return ensureCodexSIWCCredentialsForRequest(context.Background(), auth, apiKey)
-}
-
 func ensureCodexSIWCCredentialsForRequest(ctx context.Context, auth *cliproxyauth.Auth, apiKey string, clientHeaders ...http.Header) error {
 	if !codexUseSIWC(auth) {
 		return nil

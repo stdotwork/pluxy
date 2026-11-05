@@ -2,8 +2,8 @@ import { useTranslation } from 'react-i18next';
 import { IconExternalLink, IconPlus, IconSearch } from '@/components/ui/icons';
 import type { ProviderRecentUsageMap } from '@/components/providers/utils';
 import { PROVIDER_LOGOS } from '../brandLogos';
-import { getKimiAffiliateUrl } from '../kimi';
-import { APIKEY_FUN_AFFILIATE_URL, APIKEY_FUN_DASHBOARD_URL } from '../sponsor';
+import { getKimiPlatformUrl } from '../kimi';
+import { APIKEY_FUN_REGISTER_URL, APIKEY_FUN_DASHBOARD_URL } from '../sponsor';
 import { getSponsorProviderDefinition } from '../sponsorDefinitions';
 import type { ProviderGroup, ProviderResource } from '../types';
 import { ProviderResourceTable } from './ProviderResourceTable';
@@ -60,9 +60,9 @@ export function ProviderResourcePanel({
   const showSponsorDashboardLink = group.id === 'apikeyFun' && hasProviderInfo;
   const registrationUrl =
     group.id === 'kimi'
-      ? getKimiAffiliateUrl(i18n.resolvedLanguage ?? i18n.language)
-      : group.id === 'fennoAI' || group.id === 'qiniuCloud'
-        ? getSponsorProviderDefinition(group.id).affiliateUrl
+      ? getKimiPlatformUrl(i18n.resolvedLanguage ?? i18n.language)
+      : group.id === 'fennoAI'
+        ? getSponsorProviderDefinition(group.id).registerUrl
         : null;
   const registrationLabel = t(
     group.id === 'kimi' ? 'providersPage.sponsor.registerNow' : 'providersPage.sponsor.registerLink'
@@ -192,7 +192,7 @@ export function ProviderResourcePanel({
             {showSponsorRegistrationLink ? (
               <a
                 className={`${styles.emptyActionButton} ${styles.emptyActionButtonEmphasis}`}
-                href={APIKEY_FUN_AFFILIATE_URL}
+                href={APIKEY_FUN_REGISTER_URL}
                 target="_blank"
                 rel="noreferrer"
               >

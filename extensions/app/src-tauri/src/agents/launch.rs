@@ -648,17 +648,12 @@ fn terminate_deepseek_harness_process_tree(child: &mut Child) -> Result<(), Stri
 
     #[cfg(unix)]
     {
-        let process_group = format!("-{}", child.id());
-        let term_status = Command::new("kill")
-            .args(["-TERM", &process_group])
-            .status()
-            .map_err(|error| format!("Failed to stop DeepSeek Harness process group: {error}"))?;
-        if !term_status.success() {
-            return Err(format!(
-                "Failed to stop DeepSeek Harness process group: PID {}",
+        signal_deepseek_harness_process_group(child.id(), libc::SIGTERM).map_err(|error| {
+            format!(
+                "Failed to stop DeepSeek Harness process group: PID {}: {error}",
                 child.id()
-            ));
-        }
+            )
+        })?;
         for _ in 0..20 {
             match child.try_wait() {
                 Ok(Some(_)) => return Ok(()),
@@ -668,16 +663,12 @@ fn terminate_deepseek_harness_process_tree(child: &mut Child) -> Result<(), Stri
                 }
             }
         }
-        let kill_status = Command::new("kill")
-            .args(["-KILL", &process_group])
-            .status()
-            .map_err(|error| format!("Failed to force-stop DeepSeek Harness process group: {error}"))?;
-        if !kill_status.success() {
-            return Err(format!(
-                "Failed to force-stop DeepSeek Harness process group: PID {}",
+        signal_deepseek_harness_process_group(child.id(), libc::SIGKILL).map_err(|error| {
+            format!(
+                "Failed to force-stop DeepSeek Harness process group: PID {}: {error}",
                 child.id()
-            ));
-        }
+            )
+        })?;
         child
             .wait()
             .map_err(|error| format!("Failed while waiting for DeepSeek Harness process to exit: {error}"))?;
@@ -693,6 +684,30 @@ fn terminate_deepseek_harness_process_tree(child: &mut Child) -> Result<(), Stri
             .wait()
             .map_err(|error| format!("Failed while waiting for DeepSeek Harness process to exit: {error}"))?;
         Ok(())
+    }
+}
+
+/// Signals the process group that `spawn_managed_deepseek_harness` created for the child
+/// (`process_group(0)`, so the group ID is the child's PID). Calls kill(2) directly: the
+/// `kill` command from procps-ng 4.0.1 to 4.0.4 turns `kill -TERM -1234` into
+/// `kill(-1, SIGTERM)`, which signals every process the user owns. Groups 0 and 1 and the
+/// app's own group are refused, because signalling them would reach the app itself or
+/// every process.
+#[cfg(unix)]
+fn signal_deepseek_harness_process_group(process_group: u32, signal: libc::c_int) -> io::Result<()> {
+    let process_group = libc::pid_t::try_from(process_group)
+        .ok()
+        .filter(|process_group| *process_group > 1 && *process_group != unsafe { libc::getpgrp() })
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("refusing to signal process group {process_group}"),
+            )
+        })?;
+    if unsafe { libc::kill(-process_group, signal) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -2414,6 +2429,17 @@ class GuiHelper {
 
         stop_managed_deepseek_harness(&state).unwrap();
         assert!(!state.status().unwrap().running);
+    }
+
+    // Signal 0 only checks permission, so this test sends nothing even if the guard breaks.
+    #[cfg(unix)]
+    #[test]
+    fn deepseek_harness_group_signal_refuses_groups_that_reach_beyond_the_child() {
+        let own_group = u32::try_from(unsafe { libc::getpgrp() }).unwrap();
+        for process_group in [0, 1, own_group, u32::MAX] {
+            let error = signal_deepseek_harness_process_group(process_group, 0).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "group {process_group}");
+        }
     }
 
     #[test]
