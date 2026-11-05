@@ -508,7 +508,7 @@
     "seven_day_sonnet": "Giới hạn tuần của Sonnet",
     "seven_day_cowork": "Giới hạn tuần của Cowork",
     "iguana_necktie": "Iguana Necktie",
-    "seven_day_fable": "Giới hạn tuần của Fable 5",
+    "seven_day_fable": "Giới hạn tuần của Fable",
     "cloud_session_credits": "Tín dụng phiên đám mây",
     "extra_usage_label": "Sử dụng thêm",
     "extra_usage_enabled": "Đã bật",
@@ -578,6 +578,16 @@
     "credit_unlimited": "Không giới hạn",
     "plan_business_premium": "Business Premium"
   },
+  "quota_window": {
+    "five_hour": "Giới hạn 5 giờ",
+    "daily": "Giới hạn ngày",
+    "weekly": "Giới hạn tuần",
+    "monthly": "Giới hạn tháng",
+    "days": "Giới hạn {{count}} ngày",
+    "hours": "Giới hạn {{count}} giờ",
+    "minutes": "Giới hạn {{count}} phút",
+    "seconds": "Giới hạn {{count}} giây"
+  },
   "kimi_quota": {
     "plan_label": "Gói",
     "plan_unknown": "Không xác định",
@@ -592,7 +602,6 @@
     "refresh_button": "Làm mới Quota",
     "fetch_all": "Lấy tất cả",
     "weekly_limit": "Giới hạn tuần",
-    "limit_window": "Giới hạn {{duration}}",
     "limit_index": "Giới hạn #{{index}}",
     "reset_hint": "đặt lại sau {{hint}}",
     "domain_unavailable": "Không thể đọc miền của credential Kimi. Cần có file xác thực hợp lệ và có thể tải xuống.",
@@ -2365,8 +2374,6 @@
     "active": "Đăng ký đang hoạt động",
     "inactive": "Đăng ký không hoạt động",
     "window": "Giới hạn sử dụng",
-    "window_duration": "Giới hạn {{minutes}} phút",
-    "window_duration_hours": "Giới hạn {{hours}} giờ",
     "weekly": "Giới hạn tuần",
     "unknown": "Không rõ",
     "remaining": "Còn lại {{percent}}%"

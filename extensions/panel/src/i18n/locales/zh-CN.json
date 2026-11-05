@@ -493,7 +493,7 @@
     "seven_day_sonnet": "Sonnet 周限额",
     "seven_day_cowork": "Cowork 周限额",
     "iguana_necktie": "Iguana Necktie",
-    "seven_day_fable": "Fable 5 周限额",
+    "seven_day_fable": "Fable 周限额",
     "cloud_session_credits": "云端会话额度",
     "extra_usage_label": "额外用量",
     "extra_usage_enabled": "已启用",
@@ -602,8 +602,6 @@
     "active": "订阅有效",
     "inactive": "订阅未激活",
     "window": "使用限额",
-    "window_duration": "{{minutes}} 分钟限额",
-    "window_duration_hours": "{{hours}} 小时限额",
     "weekly": "周限额",
     "unknown": "未知",
     "remaining": "剩余 {{percent}}%"
@@ -620,6 +618,16 @@
     "empty_data": "暂无可用额度数据",
     "plan_label": "方案",
     "remaining_percent": "剩余 {{percent}}%"
+  },
+  "quota_window": {
+    "five_hour": "5 小时限额",
+    "daily": "日限额",
+    "weekly": "周限额",
+    "monthly": "月限额",
+    "days": "{{count}} 天限额",
+    "hours": "{{count}} 小时限额",
+    "minutes": "{{count}} 分钟限额",
+    "seconds": "{{count}} 秒限额"
   },
   "kimi_quota": {
     "plan_label": "套餐",
@@ -638,7 +646,6 @@
     "fetch_all": "获取全部",
     "weekly_limit": "周限额",
     "monthly_limit": "月限额",
-    "limit_window": "{{duration}} 限额",
     "limit_index": "限额 #{{index}}",
     "reset_hint": "{{hint}} 后重置"
   },

@@ -508,7 +508,7 @@
     "seven_day_sonnet": "Weekly Sonnet limit",
     "seven_day_cowork": "Weekly Cowork limit",
     "iguana_necktie": "Iguana Necktie",
-    "seven_day_fable": "Weekly Fable 5 limit",
+    "seven_day_fable": "Weekly Fable limit",
     "cloud_session_credits": "Cloud session credits",
     "extra_usage_label": "Extra Usage",
     "extra_usage_enabled": "Enabled",
@@ -616,11 +616,19 @@
     "active": "Subscription active",
     "inactive": "Subscription inactive",
     "window": "Usage limit",
-    "window_duration": "{{minutes}}-minute limit",
-    "window_duration_hours": "{{hours}}-hour limit",
     "weekly": "Weekly limit",
     "unknown": "Unknown",
     "remaining": "{{percent}}% remaining"
+  },
+  "quota_window": {
+    "five_hour": "5-hour limit",
+    "daily": "Daily limit",
+    "weekly": "Weekly limit",
+    "monthly": "Monthly limit",
+    "days": "{{count}}-day limit",
+    "hours": "{{count}}-hour limit",
+    "minutes": "{{count}}-minute limit",
+    "seconds": "{{count}}-second limit"
   },
   "kimi_quota": {
     "plan_label": "Plan",
@@ -639,7 +647,6 @@
     "fetch_all": "Fetch All",
     "weekly_limit": "Weekly limit",
     "monthly_limit": "Monthly limit",
-    "limit_window": "{{duration}} limit",
     "limit_index": "Limit #{{index}}",
     "reset_hint": "resets in {{hint}}"
   },
