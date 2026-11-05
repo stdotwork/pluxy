@@ -1314,8 +1314,6 @@ export function createBrowserMockRuntime(
       case 'open_custom_themes_directory':
       case 'set_window_material':
       case 'restart_agent_app':
-      case 'restart_codex_app':
-      case 'restart_opencode_app':
       case 'restart_codex_cli_daemon':
       case 'check_codex_oauth_login':
       case 'restore_codex_official_config':
@@ -1457,15 +1455,6 @@ export function createBrowserMockRuntime(
         emit('config-files-changed', { paths: ['cpa-core/config.yaml'], errors: [] });
         return config;
       }
-      case 'set_core_proxy_url': {
-        return updateCoreConfig(state, { settings: { proxyUrl: readString(payload.proxyUrl) } });
-      }
-      case 'set_core_session_affinity': {
-        return updateCoreConfig(state, { settings: { routingSessionAffinity: Boolean(payload.enabled) } });
-      }
-      case 'set_core_session_affinity_ttl': {
-        return updateCoreConfig(state, { settings: { routingSessionAffinityTtl: readString(payload.ttl) } });
-      }
       case 'add_core_api_key': {
         state.coreConfig.apiKeys.push({ apiKey: readString(payload.apiKey), remark: readString(payload.remark) });
         return clone(state.coreConfig);
@@ -1551,7 +1540,6 @@ export function createBrowserMockRuntime(
         if (state.versionSource.source === `custom:${payload.url}`) state.versionSource.source = 'github';
         return clone(state.versionSource);
       }
-      case 'set_prefer_gitcode_downloads': return clone(state.versionSource);
 
       case 'management_request': return clone(managementResponse(state, payload));
       case 'import_vertex_credential': {
@@ -1968,7 +1956,6 @@ export function createBrowserMockRuntime(
       case 'apply_codex_session_index_cleanup': return { prunedEntries: asArray(asObject(payload.request).threadIds).length, backupPath: 'C:\\Users\\Mock\\.codex\\backups\\index.json' };
 
       case 'get_codex_cli_daemon_running': return true;
-      case 'get_lan_ipv4': return ['192.168.100.100'];
       default:
         if (command.startsWith('plugin:window|') || command.startsWith('plugin:webview|')) return null;
         console.warn(`[Browser Mock] Command not implemented: ${command}`, rawPayload);
