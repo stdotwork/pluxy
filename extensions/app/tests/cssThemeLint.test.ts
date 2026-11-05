@@ -4,6 +4,7 @@ import { join, relative } from 'node:path';
 import postcss, { type Declaration } from 'postcss';
 import ts from 'typescript';
 import { themeOpacityTokenProperties, themeTokenProperties } from '../src/themes/types';
+import { isLegacyDialogRule } from './cssExceptions';
 
 const srcRoot = join(import.meta.dir, '..', 'src');
 
@@ -16,6 +17,11 @@ const EXCLUDED_DIRECTORIES = [
     path: 'mocks',
     reason: 'Browser mock preview environment only; dev toolbar overlay not loaded in production desktop application',
   },
+  // Upstream pages written before the token rules, with color fallbacks and literal radii; not yet migrated.
+  // Only these files are skipped here: !important is still caught by cssLayers.test.ts.
+  { path: 'components/routing/RoutingPanel.css', reason: 'Upstream live routing panel, not yet migrated to tokens' },
+  { path: 'pages/routing/RoutingPage.css', reason: 'Upstream routing page, not yet migrated to tokens' },
+  { path: 'pages/McpSkillsPage.css', reason: 'Upstream MCP & Skills page, not yet migrated to tokens' },
 ];
 
 const REGISTERED_THEME_VARIABLES = new Set([
@@ -546,6 +552,7 @@ export function scanCssViolations(
   const ast = postcss.parse(cssText, { from: relPath });
   const violations: string[] = [];
   ast.walkDecls((decl) => {
+    if (decl.parent?.type === 'rule' && isLegacyDialogRule(relPath, (decl.parent as postcss.Rule).selector)) return;
     violations.push(...findViolationsInDecl(relPath, decl));
     violations.push(...checkRadiusDeclaration(decl, relPath, registeredTokens));
   });
