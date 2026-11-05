@@ -99,17 +99,6 @@ func LoadDiscoveryScanFilters(configPath string) (include, exclude []string) {
 	return ParseInterfaceList(payload.Discovery.Interfaces.Include...), ParseInterfaceList(payload.Discovery.Interfaces.Exclude...)
 }
 
-// DoDiscover executes the LAN AI gateway discovery workflow and outputs results.
-// Returns 0 on success, 1 on error.
-func DoDiscover(timeout time.Duration, jsonOutput bool) int {
-	return DoDiscoverWithOptions(DiscoverOptions{Timeout: timeout, JSONOutput: jsonOutput})
-}
-
-// DoDiscoverWithServiceType executes LAN discovery for the requested DNS-SD service type.
-func DoDiscoverWithServiceType(timeout time.Duration, jsonOutput bool, serviceType string) int {
-	return DoDiscoverWithOptions(DiscoverOptions{Timeout: timeout, JSONOutput: jsonOutput, ServiceType: serviceType})
-}
-
 // DoDiscoverWithOptions executes LAN discovery with explicit scan options.
 func DoDiscoverWithOptions(opts DiscoverOptions) int {
 	include, exclude := ResolveDiscoveryInterfaceFilters(opts.Include, opts.Exclude, nil, nil)

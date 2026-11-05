@@ -83,13 +83,6 @@ var currentAntigravityReasoningReplayKVClient = func() (antigravityReasoningRepl
 	return homekv.CurrentKVClient()
 }
 
-// CacheAntigravityReasoningReplayItem stores a final GPT/Codex reasoning item for
-// stateless replay. The stored item is normalized to the minimal shape accepted
-// by Responses input replay.
-func CacheAntigravityReasoningReplayItem(modelName, sessionKey string, item []byte) bool {
-	return CacheAntigravityReasoningReplayItems(modelName, sessionKey, [][]byte{item})
-}
-
 // CacheAntigravityReasoningReplayItems stores the final GPT/Codex assistant output
 // items needed to replay a stateless next turn.
 func CacheAntigravityReasoningReplayItems(modelName, sessionKey string, items [][]byte) bool {
@@ -139,15 +132,6 @@ func CacheAntigravityReasoningReplayItemsBestEffort(ctx context.Context, modelNa
 		evictOldestAntigravityReasoningReplayEntries(AntigravityReasoningReplayCacheEvictBatchSize)
 	}
 	return true
-}
-
-// GetAntigravityReasoningReplayItem retrieves a normalized reasoning replay item.
-func GetAntigravityReasoningReplayItem(modelName, sessionKey string) ([]byte, bool) {
-	items, ok := GetAntigravityReasoningReplayItems(modelName, sessionKey)
-	if !ok || len(items) == 0 {
-		return nil, false
-	}
-	return items[0], true
 }
 
 // GetAntigravityReasoningReplayItems retrieves normalized assistant output items.
@@ -382,14 +366,6 @@ func DeleteAntigravityReasoningReplayItemsIfUnchanged(ctx context.Context, model
 		evictOldestAntigravityReasoningReplayEntries(AntigravityReasoningReplayCacheEvictBatchSize)
 	}
 	return true, nil
-}
-
-// DeleteAntigravityReasoningReplayItem removes one replay item after upstream rejects
-// it or the caller otherwise knows it is stale.
-func DeleteAntigravityReasoningReplayItem(modelName, sessionKey string) {
-	if errDelete := DeleteAntigravityReasoningReplayItemRequired(context.Background(), modelName, sessionKey); errDelete != nil {
-		return
-	}
 }
 
 // DeleteAntigravityReasoningReplayItemRequired removes one replay item for request-time paths.

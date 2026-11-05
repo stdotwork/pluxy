@@ -2268,21 +2268,3 @@ func isTimeoutError(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
-
-func sleepWithContext(ctx context.Context, d time.Duration) {
-	if d <= 0 {
-		return
-	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	if ctx == nil {
-		<-timer.C
-		return
-	}
-	select {
-	case <-ctx.Done():
-		return
-	case <-timer.C:
-		return
-	}
-}
