@@ -508,7 +508,7 @@
     "seven_day_sonnet": "Sonnet 주간 한도",
     "seven_day_cowork": "Cowork 주간 한도",
     "iguana_necktie": "Iguana Necktie",
-    "seven_day_fable": "Fable 5 주간 한도",
+    "seven_day_fable": "Fable 주간 한도",
     "cloud_session_credits": "클라우드 세션 크레딧",
     "extra_usage_label": "추가 사용량",
     "extra_usage_enabled": "활성화됨",
@@ -616,11 +616,19 @@
     "active": "구독 활성",
     "inactive": "구독 비활성",
     "window": "사용 한도",
-    "window_duration": "{{minutes}}분 한도",
-    "window_duration_hours": "{{hours}}시간 한도",
     "weekly": "주간 한도",
     "unknown": "알 수 없음",
     "remaining": "{{percent}}% 남음"
+  },
+  "quota_window": {
+    "five_hour": "5시간 한도",
+    "daily": "일일 한도",
+    "weekly": "주간 한도",
+    "monthly": "월간 한도",
+    "days": "{{count}}일 한도",
+    "hours": "{{count}}시간 한도",
+    "minutes": "{{count}}분 한도",
+    "seconds": "{{count}}초 한도"
   },
   "kimi_quota": {
     "plan_label": "요금제",
@@ -639,7 +647,6 @@
     "fetch_all": "모두 가져오기",
     "weekly_limit": "주간 한도",
     "monthly_limit": "월간 한도",
-    "limit_window": "{{duration}} 한도",
     "limit_index": "한도 #{{index}}",
     "reset_hint": "{{hint}} 후 초기화"
   },

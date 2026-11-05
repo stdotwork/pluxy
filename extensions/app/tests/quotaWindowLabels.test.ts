@@ -12,8 +12,11 @@ const LOCALES = {
     daily: 'Daily limit',
     weekly: 'Weekly limit',
     monthly: 'Monthly limit',
-    hours: '{hours}-hour limit',
-    minutes: '{minutes}-minute limit',
+    monthlyCoding: 'Monthly coding limit',
+    days: '{count}-day limit',
+    hours: '{count}-hour limit',
+    minutes: '{count}-minute limit',
+    seconds: '{count}-second limit',
     fable: 'Weekly Fable limit',
   },
   'zh-CN': {
@@ -22,8 +25,11 @@ const LOCALES = {
     daily: '日限额',
     weekly: '周限额',
     monthly: '月限额',
-    hours: '{hours} 小时限额',
-    minutes: '{minutes} 分钟限额',
+    monthlyCoding: '月编程限额',
+    days: '{count} 天限额',
+    hours: '{count} 小时限额',
+    minutes: '{count} 分钟限额',
+    seconds: '{count} 秒限额',
     fable: 'Fable 周限额',
   },
   'zh-TW': {
@@ -32,8 +38,11 @@ const LOCALES = {
     daily: '日限額',
     weekly: '週限額',
     monthly: '月限額',
-    hours: '{hours} 小時限額',
-    minutes: '{minutes} 分鐘限額',
+    monthlyCoding: '月程式設計限額',
+    days: '{count} 天限額',
+    hours: '{count} 小時限額',
+    minutes: '{count} 分鐘限額',
+    seconds: '{count} 秒限額',
     fable: 'Fable 週限額',
   },
   ja: {
@@ -42,8 +51,11 @@ const LOCALES = {
     daily: '日間制限',
     weekly: '週間制限',
     monthly: '月間制限',
-    hours: '{hours} 時間制限',
-    minutes: '{minutes} 分間制限',
+    monthlyCoding: '月間コーディング制限',
+    days: '{count} 日間制限',
+    hours: '{count} 時間制限',
+    minutes: '{count} 分間制限',
+    seconds: '{count} 秒間制限',
     fable: 'Fable 週間制限',
   },
 } as const;
@@ -73,9 +85,16 @@ describe('quota window labels use one wording for every provider', () => {
         for (const key of MONTHLY_KEYS) expect(text(key)).toBe(terms.monthly);
       });
 
-      it('names the Meta hour and minute windows with a whole phrase', () => {
-        expect(text('quota.service.meta.windowHours')).toBe(terms.hours);
-        expect(text('quota.service.meta.windowMinutes')).toBe(terms.minutes);
+      it('names any other window length with a whole phrase', () => {
+        expect(text('quota.service.limit.days')).toBe(terms.days);
+        expect(text('quota.service.limit.hours')).toBe(terms.hours);
+        expect(text('quota.service.limit.minutes')).toBe(terms.minutes);
+        expect(text('quota.service.limit.seconds')).toBe(terms.seconds);
+      });
+
+      it('names Kimi monthly windows as monthly limits', () => {
+        expect(text('quota.service.limit.month')).toBe(terms.monthly);
+        expect(text('quota.service.kimi.monthlyCode')).toBe(terms.monthlyCoding);
       });
 
       it('builds scoped weekly labels from the weekly term', () => {

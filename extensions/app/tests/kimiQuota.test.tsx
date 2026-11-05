@@ -18,7 +18,7 @@ describe('Kimi monthly quotas', () => {
   it('appends both monthly quotas, preserving precision and independent resets', () => {
     const rows = quotaRowsFor('kimi', payload);
     expect(rows.map(row => row.label)).toEqual([
-      '5 hours limit', 'Weekly limit', 'Monthly total quota', 'Monthly coding quota',
+      '5-hour limit', 'Weekly limit', 'Monthly limit', 'Monthly coding limit',
     ]);
     expect(rows[2].remainingPercent).toBeCloseTo(74.71);
     expect(rows[3].remainingPercent).toBe(40);
@@ -57,8 +57,8 @@ describe('Kimi monthly quotas', () => {
       <AuthFileQuotaPanel file={file} quota={quota} disabled={false} compact dense onRefresh={() => {}} />,
     ]) {
       const html = renderToStaticMarkup(<I18nProvider>{content}</I18nProvider>);
-      expect(html).toContain('Monthly total quota');
-      expect(html).toContain('Monthly coding quota');
+      expect(html).toContain('Monthly limit');
+      expect(html).toContain('Monthly coding limit');
       expect(html).toContain('75%');
       expect(html).toContain('40%');
       expect(html).toContain('10/22');

@@ -19,6 +19,7 @@ import type {
 } from '@/types';
 import { normalizeNumberValue, normalizeQuotaFraction, normalizeStringValue } from './parsers';
 import { parseOffsetSecondsToMs, resolveResetMs } from './resetInstants';
+import { quotaWindowLabel } from './windowLabel';
 
 const ANTIGRAVITY_BUCKET_WINDOW_ORDER = new Map<string, number>([
   ['5h', 0],
@@ -200,13 +201,17 @@ function normalizeKimiTimeUnit(rawTimeUnit: unknown): KimiTimeUnit | null {
   return null;
 }
 
-function kimiDurationToken(duration: number, rawTimeUnit: unknown): string {
-  const unit = normalizeKimiTimeUnit(rawTimeUnit);
-  if (unit === 'second') return `${duration}s`;
-  if (unit === 'hour') return `${duration}h`;
-  if (unit === 'day') return `${duration}d`;
-  if (unit === 'week') return `${duration}w`;
-  return duration % 60 === 0 ? `${duration / 60}h` : `${duration}m`;
+const KIMI_UNIT_SECONDS: Record<KimiTimeUnit, number> = {
+  second: 1,
+  minute: 60,
+  hour: 3_600,
+  day: 86_400,
+  week: 604_800,
+};
+
+/** Window length in seconds; a missing or unknown unit counts as minutes, as Kimi's default. */
+function kimiWindowSeconds(duration: number, rawTimeUnit: unknown): number {
+  return duration * KIMI_UNIT_SECONDS[normalizeKimiTimeUnit(rawTimeUnit) ?? 'minute'];
 }
 
 function kimiLimitLabel(
@@ -230,12 +235,7 @@ function kimiLimitLabel(
     (detail as Record<string, unknown>).timeUnit;
 
   if (duration !== null && duration > 0) {
-    return {
-      labelKey: 'kimi_quota.limit_window',
-      labelParams: {
-        duration: kimiDurationToken(duration, timeUnit),
-      },
-    };
+    return quotaWindowLabel(kimiWindowSeconds(duration, timeUnit));
   }
 
   return {
