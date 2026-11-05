@@ -269,3 +269,60 @@ describe('browser mock native provider groups', () => {
     expect(await request(runtime, 'GET', '/config/api-keys/openai-compatibility')).toEqual([{ ...group, keys: [group.keys[1]] }]);
   });
 });
+
+describe('browser mock MCP, skills, reverse proxy and ZCode contracts', () => {
+  test('lists, saves, toggles, imports, exports and deletes MCP servers in memory', async () => {
+    const runtime = createBrowserMockRuntime('running');
+    const servers = async () => await runtime.invoke('list_mcp_servers') as Array<{ id: string; enabled: boolean }>;
+    expect((await servers()).map(server => server.id)).toEqual(['filesystem', 'docs-search']);
+    await runtime.invoke('save_mcp_server', { server: { id: '', name: 'Local Git', transport: 'stdio', command: 'uvx', args: ['mcp-server-git'], env: {}, url: null, headers: {}, enabled: true, description: null } });
+    expect((await servers()).map(server => server.id)).toContain('local-git');
+    await runtime.invoke('set_mcp_server_enabled', { id: 'docs-search', enabled: true });
+    expect((await servers()).find(server => server.id === 'docs-search')?.enabled).toBe(true);
+    expect(await runtime.invoke('import_mcp_servers_json', { raw: '{"mcpServers":{"Fetch":{"command":"uvx","args":["mcp-server-fetch"]},"Broken":{}}}' }))
+      .toEqual({ added: 1, updated: 0, skipped: 1, errors: ['Broken: needs a command or a url'] });
+    expect(JSON.parse(await runtime.invoke('export_mcp_servers_json') as string).mcpServers.Fetch).toEqual({ type: 'stdio', command: 'uvx', args: ['mcp-server-fetch'] });
+    await runtime.invoke('delete_mcp_server', { id: 'local-git' });
+    expect((await servers()).map(server => server.id)).not.toContain('local-git');
+    await expect(runtime.invoke('delete_mcp_server', { id: 'local-git' })).rejects.toThrow("MCP server with id 'local-git' not found");
+    await expect(runtime.invoke('import_mcp_servers_json', { raw: '{' })).rejects.toThrow('Failed to parse JSON');
+  });
+
+  test('lists skills, returns their body and toggles them by path', async () => {
+    const runtime = createBrowserMockRuntime('running');
+    const [first] = await runtime.invoke('list_skills') as Array<{ path: string; enabled: boolean }>;
+    expect(await runtime.invoke('get_skill_detail', { path: first.path })).toMatchObject({ entry: { path: first.path }, body: expect.stringContaining('name: code-review') });
+    await runtime.invoke('set_skill_enabled', { path: first.path, enabled: false });
+    expect(((await runtime.invoke('list_skills')) as Array<{ enabled: boolean }>)[0].enabled).toBe(false);
+    await expect(runtime.invoke('get_skill_detail', { path: 'missing/SKILL.md' })).rejects.toThrow('no such file');
+    expect(await runtime.invoke('open_mcp_skills_directory')).toBeNull();
+  });
+
+  test('reverse proxy starts, applies and stops, and refuses a start without a certificate', async () => {
+    const runtime = createBrowserMockRuntime('running');
+    const config = { enabled: true, listenHost: '0.0.0.0', listenPort: 443, targetPort: 8317, certPath: '/tls/cert.pem', keyPath: '/tls/key.pem' };
+    expect(await runtime.invoke('reverse_proxy_get_state')).toMatchObject({ running: false, listening: null });
+    expect(await runtime.invoke('reverse_proxy_start', { config })).toMatchObject({ running: true, listening: '0.0.0.0:443', target: '127.0.0.1:8317' });
+    expect(await runtime.invoke('reverse_proxy_apply', { config: { ...config, enabled: false } })).toMatchObject({ running: false, listening: null });
+    await runtime.invoke('reverse_proxy_start', { config });
+    expect(await runtime.invoke('reverse_proxy_stop')).toMatchObject({ running: false, error: null });
+    await expect(runtime.invoke('reverse_proxy_start', { config: { ...config, keyPath: '' } })).rejects.toThrow('certificate and a private key');
+    expect(await runtime.invoke('reverse_proxy_get_state')).toMatchObject({ running: false, error: 'A certificate and a private key are required' });
+  });
+
+  test('saves ZCode subagent and model catalog edits and lists update channels', async () => {
+    const runtime = createBrowserMockRuntime('running');
+    const subagents = await runtime.invoke('get_zcode_subagent_config') as { subagents: Array<Record<string, unknown>> };
+    const saved = await runtime.invoke('save_zcode_subagent_config', { request: { defaultSubagentModel: 'gpt-5.2-codex', defaultThoughtLevel: null, subagents: [{ ...subagents.subagents[0], thoughtLevel: 'high' }] } });
+    expect(saved).toMatchObject({ defaultSubagentModel: 'gpt-5.2-codex', defaultThoughtLevel: null, subagents: [{ name: 'explorer', thoughtLevel: 'high' }] });
+    expect(await runtime.invoke('get_zcode_subagent_config')).toEqual(saved);
+
+    const catalog = await runtime.invoke('get_zcode_model_catalog_editor') as { models: Array<{ id: string; configuration: Record<string, unknown> }> };
+    const edited = { ...catalog.models[1], enabled: false, configuration: { ...catalog.models[1].configuration, maxOutputTokens: 4096, isManual: true } };
+    expect(await runtime.invoke('save_zcode_model_catalog_editor', { request: { models: [edited], modelOrder: ['claude-sonnet-4-6', 'gpt-5.2-codex'] } }))
+      .toMatchObject({ modelOrder: ['claude-sonnet-4-6', 'gpt-5.2-codex'], models: [{ id: 'gpt-5.2-codex', enabled: true }, { id: 'claude-sonnet-4-6', enabled: false, configuration: { maxOutputTokens: 4096, isManual: true } }] });
+
+    await runtime.invoke('set_update_channel', { channel: 'preview-20260101' });
+    expect(await runtime.invoke('list_update_channels')).toEqual(['stable', 'preview', 'preview-20260101']);
+  });
+});

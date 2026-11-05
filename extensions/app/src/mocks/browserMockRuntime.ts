@@ -616,6 +616,43 @@ function createState(scenario: BrowserMockScenario) {
       { id: 'claude:claude-sonnet-4-6', model: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', provider: 'Claude OAuth', kind: 'claude-oauth', protocol: 'anthropic', reasoningLevels: ['low', 'medium', 'high'] },
     ],
     codexSubagents: { enabled: true, maxConcurrentThreadsPerSession: 4, defaultSubagentModel: null, defaultSubagentReasoningEffort: 'medium', interruptMessage: true },
+    mcpServers: [
+      {
+        id: 'filesystem', name: 'Filesystem', transport: 'stdio', command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:\\Users\\Mock\\projects'],
+        env: {}, url: null, headers: {}, enabled: true, description: 'Read and write files in the projects folder',
+      },
+      {
+        id: 'docs-search', name: 'Docs search', transport: 'http', command: null, args: [], env: {},
+        url: 'https://mcp.example.com/docs', headers: { Authorization: 'Bearer mock-token' }, enabled: false, description: null,
+      },
+    ] as JsonObject[],
+    skills: [
+      { id: 'code-review', name: 'code-review', description: 'Review a diff for correctness problems', path: 'C:\\Users\\Mock\\.openclaw\\skills\\code-review\\SKILL.md', root: 'C:\\Users\\Mock\\.openclaw\\skills', source: 'openclaw', enabled: true, fileCount: 2 },
+      { id: 'release-notes', name: 'release-notes', description: 'Draft release notes from merged pull requests', path: 'C:\\Users\\Mock\\projects\\mock-demo\\.skills\\release-notes\\SKILL.md', root: 'C:\\Users\\Mock\\projects\\mock-demo\\.skills', source: 'project', enabled: false, fileCount: 1 },
+    ] as JsonObject[],
+    reverseProxy: { running: false, listening: null, target: null, requestsTotal: 0, error: null } as JsonObject,
+    zcodeSubagents: {
+      defaultSubagentModel: null as string | null,
+      defaultThoughtLevel: 'medium' as string | null,
+      subagents: [
+        { name: 'explorer', description: 'Read-only codebase search', filePath: 'C:\\Users\\Mock\\.zcode\\agents\\explorer.md', model: null, thoughtLevel: 'low', tools: ['read', 'grep'] },
+      ] as JsonObject[],
+    },
+    zcodeCatalog: {
+      models: ['gpt-5.2-codex', 'claude-sonnet-4-6'].map((id) => {
+        const configuration = {
+          contextWindow: 200_000, maxOutputTokens: 32_000,
+          supportsImage: true, supportsPdf: false, supportsVideo: false,
+          supportsJsonSchemaOutput: true, supportsNativeWebSearch: false, supportsMidConversationSystem: true,
+          reasoningLevels: ['low', 'medium', 'high'], isManual: false,
+        };
+        return { id, enabled: true, configuration, defaults: clone(configuration) };
+      }),
+      modelOrder: ['gpt-5.2-codex', 'claude-sonnet-4-6'],
+      defaultModel: 'gpt-5.2-codex' as string | undefined,
+      configured: true,
+    },
     codexCatalog: {
       defaultAutoReviewModel: null as string | null,
       revision: 'mock-catalog-r1',
@@ -1844,6 +1881,115 @@ export function createBrowserMockRuntime(
         const request = asObject(payload.request);
         state.harnessCatalog = { ...state.harnessCatalog, ...clone(request), revision: `mock-harness-${Date.now()}`, configured: true } as typeof state.harnessCatalog;
         return clone(state.harnessCatalog);
+      }
+
+      case 'list_update_channels': return Array.from(new Set(['stable', 'preview', state.appUpdateInfo.updateChannel ?? 'stable']));
+
+      case 'list_mcp_servers': return clone(state.mcpServers);
+      case 'save_mcp_server': {
+        const server = clone(asObject(payload.server));
+        server.id = readString(server.id) || readString(server.name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        if (!server.id) throw new Error('MCP server name is required');
+        const index = state.mcpServers.findIndex((item) => item.id === server.id);
+        if (index >= 0) state.mcpServers[index] = server;
+        else state.mcpServers.push(server);
+        return clone(server);
+      }
+      case 'delete_mcp_server': {
+        const index = state.mcpServers.findIndex((item) => item.id === payload.id);
+        if (index < 0) throw new Error(`MCP server with id '${readString(payload.id)}' not found`);
+        state.mcpServers.splice(index, 1);
+        return null;
+      }
+      case 'set_mcp_server_enabled': {
+        const server = state.mcpServers.find((item) => item.id === payload.id);
+        if (!server) throw new Error(`MCP server with id '${readString(payload.id)}' not found`);
+        server.enabled = payload.enabled === true;
+        return clone(server);
+      }
+      case 'import_mcp_servers_json': {
+        let parsed: unknown;
+        try { parsed = JSON.parse(readString(payload.raw)); } catch (error) { throw new Error(`Failed to parse JSON: ${error instanceof Error ? error.message : error}`); }
+        const entries = Object.entries(asObject(asObject(parsed).mcpServers ?? parsed));
+        const result = { added: 0, updated: 0, skipped: 0, errors: [] as string[] };
+        for (const [name, value] of entries) {
+          const entry = asObject(value);
+          const id = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+          if (!id || (!entry.command && !entry.url)) { result.skipped += 1; result.errors.push(`${name || '(unnamed)'}: needs a command or a url`); continue; }
+          const server = {
+            id, name, transport: readString(entry.type) || (entry.url ? 'http' : 'stdio'),
+            command: readString(entry.command) || null, args: asArray(entry.args), env: asObject(entry.env),
+            url: readString(entry.url) || null, headers: asObject(entry.headers), enabled: true, description: null,
+          };
+          const index = state.mcpServers.findIndex((item) => item.id === id);
+          if (index >= 0) { state.mcpServers[index] = server; result.updated += 1; } else { state.mcpServers.push(server); result.added += 1; }
+        }
+        return result;
+      }
+      case 'export_mcp_servers_json': return JSON.stringify({
+        mcpServers: Object.fromEntries(state.mcpServers.map((server) => [server.name, {
+          type: server.transport,
+          ...(server.command ? { command: server.command } : {}),
+          ...(asArray(server.args).length ? { args: server.args } : {}),
+          ...(server.url ? { url: server.url } : {}),
+        }])),
+      }, null, 2);
+      case 'list_skills': return clone(state.skills);
+      case 'get_skill_detail': {
+        const entry = state.skills.find((item) => item.path === payload.path);
+        if (!entry) throw new Error(`Failed to canonicalize path '${readString(payload.path)}': no such file`);
+        return { entry: clone(entry), body: `---\nname: ${readString(entry.name)}\ndescription: ${readString(entry.description)}\n---\n\n# ${readString(entry.name)}\n\nBrowser Mock skill body.\n` };
+      }
+      case 'set_skill_enabled': {
+        const entry = state.skills.find((item) => item.path === payload.path);
+        if (!entry) throw new Error(`Failed to canonicalize path '${readString(payload.path)}': no such file`);
+        entry.enabled = payload.enabled === true;
+        return clone(entry);
+      }
+      case 'open_mcp_skills_directory': return null;
+
+      case 'reverse_proxy_get_state': return clone(state.reverseProxy);
+      case 'reverse_proxy_apply':
+      case 'reverse_proxy_start': {
+        const config = asObject(payload.config);
+        if (command === 'reverse_proxy_apply' && config.enabled !== true) {
+          state.reverseProxy = { ...state.reverseProxy, running: false, listening: null, target: null, error: null };
+        } else if (!readString(config.certPath) || !readString(config.keyPath)) {
+          state.reverseProxy = { ...state.reverseProxy, running: false, listening: null, target: null, error: 'A certificate and a private key are required' };
+          throw new Error('A certificate and a private key are required');
+        } else {
+          state.reverseProxy = {
+            running: true, listening: `${readString(config.listenHost) || '0.0.0.0'}:${readNumber(config.listenPort, 443)}`,
+            target: `127.0.0.1:${readNumber(config.targetPort, 8317)}`, requestsTotal: 0, error: null,
+          };
+        }
+        return clone(state.reverseProxy);
+      }
+      case 'reverse_proxy_stop': {
+        state.reverseProxy = { ...state.reverseProxy, running: false, listening: null, target: null, error: null };
+        return clone(state.reverseProxy);
+      }
+
+      case 'get_zcode_subagent_config': return clone(state.zcodeSubagents);
+      case 'save_zcode_subagent_config': {
+        const request = asObject(payload.request);
+        state.zcodeSubagents = {
+          defaultSubagentModel: readString(request.defaultSubagentModel) || null,
+          defaultThoughtLevel: readString(request.defaultThoughtLevel) || null,
+          subagents: clone(asArray(request.subagents).map(asObject)),
+        };
+        return clone(state.zcodeSubagents);
+      }
+      case 'get_zcode_model_catalog_editor': return clone(state.zcodeCatalog);
+      case 'save_zcode_model_catalog_editor': {
+        const request = asObject(payload.request);
+        const updates = asArray(request.models).map(asObject);
+        state.zcodeCatalog.models = state.zcodeCatalog.models.map((model) => {
+          const update = updates.find((item) => item.id === model.id);
+          return update ? { ...model, enabled: update.enabled !== false, configuration: clone(asObject(update.configuration)) as typeof model.configuration } : model;
+        });
+        state.zcodeCatalog.modelOrder = asArray(request.modelOrder).map(readString);
+        return clone(state.zcodeCatalog);
       }
 
       case 'list_codex_sessions': {
