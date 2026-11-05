@@ -4,6 +4,7 @@ import { Dialog } from "../components/Dialog";
 import { EmptyState } from "../components/EmptyState";
 import { MessageNotice } from "../appNotice";
 import { useI18n } from "../i18n";
+import type { MessageKey } from "../i18n/resources";
 import { Select } from "../components/Select";
 import {
   getZCodeSubagentConfig,
@@ -14,14 +15,21 @@ import {
 import { getAgentModels } from "../services/agents";
 import type { ModelOption } from "../services/modelService";
 
-const thoughtLevelOptions = [
-  { value: "", label: "继承默认 (inherit)" },
-  { value: "disabled", label: "关闭思考 (disabled)" },
-  { value: "low", label: "低思考 (low)" },
-  { value: "medium", label: "中思考 (medium)" },
-  { value: "high", label: "高思考 (high)" },
-  { value: "max", label: "最高思考 (max)" },
-];
+export const thoughtLevelOptions = [
+  { value: "", name: "inherit" },
+  { value: "disabled", name: "disabled" },
+  { value: "low", name: "low" },
+  { value: "medium", name: "medium" },
+  { value: "high", name: "high" },
+  { value: "max", name: "max" },
+] as const;
+
+// "Name (value)" so the raw config value stays visible, unless the name already is the value.
+export const thoughtLevelLabel = (option: (typeof thoughtLevelOptions)[number], t: (key: MessageKey) => string) => {
+  const name = t(`agents.zcode.subagents.thought.${option.name}`);
+  const value = option.value || "inherit";
+  return name.toLowerCase() === value ? name : `${name} (${value})`;
+};
 
 export function ZCodeSubagentConfigDialog({
   onClose,
@@ -121,10 +129,10 @@ export function ZCodeSubagentConfigDialog({
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2 id="zcode-subagent-title" style={{ margin: 0, fontSize: "17px", display: "flex", alignItems: "center", gap: "8px", whiteSpace: "normal" }}>
             <Users size={18} style={{ flexShrink: 0 }} />
-            <span>{t("agents.zcode.subagents.title") || "ZCode 子智能体设置"}</span>
+            <span>{t("agents.zcode.subagents.title")}</span>
           </h2>
           <p style={{ margin: "6px 0 0", fontSize: "13px", color: "var(--color-text-tertiary, #6b7280)", lineHeight: "1.4", whiteSpace: "normal" }}>
-            {t("agents.zcode.subagents.description") || "配置 ZCode 子智能体（Sub-agent）的全局默认模型与思考强度，以及为各子智能体分配独立的 CPA 模型。"}
+            {t("agents.zcode.subagents.description")}
           </p>
         </div>
         <button
@@ -187,9 +195,9 @@ export function ZCodeSubagentConfigDialog({
             }}
           >
             <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "13px" }}>
-              <strong>全局默认子智能体模型</strong>
+              <strong>{t("agents.zcode.subagents.defaultModel")}</strong>
               <Select value={defaultModel} onChange={(e) => setDefaultModel(e.currentTarget.value)}>
-                <option value="">继承主会话默认模型</option>
+                <option value="">{t("agents.zcode.subagents.inheritMainModel")}</option>
                 {models.map((m) => (
                   <option key={m.name} value={m.name}>
                     {m.name}
@@ -199,11 +207,11 @@ export function ZCodeSubagentConfigDialog({
             </label>
 
             <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "13px" }}>
-              <strong>全局默认思考强度 (thoughtLevel)</strong>
+              <strong>{t("agents.zcode.subagents.defaultThoughtLevel")}</strong>
               <Select value={defaultThoughtLevel} onChange={(e) => setDefaultThoughtLevel(e.currentTarget.value)}>
                 {thoughtLevelOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
-                    {opt.label}
+                    {thoughtLevelLabel(opt, t)}
                   </option>
                 ))}
               </Select>
@@ -213,14 +221,14 @@ export function ZCodeSubagentConfigDialog({
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
               <div>
-                <strong style={{ fontSize: "14px" }}>已检测到的子智能体 ({subagents.length})</strong>
+                <strong style={{ fontSize: "14px" }}>{t("agents.zcode.subagents.detected", { count: subagents.length })}</strong>
                 <p style={{ margin: "2px 0 0", fontSize: "12px", opacity: 0.7 }}>
-                  可为具体子智能体（如 visual-judge）指定特定的 CPA 模型或思考强度
+                  {t("agents.zcode.subagents.detectedHint")}
                 </p>
               </div>
               <input
                 type="text"
-                placeholder="搜索智能体名称..."
+                placeholder={t("agents.zcode.subagents.searchPlaceholder")}
                 value={search}
                 onChange={(e) => setSearch(e.currentTarget.value)}
                 style={{ fontSize: "12px", padding: "5px 10px", width: "180px", borderRadius: "4px", border: "1px solid var(--border-color, #d1d5db)" }}
@@ -271,7 +279,7 @@ export function ZCodeSubagentConfigDialog({
                           }}
                           style={{ minWidth: "160px", fontSize: "12px" }}
                         >
-                          <option value="">继承默认</option>
+                          <option value="">{t("agents.zcode.subagents.inheritDefault")}</option>
                           {models.map((m) => (
                             <option key={m.name} value={m.name}>
                               {m.name}
@@ -286,7 +294,7 @@ export function ZCodeSubagentConfigDialog({
                         >
                           {thoughtLevelOptions.map((opt) => (
                             <option key={opt.value} value={opt.value}>
-                              {opt.label.split(" ")[0]}
+                              {t(`agents.zcode.subagents.thought.${opt.name}`)}
                             </option>
                           ))}
                         </Select>
@@ -296,7 +304,7 @@ export function ZCodeSubagentConfigDialog({
                 })
               ) : (
                 <div style={{ textAlign: "center", padding: "24px", opacity: 0.6, fontSize: "13px" }}>
-                  未发现匹配的子智能体文件
+                  {t("agents.zcode.subagents.empty")}
                 </div>
               )}
             </div>
