@@ -26,7 +26,7 @@ func TestOAuthProviderNamesUseGlossaryDisplayNames(t *testing.T) {
 
 func TestAuthStatusWordingUsesGlossaryTerms(t *testing.T) {
 	previous := currentLocale
-	t.Cleanup(func() { SetLocale(previous) })
+	t.Cleanup(func() { currentLocale = previous })
 
 	cases := []struct {
 		locale, key, want string
@@ -39,7 +39,7 @@ func TestAuthStatusWordingUsesGlossaryTerms(t *testing.T) {
 		{"zh", "active_suffix", "已启用"},
 	}
 	for _, tc := range cases {
-		SetLocale(tc.locale)
+		currentLocale = tc.locale
 		if got := T(tc.key); got != tc.want {
 			t.Errorf("%s %s = %q, want %q", tc.locale, tc.key, got, tc.want)
 		}
