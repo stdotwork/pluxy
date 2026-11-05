@@ -401,14 +401,6 @@ func applyCodexSIWCRequestBodyRulesDoc(doc *ojson.Doc, hasExplicitInstructions b
 	return changed
 }
 
-func applyCodexSIWCWebsocketBodyRules(body []byte, hasExplicitInstructions bool, opts ...cliproxyexecutor.Options) []byte {
-	doc := ojson.NewDoc(body)
-	if !applyCodexSIWCWebsocketBodyRulesDoc(doc, hasExplicitInstructions, opts...) {
-		return body
-	}
-	return doc.Bytes()
-}
-
 func applyCodexSIWCWebsocketBodyRulesDoc(doc *ojson.Doc, hasExplicitInstructions bool, opts ...cliproxyexecutor.Options) bool {
 	if doc == nil {
 		return false
@@ -424,14 +416,6 @@ func applyCodexSIWCWebsocketBodyRulesDoc(doc *ojson.Doc, hasExplicitInstructions
 		changed = true
 	}
 	return changed
-}
-
-func applyCodexSIWCCompactBodyRules(body []byte, hasExplicitInstructions bool, opts ...cliproxyexecutor.Options) []byte {
-	doc := ojson.NewDoc(body)
-	if !applyCodexSIWCCompactBodyRulesDoc(doc, hasExplicitInstructions, opts...) {
-		return body
-	}
-	return doc.Bytes()
 }
 
 func applyCodexSIWCCompactBodyRulesDoc(doc *ojson.Doc, hasExplicitInstructions bool, opts ...cliproxyexecutor.Options) bool {
@@ -847,10 +831,6 @@ func normalizeCodexParallelToolCallsForToolsDoc(doc *ojson.Doc) bool {
 	}
 
 	return doc.Delete("parallel_tool_calls") == nil
-}
-
-func publishCodexImageToolUsage(ctx context.Context, reporter *helps.UsageReporter, body []byte, completedData []byte) {
-	publishCodexImageToolUsageWithOutputItems(ctx, reporter, body, completedData, nil, nil)
 }
 
 func publishCodexImageToolUsageWithOutputItems(ctx context.Context, reporter *helps.UsageReporter, body []byte, completedData []byte, itemsByIndex map[int64][]byte, fallback [][]byte) {

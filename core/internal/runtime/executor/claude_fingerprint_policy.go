@@ -119,26 +119,6 @@ func resolveClaudeFingerprintPolicy(cfg *config.Config, auth *cliproxyauth.Auth,
 	}
 }
 
-// applyClaudeCLIIdentity applies the Claude Code CLI credential identity to the
-// upstream Messages body. It is the single implementation behind both the
-// streaming and the non-streaming request paths; keep it that way.
-//
-// ApplyCLIIdentity and ProfileClaudeCodeCLI are the same predicate, so
-// sessionID has already been resolved by ClaudeAgentSessionUUIDForRequest,
-// which always returns a UUID. Do not add a second session source here: a
-// per-apiKey cached ID would silently break agent-conversation continuity.
-//
-// API keys seed the synthesized identity from the key itself; delegated
-// providers such as Kimi seed from the stable auth identity, so an access-token
-// rotation does not rotate the device fingerprint.
-func applyClaudeCLIIdentity(body []byte, auth *cliproxyauth.Auth, apiKey, upstreamURL, sessionID string, synthesize bool) ([]byte, error) {
-	doc := ojson.NewDoc(body)
-	if errApply := applyClaudeCLIIdentityDoc(doc, auth, apiKey, upstreamURL, sessionID, synthesize); errApply != nil {
-		return nil, errApply
-	}
-	return doc.Bytes(), nil
-}
-
 func applyClaudeCLIIdentityDoc(doc *ojson.Doc, auth *cliproxyauth.Auth, apiKey, upstreamURL, sessionID string, synthesize bool) error {
 	identitySeed := apiKey
 	if isKimiMessagesUpstream(auth, upstreamURL) {
