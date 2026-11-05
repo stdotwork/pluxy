@@ -941,45 +941,6 @@ func resolveGeminiBaseURL(auth *cliproxyauth.Auth) string {
 	return base
 }
 
-func (e *GeminiExecutor) resolveGeminiConfig(auth *cliproxyauth.Auth) *config.GeminiKey {
-	if auth == nil || e.cfg == nil {
-		return nil
-	}
-	var attrKey, attrBase string
-	if auth.Attributes != nil {
-		attrKey = strings.TrimSpace(auth.Attributes["api_key"])
-		attrBase = strings.TrimSpace(auth.Attributes["base_url"])
-	}
-	for i := range e.cfg.GeminiKey {
-		entry := &e.cfg.GeminiKey[i]
-		cfgKey := strings.TrimSpace(entry.APIKey)
-		cfgBase := strings.TrimSpace(entry.BaseURL)
-		if attrKey != "" && attrBase != "" {
-			if strings.EqualFold(cfgKey, attrKey) && strings.EqualFold(cfgBase, attrBase) {
-				return entry
-			}
-			continue
-		}
-		if attrKey != "" && strings.EqualFold(cfgKey, attrKey) {
-			if cfgBase == "" || strings.EqualFold(cfgBase, attrBase) {
-				return entry
-			}
-		}
-		if attrKey == "" && attrBase != "" && strings.EqualFold(cfgBase, attrBase) {
-			return entry
-		}
-	}
-	if attrKey != "" {
-		for i := range e.cfg.GeminiKey {
-			entry := &e.cfg.GeminiKey[i]
-			if strings.EqualFold(strings.TrimSpace(entry.APIKey), attrKey) {
-				return entry
-			}
-		}
-	}
-	return nil
-}
-
 func shouldExecuteNativeInteractions(auth *cliproxyauth.Auth, opts cliproxyexecutor.Options) bool {
 	return nativeInteractionsSourceFormat(opts.SourceFormat) && isNativeInteractionsAuth(auth)
 }
@@ -991,15 +952,6 @@ func nativeInteractionsSourceFormat(format sdktranslator.Format) bool {
 	default:
 		return false
 	}
-}
-
-// sanitizeGeminiInteractionsUnsupportedInputIDs aligns input step IDs with the
-// official Gemini Interactions API schema:
-// - `function_call` (FunctionCallStep) requires `id` and rejects `call_id`
-// - `function_result` (FunctionResultStep) requires `call_id` and rejects `id`
-// - other steps and content parts do not support `id`
-func sanitizeGeminiInteractionsUnsupportedInputIDs(body []byte) []byte {
-	return helps.SanitizeGeminiInteractionsUnsupportedInputIDs(body, false)
 }
 
 func sanitizeGeminiInteractionsUnsupportedInputIDsDoc(doc *ojson.Doc) bool {
@@ -1031,28 +983,11 @@ func geminiInteractionsPayloadConfigInput(opts cliproxyexecutor.Options, payload
 	return opts.OriginalRequest
 }
 
-// geminiInteractionsSameByteSlice reports whether both slices describe the same
-// bytes of the same backing array. It compares identity rather than content so
-// the check stays constant time on large payloads.
-func geminiInteractionsSameByteSlice(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	if len(a) == 0 {
-		return true
-	}
-	return &a[0] == &b[0]
-}
-
 func isNativeInteractionsAuth(auth *cliproxyauth.Auth) bool {
 	if auth == nil {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(auth.Provider), "gemini-interactions")
-}
-
-func applyGeminiInteractionsThinking(body []byte, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) ([]byte, error) {
-	return helps.ApplyGeminiInteractionsThinking(body, req, opts)
 }
 
 func applyGeminiInteractionsThinkingDoc(doc *ojson.Doc, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) error {

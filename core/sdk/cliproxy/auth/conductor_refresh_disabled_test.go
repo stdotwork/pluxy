@@ -248,20 +248,32 @@ func TestManager_AutoRefreshLoop_DisabledAuthWithInvalidGrantNeverRefreshes(t *t
 			"access_token":  "expired-token",
 			"refresh_token": "refresh-1",
 			"expires_at":    expiredAt,
+			// Makes an expired token due for refresh for any provider, so the
+			// invalid_grant failure is the only reason the loop skips this auth.
+			"refresh_interval_seconds": 60,
 		},
 	}
 	if _, err := manager.Register(ctx, auth); err != nil {
 		t.Fatalf("Register error: %v", err)
 	}
 
-	manager.StartAutoRefresh(ctx, 10*time.Millisecond)
-	defer manager.StopAutoRefresh()
+	shouldRefresh := func() bool {
+		manager.mu.RLock()
+		defer manager.mu.RUnlock()
+		return manager.shouldRefresh(manager.auths[auth.ID], now)
+	}
 
-	// Wait 100ms to allow refresh loop cycles
-	time.Sleep(100 * time.Millisecond)
+	if shouldRefresh() {
+		t.Fatal("shouldRefresh = true for disabled+invalid_grant auth, want false")
+	}
 
-	if calls := executor.refreshCalls.Load(); calls != 0 {
-		t.Fatalf("executor.Refresh called %d times for disabled+invalid_grant auth, want 0", calls)
+	// Positive control: with the invalid_grant failure cleared, the same expired
+	// credential is due. Without this, the false above could mean "never due".
+	manager.mu.Lock()
+	manager.auths[auth.ID].LastError = nil
+	manager.mu.Unlock()
+	if !shouldRefresh() {
+		t.Fatal("control: shouldRefresh = false once the invalid_grant failure is cleared, want true")
 	}
 }
 

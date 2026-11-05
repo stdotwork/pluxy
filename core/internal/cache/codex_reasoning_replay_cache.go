@@ -294,14 +294,6 @@ func GetCodexReasoningReplayItemsRequired(ctx context.Context, modelName, sessio
 	return cloneCodexReasoningReplayItems(entry.Items), true, nil
 }
 
-// DeleteCodexReasoningReplayItem removes one replay item after upstream rejects
-// it or the caller otherwise knows it is stale.
-func DeleteCodexReasoningReplayItem(modelName, sessionKey string) {
-	if errDelete := DeleteCodexReasoningReplayItemRequired(context.Background(), modelName, sessionKey); errDelete != nil {
-		return
-	}
-}
-
 // DeleteCodexReasoningReplayItemRequired removes one replay item for request-time paths.
 func DeleteCodexReasoningReplayItemRequired(ctx context.Context, modelName, sessionKey string) error {
 	key := codexReasoningReplayCacheKey(modelName, sessionKey)

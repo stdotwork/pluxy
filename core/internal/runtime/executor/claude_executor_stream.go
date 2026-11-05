@@ -223,7 +223,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		}
 	}
 	if cloaked && len(wireSettings.sensitiveWords) > 0 {
-		matcher := helps.BuildSensitiveWordMatcher(wireSettings.sensitiveWords)
+		matcher := helps.SensitiveWordMatcherFor(wireSettings.sensitiveWords)
 		helps.ObfuscateSensitiveWordsDoc(doc, matcher)
 	}
 	cchBilling := ""

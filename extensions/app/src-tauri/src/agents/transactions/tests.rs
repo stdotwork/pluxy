@@ -96,24 +96,21 @@ fn relocated_configuration_root_accepts_writes_but_nested_links_do_not() {
     let link = home.join(".codex");
     link_path(&relocated, &link);
 
-    let previous_home = env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
-    env::set_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }, &home);
     let config = link.join("config.toml");
-    let allowed = validate_config_path(&config);
+    let allowed = validate_config_path_with_home(&config, Some(&home));
     let nested = link.join("nested");
     fs::create_dir_all(&nested).unwrap();
     let secret = outside.join("secret");
     fs::create_dir_all(&secret).unwrap();
     link_path(&secret, &nested.join("escape"));
-    let rejected = validate_config_path(&nested.join("escape").join("config.toml"));
+    let rejected =
+        validate_config_path_with_home(&nested.join("escape").join("config.toml"), Some(&home));
     let config_link = home.join(".config");
     link_path(&std::env::temp_dir(), &config_link);
-    let rejected_temp_target =
-        validate_config_path(&config_link.join("opencode").join("config.toml"));
-    match previous_home {
-        Some(value) => env::set_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }, value),
-        None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
-    }
+    let rejected_temp_target = validate_config_path_with_home(
+        &config_link.join("opencode").join("config.toml"),
+        Some(&home),
+    );
 
     assert!(allowed.is_ok(), "{allowed:?}");
     assert!(rejected.is_err(), "a link inside the configuration root must stay rejected");

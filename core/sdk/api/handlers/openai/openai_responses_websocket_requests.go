@@ -762,22 +762,6 @@ func marshalResponsesWebsocketInputItems(items []responsesWebsocketInputItem) (s
 	return string(out), nil
 }
 
-func dedupeResponsesWebsocketFunctionCalls(items []responsesWebsocketInputItem) []responsesWebsocketInputItem {
-	seenCallIDs := make(map[string]struct{}, len(items))
-	filtered := items[:0]
-	for _, item := range items {
-		if isResponsesToolCallType(item.itemType) && item.callID != "" {
-			if _, ok := seenCallIDs[item.callID]; ok {
-				continue
-			}
-			seenCallIDs[item.callID] = struct{}{}
-		}
-		filtered = append(filtered, item)
-	}
-	clear(items[len(filtered):])
-	return filtered
-}
-
 func dedupeResponsesWebsocketInputItems(items []responsesWebsocketInputItem) []responsesWebsocketInputItem {
 	// Collect the call_ids that are still referenced by tool-call output
 	// items. When several input items share the same id, the one we keep must

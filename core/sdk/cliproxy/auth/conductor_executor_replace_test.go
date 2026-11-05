@@ -215,19 +215,7 @@ func TestManagerSchedulerFastPathKimiAI(t *testing.T) {
 		t.Fatal("expected HasProviderAuth(kimi) to be false when only kimi-ai is registered")
 	}
 
-	// 1. Single provider fast-path pickNext
-	pickedAuth, exec, errPick := manager.pickNext(context.Background(), "kimi-ai", "", cliproxyexecutor.Options{}, nil)
-	if errPick != nil {
-		t.Fatalf("pickNext(kimi-ai) error = %v", errPick)
-	}
-	if pickedAuth == nil || pickedAuth.ID != auth.ID {
-		t.Fatalf("pickNext(kimi-ai) auth = %v, want ID %s", pickedAuth, auth.ID)
-	}
-	if exec != kimiExec {
-		t.Fatalf("pickNext(kimi-ai) exec = %v, want %v", exec, kimiExec)
-	}
-
-	// 2. Mixed provider fast-path pickNextMixed
+	// 1. Mixed provider fast-path pickNextMixed (single provider list, the production path)
 	pickedMixed, execMixed, providerKey, errMixed := manager.pickNextMixed(context.Background(), []string{"kimi-ai"}, "", cliproxyexecutor.Options{}, nil)
 	if errMixed != nil {
 		t.Fatalf("pickNextMixed([kimi-ai]) error = %v", errMixed)
@@ -242,7 +230,7 @@ func TestManagerSchedulerFastPathKimiAI(t *testing.T) {
 		t.Fatalf("pickNextMixed([kimi-ai]) providerKey = %q, want kimi-ai", providerKey)
 	}
 
-	// 3. Pinned auth fast-path
+	// 2. Pinned auth fast-path
 	pinnedOpts := cliproxyexecutor.Options{
 		Metadata: map[string]any{
 			cliproxyexecutor.PinnedAuthMetadataKey: auth.ID,
@@ -256,14 +244,14 @@ func TestManagerSchedulerFastPathKimiAI(t *testing.T) {
 		t.Fatalf("pickNextMixed pinned auth = %v, want ID %s", pickedPinned, auth.ID)
 	}
 
-	// 4. Non-streaming Execute via manager
+	// 3. Non-streaming Execute via manager
 	resp, errExec := manager.Execute(context.Background(), []string{"kimi-ai"}, cliproxyexecutor.Request{Model: "kimi-k2"}, cliproxyexecutor.Options{})
 	if errExec != nil {
 		t.Fatalf("manager.Execute([kimi-ai]) error = %v", errExec)
 	}
 	_ = resp
 
-	// 5. Streaming ExecuteStream via manager
+	// 4. Streaming ExecuteStream via manager
 	streamRes, errStream := manager.ExecuteStream(context.Background(), []string{"kimi-ai"}, cliproxyexecutor.Request{Model: "kimi-k2"}, cliproxyexecutor.Options{})
 	if errStream != nil {
 		t.Fatalf("manager.ExecuteStream([kimi-ai]) error = %v", errStream)
@@ -316,21 +304,21 @@ func TestManagerKimiDomainIsolation(t *testing.T) {
 	}
 
 	// Request for kimi (or kimi.com) MUST only pick authCom
-	pickedCom, _, errCom := manager.pickNext(context.Background(), "kimi", "kimi-k2", cliproxyexecutor.Options{}, nil)
+	pickedCom, _, _, errCom := manager.pickNextMixed(context.Background(), []string{"kimi"}, "kimi-k2", cliproxyexecutor.Options{}, nil)
 	if errCom != nil {
-		t.Fatalf("pickNext(kimi) error = %v", errCom)
+		t.Fatalf("pickNextMixed(kimi) error = %v", errCom)
 	}
 	if pickedCom.ID != authCom.ID {
-		t.Fatalf("pickNext(kimi) picked %s, want %s", pickedCom.ID, authCom.ID)
+		t.Fatalf("pickNextMixed(kimi) picked %s, want %s", pickedCom.ID, authCom.ID)
 	}
 
 	// Request for kimi-ai (or kimi.ai) MUST only pick authAI
-	pickedAI, _, errAI := manager.pickNext(context.Background(), "kimi-ai", "kimi-k2", cliproxyexecutor.Options{}, nil)
+	pickedAI, _, _, errAI := manager.pickNextMixed(context.Background(), []string{"kimi-ai"}, "kimi-k2", cliproxyexecutor.Options{}, nil)
 	if errAI != nil {
-		t.Fatalf("pickNext(kimi-ai) error = %v", errAI)
+		t.Fatalf("pickNextMixed(kimi-ai) error = %v", errAI)
 	}
 	if pickedAI.ID != authAI.ID {
-		t.Fatalf("pickNext(kimi-ai) picked %s, want %s", pickedAI.ID, authAI.ID)
+		t.Fatalf("pickNextMixed(kimi-ai) picked %s, want %s", pickedAI.ID, authAI.ID)
 	}
 
 	// Cross-domain isolation when one provider is absent
@@ -342,7 +330,7 @@ func TestManagerKimiDomainIsolation(t *testing.T) {
 	if mgrOnlyCom.HasProviderAuth("kimi-ai") {
 		t.Fatal("expected HasProviderAuth(kimi-ai) to be false on com-only manager")
 	}
-	_, _, errPickAIOnCom := mgrOnlyCom.pickNext(context.Background(), "kimi-ai", "kimi-k2", cliproxyexecutor.Options{}, nil)
+	_, _, _, errPickAIOnCom := mgrOnlyCom.pickNextMixed(context.Background(), []string{"kimi-ai"}, "kimi-k2", cliproxyexecutor.Options{}, nil)
 	if errPickAIOnCom == nil {
 		t.Fatal("expected error picking kimi-ai on com-only manager, got nil")
 	}
@@ -355,7 +343,7 @@ func TestManagerKimiDomainIsolation(t *testing.T) {
 	if mgrOnlyAI.HasProviderAuth("kimi") {
 		t.Fatal("expected HasProviderAuth(kimi) to be false on ai-only manager")
 	}
-	_, _, errPickComOnAI := mgrOnlyAI.pickNext(context.Background(), "kimi", "kimi-k2", cliproxyexecutor.Options{}, nil)
+	_, _, _, errPickComOnAI := mgrOnlyAI.pickNextMixed(context.Background(), []string{"kimi"}, "kimi-k2", cliproxyexecutor.Options{}, nil)
 	if errPickComOnAI == nil {
 		t.Fatal("expected error picking kimi on ai-only manager, got nil")
 	}

@@ -1521,7 +1521,7 @@ mod tests {
     #[test]
     fn buckets_long_ranges_and_filters_by_source() {
         let root = test_root("buckets");
-        let mut connection = open_store_at(&root.join("agent_usage.db")).unwrap();
+        let connection = open_store_at(&root.join("agent_usage.db")).unwrap();
         let today = Local::now().date_naive();
         for offset in [0, 40] {
             let day = (today - Duration::days(offset))
@@ -1557,7 +1557,7 @@ mod tests {
     #[test]
     fn returns_the_hourly_grid_for_day_ranges_within_retention() {
         let root = test_root("hourly-grid");
-        let mut connection = open_store_at(&root.join("agent_usage.db")).unwrap();
+        let connection = open_store_at(&root.join("agent_usage.db")).unwrap();
         let today = Local::now().date_naive();
         let day = today.format("%Y-%m-%d").to_string();
         for hour in [9, 10] {

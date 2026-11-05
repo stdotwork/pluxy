@@ -3911,34 +3911,6 @@ func ParseAntigravityUsage(data []byte) usage.Detail {
 	return ParseGeminiUsage(data)
 }
 
-func ParseAntigravityStreamUsage(line []byte) (usage.Detail, bool) {
-	payload := jsonPayload(line)
-	if len(payload) == 0 {
-		return usage.Detail{}, false
-	}
-	hasCamel := bytes.Contains(payload, geminiUsageMetaMarker)
-	hasSnake := !hasCamel && bytes.Contains(payload, geminiUsageMetaSnakeMarker)
-	if (!hasCamel && !hasSnake) || !ojson.ValidBytes(payload) {
-		return usage.Detail{}, false
-	}
-	root := util.ParseGJSONBytesNoCopy(payload)
-	node := root.Get("response.usageMetadata")
-	if !node.Exists() && hasCamel {
-		node = root.Get("usageMetadata")
-	}
-	if !node.Exists() && hasSnake {
-		node = root.Get("usage_metadata")
-	}
-	if !node.Exists() {
-		return usage.Detail{}, false
-	}
-	detail := parseGeminiFamilyUsageDetail(node)
-	if hasGeminiCandidateArtifactMarker(payload) {
-		applyGeminiPayloadArtifacts(&detail, root)
-	}
-	return detail, true
-}
-
 var stopChunkWithoutUsage sync.Map
 
 func rememberStopWithoutUsage(traceID string) {

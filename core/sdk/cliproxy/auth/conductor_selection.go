@@ -1275,10 +1275,6 @@ func credentialRetryRoundStateEligible(lastErr *Error, quotaExceeded bool) bool 
 	return isCredentialRetryRoundStatus(statusCodeFromResult(lastErr))
 }
 
-func (m *Manager) closestCooldownWait(providers []string, model string, attempt int, eligibility authSelectionEligibility, pinnedAuthID string, defaultRequestRetry int) (time.Duration, bool) {
-	return m.closestCooldownWaitWithAttempted(providers, model, attempt, eligibility, pinnedAuthID, defaultRequestRetry, 0, nil)
-}
-
 func (m *Manager) closestCooldownWaitWithAttempted(providers []string, model string, attempt int, eligibility authSelectionEligibility, pinnedAuthID string, defaultRequestRetry int, status int, attempted map[string]struct{}) (time.Duration, bool) {
 	if m == nil || len(providers) == 0 {
 		return 0, false
@@ -2164,68 +2160,6 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 		tried[authID] = struct{}{}
 		homeAuthCount++
 	}
-}
-
-func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
-	opts.EnsureMetadata()
-	clearSchedulerSelectionID(opts.Metadata)
-	if m.HomeEnabled() {
-		auth, exec, _, err := m.pickNextViaHome(ctx, model, opts, tried)
-		return auth, exec, err
-	}
-	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = provider
-	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = model
-
-	if m.hasPluginScheduler() || !m.useSchedulerFastPath() {
-		return m.pickNextLegacy(ctx, provider, model, opts, tried)
-	}
-	eligibility := authSelectionEligibilityForRequest(ctx, opts)
-	if strings.TrimSpace(model) != "" {
-		m.mu.RLock()
-		targetKey := canonicalSchedulingProvider(provider)
-		for _, candidate := range m.auths {
-			if candidate == nil || canonicalSchedulingProvider(executorKeyFromAuth(candidate)) != targetKey || candidate.Disabled {
-				continue
-			}
-			if !eligibility.allows(candidate) {
-				continue
-			}
-			if _, used := tried[candidate.ID]; used {
-				continue
-			}
-			if m.routeAwareSelectionRequired(candidate, model) {
-				m.mu.RUnlock()
-				return m.pickNextLegacy(ctx, provider, model, opts, tried)
-			}
-		}
-		m.mu.RUnlock()
-	}
-	executor, okExecutor := m.Executor(provider)
-	if !okExecutor {
-		return nil, nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
-	}
-	beforeVer := m.syncedVersion.Load()
-	selected, errPick := m.scheduler.pickSingle(ctx, provider, model, opts, tried)
-	if errPick != nil && model != "" && m.shouldRetrySchedulerPick(errPick, beforeVer) {
-		selected, errPick = m.scheduler.pickSingle(ctx, provider, model, opts, tried)
-	}
-	if errPick != nil {
-		m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errPick)
-		return nil, nil, errPick
-	}
-	if selected == nil {
-		return nil, nil, &Error{Code: "auth_not_found", Message: "selector returned no auth"}
-	}
-	authCopy := selected.Clone()
-	if !selected.indexAssigned {
-		m.mu.Lock()
-		if current := m.auths[authCopy.ID]; current != nil && !current.indexAssigned {
-			current.EnsureIndex()
-			authCopy = current.Clone()
-		}
-		m.mu.Unlock()
-	}
-	return authCopy, executor, nil
 }
 
 func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {

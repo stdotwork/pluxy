@@ -11,7 +11,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -397,112 +396,6 @@ func regularZipFile(file *zip.File) bool {
 func hasDynamicLibraryExtension(name string) bool {
 	lowerName := strings.ToLower(name)
 	return strings.HasSuffix(lowerName, ".dylib") || strings.HasSuffix(lowerName, ".so") || strings.HasSuffix(lowerName, ".dll")
-}
-
-type pluginFileInfo struct {
-	ID      string
-	Path    string
-	Version string
-}
-
-func discoverCurrentPluginFiles(root string) ([]pluginFileInfo, error) {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		root = "plugins"
-	}
-	candidates := pluginCandidateDirs(root, runtime.GOOS, runtime.GOARCH)
-	extension := pluginExtension(runtime.GOOS)
-	selected := make([]pluginFileInfo, 0)
-	seen := make(map[string]struct{})
-	for _, dir := range candidates {
-		entries, errReadDir := os.ReadDir(dir)
-		if errReadDir != nil {
-			if os.IsNotExist(errReadDir) {
-				continue
-			}
-			return nil, errReadDir
-		}
-		files := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			if entry == nil || !entry.Type().IsRegular() {
-				continue
-			}
-			if strings.HasSuffix(strings.ToLower(entry.Name()), extension) {
-				files = append(files, filepath.Join(dir, entry.Name()))
-			}
-		}
-		sort.Strings(files)
-		for _, path := range files {
-			file, okFile := pluginFileInfoFromPath(path, extension)
-			if !okFile {
-				continue
-			}
-			if _, exists := seen[file.ID]; exists {
-				continue
-			}
-			seen[file.ID] = struct{}{}
-			selected = append(selected, file)
-		}
-	}
-	return selected, nil
-}
-
-func pluginCandidateDirs(root string, goos string, goarch string) []string {
-	dirs := make([]string, 0, 2)
-	dirs = append(dirs, filepath.Join(root, goos, goarch))
-	dirs = append(dirs, root)
-	return dirs
-}
-
-func pluginIDFromPath(path string) string {
-	file, ok := pluginFileInfoFromPath(path, "")
-	if ok {
-		return file.ID
-	}
-	base := filepath.Base(path)
-	lowerBase := strings.ToLower(base)
-	for _, extension := range []string{".so", ".dylib", ".dll"} {
-		if strings.HasSuffix(lowerBase, extension) {
-			return base[:len(base)-len(extension)]
-		}
-	}
-	return base
-}
-
-func pluginFileInfoFromPath(filePath string, requiredExtension string) (pluginFileInfo, bool) {
-	base := filepath.Base(filePath)
-	lowerBase := strings.ToLower(base)
-	extension := strings.TrimSpace(requiredExtension)
-	if extension != "" {
-		if !strings.HasSuffix(lowerBase, strings.ToLower(extension)) {
-			return pluginFileInfo{}, false
-		}
-	} else {
-		for _, candidateExtension := range []string{".so", ".dylib", ".dll"} {
-			if strings.HasSuffix(lowerBase, candidateExtension) {
-				extension = candidateExtension
-				break
-			}
-		}
-		if extension == "" {
-			return pluginFileInfo{}, false
-		}
-	}
-	name := base[:len(base)-len(extension)]
-	id := name
-	version := ""
-	if versionIndex := strings.LastIndex(name, "-v"); versionIndex > 0 {
-		candidateID := name[:versionIndex]
-		candidateVersion := name[versionIndex+2:]
-		if validPluginID(candidateID) && validPluginVersion(candidateVersion) {
-			id = candidateID
-			version = candidateVersion
-		}
-	}
-	if !validPluginID(id) {
-		return pluginFileInfo{}, false
-	}
-	return pluginFileInfo{ID: id, Path: filePath, Version: version}, true
 }
 
 func pluginExtension(goos string) string {

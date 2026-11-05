@@ -37,6 +37,14 @@ test('Tauri APIs stay inside services and browser mocks', () => {
   expect([...new Set(violations)]).toEqual([]);
 });
 
+// Modules whose export reaches Tauri's `invoke`; the command stays a literal at each call site.
+const AGENT_WRAPPER = 'invokeAgentCommand';
+const INVOKERS: Record<string, string> = {
+  '@tauri-apps/api/core': 'invoke',
+  './platform': 'invoke',
+  './agents': AGENT_WRAPPER,
+};
+
 test('service IPC commands are registered and have browser mock contracts', () => {
   const commands = new Set<string>();
   const dynamic: string[] = [];
@@ -45,14 +53,37 @@ test('service IPC commands are registered and have browser mock contracts', () =
     const invokers = new Set<string>();
     const namespaces = new Set<string>();
     for (const node of module.statements) {
-      if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier)
-        || node.moduleSpecifier.text !== '@tauri-apps/api/core') continue;
+      if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier)) continue;
+      const exported = INVOKERS[node.moduleSpecifier.text];
+      if (!exported) continue;
       const bindings = node.importClause?.namedBindings;
-      if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+      if (bindings && ts.isNamespaceImport(bindings) && exported === 'invoke'
+        && node.moduleSpecifier.text === '@tauri-apps/api/core') namespaces.add(bindings.name.text);
       if (bindings && ts.isNamedImports(bindings)) for (const binding of bindings.elements) {
-        if ((binding.propertyName ?? binding.name).text === 'invoke') invokers.add(binding.name.text);
+        if ((binding.propertyName ?? binding.name).text === exported) invokers.add(binding.name.text);
       }
     }
+    // `agents.ts` defines the wrapper itself and aliases it as `invoke`.
+    const isAgents = relative(join(root, 'src/services'), path) === 'agents.ts';
+    if (isAgents) invokers.add(AGENT_WRAPPER);
+    for (const node of module.statements) {
+      if (!isAgents || !ts.isVariableStatement(node)) continue;
+      for (const declaration of node.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isIdentifier(declaration.initializer)
+          && invokers.has(declaration.initializer.text)) invokers.add(declaration.name.text);
+      }
+    }
+    // The only call allowed to forward a non-literal command is the wrapper's own call to Tauri.
+    const forwardsWrapperCommand = (call: ts.CallExpression) => {
+      const command = call.arguments[0];
+      if (!isAgents || !command || !ts.isIdentifier(command)) return false;
+      for (let parent: ts.Node | undefined = call.parent; parent; parent = parent.parent) {
+        if (!ts.isVariableDeclaration(parent) || parent.name.getText() !== AGENT_WRAPPER) continue;
+        const wrapper = parent.initializer;
+        return !!wrapper && ts.isArrowFunction(wrapper) && wrapper.parameters[0]?.name.getText() === command.text;
+      }
+      return false;
+    };
     walk(module, node => {
       if (!ts.isCallExpression(node)) return;
       const expression = node.expression;
@@ -62,7 +93,7 @@ test('service IPC commands are registered and have browser mock contracts', () =
       if (!invokes) return;
       const command = node.arguments[0];
       if (command && ts.isStringLiteral(command)) commands.add(command.text);
-      else dynamic.push(relative(root, path));
+      else if (!forwardsWrapperCommand(node)) dynamic.push(relative(root, path));
     });
   }
   const backend = readFileSync(join(root, 'src-tauri/src/main.rs'), 'utf8');

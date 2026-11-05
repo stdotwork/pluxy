@@ -14,7 +14,6 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 flate2 = "1"
 futures-util = "0.3"
-getrandom = "0.3"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server"] }

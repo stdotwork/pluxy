@@ -252,6 +252,10 @@ pub(crate) fn config_paths(client: &str, home: &Path) -> Result<Vec<PathBuf>, St
 }
 
 pub(crate) fn validate_config_path(path: &Path) -> Result<(), String> {
+    validate_config_path_with_home(path, user_home_directory().as_deref())
+}
+
+fn validate_config_path_with_home(path: &Path, home: Option<&Path>) -> Result<(), String> {
     if !path.is_absolute()
         || path
             .components()
@@ -263,7 +267,7 @@ pub(crate) fn validate_config_path(path: &Path) -> Result<(), String> {
         match fs::symlink_metadata(ancestor) {
             Ok(meta) => {
                 if path_has_reparse_point(ancestor, &meta)
-                    && !relocated_configuration_root_allowed(ancestor)
+                    && !relocated_configuration_root_allowed(ancestor, home)
                 {
                     return Err(format!(
                         "Configuration path cannot contain symbolic links: {}",
@@ -300,7 +304,7 @@ fn path_has_reparse_point(path: &Path, meta: &fs::Metadata) -> bool {
 
 /// A configuration root may itself be relocated with a symlink or junction.
 /// Deeper links are still rejected so a file inside that root cannot escape it.
-fn relocated_configuration_root_allowed(path: &Path) -> bool {
+fn relocated_configuration_root_allowed(path: &Path, home: Option<&Path>) -> bool {
     let Ok(canonical_path) = normalize_existing_path(path) else {
         return false;
     };
@@ -310,14 +314,14 @@ fn relocated_configuration_root_allowed(path: &Path) -> bool {
     {
         return true;
     }
-    let Some(home) = user_home_directory() else {
+    let Some(home) = home else {
         return false;
     };
     if home.ancestors().any(|ancestor| ancestor == path) {
         return true;
     }
 
-    configuration_root_candidates(&home)
+    configuration_root_candidates(home)
         .into_iter()
         .any(|root| paths_equivalent(&root, path) || paths_equivalent(&root, &canonical_path))
 }

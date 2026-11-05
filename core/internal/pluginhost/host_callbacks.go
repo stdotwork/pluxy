@@ -336,11 +336,6 @@ func (h *Host) callHostHTTPStreamClose(ctx context.Context, request []byte) ([]b
 	return marshalRPCResult(rpcEmptyResponse{})
 }
 
-func decodeHostHTTPRequest(raw []byte) (pluginapi.HTTPRequest, error) {
-	httpReq, _, errDecode := decodeHostHTTPRequestWithCallbackID(raw)
-	return httpReq, errDecode
-}
-
 func decodeHostHTTPRequestWithCallbackID(raw []byte) (pluginapi.HTTPRequest, string, error) {
 	httpReq, callbackID, _, errDecode := decodeHostHTTPRequestWithOperationID(raw)
 	return httpReq, callbackID, errDecode

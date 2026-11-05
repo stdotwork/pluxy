@@ -241,46 +241,56 @@ const WEEK_SECONDS = 604_800;
 const MIN_MONTH_SECONDS = 28 * 86_400;
 const MAX_MONTH_SECONDS = 31 * 86_400;
 
-const formatWindowDuration = (seconds: number | null): string => {
-  if (seconds === null || seconds <= 0) return quotaText('quota.service.duration.unknown');
-  const day = 86_400;
-  const hour = 3_600;
-  const minute = 60;
-  if (seconds % day === 0) return quotaText('quota.service.duration.days', { count: seconds / day });
-  if (seconds % hour === 0) return quotaText('quota.service.duration.hours', { count: seconds / hour });
-  if (seconds % minute === 0) return quotaText('quota.service.duration.minutes', { count: seconds / minute });
-  return quotaText('quota.service.duration.seconds', { count: seconds });
+const DAY_SECONDS = 86_400;
+const HOUR_SECONDS = 3_600;
+const MINUTE_SECONDS = 60;
+
+/**
+ * Label for a window of a known length, the same for every provider (docs/terms.md): exactly
+ * 5 hours, 24 hours, 7 days or 28-31 days get the named label; any other length is a whole
+ * `{n}-{unit} limit` phrase in its largest whole unit.
+ */
+const windowLimitLabel = (seconds: number): string => {
+  if (seconds === FIVE_HOUR_SECONDS) return quotaText('quota.service.limit.fiveHours');
+  if (seconds === DAY_SECONDS) return quotaText('quota.service.daily');
+  if (seconds === WEEK_SECONDS) return quotaText('quota.service.limit.week');
+  if (seconds >= MIN_MONTH_SECONDS && seconds <= MAX_MONTH_SECONDS) return quotaText('quota.service.limit.month');
+  if (seconds % DAY_SECONDS === 0) return quotaText('quota.service.limit.days', { count: seconds / DAY_SECONDS });
+  if (seconds % HOUR_SECONDS === 0) return quotaText('quota.service.limit.hours', { count: seconds / HOUR_SECONDS });
+  if (seconds % MINUTE_SECONDS === 0) return quotaText('quota.service.limit.minutes', { count: seconds / MINUTE_SECONDS });
+  return quotaText('quota.service.limit.seconds', { count: seconds });
 };
+
+/** A limit for one scope reads `Code review weekly limit`: the scope, then the window label in sentence case. */
+const scopedLimitLabel = (scope: string, label: string): string =>
+  scope ? `${scope} ${label.charAt(0).toLocaleLowerCase(getCurrentLocale())}${label.slice(1)}` : label;
 
 const codexWindowLabel = (
   duration: number | null,
-  prefix: string,
+  scope: string,
   kind: 'primary' | 'secondary',
 ) => {
-  if (duration === FIVE_HOUR_SECONDS) return `${prefix}${quotaText('quota.service.limit.fiveHours')}`;
-  if (duration === WEEK_SECONDS) return `${prefix}${quotaText('quota.service.limit.week')}`;
-  if (duration !== null && duration >= MIN_MONTH_SECONDS && duration <= MAX_MONTH_SECONDS) {
-    return `${prefix}${quotaText('quota.service.limit.month')}`;
+  if (duration === null) {
+    return scopedLimitLabel(scope, quotaText(kind === 'primary' ? 'quota.service.limit.fiveHours' : 'quota.service.limit.week'));
   }
-  if (duration !== null) {
-    return `${prefix}${quotaText('quota.service.limit.duration', { duration: formatWindowDuration(duration) })}`;
+  if (duration <= 0) {
+    return scopedLimitLabel(scope, quotaText('quota.service.limit.duration', { duration: quotaText('quota.service.duration.unknown') }));
   }
-  if (kind === 'primary') return `${prefix}${quotaText('quota.service.limit.fiveHours')}`;
-  return `${prefix}${quotaText('quota.service.limit.week')}`;
+  return scopedLimitLabel(scope, windowLimitLabel(duration));
 };
 
 const codexWindowRows = (value: Record<string, unknown>): QuotaRow[] => {
   const windows: Array<{
     raw: unknown;
     kind: 'primary' | 'secondary';
-    prefix: string;
+    scope: string;
     source: Record<string, unknown>;
   }> = [];
-  const addRateLimit = (rawRateLimit: unknown, prefix: string) => {
+  const addRateLimit = (rawRateLimit: unknown, scope: string) => {
     if (!isRecord(rawRateLimit)) return;
     const entries: typeof windows = [
-      { raw: rawRateLimit.primary_window ?? rawRateLimit.primaryWindow, kind: 'primary', prefix, source: rawRateLimit },
-      { raw: rawRateLimit.secondary_window ?? rawRateLimit.secondaryWindow, kind: 'secondary', prefix, source: rawRateLimit },
+      { raw: rawRateLimit.primary_window ?? rawRateLimit.primaryWindow, kind: 'primary', scope, source: rawRateLimit },
+      { raw: rawRateLimit.secondary_window ?? rawRateLimit.secondaryWindow, kind: 'secondary', scope, source: rawRateLimit },
     ];
     const order = ({ raw, kind }: typeof entries[number]) => {
       const duration = isRecord(raw) ? numberValue(raw.limit_window_seconds ?? raw.limitWindowSeconds) : null;
@@ -294,7 +304,7 @@ const codexWindowRows = (value: Record<string, unknown>): QuotaRow[] => {
   addRateLimit(value.rate_limit ?? value.rateLimit, '');
   addRateLimit(
     value.code_review_rate_limit ?? value.codeReviewRateLimit,
-    `${quotaText('quota.service.codeReview')} `,
+    quotaText('quota.service.codeReview'),
   );
   const additional = value.additional_rate_limits ?? value.additionalRateLimits;
   if (Array.isArray(additional)) {
@@ -302,17 +312,17 @@ const codexWindowRows = (value: Record<string, unknown>): QuotaRow[] => {
       if (!isRecord(item)) return;
       const name = readString(item, 'limit_name', 'limitName', 'metered_feature', 'meteredFeature')
         || quotaText('quota.service.additional', { index: index + 1 });
-      addRateLimit(item.rate_limit ?? item.rateLimit, `${name} `);
+      addRateLimit(item.rate_limit ?? item.rateLimit, name);
     });
   }
 
-  return windows.map(({ raw, kind, prefix, source }): QuotaRow | null => {
+  return windows.map(({ raw, kind, scope, source }): QuotaRow | null => {
     if (!isRecord(raw)) return null;
     const duration = numberValue(raw.limit_window_seconds ?? raw.limitWindowSeconds);
     const reached = source.limit_reached === true || source.limitReached === true || source.allowed === false;
     const resetAtMs = quotaResetFor(raw, ['reset_at', 'resetAt'], ['reset_after_seconds', 'resetAfterSeconds']);
     return {
-      label: codexWindowLabel(duration, prefix, kind),
+      label: codexWindowLabel(duration, scope, kind),
       remainingPercent: remainingFromUsedPercent(raw.used_percent ?? raw.usedPercent)
         ?? (reached && resetAtMs !== undefined ? 0 : null),
       reset: codexResetLabel(raw),
@@ -395,9 +405,7 @@ export const codexResetCreditDetailsFor = (
 const metaQuotaRows = (quota: MetaQuotaData): QuotaRow[] => quota.windows.map((window) => ({
   label: window.id === 'weekly' ? quotaText('quota.service.weekly')
     : window.durationMinutes === undefined ? quotaText('quota.service.meta.window')
-      : window.durationMinutes % 60 === 0
-        ? quotaText('quota.service.meta.windowHours', { hours: window.durationMinutes / 60 })
-        : quotaText('quota.service.meta.windowMinutes', { minutes: window.durationMinutes }),
+      : windowLimitLabel(window.durationMinutes * MINUTE_SECONDS),
   remainingPercent: window.usedPercent === null ? null : 100 - window.usedPercent,
   resetAtMs: quotaResetInstant(window.resetAt),
 }));
@@ -524,21 +532,13 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
         const unit = (readString(window, 'timeUnit', 'time_unit')
           || readString(raw, 'timeUnit', 'time_unit')
           || readString(detail, 'timeUnit', 'time_unit')).toLowerCase().replace(/^time_unit_/, '');
-        const durationText = duration !== null && duration > 0
-          ? unit.startsWith('week')
-            ? quotaText('quota.service.duration.days', { count: duration * 7 })
-            : unit.startsWith('day')
-              ? quotaText('quota.service.duration.days', { count: duration })
-              : unit.startsWith('hour')
-                ? quotaText('quota.service.duration.hours', { count: duration })
-                : unit.startsWith('second')
-                  ? quotaText('quota.service.duration.seconds', { count: duration })
-                  : duration % 60 === 0
-                    ? quotaText('quota.service.duration.hours', { count: duration / 60 })
-                    : quotaText('quota.service.duration.minutes', { count: duration })
-          : '';
-        const durationLabel = durationText
-          ? quotaText('quota.service.window.duration', { duration: durationText })
+        const durationLabel = duration !== null && duration > 0
+          ? windowLimitLabel(duration * (
+            unit.startsWith('week') ? WEEK_SECONDS
+              : unit.startsWith('day') ? DAY_SECONDS
+                : unit.startsWith('hour') ? HOUR_SECONDS
+                  : unit.startsWith('second') ? 1
+                    : MINUTE_SECONDS))
           : '';
         return {
           label:
@@ -566,7 +566,7 @@ export const quotaRowsFor = (provider: QuotaProvider, payload: unknown): QuotaRo
     // Monthly usages are ratios, unlike the absolute counters in limits/usage.
     const usages = isRecord(value.usages) ? value.usages : {};
     for (const [key, labelKey] of [
-      ['limit_month_total', 'quota.service.kimi.monthlyTotal'],
+      ['limit_month_total', 'quota.service.limit.month'],
       ['limit_month_code', 'quota.service.kimi.monthlyCode'],
     ] as const) {
       const monthly = usages[key];
