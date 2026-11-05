@@ -1,7 +1,6 @@
 import type { PluginListEntry, PluginMenu, PluginStoreEntry } from './plugins';
 
 export const PLUGIN_RESOURCES_REFRESH_EVENT = 'plugin-resources-refresh';
-export const OFFICIAL_PLUGIN_REPO_PREFIX = 'https://github.com/router-for-me/';
 export const DEFAULT_PLUGIN_STORE_SOURCE_ID = 'official';
 
 export function notifyPluginResourcesChanged() {

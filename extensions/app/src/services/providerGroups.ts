@@ -41,11 +41,6 @@ export function providerGroupStatus(group: Record<string, unknown>): 'enabled' |
   return active === 0 ? 'disabled' : active === keys.length ? 'enabled' : 'partial';
 }
 
-export function providerKeyOverrides(key: Record<string, unknown>): string[] {
-  return Object.keys(key).filter((field) => !['api-key', 'auth-index', 'authIndex', 'auth_index', 'weight'].includes(field)
-    && key[field] != null);
-}
-
 export function validateProviderGroupKeys(keys: ProviderKeyDraft[]): string | null {
   for (const { value } of keys) {
     if (!readString(value, 'api-key').trim()) return 'key';
