@@ -1,5 +1,5 @@
 {
-  "description": "Gemini client, same-format passthrough, non-stream: a functionResponse with an empty name and no id gets the name of the functionCall it answers (the preceding model turn), so the upstream receives the name; the text reply comes back unchanged.",
+  "description": "Gemini client, same-format passthrough, non-stream: a functionResponse with an empty name and no id reaches the upstream as the client sent it; the text reply comes back unchanged.",
   "source": [
     "core/internal/translator/gemini/gemini/gemini_gemini_request.go:174-352 (empty functionResponse names backfilled from the preceding model-turn calls, in call order)",
     "core/internal/translator/gemini/gemini/gemini_gemini_request_test.go:71-95 (TestConvertGeminiRequestToGemini_BackfillsEmptyName: call Bash, empty response name becomes Bash)",
@@ -58,6 +58,38 @@
         "modelVersion": "gemini-corpus-upstream",
         "responseId": "resp-corpus"
       }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.contents[1].parts[0].thoughtSignature",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    },
+    {
+      "path": "upstream[0].body.contents[2].parts[0].functionResponse.name",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    },
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    },
+    {
+      "path": "upstream[0].body.safetySettings",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    },
+    {
+      "path": "upstream[0].body.tools[0].functionDeclarations",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    },
+    {
+      "path": "upstream[0].body.tools[0].function_declarations",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
     }
   ],
   "recorded_old_core": {

@@ -56,6 +56,57 @@
       }
     }
   ],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: the serving model in modelVersion and the upstream reply's id in responseId (GenerateContentResponse reference), one chunk per text or thought delta, and a last chunk holding the finish reason, any function calls and usageMetadata, as Gemini streams end. usageMetadata follows Gemini's inclusion rules (Google's UsageMetadata reference): candidatesTokenCount leaves out thoughtsTokenCount. Today's core writes the model as model, no responseId, counts reasoning tokens in candidatesTokenCount, and sends usage in a separate chunk with no candidates.",
+      "want": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"{\"temp\": 18}"}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gpt-test-upstream",
+        "responseId": "chatcmpl-corpus",
+        "usageMetadata": {"candidatesTokenCount":6,"promptTokenCount":48,"totalTokenCount":54}
+      }
+    },
+    {
+      "path": "upstream[0].body.n",
+      "kind": "gap",
+      "reason": "topK and candidateCount have no place in the model yet: the new core reports them as dropped; today's core sends them as top_k (not a Chat Completions field) and n."
+    },
+    {
+      "path": "upstream[0].body.response_format",
+      "kind": "intended",
+      "reason": "The new core carries responseMimeType application/json with responseSchema as response_format json_schema; today's core drops both without a report.",
+      "want": {
+        "json_schema": {
+          "name": "response",
+          "schema": {"properties":{"temp":{"type":"number"}},"type":"object"}
+        },
+        "type": "json_schema"
+      }
+    },
+    {
+      "path": "upstream[0].body.tools[0].function.parameters.properties.city.type",
+      "kind": "intended",
+      "reason": "The model carries tool parameters as JSON Schema, so Gemini's Schema type names (OBJECT, STRING) are written in lower case, as JSON Schema spells them; today's core passes them to a Chat upstream in upper case, which JSON Schema validators reject."
+    },
+    {
+      "path": "upstream[0].body.tools[0].function.parameters.type",
+      "kind": "intended",
+      "reason": "The model carries tool parameters as JSON Schema, so Gemini's Schema type names (OBJECT, STRING) are written in lower case, as JSON Schema spells them; today's core passes them to a Chat upstream in upper case, which JSON Schema validators reject."
+    },
+    {
+      "path": "upstream[0].body.top_k",
+      "kind": "gap",
+      "reason": "topK and candidateCount have no place in the model yet: the new core reports them as dropped; today's core sends them as top_k (not a Chat Completions field) and n."
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {

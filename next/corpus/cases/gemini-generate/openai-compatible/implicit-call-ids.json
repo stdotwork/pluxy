@@ -60,6 +60,30 @@
       }
     }
   ],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: the serving model in modelVersion and the upstream reply's id in responseId (GenerateContentResponse reference), one chunk per text or thought delta, and a last chunk holding the finish reason, any function calls and usageMetadata, as Gemini streams end. usageMetadata follows Gemini's inclusion rules (Google's UsageMetadata reference): candidatesTokenCount leaves out thoughtsTokenCount. Today's core writes the model as model, no responseId, counts reasoning tokens in candidatesTokenCount, and sends usage in a separate chunk with no candidates.",
+      "want": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"Both results are in: A and B."}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gpt-test-upstream",
+        "responseId": "chatcmpl-corpus",
+        "usageMetadata": {"candidatesTokenCount":8,"promptTokenCount":70,"totalTokenCount":78}
+      }
+    },
+    {
+      "path": "upstream[0].body.messages[1].content",
+      "kind": "intended",
+      "reason": "The new core's Chat encoder leaves out content on an assistant message that only holds tool calls, as Chat Completions allows, for every client format; today's Gemini-to-Chat translator sends an empty string."
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {

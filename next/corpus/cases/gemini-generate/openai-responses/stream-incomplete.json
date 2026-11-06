@@ -28,6 +28,79 @@
       ]
     }
   ],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: candidate index 0, the serving model in modelVersion, one chunk per text or thought delta, and a last chunk holding the finish reason, any function calls and usageMetadata (with Gemini's inclusion rules: promptTokenCount includes cached tokens, candidatesTokenCount leaves out thoughtsTokenCount). Today's Codex translator opens with an empty chunk, adds createTime and usageMetadata.trafficType PROVISIONED_THROUGHPUT, leaves out the candidate index and cached and thought token counts, names the requested model after the first chunk, and turns Responses encrypted reasoning into a thoughtSignature carrier on the next text part (Codex reasoning carry-over is the Codex provider's, slice 9); the new core reports the encrypted reasoning as dropped.",
+      "want": [
+        {
+          "data": {
+            "candidates": [{"content":{"parts":[{"text":"Hello"}],"role":"model"},"index":0}],
+            "modelVersion": "gpt-test-upstream",
+            "responseId": "resp_corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [{"content":{"parts":[{"text":" there"}],"role":"model"},"index":0}],
+            "modelVersion": "gpt-test-upstream",
+            "responseId": "resp_corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [
+              {"content":{"parts":[],"role":"model"},"finishReason":"MAX_TOKENS","index":0}
+            ],
+            "modelVersion": "gpt-test-upstream",
+            "responseId": "resp_corpus",
+            "usageMetadata": {"candidatesTokenCount":2,"promptTokenCount":5,"totalTokenCount":7}
+          }
+        }
+      ]
+    },
+    {
+      "path": "upstream[0].body.include",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.store",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.tools",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Session-Id",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "events": [

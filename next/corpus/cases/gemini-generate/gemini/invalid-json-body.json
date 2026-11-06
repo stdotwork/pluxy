@@ -4,6 +4,37 @@
     "core/sdk/api/handlers/gemini/gemini_handlers.go:137-177 (request body error emitted as JSON before any streaming)"
   ],
   "client": {"path":"/v1beta/models/gemini-corpus:generateContent","body_text":"{\"contents\": ["},
+  "exceptions": [
+    {
+      "path": "client.body.error.code",
+      "kind": "intended",
+      "reason": "The new core rejects a body that is not JSON with 400 before anything reaches the upstream; today's core sends it to the upstream as it is.",
+      "want": 400
+    },
+    {
+      "path": "client.body.error.message",
+      "kind": "intended",
+      "reason": "The new core rejects a body that is not JSON with 400 before anything reaches the upstream; today's core sends it to the upstream as it is.",
+      "want": "request body is not valid JSON: unexpected end of JSON input"
+    },
+    {
+      "path": "client.body.error.status",
+      "kind": "intended",
+      "reason": "The new core rejects a body that is not JSON with 400 before anything reaches the upstream; today's core sends it to the upstream as it is.",
+      "want": "INVALID_ARGUMENT"
+    },
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "reason": "The new core rejects a body that is not JSON with 400 before anything reaches the upstream; today's core sends it to the upstream as it is.",
+      "want": 400
+    },
+    {
+      "path": "upstream[0]",
+      "kind": "intended",
+      "reason": "The new core rejects a body that is not JSON with 400 before anything reaches the upstream; today's core sends it to the upstream as it is."
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {"error":{"message":"corpus: no scripted reply for upstream request 1"}},

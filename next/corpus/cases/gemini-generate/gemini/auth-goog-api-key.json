@@ -32,6 +32,18 @@
       }
     }
   ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    },
+    {
+      "path": "upstream[0].body.safetySettings",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {

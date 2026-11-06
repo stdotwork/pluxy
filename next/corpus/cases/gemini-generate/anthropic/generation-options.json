@@ -1,5 +1,5 @@
 {
-  "description": "A non-streamed Gemini request with generation options, a thinking budget, a systemInstruction and toolConfig mode ANY naming one function: temperature is dropped, topP, maxOutputTokens, stopSequences and the thinking budget map to the Messages request, and the tool_use reply comes back as a functionCall.",
+  "description": "A non-streamed Gemini request with generation options, a thinking budget, a systemInstruction and toolConfig mode ANY naming one function, to a Messages upstream: the options and the one allowed function reach the Messages request (the thinking budget is reported as dropped: Messages budgets depend on the model), and the tool_use reply comes back as a functionCall.",
   "source": [
     "core/internal/translator/claude/gemini/claude_gemini_request.go (maxOutputTokens to max_tokens, topP to top_p, stopSequences to stop_sequences; thinkingConfig budget to Claude thinking; systemInstruction to a separate user message; toolConfig ANY with one allowed name to tool_choice of that tool)",
     "core/internal/translator/claude/gemini/claude_gemini_request_test.go (TestConvertGeminiRequestToClaude_DropsTemperature, TestConvertGeminiRequestToClaude_KeepsSystemInstructionUserSeparate)",
@@ -46,6 +46,105 @@
         {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":18}}},
         {"event":"message_stop","data":{"type":"message_stop"}}
       ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: candidate index 0, one chunk per text or thought delta, a last chunk holding the finish reason, any function calls and usageMetadata with Gemini's inclusion rules (promptTokenCount counts every input token, cache reads included, in cachedContentTokenCount), and max_tokens as MAX_TOKENS. Today's Claude translator adds createTime and usageMetadata.trafficType PROVISIONED_THROUGHPUT, leaves out the candidate index, reports a promptTokenCount of 0, maps a non-streamed max_tokens stop to STOP, and turns a Claude thinking signature into a thought part holding skip_thought_signature_validator, Google's last-resort value that skips validation; the new core does not invent a signature and reports the Claude one as dropped.",
+      "want": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {"functionCall":{"args":{"city":"Paris"},"id":"toolu_abc","name":"get_weather"}}
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "claude-test-upstream",
+        "responseId": "msg_corpus",
+        "usageMetadata": {"candidatesTokenCount":18,"promptTokenCount":60,"totalTokenCount":78}
+      }
+    },
+    {
+      "path": "upstream[0].body.messages[0].content[0].text",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.messages[1]",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.system",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.temperature",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.tools[0].cache_control",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.tools[0].input_schema.$schema",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.tools[0].input_schema.additionalProperties",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.top_p",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].path",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
     }
   ],
   "recorded_old_core": {

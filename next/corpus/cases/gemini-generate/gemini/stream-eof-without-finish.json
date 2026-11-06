@@ -1,5 +1,5 @@
 {
-  "description": "Gemini client, same-format passthrough, streamed: an upstream stream that closes after two text chunks with no finishReason is passed on as it is; the Gemini passthrough does not add the truncation error that OpenAI and Claude streams get.",
+  "description": "Gemini client, same-format passthrough, streamed: an upstream stream that closes after two text chunks with no finishReason is passed on, and the stream ends with an error event because the reply may have been cut short.",
   "source": [
     "core/internal/runtime/executor/gemini_executor.go:392-494 (EOF-before-finishReason guard applies to OpenAI and Claude responses; the Gemini response-format path does not use it)",
     "core/sdk/api/handlers/gemini/gemini_handlers.go:186-227 (SSE framing)"
@@ -14,6 +14,38 @@
         {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
         {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":" there"}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}}
       ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.events[2]",
+      "kind": "intended",
+      "reason": "A stream that ends without a finish reason may have been cut short; the plan makes a clean EOF without a terminal event an error, so the new core ends the stream with an error event. Today's core ends it silently, so the client cannot tell.",
+      "want": {
+        "data": {
+          "error": {
+            "code": 502,
+            "message": "upstream stream ended before the reply finished",
+            "status": "INTERNAL"
+          }
+        },
+        "event": "error"
+      }
+    },
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    },
+    {
+      "path": "upstream[0].body.safetySettings",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces each thoughtSignature with skip_thought_signature_validator, which throws away the model's reasoning state. The new core keeps every thought signature on the part it came with."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "The new core asks a streaming upstream for text/event-stream; today's Gemini provider sends no Accept header. Gemini answers alt=sse either way."
     }
   ],
   "recorded_old_core": {

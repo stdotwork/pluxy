@@ -1,5 +1,5 @@
 {
-  "description": "countTokens passes the contents to the upstream's countTokens and returns the upstream's totalTokens unchanged.",
+  "description": "countTokens: today's core passes it to the upstream's countTokens and returns its totalTokens; the new core does not serve it yet.",
   "source": [
     "core/sdk/api/handlers/gemini/gemini_handlers.go:128-177 (countTokens dispatch)",
     "core/internal/runtime/executor/gemini_executor.go:169-183 (countTokens uses the countTokens method on the model path)",
@@ -10,6 +10,39 @@
     "body": {"contents":[{"role":"user","parts":[{"text":"hi"}]}]}
   },
   "upstream": [{"body":{"totalTokens":3}}],
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "gap",
+      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404.",
+      "want": {
+        "code": 404,
+        "message": "method \"countTokens\" is not supported on models/gemini-corpus",
+        "status": "NOT_FOUND"
+      }
+    },
+    {
+      "path": "client.body.promptTokensDetails",
+      "kind": "gap",
+      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404."
+    },
+    {
+      "path": "client.body.totalTokens",
+      "kind": "gap",
+      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404."
+    },
+    {
+      "path": "client.status",
+      "kind": "gap",
+      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404.",
+      "want": 404
+    },
+    {
+      "path": "upstream[0]",
+      "kind": "gap",
+      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404."
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {"promptTokensDetails":[{"modality":"TEXT","tokenCount":3}],"totalTokens":3},

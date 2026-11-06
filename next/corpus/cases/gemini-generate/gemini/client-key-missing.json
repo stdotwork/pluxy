@@ -9,6 +9,20 @@
     "auth": "none",
     "body": {"contents":[{"role":"user","parts":[{"text":"Say hello"}]}]}
   },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The old core answers a missing client key with {\"error\": \"<text>\"} on every route; the new core answers a Gemini client with Google's error shape (error.code, message, status UNAUTHENTICATED).",
+      "want": {"code":401,"message":"missing or invalid API key","status":"UNAUTHENTICATED"}
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "reason": "The old core answers a missing client key with {\"error\": \"<text>\"} on every route; the new core answers a Gemini client with Google's error shape (error.code, message, status UNAUTHENTICATED).",
+      "want": "application/json"
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {"error":"Missing API key"},

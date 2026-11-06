@@ -7,6 +7,32 @@
     "path": "/v1beta/models/gemini-corpus:fooBar",
     "body": {"contents":[{"role":"user","parts":[{"text":"Say hello"}]}]}
   },
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core answers a method it does not serve with 404 and Google's error shape; today's core answers 200 with an empty body.",
+      "want": {
+        "error": {
+          "code": 404,
+          "message": "method \"fooBar\" is not supported on models/gemini-corpus",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "reason": "The new core answers a method it does not serve with 404 and Google's error shape; today's core answers 200 with an empty body.",
+      "want": "application/json"
+    },
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "reason": "The new core answers a method it does not serve with 404 and Google's error shape; today's core answers 200 with an empty body.",
+      "want": 404
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "headers": {
