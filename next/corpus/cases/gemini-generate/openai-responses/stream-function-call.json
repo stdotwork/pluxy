@@ -1,0 +1,107 @@
+{
+  "description": "A streamed Gemini request with one functionDeclaration: the Responses function_call item (argument deltas, arguments done, item done) comes back as a Gemini functionCall part with id call_abc, and the stream ends with finishReason STOP.",
+  "source": [
+    "core/internal/translator/codex/gemini/codex_gemini_request.go (tool declarations mapped to Responses function tools; JSON schema conversion)",
+    "core/internal/translator/codex/gemini/codex_gemini_response.go (stream: function calls buffered until completion, emitted as complete parts with IDs, order preserved)",
+    "core/internal/translator/codex/gemini/codex_gemini_response_test.go (TestConvertCodexResponseToGemini_StreamPreservesFunctionCallID)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:streamGenerateContent?alt=sse",
+    "body": {
+      "contents": [{"role":"user","parts":[{"text":"Weather in Paris?"}]}],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Current weather",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_corpus","type":"function_call","status":"in_progress","call_id":"call_abc","name":"get_weather","arguments":""}}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":2,"output_index":0,"item_id":"fc_corpus","delta":"{\"city\":"}},
+        {"event":"response.function_call_arguments.delta","data":{"type":"response.function_call_arguments.delta","sequence_number":3,"output_index":0,"item_id":"fc_corpus","delta":"\"Paris\"}"}},
+        {"event":"response.function_call_arguments.done","data":{"type":"response.function_call_arguments.done","sequence_number":4,"output_index":0,"item_id":"fc_corpus","arguments":"{\"city\":\"Paris\"}"}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_abc","name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":6,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[{"id":"fc_corpus","type":"function_call","status":"completed","call_id":"call_abc","name":"get_weather","arguments":"{\"city\":\"Paris\"}"}],"usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":7}}}}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"candidates":[{"content":{"parts":[],"role":"model"}}],"createTime":"2023-11-14T22:13:20Z","modelVersion":"gpt-test-upstream","responseId":"resp_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[{"functionCall":{"args":{"city":"Paris"},"id":"call_abc","name":"get_weather"}}],"role":"model"},"finishReason":"STOP"}],"createTime":"2025-08-15T02:52:03.884209Z","modelVersion":"gpt-test","responseId":"resp_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP"}],"createTime":"2023-11-14T22:13:20Z","modelVersion":"gpt-test","responseId":"resp_corpus","usageMetadata":{"candidatesTokenCount":2,"promptTokenCount":5,"totalTokenCount":7,"trafficType":"PROVISIONED_THROUGHPUT"}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {
+              "content": [{"text":"Weather in Paris?","type":"input_text"}],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "1bb57e96-1485-5399-8b54-597e6a3329a0",
+          "store": false,
+          "stream": true,
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "description": "Current weather",
+              "name": "get_weather",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "strict": false,
+              "type": "function"
+            },
+            {"output_format":"png","type":"image_generation"}
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Session-Id": "1bb57e96-1485-5399-8b54-597e6a3329a0",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "description": "A streamed Gemini request with maxOutputTokens 2 to a Responses upstream that ends with response.incomplete (max_output_tokens): the client gets the partial text and a final chunk with finishReason MAX_TOKENS and the usage of the partial answer.",
+  "source": [
+    "core/internal/translator/codex/gemini/codex_gemini_request.go (maxOutputTokens to max_output_tokens)",
+    "core/internal/translator/codex/gemini/codex_gemini_request_test.go (TestConvertGeminiRequestToCodex_MaxOutputTokens)",
+    "core/internal/translator/codex/gemini/codex_gemini_response.go (response.incomplete: incomplete reason max_output_tokens to finish MAX_TOKENS)",
+    "core/internal/translator/codex/gemini/codex_gemini_response_test.go (TestConvertCodexResponseToGemini_IncompleteTerminal)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:streamGenerateContent?alt=sse",
+    "body": {
+      "contents": [{"role":"user","parts":[{"text":"Say hello"}]}],
+      "generationConfig": {"maxOutputTokens":2}
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"in_progress","role":"assistant","content":[]}}},
+        {"event":"response.content_part.added","data":{"type":"response.content_part.added","sequence_number":2,"output_index":0,"content_index":0,"item_id":"msg_corpus","part":{"type":"output_text","text":"","annotations":[]}}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":3,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":"Hello"}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":4,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":" there"}},
+        {"event":"response.output_text.done","data":{"type":"response.output_text.done","sequence_number":5,"output_index":0,"content_index":0,"item_id":"msg_corpus","text":"Hello there"}},
+        {"event":"response.content_part.done","data":{"type":"response.content_part.done","sequence_number":6,"output_index":0,"content_index":0,"item_id":"msg_corpus","part":{"type":"output_text","text":"Hello there","annotations":[]}}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there","annotations":[]}]}}},
+        {"event":"response.incomplete","data":{"type":"response.incomplete","sequence_number":8,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"incomplete","model":"gpt-test-upstream","output":[{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there","annotations":[]}]}],"usage":{"input_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":7},"incomplete_details":{"reason":"max_output_tokens"}}}}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"candidates":[{"content":{"parts":[],"role":"model"}}],"createTime":"2023-11-14T22:13:20Z","modelVersion":"gpt-test-upstream","responseId":"resp_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"}}],"createTime":"2025-08-15T02:52:03.884209Z","modelVersion":"gpt-test","responseId":"resp_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[{"text":" there"}],"role":"model"}}],"createTime":"2025-08-15T02:52:03.884209Z","modelVersion":"gpt-test","responseId":"resp_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"MAX_TOKENS"}],"createTime":"2023-11-14T22:13:20Z","modelVersion":"gpt-test","responseId":"resp_corpus","usageMetadata":{"candidatesTokenCount":2,"promptTokenCount":5,"totalTokenCount":7,"trafficType":"PROVISIONED_THROUGHPUT"}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "max_output_tokens": 2,
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "677f1299-2bf7-5d4c-b9b2-21271ed2f6ae",
+          "store": false,
+          "stream": true,
+          "tools": [{"output_format":"png","type":"image_generation"}]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Session-Id": "677f1299-2bf7-5d4c-b9b2-21271ed2f6ae",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}
