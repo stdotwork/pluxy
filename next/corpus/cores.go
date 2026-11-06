@@ -177,6 +177,47 @@ var Providers = map[string]Provider{
 			return "codex", accounts
 		},
 	},
+	// A Codex API key with the upstream WebSocket on: in the new core the Codex provider
+	// extension with "websockets": true in the account's settings, in today's core a
+	// codex-api-key entry whose key has "websockets": true. Turns of a WebSocket client go to
+	// {base_url}/responses over a WebSocket; other requests over HTTP as for "codex".
+	"codex-ws": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			var ms []any
+			for _, m := range models {
+				ms = append(ms, map[string]any{"name": m, "alias": m})
+			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k, "websockets": true})
+			}
+			return map[string]any{"codex": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL + "/v1",
+				"keys":     ks,
+				"models":   ms,
+			}}}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1", "websockets": true},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "codex", accounts
+		},
+	},
 	// A ChatGPT subscription signed in to Codex: the Codex provider extension with an OAuth
 	// credential in the new core, a Codex auth file in today's core. Today's core always calls
 	// https://chatgpt.com/backend-api/codex, so it runs through the intercepting proxy; the new

@@ -69,6 +69,7 @@ Providers with their own folder of cases:
 | `vertex` | Gemini extension, a Vertex service account | a Vertex service account auth file |
 | `kimi` | Kimi extension, a Kimi Code OAuth credential | a Kimi auth file |
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
+| `codex-ws` | Codex extension, API key, `"websockets": true` in the account's settings | a Codex API key with `websockets: true` |
 
 Today's core sends a ChatGPT subscription's requests to `https://chatgpt.com/backend-api/codex`,
 which no setting moves. For `codex-oauth` the runner therefore gives the old core an HTTP proxy
@@ -129,6 +130,21 @@ has `data` (a JSON value, or a string written as is, such as `"[DONE]"`), option
 connection after the scripted body. A request beyond the script gets a 500, which shows up in
 the comparison.
 
+A client may instead hold a WebSocket: `client.websocket` is a script, and the request becomes a
+`GET` with an upgrade (no body). Each step is one of `send` (a JSON value, sent as one text
+message), `send_text` (literal text), `read` (read messages until one whose `type` is the given
+one, or `"turn"` for any message that ends a turn: `response.completed`, `response.done`,
+`response.incomplete`, `response.failed` or `error`), `close` (a close code) or `drop` (end the
+connection without a close message). After the last step the client closes normally. A read
+that waits more than 10 seconds stops the script and is recorded as `timeout`.
+
+An upstream reply may be `websocket`: the fake upstream accepts the handshake and plays a script.
+Each step is one of `receive` (wait for the next message from the core), `send` (a JSON value as
+one text message), `close` (`code` and `reason`) or `drop`. Every message the core sends is
+recorded, whenever it arrives; after the last step the fake upstream reads on until the core
+closes the socket. A `hold` reply (HTTP) keeps the response open after its body until the core
+ends the request, like an upstream still generating.
+
 `account_models`: models the account lists in both cores (see above).
 
 `accounts`: how many provider accounts both cores have (default 1). The old core's first pick
@@ -174,6 +190,13 @@ An observation is JSON:
 }
 ```
 
+- A WebSocket client's observation has the handshake reply's `status` and `headers`, the
+  `messages` it read (each parsed when it is JSON) and, when the core closed the socket, `close`
+  with its `code` (1006 when the connection ended without a close message) and `reason`. A
+  WebSocket the fake upstream accepted has, in place of `body`, `websocket`: the `messages` the
+  core sent and how the core closed it (`close`, or `"open"` if it was still open 5 seconds after
+  the client's script ended). `Sec-WebSocket-Key` and `Sec-WebSocket-Accept` change on every
+  run and are not compared.
 - `body` is parsed JSON when the body is JSON, otherwise text. A streamed reply
   (`text/event-stream`) is a list of `events`, each with `data` (parsed when it is JSON) and
   `event`, `id` or `comment` when present. `body_error` is set when the body broke off.

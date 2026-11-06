@@ -1,0 +1,198 @@
+{
+  "description": "response.interrupt for another response is refused with an error message and does not reach the upstream; the running turn goes on and a matching interrupt still works.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_responses_websocket_unknown_interrupt_test.go"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/responses",
+    "websocket": [
+      {
+        "send": {
+          "type": "response.create",
+          "model": "gpt-test",
+          "store": false,
+          "prompt_cache_key": "corpus-ws",
+          "input": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Write a long story"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "read": "response.created"
+      },
+      {
+        "send": {
+          "type": "response.interrupt",
+          "response_id": "resp_other",
+          "mode": "discard_partial_items"
+        }
+      },
+      {
+        "read": "error"
+      },
+      {
+        "send": {
+          "type": "response.interrupt",
+          "response_id": "resp_1",
+          "mode": "discard_partial_items"
+        }
+      },
+      {
+        "read": "turn"
+      }
+    ]
+  },
+  "upstream": [
+    {
+      "websocket": [
+        {
+          "receive": true
+        },
+        {
+          "send": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_1",
+              "object": "response",
+              "status": "in_progress",
+              "model": "gpt-test",
+              "output": []
+            }
+          }
+        },
+        {
+          "receive": true
+        },
+        {
+          "send": {
+            "type": "response.incomplete",
+            "sequence_number": 1,
+            "response": {
+              "id": "resp_1",
+              "object": "response",
+              "status": "incomplete",
+              "incomplete_details": {
+                "reason": "interrupted"
+              },
+              "model": "gpt-test",
+              "output": []
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "headers": {
+        "Upgrade": "websocket"
+      },
+      "messages": [
+        {
+          "response": {
+            "id": "resp_1",
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "status": "in_progress"
+          },
+          "sequence_number": 0,
+          "type": "response.created"
+        },
+        {
+          "error": {
+            "message": "response.interrupt does not target the active upstream response",
+            "type": "invalid_request_error"
+          },
+          "status": 400,
+          "type": "error"
+        },
+        {
+          "response": {
+            "id": "resp_1",
+            "incomplete_details": {
+              "reason": "interrupted"
+            },
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "status": "incomplete"
+          },
+          "sequence_number": 1,
+          "type": "response.incomplete"
+        }
+      ],
+      "status": 101
+    },
+    "upstream": [
+      {
+        "headers": {
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Conversation_id": "corpus-ws",
+          "Openai-Beta": "responses_websockets=2026-02-06",
+          "Originator": "codex-tui",
+          "Sec-Websocket-Extensions": "permessage-deflate; server_no_context_takeover; client_no_context_takeover",
+          "Sec-Websocket-Version": "13",
+          "Session_id": "corpus-ws",
+          "Upgrade": "websocket",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "GET",
+        "path": "/v1/responses",
+        "websocket": {
+          "close": {
+            "code": 1006
+          },
+          "messages": [
+            {
+              "include": [
+                "reasoning.encrypted_content"
+              ],
+              "input": [
+                {
+                  "content": [
+                    {
+                      "text": "Write a long story",
+                      "type": "input_text"
+                    }
+                  ],
+                  "role": "user",
+                  "type": "message"
+                }
+              ],
+              "instructions": "",
+              "model": "gpt-test",
+              "parallel_tool_calls": true,
+              "prompt_cache_key": "corpus-ws",
+              "store": false,
+              "stream": true,
+              "tools": [
+                {
+                  "output_format": "png",
+                  "type": "image_generation"
+                }
+              ],
+              "type": "response.create"
+            },
+            {
+              "mode": "discard_partial_items",
+              "response_id": "resp_1",
+              "type": "response.interrupt"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

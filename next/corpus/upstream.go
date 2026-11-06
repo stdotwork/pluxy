@@ -27,6 +27,7 @@ type RecordedRequest struct {
 	Path   string // path and query
 	Header http.Header
 	Body   []byte
+	ws     *wsRecord // set for a WebSocket the fake upstream accepted
 }
 
 // NewFakeUpstream starts a fake upstream with the given replies.
@@ -40,15 +41,30 @@ func (u *FakeUpstream) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	u.mu.Lock()
 	n := len(u.requests)
-	u.requests = append(u.requests, RecordedRequest{Method: r.Method, Path: r.URL.RequestURI(), Header: r.Header.Clone(), Body: body})
+	rec := RecordedRequest{Method: r.Method, Path: r.URL.RequestURI(), Header: r.Header.Clone(), Body: body}
+	ws := n < len(u.script) && len(u.script[n].WebSocket) > 0 && isWebSocketHandshake(r)
+	if ws {
+		rec.ws = &wsRecord{done: make(chan struct{})}
+	}
+	u.requests = append(u.requests, rec)
 	u.mu.Unlock()
+	if ws {
+		u.serveWebSocket(w, r, u.script[n].WebSocket, rec.ws)
+		return
+	}
+	if n < len(u.script) && len(u.script[n].WebSocket) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error":{"message":"corpus: upstream request %d should be a WebSocket handshake"}}`, n+1)
+		return
+	}
 	if n >= len(u.script) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `{"error":{"message":"corpus: no scripted reply for upstream request %d"}}`, n+1)
 		return
 	}
-	writeReply(w, u.script[n])
+	writeReply(w, r, u.script[n])
 }
 
 // Requests returns what the fake upstream has received so far.
@@ -58,7 +74,7 @@ func (u *FakeUpstream) Requests() []RecordedRequest {
 	return append([]RecordedRequest(nil), u.requests...)
 }
 
-func writeReply(w http.ResponseWriter, rep Reply) {
+func writeReply(w http.ResponseWriter, r *http.Request, rep Reply) {
 	h := w.Header()
 	for k, v := range rep.Headers {
 		h.Set(k, v)
@@ -95,6 +111,11 @@ func writeReply(w http.ResponseWriter, rep Reply) {
 	for _, ev := range rep.SSE {
 		_, _ = w.Write(encodeSSE(ev))
 		flush()
+	}
+	if rep.Hold {
+		flush()
+		<-r.Context().Done()
+		return
 	}
 	if rep.Abort {
 		flush()

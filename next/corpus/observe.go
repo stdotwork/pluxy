@@ -36,12 +36,15 @@ const ClientUserAgent = "pluxy-corpus/0"
 // Headers left out of observations: they describe the connection, not the behaviour, or
 // they change with the port (Host).
 var skipHeaders = map[string]bool{
-	"Connection":        true,
-	"Content-Length":    true,
-	"Date":              true,
-	"Host":              true,
-	"Keep-Alive":        true,
-	"Transfer-Encoding": true,
+	"Connection":     true,
+	"Content-Length": true,
+	"Date":           true,
+	"Host":           true,
+	"Keep-Alive":     true,
+	// The WebSocket handshake's nonce and its answer change on every run.
+	"Sec-Websocket-Key":    true,
+	"Sec-Websocket-Accept": true,
+	"Transfer-Encoding":    true,
 }
 
 // client sends requests without asking for compression, so replies are observed as sent.
@@ -54,25 +57,39 @@ type Observation map[string]any
 // Run sends the case's client request to a core at base and returns the observation. The
 // fake upstream must be the one the core points at.
 func Run(ctx context.Context, c *Case, base string, up *FakeUpstream) (Observation, error) {
-	req, err := buildRequest(ctx, c, base)
-	if err != nil {
-		return nil, err
+	var reply map[string]any
+	if len(c.Client.WebSocket) > 0 {
+		var err error
+		if reply, err = runClientWebSocket(ctx, c, base); err != nil {
+			return nil, err
+		}
+		up.waitWebSockets(closeWait)
+	} else {
+		req, err := buildRequest(ctx, c, base)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		reply = observeReply(resp)
+		resp.Body.Close()
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	reply := observeReply(resp)
-	resp.Body.Close()
 
 	upstream := []any{}
 	for _, r := range up.Requests() {
-		upstream = append(upstream, map[string]any{
+		o := map[string]any{
 			"method":  r.Method,
 			"path":    r.Path,
 			"headers": headerMap(r.Header),
 			"body":    bodyValue(r.Body),
-		})
+		}
+		if r.ws != nil {
+			delete(o, "body")
+			o["websocket"] = r.ws.observation()
+		}
+		upstream = append(upstream, o)
 	}
 	return normalize(Observation{"client": reply, "upstream": upstream})
 }
