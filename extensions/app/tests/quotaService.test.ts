@@ -250,6 +250,14 @@ describe('quotaRowsFor', () => {
     expect(rows[0].resetAtMs).toBeGreaterThan(Date.now());
   });
 
+  it('Kimi 已用量和剩余量都未知时不显示满额余额和 0 / 100', () => {
+    const [unknown] = quotaRowsFor('kimi', { limits: [{ detail: { limit: 100 } }] });
+    expect(unknown.remainingPercent).toBeNull();
+    expect(unknown.detail).toBeUndefined();
+    const [known] = quotaRowsFor('kimi', { limits: [{ detail: { limit: 100, used: 0 } }] });
+    expect(known).toMatchObject({ remainingPercent: 100, detail: '0 / 100' });
+  });
+
   it('Antigravity 把 5h 排在周窗口前，兼容百分数字符串且不修改响应', () => {
     const buckets = [{ window: 'weekly', remainingFraction: '40%' }, { window: 'five_hour', remaining_fraction: 0.8 }];
     const rows = quotaRowsFor('antigravity', { groups: [{ displayName: 'Gemini', buckets }] });
@@ -325,7 +333,7 @@ describe('quotaRowsFor', () => {
     expect(quotaRowsFor('xai', { config: { monthlyLimit: { val: 15000 }, used: { val: 0 } } })[0].remainingPercent).toBe(100);
     const unknown = quotaRowsFor('xai', { config: { monthlyLimit: 15000 } })[0];
     expect(unknown.remainingPercent).toBeNull();
-    expect(unknown.detail).not.toBe('US$150.00 / US$150.00');
+    expect(unknown.detail).toBeUndefined();
     expect(quotaRowsFor('xai', { config: { monthlyLimit: 15000, used: 15000 } })[0].remainingPercent).toBe(0);
   });
 
