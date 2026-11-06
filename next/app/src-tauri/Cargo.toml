@@ -1,0 +1,45 @@
+[package]
+name = "pluxy-app"
+version = "0.1.0"
+description = "The pluxy desktop app: a window, a tray icon and, if wanted, a core of its own"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+name = "pluxy_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pluxy-app"
+path = "src/main.rs"
+
+[features]
+# For the native test only (native/run.ts): the app probes its webviews' command access and
+# reports on stderr. Never in a release build.
+native-test = []
+
+[build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.4", features = ["tray-icon", "unstable"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+getrandom = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The same GTK Tauri uses, to lay page webviews over the window (src/place.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
