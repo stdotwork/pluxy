@@ -230,8 +230,9 @@ func TestSilentUpstreamIsLost(t *testing.T) {
 	c.mu.Unlock()
 	defer close(turn)
 	var e *llm.Error
-	if err := s.relay(context.Background(), c, &collected{}); !errors.As(err, &e) || e.ProviderCode != openairesponses.CodeUpstreamWebsocketLost {
-		t.Fatalf("relay: %v; want upstream_websocket_lost", err)
+	if err := s.relay(context.Background(), c, &collected{}); !errors.As(err, &e) || e.ProviderCode != openairesponses.CodeUpstreamWebsocketLost ||
+		e.Scope != llm.ScopeRequest {
+		t.Fatalf("relay: %+v; want upstream_websocket_lost on the request, which puts no cooldown on the account", err)
 	}
 	if s.current() != nil {
 		t.Error("the session kept the silent socket")
