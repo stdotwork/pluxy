@@ -441,3 +441,48 @@ func TestClientDisconnectCancelsUpstream(t *testing.T) {
 		t.Fatal("upstream request was not cancelled after the client disconnected")
 	}
 }
+
+// A non-streamed request whose upstream answers with a stream larger than core will collect
+// gets a clear error, and core cancels the upstream request instead of reading it all.
+func TestNonStreamingReplyIsBounded(t *testing.T) {
+	const total = 128 << 20 // twice core's 64 MiB limit
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		const head = `"id":"chatcmpl-big","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream"`
+		content := strings.Repeat("x", 64<<10)
+		fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n", head)
+		for sent := 0; sent < total; sent += len(content) {
+			if _, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", head, content); err != nil || r.Context().Err() != nil {
+				close(u.cancelled)
+				return
+			}
+		}
+		fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", head)
+	}
+	base := startCore(t, u)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	resp := post(t, ctx, base, clientKey, `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502; body starts %.200s", resp.StatusCode, raw)
+	}
+	var got struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("%v: %s", err, raw)
+	}
+	if !strings.Contains(got.Error.Message, "64 MiB") || !strings.Contains(got.Error.Message, "stream") {
+		t.Errorf("error message = %q, want it to name the 64 MiB limit and streaming", got.Error.Message)
+	}
+	select {
+	case <-u.cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the upstream request was not cancelled after the limit was reached")
+	}
+}

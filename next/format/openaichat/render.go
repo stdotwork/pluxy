@@ -281,6 +281,7 @@ type Aggregator struct {
 	toolIdx   map[int]int
 	finish    *llm.Finish
 	usage     *llm.Usage
+	size      int
 }
 
 // NewAggregator returns an empty aggregator.
@@ -290,14 +291,19 @@ func NewAggregator() *Aggregator {
 
 // Add records one event.
 func (a *Aggregator) Add(ev llm.Event) {
+	a.size += len(ev.Delta)
 	switch ev.Type {
 	case llm.EventResponseStart:
 		a.head.ID, a.head.Model, a.head.Created = ev.Response.ID, ev.Response.Model, created(ev.Response)
 		a.up = newUpstream(ev.Response)
 	case llm.EventNative:
-		a.others = append(a.others, a.up.choices(ev)...)
+		for _, c := range a.up.choices(ev) {
+			a.size += len(c)
+			a.others = append(a.others, c)
+		}
 	case llm.EventItemStart:
 		if ev.Item.Kind == llm.ItemToolCall {
+			a.size += len(ev.Item.CallID) + len(ev.Item.Name) + toolCallOverhead
 			a.toolIdx[ev.Index] = len(a.tools)
 			tc := outToolCall{ID: ev.Item.CallID, Type: "function"}
 			tc.Function.Name = ev.Item.Name
@@ -313,6 +319,13 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.finish, a.usage = ev.Finish, ev.Usage
 	}
 }
+
+// toolCallOverhead is the JSON a tool call adds around its ID, name and arguments.
+const toolCallOverhead = len(`{"id":"","type":"function","function":{"name":"","arguments":""}},`)
+
+// Size is about how many bytes of content the response holds so far: text, reasoning, tool
+// calls and extra choices, before JSON escaping. Callers use it to bound what they collect.
+func (a *Aggregator) Size() int { return a.size }
 
 // Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {
