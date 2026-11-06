@@ -1,0 +1,29 @@
+{
+  "description": "The client lists models.",
+  "client": {"method":"GET","path":"/v1/models"},
+  "volatile": ["client.body.data[*].created"],
+  "exceptions": [
+    {
+      "path": "client",
+      "kind": "gap",
+      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built)."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [{"created":"(volatile)","id":"corpus-model","object":"model","owned_by":"corpus"}],
+        "object": "list"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

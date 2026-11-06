@@ -1,0 +1,149 @@
+# Differential test corpus
+
+The corpus checks the new core against today's core (`core/`) at the HTTP seam. Each case sends
+one client request to a core whose provider points at a fake upstream server. The fake upstream
+records every request it gets and answers with scripted replies. The runner then compares what
+the two cores did: the reply the client got and the requests that reached the upstream.
+
+The new core must match the old one except where a case lists an **exception**. Each exception
+gives a reason, so every difference is on the record.
+
+## Running it
+
+From `next/`:
+
+```bash
+go test -count=1 -v -run TestCorpus ./corpus
+```
+
+This builds the new core and compares it with the old core's replies recorded in the case files.
+It does not build or run the old core, so it is fast enough for every CI run. The report is
+printed at the end (with `-v`).
+
+| Variable | Effect |
+| --- | --- |
+| `PLUXY_CORPUS_OLD_CORE=1` | Also build `core/` (with cgo) and run it live. Fails if the live old core no longer matches a recording. |
+| `PLUXY_CORPUS_OLD_CORE_BIN=path` | Run this old-core binary live instead of building one. |
+| `PLUXY_CORPUS_RECORD=1` | Run the old core live and write its observations into the case files (`recorded_old_core`). |
+| `PLUXY_CORPUS_REPORT=path` | Also write the report to a file. |
+| `PLUXY_CORPUS_CASE=regexp` | Run only cases whose `format/provider/name` matches. |
+| `PLUXY_CORPUS_DUMP_NEW=dir` | Write each new-core observation to a file in `dir`, to read the values an exception's `want` needs. |
+| `PLUXY_CORPUS_LOGS=1` | With `-v`, log each core's output. |
+
+CI runs the fast form in `next-ci.yml` and the live form in `next-corpus.yml` (on changes to
+`next/` or `core/`).
+
+## How a core is run
+
+Both cores run as separate programs on random local ports, each with a fresh temporary folder
+holding its config, its auth folder and its `HOME`. Their environment is cleared except for
+`PATH`, and outbound proxies are set to a closed local port, so the old core's background
+version checks cannot reach the internet. The fake upstream is on loopback, which is never
+proxied.
+
+The generated config is the same for every case:
+
+- one provider account pointed at the fake upstream, with the API key `sk-corpus-upstream`
+  (not a secret);
+- the client key `corpus-client-key`;
+- for the old core: retries and cooldowns off (one account, one attempt, as in the new core's
+  version 0), management and the bundled panel off, response compression off, the embedded model
+  catalog (`-local-model`), and the request's model listed for the account (the old core serves
+  only listed models; `account_models` in a case overrides this for both cores).
+
+The client sends no `Accept-Encoding`, so replies are observed as the core sent them.
+
+## Case files
+
+One file per case: `cases/<client format>/<provider>/<name>.json`. `cases/corpus.json` holds
+settings for every case.
+
+```json
+{
+  "description": "What behaviour this pins down.",
+  "source": ["core/... test or code the behaviour comes from"],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model": "gpt-test", "messages": [{"role": "user", "content": "Say hello"}], "stream": true}
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data": {"id": "chatcmpl-corpus", "object": "chat.completion.chunk", "choices": [...]}},
+        {"data": "[DONE]"}
+      ]
+    }
+  ],
+  "exceptions": [
+    {"path": "client.headers.Retry-After", "kind": "gap", "reason": "Why the new core differs here."}
+  ],
+  "recorded_old_core": {"client": {...}, "upstream": [...]}
+}
+```
+
+`client`: `method` (default `POST`), `path`, `headers`, `auth` (`client-key` by default,
+`none`, or a literal token), and `body` (JSON) or `body_text` (literal text, for bodies that
+are not JSON). The runner adds `Content-Type: application/json` and `User-Agent: pluxy-corpus/0`
+unless the case sets them.
+
+`upstream`: one reply per upstream request, in order. Each has `status` (default 200),
+`headers`, and one of `body` (JSON), `body_text` (literal) or `sse` (stream events). An SSE event
+has `data` (a JSON value, or a string written as is, such as `"[DONE]"`), optional `event` and
+`comment`, or `raw` for bytes written exactly (malformed streams). `"abort": true` drops the
+connection after the scripted body. A request beyond the script gets a 500, which shows up in
+the comparison.
+
+`account_models`: models the account lists in both cores (see above).
+
+`volatile`: paths whose values change between runs (timestamps, trace IDs). They are replaced by
+`"(volatile)"` before any comparison.
+
+`exceptions`: known differences. Each has:
+
+- `path`: an observation path. It covers every difference at or below it.
+- `kind`: `intended` when the new core differs on purpose (a decision is on record), or `gap` when
+  it does not match yet and a later slice or the owner has to settle it.
+- `reason`: why. Required.
+- `want` (optional): the value the new core must give at `path`, so an exception can pin the new
+  behaviour as well as excuse the old one.
+
+An exception that covers no difference fails the case, so the list cannot go stale. Global
+exceptions in `cases/corpus.json` apply to every case and fail only if they cover nothing in the
+whole corpus.
+
+`recorded_old_core` is written by `PLUXY_CORPUS_RECORD=1`; do not edit it by hand.
+
+## Observations and paths
+
+An observation is JSON:
+
+```json
+{
+  "client": {"status": 200, "headers": {...}, "body": ..., "events": [...], "body_error": "..."},
+  "upstream": [{"method": "POST", "path": "/v1/chat/completions", "headers": {...}, "body": ...}]
+}
+```
+
+- `body` is parsed JSON when the body is JSON, otherwise text. A streamed reply
+  (`text/event-stream`) is a list of `events`, each with `data` (parsed when it is JSON) and
+  `event`, `id` or `comment` when present. `body_error` is set when the body broke off.
+- Headers are compared by value, except `Connection`, `Content-Length`, `Date`, `Host`,
+  `Keep-Alive` and `Transfer-Encoding`, which describe the connection rather than the behaviour.
+- Object key order and whitespace are not compared; array order is.
+- Timing is not compared (whether a stream arrives incrementally is the e2e tests' job).
+
+A path joins keys with `.` and puts array indexes in brackets:
+`client.events[2].data.choices[0].delta`, `upstream[0].headers.User-Agent`. In exceptions and
+`volatile`, `*` matches any key and `[*]` any index. Header names match case-insensitively.
+
+## Adding cases
+
+1. Write the case file without `recorded_old_core`. Take the behaviour from today's core: its
+   tests, code or an issue, and name it in `source`.
+2. Record it: `PLUXY_CORPUS_RECORD=1 PLUXY_CORPUS_CASE=<name> go test -count=1 -run TestCorpus ./corpus`.
+   Recording also lays out the file in the corpus style (one stream event per line).
+3. Run the corpus. For each difference the report lists, fix the new core or add an exception
+   with its reason.
+
+A new provider needs an entry in `Providers` (`cores.go`): how each core's config points that
+provider at the fake upstream. A new extension also goes in `NewCoreExtensions`.

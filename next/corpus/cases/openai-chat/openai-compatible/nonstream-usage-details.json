@@ -1,0 +1,85 @@
+{
+  "description": "A non-streamed reply whose usage carries cached and reasoning token details and a vendor field, plus a vendor field on the response.",
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hi there."},"finish_reason":"stop"}
+        ],
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 3,
+          "total_tokens": 12,
+          "prompt_tokens_details": {"cached_tokens":4},
+          "completion_tokens_details": {"reasoning_tokens":1},
+          "cost": 0.0001
+        },
+        "system_fingerprint": "fp_corpus"
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.usage.cost",
+      "kind": "gap",
+      "reason": "The new core builds the non-streamed reply from its internal model and drops usage fields it does not model; the old core passes the upstream body through."
+    },
+    {
+      "path": "client.body.system_fingerprint",
+      "kind": "gap",
+      "reason": "The new core builds the non-streamed reply from its internal model and drops response fields it does not carry (system_fingerprint); the old core passes the upstream body through."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {"finish_reason":"stop","index":0,"message":{"content":"Hi there.","role":"assistant"}}
+        ],
+        "created": 1700000001,
+        "id": "chatcmpl-corpus",
+        "model": "gpt-test-upstream",
+        "object": "chat.completion",
+        "system_fingerprint": "fp_corpus",
+        "usage": {
+          "completion_tokens": 3,
+          "completion_tokens_details": {"reasoning_tokens":1},
+          "cost": 0.0001,
+          "prompt_tokens": 9,
+          "prompt_tokens_details": {"cached_tokens":4},
+          "total_tokens": 12
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}
