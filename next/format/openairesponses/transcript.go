@@ -112,12 +112,13 @@ func (t *Transcript) Next(msg map[string]json.RawMessage) (TranscriptTurn, *llm.
 	if replacesTranscript(typ, msg, input) {
 		return TranscriptTurn{Body: marshalObject(t.replacement(msg)), Warmup: warmup}, nil
 	}
-	appendInput := input
-	if containsCompaction(input) {
-		appendInput = withoutCompaction(input)
-	}
 	m := t.replacement(msg)
-	m["input"] = mergeInput(t.last, t.output, appendInput)
+	if !containsCompaction(input) {
+		m["input"] = mergeInput(t.last, t.output, input)
+	}
+	// Input with a compaction item already holds the whole conversation, compacted: merging
+	// the stale turns into it would break its tool call pairs. Today's core sends it as it is
+	// to an upstream that takes compaction items (the Codex endpoint, which made them).
 	return TranscriptTurn{Body: marshalObject(m), Warmup: warmup}, nil
 }
 
@@ -285,16 +286,6 @@ func isCompaction(typ string) bool { return typ == "compaction" || typ == "compa
 
 func containsCompaction(input json.RawMessage) bool {
 	return slices.ContainsFunc(items(input), func(r json.RawMessage) bool { return isCompaction(itemOf(r).Type) })
-}
-
-func withoutCompaction(input json.RawMessage) json.RawMessage {
-	var kept []json.RawMessage
-	for _, r := range items(input) {
-		if !isCompaction(itemOf(r).Type) {
-			kept = append(kept, r)
-		}
-	}
-	return marshalList(kept)
 }
 
 // mergeInput returns the last request's input, then the last response's output (as input
