@@ -1,16 +1,18 @@
 // Command openai-compatible is a pluxy provider extension for services that speak OpenAI Chat
-// Completions or OpenAI Responses with an API key: OpenAI itself and the many services and local
-// servers that copy its API.
+// Completions, OpenAI Responses or Anthropic Messages with an API key: OpenAI itself and the many
+// services and local servers that copy its API, some of which also serve a Messages endpoint.
 //
 // Account settings:
 //
 //	{"base_url": "https://api.openai.com/v1", "wire_api": "chat"}
 //
-// wire_api is the API the upstream speaks: "chat" (the default, POST {base_url}/chat/completions)
-// or "responses" (POST {base_url}/responses). The name follows the Codex CLI's model provider
-// setting. A request in the upstream's own format is sent unchanged; a Responses request to a
-// Chat upstream is translated, and what the translation could not carry is reported with the
-// reply. The account's credential must be of kind api_key; it is sent as a bearer token.
+// wire_api is the API the upstream speaks: "chat" (the default, POST {base_url}/chat/completions),
+// "responses" (POST {base_url}/responses) or "messages" (POST {base_url}/messages). The name
+// follows the Codex CLI's model provider setting. A request in the upstream's own format is sent
+// unchanged; a request in another format is translated where a translation exists, and what the
+// translation could not carry is reported with the reply. The account's credential must be of
+// kind api_key; it is sent as a bearer token, or for a Messages upstream in x-api-key with the
+// client's anthropic-version (2023-06-01 when the client sent none) and anthropic-beta headers.
 package main
 
 import (
@@ -27,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/format/sse"
@@ -56,7 +59,18 @@ type settings struct {
 const (
 	wireChat      = "chat"
 	wireResponses = "responses"
+	wireMessages  = "messages"
 )
+
+// anthropicVersion is the Messages API version sent when the client named none.
+const anthropicVersion = "2023-06-01"
+
+// wires maps a wire API to its upstream format and endpoint.
+var wires = map[string]struct{ format, endpoint string }{
+	wireChat:      {llm.FormatOpenAIChat, "/chat/completions"},
+	wireResponses: {llm.FormatOpenAIResponses, "/responses"},
+	wireMessages:  {llm.FormatAnthropicMessages, "/messages"},
+}
 
 // client has no timeouts after the connection is made: a long generation is not a failure, and
 // cancellation comes from the call's context.
@@ -78,35 +92,43 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if s.BaseURL == "" {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings need base_url", Scope: llm.ScopeCredential}
 	}
-	switch s.WireAPI {
-	case "":
+	if s.WireAPI == "" {
 		s.WireAPI = wireChat
-	case wireChat, wireResponses:
-	default:
-		return &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("account setting wire_api must be %q or %q", wireChat, wireResponses), Scope: llm.ScopeCredential}
+	}
+	wire, ok := wires[s.WireAPI]
+	if !ok {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("account setting wire_api must be %q, %q or %q", wireChat, wireResponses, wireMessages), Scope: llm.ScopeCredential}
 	}
 	cred := call.Account.Credential
 	if cred == nil || cred.Kind != protocol.CredentialAPIKey || cred.APIKey == "" {
 		return &llm.Error{Code: llm.CodeAuth, Message: "account has no API key", Scope: llm.ScopeCredential}
 	}
 
-	body, tr, err := buildBody(call.Request, s.WireAPI)
+	body, tr, err := buildBody(call.Request, wire.format)
 	if err != nil {
 		return err
 	}
 	// The report travels on the reply's first event.
 	send := &reporting{Stream: out, tr: tr}
-	endpoint := "/chat/completions"
-	if s.WireAPI == wireResponses {
-		endpoint = "/responses"
-	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.BaseURL, "/")+endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.BaseURL, "/")+wire.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cred.APIKey)
+	if wire.format == llm.FormatAnthropicMessages {
+		req.Header.Set("X-Api-Key", cred.APIKey)
+		req.Header.Set("Anthropic-Version", anthropicVersion)
+		if n := call.Request.Native; n != nil && n.Format == wire.format {
+			for _, h := range anthropicmessages.Headers {
+				if v := n.Headers[h]; v != "" {
+					req.Header.Set(h, v)
+				}
+			}
+		}
+	} else {
+		req.Header.Set("Authorization", "Bearer "+cred.APIKey)
+	}
 	if call.Request.Stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
@@ -125,7 +147,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return upstreamError(resp)
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send, s.WireAPI)
+		return relayStream(ctx, resp.Body, send, wire.format)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
@@ -134,11 +156,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	decode := openaichat.DecodeResponse
-	if s.WireAPI == wireResponses {
-		decode = openairesponses.DecodeResponse
-	}
-	events, err := decode(raw)
+	events, err := decoders[wire.format].response(raw)
 	if err != nil {
 		return err
 	}
@@ -150,14 +168,18 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return nil
 }
 
-// buildBody returns the upstream request body for req and how it was built. A request in the
-// upstream's own format is sent unchanged. A Responses request to a Chat upstream is translated;
-// under the reject drop policy a translation that drops anything is refused.
-func buildBody(req llm.Request, wire string) ([]byte, *llm.Translation, error) {
-	target := llm.FormatOpenAIChat
-	if wire == wireResponses {
-		target = llm.FormatOpenAIResponses
-	}
+// formatNames name the upstream formats in messages to clients.
+var formatNames = map[string]string{
+	llm.FormatOpenAIChat:        "Chat Completions",
+	llm.FormatOpenAIResponses:   "OpenAI Responses",
+	llm.FormatAnthropicMessages: "Anthropic Messages",
+}
+
+// buildBody returns the upstream request body for req in format target and how it was built. A
+// request in the upstream's own format is sent unchanged. Requests are translated to Chat from any
+// client format, and to Responses from Messages; under the reject drop policy a translation that
+// drops anything is refused.
+func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: target}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
@@ -166,12 +188,20 @@ func buildBody(req llm.Request, wire string) ([]byte, *llm.Translation, error) {
 			return n.Body, tr, nil
 		}
 	}
-	if target == llm.FormatOpenAIResponses {
-		// shortcut: no request is rebuilt as Responses yet, so only Responses clients can use a
-		// Responses upstream; add an encoder when another client format needs one.
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Message: "this account's upstream speaks OpenAI Responses; requests in " + tr.From + " are not translated to it", Scope: llm.ScopeRequest}
+	var encode func(llm.Request) ([]byte, []llm.Loss, error)
+	switch {
+	case target == llm.FormatOpenAIChat:
+		encode = openaichat.EncodeRequest
+	case target == llm.FormatOpenAIResponses && tr.From == llm.FormatAnthropicMessages:
+		// shortcut: only Messages requests are rebuilt as Responses; Chat requests have no
+		// corpus cases for it yet. Allow them once they do.
+		encode = openairesponses.EncodeRequest
+	default:
+		// shortcut: nothing is rebuilt as Messages yet (the Claude provider brings that).
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest,
+			Message: "this account's upstream speaks " + formatNames[target] + "; requests in " + tr.From + " are not translated to it"}
 	}
-	body, losses, err := openaichat.EncodeRequest(req)
+	body, losses, err := encode(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -184,7 +214,7 @@ func buildBody(req llm.Request, wire string) ([]byte, *llm.Translation, error) {
 			}
 		}
 		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest,
-			Message: "Chat Completions cannot carry parts of this request: " + strings.Join(paths, ", ")}
+			Message: formatNames[target] + " cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return body, tr, nil
 }
@@ -215,14 +245,21 @@ type streamDecoder interface {
 	Usage() *llm.Usage
 }
 
+// decoders read each upstream format's streamed and non-streamed replies.
+var decoders = map[string]struct {
+	stream   func() streamDecoder
+	response func([]byte) ([]llm.Event, error)
+}{
+	llm.FormatOpenAIChat:        {func() streamDecoder { return openaichat.NewStreamDecoder() }, openaichat.DecodeResponse},
+	llm.FormatOpenAIResponses:   {func() streamDecoder { return openairesponses.NewStreamDecoder() }, openairesponses.DecodeResponse},
+	llm.FormatAnthropicMessages: {func() streamDecoder { return anthropicmessages.NewStreamDecoder() }, anthropicmessages.DecodeResponse},
+}
+
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
 // blocked send blocks the next upstream read.
-func relayStream(ctx context.Context, body io.Reader, out eventSender, wire string) error {
+func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamFormat string) error {
 	r := sse.NewReader(body)
-	var dec streamDecoder = openaichat.NewStreamDecoder()
-	if wire == wireResponses {
-		dec = openairesponses.NewStreamDecoder()
-	}
+	dec := decoders[upstreamFormat].stream()
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF

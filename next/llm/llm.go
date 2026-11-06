@@ -87,12 +87,17 @@ func (t *Translation) Dropped() bool {
 type Native struct {
 	Format string          `json:"format"`
 	Body   json.RawMessage `json:"body"`
+	// Headers are the client's request headers that belong to Format and say how to read Body,
+	// keyed by lower-case name: for Anthropic Messages, anthropic-version and anthropic-beta. An
+	// extension that passes Body through sends them with it.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // Native formats.
 const (
-	FormatOpenAIChat      = "openai.chat"
-	FormatOpenAIResponses = "openai.responses"
+	FormatOpenAIChat        = "openai.chat"
+	FormatOpenAIResponses   = "openai.responses"
+	FormatAnthropicMessages = "anthropic.messages"
 )
 
 // Item types.
@@ -320,12 +325,15 @@ type Finish struct {
 }
 
 // Usage counts tokens. A nil field was not reported, which is different from zero.
+// InputTokens is every input token, cached or not; CachedInputTokens (read from a cache) and
+// CacheWriteInputTokens (written to one) are the parts of it the provider reports separately.
 type Usage struct {
-	InputTokens       *int64          `json:"input_tokens,omitempty"`
-	OutputTokens      *int64          `json:"output_tokens,omitempty"`
-	CachedInputTokens *int64          `json:"cached_input_tokens,omitempty"`
-	ReasoningTokens   *int64          `json:"reasoning_tokens,omitempty"`
-	Raw               json.RawMessage `json:"raw,omitempty"`
+	InputTokens           *int64          `json:"input_tokens,omitempty"`
+	OutputTokens          *int64          `json:"output_tokens,omitempty"`
+	CachedInputTokens     *int64          `json:"cached_input_tokens,omitempty"`
+	CacheWriteInputTokens *int64          `json:"cache_write_input_tokens,omitempty"`
+	ReasoningTokens       *int64          `json:"reasoning_tokens,omitempty"`
+	Raw                   json.RawMessage `json:"raw,omitempty"`
 }
 
 // Error codes.

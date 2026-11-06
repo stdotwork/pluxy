@@ -504,7 +504,13 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	}
 	for i, it := range req.Items {
 		p := path(it.Origin, fmt.Sprintf("items[%d]", i))
-		if it.Type != llm.ItemTypeToolCall && !(it.Type == llm.ItemTypeMessage && it.Role == llm.RoleAssistant) && it.Type != llm.ItemTypeReasoning {
+		// Reasoning waits for the assistant message or tool call it belongs to. Native items are
+		// dropped, so they do not end the wait (an Anthropic redacted thinking block sits between
+		// thinking and the text or tool call it leads to).
+		switch {
+		case it.Type == llm.ItemTypeToolCall, it.Type == llm.ItemTypeReasoning, it.Type == llm.ItemTypeNative:
+		case it.Type == llm.ItemTypeMessage && it.Role == llm.RoleAssistant:
+		default:
 			flushReasoning()
 		}
 		switch it.Type {
