@@ -214,6 +214,6 @@ sdk.Serve(sdk.Extension{
 handler answers a call, on the session's upstream connection; `ctx` ends if core cancels the turn.
 `Interrupt(raw)` is called from another goroutine while a turn runs, with the client's control
 message to pass upstream. `Close()` is called once when the session ends: close the upstream
-connection there. The SDK lists `session` in describe and reports `protocol_minor` 1 when
-`Session` is set. The rules, including what to send when the upstream connection is lost, are in
+connection there. The SDK reports `protocol_minor` 1 in describe, since it implements 0.1, and
+lists `session` when `Session` is set. The rules, including what to send when the upstream connection is lost, are in
 [Sessions](README.md#sessions); the Codex extension (`extensions/codex`) is a complete example.

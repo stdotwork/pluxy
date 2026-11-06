@@ -158,20 +158,23 @@ func (s *Session) Ended() bool {
 // before its terminal event, cancels the turn, which ends the session.
 func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Request) *SessionStream {
 	t := &SessionStream{s: s, ctx: ctx}
-	if account.ID != s.accountID {
-		t.fail(&llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("session of account %q got a turn for account %q", s.accountID, account.ID)})
+	// A turn refused here was never sent: closing its stream leaves the session alone.
+	refuse := func(e *llm.Error) *SessionStream {
+		t.ended = true
+		t.fail(e)
 		return t
+	}
+	if account.ID != s.accountID {
+		return refuse(&llm.Error{Code: llm.CodeInternal, Message: fmt.Sprintf("session of account %q got a turn for account %q", s.accountID, account.ID)})
 	}
 	s.mu.Lock()
 	switch {
 	case s.closed:
 		s.mu.Unlock()
-		t.fail(&llm.Error{Code: llm.CodeExtensionUnavailable, Message: "the session has ended"})
-		return t
+		return refuse(&llm.Error{Code: llm.CodeExtensionUnavailable, Message: "the session has ended"})
 	case s.running:
 		s.mu.Unlock()
-		t.fail(&llm.Error{Code: llm.CodeInternal, Message: "a turn is already running on this session"})
-		return t
+		return refuse(&llm.Error{Code: llm.CodeInternal, Message: "a turn is already running on this session"})
 	}
 	if c := account.Credential; c != nil && !slices.ContainsFunc(s.creds, func(o *protocol.Credential) bool { return sameCredential(o, c) }) {
 		s.creds = append(s.creds, c)

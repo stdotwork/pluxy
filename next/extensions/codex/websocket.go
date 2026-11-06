@@ -29,7 +29,7 @@ const openAIBeta = "responses_websockets=2026-02-06"
 // wsIdleTimeout is the liveness check on the upstream socket: during a turn the upstream must
 // send a message at least this often, or the socket counts as lost. It is the only timeout after
 // the connection is made, as today's core's Codex WebSocket read deadline is.
-const wsIdleTimeout = 5 * time.Minute
+var wsIdleTimeout = 5 * time.Minute // a variable for the tests
 
 // wsDialTimeout bounds the handshake: connecting is not yet the upstream's work.
 const wsDialTimeout = 30 * time.Second
@@ -215,10 +215,10 @@ func (s *wsSession) relay(ctx context.Context, c *wsConn, out eventSender) error
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-idle.C:
+			// An upstream silent this long is taken as lost: the client hears so and may send
+			// the whole conversation again.
 			s.drop(c)
-			return &llm.Error{Code: llm.CodeUnavailable, Status: http.StatusBadGateway, Scope: llm.ScopeEndpoint,
-				ProviderCode: openairesponses.CodeUpstreamWebsocketLost,
-				Message:      "the upstream WebSocket sent nothing for " + wsIdleTimeout.String()}
+			return openairesponses.UpstreamWebsocketLost()
 		case data = <-c.msgs:
 		case <-c.ended:
 			return lostError(c.err)

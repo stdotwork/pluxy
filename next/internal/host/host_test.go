@@ -75,15 +75,20 @@ func fakeExtension(mode string) {
 				defer conn.Close()
 			}
 		}()
-	case "serve", "slow-exit":
-		// A working extension; slow-exit takes half a second to exit once asked to stop.
-		err := sdk.Serve(sdk.Extension{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0",
+	case "serve", "slow-exit", "session":
+		// A working extension; slow-exit takes half a second to exit once asked to stop;
+		// session also holds sessions (fakeSession).
+		ext := sdk.Extension{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0",
 			Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 				if err := out.Start(llm.ResponseInfo{ID: "r", Model: call.Request.Model}); err != nil {
 					return err
 				}
 				return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
-			}})
+			}}
+		if mode == "session" {
+			ext.Session = openFakeSession
+		}
+		err := sdk.Serve(ext)
 		if mode == "slow-exit" {
 			time.Sleep(500 * time.Millisecond)
 		}
