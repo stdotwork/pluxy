@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -246,9 +247,12 @@ func runCoreArgs(t *testing.T, cfg map[string]any, args ...string) (string, stri
 	go func() {
 		defer close(addr) // core exited
 		sc := bufio.NewScanner(stderr)
+		// A line can hold a whole reply's translation report; a scanner that stopped at a long
+		// line would leave core blocked writing its log.
+		sc.Buffer(nil, 256<<20)
 		for sc.Scan() {
 			line := sc.Text()
-			t.Log("core:", line)
+			t.Logf("core: %.4096s", line)
 			logs.add(line)
 			if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
 				select {
@@ -459,6 +463,61 @@ func TestNonStreamingChat(t *testing.T) {
 	}
 }
 
+// A non-streamed request whose upstream streams a reply with two choices gets the second
+// choice whole, as a message put together from its fragments the way OpenAI's SDK does: text
+// joined, a tool call's arguments joined by tool index, its finish reason and logprobs kept.
+// The reviewer's case came back with three choices, the extra two being index 1 fragments; an
+// upstream may also finish a choice in a fragment without a delta.
+func TestNonStreamingChatPutsOtherChoicesTogether(t *testing.T) {
+	for _, last := range []string{
+		`{"index":1,"delta":{},"finish_reason":"tool_calls"}`,
+		`{"index":1,"finish_reason":"tool_calls"}`,
+	} {
+		t.Run(last, func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				for _, choices := range []string{
+					`{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null},{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}`,
+					`{"index":0,"delta":{"content":"First"},"finish_reason":null},{"index":1,"delta":{"content":"Sec"},"logprobs":{"content":[{"token":"Sec","logprob":-0.5}]},"finish_reason":null}`,
+					`{"index":1,"delta":{"role":"assistant","content":"ond"},"logprobs":{"content":[{"token":"ond","logprob":-0.25}]},"finish_reason":null}`,
+					`{"index":1,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"f","arguments":"{\"a\""}}]},"finish_reason":null}`,
+					`{"index":1,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":1}"}}]},"finish_reason":null}`,
+					`{"index":0,"delta":{},"finish_reason":"stop"},` + last,
+				} {
+					fmt.Fprintf(w, "data: {%s,\"choices\":[%s]}\n\n", head, choices)
+				}
+				io.WriteString(w, "data: [DONE]\n\n")
+			}
+			base := startCore(t, u)
+			resp := post(t, context.Background(), base, clientKey, `{"model":"gpt-test","n":2,"messages":[{"role":"user","content":"hi"}]}`)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d: %s", resp.StatusCode, raw)
+			}
+			var got struct {
+				Choices []any `json:"choices"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("%v: %s", err, raw)
+			}
+			var want []any
+			json.Unmarshal([]byte(`[
+				{"index":0,"message":{"role":"assistant","content":"First"},"finish_reason":"stop"},
+				{"index":1,"message":{"role":"assistant","content":"Second","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{\"a\":1}"}}]},
+				 "logprobs":{"content":[{"token":"Sec","logprob":-0.5},{"token":"ond","logprob":-0.25}]},"finish_reason":"tool_calls"}
+			]`), &want)
+			if !reflect.DeepEqual(got.Choices, want) {
+				g, _ := json.Marshal(got.Choices)
+				w, _ := json.Marshal(want)
+				t.Errorf("choices\n got %s\nwant %s", g, w)
+			}
+		})
+	}
+}
+
 func TestUpstreamRateLimitBecomesClientError(t *testing.T) {
 	u := newUpstream(t)
 	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
@@ -523,6 +582,113 @@ func TestClientDisconnectCancelsUpstream(t *testing.T) {
 	case <-u.cancelled:
 	case <-time.After(5 * time.Second):
 		t.Fatal("upstream request was not cancelled after the client disconnected")
+	}
+}
+
+// What a Chat reply keeps of the upstream's reply besides its content counts toward core's 64 MiB
+// limit on a non-streamed reply: reply-level fields such as system_fingerprint, and the usage
+// object with fields the model has no place for. The reviewer's case: an 8 MiB fingerprint and
+// 60 MiB of text came back as a 200 of 71,303,351 bytes.
+func TestNonStreamingChatCountsKeptFields(t *testing.T) {
+	big := strings.Repeat("f", 8<<20)
+	for _, c := range []struct{ name, first, usage string }{
+		{"fingerprint", fmt.Sprintf(`,"system_fingerprint":%q`, big), ""},
+		{"usage", "", fmt.Sprintf(`{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"extra":%q}`, big)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				fmt.Fprintf(w, "data: {%s%s,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n", head, c.first)
+				content := strings.Repeat("x", 64<<10)
+				for sent := 0; sent < 60<<20; sent += len(content) {
+					if _, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", head, content); err != nil {
+						return
+					}
+				}
+				fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", head)
+				if c.usage != "" {
+					fmt.Fprintf(w, "data: {%s,\"choices\":[],\"usage\":%s}\n\n", head, c.usage)
+				}
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}
+			base := startCore(t, u)
+			resp := post(t, context.Background(), base, clientKey, `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+				t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+			}
+		})
+	}
+}
+
+// The upstream's response id and model, which Messages and Gemini replies carry, count toward
+// core's 64 MiB limit on a non-streamed reply.
+func TestNonStreamingReplyCountsIDAndModel(t *testing.T) {
+	for _, c := range []struct{ path, body string }{
+		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1beta/models/gpt-test:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
+	} {
+		path, body := c.path, c.body
+		t.Run(path, func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				big := strings.Repeat("i", 6<<20)
+				fmt.Fprintf(w, "data: {\"id\":%q,\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n", big, big)
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				content := strings.Repeat("x", 64<<10)
+				for sent := 0; sent < 56<<20; sent += len(content) {
+					if _, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", head, content); err != nil {
+						return
+					}
+				}
+				fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", head)
+			}
+			base := startCore(t, u)
+			resp := postPath(t, context.Background(), base, path, clientKey, body)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+				t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+			}
+		})
+	}
+}
+
+// The upstream's usage object, which Responses, Messages and Gemini aggregators keep with fields
+// they have no place for, counts toward core's 64 MiB limit on a non-streamed reply.
+func TestNonStreamingReplyCountsUsage(t *testing.T) {
+	for _, c := range []struct{ path, body string }{
+		{"/v1/responses", `{"model":"gpt-test","input":"hi"}`},
+		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1beta/models/gpt-test:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
+	} {
+		path, body := c.path, c.body
+		t.Run(path, func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				content := strings.Repeat("x", 64<<10)
+				for sent := 0; sent < 60<<20; sent += len(content) {
+					if _, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", head, content); err != nil {
+						return
+					}
+				}
+				fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", head)
+				fmt.Fprintf(w, "data: {%s,\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2,\"extra\":%q}}\n\ndata: [DONE]\n\n", head, strings.Repeat("u", 8<<20))
+			}
+			base := startCore(t, u)
+			resp := postPath(t, context.Background(), base, path, clientKey, body)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+				t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+			}
+		})
 	}
 }
 

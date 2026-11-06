@@ -112,14 +112,21 @@ type builder struct {
 	id, model string
 	upFormat  string
 	losses    []llm.Loss
+	lost      map[string]bool
+	lossSize  int
 }
 
+// lose records a loss once per path. lossSize counts what the losses hold, which comes from
+// upstream data, so an aggregator can bound it with the reply.
 func (b *builder) lose(path, detail string) {
-	for _, l := range b.losses {
-		if l.Path == path {
-			return
-		}
+	if b.lost[path] {
+		return
 	}
+	if b.lost == nil {
+		b.lost = map[string]bool{}
+	}
+	b.lost[path] = true
+	b.lossSize += len(path) + len(detail)
 	b.losses = append(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
@@ -400,11 +407,13 @@ func (a *Aggregator) Add(ev llm.Event) {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		a.b.id, a.b.model, a.b.upFormat = ev.Response.ID, ev.Response.Model, ev.Response.Format
+		a.size += len(a.b.id) + len(a.b.model)
 	case llm.EventItemStart:
 		a.size += len(ev.Item.CallID) + len(ev.Item.Name) + partOverhead
 		p := &aggPart{kind: ev.Item.Kind}
 		if ev.Item.Kind == llm.ItemToolCall {
 			p.call = a.b.newCall(ev)
+			a.size += len(p.call.signature)
 		}
 		a.parts[ev.Index] = p
 		a.order = append(a.order, ev.Index)
@@ -417,21 +426,31 @@ func (a *Aggregator) Add(ev llm.Event) {
 			p.call.args.WriteString(ev.Delta)
 		}
 	case llm.EventItemEnd:
-		if p := a.parts[ev.Index]; p != nil {
+		if p := a.parts[ev.Index]; p != nil && p.call != nil {
+			// A late signature replaces the call's first one.
+			a.size -= len(p.call.signature)
 			a.b.signature(p.call, ev)
+			a.size += len(p.call.signature)
 		}
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
+		if ev.Finish != nil {
+			a.size += len(ev.Finish.RawReason)
+		}
+		if ev.Usage != nil {
+			a.size += len(ev.Usage.Raw)
+		}
 	}
 }
 
 // partOverhead is about the JSON a part adds around a call's ID, name and arguments or a text.
 const partOverhead = len(`{"functionCall":{"id":"","name":"","args":{}}},`)
 
-// Size is about how many bytes of content the response holds so far: text, thoughts, function
-// calls and the upstream chunks it keeps, before JSON escaping. Callers use it to bound what
-// they collect.
-func (a *Aggregator) Size() int { return a.size }
+// Size is about how many bytes of content the response holds so far: its id and model, text,
+// thoughts, function calls with their thought signatures, the upstream chunks it keeps, its
+// finish reason and usage as the upstream sent them, and what it reports as lost, before JSON
+// escaping. Callers use it to bound what they collect.
+func (a *Aggregator) Size() int { return a.size + a.b.lossSize }
 
 // Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {

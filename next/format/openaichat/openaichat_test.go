@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -254,6 +255,49 @@ func TestStreamDecoderEndsEarly(t *testing.T) {
 	}
 }
 
+// A reply with several choices is finished only when every choice it returned carried a finish
+// reason: an unfinished choice after the first may have been cut short as much as the first.
+func TestStreamDecoderWaitsForEveryChoice(t *testing.T) {
+	const (
+		both      = `{"id":"x","model":"m","choices":[{"index":0,"delta":{"content":"A"}},{"index":1,"delta":{"content":"B"}}]}`
+		firstDone = `{"id":"x","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
+		otherDone = `{"id":"x","model":"m","choices":[{"index":1,"delta":{},"finish_reason":"stop"}]}`
+	)
+	for _, c := range []struct {
+		name   string
+		chunks []string
+		end    string // "[DONE]", or "" for the stream closing without it
+		ok     bool
+	}{
+		{"choice 1 unfinished at [DONE]", []string{both, firstDone}, "[DONE]", false},
+		{"choice 1 unfinished at EOF", []string{both, firstDone}, "", false},
+		{"choice 0 unfinished at [DONE]", []string{both, otherDone}, "[DONE]", false},
+		{"both finished", []string{both, firstDone, otherDone}, "[DONE]", true},
+		{"both finished, other first", []string{both, otherDone, firstDone}, "", true},
+	} {
+		d := NewStreamDecoder()
+		for _, ch := range c.chunks {
+			if _, err := d.Decode([]byte(ch)); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+		}
+		var evs []llm.Event
+		var err error
+		if c.end == "[DONE]" {
+			evs, err = d.Decode([]byte(c.end))
+		} else {
+			evs, err = d.Close()
+		}
+		var le *llm.Error
+		switch {
+		case c.ok && (err != nil || len(evs) == 0 || evs[len(evs)-1].Type != llm.EventFinish):
+			t.Errorf("%s: events %+v, err %v; want a finish", c.name, evs, err)
+		case !c.ok && (!errors.As(err, &le) || le.Code != llm.CodeUpstream):
+			t.Errorf("%s: events %+v, err %v; want an upstream error", c.name, evs, err)
+		}
+	}
+}
+
 // Upstream bytes that are not JSON become an upstream error that can still be sent to core: the
 // error event must encode, with the bytes kept in raw.
 func TestMalformedUpstreamGivesError(t *testing.T) {
@@ -409,5 +453,52 @@ func TestStreamWriter(t *testing.T) {
 		"data: [DONE]\n\n"
 	if b.String() != want {
 		t.Errorf("stream:\n%s\nwant:\n%s", b.String(), want)
+	}
+}
+
+// Putting streamed extra choices together takes work in proportion to the fragments: the
+// reviewer's case, one fragment with 4,000 tool calls, took about 16 million allocations because
+// every call searched the calls before it. Doubling the calls must not much more than double the
+// allocations, whether they come in one fragment or one per fragment.
+func TestAggregatorMergesExtraChoicesInLinearWork(t *testing.T) {
+	call := func(i int) string {
+		return fmt.Sprintf(`{"index":%d,"id":"call_%d","type":"function","function":{"name":"f","arguments":"{}"}}`, i, i)
+	}
+	native := func(calls ...string) llm.Event {
+		return llm.Event{Type: llm.EventNative, Raw: json.RawMessage(`{"choices":[{"index":1,"delta":{"tool_calls":[` + strings.Join(calls, ",") + `]}}]}`)}
+	}
+	shapes := map[string]func(n int) []llm.Event{
+		"one fragment": func(n int) []llm.Event {
+			calls := make([]string, n)
+			for i := range calls {
+				calls[i] = call(i)
+			}
+			return []llm.Event{native(calls...)}
+		},
+		"one call per fragment": func(n int) []llm.Event {
+			evs := make([]llm.Event, n)
+			for i := range evs {
+				evs[i] = native(call(i))
+			}
+			return evs
+		},
+	}
+	for name, events := range shapes {
+		t.Run(name, func(t *testing.T) {
+			allocs := func(n int) float64 {
+				evs := events(n)
+				return testing.AllocsPerRun(1, func() {
+					a := NewAggregator()
+					a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "m", Format: llm.FormatOpenAIChat}})
+					for _, ev := range evs {
+						a.Add(ev)
+					}
+				})
+			}
+			small, large := allocs(2000), allocs(4000)
+			if large > 3*small {
+				t.Errorf("%.0f allocations for 2,000 calls, %.0f for 4,000: the work grows faster than the calls", small, large)
+			}
+		})
 	}
 }

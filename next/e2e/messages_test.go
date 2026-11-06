@@ -67,7 +67,7 @@ func TestMessagesUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		key := r.Header.Get("X-Api-Key")
+		key := keyForms(r.Header.Get("X-Api-Key"))
 		if strings.Contains(string(body), `"model":"error-event"`) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"m\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n")
@@ -95,11 +95,11 @@ func TestMessagesUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 			if !strings.Contains(string(raw), "Rejected") {
 				t.Errorf("the upstream's message did not reach the client (status %d): %s", resp.StatusCode, raw)
 			}
-			if strings.Contains(string(raw), upstreamKey) {
+			if holdsKey(string(raw)) {
 				t.Errorf("client reply holds the account's key: %s", raw)
 			}
 			all := logs.waitFor(t, "in "+c.model)
-			if strings.Contains(all, upstreamKey) {
+			if holdsKey(all) {
 				t.Errorf("core's log holds the account's key:\n%s", all)
 			}
 		})

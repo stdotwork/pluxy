@@ -1,6 +1,7 @@
 package openaichat
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -274,7 +275,8 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 type Aggregator struct {
 	head      outCompletion
 	up        upstream
-	others    []json.RawMessage // choices after the first, as the upstream sent them
+	others    []*otherChoice          // choices after the first, in the order they came
+	streamed  map[string]*otherChoice // the ones put together from stream fragments, by index
 	text      strings.Builder
 	reasoning strings.Builder
 	tools     []outToolCall
@@ -286,7 +288,7 @@ type Aggregator struct {
 
 // NewAggregator returns an empty aggregator.
 func NewAggregator() *Aggregator {
-	return &Aggregator{head: outCompletion{Object: "chat.completion"}, toolIdx: map[int]int{}}
+	return &Aggregator{head: outCompletion{Object: "chat.completion"}, toolIdx: map[int]int{}, streamed: map[string]*otherChoice{}}
 }
 
 // Add records one event.
@@ -296,10 +298,11 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventResponseStart:
 		a.head.ID, a.head.Model, a.head.Created = ev.Response.ID, ev.Response.Model, created(ev.Response)
 		a.up = newUpstream(ev.Response)
+		a.size += len(a.head.ID) + len(a.head.Model) + len(a.up.fields)
 	case llm.EventNative:
 		for _, c := range a.up.choices(ev) {
 			a.size += len(c)
-			a.others = append(a.others, c)
+			a.addOther(c)
 		}
 	case llm.EventItemStart:
 		if ev.Item.Kind == llm.ItemToolCall {
@@ -317,14 +320,206 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.tools[a.toolIdx[ev.Index]].Function.Arguments += ev.Delta
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
+		if ev.Finish != nil {
+			a.size += len(ev.Finish.RawReason)
+		}
+		if ev.Usage != nil {
+			a.size += len(ev.Usage.Raw)
+		}
 	}
+}
+
+// otherChoice is a choice after the first: whole as a non-streamed upstream sent it (raw), or
+// put together from the fragments a streaming upstream sent (snap).
+type otherChoice struct {
+	raw  json.RawMessage
+	snap map[string]any
+}
+
+// addOther records a choice after the first. A stream fragment (a choice with a delta, or without
+// a message once its index has streamed) is merged into the choice with its index the way
+// OpenAI's Python SDK puts a streamed completion together: the delta into the message, logprobs
+// lists appended, other choice fields replaced.
+func (a *Aggregator) addOther(c json.RawMessage) {
+	var ch map[string]any
+	d := json.NewDecoder(bytes.NewReader(c))
+	d.UseNumber()
+	err := d.Decode(&ch)
+	idx := fmt.Sprint(ch["index"])
+	o := a.streamed[idx]
+	// A fragment may come without a delta, such as one that only finishes its choice.
+	_, frag := ch["delta"]
+	if err != nil || ch["message"] != nil || !frag && o == nil {
+		a.others = append(a.others, &otherChoice{raw: c})
+		return
+	}
+	if o == nil {
+		o = &otherChoice{snap: map[string]any{"message": map[string]any{}, "finish_reason": nil}}
+		a.streamed[idx] = o
+		a.others = append(a.others, o)
+	}
+	for k, v := range ch {
+		switch {
+		case v == nil:
+		case k == "delta":
+			if delta, ok := v.(map[string]any); ok {
+				mergeDelta(o.snap["message"].(map[string]any), delta)
+			}
+		case k == "logprobs":
+			if m, ok := v.(map[string]any); ok {
+				prev, _ := o.snap[k].(map[string]any)
+				if prev == nil {
+					prev = map[string]any{}
+				}
+				o.snap[k] = mergeDelta(prev, m)
+			}
+		default:
+			o.snap[k] = v
+		}
+	}
+}
+
+// value returns the choice as the response holds it. A message put together from fragments
+// gets the role and content a whole message has, and its tool calls lose their stream index.
+func (o *otherChoice) value() any {
+	if o.snap == nil {
+		return o.raw
+	}
+	plain(o.snap)
+	msg := o.snap["message"].(map[string]any)
+	if msg["role"] == nil {
+		msg["role"] = llm.RoleAssistant
+	}
+	calls, _ := msg["tool_calls"].([]any)
+	for _, c := range calls {
+		if m, ok := c.(map[string]any); ok {
+			delete(m, "index")
+		}
+	}
+	if msg["content"] == nil && len(calls) == 0 {
+		msg["content"] = ""
+	}
+	return o.snap
+}
+
+// keepFirst are delta fields that name something rather than stream it: an upstream that repeats
+// them in later fragments repeats the same value. extra_content (a Gemini thought signature) is
+// replaced whole by a later one, as on the first choice.
+var (
+	keepFirst = map[string]bool{"index": true, "type": true, "id": true, "role": true, "name": true}
+	replaced  = map[string]bool{"extra_content": true}
+)
+
+// mergeDelta merges a stream delta into acc and returns acc: strings are joined, objects merged,
+// list entries with an index merged into the entry with the same index, other list entries
+// appended, and any other value replaced. Unlike the SDK, numbers are replaced rather than
+// added, and the keepFirst fields are not joined.
+func mergeDelta(acc, delta map[string]any) map[string]any {
+	for k, dv := range delta {
+		av := acc[k]
+		switch {
+		case dv == nil:
+		case av == nil || replaced[k]:
+			if l, ok := dv.([]any); ok {
+				dv = new(list).merge(l)
+			}
+			acc[k] = dv
+		case keepFirst[k]:
+			if av == "" {
+				acc[k] = dv
+			}
+		default:
+			switch a := av.(type) {
+			case string:
+				if d, ok := dv.(string); ok {
+					acc[k] = a + d
+				}
+			case map[string]any:
+				if d, ok := dv.(map[string]any); ok {
+					acc[k] = mergeDelta(a, d)
+				}
+			case []any:
+				if d, ok := dv.([]any); ok {
+					acc[k] = new(list).merge(a).merge(d)
+				}
+			case *list:
+				if d, ok := dv.([]any); ok {
+					a.merge(d)
+				}
+			default:
+				acc[k] = dv
+			}
+		}
+	}
+	return acc
+}
+
+// list is a list being put together from stream fragments. It finds its entries with an index
+// by that index, so merging takes work in proportion to the fragments.
+type list struct {
+	entries []any
+	byIndex map[string]map[string]any
+}
+
+// merge merges delta's entries into l and returns l: an entry with an index into the entry with
+// the same index, any other entry appended.
+func (l *list) merge(delta []any) *list {
+	for _, e := range delta {
+		m, ok := e.(map[string]any)
+		if ok && m["index"] != nil {
+			k := indexKey(m["index"])
+			if prev := l.byIndex[k]; prev != nil {
+				mergeDelta(prev, m)
+				continue
+			}
+			if l.byIndex == nil {
+				l.byIndex = map[string]map[string]any{}
+			}
+			l.byIndex[k] = m
+		}
+		l.entries = append(l.entries, e)
+	}
+	return l
+}
+
+// indexKey is an index as text, so the number 1 and the string "1" name the same entry.
+func indexKey(idx any) string {
+	switch v := idx.(type) {
+	case json.Number:
+		return string(v)
+	case string:
+		return v
+	}
+	return fmt.Sprint(idx)
+}
+
+// plain turns the lists in v, a value put together from fragments, back into JSON arrays, in
+// place, and returns v.
+func plain(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			x[k] = plain(e)
+		}
+	case *list:
+		for i, e := range x.entries {
+			x.entries[i] = plain(e)
+		}
+		return x.entries
+	case []any:
+		for i, e := range x {
+			x[i] = plain(e)
+		}
+	}
+	return v
 }
 
 // toolCallOverhead is the JSON a tool call adds around its ID, name and arguments.
 const toolCallOverhead = len(`{"id":"","type":"function","function":{"name":"","arguments":""}},`)
 
 // Size is about how many bytes of content the response holds so far: text, reasoning, tool
-// calls and extra choices, before JSON escaping. Callers use it to bound what they collect.
+// calls, extra choices and what it keeps of the upstream's reply (id, model, reply-level fields,
+// finish reason and usage), before JSON escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size }
 
 // Response returns the response body.
@@ -342,7 +537,7 @@ func (a *Aggregator) Response() ([]byte, error) {
 	c := a.head
 	choices := []any{outChoice{Message: msg, FinishReason: &reason}}
 	for _, o := range a.others {
-		choices = append(choices, o)
+		choices = append(choices, o.value())
 	}
 	c.Choices = choices
 	c.Usage = a.up.usage(a.usage)
