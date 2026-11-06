@@ -1,10 +1,13 @@
-# pluxy extension protocol, version 0
+# pluxy extension protocol, version 0.1
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
 model service, and streams the reply back; a provider may also sign in to accounts and renew their
-credentials (see [Login and refresh](#login-and-refresh)). It is deliberately small; later
-versions add capabilities and more operations without changing what is described here.
+credentials (see [Login and refresh](#login-and-refresh)). Version 0.1 adds
+[sessions](#sessions): a run of requests on one account whose upstream keeps state between them,
+such as a Responses WebSocket. It is deliberately small; later versions add capabilities and more
+operations without changing what is described here. An extension written for version 0 works
+unchanged with a core that speaks 0.1 (see [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -25,6 +28,8 @@ client ──HTTP──▶ core ──one local socket connection per call──
 - Closing the connection is how core cancels a call.
 - A call has exactly one terminal outcome: a `finish` event or an `error` event. A connection
   that ends without one is an error, never a success.
+- A [session](#sessions) (0.1) is the one call that carries more than one request: its connection
+  stays open while core sends one turn after another, each answered like a `generate` call.
 
 ## Package manifest
 
@@ -190,10 +195,11 @@ Core opens a connection and writes one call frame:
 | Field | Meaning |
 | --- | --- |
 | `id` | Call ID for logs and traces. Unique per core process. |
-| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`. |
-| `account` | For `generate` and `refresh`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
+| `op` | The operation. Version 0 has `describe`, `generate`, `login` and `refresh`; version 0.1 adds `session`. |
+| `account` | For `generate`, `refresh` and `session`: the account to use (below). For `login`: the account being signed in to, with its `id` and `settings` but no `credential`. |
 | `request` | For `generate`: the model request (below). |
 | `login` | For `login`: what to sign in with (see [Login and refresh](#login-and-refresh)). |
+| `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -203,12 +209,14 @@ An extension that gets an `op` it does not know replies with an `error` event wh
 The reply is one frame, then the extension closes the connection:
 
 ```json
-{"type": "describe.result", "info": {"id": "pluxy/openai-compatible", "version": "0.1.0", "protocol": 0, "operations": ["generate"]}}
+{"type": "describe.result", "info": {"id": "pluxy/openai-compatible", "version": "0.1.0", "protocol": 0, "protocol_minor": 1, "operations": ["generate"]}}
 ```
 
-`operations` lists the operations the extension serves: always `generate`, plus `login` and
-`refresh` when it signs in to accounts. An extension that lists `login` also lists its
-`login_methods` (see [Login and refresh](#login-and-refresh)).
+`protocol` is the version from the handshake; `protocol_minor` is the revision of that version
+the extension implements (absent means 0; see [Versioning](#versioning)). `operations` lists the
+operations the extension serves: always `generate`, plus `login` and `refresh` when it signs in to
+accounts, and `session` when it holds [sessions](#sessions). An extension that lists `login` also
+lists its `login_methods` (see [Login and refresh](#login-and-refresh)).
 
 ### `generate`
 
@@ -558,14 +566,136 @@ at its `refresh_at` (on the first request after it), and when the upstream refus
 minutes (or the `retry_after_ms` given) before renewing automatically again; after one that gave a
 credential already due for renewal, 30 seconds. An extension never refreshes on its own.
 
+## Sessions
+
+Version 0.1. Some upstreams keep state between requests on one connection. A Responses WebSocket
+keeps the previous response in memory for that socket only (with `store: false`, nothing else
+holds it), so the next request names it with `previous_response_id` and sends only the new input.
+A run of such requests needs the same upstream connection, on the same account, for its whole
+life. A **session** is how core hands that run to an extension: one local connection, one
+account, one request (a **turn**) at a time.
+
+Core opens sessions only with an extension whose describe lists `session` in `operations` and
+reports `protocol_minor` 1 or more.
+
+### Opening a session
+
+```json
+{"type": "call", "id": "c-21", "op": "session", "account": {...}, "session": {"format": "openai.responses"}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `session.format` | The kind of session: the request format of its turns, whose upstream state the session holds. Version 0.1 has `openai.responses` ([below](#openairesponses-sessions)). |
+
+The extension answers with one frame:
+
+- `{"type": "session.ready"}`: the session is open. The extension may connect to its upstream now
+  or at the first turn.
+- An `error` event, after which it closes the connection: it will not hold this session. Code
+  `unsupported` with scope `credential` means this account does not take sessions (for example,
+  its settings leave the upstream WebSocket off); core then sends the same requests to that account
+  as separate `generate` calls and keeps the conversation itself. Any other error fails the
+  request that needed the session.
+
+### Turns
+
+```json
+{"type": "session.turn", "account": {...}, "request": {...}}
+```
+
+Core sends a turn and reads its reply as for a `generate` call: events under the same ordering
+rules, ending in one `finish` or `error`. Core sends the next turn only after the last one's
+terminal event. A turn's `error` ends that turn, not the session.
+
+| Field | Meaning |
+| --- | --- |
+| `account` | Always the account the session opened with (the same `id`). Its `credential` is the newest one core holds, which may have been renewed since the session opened: use it for any new upstream connection. A connection already open stays as it is. |
+| `request` | A model request, as for `generate`. A turn may continue the session's previous response; for `openai.responses`, `native.body.previous_response_id` names it and `items` hold only the new input. A turn that continues nothing carries the whole conversation. |
+
+Core removes every credential the session has carried, in all the forms listed under
+[Errors](#errors), from every event of every turn.
+
+### Interrupts
+
+```json
+{"type": "session.interrupt", "raw": {"type": "response.interrupt", "response_id": "resp_1", "mode": "discard_partial_items"}}
+```
+
+While a turn runs, core may send `session.interrupt` with the client's own control message in
+`raw`, in the session's format. Core sends it only when it targets the running turn's response
+(the `id` in the turn's `response.start`). The extension passes it to the upstream and carries on
+with the turn: whatever the upstream sends back (an acknowledgement, a `response.incomplete`)
+arrives as the turn's events. Nothing answers the frame itself. An extension whose upstream cannot
+be interrupted ignores it.
+
+### Ending a session
+
+- Core ends a session by closing the connection: when the client disconnects, when the extension
+  generation is replaced (an idle session at once, one with a running turn after that turn), and
+  at shutdown. A running turn is cancelled, as when core closes a `generate` call; the extension
+  then closes its upstream connection.
+- The extension may end a session by closing the connection between turns. Core then treats the
+  session as gone: a later turn that continues it fails without reaching the extension, and one
+  that continues nothing opens a new session.
+- When the upstream connection is lost, the extension keeps the session. A turn running at the
+  time ends with an error; a later turn that continues a response held on the lost connection
+  fails before any other event (for `openai.responses`, as described below); a turn that
+  continues nothing connects to the upstream again, on the same account.
+
+A session holds its extension generation like a running request, so core never moves it to
+another account, another extension or a newer generation: no credential changes account halfway
+through a conversation whose state lives upstream. A crash or stop of the program ends the session.
+
+Liveness: the extension checks its upstream connection itself (for example, a read deadline
+between upstream messages); that check is one of the named liveness checks the rule against
+network timeouts allows. The local session connection needs none: either end sees the other go
+when the connection closes.
+
+### `openai.responses` sessions
+
+The upstream is a Responses WebSocket (`/v1/responses`, as in
+[OpenAI's WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)). Each turn
+is a Responses request: `native.format` is `openai.responses` and `native.body` is the client's
+`response.create` message. The extension sends it upstream as one `response.create` text message.
+
+- `previous_response_id` and `generate` pass through as the client sent them. A warmup
+  (`generate: false`) is answered like any turn.
+- Every upstream message the turn receives is one event with the message in `raw`, as for a
+  streamed Responses reply ([Events](#events)); messages the model has no event for travel as
+  `native` events.
+- An upstream `error` message or `response.failed` ends the turn with an `error` event carrying
+  the message in `error.raw`; codes and scopes are chosen as for the same failure over HTTP.
+- A connection lost during a turn ends it with an `error`: code `unavailable`, status 502,
+  `provider_code` `upstream_websocket_lost`, not retryable (the upstream may have run the turn).
+- A turn that continues a response the session no longer holds (its connection was lost) fails
+  before any other event with an `error`: code `invalid_request`, status 409, scope `request`,
+  `provider_code` `previous_response_not_found`. The client must send the whole conversation again,
+  without `previous_response_id`.
+
+Core serves the client side, `GET /v1/responses` upgraded to a WebSocket, and pins one client
+socket to one session. Turns on an account that takes no sessions go out as separate `generate`
+calls, each carrying the whole conversation so far: core keeps the earlier input and output and
+removes `previous_response_id`.
+
 ## Versioning
 
-The version in the handshake covers everything in this document. Additive changes (new optional
-fields, new event types that core only sends when the extension says it supports them) keep the
-version; anything else needs a new version, and core keeps speaking old versions for a while.
+The version in the handshake (`0`) is the major version: core and the extension must share it.
+Changes that keep every extension working (new optional fields; new operations, frames and event
+types that core uses only with an extension that says it supports them) keep the major version and
+raise the minor version: this document is version 0.1. An extension reports the minor version it
+implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
+extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
+a new major version, and core keeps speaking old versions for a while.
 
-## What version 0 leaves out
+| Version | Adds |
+| --- | --- |
+| 0 (0.0) | `describe`, `generate`, `login`, `refresh`. |
+| 0.1 | [Sessions](#sessions): the `session` operation and its frames; `protocol_minor` in describe. |
+
+## What version 0.1 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
-capabilities in `describe`; operations beyond `generate` (token counting, model listing); session
-ownership and WebSocket sessions; a private data folder per extension.
+capabilities in `describe`; operations beyond `generate` and sessions (token counting, model
+listing); several turns at once in one session (OpenAI's `stream_id` lanes); realtime sessions
+(audio, WebRTC); a private data folder per extension.

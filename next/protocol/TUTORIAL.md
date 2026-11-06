@@ -190,3 +190,30 @@ not retryable; anything that may pass as retryable. [`examples/oauth`](../exampl
 complete example with all three login kinds, and its `oauthtest` package is a fake OAuth provider
 for tests. Give the conformance kit a `PrepareLogin` fixture and it checks each login method and
 refresh outcome too. The rules are in [Login and refresh](README.md#login-and-refresh).
+
+## 7. Hold sessions (optional, protocol 0.1)
+
+An upstream that keeps state on one connection between requests, such as a Responses WebSocket,
+is served through a session: core opens one per client conversation and sends its turns one at a
+time on the same local connection. Add a session handler; it returns a value that answers turns:
+
+```go
+sdk.Serve(sdk.Extension{
+	ID: "example/ws", Version: "0.1.0", Generate: generate,
+	Session: func(ctx context.Context, call sdk.SessionCall) (sdk.Session, error) {
+		if !wantsSessions(call.Account) {
+			// Core then sends this account's turns as separate generate calls.
+			return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Message: "sessions are off for this account"}
+		}
+		return &wsSession{account: call.Account}, nil // connect upstream now or at the first turn
+	},
+})
+```
+
+`sdk.Session` has three methods. `Turn(ctx, call, out)` answers one turn exactly as a generate
+handler answers a call, on the session's upstream connection; `ctx` ends if core cancels the turn.
+`Interrupt(raw)` is called from another goroutine while a turn runs, with the client's control
+message to pass upstream. `Close()` is called once when the session ends: close the upstream
+connection there. The SDK lists `session` in describe and reports `protocol_minor` 1 when
+`Session` is set. The rules, including what to send when the upstream connection is lost, are in
+[Sessions](README.md#sessions); the Codex extension (`extensions/codex`) is a complete example.
