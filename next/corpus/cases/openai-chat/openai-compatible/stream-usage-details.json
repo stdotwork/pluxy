@@ -21,13 +21,6 @@
       ]
     }
   ],
-  "exceptions": [
-    {
-      "path": "client.events[4].data.usage.cost",
-      "kind": "gap",
-      "reason": "The new core re-renders usage from its internal model and drops usage fields it does not model (here a vendor cost field); the old core passes the chunk through."
-    }
-  ],
   "recorded_old_core": {
     "client": {
       "events": [

@@ -9,7 +9,7 @@
     {
       "path": "client",
       "kind": "gap",
-      "reason": "The old core passes a non-JSON 200 body to the client unchanged with status 200; the new core fails the request, but through the same extension_crashed path as stream-malformed-chunk (non-JSON llm.Error.Raw), giving 502."
+      "reason": "The old core passes a non-JSON 200 body to the client unchanged with status 200; the new core fails the request with 502 and an upstream error saying the response is malformed. Whether to pass such bodies through is not decided."
     }
   ],
   "recorded_old_core": {

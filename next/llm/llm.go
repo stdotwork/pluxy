@@ -107,6 +107,7 @@ const (
 	EventReasoningDelta = "reasoning.delta"
 	EventToolInputDelta = "tool_input.delta"
 	EventItemEnd        = "item.end"
+	EventNative         = "native"
 	EventFinish         = "finish"
 	EventError          = "error"
 )
@@ -126,7 +127,10 @@ type Event struct {
 	Usage    *Usage        `json:"usage,omitempty"`    // finish
 	Error    *Error        `json:"error,omitempty"`    // error
 
-	// Raw is the upstream data the event came from, for diagnostics.
+	// Raw is the upstream data the event came from, for diagnostics. In a native event it is the
+	// event's content: upstream data the model has no place for, such as OpenAI choices after
+	// the first, in the reply's format (ResponseInfo.Format). A client format that matches writes
+	// it back; others leave it out.
 	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
@@ -139,6 +143,12 @@ type ResponseInfo struct {
 	// Model is the model that actually served the request.
 	Model   string `json:"model"`
 	Created int64  `json:"created,omitempty"`
+	// Format is the upstream format the reply came from. The upstream data kept in the reply
+	// (Raw fields, native events, usage raw) is in this format.
+	Format string `json:"format,omitempty"`
+	// Raw holds the upstream's reply-level fields that have no place in the model, as one JSON
+	// object; for OpenAI Chat Completions, fields such as system_fingerprint.
+	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
 // Output item kinds.
@@ -218,6 +228,16 @@ type Error struct {
 	Scope        string          `json:"scope,omitempty"`
 	RetryAfterMS int64           `json:"retry_after_ms,omitempty"`
 	Raw          json.RawMessage `json:"raw,omitempty"`
+}
+
+// RawJSON returns upstream bytes for a Raw field, which must hold valid JSON: b itself when it is
+// valid JSON, otherwise b as a JSON string. An event carrying it can then always be encoded.
+func RawJSON(b []byte) json.RawMessage {
+	if json.Valid(b) {
+		return append(json.RawMessage(nil), b...)
+	}
+	s, _ := json.Marshal(string(b))
+	return s
 }
 
 func (e *Error) Error() string {

@@ -17,14 +17,9 @@
   ],
   "exceptions": [
     {
-      "path": "client.events[3]",
+      "path": "client.events[3].data.error",
       "kind": "gap",
-      "reason": "The old core reports a stream that never carried a finish_reason as an error even when [DONE] arrives; the new core takes [DONE] as the end, sends finish_reason stop and [DONE], so a truncated reply looks complete."
-    },
-    {
-      "path": "client.events[4]",
-      "kind": "gap",
-      "reason": "Follows from the [DONE] handling above: the new core sends [DONE], the old core does not."
+      "reason": "Both cores end the stream with an error event and no [DONE]; the error's message and code differ."
     }
   ],
   "recorded_old_core": {

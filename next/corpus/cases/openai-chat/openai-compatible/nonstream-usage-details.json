@@ -26,18 +26,6 @@
       }
     }
   ],
-  "exceptions": [
-    {
-      "path": "client.body.usage.cost",
-      "kind": "gap",
-      "reason": "The new core builds the non-streamed reply from its internal model and drops usage fields it does not model; the old core passes the upstream body through."
-    },
-    {
-      "path": "client.body.system_fingerprint",
-      "kind": "gap",
-      "reason": "The new core builds the non-streamed reply from its internal model and drops response fields it does not carry (system_fingerprint); the old core passes the upstream body through."
-    }
-  ],
   "recorded_old_core": {
     "client": {
       "body": {

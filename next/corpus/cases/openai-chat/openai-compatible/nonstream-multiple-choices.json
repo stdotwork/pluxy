@@ -19,13 +19,6 @@
       }
     }
   ],
-  "exceptions": [
-    {
-      "path": "client.body.choices[1]",
-      "kind": "gap",
-      "reason": "The new core reads only the first choice (index 0) from the upstream; the old core passes every choice through."
-    }
-  ],
   "recorded_old_core": {
     "client": {
       "body": {

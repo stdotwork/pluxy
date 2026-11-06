@@ -3,6 +3,8 @@ package openaichat
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -148,6 +150,112 @@ func TestStreamDecoderEndsEarly(t *testing.T) {
 	}
 	if _, err := d.Close(); err == nil {
 		t.Fatal("a stream that ended without a finish reason or [DONE] was accepted")
+	}
+
+	// [DONE] does not finish a reply that never carried a finish reason: the upstream may have
+	// cut it short.
+	d = NewStreamDecoder()
+	if _, err := d.Decode([]byte(`{"id":"x","model":"m","choices":[{"index":0,"delta":{"content":"Hi"}}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := d.Decode([]byte(`[DONE]`))
+	var le *llm.Error
+	if !errors.As(err, &le) || le.Code != llm.CodeUpstream {
+		t.Fatalf("[DONE] without a finish reason gave events %+v, err %v; want an upstream error", evs, err)
+	}
+}
+
+// Upstream bytes that are not JSON become an upstream error that can still be sent to core: the
+// error event must encode, with the bytes kept in raw.
+func TestMalformedUpstreamGivesError(t *testing.T) {
+	const garbage = "{not json"
+	_, respErr := DecodeResponse([]byte(garbage))
+	_, chunkErr := NewStreamDecoder().Decode([]byte(garbage))
+	for name, err := range map[string]error{"response": respErr, "stream chunk": chunkErr} {
+		var le *llm.Error
+		if !errors.As(err, &le) || le.Code != llm.CodeUpstream {
+			t.Errorf("%s: err = %v, want an upstream error", name, err)
+			continue
+		}
+		frame, err := json.Marshal(llm.Event{Type: llm.EventError, Error: le})
+		if err != nil {
+			t.Errorf("%s: error event does not encode: %v", name, err)
+			continue
+		}
+		var back llm.Event
+		var raw string
+		if err := json.Unmarshal(frame, &back); err != nil || json.Unmarshal(back.Error.Raw, &raw) != nil || raw != garbage {
+			t.Errorf("%s: raw = %s, want the upstream bytes as a JSON string", name, back.Error.Raw)
+		}
+	}
+}
+
+// A streamed reply keeps what the internal model has no field for: reply-level fields on every
+// chunk, choices after the first, and usage fields such as a vendor cost.
+func TestStreamKeepsUpstreamFields(t *testing.T) {
+	head := `"id":"x","object":"chat.completion.chunk","created":5,"model":"up","system_fingerprint":"fp_1"`
+	chunks := []string{
+		`{` + head + `,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+		`{` + head + `,"choices":[{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+		`{` + head + `,"choices":[{"index":0,"delta":{"content":"A"},"finish_reason":null}]}`,
+		`{` + head + `,"choices":[{"index":1,"delta":{"content":"B"},"finish_reason":null,"logprobs":null}]}`,
+		`{` + head + `,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`{` + head + `,"choices":[{"index":1,"delta":{},"finish_reason":"length"}]}`,
+		`{` + head + `,"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"cost":0.5}}`,
+		`[DONE]`,
+	}
+	var b bytes.Buffer
+	w := NewStreamWriter(&b, true)
+	d := NewStreamDecoder()
+	var seq llm.Sequence
+	for _, c := range chunks {
+		evs, err := d.Decode([]byte(c))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			if err := seq.Check(ev); err != nil {
+				t.Fatalf("decoder broke the event rules: %v", err)
+			}
+			if err := w.Write(ev); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// The first choice's finish chunk comes at the end, with the finish event; the other
+	// choices' chunks are passed on as they arrive.
+	want := []string{
+		`{` + head + `,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+		`{` + head + `,"choices":[{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+		`{` + head + `,"choices":[{"index":0,"delta":{"content":"A"},"finish_reason":null}]}`,
+		`{` + head + `,"choices":[{"index":1,"delta":{"content":"B"},"finish_reason":null,"logprobs":null}]}`,
+		`{` + head + `,"choices":[{"index":1,"delta":{},"finish_reason":"length"}]}`,
+		`{` + head + `,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`{` + head + `,"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5,"cost":0.5}}`,
+		`[DONE]`,
+	}
+	var got []string
+	for _, ev := range strings.Split(strings.TrimSuffix(b.String(), "\n\n"), "\n\n") {
+		got = append(got, strings.TrimPrefix(ev, "data: "))
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d chunks, want %d:\n%s", len(got), len(want), b.String())
+	}
+	for i := range want {
+		if want[i] == "[DONE]" {
+			if got[i] != want[i] {
+				t.Errorf("chunk %d = %s, want [DONE]", i, got[i])
+			}
+			continue
+		}
+		var g, w any
+		if err := json.Unmarshal([]byte(got[i]), &g); err != nil {
+			t.Fatalf("chunk %d is not JSON: %s", i, got[i])
+		}
+		_ = json.Unmarshal([]byte(want[i]), &w)
+		if !reflect.DeepEqual(g, w) {
+			t.Errorf("chunk %d:\n got %s\nwant %s", i, got[i], want[i])
+		}
 	}
 }
 

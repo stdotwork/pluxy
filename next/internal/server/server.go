@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/openaichat"
@@ -59,6 +60,11 @@ func authorized(cfg *Config, r *http.Request) bool {
 func writeError(w http.ResponseWriter, e *llm.Error) {
 	status, body := openaichat.ErrorResponse(e)
 	w.Header().Set("Content-Type", "application/json")
+	// Tell a rate-limited client when to try again, in whole seconds rounded up (RFC 9110
+	// section 10.2.3, RFC 6585 section 4).
+	if status == http.StatusTooManyRequests && e.RetryAfterMS > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt((e.RetryAfterMS+999)/1000, 10))
+	}
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }

@@ -34,6 +34,8 @@ func TestSequence(t *testing.T) {
 		{"event after finish", []Event{start, finish, msg(0)}, "after the terminal"},
 		{"tool call without id", []Event{start, {Type: EventItemStart, Item: &ItemStart{Kind: ItemToolCall, Name: "f"}}}, "without call_id"},
 		{"error without code", []Event{{Type: EventError, Error: &Error{}}}, "without an error code"},
+		{"native between items", []Event{start, msg(0), {Type: EventNative, Raw: []byte(`{}`)}, end(0), finish}, ""},
+		{"native without raw", []Event{start, {Type: EventNative}}, "without raw"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

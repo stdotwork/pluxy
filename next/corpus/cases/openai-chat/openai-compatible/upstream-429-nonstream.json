@@ -27,11 +27,6 @@
         "message": "Rate limit reached for requests",
         "type": "rate_limit_error"
       }
-    },
-    {
-      "path": "client.headers.Retry-After",
-      "kind": "gap",
-      "reason": "The old core turns the upstream's Retry-After on a 429 into a Retry-After header for the client; the new core keeps the delay in its error but does not send the header."
     }
   ],
   "recorded_old_core": {
