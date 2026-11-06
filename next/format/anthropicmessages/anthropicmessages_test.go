@@ -631,3 +631,96 @@ func TestAggregatorReportsReplyLosses(t *testing.T) {
 		t.Errorf("losses %q, want %q", got, want)
 	}
 }
+
+// Assistant text on both sides of a tool call stays in the one Chat message holding the call.
+func TestChatKeepsTextAroundToolCall(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","messages":[
+	 {"role":"user","content":"Weather?"},
+	 {"role":"assistant","content":[{"type":"text","text":"Before"},{"type":"tool_use","id":"toolu_A","name":"f","input":{}},{"type":"text","text":"After"}]},
+	 {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"21C"}],"vendor":1}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := openaichat.EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "body", body, `{"model":"m","stream":false,"messages":[
+	 {"role":"user","content":"Weather?"},
+	 {"role":"assistant","content":[{"type":"text","text":"Before"},{"type":"text","text":"After"}],"tool_calls":[{"id":"toolu_A","type":"function","function":{"name":"f","arguments":"{}"}}]},
+	 {"role":"tool","content":"21C","tool_call_id":"toolu_A"}]}`)
+	want := []string{"approximated messages[1]", "dropped messages[2].vendor"}
+	if got := lossList(losses); !reflect.DeepEqual(got, want) {
+		t.Errorf("losses %q, want %q", got, want)
+	}
+}
+
+// Stream events with JSON whitespace before them are put together like any other.
+func TestAggregatorTakesEventsWithLeadingSpace(t *testing.T) {
+	d := NewStreamDecoder()
+	a := NewAggregator()
+	for _, s := range []string{
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],"usage":{"input_tokens":1}}}`,
+		` {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		"\t" + `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		`{"type":"message_stop"}`,
+	} {
+		evs, err := d.Decode([]byte(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			a.Add(ev)
+		}
+	}
+	got, _ := a.Response()
+	if !strings.Contains(string(got), `"text":"hello"`) {
+		t.Errorf("got %s", got)
+	}
+}
+
+// Stop fields of a non-streamed Message come in message_delta when it is written as a stream, as
+// Anthropic's SDKs read them from there.
+func TestNonStreamedStopFieldsInMessageDelta(t *testing.T) {
+	events, err := DecodeResponse([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],
+	 "stop_reason":"refusal","stop_sequence":null,"stop_details":{"type":"refusal","category":"cyber"},"usage":{"input_tokens":1,"output_tokens":0}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := writeAll(t, events)
+	var start, delta string
+	for _, l := range lines {
+		typ, data, _ := strings.Cut(l, " ")
+		switch typ {
+		case "message_start":
+			start = data
+		case "message_delta":
+			delta = data
+		}
+	}
+	if !strings.Contains(start, `"stop_details":null`) || !strings.Contains(delta, `"stop_details":{"type":"refusal","category":"cyber"}`) {
+		t.Errorf("message_start %s\nmessage_delta %s", start, delta)
+	}
+}
+
+// A Responses stream that opens with its terminal event still has its encrypted reasoning
+// reported as dropped.
+func TestResponsesTerminalFirstReportsLosses(t *testing.T) {
+	d := openairesponses.NewStreamDecoder()
+	evs, err := d.Decode([]byte(`{"type":"response.completed","response":{"id":"r1","status":"completed","model":"up","output":[
+	 {"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"gAAA"},
+	 {"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi","annotations":[{"type":"url_citation"}]}]}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAggregator()
+	for _, ev := range evs {
+		a.Add(ev)
+	}
+	want := []string{"dropped output[0].encrypted_content", "dropped output[1].content[0].annotations"}
+	if got := lossList(a.Losses()); !reflect.DeepEqual(got, want) {
+		t.Errorf("losses %q, want %q", got, want)
+	}
+}

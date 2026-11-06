@@ -346,7 +346,14 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	for k, v := range top {
 		head[k] = v
 	}
-	head["content"], head["stop_reason"], head["stop_sequence"] = json.RawMessage("[]"), json.RawMessage("null"), json.RawMessage("null")
+	// The stop fields come at the end of a stream, in message_delta.
+	stopFields := []string{"stop_reason", "stop_sequence", "stop_details", "container"}
+	head["content"] = json.RawMessage("[]")
+	for _, k := range stopFields {
+		if _, ok := head[k]; ok || k == "stop_reason" || k == "stop_sequence" {
+			head[k] = json.RawMessage("null")
+		}
+	}
 	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: m.ID, Model: m.Model, Format: format},
 		Raw: eventJSON(map[string]any{"type": "message_start", "message": head})}}
 	next := 0
@@ -405,10 +412,10 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Raw: stop})
 		next++
 	}
-	md := map[string]json.RawMessage{"stop_reason": top["stop_reason"], "stop_sequence": top["stop_sequence"]}
-	for k, v := range md {
-		if v == nil {
-			md[k] = json.RawMessage("null")
+	md := map[string]json.RawMessage{"stop_reason": json.RawMessage("null"), "stop_sequence": json.RawMessage("null")}
+	for _, k := range stopFields {
+		if v, ok := top[k]; ok {
+			md[k] = v
 		}
 	}
 	delta := map[string]any{"type": "message_delta", "delta": md}

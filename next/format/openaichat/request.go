@@ -521,6 +521,12 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			e.kept(it.Origin)
 			reasoning = joinReasoning(reasoning, it.Text)
 		case llm.ItemTypeMessage:
+			if emptyForeign(it, format) {
+				// An empty message from another format only holds its own fields; they are
+				// reported, and nothing is sent for it.
+				e.kept(it.Origin)
+				break
+			}
 			content, sendable, dropped, err := e.content(it, p)
 			if err != nil {
 				return nil, nil, err
@@ -532,8 +538,8 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			// Assistant text after tool calls of the same turn (Anthropic Messages allows it) joins
 			// the message holding the calls: tool results must follow that message directly.
 			if n := len(msgs); it.Role == llm.RoleAssistant && n > 0 && reasoning == "" && len(raw) == 0 && content != nil {
-				if last := msgs[n-1]; last.Role == llm.RoleAssistant && len(last.ToolCalls) > 0 && last.Content == nil && last.ToolCallID == "" {
-					last.Content = content
+				if last := msgs[n-1]; last.Role == llm.RoleAssistant && len(last.ToolCalls) > 0 && last.ToolCallID == "" {
+					last.Content = joinContent(last.Content, content)
 					e.lose(llm.LossApproximated, p, "assistant text after tool calls sent in the message with the calls")
 					break
 				}
@@ -585,6 +591,41 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		return nil, nil, err
 	}
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
+}
+
+// emptyForeign reports whether it is a message from a format other than format that has no
+// content and only holds fields of its own (as an Anthropic message whose blocks all became tool
+// calls or results does).
+func emptyForeign(it llm.Item, format string) bool {
+	return len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0
+}
+
+// joinContent appends the content of one assistant message to another's: as one string when both
+// are strings, otherwise as one list of parts.
+func joinContent(have, next any) any {
+	hs, hok := have.(string)
+	ns, nok := next.(string)
+	switch {
+	case have == nil:
+		return next
+	case hok && nok:
+		return hs + "\n\n" + ns
+	}
+	parts := func(c any) []json.RawMessage {
+		switch v := c.(type) {
+		case string:
+			if v == "" {
+				return nil
+			}
+			text := v
+			b, _ := json.Marshal(outPart{Type: "text", Text: &text})
+			return []json.RawMessage{b}
+		case []json.RawMessage:
+			return v
+		}
+		return nil
+	}
+	return append(parts(have), parts(next)...)
 }
 
 // joinReasoning joins the reasoning of consecutive reasoning items, as today's core does.

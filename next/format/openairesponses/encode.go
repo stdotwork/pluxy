@@ -132,6 +132,12 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		p := pathOf(it.Origin, fmt.Sprintf("items[%d]", i))
 		switch it.Type {
 		case llm.ItemTypeMessage:
+			if len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0 {
+				// An empty message from another format only holds its own fields; they are
+				// reported, and nothing is sent for it.
+				e.kept(it.Origin)
+				break
+			}
 			content, sendable, dropped, err := e.content(it, p)
 			if err != nil {
 				return nil, nil, err

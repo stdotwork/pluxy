@@ -358,8 +358,8 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		}
 	}
 	// A message whose blocks all became other items still keeps its own fields, on an empty
-	// message item: first for an assistant turn, so its tool calls can join it; last for a user
-	// turn, so its tool results stay next to the calls.
+	// message item (encoders for other formats report them and send nothing for it): first for
+	// an assistant turn, last for a user turn, so tool results stay next to their calls.
 	if origin != nil && len(origin.Raw) > 0 {
 		it := llm.Item{Type: llm.ItemTypeMessage, Role: head.Role, Origin: origin}
 		if head.Role == llm.RoleAssistant {

@@ -34,6 +34,7 @@ func writeEvent(w io.Writer, typ string, data []byte) error {
 
 // rawType returns the type field of raw when raw is a JSON object that has one.
 func rawType(raw json.RawMessage) string {
+	raw = bytes.TrimLeft(raw, " \t\r\n")
 	if len(raw) == 0 || raw[0] != '{' {
 		return ""
 	}
@@ -344,6 +345,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		b.start(ev.Response)
+		b.upstreamData(ev) // a stream that opened with its terminal event
 		return s.emit("message_start", obj{"message": obj{"id": b.id, "type": "message", "role": "assistant", "model": b.model,
 			"content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": obj{"input_tokens": 0, "output_tokens": 0}}})
 	case llm.EventItemStart:
@@ -363,6 +365,8 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		blk := s.blocks[ev.Index]
 		if ev.Index != s.active {
+			// shortcut: held deltas are not bounded beyond the reply itself; bound them if
+			// upstreams interleave long parallel blocks.
 			blk.held = append(blk.held, ev.Delta)
 			return nil
 		}
@@ -426,6 +430,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 	a.size += len(ev.Delta)
 	if ev.Type == llm.EventResponseStart {
 		b.start(ev.Response)
+		b.upstreamData(ev) // a stream that opened with its terminal event
 	}
 	if b.upFormat == format {
 		if ev.Type == llm.EventFinish && rawType(ev.Raw) == "message" {
