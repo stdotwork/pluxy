@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
@@ -359,13 +360,41 @@ func isolatedEnv(dir string) []string {
 	}
 }
 
+// Ports for the old core, which takes its port from its config and cannot report one the
+// system chose. They lie below the system's ephemeral range (from 32768 on Linux, from 49152 on
+// macOS and Windows), where every other listener in the run gets its port: the fake upstreams
+// and the new core bind port 0. A port checked free here therefore stays free until the old
+// core binds it. A port from the ephemeral range could be handed to a parallel case's listener
+// in between; the old core then fails to bind but still reports that it started, and the case
+// talks to the other case's server.
+const (
+	oldCorePortMin = 20000
+	oldCorePortMax = 32767
+)
+
+var (
+	portMu    sync.Mutex
+	portsUsed = map[int]bool{} // handed out in this run, never handed out again
+)
+
+// freePort returns a free local port for the old core from below the ephemeral range.
 func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
+	portMu.Lock()
+	defer portMu.Unlock()
+	for range 1000 {
+		port := oldCorePortMin + rand.IntN(oldCorePortMax-oldCorePortMin+1)
+		if portsUsed[port] {
+			continue
+		}
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		l.Close()
+		portsUsed[port] = true
+		return port, nil
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return 0, errors.New("corpus: no free port for the old core")
 }
 
 // startProcess starts cmd and waits until a line of its output matches ready. The first
