@@ -559,6 +559,9 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	}
 	flushReasoning()
 	for _, m := range msgs {
+		if m.Role == llm.RoleAssistant && m.Content == nil && len(m.ToolCalls) == 0 {
+			m.Content = "" // Chat Completions needs content when there are no tool calls
+		}
 		out.Messages = append(out.Messages, marshal(m, m.raw))
 	}
 	b, err := json.Marshal(out)
@@ -609,7 +612,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 	parts := it.Content
 	if len(parts) == 0 {
 		if it.Role == llm.RoleAssistant && !it.TextContent {
-			return nil, false, false, nil // an assistant message that only carries tool calls
+			return nil, false, false, nil // set to "" later unless tool calls are grouped onto it
 		}
 		return "", false, false, nil
 	}

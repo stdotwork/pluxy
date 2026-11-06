@@ -204,7 +204,7 @@ Item types:
 | Type | Fields |
 | --- | --- |
 | `message` | `role` (`system`, `developer`, `user`, `assistant`), `content`: a list of parts; `text_content` is true when the client gave the content as a plain string. |
-| `tool_call` | `call_id`, `name`, `arguments` (the raw argument string, not parsed). |
+| `tool_call` | `call_id`, `name`, `arguments` (the raw argument string, not parsed); `custom` (default false) marks a call to a custom (freeform) tool, whose `arguments` is the tool's raw input rather than JSON. |
 | `tool_result` | `call_id`, `output` (string). |
 | `reasoning` | `text`: reasoning text or summary the client replayed. Opaque reasoning data (such as an encrypted blob) stays in `origin.raw`. |
 | `native` | An item core could not interpret (for example a hosted tool call); `origin.raw` holds it whole. |

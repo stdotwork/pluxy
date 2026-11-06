@@ -264,6 +264,7 @@ type StreamWriter struct {
 	w       io.Writer
 	b       *builder
 	native  bool
+	ended   bool  // an upstream terminal event was passed through
 	seq     int   // last sequence number written
 	pending []int // items whose end waits for the next event, which may say they are incomplete
 }
@@ -310,9 +311,13 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			raw = ev.Error.Raw
 		}
 		if typ := upstreamEvent(raw); typ != "" {
+			switch typ {
+			case "response.completed", "response.incomplete", "response.failed", "error":
+				s.ended = true
+			}
 			return s.passthrough(typ, raw)
 		}
-		if ev.Type == llm.EventError {
+		if ev.Type == llm.EventError && !s.ended {
 			return s.emit("error", errorFields(ev.Error))
 		}
 		return nil
@@ -446,6 +451,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		b.start(ev.Response)
+		if b.upFormat == format {
+			a.final = finalResponse(ev.Raw) // a stream that opened with its terminal event
+		}
 	case llm.EventItemStart:
 		a.size += len(ev.Item.CallID) + len(ev.Item.Name) + itemOverhead
 		b.open(ev.Index, ev.Item)
@@ -459,9 +467,8 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 	case llm.EventFinish:
 		b.finish, b.usage = ev.Finish, ev.Usage
-		if b.upFormat == format {
-			a.final = finalResponse(ev.Raw)
-			a.size += len(a.final)
+		if f := finalResponse(ev.Raw); b.upFormat == format && f != nil {
+			a.final = f
 		}
 	}
 }
@@ -472,7 +479,7 @@ const itemOverhead = len(`{"id":"","type":"function_call","status":"completed","
 // Size is about how many bytes of content the response holds so far: text, reasoning, tool
 // calls and the upstream's final Response object, before JSON escaping. Callers use it to bound
 // what they collect.
-func (a *Aggregator) Size() int { return a.size }
+func (a *Aggregator) Size() int { return a.size + len(a.final) }
 
 // finalResponse returns the Response object in a terminal event's raw: the response of a
 // response.completed or response.incomplete event, or a whole Response object.

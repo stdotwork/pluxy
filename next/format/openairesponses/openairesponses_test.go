@@ -125,6 +125,9 @@ func TestStreamDecoderFailures(t *testing.T) {
 	}
 
 	dec = NewStreamDecoder()
+	if _, err := dec.Decode([]byte(`{"type":"response.created","sequence_number":0,"response":{"id":"r"}}`)); err != nil {
+		t.Fatal(err)
+	}
 	failed := `{"type":"response.failed","sequence_number":1,"response":{"id":"r","status":"failed","error":{"code":"server_error","message":"boom"}}}`
 	_, err := dec.Decode([]byte(failed))
 	e, ok := err.(*llm.Error)
@@ -204,15 +207,29 @@ func TestStreamWriterErrorEvent(t *testing.T) {
 	}
 }
 
-// A Responses client gets an upstream Responses stream's events unchanged, also when the stream
-// does not open with response.created and carries items the model has no place for.
+// A Responses client gets an upstream Responses stream's events unchanged and once each, also
+// when the stream does not open with response.created, carries items the model has no place
+// for, or opens with its terminal event.
 func TestNativeStreamPassesThrough(t *testing.T) {
-	stream := []string{
-		`{"type":"response.in_progress","sequence_number":0,"response":{"id":"r","status":"in_progress","output":[]}}`,
-		`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"in_progress"}}`,
-		`{"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"completed"}}`,
-		`{"type":"response.completed","sequence_number":3,"response":{"id":"r","status":"completed","output":[{"id":"ws_1","type":"web_search_call","status":"completed"}]}}`,
+	for name, stream := range map[string][]string{
+		"no response.created": {
+			`{"type":"response.in_progress","sequence_number":0,"response":{"id":"r","status":"in_progress","output":[]}}`,
+			`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"in_progress"}}`,
+			`{"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"completed"}}`,
+			`{"type":"response.completed","sequence_number":3,"response":{"id":"r","status":"completed","output":[{"id":"ws_1","type":"web_search_call","status":"completed"}]}}`,
+		},
+		"only response.completed": {
+			`{"type":"response.completed","sequence_number":0,"response":{"id":"r","status":"completed","output":[{"id":"m","type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}}`,
+		},
+		"only response.failed": {
+			`{"type":"response.failed","sequence_number":0,"response":{"id":"r","status":"failed","error":{"code":"server_error","message":"boom"}}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) { checkPassthrough(t, stream) })
 	}
+}
+
+func checkPassthrough(t *testing.T, stream []string) {
 	req, _ := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
 	var out strings.Builder
 	w := NewStreamWriter(&out, req)
@@ -220,6 +237,9 @@ func TestNativeStreamPassesThrough(t *testing.T) {
 	var seq llm.Sequence
 	for _, data := range stream {
 		evs, err := dec.Decode([]byte(data))
+		if e, ok := err.(*llm.Error); ok {
+			evs, err = append(evs, llm.Event{Type: llm.EventError, Error: e}), nil
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

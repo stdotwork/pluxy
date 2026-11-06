@@ -137,6 +137,25 @@ func TestParseThenEncodeKeepsNestedFields(t *testing.T) {
 	}
 }
 
+// An assistant message with empty content keeps content "" (Chat Completions needs content when a
+// message has no tool calls); one that only carries tool calls has none.
+func TestEncodeEmptyAssistantContent(t *testing.T) {
+	req := llm.Request{Model: "m", Items: []llm.Item{
+		{Type: llm.ItemTypeMessage, Role: llm.RoleAssistant, Origin: &llm.Origin{Format: llm.FormatOpenAIResponses}},
+		{Type: llm.ItemTypeMessage, Role: llm.RoleAssistant, Origin: &llm.Origin{Format: llm.FormatOpenAIResponses}},
+		{Type: llm.ItemTypeToolCall, CallID: "c", Name: "f", Arguments: "{}"},
+	}}
+	out, _, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"model":"m","messages":[{"role":"assistant","content":""},
+	 {"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":"{}"}}]}],"stream":false}`
+	if got, w := string(out), compactJSON(t, want); got != w {
+		t.Errorf("encoded:\n got %s\nwant %s", got, w)
+	}
+}
+
 func TestParseRequestRejects(t *testing.T) {
 	for name, body := range map[string]string{
 		"not JSON":      `{`,

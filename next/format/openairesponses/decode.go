@@ -212,16 +212,10 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if ev.Type == "response.created" {
 			return d.start(out, info, raw), nil
 		}
-		switch ev.Type {
-		case "response.completed", "response.incomplete", "response.failed":
-			// The terminal event keeps its own raw.
-			out = d.start(out, info, nil)
-		default:
-			// The stream did not open with response.created. The first event's raw goes on
-			// response.start, so a Responses client still gets every upstream event once.
-			out = d.start(out, info, raw)
-			raw = nil
-		}
+		// The stream did not open with response.created. The first event's raw goes on
+		// response.start, so a Responses client still gets every upstream event once.
+		out = d.start(out, info, raw)
+		raw = nil
 	}
 	// native passes on an upstream event the model has no place for, unless its raw already went
 	// on response.start.
@@ -276,7 +270,11 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Raw: raw}), nil
 	case "response.failed":
 		d.done = true
-		return out, failure(r, data)
+		e := failure(r, data)
+		if raw == nil {
+			e.Raw = nil // already on response.start
+		}
+		return out, e
 	}
 	return native(), nil
 }
