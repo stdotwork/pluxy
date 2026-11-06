@@ -28,6 +28,8 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `internal/cred` | Core's credential store and renewal of accounts added by login. |
 | `internal/packages` | Registries, release archives and the record of installed packages. |
 | `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
+| `internal/pages` | Serves extension pages on a site of their own ([extension pages](ui/extension-pages/README.md)). |
+| `internal/extconfig` | Extensions' settings: the schema from the manifest, checking values, and the store core keeps them in. |
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
 | `corpus/` | Differential test corpus: cases replayed against this core and today's `core/`, with listed exceptions ([README](corpus/README.md)). |
@@ -65,7 +67,9 @@ go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-c
 ```
 
 With a `management_key` set, the web panel is at `http://127.0.0.1:8400/panel/`: core's status,
-accounts, extensions and themes. Sign in with the management key.
+accounts, extensions and themes, the pages extensions bring and their settings. Sign in with the
+management key. Extension pages are served from a listener of their own, on another site than
+the panel (`extension_pages` in the config); see [extension pages](ui/extension-pages/README.md).
 
 An account may list `models` it serves; without a list it serves any model. Core runs the
 extension the config names and every [installed package](#packages) that is enabled, and spreads
@@ -218,8 +222,8 @@ then switches to it in one step; requests that already started finish on the con
 extension version they started with. A file core has already seen, or an empty one (an editor
 in the middle of saving), is skipped; the file watcher waits until the file has stopped changing.
 A reload that fails at any step, from broken JSON to an extension that does not start, leaves
-the running config in place, and management shows why. `listen`, `credentials_dir` and
-`packages.dir` cannot change without a restart.
+the running config in place, and management shows why. `listen`, `credentials_dir`,
+`packages.dir` and `extension_pages.listen` cannot change without a restart.
 
 When the extension's manifest or program changes, a reload starts the new version and waits for
 its handshake before switching. The old version then drains: it finishes the requests that
@@ -270,6 +274,8 @@ needs `Authorization: Bearer <management_key>`.
 | --- | --- |
 | `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`. |
 | `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |
+| `GET /v0/management/ui` | The pages of the extensions that run and where they are served; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
+| `GET`, `PATCH /v0/management/extensions/{publisher}/{name}/config` | An extension's settings, checked against the schema its manifest declares; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 
 ## Packages
 

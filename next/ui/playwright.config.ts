@@ -12,7 +12,11 @@ export default defineConfig({
   use: { headless: true, trace: "retain-on-failure" },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"], viewport } },
-    { name: "firefox", testMatch: "extension-pages.spec.ts", use: { ...devices["Desktop Firefox"], viewport } },
+    {
+      name: "firefox",
+      testMatch: "extension-pages.spec.ts",
+      use: { ...devices["Desktop Firefox"], viewport },
+    },
     { name: "webkit", testMatch: "extension-pages.spec.ts", use: { ...devices["Desktop Safari"], viewport } },
   ],
 });

@@ -30,4 +30,4 @@ const pages: PageDef[] = [
   { id: "themes", title: "Themes", short: "Theme", render: () => <ThemesPage /> },
 ];
 
-render(<Shell host={host} themes={themes} pages={pages} />, document.body);
+render(<Shell host={host} themes={themes} pages={pages} extensionPages />, document.body);

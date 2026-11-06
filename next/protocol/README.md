@@ -50,10 +50,12 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 | `version` | The package version, chosen by the publisher: 1 to 64 letters, digits, `.`, `+`, `_` and `-`, starting with a letter or digit. Core compares versions only for equality. |
 | `protocol` | Protocol versions the program speaks. Core picks one it also speaks. |
 | `programs` | Program to run per platform, keyed by Go's `GOOS/GOARCH`. Paths are relative to the manifest's folder and may not leave it. |
+| `ui` | Optional: pages the panel shows for the extension, with their own `version`. See [extension pages](../ui/extension-pages/README.md#ui). |
+| `config` | Optional: the schema of the extension's settings, with its own `version`; the panel draws a form from it. See [extension pages](../ui/extension-pages/README.md#config). |
 
-The package version, manifest version and protocol version are separate on purpose: each can
-change without the others. Later manifest versions add optional parts (UI pages, a config schema,
-themes) and their own version fields.
+The package version, manifest version, protocol version and the versions of `ui` and `config`
+are separate on purpose: each can change without the others. Later versions add more optional
+parts (themes) with their own version fields.
 
 ### Release archives
 

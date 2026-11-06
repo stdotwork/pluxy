@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,6 +46,19 @@ type Config struct {
 	// CredentialsDir is the folder that keeps accounts added by login, relative to the config
 	// file. Default: "credentials" beside the config file.
 	CredentialsDir string `json:"credentials_dir,omitempty"`
+	// ExtensionPages says where extension pages are served: on a site of their own, never the
+	// one serving the panel (next/ui/extension-pages/README.md).
+	ExtensionPages ExtensionPagesConfig `json:"extension_pages"`
+}
+
+// ExtensionPagesConfig is the extension_pages section of the config.
+type ExtensionPagesConfig struct {
+	// Listen is the pages listener's address. Default: the host of listen, port 0 (a free port
+	// core picks at start).
+	Listen string `json:"listen,omitempty"`
+	// URL is the pages site's origin as browsers reach it. Default: derived for a panel on a
+	// loopback name (the other loopback name, on the pages listener's port).
+	URL string `json:"url,omitempty"`
 }
 
 // PackagesConfig is the packages section of the config.
@@ -123,6 +138,29 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 	return nil
 }
 
+// prepare checks the section and sets its defaults; listen is the config's listen.
+func (p *ExtensionPagesConfig) prepare(listen string) error {
+	if p.Listen == "" {
+		host, _, err := net.SplitHostPort(listen)
+		if err != nil {
+			return fmt.Errorf("config: listen %q: %w", listen, err)
+		}
+		p.Listen = net.JoinHostPort(host, "0")
+	} else if _, _, err := net.SplitHostPort(p.Listen); err != nil {
+		return fmt.Errorf("config: extension_pages.listen %q: %w", p.Listen, err)
+	}
+	if p.URL == "" {
+		return nil
+	}
+	u, err := url.Parse(p.URL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return fmt.Errorf("config: extension_pages.url %q must be an origin: http:// or https://, a host and maybe a port, nothing else", p.URL)
+	}
+	p.URL = u.Scheme + "://" + strings.ToLower(u.Host)
+	return nil
+}
+
 // Accounts returns every account the config sets, in every section, each with the ID of its
 // section's extension (empty for Config.Extension until core has read its manifest).
 func (c *Config) Accounts() []Account {
@@ -158,6 +196,9 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	}
 	if c.Listen == "" {
 		return nil, errors.New("config: listen is required")
+	}
+	if err := c.ExtensionPages.prepare(c.Listen); err != nil {
+		return nil, err
 	}
 	base := filepath.Dir(path)
 	if abs, err := filepath.Abs(base); err == nil {

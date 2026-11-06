@@ -29,6 +29,9 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/packages  install a package (InstallRequest)
 //	POST   /v0/management/packages/{publisher}/{name}/enable, .../disable
 //	DELETE /v0/management/packages/{publisher}/{name}  remove a package
+//	GET    /v0/management/ui        the extensions' pages and where they are served
+//	GET    /v0/management/extensions/{publisher}/{name}/config  an extension's settings
+//	PATCH  /v0/management/extensions/{publisher}/{name}/config  change them
 //
 // Every call needs the active config's management_key as a bearer token. Without a key in the
 // config the API is not served.
@@ -71,6 +74,7 @@ func (c *Core) Management() http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	c.handleUI(m)
 	return m
 }
 

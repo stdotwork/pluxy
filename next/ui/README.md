@@ -10,6 +10,7 @@ pages in the same places.
 | `kit/` | What both builds share: the host-services interface (`host.ts`), the management API calls (`api.ts`), components (`ui.tsx`), the shell and its layouts (`shell.tsx`, `kit.css`), the theme engine (`theme/`) and the pages core offers (`pages/`) |
 | `panel/` | The browser build: its entry page, and `browserHost.ts`, the kit's host in a browser |
 | `themes/` | The theme contract and the built-in themes, as theme files |
+| `extension-pages/` | The extension pages contract, and `pluxy-page.js`, the module an extension's page loads to talk to the panel |
 | `tests/` | Unit tests (`bun test`) |
 | `e2e/` | The browser test (Playwright), against a real core |
 
@@ -34,10 +35,12 @@ A page is a `PageDef`: a stable ID (its address is `#/<id>`), a title, a short l
 navigation, and a render function. A build only bundles the pages it imports, so pages for the
 desktop app add nothing to the panel.
 
-Extension pages are not built yet. They will be `PageDef`s too: their render function will mount
-the extension's page in an isolated document on a separate site, talking to the host through a
-message channel, never with the management key. The shell, the navigation and the theme hooks
-need no change for them.
+With `extensionPages` set, the shell adds the pages of the extensions that run, after the
+build's own: each is a `PageDef` (address `#/ext/<publisher>/<name>/<page>`) whose render shows
+the extension's document in a sandboxed frame from a separate site, talking to the panel through
+a message channel, never with the management key. The Extensions page draws each extension's
+settings form from its schema. The contract for both, and the module pages use, are in
+[extension-pages](extension-pages/README.md).
 
 ## Why Preact, built with Bun
 
@@ -68,10 +71,13 @@ bun run check          # tsc --noEmit
 bun run lint           # Biome: lint and format check
 bun run test           # unit tests
 bun run build          # writes the panel to ../internal/panel/dist
-bun run test:browser   # builds, then runs the browser test in headless Chromium
+bun run test:browser   # builds, then runs the browser tests
 ```
 
-`bun run test:browser` needs Playwright's Chromium once: `bunx playwright install chromium`. It
+`bun run test:browser` runs the panel's test in Chromium and the extension pages test
+(`e2e/extension-pages.spec.ts`: a hostile page, a benign page and the settings form) in Chromium,
+Firefox and WebKit. It needs Playwright's browsers once: `bunx playwright install chromium firefox
+webkit` (WebKit also needs its system libraries: `bunx playwright install-deps webkit`). Each test
 starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake extensions, on a
 random port.
 
@@ -87,6 +93,6 @@ before it builds and tests core, so its tests always run against the panel of th
 
 `/panel/` and its files, only while the config sets `management_key` (the panel is a page for the
 management API; without the key, `/panel/` is not found, as the API is). Every reply carries a
-Content Security Policy that allows scripts, styles and requests only to core itself, and images
-and fonts also from `data:` URLs. The page itself is revalidated on each load; the other files
+Content Security Policy that allows scripts, styles and requests only to core itself, images
+and fonts also from `data:` URLs, and frames only from the extension pages site. The page itself is revalidated on each load; the other files
 have content-hashed names and are cached.

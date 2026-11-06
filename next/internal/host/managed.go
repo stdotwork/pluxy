@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -70,15 +71,19 @@ func DefaultPolicy() Policy {
 	}
 }
 
-// Fingerprint identifies an extension generation's code: a digest of its manifest and of the
-// program it runs on this platform. Two configs naming the same manifest with the same
-// fingerprint can share one running generation.
+// Fingerprint identifies an extension generation's code: a digest of its manifest, of the
+// program it runs on this platform and of every file in its ui folder (with their names). Two
+// configs naming the same manifest with the same fingerprint can share one running generation.
 func Fingerprint(manifestPath string) (string, error) {
 	m, err := LoadManifest(manifestPath)
 	if err != nil {
 		return "", err
 	}
 	prog, err := m.Program()
+	if err != nil {
+		return "", err
+	}
+	ui, err := m.uiFiles()
 	if err != nil {
 		return "", err
 	}
@@ -89,6 +94,14 @@ func Fingerprint(manifestPath string) (string, error) {
 			return "", err
 		}
 		fmt.Fprintf(h, "%d:", len(b))
+		h.Write(b)
+	}
+	for _, name := range ui {
+		b, err := os.ReadFile(filepath.Join(m.UIDir(), filepath.FromSlash(name)))
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(h, "ui %d:%s %d:", len(name), name, len(b))
 		h.Write(b)
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil

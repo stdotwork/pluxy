@@ -176,17 +176,18 @@ var testPackages = []pkg{
 			"version": 0, "dir": "ui", "permissions": []string{"config.read", "config.write"},
 			"pages": []any{map[string]any{"id": "usage", "title": "Alpha usage", "short": "Alpha", "path": "index.html"}},
 		},
-		config: map[string]any{"version": 0, "schema": map[string]any{
+		// Literal JSON, so the fields keep their order, as the form shows them.
+		config: map[string]any{"version": 0, "schema": json.RawMessage(`{
 			"type": "object",
-			"properties": map[string]any{
-				"greeting": map[string]any{"type": "string", "title": "Greeting", "maxLength": 40, "default": "hello"},
-				"interval": map[string]any{"type": "integer", "title": "Interval (seconds)", "minimum": 1, "maximum": 3600, "default": 60},
-				"unit":     map[string]any{"type": "string", "title": "Unit", "enum": []string{"tokens", "requests"}, "default": "tokens"},
-				"detailed": map[string]any{"type": "boolean", "title": "Detailed view", "default": false},
-				"token":    map[string]any{"type": "string", "title": "Export token", "writeOnly": true},
+			"properties": {
+				"greeting": {"type": "string", "title": "Greeting", "maxLength": 40, "default": "hello"},
+				"interval": {"type": "integer", "title": "Interval (seconds)", "minimum": 1, "maximum": 3600, "default": 60},
+				"unit": {"type": "string", "title": "Unit", "enum": ["tokens", "requests"], "default": "tokens"},
+				"detailed": {"type": "boolean", "title": "Detailed view", "default": false},
+				"token": {"type": "string", "title": "Export token", "writeOnly": true}
 			},
-			"required": []string{"greeting"},
-		}},
+			"required": ["greeting"]
+		}`)},
 	},
 	{id: "test/beta", version: "1.0.0", file: "beta.tar.gz"},
 	{

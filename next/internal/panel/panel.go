@@ -27,12 +27,21 @@ var dist embed.FS
 // Prefix is where the panel is served.
 const Prefix = "/panel/"
 
-// CSP is the Content Security Policy of every panel response. Scripts, styles and requests go
-// only to core itself; images and fonts may also be data: URLs, so a theme's custom CSS can
-// embed them but cannot load anything from elsewhere. No frames, forms or embedding in other
-// sites.
+// CSP is the Content Security Policy of every panel response without extension pages. Scripts,
+// styles and requests go only to core itself; images and fonts may also be data: URLs, so a
+// theme's custom CSS can embed them but cannot load anything from elsewhere. No frames, forms or
+// embedding in other sites.
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; " +
 	"connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+// CSPWithPages is CSP that also lets the panel show frames from the extension pages site at
+// origin, and nothing else: a page that navigates its frame to another address is refused.
+func CSPWithPages(origin string) string {
+	if origin == "" {
+		return CSP
+	}
+	return CSP + "; frame-src " + origin + "/"
+}
 
 // NotBuilt is the reply of a core built without its panel.
 const NotBuilt = "This core was built without its panel. Build the panel with go generate ./internal/panel, then build core again.\n"
@@ -71,8 +80,9 @@ type file struct {
 // Handler serves the panel files in assets at Prefix while on returns true (core passes whether
 // the management API is on); otherwise every panel path is not found. Register it for both
 // "/panel" and Prefix. The page is never cached without asking core; the other files have
-// content-hashed names, so browsers keep them.
-func Handler(assets fs.FS, on func() bool) http.Handler {
+// content-hashed names, so browsers keep them. pagesOrigin returns the extension pages site's
+// origin for a request, or "" for none (nil: none).
+func Handler(assets fs.FS, on func() bool, pagesOrigin func(*http.Request) string) http.Handler {
 	files := map[string]file{}
 	_ = fs.WalkDir(assets, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || strings.HasPrefix(path.Base(name), ".") {
@@ -107,7 +117,11 @@ func Handler(assets fs.FS, on func() bool) http.Handler {
 			return
 		}
 		h := w.Header()
-		h.Set("Content-Security-Policy", CSP)
+		origin := ""
+		if pagesOrigin != nil {
+			origin = pagesOrigin(r)
+		}
+		h.Set("Content-Security-Policy", CSPWithPages(origin))
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")

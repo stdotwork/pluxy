@@ -11,10 +11,18 @@ import (
 )
 
 // panelCSP is the Content Security Policy core serves the panel with: scripts, styles and
-// requests only to core itself, images and fonts also from data: URLs, no frames, forms or
-// embedding.
+// requests only to core itself, images and fonts also from data: URLs, no forms or embedding,
+// and frames only from the extension pages site, which for a panel at 127.0.0.1 is localhost
+// on the pages port.
 const panelCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; " +
-	"connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+	"connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; frame-src http://localhost:"
+
+// isPanelCSP reports whether csp is panelCSP with the pages port filled in.
+func isPanelCSP(csp string) bool {
+	port, ok := strings.CutPrefix(csp, panelCSP)
+	port, slash := strings.CutSuffix(port, "/")
+	return ok && slash && regexp.MustCompile(`^[0-9]+$`).MatchString(port)
+}
 
 // needPanel skips the test when this checkout's panel is not built (go generate
 // ./internal/panel builds it), unless PLUXY_REQUIRE_PANEL is set, as in CI.
@@ -60,12 +68,14 @@ func TestPanelIsServedWithTheManagementAPI(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /panel/: status %d: %s", resp.StatusCode, page)
 	}
+	if csp := resp.Header.Get("Content-Security-Policy"); !isPanelCSP(csp) {
+		t.Errorf("GET /panel/: Content-Security-Policy = %q, want %q<pages port>/", csp, panelCSP)
+	}
 	for h, want := range map[string]string{
-		"Content-Type":            "text/html; charset=utf-8",
-		"Content-Security-Policy": panelCSP,
-		"X-Content-Type-Options":  "nosniff",
-		"Referrer-Policy":         "no-referrer",
-		"Cache-Control":           "no-cache",
+		"Content-Type":           "text/html; charset=utf-8",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "no-referrer",
+		"Cache-Control":          "no-cache",
 	} {
 		if got := resp.Header.Get(h); got != want {
 			t.Errorf("GET /panel/: %s = %q, want %q", h, got, want)
@@ -80,7 +90,7 @@ func TestPanelIsServedWithTheManagementAPI(t *testing.T) {
 			t.Errorf("GET %s: status %d", m[1], resp.StatusCode)
 			continue
 		}
-		if resp.Header.Get("Content-Security-Policy") != panelCSP || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		if !isPanelCSP(resp.Header.Get("Content-Security-Policy")) || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
 			t.Errorf("GET %s: missing the panel's security headers: %v", m[1], resp.Header)
 		}
 		if got := resp.Header.Get("Cache-Control"); got != "public, max-age=31536000, immutable" {

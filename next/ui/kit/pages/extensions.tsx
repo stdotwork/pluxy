@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import type { Package } from "../api";
+import { SettingsForm } from "../extensions/settings";
 import {
   Button,
   Card,
@@ -56,6 +57,7 @@ function PackageDetail(props: { p: Package; onClose: () => void; onChanged: () =
         Extensions run as separate programs, so a crash cannot take core down. That is not a sandbox: an
         extension can reach what its program can reach.
       </p>
+      {p.state !== "disabled" && <SettingsForm id={p.id} />}
       {(act.error ?? remove.error) && <Notice tone="danger">{act.error ?? remove.error}</Notice>}
       <div class="actions">
         <Button
@@ -141,8 +143,16 @@ function Available(props: { installed: Set<string>; onInstalled: () => void }) {
 }
 
 export function ExtensionsPage() {
-  const { api } = useKit();
-  const packages = useLoad(api.packages);
+  const { api, extensionsChanged } = useKit();
+  const loaded = useLoad(api.packages);
+  // After a change, the navigation's extension pages may differ too.
+  const packages = {
+    ...loaded,
+    reload: () => {
+      loaded.reload();
+      extensionsChanged();
+    },
+  };
   const [selected, setSelected] = useState<string>();
   const list = packages.data?.packages ?? [];
   const chosen = list.find((p) => p.id === selected);

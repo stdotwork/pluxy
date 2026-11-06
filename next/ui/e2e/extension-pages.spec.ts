@@ -3,6 +3,7 @@
 // works through the channel, and the settings form the panel draws from a schema.
 // Run it with `bun run test:browser`, which builds the panel first.
 import { type ChildProcess, spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -74,11 +75,20 @@ async function signIn(page: Page, remember = false) {
   await expect(page.getByRole("heading", { level: 1, name: "Status" })).toBeVisible();
 }
 
+/** Saves a screenshot when PANEL_SHOTS_DIR is set, as e2e/panel.spec.ts does. */
+async function shot(page: Page, name: string) {
+  const dir = process.env.PANEL_SHOTS_DIR;
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  await page.screenshot({ path: join(dir, `${test.info().project.name}-${name}`), animations: "disabled" });
+}
+
 const nav = (page: Page) => page.getByRole("navigation", { name: "Main" });
 
-function frameOf(page: Page, id: string): Frame {
-  const f = page.frames().find((fr) => fr.url().includes(`/${id}/`));
-  if (!f) throw new Error(`no frame of ${id}: ${page.frames().map((fr) => fr.url())}`);
+/** The frame of the extension page titled title, as the panel shows it now. */
+async function frameOf(page: Page, title: string): Promise<Frame> {
+  const f = await (await page.locator(`iframe[title="${title}"]`).elementHandle())?.contentFrame();
+  if (!f) throw new Error(`no frame for ${title}: ${page.frames().map((fr) => fr.url())}`);
   return f;
 }
 
@@ -116,6 +126,7 @@ const MUST_BE_BLOCKED = [
   "managementXHR",
   "topNavigation",
   "popup",
+  "clipboardRead",
   "exfilFetch",
   "exfilFetchNoCors",
   "exfilXHR",
@@ -137,6 +148,7 @@ const MUST_BE_BLOCKED = [
 
 // What only the canary can judge: it must receive nothing.
 const MUST_NOT_ARRIVE = [
+  "dialog", // the test checks no dialog opened
   "exfilBeacon",
   "exfilImage",
   "exfilStylesheet",
@@ -162,18 +174,30 @@ test("a hostile extension page cannot reach the key, the panel, core or the outs
   await context.addCookies([{ name: "panel_session", value: "FAKE_PANEL_COOKIE", url: base }]);
   const popups: string[] = [];
   context.on("page", (p) => popups.push(p.url()));
-  const seen: Promise<{ url: string; main: boolean; cookie?: string; auth?: string }>[] = [];
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => {
+    dialogs.push(d.message());
+    void d.dismiss();
+  });
+  // Every request the browser reports: from the panel itself or from a frame, whether anything
+  // answered it, and the credentials it carried.
+  const seen: Promise<{ url: string; main: boolean; answered: boolean; cookie?: string; auth?: string }>[] =
+    [];
   page.on("request", (r) => {
+    let main = true;
+    try {
+      main = r.frame() === page.mainFrame();
+    } catch {
+      main = false;
+    }
     seen.push(
-      r.allHeaders().then((h) => {
-        let main = true;
-        try {
-          main = r.frame() === page.mainFrame();
-        } catch {
-          main = false;
-        }
-        return { url: r.url(), main, cookie: h.cookie, auth: h.authorization };
-      }),
+      Promise.all([r.allHeaders(), r.response().catch(() => null)]).then(([h, resp]) => ({
+        url: r.url(),
+        main,
+        answered: resp !== null,
+        cookie: h.cookie,
+        auth: h.authorization,
+      })),
     );
   });
 
@@ -181,10 +205,16 @@ test("a hostile extension page cannot reach the key, the panel, core or the outs
   await nav(page).getByRole("link", { name: "Hostile" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Hostile" })).toBeVisible();
   const hostileUrl = page.url();
-  const frame = frameOf(page, "test/hostile");
-  await expect(frame.locator("#state")).toHaveText("done", { timeout: 60_000 });
+  await expect(page.frameLocator('iframe[title="Hostile"]').locator("#state")).toHaveText("done", {
+    timeout: 60_000,
+  });
+  const frame = await frameOf(page, "Hostile");
   const r = (await frame.evaluate(() => (window as unknown as { __hostile: unknown }).__hostile)) as Hostile;
 
+  await test.info().attach("hostile-results.json", {
+    body: JSON.stringify(r, null, 2),
+    contentType: "application/json",
+  });
   expect(r.error).toBeUndefined();
   expect(r.allowed).toEqual({ theme: true, config: { canary: canaryBase, panel: base } });
   expect(r.welcomeKeys).toEqual(["extension", "page", "pluxy", "theme", "type", "v"]);
@@ -206,11 +236,13 @@ test("a hostile extension page cannot reach the key, the panel, core or the outs
   expect(canaryHits).toEqual([]);
   expect(page.url()).toBe(hostileUrl);
   expect(popups).toEqual([]);
+  expect(dialogs).toEqual([]);
   const requests = await Promise.all(seen);
-  const pagesSite = requests.filter((q) => !q.main);
-  expect(pagesSite.length).toBeGreaterThan(0);
-  for (const q of pagesSite) {
-    expect(new URL(q.url).hostname, q.url).not.toBe(new URL(base).hostname);
+  const pagesHost = new URL(base).hostname === "127.0.0.1" ? "localhost" : "127.0.0.1";
+  const fromFrames = requests.filter((q) => !q.main);
+  expect(fromFrames.filter((q) => q.answered).length).toBeGreaterThan(0); // the page's own files
+  for (const q of fromFrames) {
+    if (q.answered) expect(new URL(q.url).hostname, q.url).toBe(pagesHost); // only the pages site answered
     expect(q.cookie, q.url).toBeUndefined();
     expect(q.auth, q.url).toBeUndefined();
   }
@@ -227,9 +259,10 @@ test("a hostile extension page cannot reach the key, the panel, core or the outs
 });
 
 test("a benign extension page works through the channel and follows the theme", async ({ page }) => {
-  expect((await mgmt("PATCH", "/extensions/test/alpha/config", { values: { greeting: "set by the test" } })).status).toBe(
-    200,
-  );
+  expect(
+    (await mgmt("PATCH", "/extensions/test/alpha/config", { values: { greeting: "set by the test" } }))
+      .status,
+  ).toBe(200);
   await page.emulateMedia({ colorScheme: "light" });
   await signIn(page);
   await nav(page).getByRole("link", { name: "Alpha usage" }).click();
@@ -240,7 +273,8 @@ test("a benign extension page works through the channel and follows the theme", 
 
   const token = (fr: Page | Frame) =>
     fr.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--px-color-bg").trim());
-  const frame = frameOf(page, "test/alpha");
+  const frame = await frameOf(page, "Alpha usage");
+  expect(frame.parentFrame()).toBe(page.mainFrame());
   const lightBg = await token(page);
   expect(await token(frame)).toBe(lightBg);
 
@@ -250,11 +284,14 @@ test("a benign extension page works through the channel and follows the theme", 
   const darkBg = await token(page);
   expect(darkBg).not.toBe(lightBg);
   await expect.poll(() => token(frame)).toBe(darkBg);
+  await shot(page, "extension-page-dark.png");
 
   // The page writes its own settings (it declares config.write).
   await f.getByRole("button", { name: "Set the greeting from this page" }).click();
   await expect(f.locator("#greeting")).toHaveText("hello from the page");
-  expect((await mgmt("GET", "/extensions/test/alpha/config")).body.values.greeting).toBe("hello from the page");
+  expect((await mgmt("GET", "/extensions/test/alpha/config")).body.values.greeting).toBe(
+    "hello from the page",
+  );
 
   // The page loads another document into its frame: the panel closes the channel.
   await frame.evaluate(() => location.reload());
@@ -283,11 +320,16 @@ test("the panel draws an extension's settings form from its schema, and saves th
   await form.getByLabel("Interval (seconds)").fill("120");
   await form.getByLabel("Unit").selectOption("requests");
   await form.getByLabel("Detailed view").check();
-  await form.getByLabel("Export token").fill("fake-export-token");
+  await form.getByLabel("Export token", { exact: true }).fill("fake-export-token");
   await form.getByRole("button", { name: "Save settings" }).click();
   await expect(form.getByText("Saved.")).toBeVisible();
   const saved = (await mgmt("GET", "/extensions/test/alpha/config")).body;
-  expect(saved.values).toEqual({ greeting: "from the form", interval: 120, unit: "requests", detailed: true });
+  expect(saved.values).toEqual({
+    greeting: "from the form",
+    interval: 120,
+    unit: "requests",
+    detailed: true,
+  });
   expect(saved.set).toEqual(["token"]);
   expect(JSON.stringify(saved)).not.toContain("fake-export-token");
 
@@ -298,8 +340,9 @@ test("the panel draws an extension's settings form from its schema, and saves th
   await expect(form.getByLabel("Interval (seconds)")).toHaveValue("120");
   await expect(form.getByLabel("Unit")).toHaveValue("requests");
   await expect(form.getByLabel("Detailed view")).toBeChecked();
-  await expect(form.getByLabel("Export token")).toHaveValue("");
+  await expect(form.getByLabel("Export token", { exact: true })).toHaveValue("");
   await expect(form.getByText("A value is set.")).toBeVisible();
+  await shot(page, "extension-settings.png");
 
   // Clearing the secret.
   await form.getByRole("checkbox", { name: "Clear Export token" }).check();

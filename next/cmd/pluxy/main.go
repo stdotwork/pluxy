@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
+	"github.com/stdotwork/pluxy/next/internal/pages"
 	"github.com/stdotwork/pluxy/next/internal/panel"
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
@@ -78,6 +79,15 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	if err != nil {
 		return err
 	}
+	// Extension pages have a listener of their own, so they are served on another site than
+	// the panel (next/ui/extension-pages/README.md).
+	pagesLn, err := net.Listen("tcp", cfg.ExtensionPages.Listen)
+	if err != nil {
+		ln.Close()
+		return fmt.Errorf("extension_pages.listen: %w", err)
+	}
+	c.SetPagesPort(pagesLn.Addr().(*net.TCPAddr).Port)
+	managementOn := func() bool { return c.Config().ManagementKey != "" }
 	mux := http.NewServeMux()
 	mux.Handle(core.ManagementPrefix, c.Management())
 	// The panel is on while the management API is: it is a page for that API.
@@ -85,7 +95,10 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	if !panel.Built(assets) {
 		log.Print("warning: this core was built without its panel (go generate ./internal/panel builds it)")
 	}
-	ui := panel.Handler(assets, func() bool { return c.Config().ManagementKey != "" })
+	ui := panel.Handler(assets, managementOn, func(r *http.Request) string {
+		origin, _ := c.PagesOrigin(r.Host) // none: the panel says why where it would show a page
+		return origin
+	})
 	mux.Handle(strings.TrimSuffix(panel.Prefix, "/"), ui)
 	mux.Handle(panel.Prefix, ui)
 	mux.Handle("/", server.NewHandler(c))
@@ -93,7 +106,12 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 		Handler:           mux,
 		ReadHeaderTimeout: 30 * time.Second,
 	}
+	pagesSrv := &http.Server{
+		Handler:           pages.Handler(c.PagesFolder, managementOn),
+		ReadHeaderTimeout: 30 * time.Second,
+	}
 	fmt.Fprintf(os.Stderr, "pluxy: listening on http://%s\n", ln.Addr())
+	fmt.Fprintf(os.Stderr, "pluxy: extension pages on http://%s\n", pagesLn.Addr())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -109,8 +127,9 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 		}
 	}()
 
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() { errc <- srv.Serve(ln) }()
+	go func() { errc <- pagesSrv.Serve(pagesLn) }()
 	select {
 	case err := <-errc:
 		return err
@@ -119,9 +138,11 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	log.Print("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	_ = pagesSrv.Shutdown(shutdownCtx) // pages are static files: nothing to finish
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
 	srv.Close()
+	pagesSrv.Close()
 	return nil
 }

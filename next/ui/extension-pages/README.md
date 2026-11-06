@@ -30,8 +30,9 @@ A page **cannot**, whatever its code does:
 - navigate the panel, open windows or pop-ups, submit forms, or show dialogs (`alert`,
   `confirm`, `prompt`): the frame's sandbox does not allow them;
 - navigate its own frame away: the panel's policy lets its frames show only extension pages, so
-  the browser refuses to load any other address in the frame (and the panel then closes the
-  page's channel);
+  the browser refuses to load any other address in the frame; whenever the frame gets another
+  document (an error page, or the page reloading itself), the panel closes the page's channel;
+- read the clipboard: the frame is given no permissions (`allow=""`);
 - keep anything in storage, or read another extension's settings: there is no method for it.
 
 What a page receives through the channel (the theme and its own settings) it can show, change
@@ -121,7 +122,7 @@ it, so the form and a page that writes settings get the same answer.
 | `writeOnly` | field | A secret, such as a token: it can be set and cleared, but core never shows its value again, to the panel or to a page. The form shows whether it is set. |
 
 Any other keyword is refused at install, so a schema never means something core does not
-check. Settings are kept by core, per extension, in `{packages.dir}/config/<publisher>/<name>.json`
+check. Settings are kept by core, per extension, in `{packages.dir}/.settings/<publisher>/<name>.json`
 (readable only by core's user), and survive upgrades: a field the new version no longer
 declares is dropped the next time the settings change. Core does not send settings to the
 extension's program yet; in version 0 they are for the extension's pages.
@@ -176,7 +177,7 @@ Every response from the pages site carries:
   load its module scripts and fonts with CORS. The files are public package files; no request
   to the pages site carries or needs a credential.
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-cache`
-  with an `ETag`.
+  with `Last-Modified`.
 
 Only these file types are served: `.html`, `.js`, `.mjs`, `.css`, `.json`, `.svg`, `.png`,
 `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`, `.txt`. The pages site is on while
