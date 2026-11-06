@@ -1,0 +1,53 @@
+{
+  "description": "Settings that apply to every case.",
+  "volatile": [
+    "client.headers.X-Cpa-Trace-Id"
+  ],
+  "exceptions": [
+    {
+      "path": "client.headers.Access-Control-Allow-Headers",
+      "kind": "gap",
+      "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
+    },
+    {
+      "path": "client.headers.Access-Control-Allow-Methods",
+      "kind": "gap",
+      "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
+    },
+    {
+      "path": "client.headers.Access-Control-Allow-Origin",
+      "kind": "gap",
+      "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
+    },
+    {
+      "path": "client.headers.Access-Control-Expose-Headers",
+      "kind": "gap",
+      "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
+    },
+    {
+      "path": "client.headers.X-Cpa-Trace-Id",
+      "kind": "gap",
+      "reason": "The old core adds a trace ID header to every reply; the new core has no request IDs yet."
+    },
+    {
+      "path": "client.headers.X-Accel-Buffering",
+      "kind": "gap",
+      "reason": "The new core adds X-Accel-Buffering: no to streams so proxies such as nginx do not buffer them; the old core does not."
+    },
+    {
+      "path": "upstream[*].headers.User-Agent",
+      "kind": "gap",
+      "reason": "The old core forwards the client's User-Agent upstream (cli-proxy-openai-compat when the client sends none); the new core sends Go's default."
+    },
+    {
+      "path": "upstream[*].headers.Cache-Control",
+      "kind": "gap",
+      "reason": "The old core adds Cache-Control: no-cache to streamed upstream requests; the new core does not."
+    },
+    {
+      "path": "upstream[*].body.stream_options",
+      "kind": "gap",
+      "reason": "The old core sets stream_options.include_usage true on every streamed upstream request; the new core passes the client's body through unchanged."
+    }
+  ]
+}

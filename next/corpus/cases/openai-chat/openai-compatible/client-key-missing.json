@@ -1,0 +1,34 @@
+{
+  "description": "A client request without an API key is refused before any upstream request.",
+  "client": {
+    "path": "/v1/chat/completions",
+    "auth": "none",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "gap",
+      "reason": "The old core answers a missing or wrong client key with {\"error\": \"<text>\"} and Content-Type with charset=utf-8; the new core answers with an OpenAI-style error object."
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "gap",
+      "reason": "The old core answers a missing or wrong client key with {\"error\": \"<text>\"} and Content-Type with charset=utf-8; the new core answers with an OpenAI-style error object."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {"error":"Missing API key"},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 401
+    },
+    "upstream": []
+  }
+}
