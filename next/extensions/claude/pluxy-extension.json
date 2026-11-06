@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/claude",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "claude",
+    "linux/arm64": "claude",
+    "darwin/amd64": "claude",
+    "darwin/arm64": "claude",
+    "windows/amd64": "claude.exe"
+  }
+}

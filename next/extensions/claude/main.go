@@ -1,0 +1,408 @@
+// Command claude is pluxy's provider extension for Anthropic's Claude: the Messages API with an
+// API key, or with a Claude subscription signed in through OAuth.
+//
+// Account settings (all optional):
+//
+//	{"base_url": "https://api.anthropic.com"}
+//
+// base_url is where the Messages API lives; requests go to {base_url}/v1/messages. The OAuth
+// endpoints and client can be changed with authorize_url, token_url and client_id, for a test
+// server; see oauth.go.
+//
+// Credentials: an api_key credential is sent in x-api-key, as Anthropic's API defines; an oauth
+// credential (a subscription login) is sent as a bearer token, with the OAuth beta added to
+// anthropic-beta. A Messages request is sent unchanged, with the client's own Messages headers
+// (API version, betas and its identification headers such as User-Agent and X-App), so thinking
+// blocks, their signatures and cache_control markers reach Anthropic as the client wrote them.
+// Requests in other formats (Chat Completions, Responses, Gemini) are translated to Messages,
+// with the client's reasoning effort turned into Claude's thinking settings (thinking.go).
+//
+// The extension never changes how a client presents itself: a client that is not Claude Code is
+// not made to look like Claude Code.
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
+	"github.com/stdotwork/pluxy/next/format/sse"
+	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
+)
+
+const (
+	id      = "pluxy/claude"
+	version = "0.1.0"
+)
+
+// defaultBaseURL is Anthropic's API.
+const defaultBaseURL = "https://api.anthropic.com"
+
+// anthropicVersion is the Messages API version sent when the client named none.
+const anthropicVersion = "2023-06-01"
+
+// oauthBeta is the beta Anthropic requires with an OAuth access token.
+const oauthBeta = "oauth-2025-04-20"
+
+func main() {
+	err := sdk.Serve(sdk.Extension{
+		ID:           id,
+		Version:      version,
+		Generate:     generate,
+		LoginMethods: loginMethods,
+		Login:        login,
+		Refresh:      refresh,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "claude:", err)
+		os.Exit(1)
+	}
+}
+
+// settings are an account's settings.
+type settings struct {
+	BaseURL      string `json:"base_url"`
+	AuthorizeURL string `json:"authorize_url"`
+	TokenURL     string `json:"token_url"`
+	ClientID     string `json:"client_id"`
+}
+
+// readSettings reads an account's settings and fills in the defaults.
+func readSettings(raw json.RawMessage) (settings, error) {
+	var s settings
+	if len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid JSON", Scope: llm.ScopeCredential}
+		}
+	}
+	if s.BaseURL == "" {
+		s.BaseURL = defaultBaseURL
+	}
+	s.BaseURL = strings.TrimRight(s.BaseURL, "/")
+	if s.AuthorizeURL == "" {
+		s.AuthorizeURL = defaultAuthorizeURL
+	}
+	if s.TokenURL == "" {
+		s.TokenURL = defaultTokenURL
+	}
+	if s.ClientID == "" {
+		s.ClientID = defaultClientID
+	}
+	return s, nil
+}
+
+// client has no timeouts after the connection is made: a long generation is not a failure, and
+// cancellation comes from the call's context. It follows a redirect only to the same scheme and
+// host, since Go keeps x-api-key on a redirect to another host.
+var client = &http.Client{
+	Transport: &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 30 * time.Second,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+	},
+	CheckRedirect: sameOrigin,
+}
+
+// sameOrigin refuses a redirect to another scheme or host; the redirect reply is then treated as
+// the upstream's answer.
+func sameOrigin(req *http.Request, via []*http.Request) error {
+	first := via[0].URL
+	if req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {
+		return http.ErrUseLastResponse
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
+}
+
+// authorize sets the credential's headers on an upstream request.
+func authorize(h http.Header, cred *protocol.Credential) error {
+	switch {
+	case cred == nil:
+	case cred.Kind == protocol.CredentialAPIKey && cred.APIKey != "":
+		h.Set("X-Api-Key", cred.APIKey)
+		return nil
+	case cred.Kind == protocol.CredentialOAuth && cred.AccessToken != "":
+		h.Set("Authorization", "Bearer "+cred.AccessToken)
+		h.Set("Anthropic-Beta", withBeta(h.Get("Anthropic-Beta"), oauthBeta))
+		return nil
+	}
+	return &llm.Error{Code: llm.CodeAuth, Message: "the account has no usable credential; add an API key or log in again", Scope: llm.ScopeCredential}
+}
+
+// withBeta adds beta to a comma-separated anthropic-beta value unless it is already there.
+func withBeta(list, beta string) string {
+	var out []string
+	for _, b := range strings.Split(list, ",") {
+		if b = strings.TrimSpace(b); b != "" {
+			out = append(out, b)
+		}
+	}
+	if !slices.Contains(out, beta) {
+		out = append(out, beta)
+	}
+	return strings.Join(out, ",")
+}
+
+func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return err
+	}
+	body, tr, err := buildBody(call.Request)
+	if err != nil {
+		return err
+	}
+	send := &reporting{Stream: out, tr: tr}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+"/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if call.Request.Stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	req.Header.Set("Anthropic-Version", anthropicVersion)
+	if tr.Passthrough {
+		// The client's own Messages headers go with its body. Passthrough means the client
+		// spoke Messages, so these are its headers, not ones made up for it.
+		for _, h := range slices.Concat(anthropicmessages.Headers, anthropicmessages.ClientHeaders) {
+			if v := call.Request.Native.Headers[h]; v != "" {
+				req.Header.Set(h, v)
+			}
+		}
+	}
+	if err := authorize(req.Header, call.Account.Credential); err != nil {
+		return err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var op *net.OpError
+		dial := errors.As(err, &op) && op.Op == "dial"
+		// A failed dial never reached the upstream, so trying again is safe.
+		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return upstreamError(resp, call.Request.Model)
+	}
+	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return relayStream(ctx, resp.Body, send)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	events, err := anthropicmessages.DecodeResponse(raw)
+	if err != nil {
+		return err
+	}
+	for _, ev := range events {
+		if err := send.Send(ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildBody returns the Messages request body for req and how it was built. A Messages request
+// is sent unchanged; any other is rebuilt from the model, with its reasoning effort as thinking
+// settings. Under the reject drop policy a translation that drops anything is refused.
+func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
+	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
+	if n := req.Native; n != nil {
+		tr.From = n.Format
+		if n.Format == llm.FormatAnthropicMessages {
+			tr.Passthrough = true
+			return n.Body, tr, nil
+		}
+	}
+	body, losses, err := anthropicmessages.EncodeRequest(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if req.Options.ReasoningEffort != "" {
+		var applied bool
+		body, applied, err = applyEffort(body, req.Model, req.Options.ReasoningEffort)
+		if err != nil {
+			return nil, nil, err
+		}
+		if applied {
+			// EncodeRequest reports the effort as dropped, leaving thinking to the provider.
+			losses = slices.DeleteFunc(losses, func(l llm.Loss) bool { return l.Path == "reasoning_effort" })
+		}
+	}
+	tr.Losses = losses
+	if req.DropPolicy == llm.DropReject && tr.Dropped() {
+		var paths []string
+		for _, l := range losses {
+			if l.Kind == llm.LossDropped {
+				paths = append(paths, l.Path)
+			}
+		}
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "Anthropic Messages cannot carry parts of this request: " + strings.Join(paths, ", ")}
+	}
+	return body, tr, nil
+}
+
+// reporting adds the translation report to the reply's response.start event.
+type reporting struct {
+	*sdk.Stream
+	tr *llm.Translation
+}
+
+func (r *reporting) Send(ev llm.Event) error {
+	if ev.Type == llm.EventResponseStart && ev.Response != nil {
+		info := *ev.Response
+		info.Translation = r.tr
+		ev.Response = &info
+	}
+	return r.Stream.Send(ev)
+}
+
+// relayStream decodes the upstream Messages stream and sends each event as soon as it is
+// decoded. A blocked send blocks the next upstream read.
+func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }) error {
+	r := sse.NewReader(body)
+	dec := anthropicmessages.NewStreamDecoder()
+	for {
+		e, err := r.Next()
+		eof := err == io.EOF
+		var events []llm.Event
+		switch {
+		case eof:
+			events, err = dec.Close()
+			if err != nil {
+				return err
+			}
+		case err != nil:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream broke: " + err.Error(), Scope: llm.ScopeEndpoint, Usage: dec.Usage()}
+		default:
+			events, err = dec.Decode([]byte(e.Data))
+			if err != nil {
+				return err
+			}
+		}
+		for _, ev := range events {
+			if err := out.Send(ev); err != nil {
+				return err
+			}
+			if ev.Terminal() {
+				return nil
+			}
+		}
+		if eof {
+			return nil
+		}
+	}
+}
+
+// upstreamError turns a non-2xx Messages response into a structured error. model is the model the
+// request asked for.
+func upstreamError(resp *http.Response, model string) *llm.Error {
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var parsed struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &parsed)
+	e := &llm.Error{Status: resp.StatusCode, Message: parsed.Error.Message, ProviderCode: parsed.Error.Type}
+	if e.Message == "" {
+		e.Message = fmt.Sprintf("upstream returned %s", resp.Status)
+	}
+	if json.Valid(raw) {
+		e.Raw = raw
+	}
+	switch s := resp.StatusCode; {
+	case s >= 300 && s < 400:
+		// A redirect sameOrigin refused to follow.
+		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
+		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
+	case s == http.StatusUnauthorized:
+		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
+	case s == http.StatusForbidden:
+		e.Code, e.Scope, e.Retryable = llm.CodePermission, llm.ScopeCredential, true
+	case s == http.StatusNotFound:
+		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
+		// Anthropic names the model when it does not have it: then it did not run the request,
+		// and another account may serve the model.
+		e.Retryable = model != "" && strings.Contains(e.Message, model)
+	case s == http.StatusTooManyRequests:
+		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
+		if strings.EqualFold(resp.Header.Get("Anthropic-Ratelimit-Unified-Status"), "rejected") {
+			// A subscription's usage window is used up; it opens again at the unified reset.
+			e.Code = llm.CodeQuota
+		}
+		e.RetryAfterMS = rateLimitWait(resp.Header, time.Now())
+	case s == http.StatusServiceUnavailable || s == 529:
+		// 529 is Anthropic's overloaded_error: the request was refused, not run.
+		e.Code, e.Scope, e.Retryable = llm.CodeUnavailable, llm.ScopeEndpoint, true
+		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+	case s >= 500:
+		// The upstream may have run the request before failing, so retrying is not known safe.
+		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
+	default:
+		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
+	}
+	return e
+}
+
+// rateLimitWait is how long to wait after a 429: Retry-After when given, otherwise the reset of a
+// subscription's usage window that was refused (anthropic-ratelimit-unified-reset, Unix seconds).
+func rateLimitWait(h http.Header, now time.Time) int64 {
+	if ms := retryAfter(h.Get("Retry-After"), now); ms > 0 {
+		return ms
+	}
+	if secs, err := strconv.ParseInt(strings.TrimSpace(h.Get("Anthropic-Ratelimit-Unified-Reset")), 10, 64); err == nil {
+		if d := time.Unix(secs, 0).Sub(now); d > 0 {
+			return d.Milliseconds()
+		}
+	}
+	return 0
+}
+
+// retryAfter reads a Retry-After header: delay seconds or an HTTP date.
+func retryAfter(v string, now time.Time) int64 {
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && secs >= 0 {
+		return secs * 1000
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := t.Sub(now); d > 0 {
+			return d.Milliseconds()
+		}
+	}
+	return 0
+}

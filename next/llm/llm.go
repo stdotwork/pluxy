@@ -90,7 +90,9 @@ type Native struct {
 	// Headers are the client's request headers that belong to Format and say how to read Body,
 	// keyed by lower-case name: for Anthropic Messages, anthropic-version and anthropic-beta; for
 	// OpenAI Responses, the Codex CLI's session and turn headers. An extension that passes Body
-	// through sends those its upstream reads.
+	// through sends those its upstream reads. For Anthropic Messages they also hold the headers
+	// the client names itself with (anthropicmessages.ClientHeaders), which an extension may send
+	// with a body it passes through.
 	Headers map[string]string `json:"headers,omitempty"`
 }
 

@@ -44,13 +44,14 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// build compiles core and the extension and writes the extension's manifest next to it.
+// build compiles core and the extensions and writes each extension's manifest next to it.
 func build(dir string) error {
 	for _, b := range []struct{ out, pkg string }{
 		{"pluxy", "../cmd/pluxy"},
 		{"openai-compatible", "../extensions/openai-compatible"},
 		{filepath.Join("oauth", "oauth"), "../examples/oauth"},
 		{filepath.Join("codex", "codex"), "../extensions/codex"},
+		{filepath.Join("claude", "claude"), "../extensions/claude"},
 		{"testext", "./testext"},
 	} {
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, b.out), b.pkg)
@@ -70,7 +71,7 @@ func build(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "pluxy-extension.json"), b, 0o644); err != nil {
 		return err
 	}
-	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex"} {
+	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude"} {
 		manifest["id"] = id
 		manifest["programs"] = map[string]string{runtime.GOOS + "/" + runtime.GOARCH: name}
 		b, _ = json.Marshal(manifest)
