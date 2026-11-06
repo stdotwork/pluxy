@@ -26,6 +26,7 @@ import (
 	"log"
 	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sync"
@@ -33,6 +34,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/extconfig"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
@@ -86,6 +88,9 @@ type Core struct {
 	creds  *cred.Manager // opened by the first load
 	pkgDir string        // the packages folder, fixed for core's run
 
+	settings  *extconfig.Store // extensions' settings, in the packages folder
+	pagesPort atomic.Int64     // the pages listener's port, once main has it
+
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
 	accounts sync.Mutex
@@ -113,6 +118,8 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c.pkgDir = cfg.Packages.Dir
+	// No publisher's folder can be called .settings: IDs start with a letter or digit.
+	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
 	if c.initial, err = c.loadPackages(cfg); err != nil {
 		return nil, err
 	}
@@ -283,6 +290,9 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 	}
 	if prev != nil && cfg.Listen != prev.Config.Listen {
 		return nil, fmt.Errorf("config: listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.Listen, cfg.Listen)
+	}
+	if prev != nil && cfg.ExtensionPages.Listen != prev.Config.ExtensionPages.Listen {
+		return nil, fmt.Errorf("config: extension_pages.listen cannot change while core runs (%q to %q); restart core to apply it", prev.Config.ExtensionPages.Listen, cfg.ExtensionPages.Listen)
 	}
 	if prev != nil && cfg.CredentialsDir != prev.Config.CredentialsDir {
 		return nil, fmt.Errorf("config: credentials_dir cannot change while core runs (%q to %q); restart core to apply it", prev.Config.CredentialsDir, cfg.CredentialsDir)

@@ -78,11 +78,16 @@ jobs:
           PLUXY_REQUIRE_PANEL: '1'
         run: go test -race -count=1 ./...
       # The runner image already has Chrome's system libraries, so only the browser is fetched.
-      - name: Install Chromium for the browser test
+      # Firefox and WebKit run the extension pages test and need their system libraries too.
+      - name: Install Chromium for the browser tests
         working-directory: next/ui
         timeout-minutes: 5
         run: ./node_modules/.bin/playwright install chromium
-      - name: Browser test
+      - name: Install Firefox and WebKit for the extension pages test
         working-directory: next/ui
         timeout-minutes: 10
+        run: ./node_modules/.bin/playwright install --with-deps firefox webkit
+      - name: Browser tests
+        working-directory: next/ui
+        timeout-minutes: 15
         run: bun run test:browser

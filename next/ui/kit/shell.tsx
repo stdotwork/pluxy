@@ -4,16 +4,20 @@
 import type { VNode } from "preact";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "./api";
+import { ExtensionPage } from "./extensions/page";
 import type { Host } from "./host";
 import type { ThemeState } from "./theme/state";
-import { Button, KitContext, Notice } from "./ui";
+import { Button, type Kit, KitContext, Notice } from "./ui";
 
 /**
- * A page in the navigation. Extension pages will be pages too: their render mounts the
- * extension's isolated document, so the shell and the theme hooks treat them like any other.
+ * A page in the navigation. Extension pages are pages too: their render mounts the extension's
+ * isolated document, so the shell and the theme hooks treat them like any other.
  */
 export interface PageDef {
-  /** Stable ID: the address is #/<id>, and the root element carries data-page="<id>". */
+  /**
+   * Stable ID: the address is #/<id>, and the root element carries data-page="<id>". An
+   * extension page's ID is ext/<publisher>/<name>/<page>.
+   */
   id: string;
   title: string;
   /** A label of up to about six characters, for the rail navigation. */
@@ -22,8 +26,49 @@ export interface PageDef {
 }
 
 function currentId(pages: PageDef[]): string {
-  const id = location.hash.replace(/^#\/?/, "").split("/")[0] ?? "";
-  return pages.some((p) => p.id === id) ? id : (pages[0]?.id ?? "");
+  const path = location.hash.replace(/^#\/?/, "");
+  const match = pages.filter((p) => path === p.id || path.startsWith(`${p.id}/`));
+  const longest = match.sort((a, b) => b.id.length - a.id.length)[0];
+  return longest?.id ?? pages[0]?.id ?? "";
+}
+
+/** The pages of the extensions that run, from core. */
+function useExtensionPages(on: boolean, kit: Kit, version: number): PageDef[] {
+  const [defs, setDefs] = useState<PageDef[]>([]);
+  useEffect(() => {
+    if (!on) {
+      setDefs([]);
+      return;
+    }
+    let live = true;
+    kit.api.ui().then((r) => {
+      if (!live) return;
+      if (r.status === 401) return kit.unauthorized();
+      const ui = r.body;
+      if (!ui) return;
+      setDefs(
+        ui.extensions.flatMap((ext) =>
+          ext.pages.map((page) => ({
+            id: `ext/${ext.id}/${page.id}`,
+            title: page.title,
+            short: page.short,
+            render: () => (
+              <ExtensionPage
+                ext={ext}
+                page={page}
+                pagesOrigin={ui.pages_origin}
+                pagesError={ui.pages_error}
+              />
+            ),
+          })),
+        ),
+      );
+    });
+    return () => {
+      live = false;
+    };
+  }, [on, kit, version]);
+  return defs;
 }
 
 function SignIn(props: { host: Host; onDone: () => void; reason?: string }) {
@@ -70,24 +115,39 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string }) {
   );
 }
 
-export function Shell(props: { host: Host; themes: ThemeState; pages: PageDef[]; brand?: string }) {
-  const { host, themes, pages } = props;
+export function Shell(props: {
+  host: Host;
+  themes: ThemeState;
+  pages: PageDef[];
+  brand?: string;
+  /** Adds the pages of the extensions that run, after the build's own. */
+  extensionPages?: boolean;
+}) {
+  const { host, themes } = props;
   const [signedIn, setSignedIn] = useState(host.signedIn());
   const [reason, setReason] = useState<string>();
-  const [page, setPage] = useState(() => currentId(pages));
-
-  useEffect(() => {
-    const onHash = () => setPage(currentId(pages));
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, [pages]);
+  const [uiVersion, setUiVersion] = useState(0);
 
   const unauthorized = useCallback(() => {
     host.signOut();
     setReason("Core refused the management key. Sign in again.");
     setSignedIn(false);
   }, [host]);
-  const kit = useMemo(() => ({ host, api: api(host), themes, unauthorized }), [host, themes, unauthorized]);
+  const extensionsChanged = useCallback(() => setUiVersion((n) => n + 1), []);
+  const kit = useMemo(
+    () => ({ host, api: api(host), themes, unauthorized, extensionsChanged }),
+    [host, themes, unauthorized, extensionsChanged],
+  );
+  const extPages = useExtensionPages(signedIn && props.extensionPages === true, kit, uiVersion);
+  const pages = useMemo(() => [...props.pages, ...extPages], [props.pages, extPages]);
+  const [page, setPage] = useState(() => currentId(pages));
+
+  useEffect(() => {
+    const onHash = () => setPage(currentId(pages));
+    onHash(); // extension pages arrive after the first render
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [pages]);
 
   const active = pages.find((p) => p.id === page);
   useEffect(() => {

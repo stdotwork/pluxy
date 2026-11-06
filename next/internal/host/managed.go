@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -70,28 +71,50 @@ func DefaultPolicy() Policy {
 	}
 }
 
-// Fingerprint identifies an extension generation's code: a digest of its manifest and of the
-// program it runs on this platform. Two configs naming the same manifest with the same
-// fingerprint can share one running generation.
+// Fingerprint identifies an extension generation's code: a digest of its manifest, of the
+// program it runs on this platform and of every file in its ui folder (with their names). Two
+// configs naming the same manifest with the same fingerprint can share one running generation.
 func Fingerprint(manifestPath string) (string, error) {
+	fp, _, err := fingerprint(manifestPath)
+	return fp, err
+}
+
+// fingerprint returns the Fingerprint and the SHA-256 of each ui file (lower-case hex), by its
+// slash-separated path in the ui folder, read in the same pass.
+func fingerprint(manifestPath string) (string, map[string]string, error) {
 	m, err := LoadManifest(manifestPath)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	prog, err := m.Program()
 	if err != nil {
-		return "", err
+		return "", nil, err
+	}
+	ui, err := m.uiFiles()
+	if err != nil {
+		return "", nil, err
 	}
 	h := sha256.New()
 	for _, p := range []string{manifestPath, prog} {
 		b, err := os.ReadFile(p)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		fmt.Fprintf(h, "%d:", len(b))
 		h.Write(b)
 	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+	files := map[string]string{}
+	for _, name := range ui {
+		b, err := os.ReadFile(filepath.Join(m.UIDir(), filepath.FromSlash(name)))
+		if err != nil {
+			return "", nil, err
+		}
+		sum := sha256.Sum256(b)
+		files[name] = hex.EncodeToString(sum[:])
+		fmt.Fprintf(h, "ui %d:%s %d:", len(name), name, len(b))
+		h.Write(b)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), files, nil
 }
 
 // Managed is one generation of an extension: one manifest and program, run while it is needed.
@@ -106,6 +129,7 @@ func Fingerprint(manifestPath string) (string, error) {
 type Managed struct {
 	path        string
 	fingerprint string
+	uiFiles     map[string]string // SHA-256 of each ui file, as fingerprint read them
 	manifest    *Manifest
 	info        protocol.Info // from the first handshake
 	generation  uint64
@@ -137,7 +161,7 @@ type Managed struct {
 // so a config that names a broken extension is refused before it is published. generation
 // labels it in status and logs.
 func Prepare(manifestPath string, generation uint64, policy Policy, opts Options) (*Managed, error) {
-	fp, err := Fingerprint(manifestPath)
+	fp, files, err := fingerprint(manifestPath)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +169,7 @@ func Prepare(manifestPath string, generation uint64, policy Policy, opts Options
 	if err != nil {
 		return nil, err
 	}
-	g := &Managed{path: manifestPath, fingerprint: fp, manifest: m, generation: generation, opts: opts,
+	g := &Managed{path: manifestPath, fingerprint: fp, uiFiles: files, manifest: m, generation: generation, opts: opts,
 		logf: log.Printf, policy: policy, state: StateStarting, stopping: map[*Extension]bool{}}
 	ext, err := Start(manifestPath, opts)
 	if err != nil {
@@ -166,6 +190,11 @@ func (g *Managed) Fingerprint() string { return g.fingerprint }
 
 // Manifest returns the generation's manifest.
 func (g *Managed) Manifest() *Manifest { return g.manifest }
+
+// UIFiles returns the SHA-256 (lower-case hex) of each file in the generation's ui folder as
+// it was when the generation was prepared, by slash-separated path. Only these, unchanged, may
+// be served.
+func (g *Managed) UIFiles() map[string]string { return g.uiFiles }
 
 // Info returns what the program said about itself in its first handshake.
 func (g *Managed) Info() protocol.Info { return g.info }

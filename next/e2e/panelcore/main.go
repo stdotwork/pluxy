@@ -1,6 +1,9 @@
 // Command panelcore runs a real pluxy core with fake provider extensions, for the web panel's
 // browser tests. Run it from the next folder: go run ./e2e/panelcore.
 //
+// test/alpha brings a benign extension page and a settings schema, and test/hostile a page that
+// tries to escape its sandbox; their files are in ui/e2e/fixtures.
+//
 // Once core listens and test/beta is disabled, it prints one line of JSON on stdout,
 // {"base":"http://127.0.0.1:port","key":"<management key>"}, and nothing else on stdout. It runs
 // until stdin reaches EOF or it gets SIGINT or SIGTERM, then stops core and removes its files.
@@ -19,12 +22,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -71,7 +76,7 @@ func serve() error {
 	if _, err := writeLocal(dir, testext); err != nil {
 		return err
 	}
-	index, err := writeRegistry(dir, testext)
+	index, err := writeRegistry(dir, testext, filepath.Join(root, "ui"))
 	if err != nil {
 		return err
 	}
@@ -153,6 +158,52 @@ type manifest struct {
 	Version         string            `json:"version"`
 	Protocol        []int             `json:"protocol"`
 	Programs        map[string]string `json:"programs"`
+	UI              any               `json:"ui,omitempty"`
+	Config          any               `json:"config,omitempty"`
+}
+
+// pkg is a test package: its manifest's extra parts and the fixture folder of its pages.
+type pkg struct {
+	id, version, file string
+	ui, config        any
+	fixture           string // folder under ui/e2e/fixtures, copied into the package's ui folder
+}
+
+var testPackages = []pkg{
+	{
+		id: "test/alpha", version: "0.2.0", file: "alpha.tar.gz", fixture: "alpha",
+		ui: map[string]any{
+			"version": 0, "dir": "ui", "permissions": []string{"config.read", "config.write"},
+			"pages": []any{map[string]any{"id": "usage", "title": "Alpha usage", "short": "Alpha", "path": "index.html"}},
+		},
+		// Literal JSON, so the fields keep their order, as the form shows them.
+		config: map[string]any{"version": 0, "schema": json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"greeting": {"type": "string", "title": "Greeting", "maxLength": 40, "default": "hello"},
+				"interval": {"type": "integer", "title": "Interval (seconds)", "minimum": 1, "maximum": 3600, "default": 60},
+				"unit": {"type": "string", "title": "Unit", "enum": ["tokens", "requests"], "default": "tokens"},
+				"detailed": {"type": "boolean", "title": "Detailed view", "default": false},
+				"token": {"type": "string", "title": "Export token", "writeOnly": true}
+			},
+			"required": ["greeting"]
+		}`)},
+	},
+	{id: "test/beta", version: "1.0.0", file: "beta.tar.gz"},
+	{
+		id: "test/hostile", version: "0.1.0", file: "hostile.tar.gz", fixture: "hostile",
+		ui: map[string]any{
+			"version": 0, "dir": "ui", "permissions": []string{"config.read"},
+			"pages": []any{map[string]any{"id": "hostile", "title": "Hostile", "short": "Evil", "path": "index.html"}},
+		},
+		config: map[string]any{"version": 0, "schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canary": map[string]any{"type": "string", "title": "Canary"},
+				"panel":  map[string]any{"type": "string", "title": "Panel"},
+			},
+		}},
+	},
 }
 
 // writeLocal puts the test extension in the local folder, with the manifest the config runs from
@@ -183,9 +234,9 @@ func writeLocal(dir, testext string) (string, error) {
 	return path, nil
 }
 
-// writeRegistry writes the archives of test/alpha and test/beta and the registry index that
-// offers them, and returns the index's path.
-func writeRegistry(dir, testext string) (string, error) {
+// writeRegistry writes the archives of the test packages and the registry index that offers
+// them, and returns the index's path. uiRoot is next/ui: the fixtures and the page library.
+func writeRegistry(dir, testext, uiRoot string) (string, error) {
 	prog, err := os.ReadFile(testext)
 	if err != nil {
 		return "", err
@@ -195,11 +246,12 @@ func writeRegistry(dir, testext string) (string, error) {
 		return "", err
 	}
 	pkgs := map[string]any{}
-	for _, p := range []struct{ id, version, file string }{
-		{"test/alpha", "0.2.0", "alpha.tar.gz"},
-		{"test/beta", "1.0.0", "beta.tar.gz"},
-	} {
-		archive, err := packageArchive(p.id, p.version, prog)
+	for _, p := range testPackages {
+		ui, err := pageFiles(uiRoot, p.fixture)
+		if err != nil {
+			return "", err
+		}
+		archive, err := packageArchive(p, prog, ui)
 		if err != nil {
 			return "", err
 		}
@@ -225,12 +277,38 @@ func writeRegistry(dir, testext string) (string, error) {
 	return path, nil
 }
 
-// packageArchive packs the test extension as a release archive of package id, laid out as the
-// Codex archive in e2e/packages_test.go is.
-func packageArchive(id, version string, prog []byte) ([]byte, error) {
+// pageFiles returns the files of fixture's pages, with the page library beside them, by name
+// under the package's ui folder; none for no fixture.
+func pageFiles(uiRoot, fixture string) (map[string][]byte, error) {
+	if fixture == "" {
+		return nil, nil
+	}
+	files := map[string][]byte{}
+	dir := filepath.Join(uiRoot, "e2e", "fixtures", fixture)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			if files[e.Name()], err = os.ReadFile(filepath.Join(dir, e.Name())); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if files["pluxy-page.js"], err = os.ReadFile(filepath.Join(uiRoot, "extension-pages", "pluxy-page.js")); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// packageArchive packs the test extension as a release archive of package p, laid out as the
+// Codex archive in e2e/packages_test.go is, with ui holding its pages' files.
+func packageArchive(p pkg, prog []byte, ui map[string][]byte) ([]byte, error) {
 	m, err := json.Marshal(manifest{
-		ID: id, Version: version, Protocol: []int{0},
+		ID: p.id, Version: p.version, Protocol: []int{0},
 		Programs: map[string]string{platform: "bin/testext"},
+		UI:       p.ui, Config: p.config,
 	})
 	if err != nil {
 		return nil, err
@@ -238,11 +316,19 @@ func packageArchive(id, version string, prog []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	for _, f := range []struct {
+	type entry struct {
 		name string
 		mode int64
 		body []byte
-	}{{"pluxy-extension.json", 0o644, m}, {"bin/", 0o755, nil}, {"bin/testext", 0o755, prog}} {
+	}
+	entries := []entry{{"pluxy-extension.json", 0o644, m}, {"bin/", 0o755, nil}, {"bin/testext", 0o755, prog}}
+	if len(ui) > 0 {
+		entries = append(entries, entry{"ui/", 0o755, nil})
+		for _, name := range slices.Sorted(maps.Keys(ui)) {
+			entries = append(entries, entry{"ui/" + name, 0o644, ui[name]})
+		}
+	}
+	for _, f := range entries {
 		h := &tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.body)), Typeflag: tar.TypeReg}
 		if strings.HasSuffix(f.name, "/") {
 			h.Typeflag = tar.TypeDir

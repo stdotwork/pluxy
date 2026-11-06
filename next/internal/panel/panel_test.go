@@ -30,7 +30,7 @@ func serve(t *testing.T, h http.Handler, method, target string, header ...string
 func on() bool { return true }
 
 func TestServesFilesWithTheirTypesAndCaching(t *testing.T) {
-	h := Handler(built, on)
+	h := Handler(built, on, nil)
 	for _, c := range []struct{ path, kind, cache string }{
 		{"/panel/", "text/html; charset=utf-8", "no-cache"},
 		{"/panel/index.html", "text/html; charset=utf-8", "no-cache"},
@@ -53,7 +53,7 @@ func TestServesFilesWithTheirTypesAndCaching(t *testing.T) {
 }
 
 func TestRevalidatesWithETag(t *testing.T) {
-	h := Handler(built, on)
+	h := Handler(built, on, nil)
 	etag := serve(t, h, "GET", "/panel/").Header().Get("ETag")
 	if etag == "" {
 		t.Fatal("no ETag")
@@ -67,7 +67,7 @@ func TestRevalidatesWithETag(t *testing.T) {
 }
 
 func TestRefusesWhatItDoesNotServe(t *testing.T) {
-	h := Handler(built, on)
+	h := Handler(built, on, nil)
 	for _, c := range []struct {
 		method, path string
 		code         int
@@ -90,7 +90,7 @@ func TestRefusesWhatItDoesNotServe(t *testing.T) {
 
 // While the management API is off, the panel's paths are not found, as the API's are.
 func TestOffMeansNotFound(t *testing.T) {
-	h := Handler(built, func() bool { return false })
+	h := Handler(built, func() bool { return false }, nil)
 	for _, p := range []string{"/panel", "/panel/", "/panel/app-1a2b.js"} {
 		if w := serve(t, h, "GET", p); w.Code != http.StatusNotFound {
 			t.Errorf("GET %s while off: status %d, want 404", p, w.Code)
@@ -100,7 +100,7 @@ func TestOffMeansNotFound(t *testing.T) {
 
 // A core built without the panel says so and how to build it, instead of a blank page.
 func TestNotBuiltExplains(t *testing.T) {
-	h := Handler(fstest.MapFS{".gitkeep": {}}, on)
+	h := Handler(fstest.MapFS{".gitkeep": {}}, on, nil)
 	w := serve(t, h, "GET", "/panel/")
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "go generate ./internal/panel") {
 		t.Errorf("unbuilt panel: status %d: %s", w.Code, w.Body)

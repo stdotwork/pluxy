@@ -14,6 +14,8 @@ export interface Kit {
   themes: ThemeState;
   /** Called when core refuses the key: the shell goes back to signing in. */
   unauthorized(): void;
+  /** Called after an extension changed (installed, enabled, removed): its pages may differ. */
+  extensionsChanged(): void;
 }
 
 export const KitContext = createContext<Kit | null>(null);
