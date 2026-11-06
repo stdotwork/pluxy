@@ -1,0 +1,202 @@
+{
+  "description": "Non-streamed Chat tool calls become function_call output items with call_id, name and arguments.",
+  "source": [
+    "core/internal/translator/openai/openai/responses/openai_openai-responses_request.go (ConvertOpenAIResponsesRequestToOpenAIChatCompletions)",
+    "core/internal/translator/openai/openai/responses/openai_openai-responses_response.go (ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": "Weather in Paris and Oslo?",
+      "tools": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "description": "Current weather",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call_1",
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"Paris\"}"
+                  }
+                },
+                {
+                  "id": "call_2",
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"Oslo\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 4,
+          "completion_tokens": 2,
+          "total_tokens": 6
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "background": false,
+        "created_at": 1700000001,
+        "error": null,
+        "id": "chatcmpl-corpus",
+        "incomplete_details": null,
+        "model": "gpt-test",
+        "object": "response",
+        "output": [
+          {
+            "arguments": "{\"city\":\"Paris\"}",
+            "call_id": "call_1",
+            "id": "fc_call_1",
+            "name": "get_weather",
+            "status": "completed",
+            "type": "function_call"
+          },
+          {
+            "arguments": "{\"city\":\"Oslo\"}",
+            "call_id": "call_2",
+            "id": "fc_call_2",
+            "name": "get_weather",
+            "status": "completed",
+            "type": "function_call"
+          }
+        ],
+        "status": "completed",
+        "tools": [
+          {
+            "function": {
+              "description": "Current weather",
+              "name": "get_weather",
+              "parameters": {
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "input_tokens": 4,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens": 2,
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "total_tokens": 6
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": "Weather in Paris and Oslo?",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "stream": false,
+          "tools": [
+            {
+              "function": {
+                "description": "Current weather",
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {
+                    "city": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.tools",
+      "kind": "intended",
+      "reason": "The new core's Response repeats the client's own Responses request fields; today's core repeats fields of the Chat request it translated to (Chat-shaped tools and tool_choice; nothing for instructions, text, reasoning, temperature or top_p).",
+      "want": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "description": "Current weather",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

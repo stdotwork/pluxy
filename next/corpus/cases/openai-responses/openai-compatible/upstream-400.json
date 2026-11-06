@@ -1,0 +1,81 @@
+{
+  "description": "An upstream 400 is an HTTP 400 error for the Responses client.",
+  "source": [
+    "core/sdk/api/handlers/handlers_error_response_test.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": "Say hello"
+    }
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "Invalid value for 'temperature'.",
+          "type": "invalid_request_error",
+          "param": "temperature",
+          "code": "invalid_value"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "invalid_value",
+          "message": "Invalid value for 'temperature'.",
+          "param": "temperature",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": "Say hello",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "stream": false
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {
+        "code": "invalid_value",
+        "message": "Invalid value for 'temperature'.",
+        "type": "invalid_request_error"
+      }
+    }
+  ]
+}

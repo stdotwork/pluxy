@@ -1,0 +1,157 @@
+{
+  "description": "An error object inside a 200 Chat stream ends the Responses stream with a failure.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_responses_handlers_stream_error_test.go (TestForwardResponsesStreamExposesTerminalErrors)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": "Say hello",
+      "stream": true
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "role": "assistant",
+                  "content": ""
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "error": {
+              "message": "The server had an error while processing your request.",
+              "type": "server_error",
+              "code": "internal_error"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": 1700000000,
+              "error": null,
+              "id": "chatcmpl-corpus",
+              "model": "gpt-test",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "chatcmpl-corpus",
+              "model": "gpt-test",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 2,
+            "type": "response.in_progress"
+          },
+          "event": "response.in_progress"
+        },
+        {
+          "data": {
+            "error": {
+              "code": "internal_error",
+              "message": "The server had an error while processing your request.",
+              "type": "server_error"
+            },
+            "sequence_number": 2,
+            "type": "error"
+          },
+          "event": "error"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": "Say hello",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.events[2].data.sequence_number",
+      "kind": "intended",
+      "reason": "The new core gives the closing error event the next sequence number; today's core repeats the previous event's number. Each Responses stream event's sequence_number is meant to increase.",
+      "want": 3
+    },
+    {
+      "path": "client.events[2].data.code",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
+    },
+    {
+      "path": "client.events[2].data.message",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
+    },
+    {
+      "path": "client.events[2].data.param",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
+    }
+  ]
+}

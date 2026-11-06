@@ -194,29 +194,53 @@ version 0.
 | `stream` | Whether the client asked for a streamed reply. Core always receives events; this only tells the extension how the client is being served, in case the upstream call should match. |
 | `items` | The conversation, in order. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
-| `options` | Generation options; any field may be absent. |
+| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it). |
 | `native` | The client's original request body and its format, when core received one. |
+| `origin` | The request's top-level fields that have no place in the model (see Origin below). |
+| `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
 
 Item types:
 
 | Type | Fields |
 | --- | --- |
-| `message` | `role` (`system`, `developer`, `user`, `assistant`), `content`: a list of parts. |
-| `tool_call` | `call_id`, `name`, `arguments` (the raw argument string, not parsed). |
+| `message` | `role` (`system`, `developer`, `user`, `assistant`), `content`: a list of parts; `text_content` is true when the client gave the content as a plain string. |
+| `tool_call` | `call_id`, `name`, `arguments` (the raw argument string, not parsed); `custom` (default false) marks a call to a custom (freeform) tool, whose `arguments` is the tool's raw input rather than JSON. |
 | `tool_result` | `call_id`, `output` (string). |
+| `reasoning` | `text`: reasoning text or summary the client replayed. Opaque reasoning data (such as an encrypted blob) stays in `origin.raw`. |
+| `native` | An item core could not interpret (for example a hosted tool call); `origin.raw` holds it whole. |
+
+Every item may also carry `id` (its identifier in the client's format) and `origin`.
 
 Content part types:
 
 | Type | Fields |
 | --- | --- |
 | `text` | `text`. |
-| `image` | `url` (an `https:` or `data:` URL), optional `detail`. |
+| `image` | `url` (an `https:` or `data:` URL), optional `detail`; or `file_id`. |
+| `file` | One of `file_id`, `file_data` (inline) or `url`; optional `filename`. |
 | `native` | `format` and `data`: a part core could not interpret, kept as the client sent it. |
+
+Tools: `type` (`function`, the default, or `native` for a tool core could not interpret, such as a
+provider-hosted tool, held whole in `origin.raw`), `name`, `description`, `parameters` (JSON
+Schema), `strict`, `origin`.
+
+**Origin.** The request, every item, part and tool may carry `origin`: `format` (the format it
+came from), `path` (where it was in the client's body, for example `messages[2]` or `input[0]`)
+and `raw` (a JSON object of its fields that have no place in the model, such as a message's `name`
+in Chat Completions). An encoder for `format` writes `raw` back, so those fields survive a round
+trip; an encoder for another format cannot, and reports each of them as dropped.
 
 **Native passthrough.** When `native.format` is the format the extension's upstream speaks, the
 extension should send `native.body` upstream unchanged instead of rebuilding a body from `items`.
 That keeps fields core does not model. Formats in version 0: `openai.chat` (OpenAI Chat
-Completions request body).
+Completions request body) and `openai.responses` (OpenAI Responses request body).
+
+**Translation report.** When the extension rebuilds the body in another format, it reports in the
+reply's `response.start` how it built it: `response.translation` with `from`, `to`, `passthrough`
+(true when the client's body was sent unchanged) and `losses`, each with `kind` (`approximated`:
+carried in a different form; `dropped`: left out), `path` (in the client's body) and `detail`.
+Everything not listed was preserved. Core logs the losses, together with what the reply had that
+the client's format cannot hold.
 
 ## Events
 
@@ -226,13 +250,13 @@ with deltas and closed, then one terminal event.
 
 | Type | Fields | Meaning |
 | --- | --- | --- |
-| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format` and `raw` | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). |
+| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format`, `raw` and `translation` | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). `translation` is the translation report (above). |
 | `item.start` | `index`, `item`: `kind` (`message`, `reasoning`, `tool_call`), and for tool calls `call_id` and `name` | Opens output item `index`. |
 | `text.delta` | `index`, `delta` | Text for an open `message` item. |
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
 | `tool_input.delta` | `index`, `delta` | A fragment of the argument string for an open `tool_call` item. |
 | `item.end` | `index` | Closes item `index`. |
-| `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. |
+| `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. For `openai.responses` it is an upstream stream event the model has no event for (for example `response.in_progress` or a hosted tool's item). |
 | `finish` | `finish`: `reason`, `raw_reason`; optional `usage` | Terminal: success. |
 | `error` | `error` (below) | Terminal: failure. |
 
@@ -240,6 +264,12 @@ Any event may carry `raw`: the upstream data it came from, for diagnostics. `raw
 JSON; upstream bytes that are not JSON go in as a JSON string. Core writes upstream data back
 only to a client that speaks the reply's `format`: the `response.start` fields, `native` events
 and the usage `raw` (so fields such as a vendor cost survive); other clients do not get it.
+
+For `openai.responses`, every event carries the upstream stream event it came from in `raw` (an
+`error` carries it in `error.raw`), and the `finish` of a non-streamed reply carries the whole
+Response object. A Responses client gets those upstream events and that object unchanged; events
+an extension adds itself (such as closing an item the upstream left open) carry no `raw` and are
+not written to it.
 
 Ordering rules, which core enforces and the conformance kit checks:
 
@@ -329,6 +359,5 @@ version; anything else needs a new version, and core keeps speaking old versions
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; login and credential refresh; operations beyond `generate` (token
-counting, model listing); response passthrough in the client's format; loss reports from
-translation; session ownership and WebSocket sessions; draining and hot swap; a private data
-folder per extension.
+counting, model listing); session ownership and WebSocket sessions; draining and hot swap; a
+private data folder per extension.

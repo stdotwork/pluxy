@@ -19,6 +19,68 @@ type Request struct {
 	// Native is the client's original body, when core received one. An extension whose upstream
 	// speaks Native.Format sends Native.Body unchanged instead of rebuilding it from Items.
 	Native *Native `json:"native,omitempty"`
+	// Origin holds the request's top-level fields that have no place in the model.
+	Origin *Origin `json:"origin,omitempty"`
+	// DropPolicy says what an extension does when building its upstream request would drop part
+	// of this request: DropReport (the default) sends it and reports the losses, DropReject
+	// refuses it with an unsupported error.
+	DropPolicy string `json:"drop_policy,omitempty"`
+}
+
+// Drop policies.
+const (
+	DropReport = "report"
+	DropReject = "reject"
+)
+
+// Origin records where a request, item, part or tool came from: its format, its path in the
+// source body (for example messages[2]) and, in Raw, its fields that have no place in the model,
+// as one JSON object in Format. An encoder for Format writes Raw back, so those fields survive;
+// an encoder for another format reports each of them as dropped.
+type Origin struct {
+	Format string          `json:"format"`
+	Path   string          `json:"path,omitempty"`
+	Raw    json.RawMessage `json:"raw,omitempty"`
+}
+
+// Loss kinds.
+const (
+	// LossApproximated: the meaning was carried over in a different form.
+	LossApproximated = "approximated"
+	// LossDropped: the target format has no place for it, so it was left out.
+	LossDropped = "dropped"
+)
+
+// Loss is one thing a translation could not carry over exactly. Path names it in the source
+// body (for example input[1].content[0] or metadata).
+type Loss struct {
+	Kind   string `json:"kind"`
+	Path   string `json:"path"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// Translation reports how an upstream request was built from the client's request. When
+// Passthrough is true the client's body was sent unchanged and nothing was lost; otherwise the
+// body was rebuilt from the model in format To, and Losses lists what did not carry over.
+// Everything not listed was preserved.
+type Translation struct {
+	From        string `json:"from"`
+	To          string `json:"to"`
+	Passthrough bool   `json:"passthrough,omitempty"`
+	Losses      []Loss `json:"losses,omitempty"`
+}
+
+// Dropped reports whether any loss is a drop.
+func (t *Translation) Dropped() bool {
+	if t == nil {
+		return false
+	}
+	for _, l := range t.Losses {
+		if l.Kind == LossDropped {
+			return true
+		}
+	}
+	return false
 }
 
 // Native is a body kept in its original format.
@@ -29,7 +91,8 @@ type Native struct {
 
 // Native formats.
 const (
-	FormatOpenAIChat = "openai.chat"
+	FormatOpenAIChat      = "openai.chat"
+	FormatOpenAIResponses = "openai.responses"
 )
 
 // Item types.
@@ -37,6 +100,9 @@ const (
 	ItemTypeMessage    = "message"
 	ItemTypeToolCall   = "tool_call"
 	ItemTypeToolResult = "tool_result"
+	ItemTypeReasoning  = "reasoning"
+	// ItemTypeNative is an item core could not interpret; Origin.Raw holds it whole.
+	ItemTypeNative = "native"
 )
 
 // Message roles.
@@ -50,24 +116,39 @@ const (
 // Item is one entry in a conversation. Type selects which fields apply.
 type Item struct {
 	Type string `json:"type"`
+	// ID is the item's own identifier in its source format, when it had one (Responses item
+	// ids). It names the item; it is not content.
+	ID string `json:"id,omitempty"`
 
 	// message
 	Role    string `json:"role,omitempty"`
 	Content []Part `json:"content,omitempty"`
+	// TextContent is true when the source gave the content as a plain string rather than a list
+	// of parts; an encoder that has both forms keeps the source's.
+	TextContent bool `json:"text_content,omitempty"`
 
 	// tool_call and tool_result
 	CallID string `json:"call_id,omitempty"`
 	// tool_call
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	// Custom marks a call to a custom (freeform) tool: Arguments is the tool's raw input, not
+	// JSON.
+	Custom bool `json:"custom,omitempty"`
 	// tool_result
 	Output string `json:"output,omitempty"`
+	// reasoning: the reasoning text or summary the client replayed. Opaque reasoning data, such
+	// as an encrypted blob, stays in Origin.Raw.
+	Text string `json:"text,omitempty"`
+
+	Origin *Origin `json:"origin,omitempty"`
 }
 
 // Part types.
 const (
 	PartText   = "text"
 	PartImage  = "image"
+	PartFile   = "file"
 	PartNative = "native"
 )
 
@@ -76,27 +157,83 @@ type Part struct {
 	Type string `json:"type"`
 	// text
 	Text string `json:"text,omitempty"`
-	// image
+	// image and file
 	URL    string `json:"url,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	Detail string `json:"detail,omitempty"` // image
+	// file: one of FileID (a file stored with the provider), FileData (inline, as a data: URL
+	// or base64) or URL.
+	FileID   string `json:"file_id,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	Filename string `json:"filename,omitempty"`
 	// native: a part core could not interpret, kept as the client sent it.
 	Format string          `json:"format,omitempty"`
 	Data   json.RawMessage `json:"data,omitempty"`
+
+	Origin *Origin `json:"origin,omitempty"`
 }
 
-// Tool is a function tool the model may call.
+// Tool types.
+const (
+	ToolFunction = "function"
+	// ToolNative is a tool core could not interpret, such as a provider-hosted tool;
+	// Origin.Raw holds it whole.
+	ToolNative = "native"
+)
+
+// Tool is a tool the model may call. An empty Type means function.
 type Tool struct {
-	Name        string          `json:"name"`
+	Type        string          `json:"type,omitempty"`
+	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	// Strict asks the provider to make arguments follow Parameters exactly.
+	Strict *bool   `json:"strict,omitempty"`
+	Origin *Origin `json:"origin,omitempty"`
 }
 
-// Options are generation options. Nil means not set.
+// Options are generation options. Nil or empty means not set.
 type Options struct {
-	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
-	Temperature     *float64 `json:"temperature,omitempty"`
-	TopP            *float64 `json:"top_p,omitempty"`
-	Stop            []string `json:"stop,omitempty"`
+	MaxOutputTokens   *int            `json:"max_output_tokens,omitempty"`
+	Temperature       *float64        `json:"temperature,omitempty"`
+	TopP              *float64        `json:"top_p,omitempty"`
+	Stop              []string        `json:"stop,omitempty"`
+	ToolChoice        *ToolChoice     `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat    *ResponseFormat `json:"response_format,omitempty"`
+	// ReasoningEffort is the reasoning effort the client asked for, as it named it (for
+	// example low, medium or high).
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
+// Tool choice modes.
+const (
+	ToolChoiceAuto     = "auto"
+	ToolChoiceNone     = "none"
+	ToolChoiceRequired = "required"
+	ToolChoiceTool     = "tool" // the function named in Name
+)
+
+// ToolChoice says whether and which tool the model must call.
+type ToolChoice struct {
+	Mode string `json:"mode"`
+	Name string `json:"name,omitempty"`
+}
+
+// Response format types.
+const (
+	ResponseFormatText       = "text"
+	ResponseFormatJSONObject = "json_object"
+	ResponseFormatJSONSchema = "json_schema"
+)
+
+// ResponseFormat constrains the reply's text: plain text, any JSON object, or JSON following
+// Schema.
+type ResponseFormat struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 // Event types.
@@ -149,6 +286,8 @@ type ResponseInfo struct {
 	// Raw holds the upstream's reply-level fields that have no place in the model, as one JSON
 	// object; for OpenAI Chat Completions, fields such as system_fingerprint.
 	Raw json.RawMessage `json:"raw,omitempty"`
+	// Translation reports how the extension built the upstream request from the client's.
+	Translation *Translation `json:"translation,omitempty"`
 }
 
 // Output item kinds.

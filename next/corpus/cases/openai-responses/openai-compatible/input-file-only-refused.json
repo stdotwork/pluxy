@@ -1,0 +1,57 @@
+{
+  "description": "A user turn left empty because its only part (an input_file with a file_url) cannot be sent to Chat Completions is refused with 400, not sent upstream empty.",
+  "source": [
+    "core/internal/translator/openai/openai/responses/openai_openai-responses_request.go (ConvertOpenAIResponsesRequestToOpenAIChatCompletions) responsesInputFileToChatPart",
+    "core/internal/translator/common/parts.go (UserTurnDrops)",
+    "core/internal/translator/openai/openai/responses/openai_openai-responses_user_turn_test.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_file",
+              "file_url": "https://example.com/report.pdf"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "unsupported content part: input_file",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "Both refuse the emptied user turn with 400 before any upstream call; the new core's error body is its own (it names the turn and has a code).",
+      "want": {
+        "code": "invalid_request",
+        "message": "input[0]: nothing in this user turn can be sent to Chat Completions",
+        "type": "invalid_request_error"
+      }
+    }
+  ]
+}

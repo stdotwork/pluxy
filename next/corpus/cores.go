@@ -82,6 +82,47 @@ var Providers = map[string]Provider{
 			return "openai-compatible", accounts
 		},
 	},
+	// An upstream that speaks OpenAI Responses with an API key. The new core uses the
+	// OpenAI-compatible extension with wire_api "responses". Today's core has no generic
+	// Responses upstream; the closest is a Codex API key with a custom base URL, with the
+	// Codex client identity (cloaking) turned off.
+	"openai-responses": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			var ms []any
+			for _, m := range models {
+				ms = append(ms, map[string]any{"name": m, "alias": m})
+			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k, "disable-codex-cloaking": true})
+			}
+			return map[string]any{"codex": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL + "/v1",
+				"keys":     ks,
+				"models":   ms,
+			}}}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1", "wire_api": "responses"},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "openai-compatible", accounts
+		},
+	},
 }
 
 // NewCoreExtensions maps an extension name to its package, relative to the next module root.
