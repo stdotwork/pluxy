@@ -168,8 +168,6 @@ func (l *coreLog) waitFor(t *testing.T, s string) string {
 // startCoreLogged is startCore that also returns core's log.
 func startCoreLogged(t *testing.T, u *upstream) (string, *coreLog) {
 	t.Helper()
-	logs := &coreLog{}
-	dir := t.TempDir()
 	cfg := map[string]any{
 		"listen":      "127.0.0.1:0",
 		"client_keys": []string{clientKey},
@@ -182,6 +180,21 @@ func startCoreLogged(t *testing.T, u *upstream) (string, *coreLog) {
 			}},
 		},
 	}
+	return runCoreLogged(t, cfg)
+}
+
+// runCore runs the pluxy binary with config cfg and returns its base URL.
+func runCore(t *testing.T, cfg map[string]any) string {
+	t.Helper()
+	base, _ := runCoreLogged(t, cfg)
+	return base
+}
+
+// runCoreLogged is runCore that also returns core's log.
+func runCoreLogged(t *testing.T, cfg map[string]any) (string, *coreLog) {
+	t.Helper()
+	logs := &coreLog{}
+	dir := t.TempDir()
 	b, _ := json.Marshal(cfg)
 	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, b, 0o600); err != nil {

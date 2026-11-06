@@ -35,38 +35,51 @@ func (c *Core) Logs() string { return c.logs.String() }
 // directory under cases/<format>/.
 type Provider struct {
 	// OldCore returns the old core's api-keys block for the provider, given the fake upstream
-	// URL and the models the cases use.
-	OldCore func(upstreamURL string, models []string) map[string]any
-	// NewCore returns the new core's extension name (a key of NewCoreExtensions) and account
-	// for the provider. models is empty when the account serves any model.
-	NewCore func(upstreamURL string, models []string) (extension string, account map[string]any)
+	// URL, the models the cases use and one upstream key per account.
+	OldCore func(upstreamURL string, models, keys []string) map[string]any
+	// NewCore returns the new core's extension name (a key of NewCoreExtensions) and its
+	// accounts for the provider, one per key. models is empty when the accounts serve any
+	// model.
+	NewCore func(upstreamURL string, models, keys []string) (extension string, accounts []any)
 }
 
 // Providers maps a provider directory name to its setup. Later slices add theirs here.
 var Providers = map[string]Provider{
 	"openai-compatible": {
-		OldCore: func(upstreamURL string, models []string) map[string]any {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
 			var ms []any
 			for _, m := range models {
 				ms = append(ms, map[string]any{"name": m, "alias": m})
 			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k})
+			}
 			return map[string]any{"openai-compatibility": []any{map[string]any{
 				"name":     "corpus",
 				"base-url": upstreamURL + "/v1",
-				"keys":     []any{map[string]any{"api-key": UpstreamKey}},
+				"keys":     ks,
 				"models":   ms,
 			}}}
 		},
-		NewCore: func(upstreamURL string, models []string) (string, map[string]any) {
-			acct := map[string]any{
-				"id":         "corpus",
-				"settings":   map[string]any{"base_url": upstreamURL + "/v1"},
-				"credential": map[string]any{"kind": "api_key", "api_key": UpstreamKey},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
 			}
-			if len(models) > 0 {
-				acct["models"] = models
-			}
-			return "openai-compatible", acct
+			return "openai-compatible", accounts
 		},
 	},
 }
@@ -119,19 +132,20 @@ func BuildOldCore(coreDir, out string) error {
 	return nil
 }
 
-// StartNewCore starts the new core from binDir with the case's provider pointed at upstreamURL.
-func StartNewCore(binDir, workDir, provider, upstreamURL string, models []string) (*Core, error) {
+// StartNewCore starts the new core from binDir with the case's provider pointed at upstreamURL,
+// one account per key.
+func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string) (*Core, error) {
 	p, ok := Providers[provider]
 	if !ok || p.NewCore == nil {
 		return nil, fmt.Errorf("no new-core setup for provider %q", provider)
 	}
-	ext, account := p.NewCore(upstreamURL, models)
+	ext, accounts := p.NewCore(upstreamURL, models, keys)
 	cfg := map[string]any{
 		"listen":      "127.0.0.1:0",
 		"client_keys": []string{ClientKey},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, ext+".pluxy-extension.json"),
-			"accounts": []any{account},
+			"accounts": accounts,
 		},
 	}
 	path := filepath.Join(workDir, "config.json")
@@ -152,11 +166,12 @@ type OldCoreSetup struct {
 	Provider    string
 	UpstreamURL string
 	Models      []string
+	Keys        []string // one upstream key per account
 }
 
 // StartOldCore starts today's core on a free local port with a generated config: the client
-// key, one provider entry pointed at the fake upstream, retries and cooldowns off (one account,
-// one attempt, like the new core's version 0), management and the bundled panel off, and the
+// key, one provider entry with one key per account pointed at the fake upstream, no extra retry
+// rounds, no waits and no cooldowns, management and the bundled panel off, and the
 // embedded model catalog. HOME, the auth folder and the working folder are all inside
 // WorkDir, and outbound proxies point at a closed port so the old core's background version
 // checks cannot reach the internet; the fake upstream is on loopback, which is never proxied.
@@ -187,7 +202,7 @@ func StartOldCore(s OldCoreSetup) (*Core, error) {
 			"cooldown": map[string]any{"disable-cooling": true},
 		},
 		"oauth":         map[string]any{"auth-dir": authDir},
-		"api-keys":      p.OldCore(s.UpstreamURL, s.Models),
+		"api-keys":      p.OldCore(s.UpstreamURL, s.Models, s.Keys),
 		"observability": map[string]any{"usage": map[string]any{"usage-statistics-enabled": false}},
 		"plugins":       map[string]any{"enabled": false},
 	}

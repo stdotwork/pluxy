@@ -44,12 +44,15 @@ proxied.
 The generated config is the same for every case:
 
 - one provider account pointed at the fake upstream, with the API key `sk-corpus-upstream`
-  (not a secret);
+  (not a secret); a case with `accounts` above 1 gets more accounts, keyed
+  `sk-corpus-upstream-2`, `sk-corpus-upstream-3` and so on, all pointed at the same upstream;
 - the client key `corpus-client-key`;
-- for the old core: retries and cooldowns off (one account, one attempt, as in the new core's
-  version 0), management and the bundled panel off, response compression off, the embedded model
-  catalog (`-local-model`), and the request's model listed for the account (the old core serves
-  only listed models; `account_models` in a case overrides this for both cores).
+- routing that never waits: the old core has no extra retry rounds (`request-retry: 0`), no
+  waits (`max-retry-interval: 0`) and no cooldowns; the new core runs its default routing,
+  which also never waits. Both still move a request on to another account within one round;
+- for the old core: management and the bundled panel off, response compression off, the
+  embedded model catalog (`-local-model`), and the request's model listed for the account (the
+  old core serves only listed models; `account_models` in a case overrides this for both cores).
 
 The client sends no `Accept-Encoding`, so replies are observed as the core sent them.
 
@@ -94,6 +97,11 @@ connection after the scripted body. A request beyond the script gets a 500, whic
 the comparison.
 
 `account_models`: models the account lists in both cores (see above).
+
+`accounts`: how many provider accounts both cores have (default 1). The old core's first pick
+between equal accounts changes from run to run, so multi-account cases mark
+`upstream[*].headers.Authorization` volatile; which account the new core picks is pinned by
+the e2e tests.
 
 `volatile`: paths whose values change between runs (timestamps, trace IDs). They are replaced by
 `"(volatile)"` before any comparison.
