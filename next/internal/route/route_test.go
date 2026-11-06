@@ -40,6 +40,8 @@ type harness struct {
 	slept    []time.Duration
 	attempts []string            // account IDs in attempt order
 	scripts  map[string][]script // per account: one script per attempt; the last repeats
+	// onAttempt, when set, runs as an attempt starts, before its reply exists.
+	onAttempt func(id string)
 }
 
 func newHarness(t *testing.T, cfg Config, accounts ...Account) *harness {
@@ -62,6 +64,9 @@ func newHarness(t *testing.T, cfg Config, accounts ...Account) *harness {
 
 func (h *harness) attempt(_ context.Context, a protocol.Account, _ llm.Request) Stream {
 	h.attempts = append(h.attempts, a.ID)
+	if h.onAttempt != nil {
+		h.onAttempt(a.ID)
+	}
 	ss := h.scripts[a.ID]
 	if len(ss) == 0 {
 		return &fakeStream{events: ok()}
@@ -620,4 +625,131 @@ func TestRenewedAccountIsTriedAgain(t *testing.T) {
 	h.on("b", fail(llm.Error{Code: llm.CodeInvalidRequest, Status: 400, Scope: llm.ScopeRequest, Message: "b rejected request"}))
 	h.runOK("m")
 	h.wantAttempts("a", "a")
+}
+
+// reload builds the router a config reload would: new accounts over the same state, carried
+// over by Retain with "same" meaning same settings.
+func (h *harness) reload(cfg Config, accounts ...Account) {
+	h.t.Helper()
+	r, err := New(cfg, accounts, h.attempt, h.r.state)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.r.state.Retain(h.r, r, func(old, cur *Account) bool { return string(old.Settings) == string(cur.Settings) })
+	r.now, r.sleep, r.rand = h.r.now, h.r.sleep, h.r.rand
+	h.r = r
+}
+
+func withSettings(a Account, s string) Account { a.Settings = []byte(s); return a }
+
+// After a reload, an attempt that began on an account before the account changed records
+// nothing on the changed account.
+func TestRetainIgnoresOutcomesFromBeforeAChange(t *testing.T) {
+	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b")...)
+	h.on("a", script{start(), rateLimited(time.Minute)[0]}) // a 429 after the reply started
+	older := h.r.Generate(context.Background(), h.req("m"))
+	older.Next() // attempt on a, reply started
+	h.reload(Config{Strategy: StrategyFillFirst}, withSettings(Account{ID: "a"}, `{"base_url":"elsewhere"}`), Account{ID: "b"})
+	older.Next() // the old attempt now fails with a 429
+	older.Close()
+	h.on("a", ok())
+	h.runOK("m")
+	h.wantAttempts("a", "a")
+}
+
+// Changed accounts lose their session bindings and the blocks on an endpoint label only they
+// named; weighted rotation starts afresh when weights change.
+func TestRetainDropsWhatBelongedToChangedAccounts(t *testing.T) {
+	ep := func(id, endpoint string) Account { return Account{ID: id, Endpoint: endpoint} }
+	h := newHarness(t, Config{SessionAffinity: &AffinityConfig{}}, ep("a", "shared"), ep("b", "solo"))
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.run(s1) // a, bound
+	h.r.state.failure(h.r.accounts[0], "m", &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, RetryAfterMS: 60_000}, h.now)
+
+	// a changes; a new account c joins the "shared" label. The outage on "shared" was a's
+	// endpoint, so c starts unblocked, and s1 is no longer bound to the changed a.
+	c := ep("c", "shared")
+	c.Priority = 1
+	h.reload(Config{SessionAffinity: &AffinityConfig{}}, withSettings(ep("a", "shared"), `{"x":1}`), ep("b", "solo"), c)
+	h.attempts = nil
+	h.run(s1)
+	h.wantAttempts("c")
+
+	// Weighted: a big weight scale, then a small one; the balances must not carry over.
+	big := 1_000_000_000
+	w := func(id string, n int) Account { return Account{ID: id, Weight: &n} }
+	h = newHarness(t, Config{Strategy: StrategyWeighted}, w("a", big), w("b", big))
+	h.runOK("m")
+	h.reload(Config{Strategy: StrategyWeighted}, w("a", 1), w("b", 1))
+	h.attempts = nil
+	for range 4 {
+		h.runOK("m")
+	}
+	h.wantAttempts("a", "b", "a", "b")
+}
+
+// runOn runs req on router r instead of the harness's current one.
+func (h *harness) runOn(r *Router, req Request) []llm.Event {
+	cur := h.r
+	h.r = r
+	defer func() { h.r = cur }()
+	return h.run(req)
+}
+
+// A router a reload replaced records nothing about an account the reload changed, even for an
+// attempt it begins after the reload: a request that started before it retries there.
+func TestOldRouterRecordsNothingOnChangedAccounts(t *testing.T) {
+	cfg := Config{Strategy: StrategyFillFirst}
+	h := newHarness(t, cfg, accts("a", "b")...)
+	old := h.r
+	h.on("a", rateLimited(time.Hour))
+	h.on("b", rateLimited(time.Hour), ok())
+	h.onAttempt = func(id string) {
+		if id == "a" && h.r == old {
+			// The reload lands while the old request's attempt on a is running; it changes b.
+			h.reload(cfg, Account{ID: "a"}, withSettings(Account{ID: "b"}, `{"base_url":"elsewhere"}`))
+		}
+	}
+	h.runOn(old, h.req("m")) // a: 429; the old router retries on the old b: 429
+	h.onAttempt = nil
+	h.attempts = nil
+	h.runOK("m") // a is still blocked; the changed b is not
+	h.wantAttempts("b")
+}
+
+// A reply that starts on a replaced router after the reload does not bind its session to an
+// account the reload changed.
+func TestOldRouterBindsNoSessionToChangedAccounts(t *testing.T) {
+	cfg := Config{SessionAffinity: &AffinityConfig{}}
+	h := newHarness(t, cfg, accts("a", "b")...)
+	old := h.r
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.onAttempt = func(id string) {
+		if id == "a" && h.r == old {
+			b := Account{ID: "b", Priority: 1}
+			h.reload(cfg, withSettings(Account{ID: "a"}, `{"x":1}`), b)
+		}
+	}
+	h.runOn(old, s1) // starts on a after the reload changed a
+	h.onAttempt = nil
+	h.attempts = nil
+	h.run(s1)
+	h.wantAttempts("b")
+}
+
+// A replaced router picking with its old weights does not disturb the new weights' rotation.
+func TestOldWeightsDoNotDisturbNewRotation(t *testing.T) {
+	big := 1_000_000_000
+	w := func(id string, n int) Account { return Account{ID: id, Weight: &n} }
+	cfg := Config{Strategy: StrategyWeighted}
+	h := newHarness(t, cfg, w("a", big), w("b", big))
+	h.runOK("m")
+	old := h.r
+	h.reload(cfg, w("a", 1), w("b", 1))
+	h.runOn(old, h.req("m"))
+	h.attempts = nil
+	for range 4 {
+		h.runOK("m")
+	}
+	h.wantAttempts("a", "b", "a", "b")
 }

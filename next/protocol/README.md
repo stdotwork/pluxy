@@ -4,7 +4,7 @@ This is the contract between the pluxy core and an extension program. Version 0 
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
 model service, and streams the reply back; a provider may also sign in to accounts and renew their
 credentials (see [Login and refresh](#login-and-refresh)). It is deliberately small; later
-versions add capabilities, more operations, and hot swap without changing what is described here.
+versions add capabilities and more operations without changing what is described here.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -96,6 +96,14 @@ Core closes the extension's stdin to ask it to stop. The extension stops accepti
 calls it is running and exits. Core kills the process if it is still running 5 seconds later.
 Because stdin also closes when core itself dies, an extension that follows this rule never
 outlives its core.
+
+Core starts and stops extension programs as it needs them, so a program must not count on a
+long life. It stops a program that has had no calls for a while and starts it again for the next
+call. When a new version of an extension is installed, core starts the new program next to the
+old one, sends new calls to the new one, and asks the old one to stop once its calls have ended
+(or at a deadline). A program that exits on its own is restarted after a backoff, and one that
+keeps crashing is no longer started. None of this changes the protocol: each program sees one
+start, its calls and one stop.
 
 ## Framing
 
@@ -492,4 +500,4 @@ version; anything else needs a new version, and core keeps speaking old versions
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate` (token counting, model listing); session
-ownership and WebSocket sessions; draining and hot swap; a private data folder per extension.
+ownership and WebSocket sessions; a private data folder per extension.

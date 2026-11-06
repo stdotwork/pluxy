@@ -33,6 +33,9 @@ type Account struct {
 	// Managed marks an account whose credential core's credential store keeps: each attempt
 	// asks the router's Credentials for it instead of using Credential.
 	Managed bool `json:"-"`
+
+	// gen is the generation of the router that holds this copy (see State.Retain).
+	gen uint64
 }
 
 func (a *Account) serves(model string) bool {

@@ -250,6 +250,14 @@ func (e *Extension) ExitError() error {
 	return e.waitErr
 }
 
+// PID returns the program's process ID.
+func (e *Extension) PID() int {
+	if e.cmd == nil || e.cmd.Process == nil {
+		return 0
+	}
+	return e.cmd.Process.Pid
+}
+
 // Kill kills the program without waiting.
 func (e *Extension) Kill() {
 	if e.cmd != nil && e.cmd.Process != nil {

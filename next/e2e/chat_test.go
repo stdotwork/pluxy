@@ -50,6 +50,7 @@ func build(dir string) error {
 		{"pluxy", "../cmd/pluxy"},
 		{"openai-compatible", "../extensions/openai-compatible"},
 		{filepath.Join("oauth", "oauth"), "../examples/oauth"},
+		{"testext", "./testext"},
 	} {
 		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, b.out), b.pkg)
 		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
@@ -204,6 +205,14 @@ func runCore(t *testing.T, cfg map[string]any) string {
 // runCoreLogged is runCore that also returns core's log.
 func runCoreLogged(t *testing.T, cfg map[string]any) (string, *coreLog) {
 	t.Helper()
+	base, _, logs := runCoreArgs(t, cfg)
+	return base, logs
+}
+
+// runCoreArgs runs the pluxy binary with config cfg and extra command-line arguments, and
+// returns its base URL, the path of its config file and its log.
+func runCoreArgs(t *testing.T, cfg map[string]any, args ...string) (string, string, *coreLog) {
+	t.Helper()
 	logs := &coreLog{}
 	dir := t.TempDir()
 	b, _ := json.Marshal(cfg)
@@ -212,7 +221,7 @@ func runCoreLogged(t *testing.T, cfg map[string]any) (string, *coreLog) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, filepath.Join(binDir, "pluxy"), "-config", path)
+	cmd := exec.CommandContext(ctx, filepath.Join(binDir, "pluxy"), append([]string{"-config", path}, args...)...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
 	stderr, err := cmd.StderrPipe()
@@ -247,10 +256,10 @@ func runCoreLogged(t *testing.T, cfg map[string]any) (string, *coreLog) {
 		if !ok {
 			t.Fatal("core exited before listening")
 		}
-		return a, logs
+		return a, path, logs
 	case <-time.After(15 * time.Second):
 		t.Fatal("core did not report its listening address")
-		return "", nil
+		return "", "", nil
 	}
 }
 

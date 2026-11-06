@@ -241,3 +241,26 @@ func TestRefusedTokenIsRenewedAndRetried(t *testing.T) {
 		t.Errorf("refresh calls = %d, want 1", c)
 	}
 }
+
+// Accounts added by login belong to core's credential store, not to one config: after a
+// reload they still serve requests, and a refused token is still renewed through the
+// extension.
+func TestLoginAccountsSurviveReload(t *testing.T) {
+	srv := oauthtest.New(t)
+	base, _ := startOAuthCore(t)
+	deviceLogin(t, base, srv, "work")
+	postOK(t, base, plainBody)
+	if code := manage(t, base, "POST", "/reload", nil, nil); code != http.StatusOK {
+		t.Fatalf("POST /reload: %d", code)
+	}
+	first := srv.ChatTokens()[0]
+	srv.RevokeAccess(first)
+	postOK(t, base, plainBody)
+	tokens := srv.ChatTokens()
+	if len(tokens) != 3 || tokens[1] != first || tokens[2] == first {
+		t.Errorf("chat tokens = %v; want the first token twice (served, then refused), then a new one", tokens)
+	}
+	if c := srv.RefreshCalls(); c != 1 {
+		t.Errorf("refresh calls = %d, want 1", c)
+	}
+}

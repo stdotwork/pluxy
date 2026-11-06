@@ -1,5 +1,5 @@
-// Command pluxy is the pluxy core: it serves OpenAI Chat Completions and answers through a
-// provider extension.
+// Command pluxy is the pluxy core: it serves the client APIs and answers through a provider
+// extension.
 package main
 
 import (
@@ -12,75 +12,73 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"syscall"
 	"time"
 
-	"github.com/stdotwork/pluxy/next/internal/cred"
-	"github.com/stdotwork/pluxy/next/internal/host"
+	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/internal/server"
-	"github.com/stdotwork/pluxy/next/llm"
-	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 func main() {
 	log.SetPrefix("pluxy: ")
 	log.SetFlags(0)
 	configPath := flag.String("config", "config.json", "path to the config file")
+	safeMode := flag.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
+	watch := flag.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
 	flag.Parse()
-	if err := run(*configPath); err != nil {
+	if err := run(*configPath, *safeMode, *watch); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
 }
 
-func run(configPath string) error {
-	cfg, err := server.LoadConfig(configPath)
+func run(configPath string, safeMode bool, watch time.Duration) error {
+	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode})
 	if err != nil {
+		if !safeMode {
+			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)
+		}
 		return err
 	}
+	defer c.Stop()
+	cfg := c.Config()
 	if len(cfg.ClientKeys) == 0 {
 		log.Printf("warning: no client_keys set; anyone who can reach %s can use the configured accounts", cfg.Listen)
 	}
-	ext, err := host.Start(cfg.Extension.Manifest, host.Options{})
-	if err != nil {
-		return err
+	if safeMode {
+		log.Print("safe mode: no extension runs")
 	}
-	defer ext.Stop()
-	info := ext.Info()
-	log.Printf("extension %s %s started (protocol %d)", info.ID, info.Version, info.Protocol)
-	go func() {
-		<-ext.Exited()
-		log.Printf("extension %s exited; requests will fail until core restarts", info.ID)
-	}()
-
-	store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
-	if err != nil {
-		return err
+	for _, e := range c.Status().Extensions {
+		log.Printf("extension %s %s started", e.ID, e.Version)
 	}
-	creds := cred.NewManager(store, provider{ext}, cred.Options{Reserved: func(id string) bool {
-		return slices.ContainsFunc(cfg.Extension.Accounts, func(a server.Account) bool { return a.ID == id })
-	}})
-	defer creds.Close()
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
-	handler, err := server.New(cfg, func(ctx context.Context, a protocol.Account, req llm.Request) server.Stream {
-		return ext.Generate(ctx, a, req)
-	}, creds)
-	if err != nil {
-		return err
-	}
+	mux := http.NewServeMux()
+	mux.Handle(core.ManagementPrefix, c.Management())
+	mux.Handle("/", server.NewHandler(c))
 	srv := &http.Server{
-		Handler:           handler,
+		Handler:           mux,
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	fmt.Fprintf(os.Stderr, "pluxy: listening on http://%s\n", ln.Addr())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if watch > 0 {
+		go c.Watch(ctx, watch)
+	}
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		for range hup {
+			_ = c.Reload("SIGHUP") // a failure is logged and shown in status
+		}
+	}()
+
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	select {
@@ -96,11 +94,4 @@ func run(configPath string) error {
 	}
 	srv.Close()
 	return nil
-}
-
-// provider adapts the extension to the credential manager.
-type provider struct{ *host.Extension }
-
-func (p provider) Login(ctx context.Context, account protocol.Account, login protocol.Login) cred.LoginCall {
-	return p.Extension.Login(ctx, account, login)
 }

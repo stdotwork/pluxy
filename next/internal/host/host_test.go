@@ -3,6 +3,7 @@
 package host
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
 )
 
 // The test binary doubles as the fake extensions below. Core clears an extension's environment,
@@ -66,6 +69,22 @@ func fakeExtension(mode string) {
 				defer conn.Close()
 			}
 		}()
+	case "serve", "slow-exit":
+		// A working extension; slow-exit takes half a second to exit once asked to stop.
+		err := sdk.Serve(sdk.Extension{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0",
+			Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+				if err := out.Start(llm.ResponseInfo{ID: "r", Model: call.Request.Model}); err != nil {
+					return err
+				}
+				return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+			}})
+		if mode == "slow-exit" {
+			time.Sleep(500 * time.Millisecond)
+		}
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
 	case "child-holds-stderr":
 		// Start a child that keeps our stderr open after we are killed, then stay silent.
 		self, _ := os.Executable()
