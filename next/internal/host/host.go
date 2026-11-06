@@ -468,7 +468,11 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		if !l.skip {
+		switch {
+		case l.skip:
+		case i > maxLogLine:
+			l.longLine()
+		default:
 			fmt.Fprintf(l.w, "%s%s\n", l.prefix, l.redact(string(l.buf[:i])))
 		}
 		l.skip = false
@@ -476,10 +480,14 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 	}
 	if len(l.buf) > maxLogLine { // never hold an unbounded partial line
 		if !l.skip {
-			fmt.Fprintf(l.w, "%s(a line longer than %d bytes, not logged)\n", l.prefix, maxLogLine)
+			l.longLine()
 		}
 		l.skip = true
 		l.buf = l.buf[:0]
 	}
 	return len(p), nil
+}
+
+func (l *lineLogger) longLine() {
+	fmt.Fprintf(l.w, "%s(a line longer than %d bytes, not logged)\n", l.prefix, maxLogLine)
 }

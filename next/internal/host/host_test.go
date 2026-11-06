@@ -341,4 +341,12 @@ func TestLongOutputLineIsNotSplit(t *testing.T) {
 	if want := "[x] short [redacted]\n"; !strings.HasSuffix(got, want) || strings.Count(got, "\n") != 2 {
 		t.Errorf("log = %.200q..., want a note for the long line, then %q", got, want)
 	}
+	// A long line that ends within one write is left out too.
+	out.Reset()
+	if _, err := l.Write([]byte(strings.Repeat("x", maxLogLine+1) + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); strings.Contains(got, "xxxx") || !strings.Contains(got, "not logged") {
+		t.Errorf("log = %.200q..., want only a note", got)
+	}
 }
