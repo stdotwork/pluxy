@@ -1,0 +1,135 @@
+{
+  "description": "A non-streamed Gemini request with generation options, a thinking budget, a systemInstruction and toolConfig mode ANY naming one function: temperature is dropped, topP, maxOutputTokens, stopSequences and the thinking budget map to the Messages request, and the tool_use reply comes back as a functionCall.",
+  "source": [
+    "core/internal/translator/claude/gemini/claude_gemini_request.go (maxOutputTokens to max_tokens, topP to top_p, stopSequences to stop_sequences; thinkingConfig budget to Claude thinking; systemInstruction to a separate user message; toolConfig ANY with one allowed name to tool_choice of that tool)",
+    "core/internal/translator/claude/gemini/claude_gemini_request_test.go (TestConvertGeminiRequestToClaude_DropsTemperature, TestConvertGeminiRequestToClaude_KeepsSystemInstructionUserSeparate)",
+    "core/internal/translator/claude/gemini/claude_gemini_response.go (non-stream: tool_use block to functionCall part)"
+  ],
+  "client": {
+    "path": "/v1beta/models/claude-test:generateContent",
+    "body": {
+      "contents": [{"role":"user","parts":[{"text":"Check the weather in Paris."}]}],
+      "systemInstruction": {"parts":[{"text":"Be brief."}]},
+      "generationConfig": {
+        "temperature": 0.3,
+        "topP": 0.9,
+        "maxOutputTokens": 4096,
+        "stopSequences": ["END"],
+        "thinkingConfig": {"thinkingBudget":2048}
+      },
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Current weather",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ],
+      "toolConfig": {"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["get_weather"]}}
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":60,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_abc","name":"get_weather","input":{}}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"Paris\"}"}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":18}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [
+                {"functionCall":{"args":{"city":"Paris"},"id":"toolu_abc","name":"get_weather"}}
+              ],
+              "role": "model"
+            },
+            "finishReason": "STOP"
+          }
+        ],
+        "createTime": "2026-11-06T07:23:48Z",
+        "modelVersion": "claude-test",
+        "responseId": "msg_corpus",
+        "usageMetadata": {
+          "candidatesTokenCount": 18,
+          "promptTokenCount": 0,
+          "totalTokenCount": 18,
+          "trafficType": "PROVISIONED_THROUGHPUT"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 4096,
+          "messages": [
+            {"content":[{"text":"Be brief.","type":"text"}],"role":"user"},
+            {
+              "content": [
+                {
+                  "cache_control": {"type":"ephemeral"},
+                  "text": "Check the weather in Paris.",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"af4229b3310c993bd63771849142724fd2673b4e8c7643937c5b82e17d09fb66"},
+          "model": "claude-test",
+          "stop_sequences": ["END"],
+          "stream": true,
+          "tool_choice": {"name":"get_weather","type":"tool"},
+          "tools": [
+            {
+              "cache_control": {"type":"ephemeral"},
+              "description": "Current weather",
+              "input_schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "additionalProperties": false,
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "name": "get_weather"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}
