@@ -299,7 +299,9 @@ and the usage `raw` (so fields such as a vendor cost survive); other clients do 
 
 For `openai.responses` and `anthropic.messages`, every event carries the upstream stream event it
 came from in `raw` (an `error` carries it in `error.raw`), and the `finish` of a non-streamed reply
-carries the whole Response or Message object. A client in that format gets those upstream events
+carries the whole Response or Message object. In a non-streamed `openai.responses` reply, each
+`item.end` carries its output item, so a client in another format can keep what the item holds
+(such as a reasoning item's encrypted content). A client in that format gets those upstream events
 and that object unchanged; events an extension adds itself (such as closing an item the upstream
 left open) carry no `raw` and are not written to it.
 

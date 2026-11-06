@@ -144,6 +144,7 @@ type builder struct {
 	finish   *llm.Finish
 	usage    *llm.Usage
 	losses   []llm.Loss
+	carried  map[string]bool // encrypted reasoning a thinking block's signature holds
 }
 
 func (b *builder) lose(path, detail string) {
@@ -176,18 +177,27 @@ func (b *builder) start(r *llm.ResponseInfo) {
 
 // upstreamData looks at the upstream data an event from another format carries for what a
 // Message cannot hold: annotations from a Responses upstream, and its opaque reasoning except
-// what goes in a thinking block's signature (signature).
-func (b *builder) upstreamData(ev llm.Event) {
+// what a thinking block's signature holds (signature). It returns the signature for the block
+// an item.end event closes.
+func (b *builder) upstreamData(ev llm.Event) string {
 	if b.upFormat != llm.FormatOpenAIResponses || len(ev.Raw) == 0 {
-		return
+		return ""
 	}
-	carried := ev.Type == llm.EventItemEnd && b.signature(ev) != ""
+	sig := b.signature(ev)
+	if sig != "" {
+		if b.carried == nil {
+			b.carried = map[string]bool{}
+		}
+		b.carried[sig] = true
+	}
+	sigs := openairesponses.ReasoningSignatures(ev.Raw)
 	for _, p := range openairesponses.OpaqueOutput(ev.Raw) {
-		if carried && strings.HasSuffix(p, ".encrypted_content") {
+		if s, ok := sigs[p]; ok && b.carried[s] {
 			continue
 		}
 		b.lose(p, "reply data with no place in a Message")
 	}
+	return sig
 }
 
 // signature returns the signature for the thinking block an item.end event closes: a Responses
@@ -399,9 +409,8 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		return s.emit("content_block_delta", obj{"index": blk.index, "delta": blockDelta(blk.kind, ev.Delta)})
 	case llm.EventItemEnd:
-		b.upstreamData(ev)
 		blk := s.blocks[ev.Index]
-		blk.signature = b.signature(ev)
+		blk.signature = b.upstreamData(ev)
 		if ev.Index != s.active {
 			blk.ended = true
 			return nil
@@ -480,9 +489,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		a.blocks[ev.Index].text.WriteString(ev.Delta)
 	case llm.EventItemEnd:
-		b.upstreamData(ev)
+		sig := b.upstreamData(ev)
 		if blk := a.blocks[ev.Index]; blk != nil {
-			blk.signature = b.signature(ev)
+			blk.signature = sig
 			a.size += len(blk.signature)
 		}
 	case llm.EventNative:

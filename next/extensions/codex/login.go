@@ -53,8 +53,12 @@ var loginMethods = []protocol.LoginMethod{
 }
 
 // authClient talks to the login server. Its timeout covers only signing in and renewing, never a
-// model request.
-var authClient = &http.Client{Timeout: 30 * time.Second}
+// model request. It follows no redirect: following a 307 or 308 would send the request body (a
+// refresh token, or an authorization code and its verifier) wherever the redirect points.
+var authClient = &http.Client{
+	Timeout:       30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*protocol.Grant, error) {
 	set, err := readSettings(call.Account.Settings)
@@ -100,7 +104,7 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 
 	results := make(chan url.Values, 2)
 	if set.CallbackListen == nil || *set.CallbackListen {
-		if stop := listenCallback(results); stop != nil {
+		if stop := listenCallback(callbackHandler(state, results)); stop != nil {
 			defer stop()
 		}
 	}
@@ -121,8 +125,9 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 			inputs <- in
 		}
 	}()
-	var params url.Values
-	for params == nil {
+	var code string
+	for code == "" {
+		var params url.Values
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -133,27 +138,23 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 			return nil, err
 		case params = <-results:
 		case in := <-inputs:
-			u, err := url.Parse(strings.TrimSpace(in["redirect_url"]))
-			if err != nil || u.Query().Get("state") == "" {
-				if err := s.Prompt(protocol.Prompt{Kind: protocol.LoginBrowser, URL: authURL,
-					Message: "That address has no sign-in result in it; paste the whole address the browser ended on.",
-					Inputs:  []protocol.LoginInput{{Name: "redirect_url", Label: "Address the browser ended on"}}}); err != nil {
-					return nil, err
-				}
-				continue
+			if u, err := url.Parse(strings.TrimSpace(in["redirect_url"])); err == nil {
+				params = u.Query()
 			}
-			params = u.Query()
 		}
-	}
-	if e := params.Get("error"); e != "" {
-		return nil, refused("sign-in was refused: " + e)
-	}
-	if params.Get("state") != state {
-		return nil, refused("the sign-in result does not belong to this login (state differs); start again")
-	}
-	code := params.Get("code")
-	if code == "" {
-		return nil, refused("the sign-in result has no authorization code")
+		c, ok, err := signInResult(params, state)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			if err := s.Prompt(protocol.Prompt{Kind: protocol.LoginBrowser, URL: authURL,
+				Message: "That address is not the result of this sign-in; open the link, sign in, and paste the whole address the browser ended on.",
+				Inputs:  []protocol.LoginInput{{Name: "redirect_url", Label: "Address the browser ended on"}}}); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		code = c
 	}
 	tr, err := exchangeCode(ctx, set, code, verifier, redirectURI)
 	if err != nil {
@@ -162,22 +163,54 @@ func browserLogin(ctx context.Context, set settings, s *sdk.LoginSession) (*prot
 	return grantFrom(tr, nil)
 }
 
-// listenCallback serves redirectURI's path on callbackAddr and sends each sign-in result to
-// results. It returns nil when the address is taken.
-func listenCallback(results chan<- url.Values) (stop func()) {
+// signInResult reads a browser sign-in result, the query of the address the browser was sent back
+// to. ok is false when the result is not for this login (its state differs), and it is then
+// ignored, whatever else it says; a refusal or a result with no code ends the login.
+func signInResult(params url.Values, state string) (code string, ok bool, err error) {
+	if params.Get("state") != state {
+		return "", false, nil
+	}
+	if e := params.Get("error"); e != "" {
+		return "", true, refused("sign-in was refused: " + e)
+	}
+	if code = params.Get("code"); code == "" {
+		return "", true, refused("the sign-in result has no authorization code")
+	}
+	return code, true, nil
+}
+
+// callbackHandler answers the browser's redirect to redirectURI and sends a sign-in result for
+// this login (state) to results. A result for any other login is answered and not passed on.
+func callbackHandler(state string, results chan<- url.Values) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if q.Get("state") != state {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintln(w, "This sign-in result is not for the login pluxy is waiting for.")
+			return
+		}
+		select {
+		case results <- q:
+		default:
+		}
+		if q.Get("error") != "" {
+			fmt.Fprintln(w, "Sign-in was refused. You can close this window and go back to pluxy.")
+			return
+		}
+		fmt.Fprintln(w, "Signed in. You can close this window and go back to pluxy.")
+	}
+}
+
+// listenCallback serves h on redirectURI's path at callbackAddr. It returns nil when the address
+// is taken.
+func listenCallback(h http.HandlerFunc) (stop func()) {
 	l, err := net.Listen("tcp", callbackAddr)
 	if err != nil {
 		return nil
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET "+callbackPath, func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case results <- r.URL.Query():
-		default:
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintln(w, "Signed in. You can close this window and go back to pluxy.")
-	})
+	mux.HandleFunc("GET "+callbackPath, h)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(l) }()
 	return func() { _ = srv.Close() }

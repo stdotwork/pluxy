@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,5 +81,64 @@ func TestThinkingSuffix(t *testing.T) {
 		if m, e := splitThinkingSuffix(tc.in); m != tc.model || e != tc.effort {
 			t.Errorf("splitThinkingSuffix(%q) = %q, %q; want %q, %q", tc.in, m, e, tc.model, tc.effort)
 		}
+	}
+}
+
+// A login server reply that redirects is not followed: following a 307 would send the refresh
+// token (or an authorization code and its verifier) to wherever the redirect points.
+func TestTokenEndpointRedirectIsNotFollowed(t *testing.T) {
+	var reached atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached.Add(1) }))
+	defer elsewhere.Close()
+	login := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/oauth/token", http.StatusTemporaryRedirect)
+	}))
+	defer login.Close()
+	settings, _ := json.Marshal(map[string]any{"auth_base_url": login.URL})
+	acct := protocol.Account{ID: "codex", Settings: settings, Credential: subscription("access", "secret-refresh")}
+	if _, err := refresh(context.Background(), sdk.RefreshCall{Account: acct}); err == nil {
+		t.Error("a redirected refresh succeeded")
+	}
+	if n := reached.Load(); n != 0 {
+		t.Errorf("the redirect target got %d requests carrying the refresh token", n)
+	}
+}
+
+// A sign-in result whose state is not this login's is ignored, even when it reports an error, so
+// another tab or an earlier login cannot end this one; the callback listener does not pass such a
+// result on.
+func TestSignInResultChecksStateFirst(t *testing.T) {
+	const state = "state-of-this-login"
+	for _, tc := range []struct {
+		query    string
+		ok       bool
+		code     string
+		refusing bool
+	}{
+		{query: "error=access_denied&state=other"},
+		{query: "error=access_denied"},
+		{query: "code=c&state=other"},
+		{query: "error=access_denied&state=" + state, ok: true, refusing: true},
+		{query: "state=" + state, ok: true, refusing: true},
+		{query: "code=c&state=" + state, ok: true, code: "c"},
+	} {
+		params, _ := url.ParseQuery(tc.query)
+		code, ok, err := signInResult(params, state)
+		if ok != tc.ok || code != tc.code || (err != nil) != tc.refusing {
+			t.Errorf("%s: code %q, ok %v, err %v", tc.query, code, ok, err)
+		}
+	}
+
+	results := make(chan url.Values, 1)
+	h := callbackHandler(state, results)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodGet, callbackPath+"?error=access_denied&state=other", nil))
+	if rec.Code != http.StatusBadRequest || len(results) != 0 {
+		t.Errorf("unrelated callback: status %d, %d results passed on", rec.Code, len(results))
+	}
+	rec = httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodGet, callbackPath+"?code=c&state="+state, nil))
+	if rec.Code != http.StatusOK || len(results) != 1 {
+		t.Errorf("this login's callback: status %d, %d results passed on", rec.Code, len(results))
 	}
 }

@@ -2,6 +2,7 @@ package anthropicmessages
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"reflect"
 	"slices"
@@ -777,5 +778,77 @@ func TestGeminiRequestEncodesToMessages(t *testing.T) {
 		if !slices.Contains(got, want) {
 			t.Errorf("losses %q do not include %q", got, want)
 		}
+	}
+}
+
+// Encrypted reasoning from a Responses upstream reaches a Messages client as its thinking block's
+// signature, whether the upstream streamed or sent one JSON Response, and whether the client
+// streams or not. Because the signature carries it, it is not reported as dropped.
+func TestResponsesReasoningCarriedAsSignature(t *testing.T) {
+	sig := base64.URLEncoding.EncodeToString(append([]byte{0x80}, make([]byte, 8+16+16+32)...))
+	reasoning := `{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Think."}],"encrypted_content":"` + sig + `"}`
+	message := `{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}`
+	response := `{"id":"r1","object":"response","status":"completed","model":"up","output":[` + reasoning + `,` + message + `]}`
+
+	streamed := func(t *testing.T) []llm.Event {
+		d := openairesponses.NewStreamDecoder()
+		var evs []llm.Event
+		for _, data := range []string{
+			`{"type":"response.created","response":{"id":"r1","status":"in_progress","model":"up","output":[]}}`,
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}`,
+			`{"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"Think."}`,
+			`{"type":"response.output_item.done","output_index":0,"item":` + reasoning + `}`,
+			`{"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+			`{"type":"response.output_text.delta","output_index":1,"delta":"Hi"}`,
+			`{"type":"response.output_item.done","output_index":1,"item":` + message + `}`,
+			`{"type":"response.completed","response":` + response + `}`,
+		} {
+			out, err := d.Decode([]byte(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			evs = append(evs, out...)
+		}
+		return evs
+	}
+	whole := func(t *testing.T) []llm.Event {
+		evs, err := openairesponses.DecodeResponse([]byte(response))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return evs
+	}
+	for name, upstream := range map[string]func(*testing.T) []llm.Event{"streamed": streamed, "json": whole} {
+		t.Run(name+"/stream", func(t *testing.T) {
+			var out bytes.Buffer
+			w := NewStreamWriter(&out)
+			for _, ev := range upstream(t) {
+				if err := w.Write(ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !strings.Contains(out.String(), `{"signature":"`+sig+`","type":"signature_delta"}`) {
+				t.Errorf("no signature_delta carrying the encrypted reasoning:\n%s", out.String())
+			}
+			if got := lossList(w.Losses()); slices.Contains(got, "dropped output[0].encrypted_content") {
+				t.Errorf("carried reasoning reported as dropped: %q", got)
+			}
+		})
+		t.Run(name+"/aggregate", func(t *testing.T) {
+			a := NewAggregator()
+			for _, ev := range upstream(t) {
+				a.Add(ev)
+			}
+			body, err := a.Response()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), `"signature":"`+sig+`"`) {
+				t.Errorf("no signature carrying the encrypted reasoning: %s", body)
+			}
+			if got := lossList(a.Losses()); slices.Contains(got, "dropped output[0].encrypted_content") {
+				t.Errorf("carried reasoning reported as dropped: %q", got)
+			}
+		})
 	}
 }

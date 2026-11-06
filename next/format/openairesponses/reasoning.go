@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -72,4 +73,17 @@ func ReasoningSignature(raw json.RawMessage) string {
 		return ""
 	}
 	return it.EncryptedContent
+}
+
+// ReasoningSignatures returns what ReasoningSignature returns for each reasoning item in raw (an
+// output_item.done event, a terminal event or a Response object) that has one, by the path
+// OpaqueOutput reports its encrypted content under.
+func ReasoningSignatures(raw json.RawMessage) map[string]string {
+	out := map[string]string{}
+	outputItems(raw, func(i int, item json.RawMessage) {
+		if s := ReasoningSignature(item); s != "" {
+			out[fmt.Sprintf("output[%d].encrypted_content", i)] = s
+		}
+	})
+	return out
 }

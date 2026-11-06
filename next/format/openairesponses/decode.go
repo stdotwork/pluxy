@@ -295,8 +295,8 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 }
 
 // DecodeResponse turns an upstream non-streamed Response object into the events a stream of it
-// would have produced. The finish event carries the whole body in Raw, so a Responses client
-// gets it unchanged.
+// would have produced. Each item.end carries its output item in Raw, and the finish event the
+// whole body, so a Responses client gets it unchanged.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	var r response
 	if err := json.Unmarshal(body, &r); err != nil {
@@ -307,15 +307,16 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	}
 	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: r.ID, Model: r.Model, Created: r.CreatedAt, Format: format}}}
 	next := 0
+	var raw json.RawMessage
 	add := func(start llm.ItemStart, deltaType, delta string) {
 		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
 		if delta != "" {
 			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta})
 		}
-		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
+		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Raw: raw})
 		next++
 	}
-	for _, raw := range r.Output {
+	for _, raw = range r.Output {
 		var it outputItem
 		if json.Unmarshal(raw, &it) != nil {
 			return nil, malformed("upstream sent a malformed response", body)
@@ -353,19 +354,8 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 // place for: a reasoning item's encrypted content and the annotations on output text. raw is an
 // output_item.done event, a terminal event or a Response object.
 func OpaqueOutput(raw json.RawMessage) []string {
-	var ev struct {
-		Type        string            `json:"type"`
-		Object      string            `json:"object"`
-		OutputIndex int               `json:"output_index"`
-		Item        json.RawMessage   `json:"item"`
-		Response    *response         `json:"response"`
-		Output      []json.RawMessage `json:"output"`
-	}
-	if json.Unmarshal(raw, &ev) != nil {
-		return nil
-	}
 	var out []string
-	look := func(i int, item json.RawMessage) {
+	outputItems(raw, func(i int, item json.RawMessage) {
 		var it struct {
 			EncryptedContent string `json:"encrypted_content"`
 			Content          []struct {
@@ -383,18 +373,35 @@ func OpaqueOutput(raw json.RawMessage) []string {
 				out = append(out, fmt.Sprintf("output[%d].content[%d].annotations", i, j))
 			}
 		}
+	})
+	return out
+}
+
+// outputItems calls fn with each output item in raw, by its index in the Response: the item of a
+// response.output_item.done event, or every item of a Response object or of an event that holds
+// one.
+func outputItems(raw json.RawMessage, fn func(i int, item json.RawMessage)) {
+	var ev struct {
+		Type        string            `json:"type"`
+		Object      string            `json:"object"`
+		OutputIndex int               `json:"output_index"`
+		Item        json.RawMessage   `json:"item"`
+		Response    *response         `json:"response"`
+		Output      []json.RawMessage `json:"output"`
+	}
+	if json.Unmarshal(raw, &ev) != nil {
+		return
 	}
 	switch {
 	case ev.Type == "response.output_item.done":
-		look(ev.OutputIndex, ev.Item)
+		fn(ev.OutputIndex, ev.Item)
 	case ev.Response != nil:
 		for i, item := range ev.Response.Output {
-			look(i, item)
+			fn(i, item)
 		}
 	case ev.Object == "response":
 		for i, item := range ev.Output {
-			look(i, item)
+			fn(i, item)
 		}
 	}
-	return out
 }

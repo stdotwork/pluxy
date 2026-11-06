@@ -343,7 +343,8 @@ func statusError(resp *http.Response, model string) *llm.Error {
 		}
 		e.RetryAfterMS = resetMS(ce, resp.Header.Get("Retry-After"))
 	case s == http.StatusServiceUnavailable:
-		e.Code, e.Scope, e.Retryable = llm.CodeUnavailable, llm.ScopeEndpoint, true
+		// Not retry-safe: a gateway may answer 503 after the model started on the request.
+		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
 		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
 	case s >= 500:
 		// The upstream may have run the request before failing.
