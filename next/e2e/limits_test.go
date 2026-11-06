@@ -118,7 +118,8 @@ func TestPassedThroughFieldsDoNotLeakCredential(t *testing.T) {
 
 // keyForms returns key as an upstream might echo it inside a JSON string, each form decoding back
 // to key: as is, with its first character escaped (the reviewer's upstream), with one "-"
-// escaped in upper-case hex, and with every character escaped in alternating hex case.
+// escaped in upper-case hex, with every character escaped in alternating hex case, and inside
+// JSON text with its first character escaped.
 func keyForms(key string) string {
 	var all strings.Builder
 	for i, c := range key {
@@ -128,22 +129,28 @@ func keyForms(key string) string {
 			fmt.Fprintf(&all, `\u%04X`, c)
 		}
 	}
-	return strings.Join([]string{key, fmt.Sprintf(`\u%04x`, key[0]) + key[1:], strings.Replace(key, "-", `\u002D`, 1), all.String()}, " ")
+	nested := `{\"key\":\"\\` + fmt.Sprintf(`u%04x`, key[0]) + key[1:] + `\"}` // JSON text holding the key escaped
+	return strings.Join([]string{key, fmt.Sprintf(`\u%04x`, key[0]) + key[1:], strings.Replace(key, "-", `\u002D`, 1), all.String(), nested}, " ")
 }
 
-var jsonEscape = regexp.MustCompile(`\\u[0-9a-fA-F]{4}|\\/`)
+var jsonEscape = regexp.MustCompile(`\\(u[0-9a-fA-F]{4}|["\\/bfnrt])`)
 
-// holdsKey reports whether s holds the account's key once its JSON escapes are decoded, as a
-// client decoding the reply would read it.
+// holdsKey reports whether s holds the account's key once its JSON escapes are decoded, layer
+// after layer, as a client decoding the reply and any JSON inside it would read it.
 func holdsKey(s string) bool {
-	dec := jsonEscape.ReplaceAllStringFunc(s, func(m string) string {
-		if m == `\/` {
-			return "/"
+	for range 8 {
+		if strings.Contains(s, upstreamKey) {
+			return true
 		}
-		n, _ := strconv.ParseUint(m[2:], 16, 32)
-		return string(rune(n))
-	})
-	return strings.Contains(dec, upstreamKey)
+		s = jsonEscape.ReplaceAllStringFunc(s, func(m string) string {
+			if m[1] == 'u' {
+				n, _ := strconv.ParseUint(m[2:], 16, 32)
+				return string(rune(n))
+			}
+			return m[1:]
+		})
+	}
+	return strings.Contains(s, upstreamKey)
 }
 
 // A request under the HTTP body limit must reach the upstream even when JSON would escape much

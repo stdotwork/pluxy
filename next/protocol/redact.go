@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -20,7 +22,8 @@ const Redacted = "[redacted]"
 // extension sends through the Redactor of the call's credential before the event reaches a
 // client, a log or anything else, so no provider has to remember to.
 type Redactor struct {
-	r *strings.Replacer // nil when there is nothing to redact
+	r   *strings.Replacer // nil when there is nothing to redact
+	min int               // length of the shortest form redacted; shorter text cannot hold one
 }
 
 // NewRedactor returns the Redactor for c. Every string in the credential except its kind counts
@@ -49,7 +52,7 @@ func NewRedactor(c *Credential) *Redactor {
 	for _, v := range variants {
 		pairs = append(pairs, v, Redacted)
 	}
-	return &Redactor{r: strings.NewReplacer(pairs...)}
+	return &Redactor{r: strings.NewReplacer(pairs...), min: len(variants[len(variants)-1])}
 }
 
 func collectStrings(v any, out []string) []string {
@@ -99,12 +102,59 @@ func encodings(s string) []string {
 	return out
 }
 
-// String returns s with the credential removed.
+// String returns s with the credential removed, also where s holds it only once the JSON escapes
+// in it are decoded: s may quote a JSON body, as error text often does.
 func (r *Redactor) String(s string) string {
 	if r == nil || r.r == nil {
 		return s
 	}
-	return r.r.Replace(s)
+	return r.text(s, 0)
+}
+
+// maxDepth bounds how many layers of JSON inside strings are decoded.
+const maxDepth = 8
+
+// text returns the decoded string s with the credential removed. A string that is JSON (an
+// object, array or string, such as a quoted upstream body) is redacted as JSON in turn, as a
+// client parsing it would read it. Escapes that leaves (JSON after other text, escapes nested
+// deeper, malformed JSON) can still decode to the credential for a reader; when they do, the
+// text is redacted with its escapes decoded.
+func (r *Redactor) text(s string, depth int) string {
+	if len(s) < r.min {
+		return s
+	}
+	if depth < maxDepth && strings.Contains(s, `\`) {
+		if t := strings.TrimSpace(s); t != "" && strings.IndexByte(`{["`, t[0]) >= 0 && json.Valid([]byte(t)) {
+			s = string(r.redactJSON([]byte(s), depth+1))
+		}
+	}
+	out := r.r.Replace(s)
+	if strings.Contains(out, `\`) {
+		if u := unescape(out); r.r.Replace(u) != u {
+			return r.r.Replace(u)
+		}
+	}
+	return out
+}
+
+var jsonEscape = regexp.MustCompile(`\\(u[0-9a-fA-F]{4}|["\\/bfnrt])`)
+
+// unescape decodes JSON escapes in s, layer after layer, up to maxDepth layers.
+func unescape(s string) string {
+	for range maxDepth {
+		u := jsonEscape.ReplaceAllStringFunc(s, func(m string) string {
+			if m[1] == 'u' {
+				n, _ := strconv.ParseUint(m[2:], 16, 32)
+				return string(rune(n))
+			}
+			return map[byte]string{'"': `"`, '\\': `\`, '/': "/", 'b': "\b", 'f': "\f", 'n': "\n", 'r': "\r", 't': "\t"}[m[1]]
+		})
+		if u == s {
+			break
+		}
+		s = u
+	}
+	return s
 }
 
 // raw returns b with the credential removed, still valid JSON. A client decodes the JSON, so
@@ -116,11 +166,17 @@ func (r *Redactor) raw(b json.RawMessage) json.RawMessage {
 		return b
 	}
 	var s string
-	if bytes.IndexByte(b, '\\') < 0 || !json.Valid(b) {
-		// Without a backslash every decoded string is its bytes.
+	switch {
+	case !json.Valid(b):
 		s = r.r.Replace(string(b))
-	} else {
-		s = string(r.redactJSON(b))
+	case bytes.IndexByte(b, '\\') < 0:
+		// Without a backslash every decoded string is its bytes. A replacement that breaks the
+		// JSON was in a number.
+		if s = r.r.Replace(string(b)); !json.Valid([]byte(s)) {
+			s = string(r.redactJSON(b, 0))
+		}
+	default:
+		s = string(r.redactJSON(b, 0))
 	}
 	if s == string(b) {
 		return b
@@ -129,11 +185,24 @@ func (r *Redactor) raw(b json.RawMessage) json.RawMessage {
 }
 
 // redactJSON returns the valid JSON b with the credential removed from every string in it, object
-// keys included. Only strings that change are encoded again; every other byte is kept.
-func (r *Redactor) redactJSON(b []byte) []byte {
+// keys included, and from every number, which becomes the redacted string. Only tokens that
+// change are written again; every other byte is kept.
+func (r *Redactor) redactJSON(b []byte, depth int) []byte {
 	var out []byte
 	last := 0
 	for i := 0; i < len(b); i++ {
+		if c := b[i]; c == '-' || c >= '0' && c <= '9' {
+			end := i
+			for end < len(b) && strings.IndexByte("+-.eE0123456789", b[end]) >= 0 {
+				end++
+			}
+			if tok := string(b[i:end]); len(tok) >= r.min && r.r.Replace(tok) != tok {
+				out = append(append(out, b[last:i]...), encodeString(Redacted)...)
+				last = end
+			}
+			i = end - 1
+			continue
+		}
 		if b[i] != '"' {
 			continue
 		}
@@ -144,10 +213,16 @@ func (r *Redactor) redactJSON(b []byte) []byte {
 			}
 			end++
 		}
-		tok := b[i : end+1]
-		var s string
-		if json.Unmarshal(tok, &s) == nil {
-			if red := r.decoded(s); red != s {
+		// A decoded string is no longer than its token, so a short token cannot hold the
+		// credential.
+		if tok := b[i : end+1]; len(tok)-2 >= r.min {
+			var s string
+			if bytes.IndexByte(tok, '\\') < 0 {
+				s = string(tok[1 : len(tok)-1])
+			} else if json.Unmarshal(tok, &s) != nil {
+				s = ""
+			}
+			if red := r.text(s, depth); red != s {
 				out = append(append(out, b[last:i]...), encodeString(red)...)
 				last = end + 1
 			}
@@ -158,16 +233,6 @@ func (r *Redactor) redactJSON(b []byte) []byte {
 		return b
 	}
 	return append(out, b[last:]...)
-}
-
-// decoded returns the decoded string s with the credential removed. A string that holds JSON,
-// such as an error message quoting the upstream's body, is decoded in turn, as a client parsing
-// it would.
-func (r *Redactor) decoded(s string) string {
-	if t := strings.TrimSpace(s); t != "" && (t[0] == '{' || t[0] == '[') && strings.Contains(t, `\`) && json.Valid([]byte(t)) {
-		s = string(r.redactJSON([]byte(s)))
-	}
-	return r.r.Replace(s)
 }
 
 func encodeString(s string) []byte {
