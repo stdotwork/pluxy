@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -452,5 +453,52 @@ func TestStreamWriter(t *testing.T) {
 		"data: [DONE]\n\n"
 	if b.String() != want {
 		t.Errorf("stream:\n%s\nwant:\n%s", b.String(), want)
+	}
+}
+
+// Putting streamed extra choices together takes work in proportion to the fragments: the
+// reviewer's case, one fragment with 4,000 tool calls, took about 16 million allocations because
+// every call searched the calls before it. Doubling the calls must not much more than double the
+// allocations, whether they come in one fragment or one per fragment.
+func TestAggregatorMergesExtraChoicesInLinearWork(t *testing.T) {
+	call := func(i int) string {
+		return fmt.Sprintf(`{"index":%d,"id":"call_%d","type":"function","function":{"name":"f","arguments":"{}"}}`, i, i)
+	}
+	native := func(calls ...string) llm.Event {
+		return llm.Event{Type: llm.EventNative, Raw: json.RawMessage(`{"choices":[{"index":1,"delta":{"tool_calls":[` + strings.Join(calls, ",") + `]}}]}`)}
+	}
+	shapes := map[string]func(n int) []llm.Event{
+		"one fragment": func(n int) []llm.Event {
+			calls := make([]string, n)
+			for i := range calls {
+				calls[i] = call(i)
+			}
+			return []llm.Event{native(calls...)}
+		},
+		"one call per fragment": func(n int) []llm.Event {
+			evs := make([]llm.Event, n)
+			for i := range evs {
+				evs[i] = native(call(i))
+			}
+			return evs
+		},
+	}
+	for name, events := range shapes {
+		t.Run(name, func(t *testing.T) {
+			allocs := func(n int) float64 {
+				evs := events(n)
+				return testing.AllocsPerRun(1, func() {
+					a := NewAggregator()
+					a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "m", Format: llm.FormatOpenAIChat}})
+					for _, ev := range evs {
+						a.Add(ev)
+					}
+				})
+			}
+			small, large := allocs(2000), allocs(4000)
+			if large > 3*small {
+				t.Errorf("%.0f allocations for 2,000 calls, %.0f for 4,000: the work grows faster than the calls", small, large)
+			}
+		})
 	}
 }

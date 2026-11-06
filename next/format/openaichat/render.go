@@ -385,6 +385,7 @@ func (o *otherChoice) value() any {
 	if o.snap == nil {
 		return o.raw
 	}
+	plain(o.snap)
 	msg := o.snap["message"].(map[string]any)
 	if msg["role"] == nil {
 		msg["role"] = llm.RoleAssistant
@@ -420,7 +421,7 @@ func mergeDelta(acc, delta map[string]any) map[string]any {
 		case dv == nil:
 		case av == nil || replaced[k]:
 			if l, ok := dv.([]any); ok {
-				dv = mergeList(nil, l)
+				dv = new(list).merge(l)
 			}
 			acc[k] = dv
 		case keepFirst[k]:
@@ -439,7 +440,11 @@ func mergeDelta(acc, delta map[string]any) map[string]any {
 				}
 			case []any:
 				if d, ok := dv.([]any); ok {
-					acc[k] = mergeList(a, d)
+					acc[k] = new(list).merge(a).merge(d)
+				}
+			case *list:
+				if d, ok := dv.([]any); ok {
+					a.merge(d)
 				}
 			default:
 				acc[k] = dv
@@ -449,27 +454,64 @@ func mergeDelta(acc, delta map[string]any) map[string]any {
 	return acc
 }
 
-func mergeList(acc, delta []any) []any {
+// list is a list being put together from stream fragments. It finds its entries with an index
+// by that index, so merging takes work in proportion to the fragments.
+type list struct {
+	entries []any
+	byIndex map[string]map[string]any
+}
+
+// merge merges delta's entries into l and returns l: an entry with an index into the entry with
+// the same index, any other entry appended.
+func (l *list) merge(delta []any) *list {
 	for _, e := range delta {
 		m, ok := e.(map[string]any)
 		if ok && m["index"] != nil {
-			if prev := entryWithIndex(acc, m["index"]); prev != nil {
+			k := indexKey(m["index"])
+			if prev := l.byIndex[k]; prev != nil {
 				mergeDelta(prev, m)
 				continue
 			}
+			if l.byIndex == nil {
+				l.byIndex = map[string]map[string]any{}
+			}
+			l.byIndex[k] = m
 		}
-		acc = append(acc, e)
+		l.entries = append(l.entries, e)
 	}
-	return acc
+	return l
 }
 
-func entryWithIndex(list []any, idx any) map[string]any {
-	for _, e := range list {
-		if m, ok := e.(map[string]any); ok && m["index"] != nil && fmt.Sprint(m["index"]) == fmt.Sprint(idx) {
-			return m
+// indexKey is an index as text, so the number 1 and the string "1" name the same entry.
+func indexKey(idx any) string {
+	switch v := idx.(type) {
+	case json.Number:
+		return string(v)
+	case string:
+		return v
+	}
+	return fmt.Sprint(idx)
+}
+
+// plain turns the lists in v, a value put together from fragments, back into JSON arrays, in
+// place, and returns v.
+func plain(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			x[k] = plain(e)
+		}
+	case *list:
+		for i, e := range x.entries {
+			x.entries[i] = plain(e)
+		}
+		return x.entries
+	case []any:
+		for i, e := range x {
+			x[i] = plain(e)
 		}
 	}
-	return nil
+	return v
 }
 
 // toolCallOverhead is the JSON a tool call adds around its ID, name and arguments.
