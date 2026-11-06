@@ -190,6 +190,39 @@ func TestMalformedUpstreamGivesError(t *testing.T) {
 	}
 }
 
+// A 200 body is a reply only if it has the shape of a completion: an object whose choices hold
+// choice 0 with a message. Anything else, including an error object sent with status 200, is an
+// upstream error rather than an empty successful answer.
+func TestDecodeResponseNeedsACompletion(t *testing.T) {
+	for _, c := range []struct{ name, body, msg, code string }{
+		{"empty object", `{}`, "", ""},
+		{"null", `null`, "", ""},
+		{"array", `[]`, "", ""},
+		{"no choices", `{"id":"x","choices":[]}`, "", ""},
+		{"no first choice", `{"choices":[{"index":1,"message":{"role":"assistant","content":"hi"}}]}`, "", ""},
+		{"choice without message", `{"choices":[{"index":0,"finish_reason":"stop"}]}`, "", ""},
+		{"error object", `{"error":{"message":"The server is overloaded","type":"server_error","code":"server_busy"}}`, "The server is overloaded", "server_busy"},
+	} {
+		evs, err := DecodeResponse([]byte(c.body))
+		var le *llm.Error
+		if !errors.As(err, &le) || le.Code != llm.CodeUpstream {
+			t.Errorf("%s: events %+v, err %v; want an upstream error", c.name, evs, err)
+			continue
+		}
+		if c.msg != "" && (le.Message != c.msg || le.ProviderCode != c.code) {
+			t.Errorf("%s: error = %+v, want message %q and code %q", c.name, le, c.msg, c.code)
+		}
+	}
+	for _, body := range []string{
+		`{"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`,
+		`{"choices":[{"index":0,"message":{"role":"assistant","content":null},"finish_reason":"content_filter"}],"error":null}`,
+	} {
+		if _, err := DecodeResponse([]byte(body)); err != nil {
+			t.Errorf("%s: %v", body, err)
+		}
+	}
+}
+
 // A streamed reply keeps what the internal model has no field for: reply-level fields on every
 // chunk, choices after the first, and usage fields such as a vendor cost.
 func TestStreamKeepsUpstreamFields(t *testing.T) {

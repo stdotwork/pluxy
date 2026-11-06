@@ -3,6 +3,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -84,19 +85,27 @@ type Reply struct {
 // ErrFrameTooLarge is returned for a frame longer than MaxFrame.
 var ErrFrameTooLarge = errors.New("protocol: frame too large")
 
-// WriteFrame writes v as one frame.
+// WriteFrame writes v as one frame. It returns ErrFrameTooLarge, having written nothing, when v
+// encodes to more than MaxFrame bytes.
 func WriteFrame(w io.Writer, v any) error {
-	body, err := json.Marshal(v)
-	if err != nil {
+	// The header goes first in the same buffer, so the frame is encoded once and not copied.
+	var buf bytes.Buffer
+	buf.Write(make([]byte, 4))
+	enc := json.NewEncoder(&buf)
+	// No HTML escaping: it would turn each "<", ">" and "&" in the request or reply into six
+	// bytes, and the frame goes to a program, not a web page.
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return err
 	}
-	if len(body) > MaxFrame {
+	b := buf.Bytes()
+	b = b[:len(b)-1] // Encode ends the value with a newline
+	n := len(b) - 4
+	if n > MaxFrame {
 		return ErrFrameTooLarge
 	}
-	buf := make([]byte, 4+len(body))
-	binary.BigEndian.PutUint32(buf, uint32(len(body)))
-	copy(buf[4:], body)
-	_, err = w.Write(buf)
+	binary.BigEndian.PutUint32(b, uint32(n))
+	_, err := w.Write(b)
 	return err
 }
 

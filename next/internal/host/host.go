@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -274,6 +275,8 @@ func (e *Extension) Stop() {
 }
 
 // Generate starts a generate call. The call is cancelled when ctx ends or the stream is closed.
+// Every event the call returns has the account's credential removed (protocol.Redactor), so
+// nothing the extension or its upstream echoes reaches a client or a log with it.
 func (e *Extension) Generate(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
 	select {
 	case <-e.exited:
@@ -288,10 +291,17 @@ func (e *Extension) Generate(ctx context.Context, account protocol.Account, req 
 		}
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
-	s := &Stream{conn: conn, ctx: ctx, ext: e}
+	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: protocol.NewRedactor(account.Credential)}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpGenerate, Account: &account, Request: &req}
 	if err := protocol.WriteFrame(conn, call); err != nil {
+		if errors.Is(err, protocol.ErrFrameTooLarge) {
+			// The request is valid but too big to pass on in one frame; only a smaller request
+			// can fix that.
+			s.fail(&llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusRequestEntityTooLarge, Scope: llm.ScopeRequest,
+				Message: "request is too large to pass to the provider extension"})
+			return s
+		}
 		s.fail(s.readError(err))
 	}
 	return s
@@ -300,12 +310,13 @@ func (e *Extension) Generate(ctx context.Context, account protocol.Account, req 
 // Stream is the reply to a generate call. Next returns events until and including exactly one
 // terminal event (finish or error), then keeps returning that terminal event.
 type Stream struct {
-	conn  net.Conn
-	ctx   context.Context
-	ext   *Extension
-	stop  func() bool
-	seq   llm.Sequence
-	final *llm.Event
+	conn   net.Conn
+	ctx    context.Context
+	ext    *Extension
+	redact *protocol.Redactor
+	stop   func() bool
+	seq    llm.Sequence
+	final  *llm.Event
 }
 
 func failed(code, msg string) *Stream {
@@ -334,12 +345,12 @@ func (s *Stream) Next() llm.Event {
 		s.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)})
 		return *s.final
 	}
-	if reply.Event.Terminal() {
-		ev := reply.Event
+	ev := s.redact.Event(reply.Event)
+	if ev.Terminal() {
 		s.final = &ev
 		s.Close()
 	}
-	return reply.Event
+	return ev
 }
 
 func (s *Stream) readError(err error) *llm.Error {
