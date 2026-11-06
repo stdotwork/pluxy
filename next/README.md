@@ -27,12 +27,15 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
 | `internal/cred` | Core's credential store and renewal of accounts added by login. |
 | `internal/packages` | Registries, release archives and the record of installed packages. |
+| `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
+| `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
 | `corpus/` | Differential test corpus: cases replayed against this core and today's `core/`, with listed exceptions ([README](corpus/README.md)). |
 
 ## Run it
 
 ```bash
+go generate ./internal/panel   # builds the web panel core embeds; needs Bun (skip it for a core without the panel)
 go build -o pluxy ./cmd/pluxy
 go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-compatible
 ```
@@ -60,6 +63,9 @@ go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-c
 ```bash
 ./pluxy -config config.json
 ```
+
+With a `management_key` set, the web panel is at `http://127.0.0.1:8400/panel/`: core's status,
+accounts, extensions and themes. Sign in with the management key.
 
 An account may list `models` it serves; without a list it serves any model. Core runs the
 extension the config names and every [installed package](#packages) that is enabled, and spreads

@@ -13,10 +13,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
+	"github.com/stdotwork/pluxy/next/internal/panel"
 	"github.com/stdotwork/pluxy/next/internal/server"
 )
 
@@ -78,6 +80,14 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string) 
 	}
 	mux := http.NewServeMux()
 	mux.Handle(core.ManagementPrefix, c.Management())
+	// The panel is on while the management API is: it is a page for that API.
+	assets := panel.Assets()
+	if !panel.Built(assets) {
+		log.Print("warning: this core was built without its panel (go generate ./internal/panel builds it)")
+	}
+	ui := panel.Handler(assets, func() bool { return c.Config().ManagementKey != "" })
+	mux.Handle(strings.TrimSuffix(panel.Prefix, "/"), ui)
+	mux.Handle(panel.Prefix, ui)
 	mux.Handle("/", server.NewHandler(c))
 	srv := &http.Server{
 		Handler:           mux,

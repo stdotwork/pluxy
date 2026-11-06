@@ -1,0 +1,35 @@
+{
+  "theme_version": 0,
+  "id": "pluxy/paper",
+  "name": "Paper",
+  "description": "Warm and roomy, with the navigation on top and lists as cards.",
+  "appearance": "both",
+  "tokens": {
+    "color.bg": "#f6f1e7",
+    "color.surface": "#fffdf8",
+    "color.surface-raised": "#efe7d8",
+    "color.text": "#2b2118",
+    "color.text-muted": "#75655a",
+    "color.border": "#e3d8c6",
+    "color.accent": "#9a3412",
+    "color.focus": "#9a3412",
+    "font.body": "Charter, \"Iowan Old Style\", Georgia, serif",
+    "font.size": "15px",
+    "font.size-title": "24px",
+    "density": "1.25",
+    "shape.radius": "14px",
+    "shadow.raised": "0 1px 3px rgb(80 50 20 / 0.10)"
+  },
+  "dark": {
+    "color.bg": "#1c1814",
+    "color.surface": "#241f1a",
+    "color.surface-raised": "#2e2721",
+    "color.text": "#efe6d8",
+    "color.text-muted": "#a8998a",
+    "color.border": "#3a3129",
+    "color.accent": "#f0a36b",
+    "color.accent-text": "#1c1008",
+    "color.focus": "#f0a36b"
+  },
+  "layout": { "nav": "top", "list": "cards", "width": "narrow" }
+}

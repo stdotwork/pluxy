@@ -75,6 +75,16 @@ gofmt -l .                                   # must print nothing
 The `e2e` and conformance tests build `cmd/pluxy` and the extensions with `go build`, run them on
 random free ports and Unix sockets in temporary folders, and stop them when done.
 
+Core embeds the web panel from `next/ui` (see `next/ui/README.md`), which is built, not kept in
+git. Build it before building or testing core, or the panel's e2e tests skip
+(`PLUXY_REQUIRE_PANEL=1` makes them fail instead, as in CI). The UI needs Bun `1.4.3`:
+
+```bash
+go generate ./internal/panel     # bun install and bun run build in ui/, writing internal/panel/dist
+cd ui && bun run check && bun run lint && bun run test   # type check, Biome, unit tests
+cd ui && bun run test:browser    # the browser test, headless Chromium (bunx playwright install chromium once)
+```
+
 `corpus/` is the differential test corpus (see `next/corpus/README.md`). By default it compares
 the new core with the old core's recorded replies. To run today's core live as well, or to
 re-record after changing a case:
@@ -138,7 +148,7 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 | `panel-ci.yml` | PRs and pushes to `main` touching `extensions/panel/` | `bun install --frozen-lockfile`, then `bun run verify` |
 | `panel-release.yml` | `panel-v*` tags | `bun run build`, publishes `management.html` |
 | `app-ci.yml` | PRs and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
-| `next-ci.yml` | PRs and pushes to `main` touching `next/` | `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...` |
+| `next-ci.yml` | PRs and pushes to `main` touching `next/` | UI type check, lint and unit tests; builds the panel; `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...`; the panel's browser test in headless Chromium |
 | `next-corpus.yml` | PRs and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 
 When you add a workflow, add a row here.
