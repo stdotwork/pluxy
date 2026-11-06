@@ -28,7 +28,7 @@ func (c *Core) PagesFolder(id, fp string) (pages.Folder, bool) {
 	if g == nil || g.Manifest().UI == nil || pages.FingerprintKey(g.Fingerprint()) != fp {
 		return pages.Folder{}, false
 	}
-	return pages.Folder{Dir: g.Manifest().UIDir()}, true
+	return pages.Folder{Dir: g.Manifest().UIDir(), Files: g.UIFiles()}, true
 }
 
 // UIView is what the panel can show of the extensions that run: their pages and whether they

@@ -8,11 +8,23 @@ function hostname(h: string): string {
     .replace(/\.$/, "");
 }
 
-/** Whether two host names may share cookies or a site: the same, or one under the other. */
+function isAddress(h: string): boolean {
+  return h.includes(":") || /^\d+(\.\d+){3}$/.test(h);
+}
+
+/**
+ * Whether two hosts may share cookies or a site: the same address, or names that end in the
+ * same two labels (pages.example.com and panel.example.com share example.com's cookies). With no
+ * list of public suffixes, this errs toward refusing: a.example.co.uk and b.other.co.uk count as
+ * one site too.
+ */
 export function related(a: string, b: string): boolean {
   const x = hostname(a);
   const y = hostname(b);
-  return x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`);
+  if (x === y) return true;
+  if (isAddress(x) || isAddress(y)) return false;
+  const tail = (h: string) => h.split(".").slice(-2).join(".");
+  return tail(x) === tail(y);
 }
 
 /**

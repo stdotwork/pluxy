@@ -11,8 +11,10 @@ import (
 	"sync"
 )
 
-// maxFile bounds a settings file core reads: far above what a schema's limits allow.
-const maxFile = 1 << 20
+// maxFile bounds a settings file: above the most a schema's limits allow (50 fields of 4,096
+// characters, each at most 6 bytes as escaped JSON, is about 1.2 MiB). Core refuses to save
+// more, so it can always read what it saved.
+const maxFile = 4 << 20
 
 // Store keeps each extension's settings in its own file under a folder, readable only by
 // core's user: {dir}/{publisher}/{name}.json.
@@ -33,78 +35,82 @@ func (st *Store) path(id string) (string, error) {
 }
 
 // Load returns the settings stored for extension id; none when nothing is stored.
-func (st *Store) Load(id string) (Values, error) {
+func (st *Store) Load(id string) (Stored, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return st.load(id)
 }
 
-func (st *Store) load(id string) (Values, error) {
+func (st *Store) load(id string) (Stored, error) {
 	p, err := st.path(id)
 	if err != nil {
-		return nil, err
+		return Stored{}, err
 	}
 	f, err := os.Open(p)
 	if errors.Is(err, fs.ErrNotExist) {
-		return Values{}, nil
+		return Stored{Values: Values{}}, nil
 	}
 	if err != nil {
-		return nil, err
+		return Stored{}, err
 	}
 	defer f.Close()
-	var v Values
+	var v Stored
 	if err := json.NewDecoder(&limited{f, maxFile}).Decode(&v); err != nil {
-		return nil, fmt.Errorf("settings of %s: %w", id, err)
+		return Stored{}, fmt.Errorf("settings of %s: %w", id, err)
 	}
-	if v == nil {
-		v = Values{}
+	if v.Values == nil {
+		v.Values = Values{}
 	}
 	return v, nil
 }
 
 // Change applies change to the settings of extension id as schema s allows (Schema.Merge),
 // saves them and returns them. Nothing is saved when the result breaks the schema.
-func (st *Store) Change(id string, s *Schema, change Values) (Values, error) {
+func (st *Store) Change(id string, s *Schema, change Values) (Stored, error) {
+	fail := func(err error) (Stored, error) { return Stored{}, err }
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	stored, err := st.load(id)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	next, err := s.Merge(stored, change)
 	if err != nil {
-		return nil, &Invalid{err}
+		return fail(&Invalid{err})
 	}
 	p, _ := st.path(id) // load checked it
 	b, err := json.Marshal(next)
 	if err != nil {
-		return nil, err
+		return fail(err)
+	}
+	if len(b) > maxFile {
+		return fail(&Invalid{fmt.Errorf("the settings would be larger than %d MiB", maxFile>>20)})
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".settings-*")
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	defer os.Remove(tmp.Name()) // after the rename, nothing is there
 	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
-		return nil, err
+		return fail(err)
 	}
 	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
-		return nil, err
+		return fail(err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return nil, err
+		return fail(err)
 	}
 	if err := tmp.Close(); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if err := os.Rename(tmp.Name(), p); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	return next, nil
 }

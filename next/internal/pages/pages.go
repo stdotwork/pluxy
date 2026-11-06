@@ -4,7 +4,12 @@
 package pages
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -14,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // hostHeader is what a Host may hold here: it goes into the policy, so nothing that could end a
@@ -24,7 +30,16 @@ var hostHeader = regexp.MustCompile(`^[A-Za-z0-9.:\[\]-]{1,255}$`)
 type Folder struct {
 	// Dir is the folder on disk.
 	Dir string
+	// Files holds the SHA-256 (lower-case hex) of each file the extension's fingerprint covers,
+	// by slash-separated path. Only these files are served, and only while unchanged.
+	Files map[string]string
 }
+
+// maxFile bounds one file read to serve it: a ui folder holds at most 32 MiB.
+const maxFile = 32 << 20
+
+// errorCSP is the policy of every reply that is not a page file.
+const errorCSP = "sandbox; default-src 'none'"
 
 // Lookup returns the ui folder of extension id whose fingerprint key is fp, when one runs.
 type Lookup func(id, fp string) (Folder, bool)
@@ -79,8 +94,10 @@ func CSP(folder string) string {
 func Handler(lookup Lookup, on func() bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
+		h.Set("Content-Security-Policy", errorCSP)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cache-Control", "no-store")
 		if !on() || !hostHeader.MatchString(r.Host) {
 			http.NotFound(w, r)
 			return
@@ -106,20 +123,13 @@ func Handler(lookup Lookup, on func() bool) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		root, err := os.OpenRoot(folder.Dir)
-		if err != nil {
+		want, ok := folder.Files[file]
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		defer root.Close()
-		f, err := root.Open(file) // cannot leave the folder, through links or otherwise
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		defer f.Close()
-		info, err := f.Stat()
-		if err != nil || !info.Mode().IsRegular() {
+		body, ok := read(folder.Dir, file, want)
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}
@@ -130,8 +140,34 @@ func Handler(lookup Lookup, on func() bool) http.Handler {
 		h.Set("Access-Control-Allow-Origin", "*")
 		h.Set("Content-Type", kind)
 		h.Set("Cache-Control", "no-cache")
-		http.ServeContent(w, r, "", info.ModTime(), f)
+		h.Set("ETag", `"`+want[:32]+`"`)
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
 	})
+}
+
+// read returns file from dir when it still has digest want: a file changed since the
+// extension's fingerprint was taken is not served.
+func read(dir, file, want string) ([]byte, bool) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, false
+	}
+	defer root.Close()
+	f, err := root.Open(file) // cannot leave the folder, through links or otherwise
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxFile {
+		return nil, false
+	}
+	body, err := io.ReadAll(io.LimitReader(f, maxFile+1))
+	if err != nil || len(body) > maxFile {
+		return nil, false
+	}
+	sum := sha256.Sum256(body)
+	return body, hex.EncodeToString(sum[:]) == want
 }
 
 // origin is the pages site's origin as this request reached it.
@@ -143,19 +179,50 @@ func origin(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
+func hostOnly(hostport string) string {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	return strings.TrimSuffix(strings.Trim(strings.ToLower(host), "[]"), ".")
+}
+
+// SameSite reports whether two hosts may share cookies or a site: the same address, or names
+// ending in the same two labels. With no list of public suffixes, it errs toward yes.
+func SameSite(a, b string) bool {
+	x, y := hostOnly(a), hostOnly(b)
+	if x == y {
+		return true
+	}
+	if net.ParseIP(x) != nil || net.ParseIP(y) != nil {
+		return false
+	}
+	tail := func(h string) string {
+		parts := strings.Split(h, ".")
+		if len(parts) > 2 {
+			parts = parts[len(parts)-2:]
+		}
+		return strings.Join(parts, ".")
+	}
+	return tail(x) == tail(y)
+}
+
 // Origin returns the pages site's origin for a panel reached at panelHost (a request's Host),
 // with the pages listener on port: configured when set; else, for a panel on a loopback name,
 // the other loopback name, so the pages are on another site than the panel. It returns why
 // there is none otherwise.
 func Origin(configured, panelHost string, port int) (string, error) {
+	host := hostOnly(panelHost)
 	if configured != "" {
+		u, err := url.Parse(configured)
+		if err != nil {
+			return "", err
+		}
+		if SameSite(u.Hostname(), host) {
+			return "", fmt.Errorf("extension_pages.url %s is on the panel's own site (%s): choose a host name under another domain", configured, host)
+		}
 		return configured, nil
 	}
-	host := panelHost
-	if h, _, err := net.SplitHostPort(panelHost); err == nil {
-		host = h
-	}
-	host = strings.Trim(strings.ToLower(host), "[]")
 	var other string
 	switch host {
 	case "127.0.0.1", "::1":

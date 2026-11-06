@@ -23,15 +23,19 @@ A page **cannot**, whatever its code does:
 - read the panel's document, storage, cookies or the management key: it runs on another site
   with an opaque origin, so the browser gives it no access to the panel's window;
 - call core's management API: it holds no key, and its Content Security Policy allows it no
-  requests at all;
-- send data anywhere by `fetch`, XHR, WebSocket, EventSource, `sendBeacon`, images, styles,
-  fonts, forms, workers or frames: its policy allows loading only its own package files, and
-  no requests from script;
+  requests from script at all;
+- send data to any other site by `fetch`, XHR, WebSocket, EventSource, `sendBeacon`, images,
+  styles, fonts, forms, workers or frames: its policy allows loading only its own package
+  files, and no requests from script. It can still request its own files, with anything in the
+  address's query, and navigate its frame to other addresses on the pages site; those requests
+  reach the pages listener (core), and anything in front of it, such as a reverse proxy's log;
 - navigate the panel, open windows or pop-ups, submit forms, or show dialogs (`alert`,
   `confirm`, `prompt`): the frame's sandbox does not allow them;
-- navigate its own frame away: the panel's policy lets its frames show only extension pages, so
-  the browser refuses to load any other address in the frame; whenever the frame gets another
-  document (an error page, or the page reloading itself), the panel closes the page's channel;
+- navigate its own frame to another site: the panel's policy lets its frames show only the pages
+  site, and Chromium, Firefox and WebKit refuse any other address in the frame (the browser
+  test checks this; the specification does not spell it out for a navigation the frame starts
+  itself). Whenever the frame gets another document (an error page, or the page reloading
+  itself), the panel closes the page's channel;
 - read the clipboard: the frame is given no permissions (`allow=""`);
 - keep anything in storage, or read another extension's settings: there is no method for it.
 
@@ -99,7 +103,9 @@ Each page:
 | `path` | The page's HTML file, relative to `dir`, ending in `.html`. |
 
 The files under `dir` count toward the package's fingerprint, as the manifest and program do:
-core refuses to run an installed package whose pages changed since it was installed.
+core refuses to run an installed package whose pages changed since it was installed. While an
+extension runs, the pages site serves only the files its fingerprint covered, and only while
+each still has the digest it had then; a file changed or added since is not found.
 
 ### `config`
 
@@ -119,7 +125,7 @@ it, so the form and a page that writes settings get the same answer.
 | `enum` | string field | The values allowed; the form shows a choice. |
 | `minLength`, `maxLength` | string field | Length in characters. Strings are at most 4,096 characters even without `maxLength`. |
 | `minimum`, `maximum` | number and integer fields | Bounds, inclusive. |
-| `writeOnly` | field | A secret, such as a token: it can be set and cleared, but core never shows its value again, to the panel or to a page. The form shows whether it is set. |
+| `writeOnly` | string field | A secret, such as a token: it can be set and cleared, but core never shows its value again, to the panel or to a page. The form shows whether it is set. A value saved as a secret stays one: if a later version of the schema drops `writeOnly`, the value is not shown but dropped, and the field has its default. |
 
 Any other keyword is refused at install, so a schema never means something core does not
 check. Settings are kept by core, per extension, in `{packages.dir}/.settings/<publisher>/<name>.json`
@@ -149,7 +155,11 @@ panel at `localhost` shows them from `127.0.0.1`. When core is reached by any ot
 LAN address or a domain behind a proxy), set `extension_pages.url` to an origin on another host
 name that reaches the pages listener, such as `https://pages.pluxy.example`. Without one, the
 panel shows no extension pages and says why. The panel also refuses an origin on its own host
-name, or one of its subdomains or parents, whatever core says.
+name or its domain, whatever core says, and core refuses one too. Two names count as one site
+when they end in the same two labels (`pages.example.com` and `panel.example.com` share
+`example.com`'s cookies): use a host name under another domain, such as `pluxy-pages.example`
+for a panel at `pluxy.example`. With no list of public suffixes, this errs toward refusing:
+`a.example.co.uk` and `b.other.co.uk` count as one site too.
 
 Config:
 
@@ -177,7 +187,8 @@ Every response from the pages site carries:
   load its module scripts and fonts with CORS. The files are public package files; no request
   to the pages site carries or needs a credential.
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-cache`
-  with `Last-Modified`.
+  with an `ETag`. Replies that are not page files (not found, wrong method) carry
+  `Content-Security-Policy: sandbox; default-src 'none'`.
 
 Only these file types are served: `.html`, `.js`, `.mjs`, `.css`, `.json`, `.svg`, `.png`,
 `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.woff`, `.woff2`, `.txt`. The pages site is on while
@@ -197,7 +208,7 @@ The panel shows each page in an `iframe` with `sandbox="allow-scripts"` (no `all
 `allow-forms`, `allow-popups`, `allow-top-navigation`, `allow-modals` or `allow-downloads`) and
 `referrerpolicy="no-referrer"`. The panel's own Content Security Policy allows frames only from
 the pages site (`frame-src <pages origin>/`), which is what stops a page from navigating its
-frame anywhere else.
+frame to another site in the browsers tested.
 
 The panel binds each frame it creates to the extension that owns the page, as listed by core.
 Nothing a page sends can name another extension: there is no such parameter. The panel accepts
@@ -207,7 +218,8 @@ itself), the panel closes the channel and shows a button to load the page again.
 ## The message channel
 
 A page talks to the panel over one `MessagePort`. Every message is a plain object, sent with
-structured clone, and must be at most 64 KiB as JSON.
+structured clone. A message from the page must be at most 64 KiB as JSON; the panel's answers
+may be larger (an extension's settings can hold 50 fields of 4,096 characters).
 
 ### Connecting
 

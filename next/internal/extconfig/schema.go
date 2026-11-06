@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"regexp"
 	"slices"
 	"strings"
@@ -65,10 +66,11 @@ func (s *Schema) Field(name string) (Field, bool) {
 var (
 	topKeys   = []string{"type", "properties", "required"}
 	fieldKeys = map[string][]string{
-		"string":  {"type", "title", "description", "default", "writeOnly", "enum", "minLength", "maxLength"},
-		"integer": {"type", "title", "description", "default", "writeOnly", "minimum", "maximum"},
-		"number":  {"type", "title", "description", "default", "writeOnly", "minimum", "maximum"},
-		"boolean": {"type", "title", "description", "default", "writeOnly"},
+		"string": {"type", "title", "description", "default", "writeOnly", "enum", "minLength", "maxLength"},
+		// writeOnly is for secrets, which are text.
+		"integer": {"type", "title", "description", "default", "minimum", "maximum"},
+		"number":  {"type", "title", "description", "default", "minimum", "maximum"},
+		"boolean": {"type", "title", "description", "default"},
 	}
 )
 
@@ -274,21 +276,42 @@ func (f Field) Check(v json.RawMessage) error {
 			return fmt.Errorf("must be one of %s", strings.Join(f.Enum, ", "))
 		}
 	case "integer", "number":
-		var n float64
-		if json.Unmarshal(v, &n) != nil || math.IsInf(n, 0) {
-			return errors.New("must be a number")
+		n, err := exact(v)
+		if err != nil {
+			return err
 		}
-		if f.Type == "integer" && (n != math.Trunc(n) || math.Abs(n) > 1<<53) {
-			return errors.New("must be a whole number")
+		if f.Type == "integer" && (!n.IsInt() || n.Cmp(maxSafeInt) > 0 || n.Cmp(minSafeInt) < 0) {
+			return errors.New("must be a whole number from -(2^53) to 2^53")
 		}
-		if f.Minimum != nil && n < *f.Minimum {
+		if f.Minimum != nil && n.Cmp(new(big.Float).SetFloat64(*f.Minimum)) < 0 {
 			return fmt.Errorf("must be at least %s", num(*f.Minimum))
 		}
-		if f.Maximum != nil && n > *f.Maximum {
+		if f.Maximum != nil && n.Cmp(new(big.Float).SetFloat64(*f.Maximum)) > 0 {
 			return fmt.Errorf("must be at most %s", num(*f.Maximum))
 		}
 	}
 	return nil
+}
+
+// The integers every JSON reader holds exactly.
+var (
+	maxSafeInt = new(big.Float).SetInt64(1 << 53)
+	minSafeInt = new(big.Float).SetInt64(-(1 << 53))
+)
+
+// exact reads a JSON number at a precision far beyond float64, so a value just past a bound or
+// just off a whole number is not rounded onto it.
+func exact(v json.RawMessage) (*big.Float, error) {
+	var n json.Number
+	text := string(bytes.TrimSpace(v))
+	if len(text) > 100 || json.Unmarshal(v, &n) != nil || !strings.ContainsAny(text[:1], "-0123456789") {
+		return nil, errors.New("must be a number")
+	}
+	f, _, err := big.ParseFloat(n.String(), 10, 1024, big.ToNearestEven)
+	if err != nil || f.IsInf() {
+		return nil, errors.New("must be a number")
+	}
+	return f, nil
 }
 
 func num(f float64) string { return fmt.Sprintf("%g", f) }
@@ -304,44 +327,63 @@ func compact(v json.RawMessage) json.RawMessage {
 // Values are settings by field name, each a JSON value.
 type Values map[string]json.RawMessage
 
+// Stored is what core keeps of an extension's settings: the values, and which of them were
+// saved as secrets, so a later schema that drops writeOnly never shows them.
+type Stored struct {
+	Values    Values   `json:"values"`
+	WriteOnly []string `json:"write_only,omitempty"`
+}
+
+// kept returns the stored values this schema may use: fields it declares, and no secret it no
+// longer treats as one.
+func (s *Schema) kept(stored Stored) Values {
+	out := Values{}
+	for _, f := range s.Fields {
+		v, ok := stored.Values[f.Name]
+		if ok && (f.WriteOnly || !slices.Contains(stored.WriteOnly, f.Name)) {
+			out[f.Name] = v
+		}
+	}
+	return out
+}
+
 // Merge applies change to stored: a field set to null goes back to its default. It returns the
 // result, keeping only fields the schema declares, or the first problem with it as
 // "<field> must ...".
-func (s *Schema) Merge(stored, change Values) (Values, error) {
-	next := Values{}
-	for _, f := range s.Fields {
-		if v, ok := stored[f.Name]; ok {
-			next[f.Name] = v
-		}
-	}
+func (s *Schema) Merge(stored Stored, change Values) (Stored, error) {
+	next := s.kept(stored)
 	for name, v := range change {
 		f, ok := s.Field(name)
 		if !ok {
-			return nil, fmt.Errorf("%s is not a setting of this extension", name)
+			return Stored{}, fmt.Errorf("%s is not a setting of this extension", name)
 		}
 		if string(bytes.TrimSpace(v)) == "null" {
 			delete(next, name)
 			continue
 		}
 		if err := f.Check(v); err != nil {
-			return nil, fmt.Errorf("%s %w", name, err)
+			return Stored{}, fmt.Errorf("%s %w", name, err)
 		}
 		next[name] = compact(v)
 	}
+	out := Stored{Values: next}
 	for _, f := range s.Fields {
 		v, ok := next[f.Name]
 		if !ok {
 			if f.Required && f.Default == nil {
-				return nil, fmt.Errorf("%s must have a value", f.Name)
+				return Stored{}, fmt.Errorf("%s must have a value", f.Name)
 			}
 			continue
 		}
 		// A value kept from an earlier version of the schema is checked again too.
 		if err := f.Check(v); err != nil {
-			return nil, fmt.Errorf("%s %w", f.Name, err)
+			return Stored{}, fmt.Errorf("%s %w", f.Name, err)
+		}
+		if f.WriteOnly {
+			out.WriteOnly = append(out.WriteOnly, f.Name)
 		}
 	}
-	return next, nil
+	return out, nil
 }
 
 // View is what core shows of an extension's settings: never a writeOnly value.
@@ -353,10 +395,11 @@ type View struct {
 }
 
 // View returns what may be shown of stored.
-func (s *Schema) View(stored Values) View {
+func (s *Schema) View(stored Stored) View {
+	kept := s.kept(stored)
 	v := View{Values: Values{}, Set: []string{}}
 	for _, f := range s.Fields {
-		val, ok := stored[f.Name]
+		val, ok := kept[f.Name]
 		if f.WriteOnly {
 			if ok {
 				v.Set = append(v.Set, f.Name)

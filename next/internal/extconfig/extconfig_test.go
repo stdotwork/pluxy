@@ -3,6 +3,7 @@ package extconfig
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -89,7 +90,7 @@ func TestMergeChecksEveryField(t *testing.T) {
 	for change, want := range map[string]string{
 		`{"name": "n", "greeting": "toolong"}`: "greeting must be at most 5 characters",
 		`{"name": "n", "interval": 11}`:        "interval must be at most 10",
-		`{"name": "n", "interval": 1.5}`:       "interval must be a whole number",
+		`{"name": "n", "interval": 1.5}`:       "interval must be a whole number from -(2^53) to 2^53",
 		`{"name": "n", "interval": "3"}`:       "interval must be a number",
 		`{"name": "n", "ratio": -0.5}`:         "ratio must be at least 0",
 		`{"name": "n", "unit": "c"}`:           "unit must be one of a, b",
@@ -97,7 +98,7 @@ func TestMergeChecksEveryField(t *testing.T) {
 		`{"name": "n", "other": 1}`:            "other is not a setting of this extension",
 		`{"greeting": "x"}`:                    "name must have a value",
 	} {
-		_, err := s.Merge(Values{}, values(t, change))
+		_, err := s.Merge(Stored{}, values(t, change))
 		if err == nil || err.Error() != want {
 			t.Errorf("%s: got %v, want %q", change, err, want)
 		}
@@ -106,11 +107,11 @@ func TestMergeChecksEveryField(t *testing.T) {
 
 func TestMergeNullClearsAndViewHidesSecrets(t *testing.T) {
 	s := mustParse(t, schemaText)
-	v, err := s.Merge(Values{"stale": json.RawMessage(`1`)}, values(t, `{"name": "n", "interval": 7, "token": "secret-value"}`))
+	v, err := s.Merge(Stored{Values: Values{"stale": json.RawMessage(`1`)}}, values(t, `{"name": "n", "interval": 7, "token": "secret-value"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := v["stale"]; ok {
+	if _, ok := v.Values["stale"]; ok {
 		t.Fatal("a field the schema no longer has was kept")
 	}
 	view := s.View(v)
@@ -133,7 +134,7 @@ func TestMergeNullClearsAndViewHidesSecrets(t *testing.T) {
 
 func TestMergeChecksKeptValuesAgainstANewSchema(t *testing.T) {
 	s := mustParse(t, schemaText)
-	if _, err := s.Merge(Values{"name": json.RawMessage(`"n"`), "interval": json.RawMessage(`50`)}, values(t, `{"on": true}`)); err == nil || err.Error() != "interval must be at most 10" {
+	if _, err := s.Merge(Stored{Values: Values{"name": json.RawMessage(`"n"`), "interval": json.RawMessage(`50`)}}, values(t, `{"on": true}`)); err == nil || err.Error() != "interval must be at most 10" {
 		t.Fatalf("kept out-of-range value: %v", err)
 	}
 }
@@ -142,7 +143,7 @@ func TestStoreSavesPrivatelyAndRefusesWithoutSaving(t *testing.T) {
 	dir := t.TempDir()
 	st := NewStore(filepath.Join(dir, "config"))
 	s := mustParse(t, schemaText)
-	if v, err := st.Load("pub/ext"); err != nil || len(v) != 0 {
+	if v, err := st.Load("pub/ext"); err != nil || len(v.Values) != 0 {
 		t.Fatalf("empty store: %v %v", v, err)
 	}
 	if _, err := st.Change("pub/ext", s, values(t, `{"name": "n", "token": "t"}`)); err != nil {
@@ -165,12 +166,80 @@ func TestStoreSavesPrivatelyAndRefusesWithoutSaving(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (Values{"name": json.RawMessage(`"n"`), "token": json.RawMessage(`"t"`)}); !reflect.DeepEqual(got, want) {
+	if want := (Stored{Values: Values{"name": json.RawMessage(`"n"`), "token": json.RawMessage(`"t"`)}, WriteOnly: []string{"token"}}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after a refused change: %s", got)
 	}
 	for _, id := range []string{"../x", "pub/../../x", "pub", "/abs", "pub/a/b"} {
 		if _, err := st.Load(id); err == nil {
 			t.Errorf("Load(%q) accepted", id)
+		}
+	}
+}
+
+// Review finding 2: a value saved as a secret stays secret when a later schema drops writeOnly.
+func TestASecretIsNeverShownAfterTheSchemaDeclassifiesIt(t *testing.T) {
+	secret := mustParse(t, `{"type": "object", "properties": {"token": {"type": "string", "writeOnly": true}, "on": {"type": "boolean"}}}`)
+	plain := mustParse(t, `{"type": "object", "properties": {"token": {"type": "string", "default": "d"}, "on": {"type": "boolean"}}}`)
+	st := NewStore(t.TempDir())
+	if _, err := st.Change("pub/ext", secret, values(t, `{"token": "review-canary"}`)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := st.Load("pub/ext")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(plain.View(stored)); strings.Contains(string(b), "review-canary") {
+		t.Fatalf("the new schema shows the old secret: %s", b)
+	}
+	next, err := st.Change("pub/ext", plain, values(t, `{"on": true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(next); strings.Contains(string(b), "review-canary") {
+		t.Fatalf("the old secret is kept after a change under the new schema: %s", b)
+	}
+}
+
+// Review finding 4: the largest values the schema allows can be saved and read back.
+func TestStoreHoldsTheLargestAllowedSettings(t *testing.T) {
+	props := map[string]any{}
+	for i := range MaxFields {
+		props[fmt.Sprintf("f%02d", i)] = map[string]any{"type": "string"}
+	}
+	b, _ := json.Marshal(map[string]any{"type": "object", "properties": props})
+	s := mustParse(t, string(b))
+	st := NewStore(t.TempDir())
+	big, _ := json.Marshal(strings.Repeat("\u0001", MaxString))
+	for name := range props {
+		if _, err := st.Change("pub/ext", s, Values{name: big}); err != nil {
+			t.Fatalf("set %s: %v", name, err)
+		}
+	}
+	if v, err := st.Load("pub/ext"); err != nil || len(v.Values) != MaxFields {
+		t.Fatalf("load: %d values, %v", len(v.Values), err)
+	}
+}
+
+// Review finding 5: writeOnly is for text; a secret number or switch is refused.
+func TestWriteOnlyOnlyOnText(t *testing.T) {
+	for _, typ := range []string{"integer", "number", "boolean"} {
+		if _, err := Parse(json.RawMessage(`{"type": "object", "properties": {"a": {"type": "` + typ + `", "writeOnly": true}}}`)); err == nil {
+			t.Errorf("writeOnly %s accepted", typ)
+		}
+	}
+}
+
+// Review finding 7: a bound or wholeness check does not round the value first.
+func TestNumbersAreCheckedWithoutRounding(t *testing.T) {
+	s := mustParse(t, `{"type": "object", "properties": {"i": {"type": "integer", "maximum": 1}, "n": {"type": "number", "maximum": 1}}}`)
+	for _, change := range []string{`{"i": 1.0000000000000001}`, `{"n": 1.0000000000000001}`, `{"i": 1e400}`, `{"i": 9007199254740993}`} {
+		if _, err := s.Merge(Stored{}, values(t, change)); err == nil {
+			t.Errorf("%s accepted", change)
+		}
+	}
+	for _, change := range []string{`{"i": 1}`, `{"i": 1.0}`, `{"i": -3}`, `{"n": 0.5}`, `{"n": 1e0}`} {
+		if _, err := s.Merge(Stored{}, values(t, change)); err != nil {
+			t.Errorf("%s refused: %v", change, err)
 		}
 	}
 }

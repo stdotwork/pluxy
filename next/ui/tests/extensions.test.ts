@@ -192,6 +192,14 @@ describe("where pages may come from", () => {
     expect(related("pages.pluxy.example", "pluxy.example")).toBe(true);
     expect(related("pluxy.example", "PAGES.pluxy.example.")).toBe(true);
     expect(related("pluxy-pages.example", "pluxy.example")).toBe(false);
+    // Review finding 1: siblings under one domain share its cookies and its site.
+    expect(related("pages.example.com", "panel.example.com")).toBe(true);
+    expect(
+      pageProblem("https://pages.example.com/p/x/1/a.html", "https://pages.example.com", "panel.example.com"),
+    ).toContain("the panel's own site");
+    expect(related("127.0.0.1", "10.0.0.1")).toBe(false);
+    expect(related("localhost", "127.0.0.1")).toBe(false);
+    expect(related("pages.example.net", "panel.example.com")).toBe(false);
   });
 });
 
