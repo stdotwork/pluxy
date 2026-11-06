@@ -1,0 +1,125 @@
+{
+  "description": "Generation options from a Gemini request reach the Chat request: sampling and limit fields, stop sequences, JSON response format with its schema, a thinking budget as reasoning effort, a function-calling mode of ANY limited to one allowed name, and the system instruction as a system message.",
+  "source": [
+    "core/internal/translator/openai/gemini/openai_gemini_request.go (ConvertGeminiRequestToOpenAI: generationConfig mapping, thinkingConfig mapping, toolConfig functionCallingConfig mapping, systemInstruction)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:generateContent",
+    "body": {
+      "systemInstruction": {"parts":[{"text":"Answer in JSON."}]},
+      "contents": [{"role":"user","parts":[{"text":"Weather in Paris?"}]}],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Get the current weather for a city.",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ],
+      "toolConfig": {"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["get_weather"]}},
+      "generationConfig": {
+        "temperature": 0.3,
+        "topP": 0.9,
+        "topK": 20,
+        "maxOutputTokens": 300,
+        "stopSequences": ["END"],
+        "candidateCount": 1,
+        "responseMimeType": "application/json",
+        "responseSchema": {"type":"OBJECT","properties":{"temp":{"type":"NUMBER"}}},
+        "thinkingConfig": {"thinkingBudget":1024}
+      }
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {"role":"assistant","content":"{\"temp\": 18}"},
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {"prompt_tokens":48,"completion_tokens":6,"total_tokens":54}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"{\"temp\": 18}"}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "model": "gpt-test-upstream",
+        "usageMetadata": {"candidatesTokenCount":6,"promptTokenCount":48,"totalTokenCount":54}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 300,
+          "messages": [
+            {"content":[{"text":"Answer in JSON.","type":"text"}],"role":"system"},
+            {"content":"Weather in Paris?","role":"user"}
+          ],
+          "model": "gpt-test",
+          "n": 1,
+          "reasoning_effort": "low",
+          "stop": ["END"],
+          "stream": false,
+          "temperature": 0.3,
+          "tool_choice": {"function":{"name":"get_weather"},"type":"function"},
+          "tools": [
+            {
+              "function": {
+                "description": "Get the current weather for a city.",
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {"city":{"type":"STRING"}},
+                  "required": ["city"],
+                  "type": "OBJECT"
+                }
+              },
+              "type": "function"
+            }
+          ],
+          "top_k": 20,
+          "top_p": 0.9
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

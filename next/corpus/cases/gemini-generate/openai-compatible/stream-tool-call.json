@@ -1,0 +1,94 @@
+{
+  "description": "Streamed tool call from a Chat upstream, seen by a Gemini client: the id and name arrive in the first tool_calls delta, the arguments in two pieces, and the Gemini functionCall is emitted once, when finish_reason tool_calls arrives.",
+  "source": [
+    "core/internal/translator/openai/gemini/openai_gemini_response.go (ConvertOpenAIResponseToGemini: tool-call deltas accumulated by index, emitted on finish; mapOpenAIFinishReasonToGemini)",
+    "core/internal/translator/openai/gemini/openai_gemini_request.go (ConvertGeminiRequestToOpenAI: functionDeclarations to function tools)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeStreamWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:streamGenerateContent?alt=sse",
+    "body": {
+      "contents": [{"role":"user","parts":[{"text":"Weather in Paris?"}]}],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Get the current weather for a city.",
+              "parametersJsonSchema": {
+                "type": "object",
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"role":"assistant","content":null},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Paris\"}"}}]},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[],"usage":{"prompt_tokens":85,"completion_tokens":18,"total_tokens":103,"prompt_tokens_details":{"cached_tokens":0}}}},
+        {"data":"[DONE]"}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"candidates":[{"content":{"parts":[{"functionCall":{"args":{"city":"Paris"},"id":"call_abc","name":"get_weather"}}],"role":"model"},"finishReason":"STOP","index":0}],"model":"gpt-test-upstream"}},
+        {"data":{"candidates":[],"model":"gpt-test-upstream","usageMetadata":{"candidatesTokenCount":18,"promptTokenCount":85,"totalTokenCount":103}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [{"content":"Weather in Paris?","role":"user"}],
+          "model": "gpt-test",
+          "stream": true,
+          "stream_options": {"include_usage":true},
+          "tools": [
+            {
+              "function": {
+                "description": "Get the current weather for a city.",
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {"city":{"type":"string"}},
+                  "required": ["city"],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "description": "A non-streamed reply cut off by the token limit: finish_reason length becomes finishReason MAX_TOKENS on the Gemini candidate.",
+  "source": [
+    "core/internal/translator/openai/gemini/openai_gemini_response.go (ConvertOpenAIResponseToGeminiNonStream, mapOpenAIFinishReasonToGemini)",
+    "core/internal/translator/openai/gemini/openai_gemini_request.go (ConvertGeminiRequestToOpenAI: maxOutputTokens to max_tokens)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:generateContent",
+    "body": {
+      "contents": [{"role":"user","parts":[{"text":"Tell me a long story."}]}],
+      "generationConfig": {"maxOutputTokens":5}
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {"role":"assistant","content":"Once upon a time there"},
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"Once upon a time there"}],"role":"model"},
+            "finishReason": "MAX_TOKENS",
+            "index": 0
+          }
+        ],
+        "model": "gpt-test-upstream",
+        "usageMetadata": {"candidatesTokenCount":5,"promptTokenCount":12,"totalTokenCount":17}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 5,
+          "messages": [{"content":"Tell me a long story.","role":"user"}],
+          "model": "gpt-test",
+          "stream": false
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}
