@@ -1,0 +1,200 @@
+{
+  "description": "The upstream connection drops mid-stream; the Responses client must see a failure, not a completed response.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_responses_handlers_stream_error_test.go (TestResponsesHandlerEmitsFailureWhenExecutorStopsAfterPartialOutput)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": "Say hello",
+      "stream": true
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "role": "assistant",
+                  "content": ""
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "content": "Hello"
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        }
+      ],
+      "abort": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": 1700000000,
+              "error": null,
+              "id": "chatcmpl-corpus",
+              "model": "gpt-test",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "chatcmpl-corpus",
+              "model": "gpt-test",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 2,
+            "type": "response.in_progress"
+          },
+          "event": "response.in_progress"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [],
+              "id": "msg_chatcmpl-corpus_0",
+              "role": "assistant",
+              "status": "in_progress",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "item_id": "msg_chatcmpl-corpus_0",
+            "output_index": 0,
+            "part": {
+              "annotations": [],
+              "logprobs": [],
+              "text": "",
+              "type": "output_text"
+            },
+            "sequence_number": 4,
+            "type": "response.content_part.added"
+          },
+          "event": "response.content_part.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "Hello",
+            "item_id": "msg_chatcmpl-corpus_0",
+            "logprobs": [],
+            "output_index": 0,
+            "sequence_number": 5,
+            "type": "response.output_text.delta"
+          },
+          "event": "response.output_text.delta"
+        },
+        {
+          "data": {
+            "error": {
+              "code": "internal_server_error",
+              "message": "unexpected EOF",
+              "param": null,
+              "type": "server_error"
+            },
+            "sequence_number": 5,
+            "type": "error"
+          },
+          "event": "error"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": "Say hello",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          }
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.events[5].data.error",
+      "kind": "gap",
+      "reason": "Both cores end the stream with an error event; the error's message and code differ."
+    },
+    {
+      "path": "client.events[5].data.sequence_number",
+      "kind": "intended",
+      "reason": "The new core gives the closing error event the next sequence number; today's core repeats the previous event's number. Each Responses stream event's sequence_number is meant to increase.",
+      "want": 6
+    }
+  ]
+}

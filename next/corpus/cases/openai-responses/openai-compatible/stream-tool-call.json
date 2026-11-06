@@ -1,0 +1,345 @@
+{
+  "description": "Flat Responses function tools become nested Chat tools; a streamed Chat tool call becomes function_call item events with argument deltas.",
+  "source": [
+    "core/internal/translator/openai/openai/responses/openai_openai-responses_request.go (ConvertOpenAIResponsesRequestToOpenAIChatCompletions)",
+    "core/internal/translator/openai/openai/responses/openai_openai-responses_response.go (ConvertOpenAIChatCompletionsResponseToOpenAIResponses)"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": "Weather in Paris?",
+      "stream": true,
+      "tools": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "description": "Current weather",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
+      "tool_choice": "auto"
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "role": "assistant",
+                  "content": null
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "index": 0,
+                      "id": "call_abc",
+                      "type": "function",
+                      "function": {
+                        "name": "get_weather",
+                        "arguments": ""
+                      }
+                    }
+                  ]
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "index": 0,
+                      "function": {
+                        "arguments": "{\"city\":"
+                      }
+                    }
+                  ]
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "index": 0,
+                      "function": {
+                        "arguments": "\"Paris\"}"
+                      }
+                    }
+                  ]
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "tool_calls"
+              }
+            ]
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": 1700000000,
+              "error": null,
+              "id": "chatcmpl-corpus",
+              "model": "gpt-test",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 1,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "chatcmpl-corpus",
+              "model": "gpt-test",
+              "object": "response",
+              "output": [],
+              "status": "in_progress"
+            },
+            "sequence_number": 2,
+            "type": "response.in_progress"
+          },
+          "event": "response.in_progress"
+        },
+        {
+          "data": {
+            "item": {
+              "arguments": "",
+              "call_id": "call_abc",
+              "id": "fc_call_abc",
+              "name": "get_weather",
+              "status": "in_progress",
+              "type": "function_call"
+            },
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "delta": "{\"city\":",
+            "item_id": "fc_call_abc",
+            "output_index": 0,
+            "sequence_number": 4,
+            "type": "response.function_call_arguments.delta"
+          },
+          "event": "response.function_call_arguments.delta"
+        },
+        {
+          "data": {
+            "delta": "\"Paris\"}",
+            "item_id": "fc_call_abc",
+            "output_index": 0,
+            "sequence_number": 5,
+            "type": "response.function_call_arguments.delta"
+          },
+          "event": "response.function_call_arguments.delta"
+        },
+        {
+          "data": {
+            "arguments": "{\"city\":\"Paris\"}",
+            "item_id": "fc_call_abc",
+            "output_index": 0,
+            "sequence_number": 6,
+            "type": "response.function_call_arguments.done"
+          },
+          "event": "response.function_call_arguments.done"
+        },
+        {
+          "data": {
+            "item": {
+              "arguments": "{\"city\":\"Paris\"}",
+              "call_id": "call_abc",
+              "id": "fc_call_abc",
+              "name": "get_weather",
+              "status": "completed",
+              "type": "function_call"
+            },
+            "output_index": 0,
+            "sequence_number": 7,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "background": false,
+              "created_at": 1700000000,
+              "error": null,
+              "id": "chatcmpl-corpus",
+              "model": "gpt-test",
+              "object": "response",
+              "output": [
+                {
+                  "arguments": "{\"city\":\"Paris\"}",
+                  "call_id": "call_abc",
+                  "id": "fc_call_abc",
+                  "name": "get_weather",
+                  "status": "completed",
+                  "type": "function_call"
+                }
+              ],
+              "status": "completed",
+              "tool_choice": "auto",
+              "tools": [
+                {
+                  "description": "Current weather",
+                  "name": "get_weather",
+                  "parameters": {
+                    "properties": {
+                      "city": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "type": "function"
+                }
+              ]
+            },
+            "sequence_number": 8,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": "Weather in Paris?",
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "function": {
+                "description": "Current weather",
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {
+                    "city": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

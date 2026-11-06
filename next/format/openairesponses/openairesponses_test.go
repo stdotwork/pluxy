@@ -1,0 +1,172 @@
+package openairesponses
+
+import (
+	"encoding/json"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/stdotwork/pluxy/next/format/openaichat"
+	"github.com/stdotwork/pluxy/next/llm"
+)
+
+// A Responses request translated to Chat Completions reports each thing Chat Completions has no
+// place for, by its path in the client's body, and carries over what it can.
+func TestTranslationToChatReportsLosses(t *testing.T) {
+	in := `{"model":"m","previous_response_id":"resp_1","store":true,"metadata":{"k":"v"},
+	"tools":[{"type":"function","name":"f","parameters":{"type":"object"},"strict":true},{"type":"web_search"}],
+	"input":[
+	 {"type":"message","role":"user","content":[{"type":"input_text","text":"Read this."},{"type":"input_file","file_url":"https://example.com/a.pdf"}]},
+	 {"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Use f."}],"encrypted_content":"opaque"},
+	 {"type":"function_call","id":"fc_1","call_id":"call_1","name":"f","arguments":"{}","status":"completed"},
+	 {"type":"function_call_output","call_id":"call_1","output":"ok"},
+	 {"type":"item_reference","id":"msg_9"}
+	]}`
+	req, err := ParseRequest([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := openaichat.EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, l := range losses {
+		got = append(got, l.Kind+" "+l.Path)
+	}
+	slices.Sort(got)
+	want := []string{
+		"approximated input[1]",              // reasoning summary becomes reasoning_content
+		"dropped input[0].content[1]",        // a file by URL
+		"dropped input[1].encrypted_content", // opaque reasoning
+		"dropped input[4]",                   // an item reference
+		"dropped metadata",
+		"dropped previous_response_id",
+		"dropped store",
+		"dropped tools[1]", // a hosted tool
+	}
+	slices.Sort(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("losses:\n got %q\nwant %q", got, want)
+	}
+	wantBody := `{"model":"m","messages":[
+	 {"role":"user","content":[{"type":"text","text":"Read this."}]},
+	 {"role":"assistant","reasoning_content":"Use f.","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+	 {"role":"tool","content":"ok","tool_call_id":"call_1"}],
+	 "stream":false,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"},"strict":true}}]}`
+	var g, w any
+	_ = json.Unmarshal(body, &g)
+	_ = json.Unmarshal([]byte(wantBody), &w)
+	if !reflect.DeepEqual(g, w) {
+		t.Errorf("body:\n got %s\nwant %s", body, wantBody)
+	}
+}
+
+// Events of an upstream Responses stream keep the upstream event in Raw, events the model has no
+// place for become native events, and the stream follows the protocol's ordering rules.
+func TestStreamDecoderKeepsUpstreamEvents(t *testing.T) {
+	stream := []string{
+		`{"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","created_at":7,"status":"in_progress","model":"up","output":[]}}`,
+		`{"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_1","status":"in_progress"}}`,
+		`{"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"in_progress"}}`,
+		`{"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"completed"}}`,
+		`{"type":"response.output_item.added","sequence_number":4,"output_index":1,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"f","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","sequence_number":5,"output_index":1,"item_id":"fc_1","delta":"{}"}`,
+		`{"type":"response.function_call_arguments.done","sequence_number":6,"output_index":1,"item_id":"fc_1","arguments":"{}"}`,
+		`{"type":"response.output_item.done","sequence_number":7,"output_index":1,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"f","arguments":"{}"}}`,
+		`{"type":"response.completed","sequence_number":8,"response":{"id":"resp_1","status":"completed","output":[{"type":"web_search_call"},{"type":"function_call","call_id":"call_1","name":"f","arguments":"{}"}],"usage":{"input_tokens":3,"output_tokens":2,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":0}}}}`,
+	}
+	wantTypes := []string{llm.EventResponseStart, llm.EventNative, llm.EventNative, llm.EventNative, llm.EventItemStart,
+		llm.EventToolInputDelta, llm.EventNative, llm.EventItemEnd, llm.EventFinish}
+	dec := NewStreamDecoder()
+	var seq llm.Sequence
+	var last llm.Event
+	for i, data := range stream {
+		evs, err := dec.Decode([]byte(data))
+		if err != nil {
+			t.Fatalf("event %d: %v", i, err)
+		}
+		if len(evs) != 1 {
+			t.Fatalf("event %d gave %d model events, want 1", i, len(evs))
+		}
+		ev := evs[0]
+		if ev.Type != wantTypes[i] {
+			t.Errorf("event %d: type %q, want %q", i, ev.Type, wantTypes[i])
+		}
+		if string(ev.Raw) != data {
+			t.Errorf("event %d: raw %s, want the upstream event", i, ev.Raw)
+		}
+		if err := seq.Check(ev); err != nil {
+			t.Fatalf("event %d: %v", i, err)
+		}
+		last = ev
+	}
+	if last.Finish.Reason != llm.FinishToolCalls {
+		t.Errorf("finish reason %q, want tool_calls", last.Finish.Reason)
+	}
+	if u := last.Usage; u == nil || *u.InputTokens != 3 || *u.OutputTokens != 2 || *u.CachedInputTokens != 1 {
+		t.Errorf("usage %+v", last.Usage)
+	}
+}
+
+// A stream that ends without a terminal event is an error, and response.failed is an error that
+// keeps the upstream event.
+func TestStreamDecoderFailures(t *testing.T) {
+	dec := NewStreamDecoder()
+	if _, err := dec.Decode([]byte(`{"type":"response.created","sequence_number":0,"response":{"id":"r"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.Close(); err == nil {
+		t.Error("Close before a terminal event: no error")
+	}
+
+	dec = NewStreamDecoder()
+	failed := `{"type":"response.failed","sequence_number":1,"response":{"id":"r","status":"failed","error":{"code":"server_error","message":"boom"}}}`
+	_, err := dec.Decode([]byte(failed))
+	e, ok := err.(*llm.Error)
+	if !ok || e.Message != "boom" || e.ProviderCode != "server_error" || string(e.Raw) != failed {
+		t.Errorf("response.failed gave %v", err)
+	}
+}
+
+// A reply from a Chat upstream to a Responses client becomes the Responses event sequence, and
+// what Chat had that a Response cannot hold is reported.
+func TestStreamWriterRebuildsEvents(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	w := NewStreamWriter(&out, req)
+	start := llm.ItemStart{Kind: llm.ItemMessage}
+	for _, ev := range []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Created: 5, Format: llm.FormatOpenAIChat, Raw: json.RawMessage(`{"system_fingerprint":"fp"}`)}},
+		{Type: llm.EventItemStart, Index: 0, Item: &start},
+		{Type: llm.EventTextDelta, Index: 0, Delta: "Hel"},
+		{Type: llm.EventItemEnd, Index: 0},
+		{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishLength}},
+	} {
+		if err := w.Write(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var types []string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if typ, ok := strings.CutPrefix(line, "event: "); ok {
+			types = append(types, typ)
+		}
+	}
+	want := []string{"response.created", "response.in_progress", "response.output_item.added", "response.content_part.added",
+		"response.output_text.delta", "response.output_text.done", "response.content_part.done", "response.output_item.done",
+		"response.incomplete"}
+	if !reflect.DeepEqual(types, want) {
+		t.Errorf("events:\n got %q\nwant %q", types, want)
+	}
+	if !strings.Contains(out.String(), `"incomplete_details":{"reason":"max_output_tokens"}`) {
+		t.Errorf("no incomplete_details in %s", out.String())
+	}
+	if l := w.Losses(); len(l) != 1 || l[0].Path != "response.system_fingerprint" {
+		t.Errorf("losses %+v, want system_fingerprint dropped", l)
+	}
+}

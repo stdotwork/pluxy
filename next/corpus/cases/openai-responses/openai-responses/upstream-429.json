@@ -1,0 +1,145 @@
+{
+  "description": "An upstream 429 from a Responses upstream is an HTTP error for the client, with Retry-After.",
+  "source": [
+    "core/internal/api/issue7017_retry_after_test.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": "Say hello",
+      "stream": true
+    }
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {
+        "Retry-After": "20"
+      },
+      "body": {
+        "error": {
+          "message": "Rate limit reached for requests",
+          "type": "requests",
+          "code": "rate_limit_exceeded"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "rate_limit_exceeded",
+          "message": "Rate limit reached for requests",
+          "type": "requests"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "Retry-After": "20",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.include",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.input",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.store",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.tools",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Session-Id",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built."
+    }
+  ]
+}

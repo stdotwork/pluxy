@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/openaichat"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -37,6 +38,40 @@ type Stream interface {
 // GenerateFunc starts a generate call on the provider extension.
 type GenerateFunc func(ctx context.Context, account protocol.Account, req llm.Request) Stream
 
+// clientFormat is a client API core serves: how to read its requests and write its replies.
+type clientFormat struct {
+	parse     func(body []byte) (llm.Request, error)
+	stream    func(w io.Writer, req llm.Request) eventWriter
+	aggregate func(req llm.Request) aggregator
+}
+
+type eventWriter interface{ Write(ev llm.Event) error }
+
+type aggregator interface {
+	Add(ev llm.Event)
+	// Size is about how many bytes of content the aggregator holds; core stops collecting a
+	// reply above MaxResponseBody.
+	Size() int
+	Response() ([]byte, error)
+}
+
+// lossReporter is a writer or aggregator that reports what the client format could not carry.
+type lossReporter interface{ Losses() []llm.Loss }
+
+var chatFormat = clientFormat{
+	parse: openaichat.ParseRequest,
+	stream: func(w io.Writer, req llm.Request) eventWriter {
+		return openaichat.NewStreamWriter(w, openaichat.WantsStreamUsage(req))
+	},
+	aggregate: func(llm.Request) aggregator { return openaichat.NewAggregator() },
+}
+
+var responsesFormat = clientFormat{
+	parse:     openairesponses.ParseRequest,
+	stream:    func(w io.Writer, req llm.Request) eventWriter { return openairesponses.NewStreamWriter(w, req) },
+	aggregate: func(req llm.Request) aggregator { return openairesponses.NewAggregator(req) },
+}
+
 // New returns core's HTTP handler. Requests are routed over cfg's accounts, and each attempt
 // is a call to generate.
 func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
@@ -47,13 +82,15 @@ func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-		if !authorized(cfg, r) {
-			writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
-			return
-		}
-		chat(w, r, router)
-	})
+	for path, f := range map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/responses": responsesFormat} {
+		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
+			if !authorized(cfg, r) {
+				writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
+				return
+			}
+			serve(w, r, cfg, router, f)
+		})
+	}
 	return mux, nil
 }
 
@@ -84,7 +121,7 @@ func writeError(w http.ResponseWriter, e *llm.Error) {
 	_, _ = w.Write(body)
 }
 
-func chat(w http.ResponseWriter, r *http.Request, router *route.Router) {
+func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Router, f clientFormat) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBody))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -94,11 +131,12 @@ func chat(w http.ResponseWriter, r *http.Request, router *route.Router) {
 		}
 		return // the client went away
 	}
-	req, err := openaichat.ParseRequest(body)
+	req, err := f.parse(body)
 	if err != nil {
 		writeError(w, asLLMError(err))
 		return
 	}
+	req.DropPolicy = cfg.DropPolicy
 	stream := router.Generate(r.Context(), routeRequest(r, req, body))
 	defer stream.Close()
 
@@ -110,8 +148,13 @@ func chat(w http.ResponseWriter, r *http.Request, router *route.Router) {
 		writeError(w, ev.Error)
 		return
 	}
+	var request *llm.Translation
+	if ev.Type == llm.EventResponseStart {
+		request = ev.Response.Translation
+	}
 	if !req.Stream {
-		agg := openaichat.NewAggregator()
+		agg := f.aggregate(req)
+		defer func() { logTranslation(r, request, agg) }()
 		for {
 			agg.Add(ev)
 			if ev.Terminal() {
@@ -147,7 +190,8 @@ func chat(w http.ResponseWriter, r *http.Request, router *route.Router) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	rc := http.NewResponseController(w)
-	sw := openaichat.NewStreamWriter(w, openaichat.WantsStreamUsage(req))
+	sw := f.stream(w, req)
+	defer func() { logTranslation(r, request, sw) }()
 	for {
 		// Writes block while the client is slow, and the next event is not read until the
 		// write is done: that is the backpressure path to the extension.
@@ -173,6 +217,25 @@ func asLLMError(err error) *llm.Error {
 		return e
 	}
 	return &llm.Error{Code: llm.CodeInternal, Message: err.Error()}
+}
+
+// logTranslation logs what translation lost on the way to the upstream (request) and back to
+// the client (reply), when anything was lost.
+func logTranslation(r *http.Request, request *llm.Translation, reply any) {
+	var parts []string
+	if request != nil && !request.Passthrough {
+		for _, l := range request.Losses {
+			parts = append(parts, fmt.Sprintf("request %s %s (%s)", l.Kind, l.Path, l.Detail))
+		}
+	}
+	if lr, ok := reply.(lossReporter); ok {
+		for _, l := range lr.Losses() {
+			parts = append(parts, fmt.Sprintf("reply %s %s (%s)", l.Kind, l.Path, l.Detail))
+		}
+	}
+	if len(parts) > 0 {
+		log.Printf("%s %s: translation: %s", r.Method, r.URL.Path, strings.Join(parts, "; "))
+	}
 }
 
 func logFailure(r *http.Request, e *llm.Error) {

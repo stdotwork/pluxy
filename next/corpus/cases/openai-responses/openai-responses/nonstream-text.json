@@ -1,0 +1,214 @@
+{
+  "description": "Same-format passthrough, not streamed: the upstream's Response object reaches the client unchanged, including fields pluxy does not model.",
+  "source": [
+    "core/internal/runtime/executor/codex_executor_execute_usage_test.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "gpt-test",
+      "input": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Say hello"
+            }
+          ]
+        }
+      ],
+      "instructions": "Be brief.",
+      "store": false
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "resp_corpus",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-test-upstream",
+        "output": [
+          {
+            "id": "msg_corpus",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "Hello there",
+                "annotations": []
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 2,
+          "total_tokens": 7,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "instructions": "Be brief.",
+        "x_vendor_field": "kept"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "request_timeout",
+          "message": "stream error: stream disconnected before completion: stream closed before response.completed",
+          "type": "server_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 408
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "instructions": "Be brief.",
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "34ce9a9d-0ccd-52cc-934a-b83980dea52f",
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "output_format": "png",
+              "type": "image_generation"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Session-Id": "34ce9a9d-0ccd-52cc-934a-b83980dea52f",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.include",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.tools",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Session-Id",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "client.status",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex provider, which always streams and fails on a JSON reply (408 here). The new core sends the client's non-streamed request unchanged and passes the upstream's Response object through.",
+      "want": 200
+    },
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex provider, which always streams and fails on a JSON reply (408 here). The new core sends the client's non-streamed request unchanged and passes the upstream's Response object through.",
+      "want": {
+        "id": "resp_corpus",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-test-upstream",
+        "output": [
+          {
+            "id": "msg_corpus",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "Hello there",
+                "annotations": []
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 2,
+          "total_tokens": 7,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "instructions": "Be brief.",
+        "x_vendor_field": "kept"
+      }
+    }
+  ]
+}

@@ -128,10 +128,11 @@ func (u *upstream) streamReply(w http.ResponseWriter, r *http.Request, _ []byte)
 	chunk(`[DONE]`)
 }
 
-// core runs the pluxy binary against u and returns its base URL.
-func startCore(t *testing.T, u *upstream) string {
+// startCore runs the pluxy binary against u and returns its base URL. Each option may change
+// the config before core starts.
+func startCore(t *testing.T, u *upstream, options ...func(cfg map[string]any)) string {
 	t.Helper()
-	base, _ := startCoreLogged(t, u)
+	base, _ := startCoreLogged(t, u, options...)
 	return base
 }
 
@@ -166,7 +167,7 @@ func (l *coreLog) waitFor(t *testing.T, s string) string {
 }
 
 // startCoreLogged is startCore that also returns core's log.
-func startCoreLogged(t *testing.T, u *upstream) (string, *coreLog) {
+func startCoreLogged(t *testing.T, u *upstream, options ...func(cfg map[string]any)) (string, *coreLog) {
 	t.Helper()
 	cfg := map[string]any{
 		"listen":      "127.0.0.1:0",
@@ -179,6 +180,9 @@ func startCoreLogged(t *testing.T, u *upstream) (string, *coreLog) {
 				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
 			}},
 		},
+	}
+	for _, o := range options {
+		o(cfg)
 	}
 	return runCoreLogged(t, cfg)
 }
@@ -245,7 +249,12 @@ func runCoreLogged(t *testing.T, cfg map[string]any) (string, *coreLog) {
 
 func post(t *testing.T, ctx context.Context, base, key, body string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", strings.NewReader(body))
+	return postPath(t, ctx, base, "/v1/chat/completions", key, body)
+}
+
+func postPath(t *testing.T, ctx context.Context, base, path, key, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}

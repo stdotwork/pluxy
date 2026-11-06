@@ -47,7 +47,7 @@ func TestParseThenEncodeRequest(t *testing.T) {
 	if p := req.Items[1].Content[2]; p.Type != llm.PartNative {
 		t.Fatalf("unknown part became %q, want native", p.Type)
 	}
-	out, err := EncodeRequest(req)
+	out, _, err := EncodeRequest(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,15 +66,51 @@ func TestParseThenEncodeRequest(t *testing.T) {
 	}
 }
 
+// Fields the model does not interpret survive a Chat request read into items and written back
+// as Chat: a message's name, an assistant's reasoning_content, vendor fields on the request, a
+// message, a part, a tool call and a tool, a tool's strict flag and a tool type the model does
+// not know. (The encoder always writes stream, so the input states it.)
+func TestParseThenEncodeKeepsUnmodelledFields(t *testing.T) {
+	in := `{"model":"m","stream":false,"metadata":{"team":"a"},"x_vendor":{"k":1},
+	"tools":[{"type":"function","x_tool":true,"function":{"name":"f","parameters":{"type":"object"},"strict":true,"x_fn":2}},
+	 {"type":"custom","custom":{"name":"patch"}}],
+	"messages":[
+	 {"role":"user","name":"alice","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}],"x_msg":"u"},
+	 {"role":"assistant","content":"Calling.","reasoning_content":"Need f.","tool_calls":[
+	   {"id":"call_1","type":"function","x_call":3,"function":{"name":"f","arguments":"{}"}}]},
+	 {"role":"tool","tool_call_id":"call_1","content":"done","x_tool_msg":4}
+	]}`
+	req, err := ParseRequest([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(losses) != 0 {
+		t.Errorf("same-format encode reported losses: %+v", losses)
+	}
+	var got, want any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(in), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("encoded:\n got %s\nwant %s", out, compactJSON(t, in))
+	}
+}
+
 func TestParseRequestRejects(t *testing.T) {
 	for name, body := range map[string]string{
-		"not JSON":       `{`,
-		"no model":       `{"messages":[{"role":"user","content":"hi"}]}`,
-		"no messages":    `{"model":"m","messages":[]}`,
-		"unknown role":   `{"model":"m","messages":[{"role":"wizard","content":"hi"}]}`,
-		"non-text tool":  `{"model":"m","messages":[{"role":"tool","tool_call_id":"c","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}`,
-		"bad stop":       `{"model":"m","stop":7,"messages":[{"role":"user","content":"hi"}]}`,
-		"non-func tools": `{"model":"m","tools":[{"type":"web_search"}],"messages":[{"role":"user","content":"hi"}]}`,
+		"not JSON":      `{`,
+		"no model":      `{"messages":[{"role":"user","content":"hi"}]}`,
+		"no messages":   `{"model":"m","messages":[]}`,
+		"unknown role":  `{"model":"m","messages":[{"role":"wizard","content":"hi"}]}`,
+		"non-text tool": `{"model":"m","messages":[{"role":"tool","tool_call_id":"c","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}`,
+		"bad stop":      `{"model":"m","stop":7,"messages":[{"role":"user","content":"hi"}]}`,
 	} {
 		_, err := ParseRequest([]byte(body))
 		le, ok := err.(*llm.Error)

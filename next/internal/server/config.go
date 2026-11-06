@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // Config is core's configuration file, version 0.
@@ -21,6 +22,10 @@ type Config struct {
 	Extension  ExtensionConfig `json:"extension"`
 	// Routing says how requests are spread over the accounts and retried.
 	Routing route.Config `json:"routing"`
+	// DropPolicy says what happens when translating a request to the upstream's format would
+	// drop part of it: "report" (the default) sends it and logs what was dropped, "reject"
+	// refuses it with an error naming what could not be carried.
+	DropPolicy string `json:"drop_policy,omitempty"`
 }
 
 // ExtensionConfig names the provider extension and its accounts.
@@ -51,6 +56,11 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if !filepath.IsAbs(c.Extension.Manifest) {
 		c.Extension.Manifest = filepath.Join(filepath.Dir(path), c.Extension.Manifest)
+	}
+	switch c.DropPolicy {
+	case "", llm.DropReport, llm.DropReject:
+	default:
+		return nil, fmt.Errorf("config: drop_policy must be %q or %q", llm.DropReport, llm.DropReject)
 	}
 	if len(c.Extension.Accounts) == 0 {
 		return nil, errors.New("config: extension.accounts must not be empty")
