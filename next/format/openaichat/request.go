@@ -528,7 +528,17 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			if it.Role == llm.RoleUser && dropped && !sendable {
 				return nil, nil, invalid("%s: nothing in this user turn can be sent to Chat Completions", p)
 			}
-			m := &outMessage{Role: it.Role, Content: content, raw: e.kept(it.Origin)}
+			raw := e.kept(it.Origin)
+			// Assistant text after tool calls of the same turn (Anthropic Messages allows it) joins
+			// the message holding the calls: tool results must follow that message directly.
+			if n := len(msgs); it.Role == llm.RoleAssistant && n > 0 && reasoning == "" && len(raw) == 0 && content != nil {
+				if last := msgs[n-1]; last.Role == llm.RoleAssistant && len(last.ToolCalls) > 0 && last.Content == nil && last.ToolCallID == "" {
+					last.Content = content
+					e.lose(llm.LossApproximated, p, "assistant text after tool calls sent in the message with the calls")
+					break
+				}
+			}
+			m := &outMessage{Role: it.Role, Content: content, raw: raw}
 			if it.Role == llm.RoleAssistant {
 				m.ReasoningContent, reasoning = reasoning, ""
 			}

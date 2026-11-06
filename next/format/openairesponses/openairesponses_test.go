@@ -272,3 +272,17 @@ func checkPassthrough(t *testing.T, stream []string) {
 		t.Errorf("client got:\n%s\nwant:\n%s", out.String(), want.String())
 	}
 }
+
+// Encrypted reasoning and annotations are listed by their path in the Response, from a stream's
+// item event or from the whole Response.
+func TestOpaqueOutput(t *testing.T) {
+	item := `{"type":"response.output_item.done","output_index":2,"item":{"type":"reasoning","encrypted_content":"gAAA","summary":[]}}`
+	if got := OpaqueOutput(json.RawMessage(item)); !reflect.DeepEqual(got, []string{"output[2].encrypted_content"}) {
+		t.Errorf("item event: %q", got)
+	}
+	resp := `{"object":"response","output":[{"type":"reasoning","encrypted_content":""},
+	 {"type":"message","content":[{"type":"output_text","text":"x","annotations":[{"type":"url_citation"}]},{"type":"output_text","annotations":[]}]}]}`
+	if got := OpaqueOutput(json.RawMessage(resp)); !reflect.DeepEqual(got, []string{"output[1].content[0].annotations"}) {
+		t.Errorf("response: %q", got)
+	}
+}

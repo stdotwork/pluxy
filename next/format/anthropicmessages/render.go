@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -31,8 +32,8 @@ func writeEvent(w io.Writer, typ string, data []byte) error {
 	return err
 }
 
-// upstreamEvent returns the Messages event type of raw when raw is a Messages stream event.
-func upstreamEvent(raw json.RawMessage) string {
+// rawType returns the type field of raw when raw is a JSON object that has one.
+func rawType(raw json.RawMessage) string {
 	if len(raw) == 0 || raw[0] != '{' {
 		return ""
 	}
@@ -42,9 +43,14 @@ func upstreamEvent(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &e) != nil {
 		return ""
 	}
-	switch {
-	case e.Type == "error", e.Type == "ping", strings.HasPrefix(e.Type, "message_"), strings.HasPrefix(e.Type, "content_block_"):
-		return e.Type
+	return e.Type
+}
+
+// upstreamEvent returns the Messages event type of raw when raw is a Messages stream event: any
+// typed object other than a whole Message, so event types Anthropic adds later pass through too.
+func upstreamEvent(raw json.RawMessage) string {
+	if t := rawType(raw); t != "message" {
+		return t
 	}
 	return ""
 }
@@ -98,47 +104,46 @@ func encodeUsage(u *llm.Usage) obj {
 	return out
 }
 
-// usageLosses lists usage fields of a reply from another format that Messages usage has no place
-// for.
+// usageLosses lists the usage fields of a reply from another format that Messages usage has no
+// place for, nested detail fields included. Token totals and cached input tokens are carried.
 func usageLosses(u *llm.Usage, upFormat string) []string {
 	if u == nil || upFormat == format || len(u.Raw) == 0 {
 		return nil
 	}
-	known := map[string]bool{"prompt_tokens": true, "completion_tokens": true, "total_tokens": true, "prompt_tokens_details": true,
-		"completion_tokens_details": true, "input_tokens": true, "output_tokens": true, "input_tokens_details": true, "output_tokens_details": true}
 	var out []string
-	for k := range rawjson.Object(u.Raw) {
-		if !known[k] {
-			out = append(out, k)
+	for k, v := range rawjson.Object(u.Raw) {
+		switch k {
+		case "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens", "output_tokens":
+			continue
+		case "prompt_tokens_details", "input_tokens_details", "completion_tokens_details", "output_tokens_details":
+			if d := rawjson.Object(v); d != nil {
+				for dk, dv := range d {
+					carried := dk == "cached_tokens" && (k == "prompt_tokens_details" || k == "input_tokens_details")
+					if carried || string(dv) == "0" || string(dv) == "null" {
+						continue
+					}
+					out = append(out, k+"."+dk)
+				}
+				continue
+			}
 		}
+		out = append(out, k)
 	}
 	slices.Sort(out)
 	return out
 }
 
-// block is one content block being rebuilt from model events.
-type outBlock struct {
-	kind   string
-	index  int // Messages block index
-	callID string
-	name   string
-	text   strings.Builder
-}
-
-// builder rebuilds a Messages reply from model events whose upstream format is not Messages.
+// builder keeps what a Messages reply needs from model events whose upstream format is not
+// Messages, and what the reply could not carry.
 type builder struct {
 	id       string
 	model    string
 	upFormat string
-	blocks   map[int]*outBlock // model item index -> block
-	order    []int
 	tools    bool
 	finish   *llm.Finish
 	usage    *llm.Usage
 	losses   []llm.Loss
 }
-
-func newBuilder() *builder { return &builder{blocks: map[int]*outBlock{}} }
 
 func (b *builder) lose(path, detail string) {
 	for _, l := range b.losses {
@@ -168,14 +173,15 @@ func (b *builder) start(r *llm.ResponseInfo) {
 	}
 }
 
-func (b *builder) open(idx int, s *llm.ItemStart) *outBlock {
-	blk := &outBlock{kind: s.Kind, index: len(b.order), callID: s.CallID, name: s.Name}
-	b.blocks[idx] = blk
-	b.order = append(b.order, idx)
-	if s.Kind == llm.ItemToolCall {
-		b.tools = true
+// upstreamData looks at the upstream data an event from another format carries for what a
+// Message cannot hold: opaque reasoning and annotations from a Responses upstream, for now.
+func (b *builder) upstreamData(ev llm.Event) {
+	if b.upFormat != llm.FormatOpenAIResponses || len(ev.Raw) == 0 {
+		return
 	}
-	return blk
+	for _, p := range openairesponses.OpaqueOutput(ev.Raw) {
+		b.lose(p, "reply data with no place in a Message")
+	}
 }
 
 func (b *builder) native() {
@@ -192,45 +198,67 @@ func (b *builder) finished(ev llm.Event) {
 func (b *builder) stopReason() string { return stopReason(b.finish, b.upFormat, b.tools) }
 
 // toolInput returns a tool call's arguments as the JSON object Messages wants: {} when they are
-// empty or not a JSON object.
-func toolInput(args string) json.RawMessage {
+// empty. Arguments that are not a JSON object also become {}, as in today's core, and are
+// reported.
+func (b *builder) toolInput(args string, path string) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal([]byte(args), &m) != nil || m == nil {
+		if strings.TrimSpace(args) != "" {
+			b.lose(path, "tool arguments that are not a JSON object, sent as {}")
+		}
 		return json.RawMessage("{}")
 	}
 	return json.RawMessage(args)
 }
 
-// content returns the reply's content blocks.
-func (b *builder) content() []any {
-	out := []any{}
-	for _, idx := range b.order {
-		blk := b.blocks[idx]
-		switch blk.kind {
-		case llm.ItemMessage:
-			out = append(out, obj{"type": "text", "text": blk.text.String()})
-		case llm.ItemReasoning:
-			out = append(out, obj{"type": "thinking", "thinking": blk.text.String()})
-		case llm.ItemToolCall:
-			out = append(out, obj{"type": "tool_use", "id": blk.callID, "name": blk.name, "input": toolInput(blk.text.String())})
-		}
+func contentBlockStart(kind, callID, name string) obj {
+	switch kind {
+	case llm.ItemMessage:
+		return obj{"type": "text", "text": ""}
+	case llm.ItemReasoning:
+		return obj{"type": "thinking", "thinking": ""}
 	}
-	return out
+	return obj{"type": "tool_use", "id": callID, "name": name, "input": obj{}}
+}
+
+func blockDelta(kind, delta string) obj {
+	switch kind {
+	case llm.ItemMessage:
+		return obj{"type": "text_delta", "text": delta}
+	case llm.ItemReasoning:
+		return obj{"type": "thinking_delta", "thinking": delta}
+	}
+	return obj{"type": "input_json_delta", "partial_json": delta}
+}
+
+// streamBlock is one model item being written as a content block.
+type streamBlock struct {
+	kind, callID, name string
+	index              int      // Messages block index, set when the block starts
+	held               []string // deltas waiting while another block is open
+	ended              bool
 }
 
 // StreamWriter writes events to a client as a Messages stream. When the reply came from a
 // Messages upstream it writes the upstream's events as they came; otherwise it rebuilds the
-// Messages event sequence from the model events.
+// Messages event sequence from the model events. Messages content blocks do not overlap, so
+// while one block is open, items that start later (parallel tool calls) are held and written
+// in order after it.
 type StreamWriter struct {
 	w      io.Writer
-	b      *builder
+	b      builder
 	native bool
 	ended  bool // an upstream terminal event was passed through
+
+	blocks map[int]*streamBlock // model item index -> block
+	active int                  // model item index of the open block, or -1
+	queue  []int                // model items waiting to be written, in start order
+	next   int                  // next Messages block index
 }
 
 // NewStreamWriter returns a writer for one client stream.
 func NewStreamWriter(w io.Writer) *StreamWriter {
-	return &StreamWriter{w: w, b: newBuilder()}
+	return &StreamWriter{w: w, blocks: map[int]*streamBlock{}, active: -1}
 }
 
 // Losses returns what the reply had that the client format could not carry.
@@ -243,6 +271,45 @@ func (s *StreamWriter) emit(typ string, fields obj) error {
 		return err
 	}
 	return writeEvent(s.w, typ, data)
+}
+
+// open writes the start of item idx and its held deltas, and its stop when it has ended. It
+// reports whether the block is still open.
+func (s *StreamWriter) open(idx int) (bool, error) {
+	blk := s.blocks[idx]
+	blk.index = s.next
+	s.next++
+	if err := s.emit("content_block_start", obj{"index": blk.index, "content_block": contentBlockStart(blk.kind, blk.callID, blk.name)}); err != nil {
+		return false, err
+	}
+	for _, d := range blk.held {
+		if err := s.emit("content_block_delta", obj{"index": blk.index, "delta": blockDelta(blk.kind, d)}); err != nil {
+			return false, err
+		}
+	}
+	blk.held = nil
+	if blk.ended {
+		delete(s.blocks, idx)
+		return false, s.emit("content_block_stop", obj{"index": blk.index})
+	}
+	return true, nil
+}
+
+// drain writes waiting items in order until one stays open.
+func (s *StreamWriter) drain() error {
+	for len(s.queue) > 0 {
+		idx := s.queue[0]
+		s.queue = s.queue[1:]
+		open, err := s.open(idx)
+		if err != nil {
+			return err
+		}
+		if open {
+			s.active = idx
+			return nil
+		}
+	}
+	return nil
 }
 
 // Write writes the stream events for one model event.
@@ -262,48 +329,62 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			}
 			return writeEvent(s.w, typ, raw)
 		}
-		if ev.Type == llm.EventError && !s.ended {
+		switch {
+		case ev.Type == llm.EventError && !s.ended:
+			s.ended = true
 			return s.emit("error", errorFields(ev.Error))
+		case ev.Type == llm.EventFinish && !s.ended:
+			// A non-streamed Message rebuilt as events ends with the whole Message.
+			s.ended = true
+			return s.emit("message_stop", obj{})
 		}
 		return nil
 	}
-	b := s.b
+	b := &s.b
 	switch ev.Type {
 	case llm.EventResponseStart:
 		b.start(ev.Response)
 		return s.emit("message_start", obj{"message": obj{"id": b.id, "type": "message", "role": "assistant", "model": b.model,
 			"content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": obj{"input_tokens": 0, "output_tokens": 0}}})
 	case llm.EventItemStart:
-		blk := b.open(ev.Index, ev.Item)
-		var cb obj
-		switch blk.kind {
-		case llm.ItemMessage:
-			cb = obj{"type": "text", "text": ""}
-		case llm.ItemReasoning:
-			cb = obj{"type": "thinking", "thinking": ""}
-		default:
-			cb = obj{"type": "tool_use", "id": blk.callID, "name": blk.name, "input": obj{}}
+		s.blocks[ev.Index] = &streamBlock{kind: ev.Item.Kind, callID: ev.Item.CallID, name: ev.Item.Name}
+		if ev.Item.Kind == llm.ItemToolCall {
+			b.tools = true
 		}
-		return s.emit("content_block_start", obj{"index": blk.index, "content_block": cb})
+		if s.active >= 0 {
+			s.queue = append(s.queue, ev.Index)
+			return nil
+		}
+		if _, err := s.open(ev.Index); err != nil {
+			return err
+		}
+		s.active = ev.Index
+		return nil
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
-		blk := b.blocks[ev.Index]
-		blk.text.WriteString(ev.Delta)
-		var d obj
-		switch blk.kind {
-		case llm.ItemMessage:
-			d = obj{"type": "text_delta", "text": ev.Delta}
-		case llm.ItemReasoning:
-			d = obj{"type": "thinking_delta", "thinking": ev.Delta}
-		default:
-			d = obj{"type": "input_json_delta", "partial_json": ev.Delta}
+		blk := s.blocks[ev.Index]
+		if ev.Index != s.active {
+			blk.held = append(blk.held, ev.Delta)
+			return nil
 		}
-		return s.emit("content_block_delta", obj{"index": blk.index, "delta": d})
+		return s.emit("content_block_delta", obj{"index": blk.index, "delta": blockDelta(blk.kind, ev.Delta)})
 	case llm.EventItemEnd:
-		return s.emit("content_block_stop", obj{"index": b.blocks[ev.Index].index})
+		b.upstreamData(ev)
+		blk := s.blocks[ev.Index]
+		if ev.Index != s.active {
+			blk.ended = true
+			return nil
+		}
+		delete(s.blocks, ev.Index)
+		s.active = -1
+		if err := s.emit("content_block_stop", obj{"index": blk.index}); err != nil {
+			return err
+		}
+		return s.drain()
 	case llm.EventNative:
 		b.native()
 		return nil
 	case llm.EventFinish:
+		b.upstreamData(ev)
 		b.finished(ev)
 		if err := s.emit("message_delta", obj{"delta": obj{"stop_reason": b.stopReason(), "stop_sequence": nil}, "usage": encodeUsage(ev.Usage)}); err != nil {
 			return err
@@ -315,41 +396,64 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	return nil
 }
 
+// aggBlock is one content block a non-streamed reply collects.
+type aggBlock struct {
+	kind, callID, name string
+	text               strings.Builder
+}
+
 // Aggregator collects events into a non-streamed Message. A reply from a Messages upstream is
-// returned as the upstream's Message.
+// returned as the upstream's Message; when that upstream streamed, the Message is put together
+// from its events, as Anthropic's SDKs do.
 type Aggregator struct {
-	b     *builder
-	final json.RawMessage
-	size  int
+	b      builder
+	blocks map[int]*aggBlock
+	order  []int
+	final  json.RawMessage
+	acc    accumulator
+	size   int
 }
 
 // NewAggregator returns an empty aggregator.
-func NewAggregator() *Aggregator { return &Aggregator{b: newBuilder()} }
+func NewAggregator() *Aggregator { return &Aggregator{blocks: map[int]*aggBlock{}} }
 
 // Losses returns what the reply had that the client format could not carry.
-func (a *Aggregator) Losses() []llm.Loss { return a.b.losses }
+func (a *Aggregator) Losses() []llm.Loss { return append(a.b.losses, a.acc.losses...) }
 
 // Add records one event.
 func (a *Aggregator) Add(ev llm.Event) {
-	b := a.b
+	b := &a.b
 	a.size += len(ev.Delta)
-	switch ev.Type {
-	case llm.EventResponseStart:
+	if ev.Type == llm.EventResponseStart {
 		b.start(ev.Response)
+	}
+	if b.upFormat == format {
+		if ev.Type == llm.EventFinish && rawType(ev.Raw) == "message" {
+			a.final = ev.Raw
+		} else if upstreamEvent(ev.Raw) != "" {
+			a.size += len(ev.Raw)
+			a.acc.add(ev.Raw)
+		}
+	}
+	switch ev.Type {
 	case llm.EventItemStart:
 		a.size += len(ev.Item.CallID) + len(ev.Item.Name) + blockOverhead
-		b.open(ev.Index, ev.Item)
+		a.blocks[ev.Index] = &aggBlock{kind: ev.Item.Kind, callID: ev.Item.CallID, name: ev.Item.Name}
+		a.order = append(a.order, ev.Index)
+		if ev.Item.Kind == llm.ItemToolCall {
+			b.tools = true
+		}
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
-		b.blocks[ev.Index].text.WriteString(ev.Delta)
+		a.blocks[ev.Index].text.WriteString(ev.Delta)
+	case llm.EventItemEnd:
+		b.upstreamData(ev)
 	case llm.EventNative:
 		if b.upFormat != format {
 			b.native()
 		}
 	case llm.EventFinish:
+		b.upstreamData(ev)
 		b.finished(ev)
-		if b.upFormat == format && isMessage(ev.Raw) {
-			a.final = ev.Raw
-		}
 	}
 }
 
@@ -357,25 +461,195 @@ func (a *Aggregator) Add(ev llm.Event) {
 const blockOverhead = len(`{"type":"tool_use","id":"","name":"","input":{}},`)
 
 // Size is about how many bytes of content the response holds so far: text, thinking, tool
-// calls and the upstream's final Message, before JSON escaping. Callers use it to bound what
+// calls, the upstream events it puts a Message together from and the upstream's final
+// Message, before JSON escaping. Callers use it to bound what
 // they collect.
 func (a *Aggregator) Size() int { return a.size + len(a.final) }
-
-func isMessage(raw json.RawMessage) bool {
-	var m struct {
-		Type string `json:"type"`
-	}
-	return json.Unmarshal(raw, &m) == nil && m.Type == "message"
-}
 
 // Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {
 	if len(a.final) > 0 {
 		return a.final, nil
 	}
-	b := a.b
-	return json.Marshal(obj{"id": b.id, "type": "message", "role": "assistant", "model": b.model, "content": b.content(),
+	if a.acc.message != nil {
+		return a.acc.result()
+	}
+	b := &a.b
+	content := []any{}
+	for i, idx := range a.order {
+		blk := a.blocks[idx]
+		switch blk.kind {
+		case llm.ItemMessage:
+			content = append(content, obj{"type": "text", "text": blk.text.String()})
+		case llm.ItemReasoning:
+			content = append(content, obj{"type": "thinking", "thinking": blk.text.String()})
+		case llm.ItemToolCall:
+			content = append(content, obj{"type": "tool_use", "id": blk.callID, "name": blk.name,
+				"input": b.toolInput(blk.text.String(), fmt.Sprintf("content[%d].input", i))})
+		}
+	}
+	return json.Marshal(obj{"id": b.id, "type": "message", "role": "assistant", "model": b.model, "content": content,
 		"stop_reason": b.stopReason(), "stop_sequence": nil, "usage": encodeUsage(b.usage)})
+}
+
+// accumulator puts a Message together from the events of a Messages stream, keeping every field
+// of the message and its blocks: signatures, citations and blocks the model has no place for.
+type accumulator struct {
+	message map[string]json.RawMessage
+	blocks  map[int]*accBlock
+	usage   json.RawMessage
+	losses  []llm.Loss
+}
+
+type accBlock struct {
+	fields  map[string]json.RawMessage
+	texts   map[string]*strings.Builder // text and thinking, appended by deltas
+	partial strings.Builder             // tool input JSON, appended by deltas
+	inputs  bool
+}
+
+func (a *accumulator) lose(path, detail string) {
+	for _, l := range a.losses {
+		if l.Path == path {
+			return
+		}
+	}
+	a.losses = append(a.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
+}
+
+func (a *accumulator) add(raw json.RawMessage) {
+	var ev struct {
+		Type         string          `json:"type"`
+		Index        int             `json:"index"`
+		Message      json.RawMessage `json:"message"`
+		ContentBlock json.RawMessage `json:"content_block"`
+		Delta        json.RawMessage `json:"delta"`
+		Usage        json.RawMessage `json:"usage"`
+	}
+	if json.Unmarshal(raw, &ev) != nil {
+		return
+	}
+	switch ev.Type {
+	case "message_start":
+		a.message = rawjson.Object(ev.Message)
+		if a.message == nil {
+			a.message = map[string]json.RawMessage{}
+		}
+		a.usage = mergeUsage(a.usage, a.message["usage"])
+		a.blocks = map[int]*accBlock{}
+	case "content_block_start":
+		if a.message == nil {
+			return
+		}
+		f := rawjson.Object(ev.ContentBlock)
+		if f == nil {
+			return
+		}
+		blk := &accBlock{fields: f, texts: map[string]*strings.Builder{}}
+		for _, k := range []string{"text", "thinking"} {
+			var s string
+			if json.Unmarshal(f[k], &s) == nil {
+				blk.texts[k] = &strings.Builder{}
+				blk.texts[k].WriteString(s)
+			}
+		}
+		var typ string
+		_ = json.Unmarshal(f["type"], &typ)
+		blk.inputs = typ == "tool_use" || typ == "server_tool_use" || typ == "mcp_tool_use"
+		a.blocks[ev.Index] = blk
+	case "content_block_delta":
+		blk := a.blocks[ev.Index]
+		if blk == nil {
+			return
+		}
+		d := rawjson.Object(ev.Delta)
+		var typ, s string
+		_ = json.Unmarshal(d["type"], &typ)
+		appendText := func(key, from string) {
+			if json.Unmarshal(d[from], &s) != nil {
+				return
+			}
+			if blk.texts[key] == nil {
+				blk.texts[key] = &strings.Builder{}
+			}
+			blk.texts[key].WriteString(s)
+		}
+		switch typ {
+		case "text_delta":
+			appendText("text", "text")
+		case "thinking_delta":
+			appendText("thinking", "thinking")
+		case "input_json_delta":
+			if json.Unmarshal(d["partial_json"], &s) == nil {
+				blk.partial.WriteString(s)
+			}
+		case "signature_delta":
+			blk.fields["signature"] = d["signature"]
+		case "citations_delta":
+			var list []json.RawMessage
+			_ = json.Unmarshal(blk.fields["citations"], &list)
+			list = append(list, d["citation"])
+			blk.fields["citations"], _ = json.Marshal(list)
+		default:
+			a.lose(fmt.Sprintf("content[%d].%s", ev.Index, typ), "a stream delta the Message could not be put together from")
+		}
+	case "message_delta":
+		if a.message == nil {
+			return
+		}
+		for k, v := range rawjson.Object(ev.Delta) {
+			a.message[k] = v
+		}
+		if len(ev.Usage) > 0 && string(ev.Usage) != "null" {
+			a.usage = mergeUsage(a.usage, ev.Usage)
+		}
+	case "content_block_stop", "message_stop", "ping":
+	default:
+		a.lose(ev.Type, "a stream event the Message could not be put together from")
+	}
+}
+
+func (a *accumulator) result() ([]byte, error) {
+	indexes := make([]int, 0, len(a.blocks))
+	for i := range a.blocks {
+		indexes = append(indexes, i)
+	}
+	slices.Sort(indexes)
+	content := make([]json.RawMessage, 0, len(indexes))
+	for _, i := range indexes {
+		blk := a.blocks[i]
+		for k, t := range blk.texts {
+			blk.fields[k], _ = json.Marshal(t.String())
+		}
+		if blk.inputs && blk.partial.Len() > 0 {
+			in := json.RawMessage(blk.partial.String())
+			if !json.Valid(in) {
+				a.lose(fmt.Sprintf("content[%d].input", i), "tool input that is not valid JSON, sent as {}")
+				in = json.RawMessage("{}")
+			}
+			blk.fields["input"] = in
+		}
+		content = append(content, rawjson.Encode(blk.fields))
+	}
+	a.message["content"], _ = json.Marshal(content)
+	if len(a.usage) > 0 {
+		a.message["usage"] = a.usage
+	}
+	return json.Marshal(a.message)
+}
+
+// anthropicStatus maps Anthropic's error types to their HTTP status.
+var anthropicStatus = map[string]int{
+	"invalid_request_error": http.StatusBadRequest,
+	"authentication_error":  http.StatusUnauthorized,
+	"billing_error":         http.StatusPaymentRequired,
+	"permission_error":      http.StatusForbidden,
+	"not_found_error":       http.StatusNotFound,
+	"request_too_large":     http.StatusRequestEntityTooLarge,
+	"rate_limit_error":      http.StatusTooManyRequests,
+	"timeout_error":         http.StatusGatewayTimeout,
+	"api_error":             http.StatusInternalServerError,
+	"overloaded_error":      529,
 }
 
 // errorType returns the Anthropic error type for an HTTP status, as today's core names them.
@@ -406,10 +680,14 @@ func errorType(status int) string {
 	return "invalid_request_error"
 }
 
-// status returns the HTTP status for e.
+// status returns the HTTP status for e. An error that has no status of its own but names an
+// Anthropic error type (an error event at the start of a stream) gets that type's status.
 func status(e *llm.Error) int {
 	if e.Status >= 400 && e.Status <= 599 {
 		return e.Status
+	}
+	if st, ok := anthropicStatus[e.ProviderCode]; ok && e.Code == llm.CodeUpstream {
+		return st
 	}
 	switch e.Code {
 	case llm.CodeInvalidRequest, llm.CodeUnsupported:
@@ -430,14 +708,19 @@ func status(e *llm.Error) int {
 	return http.StatusBadGateway
 }
 
-// errorFields are the fields of an Anthropic error body or error event.
+// errorFields are the fields of an Anthropic error body or error event. The error keeps the
+// upstream's Anthropic error type when it had one.
 func errorFields(e *llm.Error) obj {
 	st := status(e)
 	msg := e.Message
 	if msg == "" {
 		msg = fmt.Sprintf("%s (%d)", http.StatusText(st), st)
 	}
-	return obj{"type": "error", "error": obj{"type": errorType(st), "message": msg}}
+	typ := errorType(st)
+	if _, ok := anthropicStatus[e.ProviderCode]; ok && e.Code == llm.CodeUpstream {
+		typ = e.ProviderCode
+	}
+	return obj{"type": "error", "error": obj{"type": typ, "message": msg}}
 }
 
 // ErrorResponse returns the HTTP status and Anthropic error body for e.

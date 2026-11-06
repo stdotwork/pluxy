@@ -391,11 +391,243 @@ func TestErrorResponse(t *testing.T) {
 		{&llm.Error{Code: llm.CodeInvalidRequest, Message: "bad"}, 400, `{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}`},
 		{&llm.Error{Code: llm.CodeUpstream, Message: "overloaded", Status: 529}, 529, `{"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}`},
 		{&llm.Error{Code: llm.CodeUpstream, Message: "broke"}, 502, `{"type":"error","error":{"type":"api_error","message":"broke"}}`},
+		// An Anthropic error event at the start of a stream keeps its type and gets its status.
+		{&llm.Error{Code: llm.CodeUpstream, Message: "Overloaded", ProviderCode: "overloaded_error"}, 529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`},
 	} {
 		status, body := ErrorResponse(c.e)
 		if status != c.status {
 			t.Errorf("%v: status %d, want %d", c.e, status, c.status)
 		}
 		sameJSON(t, c.e.Error(), body, c.want)
+	}
+}
+
+// writeAll writes events through a stream writer and returns the Messages events as
+// "type data" lines.
+func writeAll(t *testing.T, events []llm.Event) []string {
+	t.Helper()
+	var out bytes.Buffer
+	w := NewStreamWriter(&out)
+	for _, ev := range events {
+		if err := w.Write(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var lines []string
+	for _, c := range strings.Split(strings.TrimSuffix(out.String(), "\n\n"), "\n\n") {
+		parts := strings.SplitN(c, "\n", 2)
+		lines = append(lines, strings.TrimPrefix(parts[0], "event: ")+" "+strings.TrimPrefix(parts[1], "data: "))
+	}
+	return lines
+}
+
+// Content blocks in a Messages stream do not overlap: parallel tool calls a Chat upstream
+// interleaves are written one block after the other, the later one held until the first ends.
+func TestStreamWriterSerialisesParallelBlocks(t *testing.T) {
+	a := &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "call_a", Name: "f"}
+	b := &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "call_b", Name: "g"}
+	got := writeAll(t, []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "up", Format: llm.FormatOpenAIChat}},
+		{Type: llm.EventItemStart, Index: 0, Item: a},
+		{Type: llm.EventToolInputDelta, Index: 0, Delta: `{"x":`},
+		{Type: llm.EventItemStart, Index: 1, Item: b},
+		{Type: llm.EventToolInputDelta, Index: 1, Delta: `{"y":`},
+		{Type: llm.EventToolInputDelta, Index: 0, Delta: `1}`},
+		{Type: llm.EventItemEnd, Index: 0},
+		{Type: llm.EventToolInputDelta, Index: 1, Delta: `2}`},
+		{Type: llm.EventItemEnd, Index: 1},
+		{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishToolCalls}},
+	})
+	want := []string{
+		`content_block_start {"content_block":{"id":"call_a","input":{},"name":"f","type":"tool_use"},"index":0,"type":"content_block_start"}`,
+		`content_block_delta {"delta":{"partial_json":"{\"x\":","type":"input_json_delta"},"index":0,"type":"content_block_delta"}`,
+		`content_block_delta {"delta":{"partial_json":"1}","type":"input_json_delta"},"index":0,"type":"content_block_delta"}`,
+		`content_block_stop {"index":0,"type":"content_block_stop"}`,
+		`content_block_start {"content_block":{"id":"call_b","input":{},"name":"g","type":"tool_use"},"index":1,"type":"content_block_start"}`,
+		`content_block_delta {"delta":{"partial_json":"{\"y\":","type":"input_json_delta"},"index":1,"type":"content_block_delta"}`,
+		`content_block_delta {"delta":{"partial_json":"2}","type":"input_json_delta"},"index":1,"type":"content_block_delta"}`,
+		`content_block_stop {"index":1,"type":"content_block_stop"}`,
+	}
+	if len(got) < 2+len(want) || !reflect.DeepEqual(got[1:1+len(want)], want) {
+		t.Errorf("events:\n got %q\nwant %q", got, want)
+	}
+}
+
+// A non-streamed Message from a Messages upstream, written to a streaming client, comes out as
+// stream events that put the same Message back together: signatures, redacted thinking, the
+// stop sequence and every usage field survive.
+func TestNonStreamedMessageAsStream(t *testing.T) {
+	body := `{"id":"msg_1","type":"message","role":"assistant","model":"up","x_vendor":1,"content":[
+	 {"type":"thinking","thinking":"Hmm.","signature":"sig-1"},
+	 {"type":"redacted_thinking","data":"opaque"},
+	 {"type":"text","text":"Hi","citations":[{"type":"char_location","cited_text":"x"}]},
+	 {"type":"tool_use","id":"toolu_1","name":"f","input":{"a":1}}],
+	 "stop_reason":"stop_sequence","stop_sequence":"END",
+	 "usage":{"input_tokens":3,"cache_read_input_tokens":10,"output_tokens":7,"service_tier":"standard"}}`
+	events, err := DecodeResponse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seq llm.Sequence
+	for _, ev := range events {
+		if err := seq.Check(ev); err != nil {
+			t.Fatalf("sequence: %v", err)
+		}
+	}
+	lines := writeAll(t, events)
+	var acc accumulator
+	var types []string
+	for _, l := range lines {
+		typ, data, _ := strings.Cut(l, " ")
+		types = append(types, typ)
+		acc.add(json.RawMessage(data))
+	}
+	wantTypes := []string{"message_start", "content_block_start", "content_block_delta", "content_block_delta", "content_block_stop",
+		"content_block_start", "content_block_stop", "content_block_start", "content_block_delta", "content_block_stop",
+		"content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"}
+	if !reflect.DeepEqual(types, wantTypes) {
+		t.Errorf("event types:\n got %q\nwant %q", types, wantTypes)
+	}
+	got, err := acc.result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "message put back together", got, body)
+}
+
+// A streamed reply to a non-streaming Messages client is put together into the Message the
+// stream describes, keeping what the model has no place for.
+func TestAggregatorPutsStreamTogether(t *testing.T) {
+	stream := []string{
+		`{"type":"ping"}`,
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"cache_read_input_tokens":100,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Hmm."}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"opaque"}}`,
+		`{"type":"content_block_stop","index":1}`,
+		`{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"f","input":{}}}`,
+		`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"a\":"}}`,
+		`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"1}"}}`,
+		`{"type":"content_block_stop","index":2}`,
+		`{"type":"message_delta","delta":{"stop_reason":"stop_sequence","stop_sequence":"END"},"usage":{"output_tokens":30}}`,
+		`{"type":"message_stop"}`,
+	}
+	d := NewStreamDecoder()
+	a := NewAggregator()
+	var last llm.Event
+	for _, s := range stream {
+		evs, err := d.Decode([]byte(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			a.Add(ev)
+			last = ev
+		}
+	}
+	got, err := a.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "message", got, `{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[
+	 {"type":"thinking","thinking":"Hmm.","signature":"sig"},
+	 {"type":"redacted_thinking","data":"opaque"},
+	 {"type":"tool_use","id":"toolu_1","name":"f","input":{"a":1}}],
+	 "stop_reason":"stop_sequence","stop_sequence":"END","usage":{"input_tokens":12,"cache_read_input_tokens":100,"output_tokens":30}}`)
+	// The ping before message_start does not lose message_start's usage.
+	if u := last.Usage; u == nil || u.InputTokens == nil || *u.InputTokens != 112 {
+		t.Errorf("finish usage %+v, want input 112 (12+100)", u)
+	}
+}
+
+// Upstream event types the decoder does not know reach a Messages client unchanged.
+func TestNativeStreamPassesUnknownEvents(t *testing.T) {
+	stream := []string{
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],"usage":{"input_tokens":3}}}`,
+		`{"type":"future_event","data":"keep-me"}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		`{"type":"message_stop"}`,
+	}
+	d := NewStreamDecoder()
+	var events []llm.Event
+	for _, s := range stream {
+		evs, err := d.Decode([]byte(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, evs...)
+	}
+	got := writeAll(t, events)
+	if len(got) != len(stream) || got[1] != "future_event "+stream[1] {
+		t.Errorf("got %q", got)
+	}
+}
+
+// Assistant text after a tool call in the same turn stays in the Chat message that holds the
+// call, so the tool result still follows that message.
+func TestChatKeepsAssistantTurnWhole(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","messages":[
+	 {"role":"user","content":"Weather?"},
+	 {"role":"assistant","vendor":true,"content":[{"type":"tool_use","id":"toolu_A","name":"f","input":{}},{"type":"text","text":"Checking."}]},
+	 {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"21C"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := openaichat.EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "body", body, `{"model":"m","stream":false,"messages":[
+	 {"role":"user","content":"Weather?"},
+	 {"role":"assistant","content":[{"type":"text","text":"Checking."}],"tool_calls":[{"id":"toolu_A","type":"function","function":{"name":"f","arguments":"{}"}}]},
+	 {"role":"tool","content":"21C","tool_call_id":"toolu_A"}]}`)
+	want := []string{"approximated messages[1]", "dropped messages[1].vendor"}
+	if got := lossList(losses); !reflect.DeepEqual(got, want) {
+		t.Errorf("losses %q, want %q", got, want)
+	}
+}
+
+// A message whose blocks are all tool calls keeps its own fields, so a translation reports them.
+func TestMessageFieldsWithoutContentItem(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","messages":[
+	 {"role":"assistant","vendor":true,"content":[{"type":"tool_use","id":"toolu_A","name":"f","input":{}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, losses, err := openaichat.EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lossList(losses); !reflect.DeepEqual(got, []string{"dropped messages[0].vendor"}) {
+		t.Errorf("losses %q", got)
+	}
+}
+
+// What a reply from another format has that a Message cannot hold is reported: usage details,
+// arguments that are not a JSON object.
+func TestAggregatorReportsReplyLosses(t *testing.T) {
+	a := NewAggregator()
+	for _, ev := range []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "up", Format: llm.FormatOpenAIChat}},
+		{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "call_1", Name: "f"}},
+		{Type: llm.EventToolInputDelta, Index: 0, Delta: `{"x":`},
+		{Type: llm.EventItemEnd, Index: 0},
+		{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishToolCalls}, Usage: &llm.Usage{InputTokens: llm.Int64(5), OutputTokens: llm.Int64(9),
+			Raw: json.RawMessage(`{"prompt_tokens":5,"completion_tokens":9,"completion_tokens_details":{"reasoning_tokens":4,"audio_tokens":0},"prompt_tokens_details":{"cached_tokens":0}}`)}},
+	} {
+		a.Add(ev)
+	}
+	body, err := a.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"input":{}`) {
+		t.Errorf("body %s", body)
+	}
+	want := []string{"dropped content[0].input", "dropped usage.completion_tokens_details.reasoning_tokens"}
+	if got := lossList(a.Losses()); !reflect.DeepEqual(got, want) {
+		t.Errorf("losses %q, want %q", got, want)
 	}
 }

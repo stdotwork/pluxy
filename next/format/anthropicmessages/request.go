@@ -357,6 +357,17 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 			item(llm.Item{Type: llm.ItemTypeNative, Origin: &llm.Origin{Format: format, Path: bp, Raw: append(json.RawMessage(nil), rb...)}})
 		}
 	}
+	// A message whose blocks all became other items still keeps its own fields, on an empty
+	// message item: first for an assistant turn, so its tool calls can join it; last for a user
+	// turn, so its tool results stay next to the calls.
+	if origin != nil && len(origin.Raw) > 0 {
+		it := llm.Item{Type: llm.ItemTypeMessage, Role: head.Role, Origin: origin}
+		if head.Role == llm.RoleAssistant {
+			items = append([]llm.Item{it}, items...)
+		} else {
+			items = append(items, it)
+		}
+	}
 	return items, nil
 }
 

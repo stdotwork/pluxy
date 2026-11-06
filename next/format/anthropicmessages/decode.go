@@ -51,12 +51,15 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 // mergeUsage overlays the usage of a message_delta on what the stream reported so far: Messages
 // stream usage is cumulative, and a field a later event leaves out keeps its earlier value.
 func mergeUsage(have, next json.RawMessage) json.RawMessage {
-	if len(have) == 0 {
+	if len(have) == 0 || string(have) == "null" {
 		return next
 	}
 	m := rawjson.Object(have)
 	n := rawjson.Object(next)
-	if m == nil || n == nil {
+	if n == nil {
+		return have
+	}
+	if m == nil {
 		return next
 	}
 	for k, v := range n {
@@ -191,12 +194,15 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		return nil, d.withUsage(e)
 	}
 	var out []llm.Event
+	if ev.Type == "message_start" && ev.Message != nil {
+		// Read even when other events (a ping) came first.
+		d.usage = mergeUsage(ev.Message.Usage, d.usage)
+	}
 	if !d.started {
 		d.started = true
 		info := llm.ResponseInfo{Format: format}
 		if ev.Message != nil {
 			info.ID, info.Model = ev.Message.ID, ev.Message.Model
-			d.usage = ev.Message.Usage
 		}
 		// The first event's raw goes on response.start, whatever it is, so a Messages client
 		// still gets every upstream event once.
@@ -311,12 +317,21 @@ type message struct {
 	Error      json.RawMessage   `json:"error"`
 }
 
+func eventJSON(fields map[string]any) json.RawMessage {
+	b, _ := json.Marshal(fields)
+	return b
+}
+
 // DecodeResponse turns an upstream non-streamed Message into the events a stream of it would have
-// produced. The finish event carries the whole body in Raw, so a Messages client gets it
-// unchanged. A body of type error becomes an *llm.Error.
+// produced, each carrying in Raw the Messages stream event it stands for, so a streaming Messages
+// client gets every block whole: signatures as signature_delta, and blocks the model has no place
+// for (redacted thinking, server tool results) as they were. The finish event carries the whole
+// body in Raw, so a non-streaming Messages client gets it unchanged. A body of type error becomes
+// an *llm.Error.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	var m message
-	if err := json.Unmarshal(body, &m); err != nil || rawjson.Object(body) == nil {
+	top := rawjson.Object(body)
+	if err := json.Unmarshal(body, &m); err != nil || top == nil {
 		return nil, malformed("upstream sent a malformed response", body)
 	}
 	if m.Type == "error" {
@@ -327,40 +342,80 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	if m.Type != "message" {
 		return nil, malformed("upstream sent a response that is not a message", body)
 	}
-	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: m.ID, Model: m.Model, Format: format}}}
-	next := 0
-	add := func(start llm.ItemStart, deltaType, delta string) {
-		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
-		if delta != "" {
-			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta})
-		}
-		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
-		next++
+	head := map[string]json.RawMessage{}
+	for k, v := range top {
+		head[k] = v
 	}
-	for _, raw := range m.Content {
-		var b contentBlock
-		if json.Unmarshal(raw, &b) != nil {
+	head["content"], head["stop_reason"], head["stop_sequence"] = json.RawMessage("[]"), json.RawMessage("null"), json.RawMessage("null")
+	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: m.ID, Model: m.Model, Format: format},
+		Raw: eventJSON(map[string]any{"type": "message_start", "message": head})}}
+	next := 0
+	for i, raw := range m.Content {
+		b := rawjson.Object(raw)
+		var cb contentBlock
+		if b == nil || json.Unmarshal(raw, &cb) != nil {
 			return nil, malformed("upstream sent a malformed response", body)
 		}
-		switch kindOf(b.Type) {
+		kind := kindOf(cb.Type)
+		if kind == llm.ItemToolCall && (cb.ID == "" || cb.Name == "") {
+			kind = ""
+		}
+		stop := eventJSON(map[string]any{"type": "content_block_stop", "index": i})
+		if kind == "" {
+			out = append(out,
+				llm.Event{Type: llm.EventNative, Raw: eventJSON(map[string]any{"type": "content_block_start", "index": i, "content_block": json.RawMessage(raw)})},
+				llm.Event{Type: llm.EventNative, Raw: stop})
+			continue
+		}
+		start := llm.ItemStart{Kind: kind}
+		startBlock := map[string]json.RawMessage{}
+		for k, v := range b {
+			startBlock[k] = v
+		}
+		var deltaType, delta string
+		var deltaRaw json.RawMessage
+		switch kind {
 		case llm.ItemMessage:
-			add(llm.ItemStart{Kind: llm.ItemMessage}, llm.EventTextDelta, b.Text)
+			startBlock["text"] = json.RawMessage(`""`)
+			deltaType, delta = llm.EventTextDelta, cb.Text
+			deltaRaw = eventJSON(map[string]any{"type": "content_block_delta", "index": i, "delta": map[string]string{"type": "text_delta", "text": cb.Text}})
 		case llm.ItemReasoning:
-			add(llm.ItemStart{Kind: llm.ItemReasoning}, llm.EventReasoningDelta, b.Think)
+			startBlock["thinking"], startBlock["signature"] = json.RawMessage(`""`), json.RawMessage(`""`)
+			deltaType, delta = llm.EventReasoningDelta, cb.Think
+			deltaRaw = eventJSON(map[string]any{"type": "content_block_delta", "index": i, "delta": map[string]string{"type": "thinking_delta", "thinking": cb.Think}})
 		case llm.ItemToolCall:
-			if b.ID == "" || b.Name == "" {
-				out = append(out, llm.Event{Type: llm.EventNative, Raw: raw})
-				continue
-			}
-			args, err := compactJSON(b.Input)
+			start.CallID, start.Name = cb.ID, cb.Name
+			args, err := compactJSON(cb.Input)
 			if err != nil {
 				return nil, malformed("upstream sent a malformed response", body)
 			}
-			add(llm.ItemStart{Kind: llm.ItemToolCall, CallID: b.ID, Name: b.Name}, llm.EventToolInputDelta, args)
-		default:
-			out = append(out, llm.Event{Type: llm.EventNative, Raw: raw})
+			startBlock["input"] = json.RawMessage("{}")
+			deltaType, delta = llm.EventToolInputDelta, args
+			deltaRaw = eventJSON(map[string]any{"type": "content_block_delta", "index": i, "delta": map[string]string{"type": "input_json_delta", "partial_json": args}})
+		}
+		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start,
+			Raw: eventJSON(map[string]any{"type": "content_block_start", "index": i, "content_block": startBlock})})
+		if delta != "" {
+			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta, Raw: deltaRaw})
+		}
+		if sig, ok := b["signature"]; ok && kind == llm.ItemReasoning && string(sig) != `""` {
+			out = append(out, llm.Event{Type: llm.EventNative, Raw: eventJSON(map[string]any{"type": "content_block_delta", "index": i,
+				"delta": map[string]json.RawMessage{"type": json.RawMessage(`"signature_delta"`), "signature": sig}})})
+		}
+		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Raw: stop})
+		next++
+	}
+	md := map[string]json.RawMessage{"stop_reason": top["stop_reason"], "stop_sequence": top["stop_sequence"]}
+	for k, v := range md {
+		if v == nil {
+			md[k] = json.RawMessage("null")
 		}
 	}
+	delta := map[string]any{"type": "message_delta", "delta": md}
+	if len(m.Usage) > 0 {
+		delta["usage"] = m.Usage
+	}
+	out = append(out, llm.Event{Type: llm.EventNative, Raw: eventJSON(delta)})
 	f := finishOf(m.StopReason)
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Raw: append(json.RawMessage(nil), body...)}), nil
 }
