@@ -27,12 +27,14 @@
     {
       "path": "upstream[0].body.max_completion_tokens",
       "kind": "gap",
-      "reason": "The old core rewrites max_completion_tokens to max_tokens unless the model sets use-max-completion-tokens; the new core passes the client's field through."
+      "reason": "The old core rewrites max_completion_tokens to max_tokens unless the model sets use-max-completion-tokens; the new core passes the client's field through.",
+      "want": 256
     },
     {
       "path": "upstream[0].body.max_tokens",
       "kind": "gap",
-      "reason": "The old core sends the client's max_completion_tokens as max_tokens (no use-max-completion-tokens on the model); the new core sends no max_tokens."
+      "reason": "The old core sends the client's max_completion_tokens as max_tokens (no use-max-completion-tokens on the model); the new core sends no max_tokens.",
+      "absent": true
     }
   ],
   "recorded_old_core": {

@@ -7,21 +7,25 @@
     {
       "path": "client.headers.Access-Control-Allow-Headers",
       "kind": "gap",
+      "absent": true,
       "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
     },
     {
       "path": "client.headers.Access-Control-Allow-Methods",
       "kind": "gap",
+      "absent": true,
       "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
     },
     {
       "path": "client.headers.Access-Control-Allow-Origin",
       "kind": "gap",
+      "absent": true,
       "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
     },
     {
       "path": "client.headers.Access-Control-Expose-Headers",
       "kind": "gap",
+      "absent": true,
       "reason": "The old core adds CORS headers to every reply; the new core sends none yet."
     },
     {
@@ -47,6 +51,7 @@
     {
       "path": "upstream[*].body.stream_options",
       "kind": "gap",
+      "absent": true,
       "reason": "The old core sets stream_options.include_usage true on every streamed upstream request; the new core passes the client's body through unchanged."
     }
   ]

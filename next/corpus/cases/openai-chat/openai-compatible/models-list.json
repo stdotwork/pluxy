@@ -4,9 +4,28 @@
   "volatile": ["client.body.data[*].created"],
   "exceptions": [
     {
-      "path": "client",
+      "path": "client.status",
       "kind": "gap",
-      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built)."
+      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built).",
+      "want": 404
+    },
+    {
+      "path": "client.body",
+      "kind": "gap",
+      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built).",
+      "want": "404 page not found\n"
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "gap",
+      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built). The reply is the mux default 404, so its content type differs.",
+      "want": "text/plain; charset=utf-8"
+    },
+    {
+      "path": "client.headers.X-Content-Type-Options",
+      "kind": "gap",
+      "reason": "The new core does not serve /v1/models yet (recorded when the core skeleton was built). The reply is the mux default 404, which adds nosniff.",
+      "want": "nosniff"
     }
   ],
   "recorded_old_core": {

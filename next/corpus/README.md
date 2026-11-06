@@ -100,16 +100,25 @@ the comparison.
 
 `exceptions`: known differences. Each has:
 
-- `path`: an observation path. It covers every difference at or below it.
+- `path`: an observation path. Without `want` or `absent` it covers only the difference at that
+  exact path, and only between plain values (not objects or arrays). Replacing or dropping an
+  object or array needs `want` or `absent`.
 - `kind`: `intended` when the new core differs on purpose (a decision is on record), or `gap` when
   it does not match yet and a later slice or the owner has to settle it.
 - `reason`: why. Required.
-- `want` (optional): the value the new core must give at `path`, so an exception can pin the new
-  behaviour as well as excuse the old one.
+- `want` (optional): the value the new core must give at `path`, in full, so an exception pins the
+  new behaviour as well as excusing the old one. With `want` the exception also covers the
+  differences below `path`, since nothing under it can be anything else. For a reply the new core
+  replaces (a different status, an error body instead of data) pin `status` and `body` each.
+- `absent` (optional, instead of `want`): the new core must give no value at `path`.
 
 An exception that covers no difference fails the case, so the list cannot go stale. Global
 exceptions in `cases/corpus.json` apply to every case and fail only if they cover nothing in the
-whole corpus.
+whole corpus. A global `want` or `absent` is checked in the cases where the exception covers a
+difference.
+
+The test run also corrupts each value of each case's new-core observation in turn and fails if the
+case still passes, so an exception cannot hide a difference it was not written for.
 
 `recorded_old_core` is written by `PLUXY_CORPUS_RECORD=1`; do not edit it by hand.
 

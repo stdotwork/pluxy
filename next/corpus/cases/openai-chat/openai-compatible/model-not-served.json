@@ -14,7 +14,12 @@
     {
       "path": "client.body.error",
       "kind": "gap",
-      "reason": "For an unknown model the old core says unknown provider (invalid_request_error, param model); the new core says no account serves the model (model_not_found)."
+      "reason": "For an unknown model the old core says unknown provider (invalid_request_error, param model); the new core says no account serves the model (model_not_found).",
+      "want": {
+        "code": "model_not_found",
+        "message": "no account serves model \"gpt-unknown\"",
+        "type": "invalid_request_error"
+      }
     }
   ],
   "recorded_old_core": {

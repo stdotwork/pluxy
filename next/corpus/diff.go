@@ -236,6 +236,11 @@ func Lookup(o Observation, path string) any {
 	if err != nil {
 		return missing
 	}
+	return lookupSegs(o, segs)
+}
+
+// lookupSegs returns the value at the concrete path segs (no wildcards), or missing.
+func lookupSegs(o Observation, segs []segment) any {
 	var v any = map[string]any(o)
 	for _, s := range segs {
 		switch c := v.(type) {
@@ -274,15 +279,44 @@ type Verdict struct {
 	WantFailed []WantFailure
 }
 
-// WantFailure is an exception whose Want value the new core does not give.
+// WantFailure is an exception whose Want value (or Absent) the new core does not give.
 type WantFailure struct {
 	Exception *Exception
+	Path      string // the concrete path the exception pinned, which a "*" in its Path may widen
 	Got       any
 }
 
 // OK reports whether the case passes.
 func (v Verdict) OK() bool {
 	return len(v.Uncovered) == 0 && len(v.Stale) == 0 && len(v.WantFailed) == 0
+}
+
+// pinned reports whether the exception fixes the new core's value at its path.
+func (e *Exception) pinned() bool { return len(e.Want) > 0 || e.Absent }
+
+// isContainer reports whether v is a JSON object or array.
+func isContainer(v any) bool {
+	switch v.(type) {
+	case map[string]any, []any:
+		return true
+	}
+	return false
+}
+
+// accepts reports whether the exception, whose path is pattern, excuses the difference d.
+//
+// An exception that pins the new core's value (Want or Absent) excuses every difference at or
+// below its path: the new value is fixed in full, and the old one is recorded, so nothing under
+// it can be anything else. Any other exception excuses only the difference at its own path, and
+// only a difference between plain values, so it cannot excuse a replaced subtree.
+func (e *Exception) accepts(pattern []segment, d Difference) bool {
+	if !covers(pattern, d.segs) {
+		return false
+	}
+	if e.pinned() {
+		return true
+	}
+	return len(pattern) == len(d.segs) && !isContainer(d.Want) && !isContainer(d.Got)
 }
 
 // Judge compares got (new core) with want (reference) under the case's and the global
@@ -293,21 +327,27 @@ func Judge(want, got Observation, caseEx, globalEx []Exception) Verdict {
 		ex     *Exception
 		segs   []segment
 		global bool
+		// pins are the concrete paths, by key, where the exception pinned a value.
+		pins map[string][]segment
 	}
-	var all []compiled
+	var all []*compiled
 	for i := range caseEx {
 		segs, _ := parsePath(caseEx[i].Path)
-		all = append(all, compiled{&caseEx[i], segs, false})
+		all = append(all, &compiled{&caseEx[i], segs, false, map[string][]segment{}})
 	}
 	for i := range globalEx {
 		segs, _ := parsePath(globalEx[i].Path)
-		all = append(all, compiled{&globalEx[i], segs, true})
+		all = append(all, &compiled{&globalEx[i], segs, true, map[string][]segment{}})
 	}
 	for _, d := range Diff(map[string]any(want), map[string]any(got)) {
 		hit := false
 		for _, c := range all {
-			if covers(c.segs, d.segs) {
+			if c.ex.accepts(c.segs, d) {
 				v.Covered[c.ex] = append(v.Covered[c.ex], d)
+				if c.ex.pinned() {
+					anchor := d.segs[:len(c.segs)]
+					c.pins[formatPath(anchor)] = anchor
+				}
 				hit = true
 				break
 			}
@@ -320,11 +360,23 @@ func Judge(want, got Observation, caseEx, globalEx []Exception) Verdict {
 		if !c.global && len(v.Covered[c.ex]) == 0 {
 			v.Stale = append(v.Stale, c.ex)
 		}
-		if len(c.ex.Want) > 0 {
-			wantV, err := decodeValue(c.ex.Want)
-			gotV := Lookup(got, c.ex.Path)
-			if err != nil || !reflect.DeepEqual(wantV, gotV) {
-				v.WantFailed = append(v.WantFailed, WantFailure{c.ex, gotV})
+		// Pins are checked where the exception excused a difference. A global exception then
+		// pins its value in the cases it applies to, not in the ones it does not touch.
+		keys := make([]string, 0, len(c.pins))
+		for k := range c.pins {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			gotV := lookupSegs(got, c.pins[k])
+			ok := false
+			if c.ex.Absent {
+				_, ok = gotV.(missingValue)
+			} else if wantV, err := decodeValue(c.ex.Want); err == nil {
+				ok = reflect.DeepEqual(wantV, gotV)
+			}
+			if !ok {
+				v.WantFailed = append(v.WantFailed, WantFailure{c.ex, k, gotV})
 			}
 		}
 	}
