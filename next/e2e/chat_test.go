@@ -131,6 +131,44 @@ func (u *upstream) streamReply(w http.ResponseWriter, r *http.Request, _ []byte)
 // core runs the pluxy binary against u and returns its base URL.
 func startCore(t *testing.T, u *upstream) string {
 	t.Helper()
+	base, _ := startCoreLogged(t, u)
+	return base
+}
+
+// coreLog collects the lines core writes to stderr.
+type coreLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *coreLog) add(line string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, line)
+}
+
+// waitFor returns core's log once a line contains s, failing the test if none does in time.
+func (l *coreLog) waitFor(t *testing.T, s string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		l.mu.Lock()
+		all := strings.Join(l.lines, "\n")
+		l.mu.Unlock()
+		if strings.Contains(all, s) {
+			return all
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("core logged no line containing %q; log:\n%s", s, all)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// startCoreLogged is startCore that also returns core's log.
+func startCoreLogged(t *testing.T, u *upstream) (string, *coreLog) {
+	t.Helper()
+	logs := &coreLog{}
 	dir := t.TempDir()
 	cfg := map[string]any{
 		"listen":      "127.0.0.1:0",
@@ -171,6 +209,7 @@ func startCore(t *testing.T, u *upstream) string {
 		for sc.Scan() {
 			line := sc.Text()
 			t.Log("core:", line)
+			logs.add(line)
 			if rest, ok := strings.CutPrefix(line, "pluxy: listening on "); ok {
 				select {
 				case addr <- rest:
@@ -184,10 +223,10 @@ func startCore(t *testing.T, u *upstream) string {
 		if !ok {
 			t.Fatal("core exited before listening")
 		}
-		return a
+		return a, logs
 	case <-time.After(15 * time.Second):
 		t.Fatal("core did not report its listening address")
-		return ""
+		return "", nil
 	}
 }
 
