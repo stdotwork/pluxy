@@ -64,6 +64,7 @@ var (
 type Manager struct {
 	store    *Store
 	prov     Provider
+	provID   string
 	reserved func(id string) bool
 	now      func() time.Time
 
@@ -112,7 +113,7 @@ type Options struct {
 // NewManager returns the manager for store's accounts on prov.
 func NewManager(store *Store, prov Provider, opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{store: store, prov: prov, reserved: opts.Reserved,
+	m := &Manager{store: store, prov: prov, provID: prov.Info().ID, reserved: opts.Reserved,
 		now: time.Now, ctx: ctx, cancel: cancel,
 		flights: map[string]*flight{}, renewals: map[string]*renewal{}, logins: map[string]*login{}}
 	if m.reserved == nil {
@@ -143,18 +144,11 @@ func (m *Manager) Close() {
 	m.wg.Wait()
 }
 
-// provID is the provider extension's ID. A config reload may swap the extension for another
-// one; accounts belong to the extension that logged them in.
-func (m *Manager) provID() string { return m.prov.Info().ID }
-
 // Accounts returns the usable accounts of this provider, for routing.
-func (m *Manager) Accounts() []route.Account { return m.AccountsFor(m.provID()) }
-
-// AccountsFor returns the usable accounts of the extension with ID ext, for routing.
-func (m *Manager) AccountsFor(ext string) []route.Account {
+func (m *Manager) Accounts() []route.Account {
 	var out []route.Account
 	for _, r := range m.store.List() {
-		if r.Extension == ext && r.Usable() {
+		if r.Extension == m.provID && r.Usable() {
 			a := r.Account
 			a.ID, a.Credential, a.Managed = r.ID, nil, true
 			out = append(out, a)
@@ -190,7 +184,7 @@ func (m *Manager) renewalFor(r Record) *renewal {
 // Refreshable reports whether core renews r's credential: it belongs to this provider, is not
 // a static key, and the provider can refresh.
 func (m *Manager) Refreshable(r Record) bool {
-	return r.Extension == m.provID() && r.Credential.Kind != protocol.CredentialAPIKey &&
+	return r.Extension == m.provID && r.Credential.Kind != protocol.CredentialAPIKey &&
 		slices.Contains(m.prov.Info().Operations, protocol.OpRefresh)
 }
 
@@ -202,7 +196,7 @@ func credentialError(code, msg string) *llm.Error {
 // it expires within refreshLead.
 func (m *Manager) Credential(ctx context.Context, id string) (*protocol.Credential, uint64, *llm.Error) {
 	rec, ok := m.store.Get(id)
-	if !ok || rec.Extension != m.provID() {
+	if !ok || rec.Extension != m.provID {
 		return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q is not in the credential store", id))
 	}
 	if !rec.Usable() {

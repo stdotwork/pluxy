@@ -197,13 +197,6 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot) (*snapshot, error) 
 	if prev != nil && cfg.CredentialsDir != prev.Config.CredentialsDir {
 		return nil, fmt.Errorf("config: credentials_dir cannot change while core runs (%q to %q); restart core to apply it", prev.Config.CredentialsDir, cfg.CredentialsDir)
 	}
-	if c.creds == nil {
-		store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
-		if err != nil {
-			return nil, err
-		}
-		c.creds = cred.NewManager(store, provider{c}, cred.Options{Reserved: c.reserved})
-	}
 	next := &snapshot{revision: rev}
 	attempt := func(ctx context.Context, a protocol.Account, req llm.Request) route.Stream {
 		if next.ext == nil {
@@ -215,26 +208,55 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot) (*snapshot, error) 
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	router.UseCredentials(c.creds)
 	next.Generation = server.Generation{Config: cfg, Router: router}
-	if c.opts.SafeMode {
-		return next, nil
+	if !c.opts.SafeMode {
+		if next.ext, err = c.prepareExtension(cfg, rev, prev); err != nil {
+			return nil, err
+		}
 	}
+	if c.creds == nil { // the first load: nothing is live yet
+		var info protocol.Info
+		if next.ext != nil {
+			info = next.ext.Info()
+		}
+		store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
+		if err != nil {
+			if next.ext != nil {
+				next.ext.Stop()
+			}
+			return nil, err
+		}
+		c.creds = cred.NewManager(store, provider{c: c, first: info}, cred.Options{Reserved: c.reserved})
+	}
+	router.UseCredentials(c.creds)
+	return next, nil
+}
+
+// prepareExtension returns the extension generation cfg names: prev's when its code has not
+// changed, else a new one, started and handshaken.
+//
+// The extension's ID cannot change: the credential store holds accounts for the one extension
+// that logged them in, and requests and logins in flight on the old generation still use its
+// accounts. shortcut: switching to another extension takes a restart; extension packages
+// (installing and removing several extensions) will lift this.
+func (c *Core) prepareExtension(cfg *server.Config, rev uint64, prev *snapshot) (*host.Managed, error) {
 	fp, err := host.Fingerprint(cfg.Extension.Manifest)
 	if err != nil {
 		return nil, err
 	}
-	if prev != nil && prev.ext != nil && prev.ext.Path() == cfg.Extension.Manifest && prev.ext.Fingerprint() == fp &&
-		prev.ext.State() != host.StateQuarantined {
-		next.ext = prev.ext // same code: keep the running generation
-		return next, nil
+	if prev != nil && prev.ext != nil {
+		if prev.ext.Path() == cfg.Extension.Manifest && prev.ext.Fingerprint() == fp && prev.ext.State() != host.StateQuarantined {
+			return prev.ext, nil // same code: keep the running generation
+		}
+		m, err := host.LoadManifest(cfg.Extension.Manifest)
+		if err != nil {
+			return nil, err
+		}
+		if was := prev.ext.Manifest().ID; m.ID != was {
+			return nil, fmt.Errorf("config: the extension cannot change from %s to %s while core runs (accounts added by login belong to one extension); restart core to switch", was, m.ID)
+		}
 	}
-	ext, err := host.Prepare(cfg.Extension.Manifest, rev, policy(cfg.Extension), c.opts.Host)
-	if err != nil {
-		return nil, err
-	}
-	next.ext = ext
-	return next, nil
+	return host.Prepare(cfg.Extension.Manifest, rev, policy(cfg.Extension), c.opts.Host)
 }
 
 // publish makes next the snapshot new requests get, carries routing state over, and drains the
@@ -246,7 +268,7 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		log.Printf("updating accounts: %v", err)
 	}
 	if prev != nil {
-		c.state.Retain(prev.Router.Accounts(), next.Router.Accounts(), sameAccount(prev, next))
+		c.state.Retain(prev.Router, next.Router, sameAccount(prev, next))
 	}
 	if next.ext != nil {
 		next.ext.SetPolicy(policy(next.Config.Extension))
@@ -276,14 +298,14 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 }
 
 // routed returns the accounts s routes over: the config's, then those the credential store
-// holds for s's extension. A stored account whose ID the config also uses is left out.
+// holds for the extension. A stored account whose ID the config also uses is left out.
 func (c *Core) routed(s *snapshot) []route.Account {
 	cfg := s.Config.Extension.Accounts
 	accounts := slices.Clone(cfg)
 	if s.ext == nil {
 		return accounts
 	}
-	for _, a := range c.creds.AccountsFor(s.ext.Info().ID) {
+	for _, a := range c.creds.Accounts() {
 		if slices.ContainsFunc(cfg, func(x route.Account) bool { return x.ID == a.ID }) {
 			log.Printf("account %q is both in the config and added by login; using the config's", a.ID)
 			continue
@@ -428,14 +450,18 @@ func (s *failedStream) Next() llm.Event { return s.ev }
 func (s *failedStream) Close()          {}
 
 // provider is the credential manager's view of the extension: each call goes to the extension
-// generation that is current when it starts and holds a lease on it until it ends.
-type provider struct{ c *Core }
+// generation that is current when it starts and holds a lease on it until it ends. Every
+// generation has the same ID (see prepareExtension).
+type provider struct {
+	c     *Core
+	first protocol.Info // the first generation's, until it is published; empty in safe mode
+}
 
 func (p provider) Info() protocol.Info {
 	if s := p.c.cur.Load(); s != nil && s.ext != nil {
 		return s.ext.Info()
 	}
-	return protocol.Info{}
+	return p.first
 }
 
 func (p provider) Login(ctx context.Context, account protocol.Account, login protocol.Login) cred.LoginCall {

@@ -21,6 +21,12 @@ import (
 // the folder.
 func testPackage(t *testing.T, version string) string {
 	t.Helper()
+	return testPackageID(t, "test/lifecycle", version)
+}
+
+// testPackageID is testPackage for an extension with ID id.
+func testPackageID(t *testing.T, id, version string) string {
+	t.Helper()
 	dir := t.TempDir()
 	prog, err := os.ReadFile(filepath.Join(binDir, "testext"))
 	if err != nil {
@@ -31,7 +37,7 @@ func testPackage(t *testing.T, version string) string {
 	}
 	m, _ := json.Marshal(map[string]any{
 		"manifest_version": 0,
-		"id":               "test/lifecycle",
+		"id":               id,
 		"version":          version,
 		"protocol":         []int{0},
 		"programs":         map[string]string{runtime.GOOS + "/" + runtime.GOARCH: "testext"},
@@ -322,6 +328,15 @@ func TestFailedReloadKeepsActiveConfig(t *testing.T) {
 	moved["listen"] = "127.0.0.1:1"
 	writeConfig(t, path, moved)
 	check("listen address change", 4, "listen")
+
+	// Accounts added by login belong to one extension: switching to another one takes a restart.
+	writeConfig(t, path, lifecycleConfig(testPackageID(t, "test/other", "0.1.0"), g, nil))
+	check("another extension", 5, "extension")
+
+	elsewhere := lifecycleConfig(v1, g, nil)
+	elsewhere["credentials_dir"] = filepath.Join(t.TempDir(), "elsewhere")
+	writeConfig(t, path, elsewhere)
+	check("credentials folder change", 6, "credentials_dir")
 }
 
 // A crashed extension is restarted after a backoff; one that keeps crashing is quarantined, and

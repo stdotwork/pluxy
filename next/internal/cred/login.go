@@ -47,7 +47,6 @@ type LoginView struct {
 
 type login struct {
 	id, account, method string
-	ext                 string // the extension running the login, which owns the account
 	reauth              bool
 	registration        string // the account's, for a reauth
 	fields              route.Account
@@ -92,7 +91,7 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	if !slices.ContainsFunc(info.LoginMethods, func(lm protocol.LoginMethod) bool { return lm.Method == req.Method }) {
 		return LoginView{}, fmt.Errorf("%w: extension %s has no login method %q", ErrInvalid, info.ID, req.Method)
 	}
-	l := &login{account: id, ext: info.ID, method: req.Method, reauth: req.Reauth, fields: req.Account, first: make(chan struct{}), state: LoginPending}
+	l := &login{account: id, method: req.Method, reauth: req.Reauth, fields: req.Account, first: make(chan struct{}), state: LoginPending}
 	m.mu.Lock()
 	m.dropOldLogins()
 	for _, o := range m.logins {
@@ -109,7 +108,7 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	case !exists && req.Reauth:
 		m.mu.Unlock()
 		return LoginView{}, ErrNotFound
-	case exists && rec.Extension != info.ID:
+	case exists && rec.Extension != m.provID:
 		m.mu.Unlock()
 		return LoginView{}, fmt.Errorf("%w: account %q belongs to extension %s", ErrConflict, id, rec.Extension)
 	case exists:
@@ -214,7 +213,7 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	if m.reserved(l.account) {
 		return fmt.Errorf("account %q is now set in core's config", l.account)
 	}
-	_, err := m.store.Create(Record{ID: l.account, Extension: l.ext, State: StateActive, Label: g.Label, Account: l.fields, Credential: *g.Credential})
+	_, err := m.store.Create(Record{ID: l.account, Extension: m.provID, State: StateActive, Label: g.Label, Account: l.fields, Credential: *g.Credential})
 	if err != nil {
 		return err
 	}

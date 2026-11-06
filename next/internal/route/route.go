@@ -57,7 +57,7 @@ type AffinityConfig struct {
 
 // Validate checks the strategy name and limits.
 func (c *Config) Validate() error {
-	if _, err := newPicker(c.Strategy, nil, nil); err != nil {
+	if _, err := newPicker(c.Strategy, nil, nil, 0); err != nil {
 		return err
 	}
 	if c.MaxAttempts < 0 || c.MaxAccounts < 0 || c.MaxWaitMS < 0 {
@@ -111,6 +111,7 @@ type Router struct {
 	picker   *picker
 	affinity *affinity // nil without session affinity
 	ttl      time.Duration
+	gen      uint64 // this router's generation, from state (see State.Retain)
 
 	mu       sync.RWMutex // guards accounts and creds
 	accounts []*Account
@@ -133,12 +134,12 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	if state == nil {
 		state = NewState()
 	}
-	r := &Router{cfg: cfg, attempt: attempt, state: state, now: time.Now, sleep: sleepCtx, rand: rand.Float64}
+	r := &Router{cfg: cfg, attempt: attempt, state: state, gen: state.nextGen(), now: time.Now, sleep: sleepCtx, rand: rand.Float64}
 	var err error
-	if r.accounts, err = accountList(accounts); err != nil {
+	if r.accounts, err = accountList(accounts, r.gen); err != nil {
 		return nil, err
 	}
-	if r.picker, err = newPicker(cfg.Strategy, r.accounts, state.rotation); err != nil {
+	if r.picker, err = newPicker(cfg.Strategy, r.accounts, state.rotation, r.gen); err != nil {
 		return nil, err
 	}
 	if cfg.SessionAffinity != nil {
@@ -151,7 +152,7 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	return r, nil
 }
 
-func accountList(accounts []Account) ([]*Account, error) {
+func accountList(accounts []Account, gen uint64) ([]*Account, error) {
 	var out []*Account
 	seen := map[string]bool{}
 	for i := range accounts {
@@ -160,6 +161,7 @@ func accountList(accounts []Account) ([]*Account, error) {
 			return nil, fmt.Errorf("account IDs must be set and unique (%q)", a.ID)
 		}
 		seen[a.ID] = true
+		a.gen = gen
 		out = append(out, &a)
 	}
 	return out, nil
@@ -169,7 +171,7 @@ func accountList(accounts []Account) ([]*Account, error) {
 // the set they started with. Routing state of an account that leaves the set is dropped, so an
 // account added again later under the same ID starts clean.
 func (r *Router) SetAccounts(accounts []Account) error {
-	list, err := accountList(accounts)
+	list, err := accountList(accounts, r.gen)
 	if err != nil {
 		return err
 	}
@@ -263,7 +265,7 @@ func (c *call) Next() llm.Event {
 		if ev.Type == llm.EventFinish {
 			c.r.state.success(c.acct, c.req.LLM.Model, c.seq)
 		} else {
-			c.r.state.failure(c.acct, c.req.LLM.Model, ev.Error, c.r.now(), c.seq)
+			c.r.state.failure(c.acct, c.req.LLM.Model, ev.Error, c.r.now())
 		}
 		c.release()
 	}
@@ -450,7 +452,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			call.Credential, version, e = c.creds.Credential(c.ctx, a.ID)
 		}
 		if e != nil {
-			r.state.failure(a, c.req.LLM.Model, e, r.now(), seq)
+			r.state.failure(a, c.req.LLM.Model, e, r.now())
 			r.state.end(a)
 			return errorEvent(e), false
 		}
@@ -472,13 +474,13 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 				return ev, false
 			}
 		}
-		r.state.failure(a, c.req.LLM.Model, ev.Error, r.now(), seq)
+		r.state.failure(a, c.req.LLM.Model, ev.Error, r.now())
 		r.state.end(a)
 		return ev, false
 	}
 	c.cur, c.acct, c.seq = s, a, seq
 	if r.affinity != nil && c.req.Session != "" {
-		r.affinity.bind(c.affinityKey(), a.ID, r.now(), r.ttl)
+		r.affinity.bind(c.affinityKey(), a, r.now(), r.ttl)
 	}
 	if ev.Terminal() {
 		// A reply that is finished in its first event: record it now.

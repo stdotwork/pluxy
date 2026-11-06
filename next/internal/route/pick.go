@@ -31,7 +31,11 @@ var Strategies = []string{StrategyRoundRobin, StrategyWeighted, StrategyFillFirs
 type picker struct {
 	strategy string
 	order    map[string]int // account ID -> position in config
+	gen      uint64         // the router's generation
 	*rotation
+	// own holds the weighted balances once the weights in State have moved on to a newer
+	// router's (rotation.weightsSince): this picker's old weights must not disturb them.
+	own map[string]map[string]int64
 }
 
 // rotation is a picker's memory.
@@ -41,14 +45,18 @@ type rotation struct {
 	current   map[string]map[string]int64 // model -> account ID -> smooth weighted current weight
 	used      map[string]time.Time        // model -> when its cursor was last used
 	lastSweep time.Time
+	// weightsSince is the generation of the router whose weights current is for; older
+	// routers keep their own balances.
+	weightsSince uint64
 }
 
 func newRotation() *rotation {
 	return &rotation{last: map[string]string{}, current: map[string]map[string]int64{}, used: map[string]time.Time{}}
 }
 
-// newPicker returns a picker for accounts; mem is its memory, nil for a fresh one.
-func newPicker(strategy string, accounts []*Account, mem *rotation) (*picker, error) {
+// newPicker returns a picker for accounts on the router of generation gen; mem is its memory,
+// nil for a fresh one.
+func newPicker(strategy string, accounts []*Account, mem *rotation, gen uint64) (*picker, error) {
 	if strategy == "" {
 		strategy = StrategyRoundRobin
 	}
@@ -58,7 +66,7 @@ func newPicker(strategy string, accounts []*Account, mem *rotation) (*picker, er
 	if mem == nil {
 		mem = newRotation()
 	}
-	p := &picker{strategy: strategy, order: map[string]int{}, rotation: mem}
+	p := &picker{strategy: strategy, order: map[string]int{}, gen: gen, rotation: mem}
 	for i, a := range accounts {
 		p.order[a.ID] = i
 	}
@@ -103,6 +111,7 @@ func (p *picker) forget(model string) {
 	delete(p.used, model)
 	delete(p.last, model)
 	delete(p.current, model)
+	delete(p.own, model)
 }
 
 // pick returns one of cands, which are in configured order and not empty. active reports the
@@ -156,10 +165,17 @@ func (p *picker) after(model string, cands []*Account) *Account {
 // total wins and pays back the sum of the weights. Candidates all have a weight above 0: the
 // router leaves weight-0 accounts out of weighted routing.
 func (p *picker) weighted(model string, cands []*Account) *Account {
-	cur := p.current[model]
+	balances := p.current
+	if p.gen < p.weightsSince {
+		if p.own == nil {
+			p.own = map[string]map[string]int64{}
+		}
+		balances = p.own
+	}
+	cur := balances[model]
 	if cur == nil {
 		cur = map[string]int64{}
-		p.current[model] = cur
+		balances[model] = cur
 	}
 	var best *Account
 	var total int64

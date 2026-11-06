@@ -99,11 +99,13 @@ type State struct {
 	affinity  *affinity
 	rotation  *rotation
 	lastSweep time.Time
-	// forgot holds, per account ID and per endpoint name whose state Retain dropped, the
-	// sequence number current then: an outcome of an attempt that began before it is about
-	// the account as it was, so it records nothing.
-	forgot map[scopeKey]uint64
-	rand   func() float64
+	// gens counts the routers made over this state; each takes the next as its generation.
+	gens uint64
+	// since holds, per account ID and per endpoint name whose state Retain dropped, the
+	// generation of the router Retain carried the state to: an outcome seen by an older router
+	// is about the account as it was, so it records nothing.
+	since map[scopeKey]uint64
+	rand  func() float64
 }
 
 // lastEnd returns when the latest block of st ends.
@@ -169,18 +171,29 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 // NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
-		forgot: map[scopeKey]uint64{}, rand: rand.Float64}
+		since: map[scopeKey]uint64{}, rand: rand.Float64}
 }
 
-// Retain carries the state from the accounts of one config (prev) to those of the next. State
-// stays with every account in next that same reports is the same account as the one with its
-// ID in prev. For accounts that were removed or changed it is dropped: blocks on their
-// credential and models, their session bindings, and blocks on endpoints that no unchanged
-// account names: a block is about one upstream account, and a changed account may be another
-// one. Outcomes of attempts that began before Retain no longer record anything on what it
-// dropped. Weighted rotation starts afresh when the weights change. Running attempts stay
-// counted until they end.
-func (s *State) Retain(prev, next []Account, same func(old, cur *Account) bool) {
+// nextGen returns the generation for a new router.
+func (s *State) nextGen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gens++
+	return s.gens
+}
+
+// Retain carries the state from the accounts of one router (prev, the one a reload replaces)
+// to those of the next, which must not be serving yet. State stays with every account of next
+// that same reports is the same account as the one with its ID in prev. For accounts that were
+// removed or changed it is dropped: blocks on their credential and models, their session
+// bindings, and blocks on endpoints that no unchanged account names: a block is about one
+// upstream account, and a changed account may be another one. From then on, outcomes that
+// routers older than next see on what it dropped record nothing and bind no session, whenever
+// their attempts began: a request that started on an older router may still retry there.
+// Weighted rotation starts afresh when the weights change, and older routers keep their own
+// balances. Running attempts stay counted until they end.
+func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Account) bool) {
+	prev, next, gen := prevRouter.Accounts(), nextRouter.Accounts(), nextRouter.gen
 	kept := map[string]bool{}
 	endpoints := map[string]bool{}
 	weights := map[string]int{}
@@ -201,13 +214,15 @@ func (s *State) Retain(prev, next []Account, same func(old, cur *Account) bool) 
 		}
 	}
 
+	changed := map[string]bool{}
 	s.mu.Lock()
 	for _, a := range prev {
 		if !kept[a.ID] {
-			s.forgot[scopeKey{kind: scopeCredential, id: a.ID}] = s.seq
+			changed[a.ID] = true
+			s.since[scopeKey{kind: scopeCredential, id: a.ID}] = gen
 		}
 		if !endpoints[a.endpoint()] {
-			s.forgot[scopeKey{kind: scopeEndpoint, id: a.endpoint()}] = s.seq
+			s.since[scopeKey{kind: scopeEndpoint, id: a.endpoint()}] = gen
 		}
 	}
 	for k := range s.scopes {
@@ -217,22 +232,22 @@ func (s *State) Retain(prev, next []Account, same func(old, cur *Account) bool) 
 	}
 	s.mu.Unlock()
 
-	s.affinity.retain(kept)
+	s.affinity.retain(kept, changed, gen)
 	if reweighted {
 		s.rotation.mu.Lock()
 		clear(s.rotation.current)
+		s.rotation.weightsSince = gen
 		s.rotation.mu.Unlock()
 	}
 }
 
-// stale reports whether an outcome on key from the attempt with sequence number seq predates
-// Retain dropping key's state. s.mu is held.
-func (s *State) stale(key scopeKey, seq uint64) bool {
+// stale reports whether an outcome on key seen by a router of generation gen is about an
+// account as it was before Retain dropped key's state. s.mu is held.
+func (s *State) stale(key scopeKey, gen uint64) bool {
 	if key.kind == scopeModel {
 		key = scopeKey{kind: scopeCredential, id: key.id}
 	}
-	mark, ok := s.forgot[key]
-	return ok && seq <= mark
+	return gen < s.since[key]
 }
 
 // end releases the reservation begin made. Call it exactly once per begin.
@@ -293,9 +308,9 @@ func (s *State) availability(a *Account, model string, now time.Time) (until tim
 	return until, reason, busy
 }
 
-// failure records what a failed attempt on account a for model, with sequence number seq,
-// says about the account. Failures about the request or the caller record nothing.
-func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, seq uint64) {
+// failure records what a failed attempt on account a for model says about the account.
+// Failures about the request or the caller record nothing.
+func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time) {
 	kind, scope, fixed, base, max := classify(e)
 	if kind == "" {
 		return
@@ -313,7 +328,7 @@ func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time, s
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stale(key, seq) {
+	if s.stale(key, a.gen) {
 		return
 	}
 	s.maybeSweep(now)
@@ -377,7 +392,7 @@ func (s *State) success(a *Account, model string, seq uint64) {
 	defer s.mu.Unlock()
 	for _, k := range keysFor(a, model) {
 		st := s.scopes[k]
-		if st == nil {
+		if st == nil || s.stale(k, a.gen) {
 			continue
 		}
 		empty := true
