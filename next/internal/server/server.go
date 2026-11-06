@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
+	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/internal/route"
@@ -41,7 +42,7 @@ type GenerateFunc func(ctx context.Context, account protocol.Account, req llm.Re
 
 // clientFormat is a client API core serves: how to read its requests and write its replies.
 type clientFormat struct {
-	parse     func(body []byte) (llm.Request, error)
+	parse     func(r *http.Request, body []byte) (llm.Request, error)
 	stream    func(w io.Writer, req llm.Request) eventWriter
 	aggregate func(req llm.Request) aggregator
 	// errorBody returns the status and body of an error reply; nil means the OpenAI shape.
@@ -49,6 +50,14 @@ type clientFormat struct {
 	// headers are client request headers that belong to the format's body; they travel with
 	// the native body.
 	headers []string
+	// googleKeys accepts the client key where Google's clients send it: in x-goog-api-key or
+	// the key query parameter.
+	googleKeys bool
+}
+
+// bodyOnly adapts a parser for a format whose request is all in its body.
+func bodyOnly(parse func(body []byte) (llm.Request, error)) func(*http.Request, []byte) (llm.Request, error) {
+	return func(_ *http.Request, body []byte) (llm.Request, error) { return parse(body) }
 }
 
 type eventWriter interface{ Write(ev llm.Event) error }
@@ -65,7 +74,7 @@ type aggregator interface {
 type lossReporter interface{ Losses() []llm.Loss }
 
 var chatFormat = clientFormat{
-	parse: openaichat.ParseRequest,
+	parse: bodyOnly(openaichat.ParseRequest),
 	stream: func(w io.Writer, req llm.Request) eventWriter {
 		return openaichat.NewStreamWriter(w, openaichat.WantsStreamUsage(req))
 	},
@@ -73,17 +82,38 @@ var chatFormat = clientFormat{
 }
 
 var responsesFormat = clientFormat{
-	parse:     openairesponses.ParseRequest,
+	parse:     bodyOnly(openairesponses.ParseRequest),
 	stream:    func(w io.Writer, req llm.Request) eventWriter { return openairesponses.NewStreamWriter(w, req) },
 	aggregate: func(req llm.Request) aggregator { return openairesponses.NewAggregator(req) },
 }
 
 var messagesFormat = clientFormat{
-	parse:     anthropicmessages.ParseRequest,
+	parse:     bodyOnly(anthropicmessages.ParseRequest),
 	stream:    func(w io.Writer, _ llm.Request) eventWriter { return anthropicmessages.NewStreamWriter(w) },
 	aggregate: func(llm.Request) aggregator { return anthropicmessages.NewAggregator() },
 	errorBody: anthropicmessages.ErrorResponse,
 	headers:   anthropicmessages.Headers,
+}
+
+// geminiFormat serves Gemini's GenerateContent at /v1beta/models/{model}:{method}. The method
+// says whether the reply streams; a stream is always server-sent events, with or without
+// alt=sse, as today's core serves it.
+var geminiFormat = clientFormat{
+	parse: func(r *http.Request, body []byte) (llm.Request, error) {
+		model, method, _ := strings.Cut(r.PathValue("action"), ":")
+		switch method {
+		case "generateContent", "streamGenerateContent":
+		default:
+			// shortcut: countTokens is not served; no client in the corpus relies on it.
+			return llm.Request{}, &llm.Error{Code: llm.CodeNotFound, Scope: llm.ScopeRequest,
+				Message: fmt.Sprintf("method %q is not supported on models/%s", method, model)}
+		}
+		return geminigenerate.ParseRequest(model, method == "streamGenerateContent", body)
+	},
+	stream:     func(w io.Writer, _ llm.Request) eventWriter { return geminigenerate.NewStreamWriter(w) },
+	aggregate:  func(llm.Request) aggregator { return geminigenerate.NewAggregator() },
+	errorBody:  geminigenerate.ErrorResponse,
+	googleKeys: true,
 }
 
 // New returns core's HTTP handler. Requests are routed over cfg's accounts, and each attempt
@@ -96,10 +126,11 @@ func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	formats := map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/responses": responsesFormat, "/v1/messages": messagesFormat}
+	formats := map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/responses": responsesFormat, "/v1/messages": messagesFormat,
+		"/v1beta/models/{action}": geminiFormat}
 	for path, f := range formats {
 		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
-			if !authorized(cfg, r) {
+			if !authorized(cfg, r, f.googleKeys) {
 				f.writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
 				return
 			}
@@ -110,12 +141,13 @@ func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
 }
 
 // authorized reports whether the request carries a client key: as a bearer token, or in
-// x-api-key as Anthropic clients send it.
-func authorized(cfg *Config, r *http.Request) bool {
+// x-api-key as Anthropic clients send it; with googleKeys also in x-goog-api-key or the key
+// query parameter, as Google's clients send it.
+func authorized(cfg *Config, r *http.Request, googleKeys bool) bool {
 	if len(cfg.ClientKeys) == 0 {
 		return true
 	}
-	token := clientToken(r)
+	token := clientToken(r, googleKeys)
 	if token == "" {
 		return false
 	}
@@ -126,11 +158,18 @@ func authorized(cfg *Config, r *http.Request) bool {
 	return match == 1
 }
 
-// clientToken returns the key the client sent: a bearer token, or else x-api-key.
-func clientToken(r *http.Request) string {
+// clientToken returns the key the client sent: a bearer token, or else x-api-key; with
+// googleKeys (Gemini clients), else x-goog-api-key or the key query parameter.
+func clientToken(r *http.Request, googleKeys bool) string {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || token == "" {
 		token = r.Header.Get("X-Api-Key")
+	}
+	if token == "" && googleKeys {
+		token = r.Header.Get("X-Goog-Api-Key")
+		if token == "" {
+			token = r.URL.Query().Get("key")
+		}
 	}
 	return token
 }
@@ -161,7 +200,7 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 		}
 		return // the client went away
 	}
-	req, err := f.parse(body)
+	req, err := f.parse(r, body)
 	if err != nil {
 		f.writeError(w, asLLMError(err))
 		return

@@ -98,6 +98,9 @@ const (
 	FormatOpenAIChat        = "openai.chat"
 	FormatOpenAIResponses   = "openai.responses"
 	FormatAnthropicMessages = "anthropic.messages"
+	// FormatGeminiGenerate is Gemini's GenerateContent API. Its model and whether it streams
+	// are in the request path, not the body: Request.Model and Request.Stream carry them.
+	FormatGeminiGenerate = "gemini.generate_content"
 )
 
 // Item types.

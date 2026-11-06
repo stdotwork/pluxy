@@ -1,0 +1,101 @@
+{
+  "description": "The client authenticates with the key query parameter instead of a header; the request is accepted and reaches the upstream as usual, and the key is not forwarded upstream.",
+  "source": [
+    "core/internal/api/server_middleware.go:493-543 (client access auth reads the query key)",
+    "core/internal/access/config_access/provider.go:55-84 (credential lookup from Authorization, X-Goog-Api-Key and key)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-corpus:generateContent?key=corpus-client-key",
+    "auth": "none",
+    "body": {"contents":[{"role":"user","parts":[{"text":"Say hello"}]}]}
+  },
+  "upstream": [
+    {
+      "body": {
+        "candidates": [
+          {
+            "content": {"role":"model","parts":[{"text":"Hello there!"}]},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 40,
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        },
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus"
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked."
+    },
+    {
+      "path": "upstream[0].body.safetySettings",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"Hello there!"}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus",
+        "usageMetadata": {
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "promptTokenCount": 40,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:generateContent"
+      }
+    ]
+  }
+}

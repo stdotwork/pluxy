@@ -248,7 +248,8 @@ func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL st
 }
 
 // caseModels returns the models the old core lists for the case: AccountModels, or else the
-// request's model without a thinking suffix such as "(high)".
+// request's model without a thinking suffix such as "(high)". A Gemini request names its model in
+// the path (/v1beta/models/{model}:{method}).
 func caseModels(c *Case) []string {
 	if len(c.AccountModels) > 0 {
 		return c.AccountModels
@@ -258,6 +259,9 @@ func caseModels(c *Case) []string {
 	}
 	_ = json.Unmarshal(c.Client.Body, &body)
 	m := body.Model
+	if _, rest, ok := strings.Cut(c.Client.Path, "/models/"); ok && m == "" {
+		m, _, _ = strings.Cut(rest, ":")
+	}
 	if i := strings.LastIndex(m, "("); i > 0 && strings.HasSuffix(m, ")") {
 		m = m[:i]
 	}

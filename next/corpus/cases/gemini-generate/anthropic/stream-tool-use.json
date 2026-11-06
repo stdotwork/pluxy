@@ -1,0 +1,183 @@
+{
+  "description": "A streamed Gemini request with one functionDeclaration to a Messages upstream: the tool_use block (id toolu_abc, input_json_delta fragments, stop_reason tool_use) comes back as a Gemini functionCall with the same id, with its arguments assembled, and the finish reason is STOP.",
+  "source": [
+    "core/internal/translator/claude/gemini/claude_gemini_request.go (Gemini tool declarations to Claude tools; tool config mapping)",
+    "core/internal/translator/claude/gemini/claude_gemini_response.go (tool-use start and partial JSON buffered, emitted as a complete functionCall at block stop; tool ID preserved)",
+    "core/internal/translator/claude/gemini/claude_gemini_response_test.go (TestConvertClaudeResponseToGemini_StreamPreservesToolUseID)"
+  ],
+  "client": {
+    "path": "/v1beta/models/claude-test:streamGenerateContent?alt=sse",
+    "body": {
+      "contents": [{"role":"user","parts":[{"text":"What is the weather in Paris?"}]}],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Get the weather for a city.",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":40,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_abc","name":"get_weather","input":{}}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"Paris\"}"}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":15}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "volatile": ["client.events[*].data.createTime"],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: candidate index 0, one chunk per text or thought delta, a last chunk holding the finish reason, any function calls and usageMetadata with Gemini's inclusion rules (promptTokenCount counts every input token, cache reads included, in cachedContentTokenCount; a Messages upstream gives no separate thinking count, so all output tokens count as candidates), and max_tokens as MAX_TOKENS. Today's Claude translator adds createTime and usageMetadata.trafficType PROVISIONED_THROUGHPUT, leaves out the candidate index, reports a promptTokenCount of 0, maps a non-streamed max_tokens stop to STOP, and turns a Claude thinking signature into a thought part holding skip_thought_signature_validator, Google's last-resort value that skips validation; the new core does not invent a signature and reports the Claude one as dropped.",
+      "want": [
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "parts": [
+                    {"functionCall":{"args":{"city":"Paris"},"id":"toolu_abc","name":"get_weather"}}
+                  ],
+                  "role": "model"
+                },
+                "finishReason": "STOP",
+                "index": 0
+              }
+            ],
+            "modelVersion": "claude-test-upstream",
+            "responseId": "msg_corpus",
+            "usageMetadata": {"candidatesTokenCount":15,"promptTokenCount":40,"totalTokenCount":55}
+          }
+        }
+      ]
+    },
+    {
+      "path": "upstream[0].body.messages[0].content[0].cache_control",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tools[0].cache_control",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tools[0].input_schema.$schema",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].body.tools[0].input_schema.additionalProperties",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].path",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"candidates":[{"content":{"parts":[{"functionCall":{"args":{"city":"Paris"},"id":"toolu_abc","name":"get_weather"}}],"role":"model"},"finishReason":"STOP"}],"createTime":"2026-11-06T07:23:49Z","modelVersion":"claude-test-upstream","responseId":"msg_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP"}],"createTime":"2026-11-06T07:23:49Z","modelVersion":"claude-test-upstream","responseId":"msg_corpus","usageMetadata":{"candidatesTokenCount":15,"promptTokenCount":0,"totalTokenCount":15,"trafficType":"PROVISIONED_THROUGHPUT"}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {
+              "content": [
+                {
+                  "cache_control": {"type":"ephemeral"},
+                  "text": "What is the weather in Paris?",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"9812614c93f1fa851b3d0f72b7b284944d46ba61ee24ee868cfd79dc61b548e0"},
+          "model": "claude-test",
+          "stream": true,
+          "tools": [
+            {
+              "cache_control": {"type":"ephemeral"},
+              "description": "Get the weather for a city.",
+              "input_schema": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "additionalProperties": false,
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "name": "get_weather"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}

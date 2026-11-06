@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -732,5 +733,49 @@ func TestResponsesTerminalFirstReportsLosses(t *testing.T) {
 	want := []string{"dropped output[0].encrypted_content", "dropped output[1].content[0].annotations"}
 	if got := lossList(a.Losses()); !reflect.DeepEqual(got, want) {
 		t.Errorf("losses %q, want %q", got, want)
+	}
+}
+
+// A Gemini GenerateContent request, read by its parser and encoded to Messages: the system
+// instruction becomes the system prompt, each turn's calls and results pair up by id, and Gemini's
+// thought signature and reasoning effort have no place in Messages and are reported.
+func TestGeminiRequestEncodesToMessages(t *testing.T) {
+	const body = `{"systemInstruction":{"parts":[{"text":"Be brief."}]},
+	"contents":[
+	 {"role":"user","parts":[{"text":"Weather?"}]},
+	 {"role":"model","parts":[
+	  {"text":"Checking."},
+	  {"functionCall":{"id":"c1","name":"w","args":{"city":"P"}},"thoughtSignature":"sig"},
+	  {"functionCall":{"id":"c2","name":"w","args":{"city":"B"}}}]},
+	 {"role":"user","parts":[
+	  {"functionResponse":{"id":"c1","name":"w","response":{"t":1}}},
+	  {"functionResponse":{"id":"c2","name":"w","response":{"t":2}}}]}],
+	"tools":[{"functionDeclarations":[{"name":"w","parametersJsonSchema":{"type":"object"}}]}],
+	"generationConfig":{"temperature":0.5,"stopSequences":["X"],"thinkingConfig":{"thinkingBudget":2048}}}`
+	req, err := geminigenerate.ParseRequest("m", false, []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "body", out, `{"model":"m","stream":false,"max_tokens":32000,"temperature":0.5,"stop_sequences":["X"],
+	 "system":[{"type":"text","text":"Be brief."}],
+	 "tools":[{"name":"w","input_schema":{"type":"object"}}],
+	 "messages":[
+	  {"role":"user","content":[{"type":"text","text":"Weather?"}]},
+	  {"role":"assistant","content":[
+	   {"type":"text","text":"Checking."},
+	   {"type":"tool_use","id":"c1","name":"w","input":{"city":"P"}},
+	   {"type":"tool_use","id":"c2","name":"w","input":{"city":"B"}}]},
+	  {"role":"user","content":[
+	   {"type":"tool_result","tool_use_id":"c1","content":"{\"t\":1}"},
+	   {"type":"tool_result","tool_use_id":"c2","content":"{\"t\":2}"}]}]}`)
+	got := lossList(losses)
+	for _, want := range []string{"dropped contents[1].parts[1].thoughtSignature", "dropped reasoning_effort"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("losses %q do not include %q", got, want)
+		}
 	}
 }

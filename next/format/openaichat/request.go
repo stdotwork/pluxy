@@ -570,7 +570,12 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			var tc chatToolCall
 			tc.ID, tc.Type = it.CallID, "function"
 			tc.Function.Name, tc.Function.Arguments = it.Name, it.Arguments
-			last.ToolCalls = append(last.ToolCalls, marshal(tc, e.kept(it.Origin)))
+			origin, extra := geminiSignature(it.Origin)
+			raw := e.kept(origin)
+			if extra != nil {
+				raw = rawjson.Merge(extra, raw)
+			}
+			last.ToolCalls = append(last.ToolCalls, marshal(tc, raw))
 		case llm.ItemTypeToolResult:
 			msgs = append(msgs, &outMessage{Role: "tool", Content: it.Output, ToolCallID: it.CallID, raw: e.kept(it.Origin)})
 		case llm.ItemTypeNative:
@@ -591,6 +596,23 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		return nil, nil, err
 	}
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
+}
+
+// geminiSignature takes the thought signature off a function call from a Gemini request and
+// returns it as the call's extra_content.google.thought_signature, where Gemini's
+// OpenAI-compatible API carries it (https://ai.google.dev/gemini-api/docs/openai), with the
+// origin left without it. Other origins come back unchanged.
+func geminiSignature(o *llm.Origin) (*llm.Origin, json.RawMessage) {
+	if o == nil || o.Format != llm.FormatGeminiGenerate {
+		return o, nil
+	}
+	m := rawjson.Object(o.Raw)
+	sig, ok := m["thoughtSignature"]
+	if !ok {
+		return o, nil
+	}
+	extra, _ := json.Marshal(map[string]any{"extra_content": map[string]any{"google": map[string]json.RawMessage{"thought_signature": sig}}})
+	return &llm.Origin{Format: o.Format, Path: o.Path, Raw: rawjson.Rest(m, "thoughtSignature")}, extra
 }
 
 // emptyForeign reports whether it is a message from a format other than format that has no

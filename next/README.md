@@ -3,11 +3,11 @@
 A new core for pluxy, built from scratch beside today's `core/`. Core receives client requests and
 hands them to **provider extensions**: separate programs, one per kind of upstream, that core
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
-Responses and Anthropic Messages (streamed and not, over HTTP) through the OpenAI-compatible
-API-key provider, which talks to an upstream that speaks any of them. A request in the upstream's
-own format passes through unchanged; a Responses or Messages request to a Chat upstream, and a
-Messages request to a Responses upstream, are translated, and what the translation could not carry
-is logged.
+Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
+OpenAI-compatible API-key provider, which talks to an upstream that speaks any of them. A request
+in the upstream's own format passes through unchanged; a Responses, Messages or Gemini request to a
+Chat upstream, a Messages or Gemini request to a Responses upstream, and a Gemini request to a
+Messages upstream are translated, and what the translation could not carry is logged.
 
 ## Layout
 
@@ -18,7 +18,7 @@ is logged.
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
 | `conformance/` | The conformance kit extensions run in their tests. |
-| `format/` | Client and upstream formats as libraries extensions build in: `sse`, `openaichat`, `openairesponses`, `anthropicmessages`. |
+| `format/` | Client and upstream formats as libraries extensions build in: `sse`, `openaichat`, `openairesponses`, `anthropicmessages`, `geminigenerate`. |
 | `extensions/openai-compatible` | Provider extension for OpenAI-compatible APIs with an API key. |
 | `examples/scripted` | The tutorial's example extension. |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API. |
@@ -61,10 +61,17 @@ extension and spreads requests over its accounts: see [Accounts and routing](#ac
 An account's `settings` may set `"wire_api": "responses"` for an upstream that speaks OpenAI
 Responses (`POST {base_url}/responses`), or `"wire_api": "messages"` for one that speaks Anthropic
 Messages (`POST {base_url}/messages`, with the key in `x-api-key` and the client's
-`anthropic-version` and `anthropic-beta` headers); the default is `"chat"`. A Responses account
-serves Responses and Messages clients; a Messages account serves only Messages clients for now.
+`anthropic-version` and `anthropic-beta` headers), or `"wire_api": "gemini"` for one that speaks
+Gemini GenerateContent (`base_url` ending in `/v1beta`; `POST {base_url}/models/{model}:generateContent`
+or `:streamGenerateContent?alt=sse`, with the key in `x-goog-api-key`); the default is `"chat"`. A
+Responses account serves Responses, Messages and Gemini clients; a Messages account serves Messages
+and Gemini clients; a Gemini account serves only Gemini clients for now.
 
-Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`.
+Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
+(a stream is server-sent events, with or without `alt=sse`); `countTokens` is not served yet.
+
+Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`; Gemini
+clients may also send it in `x-goog-api-key` or the `key` query parameter.
 
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`

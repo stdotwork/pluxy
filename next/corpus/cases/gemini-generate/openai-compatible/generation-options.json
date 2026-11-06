@@ -1,0 +1,176 @@
+{
+  "description": "Generation options from a Gemini request reach the Chat request: sampling and limit fields, stop sequences, JSON response format with its schema, a thinking budget as reasoning effort, a function-calling mode of ANY limited to one allowed name, and the system instruction as a system message.",
+  "source": [
+    "core/internal/translator/openai/gemini/openai_gemini_request.go (ConvertGeminiRequestToOpenAI: generationConfig mapping, thinkingConfig mapping, toolConfig functionCallingConfig mapping, systemInstruction)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:generateContent",
+    "body": {
+      "systemInstruction": {"parts":[{"text":"Answer in JSON."}]},
+      "contents": [{"role":"user","parts":[{"text":"Weather in Paris?"}]}],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Get the current weather for a city.",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ],
+      "toolConfig": {"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["get_weather"]}},
+      "generationConfig": {
+        "temperature": 0.3,
+        "topP": 0.9,
+        "topK": 20,
+        "maxOutputTokens": 300,
+        "stopSequences": ["END"],
+        "candidateCount": 1,
+        "responseMimeType": "application/json",
+        "responseSchema": {"type":"OBJECT","properties":{"temp":{"type":"NUMBER"}}},
+        "thinkingConfig": {"thinkingBudget":1024}
+      }
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {"role":"assistant","content":"{\"temp\": 18}"},
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {"prompt_tokens":48,"completion_tokens":6,"total_tokens":54}
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: the serving model in modelVersion and the upstream reply's id in responseId (GenerateContentResponse reference), one chunk per text or thought delta, and a last chunk holding the finish reason, any function calls and usageMetadata, as Gemini streams end. usageMetadata follows Gemini's inclusion rules (Google's UsageMetadata reference): candidatesTokenCount leaves out thoughtsTokenCount. Today's core writes the model as model, no responseId, counts reasoning tokens in candidatesTokenCount, and sends usage in a separate chunk with no candidates.",
+      "want": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"{\"temp\": 18}"}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gpt-test-upstream",
+        "responseId": "chatcmpl-corpus",
+        "usageMetadata": {"candidatesTokenCount":6,"promptTokenCount":48,"totalTokenCount":54}
+      }
+    },
+    {
+      "path": "upstream[0].body.n",
+      "kind": "gap",
+      "reason": "topK and candidateCount have no place in the model yet: the new core reports them as dropped; today's core sends them as top_k (not a Chat Completions field) and n."
+    },
+    {
+      "path": "upstream[0].body.response_format",
+      "kind": "intended",
+      "reason": "The new core carries responseMimeType application/json with responseSchema as response_format json_schema; today's core drops both without a report.",
+      "want": {
+        "json_schema": {
+          "name": "response",
+          "schema": {"properties":{"temp":{"type":"number"}},"type":"object"}
+        },
+        "type": "json_schema"
+      }
+    },
+    {
+      "path": "upstream[0].body.tools[0].function.parameters.properties.city.type",
+      "kind": "intended",
+      "reason": "The model carries tool parameters as JSON Schema, so Gemini's Schema type names (OBJECT, STRING) are written in lower case, as JSON Schema spells them; today's core passes them to a Chat upstream in upper case, which JSON Schema validators reject."
+    },
+    {
+      "path": "upstream[0].body.tools[0].function.parameters.type",
+      "kind": "intended",
+      "reason": "The model carries tool parameters as JSON Schema, so Gemini's Schema type names (OBJECT, STRING) are written in lower case, as JSON Schema spells them; today's core passes them to a Chat upstream in upper case, which JSON Schema validators reject."
+    },
+    {
+      "path": "upstream[0].body.top_k",
+      "kind": "gap",
+      "reason": "topK and candidateCount have no place in the model yet: the new core reports them as dropped; today's core sends them as top_k (not a Chat Completions field) and n."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"{\"temp\": 18}"}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "model": "gpt-test-upstream",
+        "usageMetadata": {"candidatesTokenCount":6,"promptTokenCount":48,"totalTokenCount":54}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 300,
+          "messages": [
+            {"content":[{"text":"Answer in JSON.","type":"text"}],"role":"system"},
+            {"content":"Weather in Paris?","role":"user"}
+          ],
+          "model": "gpt-test",
+          "n": 1,
+          "reasoning_effort": "low",
+          "stop": ["END"],
+          "stream": false,
+          "temperature": 0.3,
+          "tool_choice": {"function":{"name":"get_weather"},"type":"function"},
+          "tools": [
+            {
+              "function": {
+                "description": "Get the current weather for a city.",
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {"city":{"type":"STRING"}},
+                  "required": ["city"],
+                  "type": "OBJECT"
+                }
+              },
+              "type": "function"
+            }
+          ],
+          "top_k": 20,
+          "top_p": 0.9
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

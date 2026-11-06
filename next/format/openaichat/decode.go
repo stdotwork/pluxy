@@ -120,6 +120,7 @@ type streamChoice struct {
 				Name      string `json:"name"`
 				Arguments string `json:"arguments"`
 			} `json:"function"`
+			ExtraContent json.RawMessage `json:"extra_content"`
 		} `json:"tool_calls"`
 	} `json:"delta"`
 	FinishReason *string `json:"finish_reason"`
@@ -135,13 +136,14 @@ type StreamDecoder struct {
 	text      int // open message item, or -1
 	reasoning int // open reasoning item, or -1
 	tools     map[int]int
+	extra     map[int]json.RawMessage // extra_content that came after a tool call opened, by item
 	finish    *llm.Finish
 	usage     *llm.Usage
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]int{}}
+	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]int{}, extra: map[int]json.RawMessage{}}
 }
 
 func (d *StreamDecoder) open(kind string, ev *[]llm.Event, item llm.ItemStart) int {
@@ -168,9 +170,11 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 	}
 	slices.Sort(open)
 	for _, idx := range open {
-		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: idx})
+		// extra_content sent after the call opened rides on its item.end.
+		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: d.extra[idx]})
 	}
 	clear(d.tools)
+	clear(d.extra)
 }
 
 // Decode takes the data of one SSE event and returns the events it produces. After "[DONE]" it
@@ -244,7 +248,10 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 					id = "call_" + strconv.Itoa(tc.Index)
 				}
 				idx = d.open(llm.ItemToolCall, &out, llm.ItemStart{CallID: id, Name: tc.Function.Name})
+				out[len(out)-1].Raw = extraContent(tc.ExtraContent)
 				d.tools[tc.Index] = idx
+			} else if raw := extraContent(tc.ExtraContent); raw != nil {
+				d.extra[idx] = raw
 			}
 			if tc.Function.Arguments != "" {
 				out = append(out, llm.Event{Type: llm.EventToolInputDelta, Index: idx, Delta: tc.Function.Arguments})
@@ -336,11 +343,26 @@ type completion struct {
 type completionChoice struct {
 	Index   int `json:"index"`
 	Message *struct {
-		Content          *string        `json:"content"`
-		ReasoningContent *string        `json:"reasoning_content"`
-		ToolCalls        []chatToolCall `json:"tool_calls"`
+		Content          *string `json:"content"`
+		ReasoningContent *string `json:"reasoning_content"`
+		ToolCalls        []struct {
+			chatToolCall
+			ExtraContent json.RawMessage `json:"extra_content"`
+		} `json:"tool_calls"`
 	} `json:"message"`
 	FinishReason string `json:"finish_reason"`
+}
+
+// extraContent returns a tool call's extra_content as the raw of its item.start event:
+// {"extra_content": ...}, or nil when it has none. Gemini's OpenAI-compatible API carries a call's
+// thought signature there (extra_content.google.thought_signature), and a Gemini client needs it
+// back on the call.
+func extraContent(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	b, _ := json.Marshal(map[string]json.RawMessage{"extra_content": raw})
+	return b
 }
 
 // DecodeResponse turns an upstream non-streamed Chat Completions response into the events a
@@ -375,8 +397,8 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		ID: c.ID, Model: c.Model, Created: c.Created, Format: llm.FormatOpenAIChat, Raw: replyFields(body),
 	}}}
 	next := 0
-	item := func(start llm.ItemStart, delta string, deltaType string) {
-		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
+	item := func(start llm.ItemStart, delta string, deltaType string, raw json.RawMessage) {
+		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start, Raw: raw})
 		if delta != "" {
 			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta})
 		}
@@ -390,17 +412,17 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		}
 		m := ch.Message
 		if m.ReasoningContent != nil && *m.ReasoningContent != "" {
-			item(llm.ItemStart{Kind: llm.ItemReasoning}, *m.ReasoningContent, llm.EventReasoningDelta)
+			item(llm.ItemStart{Kind: llm.ItemReasoning}, *m.ReasoningContent, llm.EventReasoningDelta, nil)
 		}
 		if m.Content != nil && *m.Content != "" {
-			item(llm.ItemStart{Kind: llm.ItemMessage}, *m.Content, llm.EventTextDelta)
+			item(llm.ItemStart{Kind: llm.ItemMessage}, *m.Content, llm.EventTextDelta, nil)
 		}
 		for i, tc := range m.ToolCalls {
 			id := tc.ID
 			if id == "" {
 				id = "call_" + strconv.Itoa(i)
 			}
-			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta)
+			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta, extraContent(tc.ExtraContent))
 		}
 		finish = decodeFinish(ch.FinishReason)
 	}

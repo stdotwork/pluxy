@@ -1,0 +1,88 @@
+{
+  "description": "A streamed reply stopped by the upstream's content filter: finish_reason content_filter becomes finishReason SAFETY on the last Gemini chunk, after the text already streamed.",
+  "source": [
+    "core/internal/translator/openai/gemini/openai_gemini_response.go (ConvertOpenAIResponseToGemini, mapOpenAIFinishReasonToGemini: content_filter to SAFETY)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeStreamWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:streamGenerateContent?alt=sse",
+    "body": {"contents":[{"role":"user","parts":[{"text":"Tell me something."}]}]}
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{"role":"assistant","content":"Partial answer"},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test-upstream","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}},
+        {"data":"[DONE]"}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: the serving model in modelVersion and the upstream reply's id in responseId (GenerateContentResponse reference), one chunk per text or thought delta, and a last chunk holding the finish reason, any function calls and usageMetadata, as Gemini streams end. usageMetadata follows Gemini's inclusion rules (Google's UsageMetadata reference): candidatesTokenCount leaves out thoughtsTokenCount. Today's core writes the model as model, no responseId, counts reasoning tokens in candidatesTokenCount, and sends usage in a separate chunk with no candidates.",
+      "want": [
+        {
+          "data": {
+            "candidates": [
+              {"content":{"parts":[{"text":"Partial answer"}],"role":"model"},"index":0}
+            ],
+            "modelVersion": "gpt-test-upstream",
+            "responseId": "chatcmpl-corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [
+              {"content":{"parts":[],"role":"model"},"finishReason":"SAFETY","index":0}
+            ],
+            "modelVersion": "gpt-test-upstream",
+            "responseId": "chatcmpl-corpus",
+            "usageMetadata": {"candidatesTokenCount":3,"promptTokenCount":10,"totalTokenCount":13}
+          }
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"candidates":[{"content":{"parts":[{"text":"Partial answer"}],"role":"model"},"index":0}],"model":"gpt-test-upstream"}},
+        {"data":{"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"SAFETY","index":0}],"model":"gpt-test-upstream"}},
+        {"data":{"candidates":[],"model":"gpt-test-upstream","usageMetadata":{"candidatesTokenCount":3,"promptTokenCount":10,"totalTokenCount":13}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [{"content":"Tell me something.","role":"user"}],
+          "model": "gpt-test",
+          "stream": true,
+          "stream_options": {"include_usage":true}
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

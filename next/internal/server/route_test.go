@@ -26,4 +26,12 @@ func TestTenantFollowsTheClientKey(t *testing.T) {
 	if tenant(none) != "" {
 		t.Errorf("no key gave tenant %q, want empty", tenant(none))
 	}
+
+	// Gemini clients send the key in x-goog-api-key or the key query parameter.
+	goog := httptest.NewRequest("POST", "/v1beta/models/m:generateContent", nil)
+	goog.Header.Set("X-Goog-Api-Key", "key-a")
+	query := httptest.NewRequest("POST", "/v1beta/models/m:generateContent?key=key-a", nil)
+	if tenant(goog) != tenant(bearer) || tenant(query) != tenant(bearer) {
+		t.Errorf("x-goog-api-key tenant %q, ?key= tenant %q, bearer tenant %q; want all the same", tenant(goog), tenant(query), tenant(bearer))
+	}
 }

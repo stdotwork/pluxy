@@ -1,0 +1,107 @@
+{
+  "description": "A user turn with text and an inline PNG becomes a Chat content array with a text part and an image_url part carrying a base64 data URL.",
+  "source": [
+    "core/internal/translator/openai/gemini/openai_gemini_request.go (ConvertGeminiRequestToOpenAI, openAIContentPartFromGeminiInlineData)",
+    "core/internal/translator/openai/gemini/openai_gemini_response.go (ConvertOpenAIResponseToGeminiNonStream)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:generateContent",
+    "body": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {"text":"What is in this image?"},
+            {"inlineData":{"mimeType":"image/png","data":"aGVsbG8="}}
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {"role":"assistant","content":"The image says hello."},
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {"prompt_tokens":85,"completion_tokens":6,"total_tokens":91}
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: the serving model in modelVersion and the upstream reply's id in responseId (GenerateContentResponse reference), one chunk per text or thought delta, and a last chunk holding the finish reason, any function calls and usageMetadata, as Gemini streams end. usageMetadata follows Gemini's inclusion rules (Google's UsageMetadata reference): candidatesTokenCount leaves out thoughtsTokenCount. Today's core writes the model as model, no responseId, counts reasoning tokens in candidatesTokenCount, and sends usage in a separate chunk with no candidates.",
+      "want": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"The image says hello."}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gpt-test-upstream",
+        "responseId": "chatcmpl-corpus",
+        "usageMetadata": {"candidatesTokenCount":6,"promptTokenCount":85,"totalTokenCount":91}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"The image says hello."}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "model": "gpt-test-upstream",
+        "usageMetadata": {"candidatesTokenCount":6,"promptTokenCount":85,"totalTokenCount":91}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": [
+                {"text":"What is in this image?","type":"text"},
+                {"image_url":{"url":"data:image/png;base64,aGVsbG8="},"type":"image_url"}
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "stream": false
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

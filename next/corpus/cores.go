@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
@@ -153,6 +154,47 @@ var Providers = map[string]Provider{
 				acct := map[string]any{
 					"id":         id,
 					"settings":   map[string]any{"base_url": upstreamURL + "/v1", "wire_api": "messages"},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "openai-compatible", accounts
+		},
+	},
+	// An upstream that speaks Gemini GenerateContent with an API key. The new core uses the
+	// OpenAI-compatible extension with wire_api "gemini" (the Gemini provider extension comes
+	// later); today's core uses a Gemini API key with a custom base URL. Both send requests to
+	// {upstream}/v1beta/models/{model}:{method}.
+	"gemini": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			var ms []any
+			for _, m := range models {
+				ms = append(ms, map[string]any{"name": m, "alias": m})
+			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k})
+			}
+			return map[string]any{"gemini": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL,
+				"keys":     ks,
+				"models":   ms,
+			}}}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1beta", "wire_api": "gemini"},
 					"credential": map[string]any{"kind": "api_key", "api_key": k},
 				}
 				if len(models) > 0 {
@@ -318,13 +360,41 @@ func isolatedEnv(dir string) []string {
 	}
 }
 
+// Ports for the old core, which takes its port from its config and cannot report one the
+// system chose. They lie below the system's ephemeral range (from 32768 on Linux, from 49152 on
+// macOS and Windows), where every other listener in the run gets its port: the fake upstreams
+// and the new core bind port 0. A port checked free here therefore stays free until the old
+// core binds it. A port from the ephemeral range could be handed to a parallel case's listener
+// in between; the old core then fails to bind but still reports that it started, and the case
+// talks to the other case's server.
+const (
+	oldCorePortMin = 20000
+	oldCorePortMax = 32767
+)
+
+var (
+	portMu    sync.Mutex
+	portsUsed = map[int]bool{} // handed out in this run, never handed out again
+)
+
+// freePort returns a free local port for the old core from below the ephemeral range.
 func freePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
+	portMu.Lock()
+	defer portMu.Unlock()
+	for range 1000 {
+		port := oldCorePortMin + rand.IntN(oldCorePortMax-oldCorePortMin+1)
+		if portsUsed[port] {
+			continue
+		}
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		l.Close()
+		portsUsed[port] = true
+		return port, nil
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return 0, errors.New("corpus: no free port for the old core")
 }
 
 // startProcess starts cmd and waits until a line of its output matches ready. The first

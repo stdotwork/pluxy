@@ -1,0 +1,226 @@
+{
+  "description": "A non-streamed Gemini request whose history has a model functionCall (with a thought part before it and a thoughtSignature on the call) and a user functionResponse with the same id: the upstream Responses input carries a function_call and a function_call_output with that call ID, and the text reply comes back as one Gemini candidate.",
+  "source": [
+    "core/internal/translator/codex/gemini/codex_gemini_request.go (functionCall to function_call, functionResponse to function_call_output; IDs preserved; hidden thought parts dropped; thoughtSignature handling)",
+    "core/internal/translator/codex/gemini/codex_gemini_request_test.go (TestConvertGeminiRequestToCodex_PreservesCustomCallIDs, TestConvertGeminiRequestToCodex_DropsHiddenThoughtParts)",
+    "core/internal/translator/codex/gemini/codex_gemini_response.go (non-stream: output message text to a text part)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:generateContent",
+    "body": {
+      "contents": [
+        {"role":"user","parts":[{"text":"Weather in Paris?"}]},
+        {
+          "role": "model",
+          "parts": [
+            {"text":"I should look up the weather.","thought":true},
+            {
+              "functionCall": {"id":"fc-1","name":"get_weather","args":{"city":"Paris"}},
+              "thoughtSignature": "CiQB0e2Kb7sigA1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [{"functionResponse":{"id":"fc-1","name":"get_weather","response":{"temp":18}}}]
+        }
+      ],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Current weather",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"response.created","data":{"type":"response.created","sequence_number":0,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-test-upstream","output":[],"usage":null}}},
+        {"event":"response.output_item.added","data":{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"in_progress","role":"assistant","content":[]}}},
+        {"event":"response.content_part.added","data":{"type":"response.content_part.added","sequence_number":2,"output_index":0,"content_index":0,"item_id":"msg_corpus","part":{"type":"output_text","text":"","annotations":[]}}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":3,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":"You're"}},
+        {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","sequence_number":4,"output_index":0,"content_index":0,"item_id":"msg_corpus","delta":" welcome."}},
+        {"event":"response.output_text.done","data":{"type":"response.output_text.done","sequence_number":5,"output_index":0,"content_index":0,"item_id":"msg_corpus","text":"You're welcome."}},
+        {"event":"response.content_part.done","data":{"type":"response.content_part.done","sequence_number":6,"output_index":0,"content_index":0,"item_id":"msg_corpus","part":{"type":"output_text","text":"You're welcome.","annotations":[]}}},
+        {"event":"response.output_item.done","data":{"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"You're welcome.","annotations":[]}]}}},
+        {"event":"response.completed","data":{"type":"response.completed","sequence_number":8,"response":{"id":"resp_corpus","object":"response","created_at":1700000000,"status":"completed","model":"gpt-test-upstream","output":[{"id":"msg_corpus","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"You're welcome.","annotations":[]}]}],"usage":{"input_tokens":40,"input_tokens_details":{"cached_tokens":0},"output_tokens":4,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":44}}}}
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: candidate index 0, the serving model in modelVersion, one chunk per text or thought delta, and a last chunk holding the finish reason, any function calls and usageMetadata (with Gemini's inclusion rules: promptTokenCount includes cached tokens, candidatesTokenCount leaves out thoughtsTokenCount). Today's Codex translator opens with an empty chunk, adds createTime and usageMetadata.trafficType PROVISIONED_THROUGHPUT, leaves out the candidate index and cached and thought token counts, names the requested model after the first chunk, and turns Responses encrypted reasoning into a thoughtSignature carrier on the next text part (Codex reasoning carry-over is the Codex provider's, slice 9); the new core reports the encrypted reasoning as dropped.",
+      "want": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"You're welcome."}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gpt-test-upstream",
+        "responseId": "resp_corpus",
+        "usageMetadata": {"candidatesTokenCount":4,"promptTokenCount":40,"totalTokenCount":44}
+      }
+    },
+    {
+      "path": "upstream[0].body.include",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.store",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.stream",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.tool_choice",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.tools[0].parameters.additionalProperties",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.tools[0].strict",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].body.tools[1]",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    },
+    {
+      "path": "upstream[0].headers.Session-Id",
+      "kind": "intended",
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false and additionalProperties false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {"content":{"parts":[{"text":"You're welcome."}],"role":"model"},"finishReason":"STOP"}
+        ],
+        "createTime": "2023-11-14T22:13:20Z",
+        "modelVersion": "gpt-test",
+        "responseId": "resp_corpus",
+        "usageMetadata": {
+          "candidatesTokenCount": 4,
+          "promptTokenCount": 40,
+          "totalTokenCount": 44,
+          "trafficType": "PROVISIONED_THROUGHPUT"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {
+              "content": [{"text":"Weather in Paris?","type":"input_text"}],
+              "role": "user",
+              "type": "message"
+            },
+            {
+              "arguments": "{\"city\":\"Paris\"}",
+              "call_id": "fc-1",
+              "name": "get_weather",
+              "type": "function_call"
+            },
+            {"call_id":"fc-1","output":"{\"temp\":18}","type":"function_call_output"}
+          ],
+          "instructions": "",
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "1bb57e96-1485-5399-8b54-597e6a3329a0",
+          "store": false,
+          "stream": true,
+          "tool_choice": "auto",
+          "tools": [
+            {
+              "description": "Current weather",
+              "name": "get_weather",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "strict": false,
+              "type": "function"
+            },
+            {"output_format":"png","type":"image_generation"}
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "Session-Id": "1bb57e96-1485-5399-8b54-597e6a3329a0",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

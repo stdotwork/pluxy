@@ -1,0 +1,171 @@
+{
+  "description": "A streamed Gemini request to a Messages upstream that thinks first: the thinking block's text comes back as thought parts and the text block as a normal text part; the Claude signature has no place in a Gemini reply and is reported as dropped.",
+  "source": [
+    "core/internal/translator/claude/gemini/claude_gemini_response.go (Claude thinking deltas to thought:true parts; thinking signatures carried as Gemini thought signatures)",
+    "core/internal/translator/claude/gemini/claude_gemini_response_test.go (TestConvertClaudeResponseToGemini_StreamThinkingSignature)"
+  ],
+  "client": {
+    "path": "/v1beta/models/claude-test:streamGenerateContent?alt=sse",
+    "body": {"contents":[{"role":"user","parts":[{"text":"Is 17 prime?"}]}]}
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":14,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"17 is not divisible by 2, 3 or 5."}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" The square root of 17 is below 5, so checking 2, 3 and 5 is enough."}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-claude-1"}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Yes, 17 is prime."}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":1}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":48}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "volatile": ["client.events[*].data.createTime"],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes the Gemini reply the same way for every upstream format: candidate index 0, one chunk per text or thought delta, a last chunk holding the finish reason, any function calls and usageMetadata with Gemini's inclusion rules (promptTokenCount counts every input token, cache reads included, in cachedContentTokenCount; a Messages upstream gives no separate thinking count, so all output tokens count as candidates), and max_tokens as MAX_TOKENS. Today's Claude translator adds createTime and usageMetadata.trafficType PROVISIONED_THROUGHPUT, leaves out the candidate index, reports a promptTokenCount of 0, maps a non-streamed max_tokens stop to STOP, and turns a Claude thinking signature into a thought part holding skip_thought_signature_validator, Google's last-resort value that skips validation; the new core does not invent a signature and reports the Claude one as dropped.",
+      "want": [
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "parts": [{"text":"17 is not divisible by 2, 3 or 5.","thought":true}],
+                  "role": "model"
+                },
+                "index": 0
+              }
+            ],
+            "modelVersion": "claude-test-upstream",
+            "responseId": "msg_corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "parts": [
+                    {
+                      "text": " The square root of 17 is below 5, so checking 2, 3 and 5 is enough.",
+                      "thought": true
+                    }
+                  ],
+                  "role": "model"
+                },
+                "index": 0
+              }
+            ],
+            "modelVersion": "claude-test-upstream",
+            "responseId": "msg_corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [
+              {"content":{"parts":[{"text":"Yes, 17 is prime."}],"role":"model"},"index":0}
+            ],
+            "modelVersion": "claude-test-upstream",
+            "responseId": "msg_corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [{"content":{"parts":[],"role":"model"},"finishReason":"STOP","index":0}],
+            "modelVersion": "claude-test-upstream",
+            "responseId": "msg_corpus",
+            "usageMetadata": {"candidatesTokenCount":48,"promptTokenCount":14,"totalTokenCount":62}
+          }
+        }
+      ]
+    },
+    {
+      "path": "upstream[0].body.messages[0].content[0].cache_control",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].path",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider and its Gemini-to-Claude translator, which rewrite the request even for a custom base URL: cache_control breakpoints, a metadata.user_id hashed from the request, $schema and additionalProperties false on tool schemas, the system instruction sent as a user message, temperature and top_p dropped, every request streamed, ?beta=true, and the key as a bearer token with its own Accept and Accept-Encoding. The new core sends a plain Messages request: the system instruction as system, the client's sampling options, stream as the client asked, and the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"candidates":[{"content":{"parts":[{"text":"17 is not divisible by 2, 3 or 5.","thought":true}],"role":"model"}}],"createTime":"2026-11-06T07:23:48Z","modelVersion":"claude-test-upstream","responseId":"msg_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[{"text":" The square root of 17 is below 5, so checking 2, 3 and 5 is enough.","thought":true}],"role":"model"}}],"createTime":"2026-11-06T07:23:48Z","modelVersion":"claude-test-upstream","responseId":"msg_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[{"thought":true,"thoughtSignature":"skip_thought_signature_validator"}],"role":"model"}}],"createTime":"2026-11-06T07:23:48Z","modelVersion":"claude-test-upstream","responseId":"msg_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[{"text":"Yes, 17 is prime."}],"role":"model"}}],"createTime":"2026-11-06T07:23:48Z","modelVersion":"claude-test-upstream","responseId":"msg_corpus","usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}}},
+        {"data":{"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP"}],"createTime":"2026-11-06T07:23:48Z","modelVersion":"claude-test-upstream","responseId":"msg_corpus","usageMetadata":{"candidatesTokenCount":48,"promptTokenCount":0,"totalTokenCount":48,"trafficType":"PROVISIONED_THROUGHPUT"}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 32000,
+          "messages": [
+            {
+              "content": [
+                {"cache_control":{"type":"ephemeral"},"text":"Is 17 prime?","type":"text"}
+              ],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"e9873ff5e259cd5e80a60b66b39526c0906f1efc69d9a366710cb998a43b30fb"},
+          "model": "claude-test",
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}
