@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 )
 
 func TestReader(t *testing.T) {
@@ -41,5 +42,65 @@ func TestReaderLimit(t *testing.T) {
 	r.max = 50
 	if _, err := r.Next(); err != ErrEventTooLarge {
 		t.Fatalf("err = %v, want ErrEventTooLarge", err)
+	}
+}
+
+func TestReaderLineEndings(t *testing.T) {
+	// The standard's end-of-line is CRLF, LF or a lone CR, and a stream may mix them.
+	for name, stream := range map[string]string{
+		"CR":         "data: hello\rdata: world\r\rdata: [DONE]\r\r",
+		"mixed":      "data: hello\r\ndata: world\r\rdata: [DONE]\n\n",
+		"CR then LF": "data: hello\rdata: world\r\n\ndata: [DONE]\r\n\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := NewReader(iotest.OneByteReader(strings.NewReader(stream)))
+			for i, want := range []string{"hello\nworld", "[DONE]"} {
+				got, err := r.Next()
+				if err != nil {
+					t.Fatalf("event %d: %v", i, err)
+				}
+				if got.Data != want {
+					t.Fatalf("event %d data = %q, want %q", i, got.Data, want)
+				}
+			}
+			if _, err := r.Next(); err != io.EOF {
+				t.Fatalf("at the end: err = %v, want io.EOF", err)
+			}
+		})
+	}
+}
+
+func TestReaderCRDispatchesWithoutMoreInput(t *testing.T) {
+	// An event ended by CR CR must be returned at once, not when the next byte arrives.
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	go func() { _, _ = io.WriteString(pw, "data: now\r\r") }()
+	r := NewReader(pr)
+	got := make(chan Event, 1)
+	go func() {
+		ev, _ := r.Next()
+		got <- ev
+	}()
+	select {
+	case ev := <-got:
+		if ev.Data != "now" {
+			t.Fatalf("data = %q, want %q", ev.Data, "now")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("event ended by CR CR was not returned while the stream stayed open")
+	}
+}
+
+func TestReaderLimitIsPerEvent(t *testing.T) {
+	// Keepalive comments are events of their own; their bytes must not count toward the next one.
+	stream := strings.Repeat(": keepalive\n\n", 100) + "data: ok\n\n"
+	r := NewReader(strings.NewReader(stream))
+	r.max = 50
+	ev, err := r.Next()
+	if err != nil {
+		t.Fatalf("err = %v, want the data event", err)
+	}
+	if ev.Data != "ok" {
+		t.Fatalf("data = %q, want %q", ev.Data, "ok")
 	}
 }
