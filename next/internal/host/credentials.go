@@ -18,7 +18,7 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 	account.Credential = nil
 	// What the user entered (an API key, a pasted redirect URL with its code) counts as secret
 	// in everything the call sends back.
-	l := &LoginCall{ext: e, ctx: ctx}
+	l := &LoginCall{ext: e, ctx: ctx, account: account.ID}
 	l.addSecrets(login.Input)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
@@ -37,10 +37,11 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 // LoginCall is a running login. Next returns its prompts and then exactly one terminal frame
 // (login.done or error), which it keeps returning.
 type LoginCall struct {
-	ext  *Extension
-	ctx  context.Context
-	conn net.Conn
-	stop func() bool
+	ext     *Extension
+	ctx     context.Context
+	account string
+	conn    net.Conn
+	stop    func() bool
 
 	wmu     sync.Mutex // guards writes, secrets and redact
 	secrets map[string]string
@@ -58,6 +59,7 @@ func (l *LoginCall) addSecrets(input map[string]string) {
 		l.secrets[fmt.Sprintf("%s.%d", k, len(l.secrets))] = v
 	}
 	l.redact = inputRedactor(l.secrets)
+	l.ext.held.add(l.account+" login input", inputCredential(l.secrets))
 }
 
 func (l *LoginCall) redactor() *protocol.Redactor {
@@ -81,6 +83,7 @@ func (l *LoginCall) Next() protocol.Reply {
 		p := redactPrompt(l.redactor(), *r.Prompt)
 		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &p}
 	case r.Type == protocol.TypeLoginDone && validGrant(r.Grant):
+		l.ext.held.add(l.account, r.Grant.Credential)
 		done := protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: r.Grant}
 		l.final = &done
 		l.Close()
@@ -131,6 +134,7 @@ func (l *LoginCall) readError(err error) *llm.Error {
 // Refresh runs a refresh call: the extension renews account's credential and returns the new
 // one. Errors have the sent credential removed from them.
 func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
+	e.held.add(account.ID, account.Credential)
 	conn, lerr := e.dial(ctx)
 	if lerr != nil {
 		return nil, lerr
@@ -148,6 +152,7 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 	}
 	switch {
 	case r.Type == protocol.TypeRefreshDone && validGrant(r.Grant):
+		e.held.add(account.ID, r.Grant.Credential)
 		return r.Grant.Credential, nil
 	case r.Type == llm.EventError && r.Error != nil:
 		redact := protocol.NewRedactor(account.Credential)
@@ -196,8 +201,16 @@ func inputRedactor(input map[string]string) *protocol.Redactor {
 	if len(input) == 0 {
 		return nil
 	}
+	return protocol.NewRedactor(inputCredential(input))
+}
+
+// inputCredential holds what a user entered as a credential, so all of it counts as secret.
+func inputCredential(input map[string]string) *protocol.Credential {
+	if len(input) == 0 {
+		return nil
+	}
 	data, _ := json.Marshal(input)
-	return protocol.NewRedactor(&protocol.Credential{Kind: "input", Data: data})
+	return &protocol.Credential{Kind: "input", Data: data}
 }
 
 // redactPrompt removes what the user entered from every text a prompt shows, in case the
