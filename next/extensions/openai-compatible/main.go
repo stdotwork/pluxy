@@ -186,7 +186,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return upstreamError(resp)
+		return upstreamError(resp, call.Request.Model)
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return relayStream(ctx, resp.Body, send, wire.format)
@@ -246,7 +246,10 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 	default:
 		// shortcut: nothing else is rebuilt as Messages yet (the Claude provider brings that),
 		// and nothing is rebuilt as GenerateContent (the Gemini provider brings that).
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest,
+		// The refusal is about this account's upstream, not the request: an account that speaks
+		// the client's format can still serve it, so core may try one (scope credential,
+		// retryable: nothing reached the upstream).
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this account's upstream speaks " + formatNames[target] + "; requests in " + tr.From + " are not translated to it"}
 	}
 	body, losses, err := encode(req)
@@ -261,7 +264,8 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 				paths = append(paths, l.Path)
 			}
 		}
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest,
+		// Another account may speak the client's format and carry it whole.
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: formatNames[target] + " cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return body, tr, nil
@@ -344,8 +348,9 @@ func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamF
 	}
 }
 
-// upstreamError turns a non-2xx upstream response into a structured error.
-func upstreamError(resp *http.Response) *llm.Error {
+// upstreamError turns a non-2xx upstream response into a structured error. model is the model
+// the request asked for.
+func upstreamError(resp *http.Response, model string) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
 		Error struct {
@@ -381,6 +386,11 @@ func upstreamError(resp *http.Response) *llm.Error {
 		e.Code, e.Scope, e.Retryable = llm.CodePermission, llm.ScopeCredential, true
 	case s == http.StatusNotFound:
 		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
+		if modelRefused(e, model) {
+			// The upstream confirmed it does not serve the model, so it did not run the
+			// request: another account may serve the model.
+			e.Retryable = true
+		}
 	case s == http.StatusTooManyRequests:
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeCredential, true
 		if e.ProviderCode == "insufficient_quota" {
@@ -397,6 +407,13 @@ func upstreamError(resp *http.Response) *llm.Error {
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
 	}
 	return e
+}
+
+// modelRefused reports whether a 404 is the upstream saying it does not have the requested
+// model, as OpenAI says with code model_not_found and Anthropic and Gemini say by naming the
+// model in the message, rather than a path or other resource it does not serve.
+func modelRefused(e *llm.Error, model string) bool {
+	return e.ProviderCode == "model_not_found" || (model != "" && strings.Contains(e.Message, model))
 }
 
 // retryAfter reads a Retry-After header: delay seconds or an HTTP date.

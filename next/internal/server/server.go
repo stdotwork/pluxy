@@ -8,13 +8,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
+	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -116,16 +119,41 @@ var geminiFormat = clientFormat{
 	googleKeys: true,
 }
 
-// New returns core's HTTP handler. Requests are routed over cfg's accounts, and each attempt
-// is a call to generate.
-func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
+// New returns core's HTTP handler. Requests are routed over cfg's accounts and, when creds is
+// not nil, the accounts added by login; each attempt is a call to generate. With a management
+// key in cfg, it also serves the management API.
+func New(cfg *Config, generate GenerateFunc, creds *cred.Manager) (http.Handler, error) {
 	router, err := route.New(cfg.Routing, cfg.Extension.Accounts, func(ctx context.Context, a protocol.Account, req llm.Request) route.Stream {
 		return generate(ctx, a, req)
 	}, nil)
 	if err != nil {
 		return nil, err
 	}
+	if creds != nil {
+		router.UseCredentials(creds)
+		// One update at a time, each reading the accounts when it runs: an update that read an
+		// older set can never be published after a newer one.
+		var mu sync.Mutex
+		update := func() {
+			mu.Lock()
+			defer mu.Unlock()
+			accounts := slices.Clone(cfg.Extension.Accounts)
+			for _, a := range creds.Accounts() {
+				if slices.ContainsFunc(cfg.Extension.Accounts, func(c route.Account) bool { return c.ID == a.ID }) {
+					log.Printf("account %q is both in the config and added by login; using the config's", a.ID)
+					continue
+				}
+				accounts = append(accounts, a)
+			}
+			if err := router.SetAccounts(accounts); err != nil {
+				log.Printf("updating accounts: %v", err)
+			}
+		}
+		creds.OnChange(update)
+		update()
+	}
 	mux := http.NewServeMux()
+	addManagement(mux, cfg, creds)
 	formats := map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/responses": responsesFormat, "/v1/messages": messagesFormat,
 		"/v1beta/models/{action}": geminiFormat}
 	for path, f := range formats {

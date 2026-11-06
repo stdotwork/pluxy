@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -52,13 +54,22 @@ func run(configPath string) error {
 		log.Printf("extension %s exited; requests will fail until core restarts", info.ID)
 	}()
 
+	store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
+	if err != nil {
+		return err
+	}
+	creds := cred.NewManager(store, provider{ext}, cred.Options{Reserved: func(id string) bool {
+		return slices.ContainsFunc(cfg.Extension.Accounts, func(a server.Account) bool { return a.ID == id })
+	}})
+	defer creds.Close()
+
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
 	}
 	handler, err := server.New(cfg, func(ctx context.Context, a protocol.Account, req llm.Request) server.Stream {
 		return ext.Generate(ctx, a, req)
-	})
+	}, creds)
 	if err != nil {
 		return err
 	}
@@ -85,4 +96,11 @@ func run(configPath string) error {
 	}
 	srv.Close()
 	return nil
+}
+
+// provider adapts the extension to the credential manager.
+type provider struct{ *host.Extension }
+
+func (p provider) Login(ctx context.Context, account protocol.Account, login protocol.Login) cred.LoginCall {
+	return p.Extension.Login(ctx, account, login)
 }

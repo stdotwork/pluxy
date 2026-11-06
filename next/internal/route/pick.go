@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 )
 
 // Strategies: how one account is chosen from the eligible ones.
@@ -31,9 +32,11 @@ type picker struct {
 	strategy string
 	order    map[string]int // account ID -> position in config
 
-	mu      sync.Mutex
-	last    map[string]string           // model -> account ID picked last
-	current map[string]map[string]int64 // model -> account ID -> smooth weighted current weight
+	mu        sync.Mutex
+	last      map[string]string           // model -> account ID picked last
+	current   map[string]map[string]int64 // model -> account ID -> smooth weighted current weight
+	used      map[string]time.Time        // model -> when its cursor was last used
+	lastSweep time.Time
 }
 
 func newPicker(strategy string, accounts []*Account) (*picker, error) {
@@ -43,18 +46,60 @@ func newPicker(strategy string, accounts []*Account) (*picker, error) {
 	if !slices.Contains(Strategies, strategy) {
 		return nil, fmt.Errorf("unknown routing strategy %q (want one of %v)", strategy, Strategies)
 	}
-	p := &picker{strategy: strategy, order: map[string]int{}, last: map[string]string{}, current: map[string]map[string]int64{}}
+	p := &picker{strategy: strategy, order: map[string]int{}, last: map[string]string{}, current: map[string]map[string]int64{}, used: map[string]time.Time{}}
 	for i, a := range accounts {
 		p.order[a.ID] = i
 	}
 	return p, nil
 }
 
-// pick returns one of cands, which are in configured order and not empty. active reports the
-// running attempts on an account.
-func (p *picker) pick(model string, cands []*Account, active func(string) int) *Account {
+// setOrder replaces the configured order with that of accounts.
+func (p *picker) setOrder(accounts []*Account) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.order = map[string]int{}
+	for i, a := range accounts {
+		p.order[a.ID] = i
+	}
+}
+
+// forgetModels drops rotation cursors unused for stateIdle, and the least recently used ones
+// beyond maxModelKeys. Losing a cursor only restarts that model's rotation. Call with p.mu
+// held.
+func (p *picker) forgetModels(now time.Time) {
+	if now.Sub(p.lastSweep) >= sweepEvery {
+		p.lastSweep = now
+		for m, t := range p.used {
+			if now.Sub(t) > stateIdle {
+				p.forget(m)
+			}
+		}
+	}
+	for len(p.used) > maxModelKeys {
+		oldest, first := "", true
+		var at time.Time
+		for m, t := range p.used {
+			if first || t.Before(at) {
+				oldest, at, first = m, t, false
+			}
+		}
+		p.forget(oldest)
+	}
+}
+
+func (p *picker) forget(model string) {
+	delete(p.used, model)
+	delete(p.last, model)
+	delete(p.current, model)
+}
+
+// pick returns one of cands, which are in configured order and not empty. active reports the
+// running attempts on an account.
+func (p *picker) pick(model string, cands []*Account, active func(string) int, now time.Time) *Account {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.used[model] = now
+	defer p.forgetModels(now)
 	var a *Account
 	switch p.strategy {
 	case StrategyFillFirst:

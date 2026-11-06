@@ -30,6 +30,9 @@ type Account struct {
 	Settings json.RawMessage `json:"settings,omitempty"`
 	// Credential is the secret the account presents.
 	Credential *protocol.Credential `json:"credential,omitempty"`
+	// Managed marks an account whose credential core's credential store keeps: each attempt
+	// asks the router's Credentials for it instead of using Credential.
+	Managed bool `json:"-"`
 }
 
 func (a *Account) serves(model string) bool {

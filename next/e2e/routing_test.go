@@ -144,3 +144,79 @@ func TestNoRetryAfterFirstByte(t *testing.T) {
 		t.Errorf("upstream keys = %v, want only [sk-a]: no retry after the reply started", got)
 	}
 }
+
+// An account whose upstream speaks another format refuses a request it cannot translate, but
+// that refusal is about the account, not the request: core moves the request on to an account
+// that serves the client's format instead of failing it.
+func TestAccountRefusingTheFormatRotates(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) { okReply(w) }
+	base := runCore(t, map[string]any{
+		"listen":      "127.0.0.1:0",
+		"client_keys": []string{clientKey},
+		"routing":     map[string]any{"strategy": "fill-first"},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{
+					"id":         "acct-gemini",
+					"settings":   map[string]any{"base_url": u.URL + "/v1beta", "wire_api": "gemini"},
+					"credential": map[string]any{"kind": "api_key", "api_key": "sk-gemini"},
+				},
+				map[string]any{
+					"id":         "acct-chat",
+					"settings":   map[string]any{"base_url": u.URL + "/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": "sk-chat"},
+				},
+			},
+		},
+	})
+	postOK(t, base, plainBody)
+	if got, want := usedKeys(u), []string{"sk-chat"}; !slices.Equal(got, want) {
+		t.Errorf("upstream keys = %v, want %v", got, want)
+	}
+}
+
+// An account whose upstream says it does not have the model passes the request on, within the
+// same request, to an account that serves the model.
+func TestModelNotFoundRotates(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if keyOf(r) == "sk-a" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"error":{"message":"The model `+"`gpt-test`"+` does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}}`)
+			return
+		}
+		okReply(w)
+	}
+	base := startCoreAccounts(t, u, map[string]any{"strategy": "fill-first"}, "sk-a", "sk-b")
+	postOK(t, base, plainBody)
+	if got, want := usedKeys(u), []string{"sk-a", "sk-b"}; !slices.Equal(got, want) {
+		t.Errorf("upstream keys = %v, want %v", got, want)
+	}
+}
+
+// A 404 that is not about the model (here, a path the upstream does not serve) is not taken
+// as the account lacking the model: it goes to the client, and no other account is tried.
+func TestOtherNotFoundDoesNotRotate(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if keyOf(r) == "sk-a" {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `<html>404 page not found</html>`)
+			return
+		}
+		okReply(w)
+	}
+	base := startCoreAccounts(t, u, map[string]any{"strategy": "fill-first"}, "sk-a", "sk-b")
+	resp := post(t, context.Background(), base, clientKey, plainBody)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status %d, want 404", resp.StatusCode)
+	}
+	if got, want := usedKeys(u), []string{"sk-a"}; !slices.Equal(got, want) {
+		t.Errorf("upstream keys = %v, want %v", got, want)
+	}
+}

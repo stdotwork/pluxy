@@ -21,6 +21,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -89,19 +91,36 @@ type Request struct {
 	Pin string
 }
 
-// Router routes requests over a fixed set of accounts.
+// Credentials supplies the credentials of managed accounts (Account.Managed): core's
+// credential store, which renews them through the provider extension.
+type Credentials interface {
+	// Credential returns the credential an attempt on the account presents, and its version.
+	// It renews the credential first when it is about to expire, sharing the renewal with
+	// concurrent callers. An error is the attempt's outcome: the account cannot be used now.
+	Credential(ctx context.Context, accountID string) (*protocol.Credential, uint64, *llm.Error)
+	// Rejected reports that the upstream refused the credential at version. It renews the
+	// credential (shared with concurrent callers) and reports whether a newer one is ready.
+	Rejected(ctx context.Context, accountID string, version uint64) bool
+}
+
+// Router routes requests over a set of accounts.
 type Router struct {
 	cfg      Config
-	accounts []*Account
 	attempt  AttemptFunc
 	state    *State
 	picker   *picker
 	affinity *affinity
 
-	// For tests: the clock, the wait, and the source of jitter.
-	now   func() time.Time
-	sleep func(ctx context.Context, d time.Duration) error
-	rand  func() float64
+	mu       sync.RWMutex // guards accounts and creds
+	accounts []*Account
+	creds    Credentials
+
+	// For tests: the clock, the wait, the source of jitter, and a hook run after an account
+	// is chosen and before it is reserved.
+	now           func() time.Time
+	sleep         func(ctx context.Context, d time.Duration) error
+	rand          func() float64
+	beforeReserve func(account string)
 }
 
 // New returns a router for accounts. state may be shared with other routers; nil starts empty.
@@ -113,16 +132,10 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 		state = NewState()
 	}
 	r := &Router{cfg: cfg, attempt: attempt, state: state, now: time.Now, sleep: sleepCtx, rand: rand.Float64}
-	seen := map[string]bool{}
-	for i := range accounts {
-		a := accounts[i]
-		if a.ID == "" || seen[a.ID] {
-			return nil, fmt.Errorf("account IDs must be set and unique (%q)", a.ID)
-		}
-		seen[a.ID] = true
-		r.accounts = append(r.accounts, &a)
-	}
 	var err error
+	if r.accounts, err = accountList(accounts); err != nil {
+		return nil, err
+	}
 	if r.picker, err = newPicker(cfg.Strategy, r.accounts); err != nil {
 		return nil, err
 	}
@@ -134,6 +147,54 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 		r.affinity = newAffinity(ttl)
 	}
 	return r, nil
+}
+
+func accountList(accounts []Account) ([]*Account, error) {
+	var out []*Account
+	seen := map[string]bool{}
+	for i := range accounts {
+		a := accounts[i]
+		if a.ID == "" || seen[a.ID] {
+			return nil, fmt.Errorf("account IDs must be set and unique (%q)", a.ID)
+		}
+		seen[a.ID] = true
+		out = append(out, &a)
+	}
+	return out, nil
+}
+
+// SetAccounts replaces the accounts requests are routed over. Requests already routing keep
+// the set they started with. Routing state of an account that leaves the set is dropped, so an
+// account added again later under the same ID starts clean.
+func (r *Router) SetAccounts(accounts []Account) error {
+	list, err := accountList(accounts)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	old := r.accounts
+	r.accounts = list
+	r.picker.setOrder(list)
+	r.mu.Unlock()
+	for _, a := range old {
+		if !slices.ContainsFunc(list, func(b *Account) bool { return b.ID == a.ID }) {
+			r.state.forget(a.ID)
+		}
+	}
+	return nil
+}
+
+// UseCredentials sets where managed accounts' credentials come from.
+func (r *Router) UseCredentials(c Credentials) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.creds = c
+}
+
+func (r *Router) snapshot() ([]*Account, Credentials) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.accounts, r.creds
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -164,6 +225,11 @@ type call struct {
 	acct    *Account
 	seq     uint64
 	ended   bool // the attempt's reservation is released
+
+	creds   Credentials
+	renewed map[string]bool // accounts whose refused credential was renewed during this request
+	fresh   bool            // the last failed attempt's credential has been renewed: try it again
+	again   *Account        // the account to try next, its credential just renewed
 }
 
 func (c *call) Next() llm.Event {
@@ -210,8 +276,10 @@ func (c *call) release() {
 // gives up and returns the error event that ends the request.
 func (c *call) route() llm.Event {
 	r, model := c.r, c.req.LLM.Model
+	accounts, creds := r.snapshot()
+	c.creds = creds
 	var capable []*Account
-	for _, a := range r.accounts {
+	for _, a := range accounts {
 		if a.serves(model) && (c.req.Pin == "" || a.ID == c.req.Pin) && (r.picker.strategy != StrategyWeighted || a.weight() > 0) {
 			capable = append(capable, a)
 		}
@@ -257,14 +325,35 @@ func (c *call) route() llm.Event {
 			return errorEvent(last)
 		}
 		if len(cands) > 0 {
-			a := c.choose(cands, now)
+			a := c.again
+			if c.again == nil || !slices.Contains(cands, c.again) {
+				a = c.choose(cands, now)
+			}
+			c.again = nil
+			if r.beforeReserve != nil {
+				r.beforeReserve(a.ID)
+			}
+			seq, ok := r.state.reserve(a, model, r.now())
+			if !ok {
+				// Another request took the account's last slot, or a block landed, since the
+				// candidates were gathered: choose again.
+				continue
+			}
 			attempts++
 			tried[a.ID], used[a.ID] = true, true
-			ev, started := c.try(a)
+			ev, started := c.try(a, seq)
 			if started {
 				return ev
 			}
 			last = ev.Error
+			if c.fresh {
+				// The upstream refused the account's credential and a renewed one is ready:
+				// the account may serve the request after all.
+				c.fresh = false
+				delete(tried, a.ID)
+				c.again = a
+				continue
+			}
 			if !retrySafe(last) {
 				return ev
 			}
@@ -328,22 +417,49 @@ func (c *call) choose(cands []*Account, now time.Time) *Account {
 			best = append(best, a)
 		}
 	}
-	return r.picker.pick(c.req.LLM.Model, best, r.state.activeCount)
+	return r.picker.pick(c.req.LLM.Model, best, r.state.activeCount, now)
 }
 
 func (c *call) affinityKey() affinityKey {
 	return affinityKey{tenant: c.req.Tenant, model: c.req.LLM.Model, session: c.req.Session}
 }
 
-// try runs one attempt on a and reads its first event. started is true when the reply began;
-// the attempt then belongs to the call.
-func (c *call) try(a *Account) (ev llm.Event, started bool) {
+// try runs one attempt on a, reserved with sequence number seq, and reads its first event.
+// started is true when the reply began; the attempt then belongs to the call.
+func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 	r := c.r
-	seq := r.state.begin(a)
-	s := r.attempt(c.ctx, a.call(), c.req.LLM)
+	call := a.call()
+	var version uint64
+	if a.Managed {
+		var e *llm.Error
+		if c.creds == nil {
+			e = &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeCredential, Message: fmt.Sprintf("account %q has no credential store", a.ID)}
+		} else {
+			call.Credential, version, e = c.creds.Credential(c.ctx, a.ID)
+		}
+		if e != nil {
+			r.state.failure(a, c.req.LLM.Model, e, r.now())
+			r.state.end(a)
+			return errorEvent(e), false
+		}
+	}
+	s := r.attempt(c.ctx, call, c.req.LLM)
 	ev = s.Next()
 	if ev.Type == llm.EventError {
 		s.Close()
+		if a.Managed && c.creds != nil && credentialRefused(ev.Error) && !c.renewed[a.ID] {
+			// A refused credential may only need renewing (revoked early, or expired before
+			// its stated time): renew it once per request and per account, and try again.
+			if c.renewed == nil {
+				c.renewed = map[string]bool{}
+			}
+			c.renewed[a.ID] = true
+			if c.creds.Rejected(c.ctx, a.ID, version) {
+				c.fresh = true
+				r.state.end(a)
+				return ev, false
+			}
+		}
 		r.state.failure(a, c.req.LLM.Model, ev.Error, r.now())
 		r.state.end(a)
 		return ev, false
@@ -362,13 +478,23 @@ func (c *call) try(a *Account) (ev llm.Event, started bool) {
 
 // retrySafe reports whether a failed attempt may be tried again elsewhere: the extension says
 // the upstream certainly did not run it, and the failure is about the account (so the account
-// is now blocked and the next attempt goes to another one, or waits).
+// is now blocked and the next attempt goes to another one, or waits). An account that cannot
+// serve this request (unsupported, about the account rather than the request) is not blocked:
+// it was tried this round, so the next attempt goes to another account.
 func retrySafe(e *llm.Error) bool {
 	if e == nil || !e.Retryable {
 		return false
 	}
+	if e.Code == llm.CodeUnsupported {
+		return e.Scope != "" && e.Scope != llm.ScopeRequest
+	}
 	kind, _, _, _, _ := classify(e)
 	return kind != ""
+}
+
+// credentialRefused reports whether the upstream refused the account's credential itself.
+func credentialRefused(e *llm.Error) bool {
+	return e != nil && e.Code == llm.CodeAuth && (e.Scope == "" || e.Scope == llm.ScopeCredential)
 }
 
 func coolingError(model string, wait time.Duration, reason *llm.Error) *llm.Error {

@@ -21,7 +21,9 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `format/` | Client and upstream formats as libraries extensions build in: `sse`, `openaichat`, `openairesponses`, `anthropicmessages`, `geminigenerate`. |
 | `extensions/openai-compatible` | Provider extension for OpenAI-compatible APIs with an API key. |
 | `examples/scripted` | The tutorial's example extension. |
-| `internal/host`, `internal/server` | Core's extension host and HTTP API. |
+| `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
+| `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
+| `internal/cred` | Core's credential store and renewal of accounts added by login. |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
 | `corpus/` | Differential test corpus: cases replayed against this core and today's `core/`, with listed exceptions ([README](corpus/README.md)). |
 
@@ -38,6 +40,7 @@ go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-c
 {
   "listen": "127.0.0.1:8400",
   "client_keys": ["choose-a-client-key"],
+  "management_key": "choose-a-management-key",
   "extension": {
     "manifest": "extensions/openai-compatible/pluxy-extension.json",
     "accounts": [
@@ -124,3 +127,34 @@ on), then the highest `priority`, then picks by strategy.
 
 A client can pin a request to one account with the `X-Pluxy-Account: <id>` header. A pinned
 request never goes to another account.
+
+An account that cannot serve a request (its upstream speaks another format and the request
+cannot be translated to it, or the upstream says it does not have the model) passes the request
+on to the next account within the same request.
+
+## Accounts added by login
+
+Besides the accounts in the config, a provider extension that signs in to accounts (OAuth in a
+browser, a device code, or an API key it checks) can add accounts through the management API.
+Core keeps each one in its credential store, a folder with one file per account readable only by
+its owner (`credentials_dir`, default `credentials` beside the config file), and renews its
+credential through the extension shortly before it expires. Only the extension that created an
+account ever receives its credential. The protocol side is in the
+[protocol README](protocol/README.md#login-and-refresh).
+
+The management API is served under `/v0/management` when the config sets `management_key`;
+send it as a bearer token. With a management key set, `extension.accounts` may be empty.
+
+| Request | Does |
+| --- | --- |
+| `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at` and the last renewal error. Never a secret. |
+| `POST /accounts` | Starts a login that adds an account: `{"id": "work", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
+| `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
+| `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |
+| `DELETE /logins/{id}` | Cancels the login. |
+| `POST /accounts/{id}/login` | Signs in to an existing account again (`{"method": ..., "input": ...}`), replacing its credential. |
+| `POST /accounts/{id}/refresh` | Renews the account's credential now. |
+| `PATCH /accounts/{id}` | `{"disabled": true}` or `false`. Disabled accounts get no requests. |
+| `DELETE /accounts/{id}` | Removes the account and its credential. |
+
+Accounts set in the config are listed but changed only in the config.
