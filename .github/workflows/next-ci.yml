@@ -77,9 +77,12 @@ jobs:
         env:
           PLUXY_REQUIRE_PANEL: '1'
         run: go test -race -count=1 ./...
+      # The runner image already has Chrome's system libraries, so only the browser is fetched.
       - name: Install Chromium for the browser test
         working-directory: next/ui
-        run: ./node_modules/.bin/playwright install --with-deps chromium
+        timeout-minutes: 5
+        run: ./node_modules/.bin/playwright install chromium
       - name: Browser test
         working-directory: next/ui
+        timeout-minutes: 10
         run: bun run test:browser
