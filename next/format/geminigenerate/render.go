@@ -405,6 +405,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 		p := &aggPart{kind: ev.Item.Kind}
 		if ev.Item.Kind == llm.ItemToolCall {
 			p.call = a.b.newCall(ev)
+			a.size += len(p.call.signature)
 		}
 		a.parts[ev.Index] = p
 		a.order = append(a.order, ev.Index)
@@ -417,8 +418,11 @@ func (a *Aggregator) Add(ev llm.Event) {
 			p.call.args.WriteString(ev.Delta)
 		}
 	case llm.EventItemEnd:
-		if p := a.parts[ev.Index]; p != nil {
+		if p := a.parts[ev.Index]; p != nil && p.call != nil {
+			// A late signature replaces the call's first one.
+			a.size -= len(p.call.signature)
 			a.b.signature(p.call, ev)
+			a.size += len(p.call.signature)
 		}
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
@@ -429,7 +433,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 const partOverhead = len(`{"functionCall":{"id":"","name":"","args":{}}},`)
 
 // Size is about how many bytes of content the response holds so far: text, thoughts, function
-// calls and the upstream chunks it keeps, before JSON escaping. Callers use it to bound what
+// calls with their thought signatures and the upstream chunks it keeps, before JSON escaping. Callers use it to bound what
 // they collect.
 func (a *Aggregator) Size() int { return a.size }
 

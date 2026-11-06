@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // A Gemini request whose model turn holds a thought, which Chat Completions has no place for, is
@@ -145,6 +146,71 @@ func TestGeminiUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 			all := logs.waitFor(t, "in "+c.model)
 			if holdsKey(all) {
 				t.Errorf("core's log holds the account's key:\n%s", all)
+			}
+		})
+	}
+}
+
+// A Gemini client's non-streamed reply keeps every function call's thought signature, so the
+// signatures count toward core's 64 MiB limit on a non-streamed reply like any other content,
+// whether a Chat upstream (Gemini's OpenAI-compatible API) sends a call's signature when the call
+// opens or replaces it later. This is the reviewer's case: 65 calls with 1 MiB signatures came
+// back as a 200 of 68,162,298 bytes.
+func TestGeminiNonStreamingReplyCountsThoughtSignatures(t *testing.T) {
+	sig := strings.Repeat("A", 1<<20)
+	for _, late := range []bool{false, true} {
+		t.Run(fmt.Sprintf("late=%t", late), func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				call := func(i int, args, s string) string {
+					return fmt.Sprintf(`{"index":%d,"id":"call_%d","type":"function","function":{"name":"f","arguments":%q},"extra_content":{"google":{"thought_signature":%q}}}`, i, i, args, s)
+				}
+				write := func(format string, a ...any) bool {
+					_, err := fmt.Fprintf(w, format, a...)
+					w.(http.Flusher).Flush()
+					return err == nil && r.Context().Err() == nil
+				}
+				for i := range 65 {
+					first := sig
+					if late {
+						first = "small"
+					}
+					if !write("data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[%s]}}]}\n\n", head, call(i, "{}", first)) {
+						close(u.cancelled)
+						return
+					}
+					if late && !write("data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[%s]}}]}\n\n", head, call(i, "", sig)) {
+						close(u.cancelled)
+						return
+					}
+				}
+				if !write("data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n", head) {
+					close(u.cancelled)
+					return
+				}
+				// Hold the stream open: core must cancel it, not read it to the end.
+				select {
+				case <-r.Context().Done():
+					close(u.cancelled)
+				case <-time.After(10 * time.Second):
+					write("data: [DONE]\n\n")
+				}
+			}
+			base := startCore(t, u)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			resp := postPath(t, ctx, base, "/v1beta/models/gpt-test:generateContent", clientKey, `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+				t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+			}
+			select {
+			case <-u.cancelled:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the upstream request was not cancelled after the limit was reached")
 			}
 		})
 	}
