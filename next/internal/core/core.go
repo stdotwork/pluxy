@@ -359,7 +359,21 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		}
 		return g.Generate(ctx, a, req)
 	}
-	next.Generation = server.Generation{Config: cfg}
+	openSession := func(ctx context.Context, ext string, a protocol.Account, info protocol.SessionInfo) (server.Session, *llm.Error) {
+		if c.opts.SafeMode {
+			return nil, safeModeEvent().Error
+		}
+		g := next.exts[ext]
+		if g == nil {
+			return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s does not run", ext)}
+		}
+		s, e := g.OpenSession(ctx, a, info)
+		if e != nil {
+			return nil, e
+		}
+		return hostSession{s}, nil
+	}
+	next.Generation = server.Generation{Config: cfg, Attempt: attempt, OpenSession: openSession}
 	router, err := route.New(cfg.Routing, c.configured(next), attempt, c.state)
 	if err != nil {
 		c.discard(next, prev)
@@ -634,6 +648,13 @@ func failed(e *llm.Error) route.Stream {
 
 func (s *failedStream) Next() llm.Event { return s.ev }
 func (s *failedStream) Close()          {}
+
+// hostSession is a host session as the client API handler uses it.
+type hostSession struct{ *host.Session }
+
+func (s hostSession) Turn(ctx context.Context, a protocol.Account, req llm.Request) server.Stream {
+	return s.Session.Turn(ctx, a, req)
+}
 
 // providers is the credential manager's view of the extensions that run.
 type providers struct{ c *Core }

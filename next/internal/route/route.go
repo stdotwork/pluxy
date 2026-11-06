@@ -90,6 +90,9 @@ type Request struct {
 	Session string
 	// Pin, when set, restricts the request to the account with this ID.
 	Pin string
+	// Attempt, when set, runs this request's attempts in place of the router's AttemptFunc (a
+	// WebSocket turn that goes to an open session). Routing, state and retries are the same.
+	Attempt AttemptFunc
 }
 
 // Credentials supplies the credentials of managed accounts (Account.Managed): core's
@@ -459,7 +462,11 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			return errorEvent(e), false
 		}
 	}
-	s := r.attempt(c.ctx, a.Extension, call, c.req.LLM)
+	attempt := r.attempt
+	if c.req.Attempt != nil {
+		attempt = c.req.Attempt
+	}
+	s := attempt(c.ctx, a.Extension, call, c.req.LLM)
 	ev = s.Next()
 	if ev.Type == llm.EventError {
 		s.Close()

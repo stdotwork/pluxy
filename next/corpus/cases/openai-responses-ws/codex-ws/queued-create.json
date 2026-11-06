@@ -1,0 +1,460 @@
+{
+  "description": "A second response.create sent while the first turn streams waits for it, then goes upstream on the same WebSocket.",
+  "source": [
+    "core/sdk/api/handlers/openai/openai_responses_websocket_input.go"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/responses",
+    "websocket": [
+      {
+        "send": {
+          "type": "response.create",
+          "model": "gpt-test",
+          "store": false,
+          "prompt_cache_key": "corpus-ws",
+          "input": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "First"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "send": {
+          "type": "response.create",
+          "model": "gpt-test",
+          "store": false,
+          "prompt_cache_key": "corpus-ws",
+          "input": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Second"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "read": "turn"
+      },
+      {
+        "read": "turn"
+      }
+    ]
+  },
+  "upstream": [
+    {
+      "websocket": [
+        {
+          "receive": true
+        },
+        {
+          "send": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_1",
+              "object": "response",
+              "status": "in_progress",
+              "model": "gpt-test",
+              "output": []
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item_id": "msg_1",
+            "content_index": 0,
+            "delta": "One"
+          }
+        },
+        {
+          "send": {
+            "type": "response.output_item.done",
+            "sequence_number": 2,
+            "output_index": 0,
+            "item": {
+              "id": "msg_1",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "One",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.completed",
+            "sequence_number": 3,
+            "response": {
+              "id": "resp_1",
+              "object": "response",
+              "status": "completed",
+              "model": "gpt-test",
+              "output": [
+                {
+                  "id": "msg_1",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "One",
+                      "annotations": []
+                    }
+                  ]
+                }
+              ],
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 1,
+                "total_tokens": 6
+              }
+            }
+          }
+        },
+        {
+          "receive": true
+        },
+        {
+          "send": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_2",
+              "object": "response",
+              "status": "in_progress",
+              "model": "gpt-test",
+              "output": []
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item_id": "msg_2",
+            "content_index": 0,
+            "delta": "Two"
+          }
+        },
+        {
+          "send": {
+            "type": "response.output_item.done",
+            "sequence_number": 2,
+            "output_index": 0,
+            "item": {
+              "id": "msg_2",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Two",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "send": {
+            "type": "response.completed",
+            "sequence_number": 3,
+            "response": {
+              "id": "resp_2",
+              "object": "response",
+              "status": "completed",
+              "model": "gpt-test",
+              "output": [
+                {
+                  "id": "msg_2",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "Two",
+                      "annotations": []
+                    }
+                  ]
+                }
+              ],
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 1,
+                "total_tokens": 6
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "headers": {
+        "Upgrade": "websocket"
+      },
+      "messages": [
+        {
+          "response": {
+            "id": "resp_1",
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "status": "in_progress"
+          },
+          "sequence_number": 0,
+          "type": "response.created"
+        },
+        {
+          "content_index": 0,
+          "delta": "One",
+          "item_id": "msg_1",
+          "output_index": 0,
+          "sequence_number": 1,
+          "type": "response.output_text.delta"
+        },
+        {
+          "item": {
+            "content": [
+              {
+                "annotations": [],
+                "text": "One",
+                "type": "output_text"
+              }
+            ],
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          },
+          "output_index": 0,
+          "sequence_number": 2,
+          "type": "response.output_item.done"
+        },
+        {
+          "response": {
+            "id": "resp_1",
+            "model": "gpt-test",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "text": "One",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "status": "completed",
+            "usage": {
+              "input_tokens": 5,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens": 1,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              },
+              "total_tokens": 6
+            }
+          },
+          "sequence_number": 3,
+          "type": "response.completed"
+        },
+        {
+          "response": {
+            "id": "resp_2",
+            "model": "gpt-test",
+            "object": "response",
+            "output": [],
+            "status": "in_progress"
+          },
+          "sequence_number": 0,
+          "type": "response.created"
+        },
+        {
+          "content_index": 0,
+          "delta": "Two",
+          "item_id": "msg_2",
+          "output_index": 0,
+          "sequence_number": 1,
+          "type": "response.output_text.delta"
+        },
+        {
+          "item": {
+            "content": [
+              {
+                "annotations": [],
+                "text": "Two",
+                "type": "output_text"
+              }
+            ],
+            "id": "msg_2",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          },
+          "output_index": 0,
+          "sequence_number": 2,
+          "type": "response.output_item.done"
+        },
+        {
+          "response": {
+            "id": "resp_2",
+            "model": "gpt-test",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "text": "Two",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_2",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "status": "completed",
+            "usage": {
+              "input_tokens": 5,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens": 1,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              },
+              "total_tokens": 6
+            }
+          },
+          "sequence_number": 3,
+          "type": "response.completed"
+        }
+      ],
+      "status": 101
+    },
+    "upstream": [
+      {
+        "headers": {
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Conversation_id": "corpus-ws",
+          "Openai-Beta": "responses_websockets=2026-02-06",
+          "Originator": "codex-tui",
+          "Sec-Websocket-Extensions": "permessage-deflate; server_no_context_takeover; client_no_context_takeover",
+          "Sec-Websocket-Version": "13",
+          "Session_id": "corpus-ws",
+          "Upgrade": "websocket",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "GET",
+        "path": "/v1/responses",
+        "websocket": {
+          "close": {
+            "code": 1006
+          },
+          "messages": [
+            {
+              "include": [
+                "reasoning.encrypted_content"
+              ],
+              "input": [
+                {
+                  "content": [
+                    {
+                      "text": "First",
+                      "type": "input_text"
+                    }
+                  ],
+                  "role": "user",
+                  "type": "message"
+                }
+              ],
+              "instructions": "",
+              "model": "gpt-test",
+              "parallel_tool_calls": true,
+              "prompt_cache_key": "corpus-ws",
+              "store": false,
+              "stream": true,
+              "tools": [
+                {
+                  "output_format": "png",
+                  "type": "image_generation"
+                }
+              ],
+              "type": "response.create"
+            },
+            {
+              "include": [
+                "reasoning.encrypted_content"
+              ],
+              "input": [
+                {
+                  "content": [
+                    {
+                      "text": "Second",
+                      "type": "input_text"
+                    }
+                  ],
+                  "role": "user",
+                  "type": "message"
+                }
+              ],
+              "instructions": "",
+              "model": "gpt-test",
+              "parallel_tool_calls": true,
+              "prompt_cache_key": "corpus-ws",
+              "store": false,
+              "stream": true,
+              "tools": [
+                {
+                  "output_format": "png",
+                  "type": "image_generation"
+                }
+              ],
+              "type": "response.create"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

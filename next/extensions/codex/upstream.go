@@ -75,7 +75,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			base = defaultSubscriptionBaseURL
 		}
 	}
-	ur, err := buildRequest(call.Request, call.Account.ID, s, a)
+	ur, err := buildRequest(call.Request, call.Account.ID, s, a, false)
 	if err != nil {
 		return err
 	}
@@ -110,6 +110,13 @@ func setHeaders(h http.Header, req llm.Request, ur *upstreamRequest, s settings,
 	if ur.sessionID != "" {
 		h.Set("Session-Id", ur.sessionID)
 	}
+	setClientHeaders(h, req, ur, s, a)
+}
+
+// setClientHeaders sets the headers an upstream request carries on HTTP and on the WebSocket
+// handshake alike: the Codex client's own headers passed on, the client identity, and a
+// subscription's account and routing hint.
+func setClientHeaders(h http.Header, req llm.Request, ur *upstreamRequest, s settings, a account) {
 	var client map[string]string
 	if req.Native != nil {
 		client = req.Native.Headers

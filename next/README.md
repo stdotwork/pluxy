@@ -93,6 +93,16 @@ and Gemini clients; a Gemini account serves only Gemini clients for now.
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`); `countTokens` is not served yet.
 
+Responses clients may also open a WebSocket on `GET /v1/responses` ([OpenAI's WebSocket
+mode](https://developers.openai.com/api/docs/guides/websocket-mode)): each `response.create`
+message is a turn, answered with that turn's stream events, one message each. When the chosen
+account's extension holds sessions (protocol 0.1, such as a Codex account with `"websockets":
+true`), the socket's turns go to one session on that account, so a turn can continue the previous
+response with `previous_response_id`, and later turns stay on that account. On any other account
+each turn is a request that carries the whole conversation so far, which core keeps for the
+socket. `response.append`,
+`response.interrupt` and warmups (`"generate": false`) are served as today's core serves them.
+
 Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`; Gemini
 clients may also send it in `x-goog-api-key` or the `key` query parameter.
 
@@ -138,6 +148,7 @@ replaying the block sends the reasoning back, so it carries over between turns. 
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
 | `callback_listen` | Default `true`: let a browser sign-in listen on `localhost:1455`. |
+| `websockets` | Default `false`: send a Responses WebSocket client's turns to `{base_url}/responses` over one upstream WebSocket per client socket (Codex's WebSocket transport), as today's core does with `websockets: true`. A socket the upstream drops is not replaced in the middle of a turn: the client gets `upstream_websocket_lost` and sends the whole conversation again. |
 | `auth_base_url` | OpenAI's login server; for tests. |
 
 ## Claude
@@ -419,7 +430,10 @@ the running config in place, and management shows why. `listen`, `credentials_di
 
 When the extension's manifest or program changes, a reload starts the new version and waits for
 its handshake before switching. The old version then drains: it finishes the requests that
-started on it and stops, at the latest after `drain_timeout_ms`. Routing state (blocks,
+started on it and stops, at the latest after `drain_timeout_ms`. A Responses WebSocket's session
+lives in the old version, so it closes once its running turn ends: the client's next turn that
+continues it gets `previous_response_not_found`, and one with the whole conversation opens a
+session on the new version. Routing state (blocks,
 cooldowns, session bindings, the round-robin turn) carries over for every account whose ID,
 extension and `settings` stay the same; an account whose `settings` change starts fresh.
 Accounts added by login stay in the credential store through reloads and serve requests on every

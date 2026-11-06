@@ -268,7 +268,7 @@ func observe(t *testing.T, c *Case, label string, start func(dir, upstreamURL, p
 
 // caseModels returns the models the old core lists for the case: AccountModels, or else the
 // request's model without a thinking suffix such as "(high)". A Gemini request names its model in
-// the path (/v1beta/models/{model}:{method}).
+// the path (/v1beta/models/{model}:{method}), a WebSocket client in its first message.
 func caseModels(c *Case) []string {
 	if len(c.AccountModels) > 0 {
 		return c.AccountModels
@@ -277,6 +277,12 @@ func caseModels(c *Case) []string {
 		Model string `json:"model"`
 	}
 	_ = json.Unmarshal(c.Client.Body, &body)
+	for _, s := range c.Client.WebSocket {
+		// A WebSocket client names its model in its first message that has one.
+		if body.Model == "" && len(s.Send) > 0 {
+			_ = json.Unmarshal(s.Send, &body)
+		}
+	}
 	m := body.Model
 	if _, rest, ok := strings.Cut(c.Client.Path, "/models/"); ok && m == "" {
 		m, _, _ = strings.Cut(rest, ":")

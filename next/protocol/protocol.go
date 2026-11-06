@@ -15,8 +15,14 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// Version is the protocol version this package implements.
+// Version is the protocol version this package implements: the major version, which the
+// handshake carries.
 const Version = 0
+
+// Minor is the minor version this package implements within Version. An extension reports it in
+// describe (Info.ProtocolMinor); core uses what a minor version adds only with an extension that
+// reports it. Minor 1 adds sessions.
+const Minor = 1
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -37,6 +43,9 @@ const (
 	OpGenerate = "generate"
 	OpLogin    = "login"
 	OpRefresh  = "refresh"
+	// OpSession opens a session (minor version 1): one connection that carries turns, one at a
+	// time, on one account.
+	OpSession = "session"
 )
 
 // Frame types that are not events.
@@ -52,7 +61,26 @@ const (
 	TypeLoginDone = "login.done"
 	// TypeRefreshDone ends a refresh call successfully, with the renewed credential.
 	TypeRefreshDone = "refresh.done"
+	// TypeSessionReady is the extension's answer to a session call that it accepts.
+	TypeSessionReady = "session.ready"
+	// TypeSessionTurn is a frame core sends on a session: one request, answered with events.
+	TypeSessionTurn = "session.turn"
+	// TypeSessionInterrupt is a frame core sends on a session while a turn runs: the client's
+	// control message for the running turn, in Raw.
+	TypeSessionInterrupt = "session.interrupt"
 )
+
+// Session kinds (SessionInfo.Format).
+const (
+	// SessionOpenAIResponses is a Responses WebSocket session: turns are Responses requests and
+	// may continue the session's previous response with previous_response_id.
+	SessionOpenAIResponses = llm.FormatOpenAIResponses
+)
+
+// SessionInfo says what kind of session a session call opens.
+type SessionInfo struct {
+	Format string `json:"format"`
+}
 
 // Call is the first frame core sends on a connection. For every op but login it is the only
 // one; a login call may be followed by login.input frames.
@@ -66,6 +94,10 @@ type Call struct {
 	Login *Login `json:"login,omitempty"`
 	// Input is what the user entered, in a login.input frame.
 	Input map[string]string `json:"input,omitempty"`
+	// Session is what a session call opens.
+	Session *SessionInfo `json:"session,omitempty"`
+	// Raw is the client's control message, in a session.interrupt frame.
+	Raw json.RawMessage `json:"raw,omitempty"`
 }
 
 // Login is the subject of a login call.
@@ -112,10 +144,12 @@ type Credential struct {
 
 // Info is the reply to describe.
 type Info struct {
-	ID         string   `json:"id"`
-	Version    string   `json:"version"`
-	Protocol   int      `json:"protocol"`
-	Operations []string `json:"operations"`
+	ID       string `json:"id"`
+	Version  string `json:"version"`
+	Protocol int    `json:"protocol"`
+	// ProtocolMinor is the minor version of Protocol the extension implements; 0 when absent.
+	ProtocolMinor int      `json:"protocol_minor,omitempty"`
+	Operations    []string `json:"operations"`
 	// LoginMethods are the ways login can add an account; present when Operations includes
 	// login.
 	LoginMethods []LoginMethod `json:"login_methods,omitempty"`

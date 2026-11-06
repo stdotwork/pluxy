@@ -753,3 +753,26 @@ func TestOldWeightsDoNotDisturbNewRotation(t *testing.T) {
 	}
 	h.wantAttempts("a", "b", "a", "b")
 }
+
+// A request's own attempt function runs its attempts in place of the router's, with the
+// same retries and account state.
+func TestRequestAttempt(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b")...)
+	var own []string
+	req := h.req("m")
+	req.Attempt = func(_ context.Context, _ string, a protocol.Account, _ llm.Request) Stream {
+		own = append(own, a.ID)
+		if a.ID == "a" {
+			return &fakeStream{events: rateLimited(time.Minute)}
+		}
+		return &fakeStream{events: ok()}
+	}
+	if evs := h.run(req); evs[len(evs)-1].Type != llm.EventFinish {
+		t.Fatalf("request failed: %+v", evs[len(evs)-1])
+	}
+	if !slices.Equal(own, []string{"a", "b"}) {
+		t.Errorf("own attempts = %v, want a then b", own)
+	}
+	h.runOK("m") // the router's attempt; a is still rate-limited
+	h.wantAttempts("b")
+}

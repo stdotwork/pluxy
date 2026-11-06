@@ -31,8 +31,9 @@ type upstreamRequest struct {
 }
 
 // buildRequest returns the Codex request for req: the client's Responses body, or the request
-// translated to Responses, in the shape the Codex endpoint takes (shape).
-func buildRequest(req llm.Request, accountID string, s settings, a account) (*upstreamRequest, error) {
+// translated to Responses, in the shape the Codex endpoint takes (shape). ws shapes it for the
+// Responses WebSocket, which keeps previous_response_id and generate.
+func buildRequest(req llm.Request, accountID string, s settings, a account, ws bool) (*upstreamRequest, error) {
 	model, effort := splitThinkingSuffix(req.Model)
 	tr := &llm.Translation{To: llm.FormatOpenAIResponses}
 	var body []byte
@@ -66,7 +67,7 @@ func buildRequest(req llm.Request, accountID string, s settings, a account) (*up
 	if err := json.Unmarshal(body, &m); err != nil || m == nil {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
 	}
-	sh := shaper{m: m, req: req, model: model, effort: effort, s: s, a: a, accountID: accountID}
+	sh := shaper{m: m, req: req, model: model, effort: effort, s: s, a: a, accountID: accountID, ws: ws}
 	if err := sh.shape(); err != nil {
 		return nil, err
 	}
@@ -140,9 +141,14 @@ type shaper struct {
 	s         settings
 	a         account
 	accountID string // the account's ID in core
+	ws        bool   // for the Responses WebSocket
 
 	sessionID string
 }
+
+// wsFields are fields the Responses WebSocket takes that HTTP does not: a turn continues the
+// socket's previous response, and generate: false only warms the socket up.
+var wsFields = []string{"previous_response_id", "generate"}
 
 func raw(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
@@ -173,6 +179,9 @@ func (h *shaper) shape() error {
 		}
 	}
 	for _, k := range removedFields {
+		if h.ws && slices.Contains(wsFields, k) {
+			continue
+		}
 		delete(m, k)
 	}
 	h.streamOptions()

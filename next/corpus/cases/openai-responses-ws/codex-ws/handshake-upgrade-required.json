@@ -1,0 +1,89 @@
+{
+  "description": "The upstream answers the WebSocket handshake with 426; today's core does not fall back to HTTP for a WebSocket client.",
+  "source": [
+    "core/internal/runtime/executor/codex_websockets_stream.go",
+    "core/internal/runtime/executor/codex_websockets_executor_test.go"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/responses",
+    "websocket": [
+      {
+        "send": {
+          "type": "response.create",
+          "model": "gpt-test",
+          "store": false,
+          "prompt_cache_key": "corpus-ws",
+          "input": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Say hello"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "read": "turn"
+      },
+      {
+        "read": "turn"
+      }
+    ]
+  },
+  "upstream": [
+    {
+      "status": 426,
+      "body": {
+        "error": {
+          "message": "Upgrade required",
+          "type": "invalid_request_error"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "close": {
+        "code": 1006
+      },
+      "headers": {
+        "Upgrade": "websocket"
+      },
+      "messages": [
+        {
+          "error": {
+            "message": "Upgrade required",
+            "type": "invalid_request_error"
+          },
+          "status": 426,
+          "type": "error"
+        }
+      ],
+      "status": 101
+    },
+    "upstream": [
+      {
+        "body": null,
+        "headers": {
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Conversation_id": "corpus-ws",
+          "Openai-Beta": "responses_websockets=2026-02-06",
+          "Originator": "codex-tui",
+          "Sec-Websocket-Extensions": "permessage-deflate; server_no_context_takeover; client_no_context_takeover",
+          "Sec-Websocket-Version": "13",
+          "Session_id": "corpus-ws",
+          "Upgrade": "websocket",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "GET",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

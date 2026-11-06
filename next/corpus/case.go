@@ -61,6 +61,25 @@ type ClientRequest struct {
 	// Body is a JSON body. BodyText is a literal body, for requests that are not valid JSON.
 	Body     json.RawMessage `json:"body,omitempty"`
 	BodyText *string         `json:"body_text,omitempty"`
+	// WebSocket, when set, makes the request a WebSocket handshake (GET with an upgrade) and
+	// scripts what the client does on the socket. It is used instead of a body.
+	WebSocket []ClientStep `json:"websocket,omitempty"`
+}
+
+// ClientStep is one step of a WebSocket client's script; set exactly one field. After the last
+// step the client closes the socket normally, unless a step already closed or dropped it.
+type ClientStep struct {
+	// Send sends a JSON value as one text message; SendText sends literal text.
+	Send     json.RawMessage `json:"send,omitempty"`
+	SendText *string         `json:"send_text,omitempty"`
+	// Read reads messages until one whose type is Read, or until the socket closes. "turn"
+	// stands for any message that ends a turn: response.completed, response.done,
+	// response.incomplete, response.failed or error.
+	Read string `json:"read,omitempty"`
+	// Close closes the socket with this close code.
+	Close int `json:"close,omitempty"`
+	// Drop drops the connection without a close message.
+	Drop bool `json:"drop,omitempty"`
 }
 
 // Reply is one scripted upstream reply.
@@ -73,6 +92,33 @@ type Reply struct {
 	SSE      []SSEEvent      `json:"sse,omitempty"`
 	// Abort drops the connection after the scripted body instead of ending the reply cleanly.
 	Abort bool `json:"abort,omitempty"`
+	// Hold keeps the reply open after the scripted body until the core ends the request, as an
+	// upstream that is still generating does.
+	Hold bool `json:"hold,omitempty"`
+	// WebSocket accepts the request as a WebSocket handshake and scripts the upstream's side
+	// of the socket. It is used instead of a status and body; a request that is not a handshake
+	// gets a 500 reply.
+	WebSocket []UpstreamStep `json:"websocket,omitempty"`
+}
+
+// UpstreamStep is one step of the fake upstream's side of a WebSocket; set exactly one field.
+// Every message the core sends is recorded, whenever it arrives. After the last step the fake
+// upstream keeps reading until the core closes the socket.
+type UpstreamStep struct {
+	// Receive waits for the next message from the core that no earlier Receive took.
+	Receive bool `json:"receive,omitempty"`
+	// Send sends a JSON value as one text message.
+	Send json.RawMessage `json:"send,omitempty"`
+	// Close closes the socket with a close message.
+	Close *CloseFrame `json:"close,omitempty"`
+	// Drop drops the connection without a close message.
+	Drop bool `json:"drop,omitempty"`
+}
+
+// CloseFrame is a WebSocket close message.
+type CloseFrame struct {
+	Code   int    `json:"code"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // SSEEvent is one server-sent event the fake upstream writes. Data is a JSON value written in
@@ -186,7 +232,23 @@ func (c *Case) validate() error {
 	if len(c.Client.Body) > 0 && c.Client.BodyText != nil {
 		return fmt.Errorf("client: set body or body_text, not both")
 	}
+	if len(c.Client.WebSocket) > 0 && (len(c.Client.Body) > 0 || c.Client.BodyText != nil) {
+		return fmt.Errorf("client: a websocket script has no body")
+	}
+	for i, s := range c.Client.WebSocket {
+		if n := count(len(s.Send) > 0, s.SendText != nil, s.Read != "", s.Close != 0, s.Drop); n != 1 {
+			return fmt.Errorf("client.websocket[%d]: set exactly one of send, send_text, read, close or drop", i)
+		}
+	}
 	for i, r := range c.Upstream {
+		for j, s := range r.WebSocket {
+			if n := count(s.Receive, len(s.Send) > 0, s.Close != nil, s.Drop); n != 1 {
+				return fmt.Errorf("upstream[%d].websocket[%d]: set exactly one of receive, send, close or drop", i, j)
+			}
+		}
+		if len(r.WebSocket) > 0 && (r.Status != 0 || len(r.Body) > 0 || r.BodyText != nil || len(r.SSE) > 0 || r.Abort || r.Hold) {
+			return fmt.Errorf("upstream[%d]: a websocket reply has no status, body or sse", i)
+		}
 		n := 0
 		if len(r.Body) > 0 {
 			n++
@@ -212,6 +274,16 @@ func (c *Case) validate() error {
 		}
 	}
 	return nil
+}
+
+func count(conds ...bool) int {
+	n := 0
+	for _, c := range conds {
+		if c {
+			n++
+		}
+	}
+	return n
 }
 
 func (e Exception) validate() error {
