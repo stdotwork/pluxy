@@ -1,6 +1,6 @@
 // Package openairesponses converts between OpenAI Responses and pluxy's internal model: core uses
-// it to read client requests and write client replies, and provider extensions use it to read
-// replies from an upstream that speaks Responses.
+// it to read client requests and write client replies, and provider extensions use it to build
+// requests for and read replies from an upstream that speaks Responses.
 //
 // A request read here keeps its body as the native form, so an upstream that speaks Responses
 // gets it unchanged. A reply from such an upstream keeps every upstream event in its raw field,

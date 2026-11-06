@@ -504,12 +504,13 @@ func TestClientDisconnectCancelsUpstream(t *testing.T) {
 }
 
 // A non-streamed request whose upstream answers with a stream larger than core will collect
-// gets a clear error, and core cancels the upstream request instead of reading it all. Chat and
-// Responses clients collect the reply in different aggregators; both are bounded.
+// gets a clear error, and core cancels the upstream request instead of reading it all. Chat,
+// Responses and Messages clients collect the reply in different aggregators; all are bounded.
 func TestNonStreamingReplyIsBounded(t *testing.T) {
 	for _, c := range []struct{ path, body string }{
 		{"/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hi"}]}`},
 		{"/v1/responses", `{"model":"gpt-test","input":"hi"}`},
+		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
 	} {
 		path, body := c.path, c.body
 		t.Run(path, func(t *testing.T) {

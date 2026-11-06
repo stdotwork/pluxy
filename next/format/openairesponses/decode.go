@@ -348,3 +348,53 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	f := finishOf(r)
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Raw: append(json.RawMessage(nil), body...)}), nil
 }
+
+// OpaqueOutput lists, by path in the Response, the output data a client in another format has no
+// place for: a reasoning item's encrypted content and the annotations on output text. raw is an
+// output_item.done event, a terminal event or a Response object.
+func OpaqueOutput(raw json.RawMessage) []string {
+	var ev struct {
+		Type        string            `json:"type"`
+		Object      string            `json:"object"`
+		OutputIndex int               `json:"output_index"`
+		Item        json.RawMessage   `json:"item"`
+		Response    *response         `json:"response"`
+		Output      []json.RawMessage `json:"output"`
+	}
+	if json.Unmarshal(raw, &ev) != nil {
+		return nil
+	}
+	var out []string
+	look := func(i int, item json.RawMessage) {
+		var it struct {
+			EncryptedContent string `json:"encrypted_content"`
+			Content          []struct {
+				Annotations []json.RawMessage `json:"annotations"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(item, &it) != nil {
+			return
+		}
+		if it.EncryptedContent != "" {
+			out = append(out, fmt.Sprintf("output[%d].encrypted_content", i))
+		}
+		for j, c := range it.Content {
+			if len(c.Annotations) > 0 {
+				out = append(out, fmt.Sprintf("output[%d].content[%d].annotations", i, j))
+			}
+		}
+	}
+	switch {
+	case ev.Type == "response.output_item.done":
+		look(ev.OutputIndex, ev.Item)
+	case ev.Response != nil:
+		for i, item := range ev.Response.Output {
+			look(i, item)
+		}
+	case ev.Object == "response":
+		for i, item := range ev.Output {
+			look(i, item)
+		}
+	}
+	return out
+}

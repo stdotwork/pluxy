@@ -1,0 +1,104 @@
+{
+  "description": "An upstream 400 on a streamed request reaches the client as a 400 with the Claude error envelope, not as an SSE stream.",
+  "source": [
+    "core/sdk/api/handlers/claude/code_handlers_error_test.go (TestClaudeErrorExtractsClaudeStyleUpstreamJSON)",
+    "core/sdk/api/handlers/claude/code_handlers_error_test.go (TestWriteClaudeErrorResponseUsesClaudeEnvelope)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "claude-test",
+      "max_tokens": 256,
+      "stream": true,
+      "messages": [{"role":"user","content":"Say hello"}]
+    }
+  },
+  "upstream": [
+    {
+      "status": 400,
+      "headers": {"Content-Type":"application/json"},
+      "body": {
+        "type": "error",
+        "error": {
+          "type": "invalid_request_error",
+          "message": "messages.1.content.0: unexpected tool_use_id"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "messages.1.content.0: unexpected tool_use_id",
+          "type": "invalid_request_error"
+        },
+        "type": "error"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 400
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [
+            {
+              "content": [{"cache_control":{"type":"ephemeral"},"text":"Say hello","type":"text"}],
+              "role": "user"
+            }
+          ],
+          "model": "claude-test",
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages[0].content",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10).",
+      "want": "Say hello"
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].path",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "description": "A user message with text and two images: one base64 image and one image given by URL. Both reach the upstream as image parts (base64 as a data URL).",
+  "source": [
+    "core/internal/translator/openai/claude/openai_claude_request.go (convertClaudeContentPart: text and image content parts)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gpt-test",
+      "max_tokens": 256,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {"type":"text","text":"What is in these images?"},
+            {
+              "type": "image",
+              "source": {"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}
+            },
+            {"type":"image","source":{"type":"url","url":"https://example.com/cat.png"}}
+          ]
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Two images."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":300,"completion_tokens":3,"total_tokens":303}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "content": [{"text":"Two images.","type":"text"}],
+        "id": "chatcmpl-corpus",
+        "model": "gpt-test-upstream",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {"input_tokens":300,"output_tokens":3}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [
+            {
+              "content": [
+                {"text":"What is in these images?","type":"text"},
+                {"image_url":{"url":"data:image/png;base64,iVBORw0KGgo="},"type":"image_url"},
+                {"image_url":{"url":"https://example.com/cat.png"},"type":"image_url"}
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "gpt-test",
+          "stream": false
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

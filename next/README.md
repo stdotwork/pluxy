@@ -2,11 +2,12 @@
 
 A new core for pluxy, built from scratch beside today's `core/`. Core receives client requests and
 hands them to **provider extensions**: separate programs, one per kind of upstream, that core
-starts and talks to over a local socket. Today it serves OpenAI Chat Completions and OpenAI
-Responses (streamed and not, over HTTP) through the OpenAI-compatible API-key provider, which
-talks to an upstream that speaks either. A request in the upstream's own format passes through
-unchanged; a Responses request to a Chat upstream is translated, and what the translation could
-not carry is logged.
+starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
+Responses and Anthropic Messages (streamed and not, over HTTP) through the OpenAI-compatible
+API-key provider, which talks to an upstream that speaks any of them. A request in the upstream's
+own format passes through unchanged; a Responses or Messages request to a Chat upstream, and a
+Messages request to a Responses upstream, are translated, and what the translation could not carry
+is logged.
 
 ## Layout
 
@@ -17,7 +18,7 @@ not carry is logged.
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
 | `conformance/` | The conformance kit extensions run in their tests. |
-| `format/` | Client and upstream formats as libraries extensions build in: `sse`, `openaichat`, `openairesponses`. |
+| `format/` | Client and upstream formats as libraries extensions build in: `sse`, `openaichat`, `openairesponses`, `anthropicmessages`. |
 | `extensions/openai-compatible` | Provider extension for OpenAI-compatible APIs with an API key. |
 | `examples/scripted` | The tutorial's example extension. |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API. |
@@ -58,8 +59,12 @@ An account may list `models` it serves; without a list it serves any model. Core
 extension and spreads requests over its accounts: see [Accounts and routing](#accounts-and-routing).
 
 An account's `settings` may set `"wire_api": "responses"` for an upstream that speaks OpenAI
-Responses (`POST {base_url}/responses`); the default is `"chat"`. Such an account serves only
-Responses clients for now.
+Responses (`POST {base_url}/responses`), or `"wire_api": "messages"` for one that speaks Anthropic
+Messages (`POST {base_url}/messages`, with the key in `x-api-key` and the client's
+`anthropic-version` and `anthropic-beta` headers); the default is `"chat"`. A Responses account
+serves Responses and Messages clients; a Messages account serves only Messages clients for now.
+
+Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`.
 
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`

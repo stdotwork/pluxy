@@ -1,0 +1,142 @@
+{
+  "description": "Same-format passthrough, streamed, with a tool call: the tool_use block and its input_json_delta fragments reach the client unchanged, and the stop_reason tool_use is passed through.",
+  "source": [
+    "core/internal/runtime/executor/claude_executor_stream_terminal_test.go (TestClaudeExecutor_ExecuteStream_Passthrough_ClientDisconnectAfterTerminalEventIsNotFailed)",
+    "core/internal/runtime/executor/claude_messages_passthrough_test.go (TestClaudeExecutor_DirectMessagesOfficialUpstreamPreservesCallerShape, tools)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "claude-test",
+      "max_tokens": 256,
+      "stream": true,
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Get the weather for a city.",
+          "input_schema": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ],
+      "messages": [{"role":"user","content":"What is the weather in Paris?"}]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":40,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01B","name":"get_weather","input":{}}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"Paris\"}"}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":15}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"message":{"content":[],"id":"msg_corpus","model":"claude-test-upstream","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":40,"output_tokens":1}},"type":"message_start"},"event":"message_start"},
+        {"data":{"content_block":{"id":"toolu_01B","input":{},"name":"get_weather","type":"tool_use"},"index":0,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"partial_json":"{\"city\":","type":"input_json_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"delta":{"partial_json":"\"Paris\"}","type":"input_json_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {"data":{"delta":{"stop_reason":"tool_use","stop_sequence":null},"type":"message_delta","usage":{"output_tokens":15}},"event":"message_delta"},
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [
+            {
+              "content": [
+                {
+                  "cache_control": {"type":"ephemeral"},
+                  "text": "What is the weather in Paris?",
+                  "type": "text"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "claude-test",
+          "stream": true,
+          "tools": [
+            {
+              "cache_control": {"type":"ephemeral"},
+              "description": "Get the weather for a city.",
+              "input_schema": {
+                "properties": {"city":{"type":"string"}},
+                "required": ["city"],
+                "type": "object"
+              },
+              "name": "get_weather"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages[0].content",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10).",
+      "want": "What is the weather in Paris?"
+    },
+    {
+      "path": "upstream[0].body.tools[0].cache_control",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    },
+    {
+      "path": "upstream[0].path",
+      "kind": "intended",
+      "reason": "Today's core reaches a Messages upstream only through its Claude API-key provider, which rewrites the request even for a custom base URL: it adds cache_control breakpoints, removes the thinking setting and thinking blocks whose signatures it cannot verify, drops a cache TTL, adds stream false, adds ?beta=true and sends the key as a bearer token with its own Accept and Accept-Encoding. The new core passes a Messages request to a Messages upstream unchanged, thinking blocks, signatures and cache_control included, and sends the key in x-api-key as Anthropic's API defines; Claude-specific rewrites belong to the Claude provider extension (slice 10)."
+    }
+  ]
+}

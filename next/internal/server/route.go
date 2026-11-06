@@ -29,10 +29,10 @@ func routeRequest(r *http.Request, req llm.Request, body []byte) route.Request {
 	}
 }
 
-// tenant identifies the caller by a digest of its bearer token, so session bindings of one
+// tenant identifies the caller by a digest of its client key, so session bindings of one
 // client key never route another's requests.
 func tenant(r *http.Request) string {
-	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	token := clientToken(r)
 	if token == "" {
 		return ""
 	}

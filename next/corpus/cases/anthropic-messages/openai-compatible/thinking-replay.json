@@ -1,0 +1,151 @@
+{
+  "description": "History with a signed thinking block and a redacted thinking block before a tool call, and thinking enabled with a token budget of 4096 (reasoning_effort medium). The redacted block is never sent; the tool call and its result are.",
+  "source": [
+    "core/internal/translator/openai/claude/openai_claude_request.go (thinking and redacted_thinking handling, shouldMapClaudeThinkingToGPTReasoning, thinking budget_tokens)",
+    "core/internal/thinking/convert.go (ConvertBudgetToLevel)",
+    "core/internal/runtime/executor/openai_compat_executor.go (executeWithCredentials)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "gpt-test",
+      "max_tokens": 8192,
+      "thinking": {"type":"enabled","budget_tokens":4096},
+      "tools": [
+        {
+          "name": "get_weather",
+          "description": "Get the current weather for a city.",
+          "input_schema": {
+            "type": "object",
+            "properties": {"city":{"type":"string"}},
+            "required": ["city"]
+          }
+        }
+      ],
+      "messages": [
+        {"role":"user","content":"Weather in Paris?"},
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "Need weather.",
+              "signature": "EqQBCgIYAhIMcorpusSignature0001"
+            },
+            {"type":"redacted_thinking","data":"EmwKAhgBcorpusRedacted0001"},
+            {"type":"tool_use","id":"toolu_01A","name":"get_weather","input":{"city":"Paris"}}
+          ]
+        },
+        {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01A","content":"21C"}]}
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000001,
+        "model": "gpt-test-upstream",
+        "choices": [
+          {
+            "index": 0,
+            "message": {"role":"assistant","content":"Paris is 21C."},
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {"prompt_tokens":60,"completion_tokens":6,"total_tokens":66}
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "content": [{"text":"Paris is 21C.","type":"text"}],
+        "id": "chatcmpl-corpus",
+        "model": "gpt-test-upstream",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {"input_tokens":60,"output_tokens":6}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 8192,
+          "messages": [
+            {"content":"Weather in Paris?","role":"user"},
+            {
+              "content": "",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "function": {"arguments":"{\"city\":\"Paris\"}","name":"get_weather"},
+                  "id": "toolu_01A",
+                  "type": "function"
+                }
+              ]
+            },
+            {"content":"21C","name":"get_weather","role":"tool","tool_call_id":"toolu_01A"}
+          ],
+          "model": "gpt-test",
+          "reasoning_effort": "medium",
+          "stream": false,
+          "tools": [
+            {
+              "function": {
+                "description": "Get the current weather for a city.",
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {"city":{"type":"string"}},
+                  "required": ["city"],
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages[1].content",
+      "kind": "intended",
+      "reason": "The new core sends replayed thinking text to a Chat upstream as the assistant message's reasoning_content and reports it as approximated (its signature as dropped), as it does for Responses reasoning; today's core drops thinking whose signature it cannot verify and sends empty content. An assistant message with tool calls needs no content."
+    },
+    {
+      "path": "upstream[0].body.messages[1].reasoning_content",
+      "kind": "intended",
+      "reason": "The new core sends replayed thinking text to a Chat upstream as the assistant message's reasoning_content and reports it as approximated (its signature as dropped), as it does for Responses reasoning; today's core drops thinking whose signature it cannot verify and sends empty content. An assistant message with tool calls needs no content.",
+      "want": "Need weather."
+    },
+    {
+      "path": "upstream[0].body.messages[2].name",
+      "kind": "intended",
+      "reason": "Today's core adds the function's name to each tool message; Chat Completions' tool message has no name field, so the new core leaves it out."
+    }
+  ]
+}

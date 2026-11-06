@@ -195,7 +195,7 @@ version 0.
 | `items` | The conversation, in order. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it). |
-| `native` | The client's original request body and its format, when core received one. |
+| `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
 | `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`, naming what could not be carried). |
 
@@ -206,8 +206,8 @@ Item types:
 | `message` | `role` (`system`, `developer`, `user`, `assistant`), `content`: a list of parts; `text_content` is true when the client gave the content as a plain string. |
 | `tool_call` | `call_id`, `name`, `arguments` (the raw argument string, not parsed); `custom` (default false) marks a call to a custom (freeform) tool, whose `arguments` is the tool's raw input rather than JSON. |
 | `tool_result` | `call_id`, `output` (string). |
-| `reasoning` | `text`: reasoning text or summary the client replayed. Opaque reasoning data (such as an encrypted blob) stays in `origin.raw`. |
-| `native` | An item core could not interpret (for example a hosted tool call); `origin.raw` holds it whole. |
+| `reasoning` | `text`: reasoning text or summary the client replayed. Opaque reasoning data (such as an OpenAI encrypted blob or an Anthropic thinking signature) stays in `origin.raw`. |
+| `native` | An item core could not interpret (for example a hosted tool call or Anthropic redacted thinking); `origin.raw` holds it whole, in its place in the conversation. |
 
 Every item may also carry `id` (its identifier in the client's format) and `origin`.
 
@@ -232,8 +232,9 @@ trip; an encoder for another format cannot, and reports each of them as dropped.
 
 **Native passthrough.** When `native.format` is the format the extension's upstream speaks, the
 extension should send `native.body` upstream unchanged instead of rebuilding a body from `items`.
-That keeps fields core does not model. Formats in version 0: `openai.chat` (OpenAI Chat
-Completions request body) and `openai.responses` (OpenAI Responses request body).
+That keeps fields core does not model. It also sends `native.headers` with it. Formats in version
+0: `openai.chat` (OpenAI Chat Completions request body), `openai.responses` (OpenAI Responses
+request body) and `anthropic.messages` (Anthropic Messages request body).
 
 **Translation report.** When the extension rebuilds the body in another format, it reports in the
 reply's `response.start` how it built it: `response.translation` with `from`, `to`, `passthrough`
@@ -256,7 +257,7 @@ with deltas and closed, then one terminal event.
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
 | `tool_input.delta` | `index`, `delta` | A fragment of the argument string for an open `tool_call` item. |
 | `item.end` | `index` | Closes item `index`. |
-| `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. For `openai.responses` it is an upstream stream event the model has no event for (for example `response.in_progress` or a hosted tool's item). |
+| `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. For `openai.responses` and `anthropic.messages` it is an upstream stream event the model has no event for (for example `response.in_progress`, or `ping`, `message_delta` and a thinking block's `signature_delta`). |
 | `finish` | `finish`: `reason`, `raw_reason`; optional `usage` | Terminal: success. |
 | `error` | `error` (below) | Terminal: failure. |
 
@@ -265,11 +266,11 @@ JSON; upstream bytes that are not JSON go in as a JSON string. Core writes upstr
 only to a client that speaks the reply's `format`: the `response.start` fields, `native` events
 and the usage `raw` (so fields such as a vendor cost survive); other clients do not get it.
 
-For `openai.responses`, every event carries the upstream stream event it came from in `raw` (an
-`error` carries it in `error.raw`), and the `finish` of a non-streamed reply carries the whole
-Response object. A Responses client gets those upstream events and that object unchanged; events
-an extension adds itself (such as closing an item the upstream left open) carry no `raw` and are
-not written to it.
+For `openai.responses` and `anthropic.messages`, every event carries the upstream stream event it
+came from in `raw` (an `error` carries it in `error.raw`), and the `finish` of a non-streamed reply
+carries the whole Response or Message object. A client in that format gets those upstream events
+and that object unchanged; events an extension adds itself (such as closing an item the upstream
+left open) carry no `raw` and are not written to it.
 
 Ordering rules, which core enforces and the conformance kit checks:
 
@@ -293,6 +294,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `input_tokens` | All input tokens, including cached ones. |
 | `output_tokens` | All output tokens, including reasoning. |
 | `cached_input_tokens` | Input tokens read from a cache. |
+| `cache_write_input_tokens` | Input tokens written to a cache. Anthropic counts cache reads and writes apart from its `input_tokens`; `input_tokens` here is their sum. |
 | `reasoning_tokens` | Output tokens spent on reasoning. |
 | `raw` | The upstream's usage object, unchanged. |
 

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/internal/route"
@@ -43,6 +44,11 @@ type clientFormat struct {
 	parse     func(body []byte) (llm.Request, error)
 	stream    func(w io.Writer, req llm.Request) eventWriter
 	aggregate func(req llm.Request) aggregator
+	// errorBody returns the status and body of an error reply; nil means the OpenAI shape.
+	errorBody func(e *llm.Error) (int, []byte)
+	// headers are client request headers that belong to the format's body; they travel with
+	// the native body.
+	headers []string
 }
 
 type eventWriter interface{ Write(ev llm.Event) error }
@@ -72,6 +78,14 @@ var responsesFormat = clientFormat{
 	aggregate: func(req llm.Request) aggregator { return openairesponses.NewAggregator(req) },
 }
 
+var messagesFormat = clientFormat{
+	parse:     anthropicmessages.ParseRequest,
+	stream:    func(w io.Writer, _ llm.Request) eventWriter { return anthropicmessages.NewStreamWriter(w) },
+	aggregate: func(llm.Request) aggregator { return anthropicmessages.NewAggregator() },
+	errorBody: anthropicmessages.ErrorResponse,
+	headers:   anthropicmessages.Headers,
+}
+
 // New returns core's HTTP handler. Requests are routed over cfg's accounts, and each attempt
 // is a call to generate.
 func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
@@ -82,10 +96,11 @@ func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	for path, f := range map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/responses": responsesFormat} {
+	formats := map[string]clientFormat{"/v1/chat/completions": chatFormat, "/v1/responses": responsesFormat, "/v1/messages": messagesFormat}
+	for path, f := range formats {
 		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
 			if !authorized(cfg, r) {
-				writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
+				f.writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
 				return
 			}
 			serve(w, r, cfg, router, f)
@@ -94,12 +109,14 @@ func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
 	return mux, nil
 }
 
+// authorized reports whether the request carries a client key: as a bearer token, or in
+// x-api-key as Anthropic clients send it.
 func authorized(cfg *Config, r *http.Request) bool {
 	if len(cfg.ClientKeys) == 0 {
 		return true
 	}
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok || token == "" {
+	token := clientToken(r)
+	if token == "" {
 		return false
 	}
 	match := 0
@@ -109,8 +126,21 @@ func authorized(cfg *Config, r *http.Request) bool {
 	return match == 1
 }
 
-func writeError(w http.ResponseWriter, e *llm.Error) {
-	status, body := openaichat.ErrorResponse(e)
+// clientToken returns the key the client sent: a bearer token, or else x-api-key.
+func clientToken(r *http.Request) string {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || token == "" {
+		token = r.Header.Get("X-Api-Key")
+	}
+	return token
+}
+
+func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) {
+	errorBody := f.errorBody
+	if errorBody == nil {
+		errorBody = openaichat.ErrorResponse
+	}
+	status, body := errorBody(e)
 	w.Header().Set("Content-Type", "application/json")
 	// Tell a rate-limited client when to try again, in whole seconds rounded up (RFC 9110
 	// section 10.2.3, RFC 6585 section 4).
@@ -126,17 +156,27 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is too large", Status: http.StatusRequestEntityTooLarge})
+			f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is too large", Status: http.StatusRequestEntityTooLarge})
 			return
 		}
 		return // the client went away
 	}
 	req, err := f.parse(body)
 	if err != nil {
-		writeError(w, asLLMError(err))
+		f.writeError(w, asLLMError(err))
 		return
 	}
 	req.DropPolicy = cfg.DropPolicy
+	if req.Native != nil {
+		for _, h := range f.headers {
+			if v := r.Header.Values(h); len(v) > 0 {
+				if req.Native.Headers == nil {
+					req.Native.Headers = map[string]string{}
+				}
+				req.Native.Headers[h] = strings.Join(v, ",")
+			}
+		}
+	}
 	stream := router.Generate(r.Context(), routeRequest(r, req, body))
 	defer stream.Close()
 
@@ -145,7 +185,7 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 	ev := stream.Next()
 	if ev.Type == llm.EventError {
 		logFailure(r, ev.Error)
-		writeError(w, ev.Error)
+		f.writeError(w, ev.Error)
 		return
 	}
 	var request *llm.Translation
@@ -164,19 +204,19 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 				// Returning closes the stream, which cancels the call and the upstream request.
 				e := &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream reply is larger than %d MiB, the limit for a non-streamed response; send the request with \"stream\": true", MaxResponseBody>>20)}
 				logFailure(r, e)
-				writeError(w, e)
+				f.writeError(w, e)
 				return
 			}
 			ev = stream.Next()
 		}
 		if ev.Type == llm.EventError {
 			logFailure(r, ev.Error)
-			writeError(w, ev.Error)
+			f.writeError(w, ev.Error)
 			return
 		}
 		out, err := agg.Response()
 		if err != nil {
-			writeError(w, &llm.Error{Code: llm.CodeInternal, Message: err.Error()})
+			f.writeError(w, &llm.Error{Code: llm.CodeInternal, Message: err.Error()})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
