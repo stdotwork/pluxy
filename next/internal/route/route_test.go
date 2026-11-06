@@ -2,7 +2,10 @@ package route
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -268,6 +271,28 @@ func TestRequestErrorLeavesAccountAlone(t *testing.T) {
 	h.wantAttempts("a", "a")
 }
 
+// An account that cannot serve the request (unsupported, about the account) passes it on
+// without being blocked; when no account can serve it, the request fails with the refusal
+// after one try each instead of looping.
+func TestUnsupportedAccountPassesRequestOn(t *testing.T) {
+	refuse := fail(llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Message: "other format"})
+	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b", "c")...)
+	h.on("a", refuse)
+	h.on("b", refuse)
+	h.runOK("m") // a and b refuse, c serves
+	h.runOK("m") // a and b are not blocked: they are tried again first
+	h.wantAttempts("a", "b", "c", "a", "b", "c")
+
+	h = newHarness(t, Config{}, accts("a", "b")...)
+	h.on("a", refuse)
+	h.on("b", refuse)
+	evs := h.run(h.req("m"))
+	if e := evs[0].Error; e == nil || e.Code != llm.CodeUnsupported {
+		t.Errorf("got %+v, want the refusal", evs[0])
+	}
+	h.wantAttempts("a", "b")
+}
+
 // The slice's check: an older success never clears a newer cooldown. A reply that started
 // before the account was rate-limited finishes after it; the account stays blocked.
 func TestOlderSuccessKeepsNewerCooldown(t *testing.T) {
@@ -454,4 +479,119 @@ func TestSessionAffinity(t *testing.T) {
 	h.now = h.now.Add(2 * time.Minute)
 	h.run(s1)
 	h.wantAttempts("a", "b", "b")
+}
+
+// heldStream is a reply that has started and stays open until closed.
+type heldStream struct {
+	n       int
+	onClose func()
+	closed  sync.Once
+}
+
+func (s *heldStream) Next() llm.Event {
+	s.n++
+	if s.n == 1 {
+		return start()
+	}
+	return llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}}
+}
+
+func (s *heldStream) Close() { s.closed.Do(s.onClose) }
+
+// Choosing an account and reserving it are one step: two requests that both find an account
+// under its concurrency limit cannot both run on it. The hook holds both requests after they
+// chose and before they reserved, the moment the race needs.
+func TestConcurrencyLimitHoldsUnderRace(t *testing.T) {
+	var mu sync.Mutex
+	active, peak := map[string]int{}, map[string]int{}
+	attempt := func(_ context.Context, a protocol.Account, _ llm.Request) Stream {
+		mu.Lock()
+		active[a.ID]++
+		peak[a.ID] = max(peak[a.ID], active[a.ID])
+		mu.Unlock()
+		return &heldStream{onClose: func() {
+			mu.Lock()
+			active[a.ID]--
+			mu.Unlock()
+		}}
+	}
+	r, err := New(Config{Strategy: StrategyFillFirst}, []Account{{ID: "a", MaxConcurrency: 1}, {ID: "b"}}, attempt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var barrier sync.WaitGroup
+	barrier.Add(2)
+	var arrivals atomic.Int32
+	r.beforeReserve = func(string) {
+		if arrivals.Add(1) <= 2 {
+			barrier.Done()
+			barrier.Wait()
+		}
+	}
+	streams := make([]Stream, 2)
+	var wg sync.WaitGroup
+	for i := range streams {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			streams[i] = r.Generate(context.Background(), Request{LLM: llm.Request{Model: "m"}})
+			if ev := streams[i].Next(); ev.Type != llm.EventResponseStart {
+				t.Errorf("request %d: %+v", i, ev)
+			}
+		}()
+	}
+	wg.Wait()
+	mu.Lock()
+	gotA, gotB := peak["a"], peak["b"]
+	mu.Unlock()
+	if gotA != 1 || gotB != 1 {
+		t.Errorf("peak attempts: a %d (max_concurrency 1), b %d; want 1 and 1", gotA, gotB)
+	}
+	for _, s := range streams {
+		s.Close()
+	}
+}
+
+// Routing state keyed by a model name the client chose does not grow without bound: entries
+// that have been idle a while are dropped, and while many are live the table stays within its
+// limit without dropping a live cooldown.
+func TestModelStateIsBounded(t *testing.T) {
+	defer func(n int) { maxModelKeys = n }(maxModelKeys)
+	maxModelKeys = 100
+	h := newHarness(t, Config{}, accts("a")...)
+	h.on("a", rateLimited(time.Hour))
+	h.run(h.req("keep")) // a credential-wide block first
+	h.on("a", fail(llm.Error{Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeModel, RetryAfterMS: time.Hour.Milliseconds()}))
+	h.now = h.now.Add(2 * time.Hour) // the credential-wide block has passed
+	h.run(h.req("keep"))             // now a model-scoped block on "keep"
+	notFound := fail(llm.Error{Code: llm.CodeNotFound, Status: 404, Retryable: true, Scope: llm.ScopeModel, ProviderCode: "model_not_found"})
+	h.on("a", notFound)
+	for i := range 1000 {
+		h.run(h.req(fmt.Sprintf("no-such-model-%d", i)))
+	}
+	h.r.state.mu.Lock()
+	n := len(h.r.state.scopes)
+	h.r.state.mu.Unlock()
+	h.r.picker.mu.Lock()
+	cursors := len(h.r.picker.last)
+	h.r.picker.mu.Unlock()
+	if n > maxModelKeys+2 || cursors > maxModelKeys {
+		t.Errorf("after 1,000 model names: %d scopes, %d model cursors; want at most %d", n, cursors, maxModelKeys)
+	}
+	if until, _, _ := h.r.state.availability(h.r.accounts[0], "keep", h.now); until.IsZero() {
+		t.Error("the live cooldown on model \"keep\" was dropped")
+	}
+
+	h.now = h.now.Add(24 * time.Hour)
+	h.on("a", ok())
+	h.runOK("m")
+	h.r.state.mu.Lock()
+	n = len(h.r.state.scopes)
+	h.r.state.mu.Unlock()
+	h.r.picker.mu.Lock()
+	cursors = len(h.r.picker.last)
+	h.r.picker.mu.Unlock()
+	if n != 0 || cursors > 1 {
+		t.Errorf("24h later: %d scopes, %d model cursors; want 0 and at most 1", n, cursors)
+	}
 }

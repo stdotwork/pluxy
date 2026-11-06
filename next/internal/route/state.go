@@ -74,28 +74,94 @@ var (
 	notFoundCooldown = 12 * time.Hour
 )
 
+// Bounds on state keyed by model names, which clients choose.
+var (
+	// maxModelKeys bounds the model-scoped entries kept (blocks here, rotation cursors in the
+	// picker). When it is full of live blocks, a new model-scoped block is not recorded: live
+	// cooldowns are never dropped to make room.
+	maxModelKeys = 10_000
+	// stateIdle: an entry whose blocks all ended this long ago is dropped (its backoff step
+	// with it), as is a rotation cursor unused this long.
+	stateIdle = time.Hour
+	// sweepEvery is how often idle entries are looked for.
+	sweepEvery = time.Minute
+)
+
 // State is core's routing state for accounts: blocks per scope and active attempts per
 // account. It is shared by every request and safe for concurrent use.
 type State struct {
-	mu     sync.Mutex
-	seq    uint64
-	scopes map[scopeKey]*scopeState
-	active map[string]int
-	rand   func() float64
+	mu        sync.Mutex
+	seq       uint64
+	scopes    map[scopeKey]*scopeState
+	models    int // model-scoped entries in scopes
+	active    map[string]int
+	rand      func() float64
+	lastSweep time.Time
+}
+
+// lastEnd returns when the latest block of st ends.
+func (st *scopeState) lastEnd() time.Time {
+	var t time.Time
+	for _, b := range st.blocks {
+		if b.until.After(t) {
+			t = b.until
+		}
+	}
+	return t
+}
+
+// drop removes the entry for k. Call with s.mu held.
+func (s *State) drop(k scopeKey) {
+	if _, ok := s.scopes[k]; !ok {
+		return
+	}
+	delete(s.scopes, k)
+	if k.kind == scopeModel {
+		s.models--
+	}
+}
+
+// sweep drops entries whose blocks all ended before cutoff. Call with s.mu held.
+func (s *State) sweep(cutoff time.Time) {
+	for k, st := range s.scopes {
+		if !st.lastEnd().After(cutoff) {
+			s.drop(k)
+		}
+	}
+}
+
+// maybeSweep drops idle entries, at most once per sweepEvery. Call with s.mu held.
+func (s *State) maybeSweep(now time.Time) {
+	if now.Sub(s.lastSweep) < sweepEvery {
+		return
+	}
+	s.lastSweep = now
+	s.sweep(now.Add(-stateIdle))
+}
+
+// reserve checks, in one step with reserving it, that account a may serve model now: no block
+// covers it and it is under its concurrency limit. Two requests that both chose a can then
+// never both run on it beyond its limit. It returns the attempt's sequence number.
+func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maybeSweep(now)
+	for _, k := range keysFor(a, model) {
+		if st := s.scopes[k]; st != nil && st.lastEnd().After(now) {
+			return 0, false
+		}
+	}
+	if a.MaxConcurrency > 0 && s.active[a.ID] >= a.MaxConcurrency {
+		return 0, false
+	}
+	s.seq++
+	s.active[a.ID]++
+	return s.seq, true
 }
 
 // NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, rand: rand.Float64}
-}
-
-// begin reserves an attempt on account a and returns the attempt's sequence number.
-func (s *State) begin(a *Account) uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.seq++
-	s.active[a.ID]++
-	return s.seq
 }
 
 // end releases the reservation begin made. Call it exactly once per begin.
@@ -106,6 +172,18 @@ func (s *State) end(a *Account) {
 		delete(s.active, a.ID)
 	} else {
 		s.active[a.ID]--
+	}
+}
+
+// forget drops the state kept on account id's credential and models. Endpoint state stays: other
+// accounts may share the endpoint.
+func (s *State) forget(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.scopes {
+		if k.kind != scopeEndpoint && k.id == id {
+			s.drop(k)
+		}
 	}
 }
 
@@ -164,10 +242,23 @@ func (s *State) failure(a *Account, model string, e *llm.Error, now time.Time) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.maybeSweep(now)
 	st := s.scopes[key]
 	if st == nil {
+		if key.kind == scopeModel && s.models >= maxModelKeys {
+			s.sweep(now) // make room from blocks that have ended
+			if s.models >= maxModelKeys {
+				// shortcut: the table is full of live model blocks, so this one is not kept
+				// (the next request for the model tries the account again); raise
+				// maxModelKeys if real pools serve more models than this at once.
+				return
+			}
+		}
 		st = &scopeState{}
 		s.scopes[key] = st
+		if key.kind == scopeModel {
+			s.models++
+		}
 	}
 	b := &st.blocks[kindIndex(kind)]
 	var until time.Time
@@ -226,7 +317,7 @@ func (s *State) success(a *Account, model string, seq uint64) {
 			}
 		}
 		if empty {
-			delete(s.scopes, k)
+			s.drop(k)
 		}
 	}
 }
