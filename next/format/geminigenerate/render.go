@@ -434,6 +434,12 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
+		if ev.Finish != nil {
+			a.size += len(ev.Finish.RawReason)
+		}
+		if ev.Usage != nil {
+			a.size += len(ev.Usage.Raw)
+		}
 	}
 }
 
@@ -441,8 +447,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 const partOverhead = len(`{"functionCall":{"id":"","name":"","args":{}}},`)
 
 // Size is about how many bytes of content the response holds so far: its id and model, text,
-// thoughts, function calls with their thought signatures, the upstream chunks it keeps and what
-// it reports as lost, before JSON escaping. Callers use it to bound what they collect.
+// thoughts, function calls with their thought signatures, the upstream chunks it keeps, its
+// finish reason and usage as the upstream sent them, and what it reports as lost, before JSON
+// escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size + a.b.lossSize }
 
 // Response returns the response body.

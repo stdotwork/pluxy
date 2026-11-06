@@ -492,6 +492,12 @@ func (a *Aggregator) Add(ev llm.Event) {
 		if f := finalResponse(ev.Raw); b.upFormat == format && f != nil {
 			a.final = f
 		}
+		if ev.Finish != nil {
+			a.size += len(ev.Finish.RawReason)
+		}
+		if ev.Usage != nil {
+			a.size += len(ev.Usage.Raw)
+		}
 	}
 }
 
@@ -499,8 +505,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 const itemOverhead = len(`{"id":"","type":"function_call","status":"completed","call_id":"","name":"","arguments":""},`)
 
 // Size is about how many bytes of content the response holds so far: its id, the text,
-// reasoning and tool calls of its items with their ids, the upstream's final Response object and
-// what it reports as lost, before JSON escaping. Callers use it to bound what they collect.
+// reasoning and tool calls of its items with their ids, the upstream's final Response object, its
+// finish reason and usage as the upstream sent them, and what it reports as lost, before JSON
+// escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size + len(a.final) + a.b.lossSize }
 
 // finalResponse returns the Response object in a terminal event's raw: the response of a

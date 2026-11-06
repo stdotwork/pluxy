@@ -658,6 +658,40 @@ func TestNonStreamingReplyCountsIDAndModel(t *testing.T) {
 	}
 }
 
+// The upstream's usage object, which Responses, Messages and Gemini aggregators keep with fields
+// they have no place for, counts toward core's 64 MiB limit on a non-streamed reply.
+func TestNonStreamingReplyCountsUsage(t *testing.T) {
+	for _, c := range []struct{ path, body string }{
+		{"/v1/responses", `{"model":"gpt-test","input":"hi"}`},
+		{"/v1/messages", `{"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`},
+		{"/v1beta/models/gpt-test:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
+	} {
+		path, body := c.path, c.body
+		t.Run(path, func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				content := strings.Repeat("x", 64<<10)
+				for sent := 0; sent < 60<<20; sent += len(content) {
+					if _, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", head, content); err != nil {
+						return
+					}
+				}
+				fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", head)
+				fmt.Fprintf(w, "data: {%s,\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2,\"extra\":%q}}\n\ndata: [DONE]\n\n", head, strings.Repeat("u", 8<<20))
+			}
+			base := startCore(t, u)
+			resp := postPath(t, context.Background(), base, path, clientKey, body)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+				t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+			}
+		})
+	}
+}
+
 // A non-streamed request whose upstream answers with a stream larger than core will collect
 // gets a clear error, and core cancels the upstream request instead of reading it all. Chat,
 // Responses, Messages and Gemini clients collect the reply in different aggregators; all are

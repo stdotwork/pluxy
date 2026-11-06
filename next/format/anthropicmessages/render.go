@@ -510,6 +510,12 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventFinish:
 		b.upstreamData(ev)
 		b.finished(ev)
+		if ev.Finish != nil {
+			a.size += len(ev.Finish.RawReason)
+		}
+		if ev.Usage != nil {
+			a.size += len(ev.Usage.Raw)
+		}
 	}
 }
 
@@ -518,8 +524,8 @@ const blockOverhead = len(`{"type":"tool_use","id":"","name":"","input":{}},`)
 
 // Size is about how many bytes of content the response holds so far: its id and model, text,
 // thinking, tool calls, the upstream events it puts a Message together from, the upstream's final
-// Message and what it reports as lost, before JSON escaping. Callers use it to bound what they
-// collect.
+// Message, its finish reason and usage as the upstream sent them, and what it reports as lost,
+// before JSON escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int {
 	return a.size + len(a.final) + a.b.lossSize + a.acc.lossSize
 }
