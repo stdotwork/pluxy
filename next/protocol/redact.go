@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/base64"
 	"encoding/json"
@@ -106,16 +107,75 @@ func (r *Redactor) String(s string) string {
 	return r.r.Replace(s)
 }
 
-// raw returns b with the credential removed, still valid JSON.
+// raw returns b with the credential removed, still valid JSON. A client decodes the JSON, so
+// the credential is removed from each decoded string rather than from b's bytes: an upstream
+// can escape any character of it (\u0073 for "s"), and no list of byte encodings covers them
+// all.
 func (r *Redactor) raw(b json.RawMessage) json.RawMessage {
 	if r == nil || r.r == nil || len(b) == 0 {
 		return b
 	}
-	s := r.r.Replace(string(b))
+	var s string
+	if bytes.IndexByte(b, '\\') < 0 || !json.Valid(b) {
+		// Without a backslash every decoded string is its bytes.
+		s = r.r.Replace(string(b))
+	} else {
+		s = string(r.redactJSON(b))
+	}
 	if s == string(b) {
 		return b
 	}
 	return llm.RawJSON([]byte(s))
+}
+
+// redactJSON returns the valid JSON b with the credential removed from every string in it, object
+// keys included. Only strings that change are encoded again; every other byte is kept.
+func (r *Redactor) redactJSON(b []byte) []byte {
+	var out []byte
+	last := 0
+	for i := 0; i < len(b); i++ {
+		if b[i] != '"' {
+			continue
+		}
+		end := i + 1
+		for end < len(b) && b[end] != '"' {
+			if b[end] == '\\' {
+				end++
+			}
+			end++
+		}
+		tok := b[i : end+1]
+		var s string
+		if json.Unmarshal(tok, &s) == nil {
+			if red := r.decoded(s); red != s {
+				out = append(append(out, b[last:i]...), encodeString(red)...)
+				last = end + 1
+			}
+		}
+		i = end
+	}
+	if out == nil {
+		return b
+	}
+	return append(out, b[last:]...)
+}
+
+// decoded returns the decoded string s with the credential removed. A string that holds JSON,
+// such as an error message quoting the upstream's body, is decoded in turn, as a client parsing
+// it would.
+func (r *Redactor) decoded(s string) string {
+	if t := strings.TrimSpace(s); t != "" && (t[0] == '{' || t[0] == '[') && strings.Contains(t, `\`) && json.Valid([]byte(t)) {
+		s = string(r.redactJSON([]byte(s)))
+	}
+	return r.r.Replace(s)
+}
+
+func encodeString(s string) []byte {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
 // Event returns ev with the credential removed from the text and upstream data it carries:

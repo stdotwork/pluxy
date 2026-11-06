@@ -59,3 +59,31 @@ func TestRedactorOpaque(t *testing.T) {
 		t.Error("redaction changed the caller's event")
 	}
 }
+
+// Raw upstream data reaches clients as JSON, and a client decodes JSON escapes, so the
+// credential must go wherever a decoded string holds it, whichever characters the upstream
+// escaped: the reviewer's upstream escaped only the first one. A string holding JSON is decoded
+// in turn, as a client parsing it would. Expected values were written by hand.
+func TestRedactorRawDecodesEscapes(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "sk-test/key+42"})
+	for _, c := range []struct{ in, want string }{
+		{`{"message":"Rejected \u0073k-test/key+42"}`, `{"message":"Rejected [redacted]"}`},
+		{`{"message":"Rejected sk-test\/key\u002B42","code":"x"}`, `{"message":"Rejected [redacted]","code":"x"}`},
+		{`{"message":"Rejected sk-test\/key\u002b42"}`, `{"message":"Rejected [redacted]"}`},
+		{`{"m":"\u0073\u006B\u002d\u0074\u0065\u0073\u0074\u002F\u006b\u0065\u0079\u002B\u0034\u0032"}`, `{"m":"[redacted]"}`},
+		{`{"\u0073k-test/key+42":1}`, `{"[redacted]":1}`},
+		{`["a \"quoted\" \u0073k-test/key+42",2]`, `["a \"quoted\" [redacted]",2]`},
+		{`"Rejected \u0073k-test/key+42"`, `"Rejected [redacted]"`},
+		{`{"error":{"message":"{\"key\":\"\\u0073k-test/key+42\"}"}}`, `{"error":{"message":"{\"key\":\"[redacted]\"}"}}`},
+		// Data around the credential keeps its bytes, escapes included.
+		{`{"a":"caf\u00e9 <b>","b":[1, 2],"c":"\u0073k-test/key+42"}`, `{"a":"caf\u00e9 <b>","b":[1, 2],"c":"[redacted]"}`},
+		// The encodings String removes are removed inside a decoded string too.
+		{`{"m":"token c2stdGVzdC9rZXkrNDI\u003d refused"}`, `{"m":"token [redacted] refused"}`},
+		{`{"m":"key=sk-test%2Fkey%2B42"}`, `{"m":"key=[redacted]"}`},
+	} {
+		ev := r.Event(llm.Event{Type: llm.EventNative, Raw: json.RawMessage(c.in)})
+		if got := string(ev.Raw); got != c.want {
+			t.Errorf("raw %s\n got %s\nwant %s", c.in, got, c.want)
+		}
+	}
+}

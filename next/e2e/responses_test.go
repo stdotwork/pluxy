@@ -66,7 +66,7 @@ func TestResponsesUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		key := keyForms(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		created := `data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}` + "\n\n"
 		switch {
 		case strings.Contains(string(body), `"model":"error-event"`):
@@ -98,11 +98,11 @@ func TestResponsesUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 			if !strings.Contains(string(raw), "Rejected") {
 				t.Errorf("the upstream's message did not reach the client (status %d): %s", resp.StatusCode, raw)
 			}
-			if strings.Contains(string(raw), upstreamKey) {
+			if holdsKey(string(raw)) {
 				t.Errorf("client reply holds the account's key: %s", raw)
 			}
 			all := logs.waitFor(t, model)
-			if strings.Contains(all, upstreamKey) {
+			if holdsKey(all) {
 				t.Errorf("core's log holds the account's key:\n%s", all)
 			}
 		})

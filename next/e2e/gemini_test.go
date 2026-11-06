@@ -106,7 +106,7 @@ func TestUpstreamRedirectToAnotherHostIsNotFollowed(t *testing.T) {
 func TestGeminiUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 	u := newUpstream(t)
 	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("X-Goog-Api-Key")
+		key := keyForms(r.Header.Get("X-Goog-Api-Key"))
 		if strings.HasSuffix(r.URL.Path, "/models/error-chunk:streamGenerateContent") {
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hi\"}]},\"index\":0}]}\n\n")
@@ -139,11 +139,11 @@ func TestGeminiUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 			if !strings.Contains(string(raw), "Rejected") {
 				t.Errorf("the upstream's message did not reach the client (status %d): %s", resp.StatusCode, raw)
 			}
-			if strings.Contains(string(raw), upstreamKey) {
+			if holdsKey(string(raw)) {
 				t.Errorf("client reply holds the account's key: %s", raw)
 			}
 			all := logs.waitFor(t, "in "+c.model)
-			if strings.Contains(all, upstreamKey) {
+			if holdsKey(all) {
 				t.Errorf("core's log holds the account's key:\n%s", all)
 			}
 		})
