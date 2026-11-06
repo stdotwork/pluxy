@@ -173,15 +173,16 @@ var Providers = map[string]Provider{
 			for _, m := range models {
 				ms = append(ms, map[string]any{"name": m, "alias": m})
 			}
-			var entries []any
+			var ks []any
 			for _, k := range keys {
-				entries = append(entries, map[string]any{
-					"api-key":  k,
-					"base-url": upstreamURL,
-					"models":   ms,
-				})
+				ks = append(ks, map[string]any{"api-key": k})
 			}
-			return map[string]any{"gemini-api-key": entries}
+			return map[string]any{"gemini": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL,
+				"keys":     ks,
+				"models":   ms,
+			}}}
 		},
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
