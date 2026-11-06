@@ -336,20 +336,23 @@ type otherChoice struct {
 	snap map[string]any
 }
 
-// addOther records a choice after the first. A stream fragment (a choice with a delta) is merged
-// into the choice with its index the way OpenAI's Python SDK puts a streamed completion
-// together: the delta into the message, logprobs lists appended, other choice fields replaced.
+// addOther records a choice after the first. A stream fragment (a choice with a delta, or without
+// a message once its index has streamed) is merged into the choice with its index the way
+// OpenAI's Python SDK puts a streamed completion together: the delta into the message, logprobs
+// lists appended, other choice fields replaced.
 func (a *Aggregator) addOther(c json.RawMessage) {
 	var ch map[string]any
 	d := json.NewDecoder(bytes.NewReader(c))
 	d.UseNumber()
 	err := d.Decode(&ch)
-	if _, frag := ch["delta"]; err != nil || !frag || ch["message"] != nil {
+	idx := fmt.Sprint(ch["index"])
+	o := a.streamed[idx]
+	// A fragment may come without a delta, such as one that only finishes its choice.
+	_, frag := ch["delta"]
+	if err != nil || ch["message"] != nil || !frag && o == nil {
 		a.others = append(a.others, &otherChoice{raw: c})
 		return
 	}
-	idx := fmt.Sprint(ch["index"])
-	o := a.streamed[idx]
 	if o == nil {
 		o = &otherChoice{snap: map[string]any{"message": map[string]any{}, "finish_reason": nil}}
 		a.streamed[idx] = o

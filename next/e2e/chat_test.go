@@ -466,47 +466,55 @@ func TestNonStreamingChat(t *testing.T) {
 // A non-streamed request whose upstream streams a reply with two choices gets the second
 // choice whole, as a message put together from its fragments the way OpenAI's SDK does: text
 // joined, a tool call's arguments joined by tool index, its finish reason and logprobs kept.
-// The reviewer's case came back with three choices, the extra two being index 1 fragments.
+// The reviewer's case came back with three choices, the extra two being index 1 fragments; an
+// upstream may also finish a choice in a fragment without a delta.
 func TestNonStreamingChatPutsOtherChoicesTogether(t *testing.T) {
-	u := newUpstream(t)
-	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
-		for _, choices := range []string{
-			`{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null},{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}`,
-			`{"index":0,"delta":{"content":"First"},"finish_reason":null},{"index":1,"delta":{"content":"Sec"},"logprobs":{"content":[{"token":"Sec","logprob":-0.5}]},"finish_reason":null}`,
-			`{"index":1,"delta":{"role":"assistant","content":"ond"},"logprobs":{"content":[{"token":"ond","logprob":-0.25}]},"finish_reason":null}`,
-			`{"index":1,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"f","arguments":"{\"a\""}}]},"finish_reason":null}`,
-			`{"index":1,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":1}"}}]},"finish_reason":null}`,
-			`{"index":0,"delta":{},"finish_reason":"stop"},{"index":1,"delta":{},"finish_reason":"tool_calls"}`,
-		} {
-			fmt.Fprintf(w, "data: {%s,\"choices\":[%s]}\n\n", head, choices)
-		}
-		io.WriteString(w, "data: [DONE]\n\n")
-	}
-	base := startCore(t, u)
-	resp := post(t, context.Background(), base, clientKey, `{"model":"gpt-test","n":2,"messages":[{"role":"user","content":"hi"}]}`)
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status %d: %s", resp.StatusCode, raw)
-	}
-	var got struct {
-		Choices []any `json:"choices"`
-	}
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("%v: %s", err, raw)
-	}
-	var want []any
-	json.Unmarshal([]byte(`[
-		{"index":0,"message":{"role":"assistant","content":"First"},"finish_reason":"stop"},
-		{"index":1,"message":{"role":"assistant","content":"Second","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{\"a\":1}"}}]},
-		 "logprobs":{"content":[{"token":"Sec","logprob":-0.5},{"token":"ond","logprob":-0.25}]},"finish_reason":"tool_calls"}
-	]`), &want)
-	if !reflect.DeepEqual(got.Choices, want) {
-		g, _ := json.Marshal(got.Choices)
-		w, _ := json.Marshal(want)
-		t.Errorf("choices\n got %s\nwant %s", g, w)
+	for _, last := range []string{
+		`{"index":1,"delta":{},"finish_reason":"tool_calls"}`,
+		`{"index":1,"finish_reason":"tool_calls"}`,
+	} {
+		t.Run(last, func(t *testing.T) {
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+				for _, choices := range []string{
+					`{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null},{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}`,
+					`{"index":0,"delta":{"content":"First"},"finish_reason":null},{"index":1,"delta":{"content":"Sec"},"logprobs":{"content":[{"token":"Sec","logprob":-0.5}]},"finish_reason":null}`,
+					`{"index":1,"delta":{"role":"assistant","content":"ond"},"logprobs":{"content":[{"token":"ond","logprob":-0.25}]},"finish_reason":null}`,
+					`{"index":1,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"f","arguments":"{\"a\""}}]},"finish_reason":null}`,
+					`{"index":1,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":1}"}}]},"finish_reason":null}`,
+					`{"index":0,"delta":{},"finish_reason":"stop"},` + last,
+				} {
+					fmt.Fprintf(w, "data: {%s,\"choices\":[%s]}\n\n", head, choices)
+				}
+				io.WriteString(w, "data: [DONE]\n\n")
+			}
+			base := startCore(t, u)
+			resp := post(t, context.Background(), base, clientKey, `{"model":"gpt-test","n":2,"messages":[{"role":"user","content":"hi"}]}`)
+			defer resp.Body.Close()
+			raw, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d: %s", resp.StatusCode, raw)
+			}
+			var got struct {
+				Choices []any `json:"choices"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("%v: %s", err, raw)
+			}
+			var want []any
+			json.Unmarshal([]byte(`[
+				{"index":0,"message":{"role":"assistant","content":"First"},"finish_reason":"stop"},
+				{"index":1,"message":{"role":"assistant","content":"Second","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{\"a\":1}"}}]},
+				 "logprobs":{"content":[{"token":"Sec","logprob":-0.5},{"token":"ond","logprob":-0.25}]},"finish_reason":"tool_calls"}
+			]`), &want)
+			if !reflect.DeepEqual(got.Choices, want) {
+				g, _ := json.Marshal(got.Choices)
+				w, _ := json.Marshal(want)
+				t.Errorf("choices\n got %s\nwant %s", g, w)
+			}
+		})
 	}
 }
 
