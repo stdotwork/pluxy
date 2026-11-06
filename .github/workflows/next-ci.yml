@@ -39,6 +39,28 @@ jobs:
           go-version-file: next/go.mod
           cache: true
           cache-dependency-path: next/go.mod
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: UI install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: UI type check
+        working-directory: next/ui
+        run: bun run check
+      - name: UI lint
+        working-directory: next/ui
+        run: bun run lint
+      - name: UI unit tests
+        working-directory: next/ui
+        run: bun run test
+      - name: Build the panel core embeds
+        run: go generate ./internal/panel
       - name: Format
         run: |
           unformatted="$(gofmt -l .)"
@@ -52,4 +74,12 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
+        env:
+          PLUXY_REQUIRE_PANEL: '1'
         run: go test -race -count=1 ./...
+      - name: Install Chromium for the browser test
+        working-directory: next/ui
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Browser test
+        working-directory: next/ui
+        run: bun run test:browser
