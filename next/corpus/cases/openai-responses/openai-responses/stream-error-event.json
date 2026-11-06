@@ -133,12 +133,14 @@
     {
       "path": "upstream[0].body.include",
       "kind": "intended",
-      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension.",
+      "absent": true
     },
     {
       "path": "upstream[0].body.input",
       "kind": "intended",
-      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension.",
+      "want": "Say hello"
     },
     {
       "path": "upstream[0].body.instructions",
@@ -163,7 +165,8 @@
     {
       "path": "upstream[0].body.tools",
       "kind": "intended",
-      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension."
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (input as a list, empty instructions, include, store false, parallel_tool_calls, prompt_cache_key and Session-Id, an image_generation tool, temperature removed, every request streamed). The new core's generic Responses upstream sends the client's body unchanged; Codex endpoint rules belong to the Codex provider extension.",
+      "absent": true
     },
     {
       "path": "upstream[0].headers.Accept-Encoding",

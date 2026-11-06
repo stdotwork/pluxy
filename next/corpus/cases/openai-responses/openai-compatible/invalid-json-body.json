@@ -32,7 +32,12 @@
     {
       "path": "client.body.error",
       "kind": "gap",
-      "reason": "Both answer 400, but the old core does not report the JSON error: it fails to find a model and says unknown provider (model_not_found); the new core reports that the body is not valid JSON."
+      "reason": "Both answer 400, but the old core does not report the JSON error: it fails to find a model and says unknown provider (model_not_found); the new core reports that the body is not valid JSON.",
+      "want": {
+        "code": "invalid_request",
+        "message": "request body is not valid JSON: unexpected end of JSON input",
+        "type": "invalid_request_error"
+      }
     }
   ]
 }

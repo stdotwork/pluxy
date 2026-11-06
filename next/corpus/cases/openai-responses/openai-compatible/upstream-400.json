@@ -70,7 +70,12 @@
     {
       "path": "client.body.error",
       "kind": "intended",
-      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built."
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {
+        "code": "invalid_value",
+        "message": "Invalid value for 'temperature'.",
+        "type": "invalid_request_error"
+      }
     }
   ]
 }

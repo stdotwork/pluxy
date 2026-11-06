@@ -221,7 +221,22 @@
     {
       "path": "client.body.text",
       "kind": "intended",
-      "reason": "The new core's Response repeats the client's own Responses request fields; today's core repeats fields of the Chat request it translated to (Chat-shaped tools and tool_choice; nothing for instructions, text, reasoning, temperature or top_p)."
+      "reason": "The new core's Response repeats the client's own Responses request fields; today's core repeats fields of the Chat request it translated to (Chat-shaped tools and tool_choice; nothing for instructions, text, reasoning, temperature or top_p).",
+      "want": {
+        "format": {
+          "name": "weather",
+          "schema": {
+            "properties": {
+              "temp": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "strict": true,
+          "type": "json_schema"
+        }
+      }
     },
     {
       "path": "client.body.tool_choice",

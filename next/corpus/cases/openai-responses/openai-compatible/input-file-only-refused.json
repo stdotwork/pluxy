@@ -46,7 +46,12 @@
     {
       "path": "client.body.error",
       "kind": "intended",
-      "reason": "Both refuse the emptied user turn with 400 before any upstream call; the new core's error body is its own (it names the turn and has a code)."
+      "reason": "Both refuse the emptied user turn with 400 before any upstream call; the new core's error body is its own (it names the turn and has a code).",
+      "want": {
+        "code": "invalid_request",
+        "message": "input[0]: nothing in this user turn can be sent to Chat Completions",
+        "type": "invalid_request_error"
+      }
     }
   ]
 }

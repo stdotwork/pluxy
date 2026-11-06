@@ -79,7 +79,12 @@
     {
       "path": "client.body.error",
       "kind": "intended",
-      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built."
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {
+        "code": "rate_limit_exceeded",
+        "message": "Rate limit reached for requests",
+        "type": "rate_limit_error"
+      }
     }
   ]
 }
