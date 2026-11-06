@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Request is an API request the server answered with a valid token.
@@ -32,6 +33,10 @@ type Server struct {
 	Deny bool
 	// TokenDown makes the token endpoint answer 503.
 	TokenDown bool
+	// CodeLifetime is how long a device code lasts, in seconds; 0 means 600.
+	CodeLifetime int
+	// SlowDown makes every poll of a pending device code answer slow_down.
+	SlowDown bool
 
 	mu       sync.Mutex
 	n        int
@@ -45,6 +50,7 @@ type code struct {
 	user     string
 	approved bool
 	deviceID string
+	expires  time.Time
 }
 
 // New starts a fake that is closed when the test ends.
@@ -110,10 +116,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.n++
 		dc, uc := fmt.Sprintf("kimitest-device-%d", s.n), fmt.Sprintf("KIMI-%04d", s.n)
-		s.codes[dc] = &code{user: uc, deviceID: r.Header.Get("X-Msh-Device-Id")}
+		life := s.CodeLifetime
+		if life == 0 {
+			life = 600
+		}
+		s.codes[dc] = &code{user: uc, deviceID: r.Header.Get("X-Msh-Device-Id"), expires: time.Now().Add(time.Duration(life) * time.Second)}
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{"device_code": dc, "user_code": uc, "verification_uri": s.URL + "/device",
-			"verification_uri_complete": s.URL + "/device?user_code=" + uc, "expires_in": 600, "interval": 1})
+			"verification_uri_complete": s.URL + "/device?user_code=" + uc, "expires_in": life, "interval": 1})
 	case r.URL.Path == "/api/oauth/token" && r.Method == http.MethodPost:
 		s.token(w, r)
 	case strings.HasPrefix(r.URL.Path, "/coding/v1/") && r.Method == http.MethodPost:
@@ -162,8 +172,12 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case c == nil:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_grant"})
+		case time.Now().After(c.expires):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expired_token"})
 		case s.Deny:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "access_denied"})
+		case !c.approved && s.SlowDown:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "slow_down"})
 		case !c.approved:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "authorization_pending"})
 		default:

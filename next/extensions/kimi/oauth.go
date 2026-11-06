@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +39,20 @@ var loginMethods = []protocol.LoginMethod{
 	{Method: "device", Kind: protocol.LoginDevice, Label: "Kimi Code (device code)"},
 }
 
+// authClient talks to Kimi's login. Its timeout covers only signing in and renewing, never a
+// model request: a login host that stops answering must not hold a renewal, and every request of
+// the account waiting on it, forever. It follows no redirect, which would send the form (a device
+// code or refresh token) wherever the redirect points.
+var authClient = &http.Client{
+	Timeout:       30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// prompter shows the user a login prompt; *sdk.LoginSession is one.
+type prompter interface {
+	Prompt(protocol.Prompt) error
+}
+
 func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*protocol.Grant, error) {
 	set, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -47,6 +61,10 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	if call.Method != "device" {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("unknown login method %q", call.Method), Scope: llm.ScopeRequest}
 	}
+	return deviceLogin(ctx, set, s)
+}
+
+func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant, error) {
 	deviceID := newDeviceID()
 	var dc struct {
 		DeviceCode              string `json:"device_code"`
@@ -73,12 +91,24 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	if dc.Interval > 0 {
 		interval = time.Duration(dc.Interval) * time.Second
 	}
+	if dc.ExpiresIn > 0 {
+		// Polling past the code's lifetime only earns expired_token; stop when it ends.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.Now().Add(time.Duration(dc.ExpiresIn)*time.Second))
+		defer cancel()
+	}
+	expired := func(parent error) error {
+		if errors.Is(parent, context.DeadlineExceeded) && dc.ExpiresIn > 0 {
+			return refused("the code expired before it was approved; start the login again")
+		}
+		return parent
+	}
 	for {
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			return nil, expired(ctx.Err())
 		case <-timer.C:
 		}
 		var tr tokenResponse
@@ -89,7 +119,7 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 			return &protocol.Grant{Credential: tr.credential(deviceID, "")}, nil
 		}
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, expired(ctx.Err())
 		}
 		switch f.code {
 		case "authorization_pending":
@@ -179,7 +209,7 @@ func oauthPost(ctx context.Context, endpoint, deviceID string, form url.Values, 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	deviceHeaders(req.Header, deviceID)
-	resp, err := client.Do(req)
+	resp, err := authClient.Do(req)
 	if err != nil {
 		return &oauthFailure{err: err}
 	}
@@ -189,11 +219,7 @@ func oauthPost(ctx context.Context, endpoint, deviceID string, form url.Values, 
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		var wait int64
-		if secs, err := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64); err == nil && secs > 0 {
-			wait = secs * 1000
-		}
-		return &oauthFailure{status: resp.StatusCode, code: e.Error, retryAfterMS: wait}
+		return &oauthFailure{status: resp.StatusCode, code: e.Error, retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
 		return &oauthFailure{status: resp.StatusCode, err: fmt.Errorf("the reply is not valid JSON: %w", err)}
@@ -218,7 +244,7 @@ func tokenError(f *oauthFailure) error {
 	case f.status == http.StatusTooManyRequests:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: "Kimi's login is rate limiting", Status: f.status, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: f.retryAfterMS}
 	case f.status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("Kimi's login answered %d", f.status), Status: f.status, Retryable: true, Scope: llm.ScopeEndpoint}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("Kimi's login answered %d", f.status), Status: f.status, Retryable: true, Scope: llm.ScopeEndpoint, RetryAfterMS: f.retryAfterMS}
 	case f.code == "invalid_grant":
 		return &llm.Error{Code: llm.CodeAuth, Message: "Kimi refused the grant; log in again", Status: f.status, ProviderCode: f.code, Scope: llm.ScopeCredential}
 	}
