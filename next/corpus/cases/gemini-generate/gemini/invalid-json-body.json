@@ -1,0 +1,34 @@
+{
+  "description": "A Gemini request whose body is not JSON is refused before any upstream call, with a JSON error.",
+  "source": [
+    "core/sdk/api/handlers/gemini/gemini_handlers.go:137-177 (request body error emitted as JSON before any streaming)"
+  ],
+  "client": {"path":"/v1beta/models/gemini-corpus:generateContent","body_text":"{\"contents\": ["},
+  "recorded_old_core": {
+    "client": {
+      "body": {"error":{"message":"corpus: no scripted reply for upstream request 1"}},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 500
+    },
+    "upstream": [
+      {
+        "body": "{\"contents\": [",
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:generateContent"
+      }
+    ]
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "description": "Gemini client, same-format passthrough, non-stream: systemInstruction, the user turn and generationConfig reach the upstream as the client sent them, and the upstream's candidate (with its thoughtSignature and usageMetadata) reaches the client unchanged.",
+  "source": [
+    "core/sdk/api/handlers/gemini/gemini_handlers.go:128-177 (generateContent dispatch)",
+    "core/internal/translator/gemini/gemini/gemini_gemini_request.go:31-87 (same-format request)",
+    "core/internal/translator/gemini/gemini/gemini_gemini_response.go:10-30 (non-stream response returned unchanged)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-corpus:generateContent",
+    "body": {
+      "systemInstruction": {"parts":[{"text":"Be brief."}]},
+      "contents": [{"role":"user","parts":[{"text":"Say hello"}]}],
+      "generationConfig": {"temperature":0.2,"maxOutputTokens":256}
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [{"text":"Hello there!","thoughtSignature":"CiQB0e2Kb7sigA1"}]
+            },
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 40,
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        },
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {
+              "parts": [{"text":"Hello there!","thoughtSignature":"CiQB0e2Kb7sigA1"}],
+              "role": "model"
+            },
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus",
+        "usageMetadata": {
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "promptTokenCount": 40,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+          "generationConfig": {"maxOutputTokens":256,"temperature":0.2},
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ],
+          "systemInstruction": {"parts":[{"text":"Be brief."}]}
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:generateContent"
+      }
+    ]
+  }
+}

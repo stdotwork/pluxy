@@ -1,0 +1,68 @@
+{
+  "description": "Gemini client, same-format passthrough, non-stream: an upstream that blocks the prompt (promptFeedback with a blockReason and no candidates) gets a 502 from today's core, with the upstream's block reason in the error message.",
+  "source": [
+    "core/internal/runtime/executor/gemini_executor.go:503-547 (prompt feedback with blockReason and no candidates becomes HTTP 502)",
+    "core/internal/runtime/executor/gemini_executor_test.go:1659-1737 (TestGeminiExecutorPromptFeedbackBlockWithoutCandidatesReturnsError)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-corpus:generateContent",
+    "body": {"contents":[{"role":"user","parts":[{"text":"Say hello"}]}]}
+  },
+  "upstream": [
+    {
+      "body": {
+        "promptFeedback": {
+          "blockReason": "SAFETY",
+          "safetyRatings": [
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","probability":"HIGH","blocked":true}
+          ]
+        },
+        "usageMetadata": {"promptTokenCount":5,"totalTokenCount":5},
+        "modelVersion": "gemini-corpus-upstream"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "internal_server_error",
+          "message": "upstream blocked the prompt: SAFETY",
+          "type": "server_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 502
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [{"parts":[{"text":"Say hello"}],"role":"user"}],
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:generateContent"
+      }
+    ]
+  }
+}

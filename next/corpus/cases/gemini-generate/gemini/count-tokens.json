@@ -1,0 +1,40 @@
+{
+  "description": "countTokens passes the contents to the upstream's countTokens and returns the upstream's totalTokens unchanged.",
+  "source": [
+    "core/sdk/api/handlers/gemini/gemini_handlers.go:128-177 (countTokens dispatch)",
+    "core/internal/runtime/executor/gemini_executor.go:169-183 (countTokens uses the countTokens method on the model path)",
+    "core/internal/translator/gemini/gemini/gemini_gemini_response.go:10-30 (token count JSON returned as is)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-corpus:countTokens",
+    "body": {"contents":[{"role":"user","parts":[{"text":"hi"}]}]}
+  },
+  "upstream": [{"body":{"totalTokens":3}}],
+  "recorded_old_core": {
+    "client": {
+      "body": {"promptTokensDetails":[{"modality":"TEXT","tokenCount":3}],"totalTokens":3},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {"contents":[{"parts":[{"text":"hi"}],"role":"user"}],"model":"gemini-corpus"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:countTokens"
+      }
+    ]
+  }
+}
