@@ -113,6 +113,7 @@ func TestFetchRefusesBadPackages(t *testing.T) {
 		{"absolute entry", append(good(), entry{name: "/tmp/escape", body: "x"}), nil, "leaves the package folder"},
 		{"symbolic link", append(good(), entry{name: "link", typ: tar.TypeSymlink, link: "/etc/passwd"}), nil, "not a regular file or folder"},
 		{"hard link", append(good(), entry{name: "hard", typ: tar.TypeLink, link: "bin/ext"}), nil, "not a regular file or folder"},
+		{"link named as the folder itself", append(good(), entry{name: ".", typ: tar.TypeSymlink, link: "/etc"}), nil, "not a regular file or folder"},
 		{"duplicate entry", append(good(), entry{name: "bin/ext", body: "again"}), nil, "bin/ext"},
 		{"no manifest", []entry{{name: "bin/ext", body: "x"}}, nil, "no pluxy-extension.json"},
 		{"other package's manifest", []entry{{name: "pluxy-extension.json", body: manifest("test/other", "1.0.0", "bin/ext")}, {name: "bin/ext", body: "x"}}, nil, "not the test/ext 1.0.0"},
@@ -269,5 +270,41 @@ func TestRegistryLocations(t *testing.T) {
 		if err := CheckLocation(loc); (err == nil) != ok {
 			t.Errorf("CheckLocation(%q) = %v", loc, err)
 		}
+	}
+}
+
+// A link already inside the packages folder is never followed: installing and removing write
+// and delete only inside the folder.
+func TestCommitAndRemoveStayInsideThePackagesFolder(t *testing.T) {
+	in, root := installer(t, localRegistry(t, archive(t, good()), nil))
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "ext", "1.0.0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(outside, "ext", "1.0.0", "unrelated")
+	if err := os.WriteFile(keep, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "test")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := in.Fetch(context.Background(), Request{ID: "test/ext"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Commit(nil); err == nil {
+		t.Error("installed through a link")
+	}
+	if err := Remove(root, "test/ext", "1.0.0"); err == nil {
+		t.Error("removed through a link")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("a file outside the packages folder was removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "ext", "1.0.0", "pluxy-extension.json")); err == nil {
+		t.Error("the package was written outside the packages folder")
 	}
 }

@@ -239,6 +239,10 @@ func (m *Manager) Credential(ctx context.Context, extension, id string) (*protoc
 		r, e := m.renew(ctx, rec, false)
 		now = m.now()
 		switch {
+		case e == nil && (r.Registration != rec.Registration || r.Extension != extension):
+			// Removed during the renewal, and maybe added again for another extension: the
+			// record is not the account this attempt asked for.
+			return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", id))
 		case e == nil:
 			rec = r
 			if !rec.Usable() {

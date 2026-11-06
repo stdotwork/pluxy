@@ -304,7 +304,9 @@ An enabled package's program runs only while it is needed, as any extension does
 starts it, core checks its manifest and program still have the digest recorded at install; one
 that changed is not run. An enabled package that cannot start when core starts (its files
 changed, or it needs a protocol version this core does not speak) is skipped, and management
-shows why; core serves with the rest.
+shows why; core serves with the rest. A reload that cannot prepare a package that runs now is
+refused, and the running version stays. Installing the same release again replaces files that
+changed. Management never shows a registry or archive URL's user name, password or query.
 
 ### Bundled packages
 

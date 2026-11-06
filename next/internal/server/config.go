@@ -159,11 +159,15 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	if c.Listen == "" {
 		return nil, errors.New("config: listen is required")
 	}
+	base := filepath.Dir(path)
+	if abs, err := filepath.Abs(base); err == nil {
+		base = abs
+	}
 	rel := func(p string) string {
 		if p == "" || filepath.IsAbs(p) {
 			return p
 		}
-		return filepath.Join(filepath.Dir(path), p)
+		return filepath.Join(base, p)
 	}
 	if c.Extension.Manifest == "" && len(c.Extension.Accounts) > 0 {
 		return nil, errors.New("config: extension.accounts needs extension.manifest; accounts of an installed package go in extensions.<id>.accounts")

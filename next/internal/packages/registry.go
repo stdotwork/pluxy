@@ -160,6 +160,23 @@ func (ix *Index) pick(id, version string, protocols []int, platform string) (Rel
 	return Release{}, Artifact{}, fmt.Errorf("no release of %s runs here: %w", id, first)
 }
 
+// RedactURL returns loc fit to show: an https:// URL without its user name, password and
+// query, which may hold secrets; a path as it is.
+func RedactURL(loc string) string {
+	if !isHTTPS(loc) {
+		return loc
+	}
+	u, err := url.Parse(loc)
+	if err != nil {
+		return "(an https:// URL that does not parse)"
+	}
+	u.User, u.Fragment = nil, ""
+	if u.RawQuery != "" {
+		u.RawQuery = "redacted"
+	}
+	return u.String()
+}
+
 // isHTTPS reports whether loc is an https:// URL rather than a path.
 func isHTTPS(loc string) bool { return strings.HasPrefix(strings.ToLower(loc), "https://") }
 
@@ -170,12 +187,12 @@ func CheckLocation(loc string) error {
 	if isHTTPS(loc) {
 		u, err := url.Parse(loc)
 		if err != nil || u.Host == "" {
-			return fmt.Errorf("registry URL %q is not a valid https:// URL", loc)
+			return fmt.Errorf("registry URL %q is not a valid https:// URL", RedactURL(loc))
 		}
 		return nil
 	}
 	if u, err := url.Parse(loc); err == nil && u.Scheme != "" && len(u.Scheme) > 1 {
-		return fmt.Errorf("registry %q: only https:// URLs and local paths are allowed", loc)
+		return fmt.Errorf("registry %s://…: only https:// URLs and local paths are allowed", u.Scheme)
 	}
 	if !filepath.IsAbs(loc) {
 		return fmt.Errorf("registry path %q must be absolute", loc)
@@ -187,27 +204,27 @@ func CheckLocation(loc string) error {
 func resolve(index, ref string) (string, error) {
 	u, err := url.Parse(ref)
 	if err != nil {
-		return "", fmt.Errorf("%w: archive url %q is not valid", ErrRefused, ref)
+		return "", fmt.Errorf("%w: archive url is not valid", ErrRefused)
 	}
 	if u.Scheme != "" {
 		if !strings.EqualFold(u.Scheme, "https") || u.Host == "" {
-			return "", fmt.Errorf("%w: archive url %q: only https:// URLs or paths relative to the index are allowed", ErrRefused, ref)
+			return "", fmt.Errorf("%w: archive url %s://…: only https:// URLs or paths relative to the index are allowed", ErrRefused, u.Scheme)
 		}
 		return u.String(), nil
 	}
 	if isHTTPS(index) {
 		base, err := url.Parse(index)
 		if err != nil {
-			return "", fmt.Errorf("%w: registry URL %q is not valid", ErrRefused, index)
+			return "", fmt.Errorf("%w: registry URL %s is not valid", ErrRefused, RedactURL(index))
 		}
 		out := base.ResolveReference(u)
 		if !strings.EqualFold(out.Scheme, "https") {
-			return "", fmt.Errorf("%w: archive url %q does not resolve to an https:// URL", ErrRefused, ref)
+			return "", fmt.Errorf("%w: archive url %s does not resolve to an https:// URL", ErrRefused, RedactURL(out.String()))
 		}
 		return out.String(), nil
 	}
 	if u.Host != "" || u.RawQuery != "" || u.Fragment != "" || !filepath.IsLocal(filepath.FromSlash(u.Path)) || strings.Contains(u.Path, `\`) {
-		return "", fmt.Errorf("%w: archive url %q must be a path inside the local registry's folder", ErrRefused, ref)
+		return "", fmt.Errorf("%w: archive url %q must be a path inside the local registry's folder", ErrRefused, u.Path)
 	}
 	return filepath.Join(filepath.Dir(index), filepath.FromSlash(u.Path)), nil
 }
@@ -228,7 +245,7 @@ func httpsRedirectsOnly(req *http.Request, via []*http.Request) error {
 		return errors.New("too many redirects")
 	}
 	if req.URL.Scheme != "https" {
-		return fmt.Errorf("refusing a redirect to %s: only https:// is allowed", req.URL.Redacted())
+		return fmt.Errorf("refusing a redirect to %s: only https:// is allowed", RedactURL("https://"+req.URL.Host+req.URL.Path))
 	}
 	return nil
 }
@@ -245,7 +262,7 @@ func open(ctx context.Context, client *http.Client, loc string, limit int64) (io
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, loc, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrFetch, err)
+		return nil, fmt.Errorf("%w: %s is not a valid URL", ErrFetch, RedactURL(loc))
 	}
 	// The digest pins the bytes as published: no transparent decompression.
 	req.Header.Set("Accept-Encoding", "identity")
@@ -256,15 +273,20 @@ func open(ctx context.Context, client *http.Client, loc string, limit int64) (io
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrFetch, err)
+		// A *url.Error names the whole URL, query included.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("%w: GET %s: %v", ErrFetch, RedactURL(loc), err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("%w: GET %s: %s", ErrFetch, req.URL.Redacted(), resp.Status)
+		return nil, fmt.Errorf("%w: GET %s: %s", ErrFetch, RedactURL(loc), resp.Status)
 	}
 	if resp.ContentLength > limit {
 		resp.Body.Close()
-		return nil, fmt.Errorf("%w: %s is %d bytes, more than the %d allowed", ErrRefused, req.URL.Redacted(), resp.ContentLength, limit)
+		return nil, fmt.Errorf("%w: %s is %d bytes, more than the %d allowed", ErrRefused, RedactURL(loc), resp.ContentLength, limit)
 	}
 	return resp.Body, nil
 }

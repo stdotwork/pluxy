@@ -347,5 +347,70 @@ func TestChangedPackageIsNotRun(t *testing.T) {
 		if code, body := ask(t, base, "gpt-4o"); code != http.StatusOK {
 			t.Errorf("gpt-4o status %d: %s", code, body)
 		}
+		// Installing the same release again replaces the changed files.
+		var installed struct {
+			Package packageView `json:"package"`
+		}
+		if code := manage(t, base, "POST", "/packages", map[string]any{"id": "pluxy/codex", "enable": true}, &installed); code != http.StatusOK || installed.Package.State == "failed" {
+			t.Fatalf("installing again: status %d, %+v", code, installed.Package)
+		}
+		if code, body := askCodex(t, base); code != http.StatusOK {
+			t.Errorf("after installing again: Codex status %d: %s", code, body)
+		}
 	})
+}
+
+// A reload that cannot prepare a running package again (its files changed) is refused: the
+// running version stays and serves.
+func TestReloadKeepsRunningPackageWhoseFilesChanged(t *testing.T) {
+	u := answeringUpstream(t)
+	srv := codextest.New(t)
+	base, pkgDir := packagesCore(t, u, srv, writeRegistry(t, codexArchive(t, "0.1.0"), ""), noWatch...)
+	if code := manage(t, base, "POST", "/packages", map[string]any{"id": "pluxy/codex", "enable": true}, nil); code != http.StatusOK {
+		t.Fatalf("install: status %d", code)
+	}
+	waitStatus(t, base, "codex running", codexRunning)
+	prog := filepath.Join(pkgDir, "pluxy", "codex", "0.1.0", "bin", "codex")
+	b, err := os.ReadFile(prog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prog+".new", append(b, "changed"...), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(prog+".new", prog); err != nil {
+		t.Fatal(err)
+	}
+	if code, s := reload(t, base); code != http.StatusUnprocessableEntity || !strings.Contains(s.Desired.Error, "changed since it was installed") {
+		t.Errorf("reload: status %d, desired %+v; want 422 naming the changed files", code, s.Desired)
+	}
+	if s := status(t, base); !codexRunning(s) {
+		t.Errorf("the running Codex generation was dropped: %+v", s)
+	}
+	if code, body := askCodex(t, base); code != http.StatusOK {
+		t.Errorf("after the refused reload: Codex status %d: %s", code, body)
+	}
+}
+
+// Management replies never show a registry URL's password or query.
+func TestRegistryRepliesHideURLSecrets(t *testing.T) {
+	u := answeringUpstream(t)
+	srv := codextest.New(t)
+	pkgDir := filepath.Join(t.TempDir(), "packages")
+	cfg := packagesConfig(u, srv, "", pkgDir)
+	cfg["packages"].(map[string]any)["registries"] = []any{map[string]any{"name": "private", "url": "https://user:hunter2@127.0.0.1:1/index.json?token=abc123"}}
+	base, _, _ := runCoreArgs(t, cfg)
+	for _, call := range []struct {
+		method, path string
+		body         any
+	}{{"GET", "/registries", nil}, {"POST", "/packages", map[string]any{"id": "pluxy/codex"}}} {
+		var reply json.RawMessage
+		manage(t, base, call.method, call.path, call.body, &reply)
+		if strings.Contains(string(reply), "hunter2") || strings.Contains(string(reply), "abc123") {
+			t.Errorf("%s %s shows a URL secret: %s", call.method, call.path, reply)
+		}
+		if !strings.Contains(string(reply), "127.0.0.1:1") {
+			t.Errorf("%s %s does not name the registry: %s", call.method, call.path, reply)
+		}
+	}
 }

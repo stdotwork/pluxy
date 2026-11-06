@@ -273,7 +273,9 @@ type extensionSpec struct {
 }
 
 // prepare validates the config and builds everything the snapshot needs, without changing
-// what is live. A new extension generation it starts is stopped again if prepare fails.
+// what is live. A new extension generation it starts is stopped again if prepare fails. An
+// enabled package that cannot be prepared fails prepare when it is in strict or runs in prev;
+// otherwise it is left out and recorded in failed.
 func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State, strict map[string]bool) (*snapshot, error) {
 	cfg, err := server.ParseConfig(b, c.opts.ConfigPath)
 	if err != nil {
@@ -325,7 +327,9 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 			switch {
 			case err == nil:
 				next.exts[id] = g
-			case spec.pkg != nil && !strict[id]:
+			case spec.pkg != nil && !strict[id] && (prev == nil || prev.exts[id] == nil):
+				// It does not run now (core is starting, or it failed before): skip it rather than
+				// refuse the reload. A package that runs now keeps running: the reload is refused.
 				log.Printf("package %s %s not started: %v", id, spec.pkg.Version, err)
 				next.failed[id] = err.Error()
 			default:

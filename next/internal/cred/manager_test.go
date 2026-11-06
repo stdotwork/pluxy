@@ -639,3 +639,35 @@ func TestInputWhileLoginStarts(t *testing.T) {
 	}
 	m.CancelLogin("login-1")
 }
+
+// An account removed while its credential is being renewed, and added again under the same ID
+// for another extension, never has the new account's credential handed to the first extension.
+func TestRenewalNeverReturnsAnotherExtensionsCredential(t *testing.T) {
+	p := &fakeProvider{gate: make(chan struct{}), started: make(chan struct{}, 1)}
+	m, store := newManager(t, p, time.Minute) // due for renewal
+	type result struct {
+		c *protocol.Credential
+		e *llm.Error
+	}
+	done := make(chan result, 1)
+	go func() {
+		c, _, e := m.Credential(context.Background(), provID, "acct")
+		done <- result{c, e}
+	}()
+	wait(t, p.started)
+	if err := m.Remove("acct"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(Record{ID: "acct", Extension: "someone/else", State: StateActive,
+		Credential: protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "theirs"}}); err != nil {
+		t.Fatal(err)
+	}
+	close(p.gate)
+	r := <-done
+	if r.c != nil {
+		t.Fatalf("%s was handed %+v, the credential of another extension's account", provID, r.c)
+	}
+	if r.e == nil {
+		t.Error("no error for an account that was removed")
+	}
+}

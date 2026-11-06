@@ -107,6 +107,7 @@ func (c *Core) Packages() []PackageView {
 
 func (c *Core) view(s *snapshot, p packages.Installed) PackageView {
 	v := PackageView{Installed: p, State: "disabled"}
+	v.URL = packages.RedactURL(p.URL)
 	switch g := s.exts[p.ID]; {
 	case !p.Enabled:
 	case g != nil && g.Path() == p.Manifest(c.pkgDir):
@@ -141,16 +142,21 @@ func (c *Core) Install(ctx context.Context, req InstallRequest) (PackageView, er
 	}
 	old, had := c.cur.Load().pkgs[req.ID]
 	if had && old.Version == staged.Version {
-		staged.Discard()
 		if old.SHA256 != staged.SHA256 {
+			staged.Discard()
 			return PackageView{}, fmt.Errorf("%w: %s %s is installed with archive digest %s; registry %s now pins %s. Remove it first to install the new archive",
 				packages.ErrRefused, req.ID, old.Version, old.SHA256, staged.Registry, staged.SHA256)
 		}
-		if req.Enable && !old.Enabled {
-			return c.setEnabled(req.ID, true)
+		if fp, err := host.Fingerprint(old.Manifest(c.pkgDir)); err == nil && fp == old.Fingerprint {
+			// Installed and intact: nothing to replace.
+			staged.Discard()
+			if req.Enable && !old.Enabled {
+				return c.setEnabled(req.ID, true)
+			}
+			v, _ := c.packageView(req.ID)
+			return v, nil
 		}
-		v, _ := c.packageView(req.ID)
-		return v, nil
+		// Its files changed since it was installed: the checked release replaces them.
 	}
 	p, err := staged.Commit(c.inUse)
 	if err != nil {
@@ -177,7 +183,7 @@ func (c *Core) Install(ctx context.Context, req InstallRequest) (PackageView, er
 		v, _ := c.packageView(req.ID)
 		return v, fmt.Errorf("%w: %s %s is installed but did not start, so it stays disabled: %v", ErrNotStarted, req.ID, p.Version, err)
 	}
-	if had {
+	if had && old.Version != p.Version {
 		c.retire(old)
 	}
 	log.Printf("package %s %s installed from registry %s", req.ID, p.Version, p.Registry)
@@ -309,6 +315,7 @@ func (c *Core) Registries(ctx context.Context) []RegistryView {
 	out := []RegistryView{}
 	for _, r := range in.Registries {
 		v := RegistryView{Registry: r}
+		v.URL = packages.RedactURL(r.URL)
 		ix, err := packages.ReadIndex(ctx, in.Client, r)
 		if err != nil {
 			v.Error = err.Error()

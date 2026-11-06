@@ -37,9 +37,12 @@ type Installed struct {
 }
 
 // Dir returns the package's folder under the packages folder root.
-func (in Installed) Dir(root string) string {
+func (in Installed) Dir(root string) string { return filepath.Join(root, in.rel()) }
+
+// rel returns the package's folder relative to the packages folder.
+func (in Installed) rel() string {
 	pub, name, _ := strings.Cut(in.ID, "/")
-	return filepath.Join(root, pub, name, in.Version)
+	return filepath.Join(pub, name, in.Version)
 }
 
 // Manifest returns the path of the package's manifest under root.

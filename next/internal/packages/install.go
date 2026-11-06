@@ -86,6 +86,9 @@ func (in *Installer) Fetch(ctx context.Context, req Request) (*Staged, error) {
 	if err := os.MkdirAll(filepath.Join(in.Dir, stagingDir), 0o755); err != nil {
 		return nil, err
 	}
+	if fi, err := os.Lstat(filepath.Join(in.Dir, stagingDir)); err != nil || !fi.IsDir() {
+		return nil, fmt.Errorf("%s is not a folder", filepath.Join(in.Dir, stagingDir))
+	}
 	dir, err := os.MkdirTemp(filepath.Join(in.Dir, stagingDir), "install-")
 	if err != nil {
 		return nil, err
@@ -213,7 +216,7 @@ func unpack(path, dir string) error {
 			return fmt.Errorf("%w: the archive has more than %d entries", ErrRefused, maxEntries)
 		}
 		name := strings.TrimSuffix(strings.TrimPrefix(h.Name, "./"), "/")
-		if name == "" || name == "." {
+		if (name == "" || name == ".") && h.Typeflag == tar.TypeDir {
 			continue // the folder itself
 		}
 		local := filepath.FromSlash(name)
@@ -290,21 +293,33 @@ func (s *Staged) check(dir string) error {
 // returns its record (not yet saved: the caller saves the State). A folder already there for
 // the version that inUse does not claim is left over from an interrupted install or removal and
 // is replaced; one in use is a conflict.
+//
+// Every change goes through an os.Root on the packages folder, so a link inside the folder
+// never leads a write or a removal outside it.
 func (s *Staged) Commit(inUse func(dir string) bool) (Installed, error) {
 	defer s.Discard()
-	final := s.Installed.Dir(s.in.Dir)
-	if _, err := os.Lstat(final); err == nil {
-		if inUse != nil && inUse(final) {
+	root, err := os.OpenRoot(s.in.Dir)
+	if err != nil {
+		return Installed{}, err
+	}
+	defer root.Close()
+	staged, err := filepath.Rel(s.in.Dir, filepath.Join(s.dir, "pkg"))
+	if err != nil {
+		return Installed{}, err
+	}
+	final := s.Installed.rel()
+	if _, err := root.Lstat(final); err == nil {
+		if inUse != nil && inUse(s.Installed.Dir(s.in.Dir)) {
 			return Installed{}, fmt.Errorf("%w: %s %s is still in use by a removed copy that is finishing its requests; try again once it has stopped", ErrConflict, s.ID, s.Version)
 		}
-		if err := os.RemoveAll(final); err != nil {
+		if err := root.RemoveAll(final); err != nil {
 			return Installed{}, err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(final), 0o755); err != nil {
 		return Installed{}, err
 	}
-	if err := os.Rename(filepath.Join(s.dir, "pkg"), final); err != nil {
+	if err := root.Rename(staged, final); err != nil {
 		return Installed{}, err
 	}
 	s.InstalledAt = time.Now().UTC()
@@ -326,14 +341,19 @@ func ClearStaging(dir string) error {
 
 // Remove removes the folder of id at version, and its publisher's and name's folders when
 // they are left empty.
+// It removes only inside dir, through an os.Root.
 func Remove(dir, id, version string) error {
-	in := Installed{ID: id, Version: version}
-	final := in.Dir(dir)
-	if err := os.RemoveAll(final); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	final := Installed{ID: id, Version: version}.rel()
+	if err := root.RemoveAll(final); err != nil {
 		return err
 	}
 	name := filepath.Dir(final)
-	_ = os.Remove(name)               // fails when another version is there
-	_ = os.Remove(filepath.Dir(name)) // fails when another package of the publisher is there
+	_ = root.Remove(name)               // fails when another version is there
+	_ = root.Remove(filepath.Dir(name)) // fails when another package of the publisher is there
 	return nil
 }
