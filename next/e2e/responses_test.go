@@ -108,3 +108,32 @@ func TestResponsesUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 		})
 	}
 }
+
+// The event that ends a reply counts toward core's 64 MiB limit on a non-streamed reply like
+// every event before it. This is the reviewer's case: 60 MiB of text and then an 8 MiB final
+// Response object, which a Responses client gets as the reply, came back as a 200.
+func TestNonStreamingReplyCountsTheFinalEvent(t *testing.T) {
+	u := newUpstream(t)
+	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`+"\n\n")
+		chunk := strings.Repeat("x", 64<<10)
+		for sent := 0; sent < 60<<20; sent += len(chunk) {
+			fmt.Fprintf(w, `data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":%q}`+"\n\n", chunk)
+		}
+		fmt.Fprint(w, `data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`+"\n\n")
+		final := strings.Repeat("y", 8<<20)
+		fmt.Fprintf(w, `data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":1,"status":"completed","model":"m","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":%q}]}]}}`+"\n\n", final)
+	})
+	base := startCore(t, u, func(cfg map[string]any) {
+		acct := cfg["extension"].(map[string]any)["accounts"].([]any)[0].(map[string]any)
+		acct["settings"].(map[string]any)["wire_api"] = "responses"
+	})
+	resp := postPath(t, context.Background(), base, "/v1/responses", clientKey, `{"model":"gpt-test","input":"hi"}`)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+		t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+	}
+}

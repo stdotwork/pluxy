@@ -247,15 +247,17 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 		defer func() { logTranslation(r, request, agg) }()
 		for {
 			agg.Add(ev)
-			if ev.Terminal() {
-				break
-			}
+			// The terminal event counts too: it can carry content, such as a Responses
+			// upstream's final Response object.
 			if agg.Size() > MaxResponseBody {
 				// Returning closes the stream, which cancels the call and the upstream request.
 				e := &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream reply is larger than %d MiB, the limit for a non-streamed response; send the request with \"stream\": true", MaxResponseBody>>20)}
 				logFailure(r, e)
 				f.writeError(w, e)
 				return
+			}
+			if ev.Terminal() {
+				break
 			}
 			ev = stream.Next()
 		}
