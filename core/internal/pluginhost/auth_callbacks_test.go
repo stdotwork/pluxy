@@ -316,6 +316,57 @@ func TestHostAuthGetRuntimeCallbackReturnsBaseURL(t *testing.T) {
 	}
 }
 
+func TestHostAuthListReportsEffectiveCodexWebsockets(t *testing.T) {
+	auth := &coreauth.Auth{
+		ID:         "codex-oauth.json",
+		Provider:   "codex",
+		Status:     coreauth.StatusActive,
+		Attributes: map[string]string{"runtime_only": "true"},
+		Metadata:   map[string]any{"access_token": "oauth-token"},
+	}
+	host := New()
+	host.SetAuthManager(coreauth.NewManager(nil, nil, nil))
+	if _, errRegister := host.currentAuthManager().Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+	entries, errList := host.listAuthFiles()
+	if errList != nil {
+		t.Fatalf("list auth files: %v", errList)
+	}
+	if len(entries) != 1 || !entries[0].Websockets {
+		t.Fatalf("entries = %#v, want one websocket-enabled Codex OAuth auth", entries)
+	}
+}
+
+func TestHostAuthDiskListReportsEffectiveCodexWebsockets(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "OAuth unset", body: `{"type":"codex"}`, want: true},
+		{name: "API key", body: `{"type":"codex","auth_kind":"apikey"}`, want: false},
+		{name: "custom base URL", body: `{"type":"codex","base_url":"https://codex.example.com"}`, want: false},
+		{name: "explicit false", body: `{"type":"codex","websockets":false}`, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			authDir := t.TempDir()
+			if errWrite := os.WriteFile(filepath.Join(authDir, "codex.json"), []byte(tt.body), 0o600); errWrite != nil {
+				t.Fatalf("write auth file: %v", errWrite)
+			}
+			host := New()
+			host.runtimeConfig = &config.Config{AuthDir: authDir}
+			entries, errList := host.listAuthFilesFromDisk()
+			if errList != nil {
+				t.Fatalf("list auth files: %v", errList)
+			}
+			if len(entries) != 1 || entries[0].Websockets != tt.want {
+				t.Fatalf("entries = %#v, want one auth with websockets=%t", entries, tt.want)
+			}
+		})
+	}
+}
+
 func TestListAuthFilesFromDiskReadsBaseURL(t *testing.T) {
 	authDir := t.TempDir()
 	filePath := filepath.Join(authDir, "test-auth.json")

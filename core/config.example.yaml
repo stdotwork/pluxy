@@ -370,6 +370,9 @@ client:
 # Shared upstream behavior applies to OAuth and API-key credentials.
 upstream:
   codex:
+    # Codex ChatGPT OAuth accounts use upstream WebSockets by default for downstream
+    # WebSocket requests. Set websockets: false on an account to disable them.
+    # API keys and accounts with a custom base_url remain off unless explicitly enabled.
     # Experimental full-duplex Codex Responses WebSocket steering (default: false).
     # Keeps one upstream account/model per socket; accepted input is never replayed.
     response-steering: false
@@ -748,7 +751,7 @@ upstream:
 #           #   enabled: false                # opt this key out while the group stays pooled
 #           disable-codex-cloaking: false # optional: true disables cloaking; OAuth provider settings do not apply here
 #           alpha-search: false # optional: allow this key to serve /v1/alpha/search via base-url + /alpha/search
-#           websockets: false # optional: use the Codex upstream WebSocket transport
+#           websockets: false # optional: use the Codex upstream WebSocket transport (API keys default off)
 #
 #   # Claude API keys
 #

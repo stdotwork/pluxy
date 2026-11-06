@@ -106,6 +106,46 @@ func TestListAuthFiles_IncludesWebsocketsFromManager(t *testing.T) {
 	}
 }
 
+func TestListAuthFilesReportsEffectiveCodexWebsocketsDefault(t *testing.T) {
+	tests := []struct {
+		name       string
+		attributes map[string]string
+		metadata   map[string]any
+		want       bool
+	}{
+		{name: "oauth unset", metadata: map[string]any{"type": "codex", "access_token": "token"}, want: true},
+		{name: "api key", attributes: map[string]string{"api_key": "key"}, metadata: map[string]any{"type": "codex"}, want: false},
+		{name: "custom base URL", attributes: map[string]string{"base_url": "https://codex.example.com"}, metadata: map[string]any{"type": "codex", "access_token": "token"}, want: false},
+		{name: "explicit false", metadata: map[string]any{"type": "codex", "access_token": "token", "websockets": false}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MANAGEMENT_PASSWORD", "")
+			authDir := t.TempDir()
+			fileName := "codex-effective-websockets.json"
+			filePath := filepath.Join(authDir, fileName)
+			if errWrite := os.WriteFile(filePath, []byte(`{"type":"codex"}`), 0o600); errWrite != nil {
+				t.Fatalf("failed to write auth file: %v", errWrite)
+			}
+			attributes := map[string]string{"path": filePath}
+			for key, value := range tt.attributes {
+				attributes[key] = value
+			}
+			manager := coreauth.NewManager(nil, nil, nil)
+			record := &coreauth.Auth{ID: fileName, FileName: fileName, Provider: "codex", Status: coreauth.StatusActive, Attributes: attributes, Metadata: tt.metadata}
+			if _, errRegister := manager.Register(context.Background(), record); errRegister != nil {
+				t.Fatalf("failed to register auth record: %v", errRegister)
+			}
+			h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+			h.tokenStore = &memoryAuthStore{}
+			entry := firstAuthFileEntry(t, h)
+			if got := entry["websockets"]; got != tt.want {
+				t.Fatalf("websockets = %#v, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestListAuthFilesFromDisk_IncludesWebsockets(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
 
@@ -120,6 +160,33 @@ func TestListAuthFilesFromDisk_IncludesWebsockets(t *testing.T) {
 	entry := firstAuthFileEntry(t, h)
 	if got := entry["websockets"]; got != false {
 		t.Fatalf("expected websockets false, got %#v", got)
+	}
+}
+
+func TestListAuthFilesFromDiskReportsEffectiveCodexWebsocketsDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "oauth unset", body: `{"type":"codex","access_token":"token"}`, want: true},
+		{name: "api key", body: `{"type":"codex","api_key":"key"}`, want: false},
+		{name: "custom base URL", body: `{"type":"codex","access_token":"token","base_url":"https://codex.example.com"}`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MANAGEMENT_PASSWORD", "")
+			authDir := t.TempDir()
+			filePath := filepath.Join(authDir, "codex-effective-websockets.json")
+			if errWrite := os.WriteFile(filePath, []byte(tt.body), 0o600); errWrite != nil {
+				t.Fatalf("failed to write auth file: %v", errWrite)
+			}
+			h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, nil)
+			entry := firstAuthFileEntry(t, h)
+			if got := entry["websockets"]; got != tt.want {
+				t.Fatalf("websockets = %#v, want %t", got, tt.want)
+			}
+		})
 	}
 }
 

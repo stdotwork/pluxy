@@ -118,6 +118,25 @@ retain the corresponding business operation's fields.
 | `/plugins/store/<id>/install` | POST | Install or update a plugin. |
 | `/plugins/<id>/quota` | GET, POST, DELETE | Read, fetch, or reset plugin quota. |
 
+## Credential WebSocket setting
+
+For Codex accounts, `GET /v8/management/credentials` returns `websockets` as the
+effective upstream transport setting, including when the flag is absent from the
+credential file. Codex ChatGPT OAuth logins default to `true`; API-key credentials
+and accounts with a non-empty custom `base_url` default to `false`. Explicit
+`websockets` values in account attributes or metadata override these defaults;
+attributes take precedence over metadata. xAI defaults are unchanged.
+
+Set `websockets: false` on the account to disable upstream WebSockets. For a JSON
+credential file, use `"websockets": false`, or send a fields patch such as
+`{"name":"codex-account.json","websockets":false}` to
+`PATCH /v8/management/credentials/fields`.
+
+The transport setting applies to downstream WebSocket requests. HTTP/SSE requests
+continue to use HTTP, and the existing WebSocket upgrade fallback is unchanged.
+Downloading a credential still returns its stored JSON without inserting the
+effective default.
+
 ## OAuth
 
 The login URL is shared by all providers. Set the required `provider` query

@@ -4337,6 +4337,25 @@ func TestWebsocketUpstreamSupportsIncrementalInputForModel(t *testing.T) {
 	}
 }
 
+func TestWebsocketUpstreamUsesCodexOAuthDefault(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(&websocketProviderCaptureExecutor{provider: "codex"})
+	auth := &coreauth.Auth{ID: "codex-default-websocket-handler", Provider: "codex", Status: coreauth.StatusActive}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+	const model = "codex-default-websocket-handler-model"
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(auth.ID) })
+	h := NewOpenAIResponsesAPIHandler(handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, manager))
+	if !h.websocketUpstreamSupportsIncrementalInputForModel(model) {
+		t.Fatal("unset Codex OAuth auth does not support incremental WebSocket input")
+	}
+	if !h.responsesWebsocketUsesUpstreamWebsocketPassthrough(model) {
+		t.Fatal("unset Codex OAuth auth does not use upstream WebSocket passthrough")
+	}
+}
+
 func TestWebsocketUpstreamSupportsIncrementalInputForXAI(t *testing.T) {
 	manager := coreauth.NewManager(nil, nil, nil)
 	auth := &coreauth.Auth{

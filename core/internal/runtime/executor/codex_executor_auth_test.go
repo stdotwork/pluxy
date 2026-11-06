@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gorilla/websocket"
 	codexauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -639,6 +640,120 @@ func TestCodexExecutorRefreshSelectiveAndDual(t *testing.T) {
 	}
 	if persistedMap["siwc"].(map[string]any)["access_token"] != "siwc-bound-concurrently" {
 		t.Fatalf("Storage.SaveTokenToFile overwrote concurrent SIWC bind: %#v", persistedMap["siwc"])
+	}
+}
+
+func TestCodexAutoExecutorUsesCodexOAuthWebsocketDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		auth *cliproxyauth.Auth
+		want bool
+	}{
+		{name: "oauth default", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"access_token": "token"}}, want: true},
+		{name: "api key", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"api_key": "key"}}, want: false},
+		{name: "custom base URL", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"base_url": "https://codex.example.com"}, Metadata: map[string]any{"access_token": "token"}}, want: false},
+		{name: "explicit true", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"websockets": "true"}}, want: true},
+		{name: "explicit false", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"websockets": "false"}, Metadata: map[string]any{"access_token": "token"}}, want: false},
+		{name: "metadata false", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"access_token": "token", "websockets": false}}, want: false},
+		{name: "metadata true on custom URL", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"base_url": "https://codex.example.com"}, Metadata: map[string]any{"websockets": true}}, want: true},
+		{name: "API key true", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"api_key": "key", "websockets": "true"}}, want: true},
+		{name: "API key kind", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"auth_kind": cliproxyauth.AuthKindAPIKey}}, want: false},
+		{name: "OAuth kind with API key", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"auth_kind": cliproxyauth.AuthKindOAuth, "api_key": "key"}}, want: false},
+		{name: "metadata base URL", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"base_url": "https://codex.example.com"}}, want: false},
+		{name: "metadata false string", auth: &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"websockets": " false "}}, want: false},
+		{name: "attribute wins", auth: &cliproxyauth.Auth{Provider: "codex", Attributes: map[string]string{"websockets": "false"}, Metadata: map[string]any{"websockets": true}}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.auth.ID = t.Name()
+			requests := make(chan struct{}, 4)
+			upgrader := websocket.Upgrader{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodConnect {
+					t.Errorf("unexpected upstream dial through test proxy: %s", r.Host)
+					http.Error(w, "external dials are disabled in this test", http.StatusBadGateway)
+					return
+				}
+				conn, errUpgrade := upgrader.Upgrade(w, r, nil)
+				if errUpgrade != nil {
+					t.Errorf("upgrade: %v", errUpgrade)
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				for {
+					_, payload, errRead := conn.ReadMessage()
+					if errRead != nil {
+						return
+					}
+					requests <- struct{}{}
+					if got := ojson.GetBytes(payload, "type").String(); got != "response.create" {
+						t.Errorf("upstream event = %q, want response.create", got)
+					}
+					if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp-default","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}`)); errWrite != nil {
+						return
+					}
+				}
+			}))
+			defer server.Close()
+			// Any unexpected dial is sent to this loopback server, which refuses CONNECT.
+			tt.auth.ProxyURL = server.URL
+			conn, _, errDial := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if errDial != nil {
+				t.Fatalf("dial test upstream: %v", errDial)
+			}
+			defer func() { _ = conn.Close() }()
+
+			exec := NewCodexAutoExecutor(&config.Config{SDKConfig: config.SDKConfig{DisableImageGeneration: config.DisableImageGenerationAll}})
+			exec.wsExec.store = &codexWebsocketSessionStore{sessions: make(map[string]*codexWebsocketSession)}
+			defer exec.CloseExecutionSession(t.Name())
+			baseURL := tt.auth.Attributes["base_url"]
+			if baseURL == "" {
+				baseURL = "https://chatgpt.com/backend-api/codex"
+			}
+			wsURL := "wss" + strings.TrimPrefix(baseURL, "https") + "/responses"
+			// Reuse a loopback socket for the real ChatGPT target, so OAuth has no
+			// custom base_url and this test cannot contact the external upstream.
+			sess := exec.wsExec.getOrCreateSession(t.Name())
+			sess.conn = conn
+			sess.connCloser = newWebsocketConnectionCloser(conn)
+			sess.authID, sess.wsURL, sess.proxyURL = tt.auth.ID, wsURL, server.URL
+			if preparedConn, _, _, errConn := exec.wsExec.ensureUpstreamConn(context.Background(), tt.auth, sess, tt.auth.ID, wsURL, nil); errConn != nil || preparedConn != conn {
+				t.Fatalf("prepare test connection: %v", errConn)
+			}
+			ctx := cliproxyexecutor.WithRequiredUpstreamWebsocket(cliproxyexecutor.WithDownstreamWebsocket(context.Background()))
+			req := cliproxyexecutor.Request{Model: "gpt-5.4", Payload: []byte(`{"model":"gpt-5.4","input":[]}`)}
+			opts := cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatCodex, Metadata: map[string]any{cliproxyexecutor.ExecutionSessionMetadataKey: t.Name()}}
+			for _, stream := range []bool{false, true} {
+				var errExecute error
+				if stream {
+					var result *cliproxyexecutor.StreamResult
+					result, errExecute = exec.ExecuteStream(ctx, tt.auth, req, opts)
+					if errExecute == nil {
+						for chunk := range result.Chunks {
+							if chunk.Err != nil {
+								t.Fatalf("stream chunk: %v", chunk.Err)
+							}
+						}
+					}
+				} else {
+					_, errExecute = exec.Execute(ctx, tt.auth, req, opts)
+				}
+				if tt.want {
+					if errExecute != nil {
+						t.Fatalf("stream=%t: WebSocket execution: %v", stream, errExecute)
+					}
+				} else if !cliproxyexecutor.IsUpstreamWebsocketReplayRequired(errExecute) {
+					t.Fatalf("stream=%t: error = %v, want HTTP replay signal", stream, errExecute)
+				}
+			}
+			wantRequests := 0
+			if tt.want {
+				wantRequests = 2
+			}
+			if got := len(requests); got != wantRequests {
+				t.Fatalf("loopback WebSocket requests = %d, want %d", got, wantRequests)
+			}
+		})
 	}
 }
 
