@@ -84,16 +84,22 @@ type SSEEvent struct {
 
 // Exception is a known difference between the new core and the old one at Path.
 type Exception struct {
-	// Path is an observation path (see README.md). It covers every difference at or below it.
-	// A "*" segment matches any key or index.
+	// Path is an observation path (see README.md). Without Want or Absent it covers only the
+	// difference at Path itself, and only when neither side is an object or array. With Want or
+	// Absent it also covers the differences below Path, because the new core's whole value at
+	// Path is pinned. A "*" segment matches any key or index.
 	Path string `json:"path"`
 	// Kind is "intended" (the new core differs on purpose) or "gap" (the new core does not
 	// match yet; a later slice builds it or the owner decides).
 	Kind string `json:"kind"`
 	// Reason says why the difference is there. Required.
 	Reason string `json:"reason"`
-	// Want, when set, is the value the new core must give at Path.
+	// Want, when set, is the value the new core must give at Path, in full. Required when the
+	// exception covers an object or array on either side.
 	Want json.RawMessage `json:"want,omitempty"`
+	// Absent, when true, says the new core must give no value at Path. Used instead of Want
+	// where the new core drops what the old core sends.
+	Absent bool `json:"absent,omitempty"`
 }
 
 const (
@@ -211,6 +217,14 @@ func (e Exception) validate() error {
 	}
 	if strings.TrimSpace(e.Reason) == "" {
 		return fmt.Errorf("reason is required")
+	}
+	if len(e.Want) > 0 && e.Absent {
+		return fmt.Errorf("set want or absent, not both")
+	}
+	if len(e.Want) > 0 {
+		if _, err := decodeValue(e.Want); err != nil {
+			return fmt.Errorf("want: %w", err)
+		}
 	}
 	return nil
 }

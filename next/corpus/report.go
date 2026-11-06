@@ -101,7 +101,11 @@ func Report(results []Result, reference string, global []Exception, staleGlobal 
 			fmt.Fprintf(&b, "    STALE exception %s covers no difference; remove it\n", e.Path)
 		}
 		for _, w := range r.Verdict.WantFailed {
-			fmt.Fprintf(&b, "    WANT exception %s wants %s, new core gave %s\n", w.Exception.Path, showRaw(w.Exception.Want), Show(w.Got))
+			wanted := "no value"
+			if !w.Exception.Absent {
+				wanted = showRaw(w.Exception.Want)
+			}
+			fmt.Fprintf(&b, "    WANT exception %s wants %s at %s, new core gave %s\n", w.Exception.Path, wanted, w.Path, Show(w.Got))
 		}
 	}
 	for _, e := range staleGlobal {

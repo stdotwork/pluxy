@@ -7,9 +7,22 @@
   "upstream": [{"headers":{"Content-Type":"application/json"},"body_text":"{not json"}],
   "exceptions": [
     {
-      "path": "client",
+      "path": "client.status",
       "kind": "gap",
-      "reason": "The old core passes a non-JSON 200 body to the client unchanged with status 200; the new core fails the request with 502 and an upstream error saying the response is malformed. Whether to pass such bodies through is not decided."
+      "reason": "The old core passes a non-JSON 200 body to the client unchanged with status 200; the new core fails the request with 502 and an upstream error saying the response is malformed. Whether to pass such bodies through is not decided.",
+      "want": 502
+    },
+    {
+      "path": "client.body",
+      "kind": "gap",
+      "reason": "The old core passes a non-JSON 200 body to the client unchanged with status 200; the new core fails the request with 502 and an upstream error saying the response is malformed. Whether to pass such bodies through is not decided.",
+      "want": {
+        "error": {
+          "code": "upstream",
+          "message": "upstream sent a malformed response",
+          "type": "server_error"
+        }
+      }
     }
   ],
   "recorded_old_core": {

@@ -17,7 +17,12 @@
     {
       "path": "client.events[2].data.error",
       "kind": "gap",
-      "reason": "Both cores end the stream with an error event and no [DONE]; the error's message and code differ."
+      "reason": "Both cores end the stream with an error event and no [DONE]; the error's message and code differ.",
+      "want": {
+        "code": "upstream",
+        "message": "upstream stream broke: unexpected EOF",
+        "type": "server_error"
+      }
     }
   ],
   "recorded_old_core": {

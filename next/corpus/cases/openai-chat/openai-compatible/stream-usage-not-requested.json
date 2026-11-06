@@ -20,12 +20,14 @@
     {
       "path": "client.events[4]",
       "kind": "gap",
-      "reason": "The old core always asks the upstream for usage on streams and passes the usage chunk to the client even when the client did not ask (no stream_options.include_usage); the new core sends the usage chunk only when asked, as OpenAI documents."
+      "reason": "The old core always asks the upstream for usage on streams and passes the usage chunk to the client even when the client did not ask (no stream_options.include_usage); the new core sends the usage chunk only when asked, as OpenAI documents.",
+      "want": {"data":"[DONE]"}
     },
     {
       "path": "client.events[5]",
       "kind": "gap",
-      "reason": "Follows from the usage chunk above: one event fewer in the new core's stream."
+      "reason": "Follows from the usage chunk above: one event fewer in the new core's stream.",
+      "absent": true
     }
   ],
   "recorded_old_core": {

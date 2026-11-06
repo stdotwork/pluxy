@@ -23,12 +23,14 @@
     {
       "path": "upstream[0].body.model",
       "kind": "gap",
-      "reason": "The old core reads a thinking level from a model suffix, strips the suffix and sends reasoning_effort upstream; the new core has no thinking conversion yet and sends the model name as given."
+      "reason": "The old core reads a thinking level from a model suffix, strips the suffix and sends reasoning_effort upstream; the new core has no thinking conversion yet and sends the model name as given.",
+      "want": "gpt-test(high)"
     },
     {
       "path": "upstream[0].body.reasoning_effort",
       "kind": "gap",
-      "reason": "The old core adds reasoning_effort high from the (high) model suffix; the new core has no thinking conversion yet."
+      "reason": "The old core adds reasoning_effort high from the (high) model suffix; the new core has no thinking conversion yet.",
+      "absent": true
     }
   ],
   "recorded_old_core": {

@@ -213,6 +213,9 @@ func runCase(t *testing.T, c *Case, global *Global) Result {
 		return res
 	}
 	res.Verdict = Judge(ref, newObs, c.Exceptions, global.Exceptions)
+	if res.Verdict.OK() {
+		probeCase(t, ref, newObs, c, global)
+	}
 	return res
 }
 

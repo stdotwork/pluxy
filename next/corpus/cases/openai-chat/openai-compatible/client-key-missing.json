@@ -9,7 +9,12 @@
     {
       "path": "client.body.error",
       "kind": "gap",
-      "reason": "The old core answers a missing or wrong client key with {\"error\": \"<text>\"} and Content-Type with charset=utf-8; the new core answers with an OpenAI-style error object."
+      "reason": "The old core answers a missing or wrong client key with {\"error\": \"<text>\"} and Content-Type with charset=utf-8; the new core answers with an OpenAI-style error object.",
+      "want": {
+        "code": "invalid_api_key",
+        "message": "missing or invalid API key",
+        "type": "authentication_error"
+      }
     },
     {
       "path": "client.headers.Content-Type",

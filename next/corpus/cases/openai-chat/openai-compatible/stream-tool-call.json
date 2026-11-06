@@ -33,7 +33,8 @@
     {
       "path": "client.events[0].data.choices[0].delta.content",
       "kind": "gap",
-      "reason": "The old core passes the upstream chunk through (content null); the new core re-renders the first chunk from its internal model with content \"\"."
+      "reason": "The old core passes the upstream chunk through (content null); the new core re-renders the first chunk from its internal model with content \"\".",
+      "want": ""
     }
   ],
   "recorded_old_core": {
