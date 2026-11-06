@@ -47,13 +47,77 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 | --- | --- |
 | `manifest_version` | Version of this manifest format. Version 0 is described here. |
 | `id` | Publisher-qualified ID, `publisher/name`: lower-case letters, digits, `-` and `.`. |
-| `version` | The package version, chosen by the publisher. Core does not interpret it in v0. |
+| `version` | The package version, chosen by the publisher: 1 to 64 letters, digits, `.`, `+`, `_` and `-`, starting with a letter or digit. Core compares versions only for equality. |
 | `protocol` | Protocol versions the program speaks. Core picks one it also speaks. |
 | `programs` | Program to run per platform, keyed by Go's `GOOS/GOARCH`. Paths are relative to the manifest's folder and may not leave it. |
 
 The package version, manifest version and protocol version are separate on purpose: each can
 change without the others. Later manifest versions add optional parts (UI pages, a config schema,
 themes) and their own version fields.
+
+### Release archives
+
+A release of a package is published as one archive per platform: a gzip-compressed tar file
+holding the package folder, with `pluxy-extension.json` at the top (no enclosing folder) and the
+program the manifest names for that platform. An archive may hold only regular files and
+folders: no links, devices or names that leave the folder. Core refuses an archive larger
+than 512 MiB unpacked or with more than 10,000 entries. A file is installed executable when any
+of its execute bits is set in the archive.
+
+```bash
+tar -czf pluxy-codex-0.1.0-linux-amd64.tar.gz -C package-folder .
+sha256sum pluxy-codex-0.1.0-linux-amd64.tar.gz
+```
+
+### Registry index
+
+Core installs packages from registries. A registry is one JSON file, the index, read from a
+local path or an `https://` URL. It lists packages by ID and, for each, the releases it offers,
+newest first, each pinned to its archives' SHA-256 digests and sizes:
+
+```json
+{
+  "registry_version": 0,
+  "packages": {
+    "pluxy/codex": {
+      "releases": [
+        {
+          "version": "0.1.0",
+          "protocol": [0],
+          "artifacts": {
+            "linux/amd64": {
+              "url": "pluxy-codex-0.1.0-linux-amd64.tar.gz",
+              "sha256": "9f2c…",
+              "size": 8123456
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `registry_version` | Version of this index format. Version 0 is described here. |
+| `packages` | Packages by ID (the manifest's `id`). |
+| `releases` | Releases offered, newest first. A release's `version` appears once per package. |
+| `protocol` | Protocol versions the release's program speaks, so core can pick a release it can run before downloading it. |
+| `artifacts` | The release's archives by platform (`GOOS/GOARCH`). |
+| `url` | Where the archive is: relative to the index (a path inside the index's folder for a local index, a URL reference for an HTTPS one) or an absolute `https://` URL. Never plain `http://`. |
+| `sha256` | The archive's SHA-256 digest, in lower-case hex. |
+| `size` | The archive's exact size in bytes. |
+
+Core installs a release only when its archive has exactly `size` bytes and the digest it lists,
+and when the manifest inside has the release's ID and version, a manifest version core reads, a
+protocol version core speaks and a program for core's platform. Core reads at most 8 MiB of an
+index. Unknown fields are ignored, so later versions of the format can add optional ones.
+
+A registry earns trust by what it lists, not by where it is: the curated registry lists releases
+its maintainers reviewed, each pinned by digest, and a local or private registry is used only when
+core's config names it. A digest pins the archive the registry listed; it does not prove who built
+it. Version 0 has no signatures.
 
 ## Starting and the handshake
 
