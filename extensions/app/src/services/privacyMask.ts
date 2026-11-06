@@ -10,7 +10,9 @@ const keepPrefix = (value: string, visible: number) => value.slice(0, Math.min(v
 
 export function maskEmail(email: string): string {
   const at = email.lastIndexOf('@');
-  if (at <= 0) return maskIdentifier(email);
+  if (at < 0) return maskIdentifier(email);
+  // No local part ("@alice"): maskIdentifier would hand this value straight back to maskEmail.
+  if (at === 0) return maskOpaque(email.trim());
   const local = email.slice(0, at);
   const domain = email.slice(at + 1);
   const dot = domain.lastIndexOf('.');
@@ -19,14 +21,18 @@ export function maskEmail(email: string): string {
   return `${keepPrefix(local, local.length > 4 ? 2 : 1)}${MASK}@${keepPrefix(host, 1)}${MASK}${suffix}`;
 }
 
+function maskOpaque(text: string): string {
+  if (text.length <= 4) return MASK;
+  const visible = text.length > 10 ? 2 : 1;
+  return `${text.slice(0, visible)}${MASK}${text.slice(-visible)}`;
+}
+
 /** Masks an opaque account identifier such as a GCP project or account ID. */
 export function maskIdentifier(value: string): string {
   const text = value.trim();
   if (!text) return value;
   if (text.includes('@')) return maskEmail(text);
-  if (text.length <= 4) return MASK;
-  const visible = text.length > 10 ? 2 : 1;
-  return `${text.slice(0, visible)}${MASK}${text.slice(-visible)}`;
+  return maskOpaque(text);
 }
 
 // Credential file names often embed the account with `@` and `.` replaced,
@@ -53,8 +59,10 @@ export function maskSensitiveText(text: string, identities: readonly string[] = 
   if (!text) return text;
   let masked = text;
   for (const identity of identities) {
+    const replacement = maskIdentifier(identity);
     for (const variant of identityVariants(identity)) {
-      masked = masked.replace(new RegExp(escapeRegExp(variant), 'gi'), maskIdentifier(identity));
+      // A function replacer: a string would expand `$&`, `$'` and similar patterns in the identity.
+      masked = masked.replace(new RegExp(escapeRegExp(variant), 'gi'), () => replacement);
     }
   }
   return masked
