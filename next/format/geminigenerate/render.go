@@ -151,11 +151,22 @@ func (b *builder) upstreamData(ev llm.Event) {
 		}
 	case llm.FormatAnthropicMessages:
 		m := rawjson.Object(ev.Raw)
-		var d struct {
+		var t struct {
 			Type string `json:"type"`
 		}
-		if m != nil && json.Unmarshal(m["delta"], &d) == nil && d.Type == "signature_delta" {
+		if m == nil {
+			return
+		}
+		if json.Unmarshal(m["delta"], &t) == nil && t.Type == "signature_delta" {
 			b.lose("content.signature", "a thinking signature only a Messages upstream can check")
+		}
+		if json.Unmarshal(m["content_block"], &t) == nil {
+			switch t.Type {
+			case "", "text", "thinking", "tool_use":
+			default:
+				// redacted_thinking, server tool use and results: no place in a Gemini reply.
+				b.lose("content."+t.Type, "a Messages content block with no place in a GenerateContentResponse")
+			}
 		}
 	}
 }
@@ -166,15 +177,16 @@ func (b *builder) eventLosses(ev llm.Event) {
 	case llm.EventResponseStart:
 		b.start(ev.Response)
 	case llm.EventNative:
-		b.lose("choices", "reply data in "+b.upFormat+" with no place in a GenerateContentResponse")
+		if b.upFormat == llm.FormatOpenAIChat {
+			// A Chat upstream's native events hold choices after the first.
+			b.lose("choices", "reply data in "+b.upFormat+" with no place in a GenerateContentResponse")
+		}
 	case llm.EventFinish:
 		for _, k := range usageLosses(ev.Usage, b.upFormat) {
 			b.lose("usage."+k, "usage field with no place in usageMetadata")
 		}
 	}
-	if ev.Type != llm.EventNative {
-		b.upstreamData(ev)
-	}
+	b.upstreamData(ev)
 }
 
 // response returns one GenerateContentResponse with the given parts and, when finish is set,

@@ -234,7 +234,9 @@ trip; an encoder for another format cannot, and reports each of them as dropped.
 extension should send `native.body` upstream unchanged instead of rebuilding a body from `items`.
 That keeps fields core does not model. It also sends `native.headers` with it. Formats in version
 0: `openai.chat` (OpenAI Chat Completions request body), `openai.responses` (OpenAI Responses
-request body) and `anthropic.messages` (Anthropic Messages request body).
+request body), `anthropic.messages` (Anthropic Messages request body) and
+`gemini.generate_content` (Gemini GenerateContent request body; its model and whether it streams
+come from the request path, so they are in the request's `model` and `stream`).
 
 **Translation report.** When the extension rebuilds the body in another format, it reports in the
 reply's `response.start` how it built it: `response.translation` with `from`, `to`, `passthrough`
@@ -257,7 +259,7 @@ with deltas and closed, then one terminal event.
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
 | `tool_input.delta` | `index`, `delta` | A fragment of the argument string for an open `tool_call` item. |
 | `item.end` | `index` | Closes item `index`. |
-| `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. For `openai.responses` and `anthropic.messages` it is an upstream stream event the model has no event for (for example `response.in_progress`, or `ping`, `message_delta` and a thinking block's `signature_delta`). |
+| `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. For `openai.responses` and `anthropic.messages` it is an upstream stream event the model has no event for (for example `response.in_progress`, or `ping`, `message_delta` and a thinking block's `signature_delta`). For `gemini.generate_content` it is a stream chunk that produced no other event. |
 | `finish` | `finish`: `reason`, `raw_reason`; optional `usage` | Terminal: success. |
 | `error` | `error` (below) | Terminal: failure. |
 
@@ -271,6 +273,14 @@ came from in `raw` (an `error` carries it in `error.raw`), and the `finish` of a
 carries the whole Response or Message object. A client in that format gets those upstream events
 and that object unchanged; events an extension adds itself (such as closing an item the upstream
 left open) carry no `raw` and are not written to it.
+
+For `gemini.generate_content`, each upstream chunk (a whole GenerateContentResponse) rides in the
+`raw` of the first event it produces, or of a `native` event when it produces none; a non-streamed
+reply's body rides on `response.start`. A Gemini client gets those chunks unchanged, thought
+signatures included. Gemini streams end when the upstream closes them, so `finish` comes at the end
+of the stream and carries no `raw`; `finish.raw_reason` keeps Gemini's finish reason (`SAFETY`,
+`RECITATION`, `MAX_TOKENS` and the rest stay distinct), and a blocked prompt finishes with reason
+`content_filter` and the block reason as `raw_reason`.
 
 Ordering rules, which core enforces and the conformance kit checks:
 
@@ -291,8 +301,8 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 
 | Field | Meaning |
 | --- | --- |
-| `input_tokens` | All input tokens, including cached ones. |
-| `output_tokens` | All output tokens, including reasoning. |
+| `input_tokens` | All input tokens, including cached ones. Gemini's `promptTokenCount` already includes its cached tokens; its tool-use prompt tokens count here too. |
+| `output_tokens` | All output tokens, including reasoning. Gemini counts `thoughtsTokenCount` apart from `candidatesTokenCount`; this is their sum. |
 | `cached_input_tokens` | Input tokens read from a cache. |
 | `cache_write_input_tokens` | Input tokens written to a cache. Anthropic counts cache reads and writes apart from its `input_tokens`; `input_tokens` here is their sum. |
 | `reasoning_tokens` | Output tokens spent on reasoning. |
