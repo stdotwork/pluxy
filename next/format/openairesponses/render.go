@@ -472,6 +472,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 		b.items[ev.Index].done = true
 		if ev.Opaque != nil {
 			b.items[ev.Index].opaque = ev.Opaque.Data
+			a.size += len(ev.Opaque.Data)
 		}
 	case llm.EventNative:
 		if b.upFormat != format {

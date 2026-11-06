@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
+	"slices"
 )
 
 // Prompt caching. A Messages client places its own cache_control markers, and its body is sent as
@@ -18,11 +18,9 @@ var ephemeral = json.RawMessage(`{"type":"ephemeral"}`)
 // uncacheable are block types that cannot carry cache_control.
 var uncacheable = map[string]bool{"thinking": true, "redacted_thinking": true}
 
-// addCacheBreakpoints adds cache breakpoints to a translated Messages body that has none.
+// addCacheBreakpoints adds cache breakpoints to a translated Messages body that has none: where
+// Messages takes cache_control (system blocks, tools, message content blocks), none is set.
 func addCacheBreakpoints(body []byte) ([]byte, error) {
-	if bytes.Contains(body, []byte(`"cache_control"`)) {
-		return body, nil
-	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, err
@@ -32,6 +30,26 @@ func addCacheBreakpoints(body []byte) ([]byte, error) {
 	_ = json.Unmarshal(m["tools"], &tools)
 	var messages []map[string]json.RawMessage
 	if err := json.Unmarshal(m["messages"], &messages); err != nil {
+		return body, nil
+	}
+	// The content of each user or assistant message given as blocks; nil for the rest.
+	contents := make([][]map[string]json.RawMessage, len(messages))
+	for i, msg := range messages {
+		var role string
+		_ = json.Unmarshal(msg["role"], &role)
+		if role == "user" || role == "assistant" {
+			_ = json.Unmarshal(msg["content"], &contents[i])
+		}
+	}
+	marked := func(blocks []map[string]json.RawMessage) bool {
+		for _, b := range blocks {
+			if _, ok := b["cache_control"]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	if marked(system) || marked(tools) || slices.ContainsFunc(contents, marked) {
 		return body, nil
 	}
 
@@ -47,13 +65,7 @@ func addCacheBreakpoints(body []byte) ([]byte, error) {
 		set("tools", tools)
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
-		var role string
-		_ = json.Unmarshal(messages[i]["role"], &role)
-		var content []map[string]json.RawMessage
-		if (role != "user" && role != "assistant") || json.Unmarshal(messages[i]["content"], &content) != nil {
-			// A message given as a string is not one EncodeRequest writes; leave it.
-			continue
-		}
+		content := contents[i]
 		j := len(content) - 1
 		for ; j >= 0; j-- {
 			var typ string

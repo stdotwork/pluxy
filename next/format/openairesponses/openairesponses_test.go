@@ -286,3 +286,19 @@ func TestOpaqueOutput(t *testing.T) {
 		t.Errorf("response: %q", got)
 	}
 }
+
+// Opaque reasoning data the aggregator keeps counts toward its size, which core bounds.
+func TestAggregatorSizeCountsOpaque(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","input":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAggregator(req)
+	a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r", Format: llm.FormatAnthropicMessages}})
+	a.Add(llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemReasoning}})
+	before := a.Size()
+	a.Add(llm.Event{Type: llm.EventItemEnd, Index: 0, Opaque: &llm.Opaque{Format: llm.FormatAnthropicMessages, Data: strings.Repeat("E", 1<<20)}})
+	if got := a.Size() - before; got < 1<<20 {
+		t.Errorf("size grew by %d for 1 MiB of opaque data", got)
+	}
+}

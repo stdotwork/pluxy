@@ -165,7 +165,9 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return nil, refused("Anthropic refused the key")
 	default:
-		return nil, upstreamError(resp, "")
+		// Core redacts the key as the user entered it; this one is trimmed, so remove it here.
+		r := protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key})
+		return nil, r.Event(llm.Event{Type: llm.EventError, Error: upstreamError(resp, "")}).Error
 	}
 }
 

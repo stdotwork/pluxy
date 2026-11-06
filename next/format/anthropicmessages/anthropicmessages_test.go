@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -932,4 +933,29 @@ func TestThinkingSignatureRoundTripsThroughResponses(t *testing.T) {
 	if got := lossList(losses); !slices.Contains(got, "dropped input[4]") {
 		t.Errorf("losses %q: the OpenAI reasoning item is not reported dropped", got)
 	}
+}
+
+// Signature deltas are collected for the item's end, up to a limit: a stream that keeps sending
+// them fails instead of growing without bound.
+func TestStreamDecoderBoundsSignature(t *testing.T) {
+	dec := NewStreamDecoder()
+	for _, data := range []string{
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":3,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+	} {
+		if _, err := dec.Decode([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	piece := `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"` + strings.Repeat("E", 64<<10) + `"}}`
+	for range MaxSignature/(64<<10) + 1 {
+		if _, err := dec.Decode([]byte(piece)); err != nil {
+			var e *llm.Error
+			if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Retryable {
+				t.Fatalf("err = %v, want a non-retryable upstream error", err)
+			}
+			return
+		}
+	}
+	t.Fatal("the decoder took signature deltas beyond MaxSignature")
 }

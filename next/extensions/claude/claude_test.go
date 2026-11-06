@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +163,50 @@ func TestWithBeta(t *testing.T) {
 	} {
 		if got := withBeta(in, oauthBeta); got != want {
 			t.Errorf("withBeta(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Core redacts a login's input as the user entered it; the extension sends the key trimmed, so it
+// removes the trimmed key from an upstream error itself.
+func TestAPIKeyLoginErrorHidesTrimmedKey(t *testing.T) {
+	const key = "sk-ant-api-echoed"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"bad key `+r.Header.Get("X-Api-Key")+`"}}`)
+	}))
+	defer srv.Close()
+	_, err := apiKeyLogin(context.Background(), settings{BaseURL: srv.URL}, "  "+key+"\n")
+	var e *llm.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("err = %v, want an *llm.Error", err)
+	}
+	if strings.Contains(e.Message, key) || strings.Contains(string(e.Raw), key) {
+		t.Errorf("error shows the key: message %q, raw %s", e.Message, e.Raw)
+	}
+}
+
+// A translated request gets cache breakpoints unless it already has cache markers; a tool
+// property that happens to be named cache_control is not one.
+func TestCacheBreakpoints(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"system and last message",
+			`{"system":[{"type":"text","text":"S"}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":[{"type":"text","text":"b"},{"type":"thinking","thinking":"t","signature":"E"}]}]}`,
+			`{"system":[{"type":"text","text":"S","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]},{"role":"assistant","content":[{"type":"text","text":"b","cache_control":{"type":"ephemeral"}},{"type":"thinking","thinking":"t","signature":"E"}]}]}`},
+		{"last tool without system, property named cache_control",
+			`{"tools":[{"name":"f","input_schema":{"type":"object","properties":{"cache_control":{"type":"string"}}}}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]}]}`,
+			`{"tools":[{"name":"f","input_schema":{"type":"object","properties":{"cache_control":{"type":"string"}}},"cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}}]}]}`},
+		{"already marked",
+			`{"system":[{"type":"text","text":"S","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]}]}`,
+			`{"system":[{"type":"text","text":"S","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]}]}`},
+	} {
+		out, err := addCacheBreakpoints([]byte(c.in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !jsonEqual(out, json.RawMessage(c.want)) {
+			t.Errorf("%s:\n got %s\nwant %s", c.name, out, c.want)
 		}
 	}
 }

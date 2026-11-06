@@ -119,7 +119,7 @@ func (r *Redactor) raw(b json.RawMessage) json.RawMessage {
 }
 
 // Event returns ev with the credential removed from the text and upstream data it carries:
-// error messages and codes, and every raw field. Generated content (deltas, tool names) is the
+// error messages and codes, every raw field and reasoning's opaque data. Generated content (deltas, tool names) is the
 // reply itself and is left alone.
 func (r *Redactor) Event(ev llm.Event) llm.Event {
 	if r == nil || r.r == nil {
@@ -132,6 +132,11 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		ev.Response = &resp
 	}
 	ev.Usage = r.usage(ev.Usage)
+	if ev.Opaque != nil {
+		o := *ev.Opaque
+		o.Data = r.String(o.Data)
+		ev.Opaque = &o
+	}
 	if ev.Error != nil {
 		e := *ev.Error
 		e.Message = r.String(e.Message)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -144,6 +145,10 @@ type streamEvent struct {
 	Error json.RawMessage `json:"error"`
 }
 
+// MaxSignature bounds the thinking signature the stream decoder collects for one block. Claude's
+// signatures run to kilobytes; one this large means a broken stream.
+const MaxSignature = 1 << 20
+
 // StreamDecoder turns the events of an upstream Messages stream into model events. Every model
 // event carries the upstream event it came from in Raw; upstream events the model has no event
 // for (ping, message_delta, signature deltas, redacted thinking, server tool blocks, unknown
@@ -153,15 +158,15 @@ type StreamDecoder struct {
 	started bool
 	done    bool
 	next    int
-	items   map[int]int    // upstream block index -> open model item index
-	sigs    map[int]string // model item index -> signature of an open thinking block
+	items   map[int]int              // upstream block index -> open model item index
+	sigs    map[int]*strings.Builder // model item index -> signature of an open thinking block
 	stop    string
 	usage   json.RawMessage
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{items: map[int]int{}, sigs: map[int]string{}}
+	return &StreamDecoder{items: map[int]int{}, sigs: map[int]*strings.Builder{}}
 }
 
 // closeAll closes items the upstream left open; the events it adds carry no Raw.
@@ -264,7 +269,17 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		if ev.Delta.Type == "signature_delta" {
 			// Carried on the item's end as well, for clients in other formats.
-			d.sigs[idx] += ev.Delta.Signature
+			sig := d.sigs[idx]
+			if sig == nil {
+				sig = &strings.Builder{}
+				d.sigs[idx] = sig
+			}
+			if sig.Len()+len(ev.Delta.Signature) > MaxSignature {
+				d.done = true
+				return nil, d.withUsage(&llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint,
+					Message: fmt.Sprintf("upstream sent a thinking signature over %d bytes", MaxSignature)})
+			}
+			sig.WriteString(ev.Delta.Signature)
 		}
 		// signature_delta, citations_delta and deltas the model has no place for.
 		return native(), nil
@@ -275,8 +290,8 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		delete(d.items, ev.Index)
 		end := llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: raw}
-		if sig := d.sigs[idx]; sig != "" {
-			end.Opaque = &llm.Opaque{Format: format, Data: sig}
+		if sig := d.sigs[idx]; sig != nil && sig.Len() > 0 {
+			end.Opaque = &llm.Opaque{Format: format, Data: sig.String()}
 		}
 		delete(d.sigs, idx)
 		return append(out, end), nil
