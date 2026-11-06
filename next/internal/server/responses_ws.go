@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -66,7 +67,11 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 		// Keeps the client's sticky turn state across reconnects, as today's core does.
 		w.Header().Set("X-Codex-Turn-State", ts)
 	}
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionNoContextTakeover})
+	// A request that passed the client key check may come from any origin, as in today's core:
+	// a web page cannot set the key's header on a WebSocket. Without client keys, a web page on
+	// another site could drive core, so the library's same-origin check stays.
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionNoContextTakeover,
+		InsecureSkipVerify: len(cfg.ClientKeys) > 0})
 	if err != nil {
 		return // Accept has written the HTTP error
 	}
@@ -75,14 +80,21 @@ func serveResponsesWebSocket(w http.ResponseWriter, r *http.Request, src Source)
 	defer cancel()
 	s := &wsSocket{conn: conn, r: r, src: src, ctx: ctx, noSession: map[string]bool{}, codexClient: isCodexClient(r)}
 	defer s.close()
-	queue := make(chan []byte, wsQueue)
+	queue := make(chan wsMessage, wsQueue)
 	go s.read(queue, cancel)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case msg := <-queue:
-			if !s.handle(msg) {
+			if msg.epoch < s.epoch.Load() {
+				// Written before the client heard of an upstream loss: the client resends.
+				if s.sendError(openairesponses.PreviousResponseNotFound()) != nil {
+					return
+				}
+				continue
+			}
+			if !s.handle(msg.data) {
 				return
 			}
 		}
@@ -117,11 +129,23 @@ type wsSocket struct {
 	sessionExt string
 	noSession  map[string]bool // extension and account that take no sessions
 	transcript openairesponses.Transcript
-	lastModel  string
-	lastMode   string // the mode of the last turn that completed: wsModeSession, wsModeHTTP or ""
+	// pinned is the account a session turn last ran on; later turns stay on it, as in today's
+	// core ("the next full create reconnects on it, never on another one").
+	pinned    string
+	lastModel string
+	lastMode  string // the mode of the last turn that completed: wsModeSession, wsModeHTTP or ""
+
+	// epoch counts upstream losses; each queued message carries the count when it was read.
+	epoch atomic.Uint64
 
 	mu   sync.Mutex
 	turn *wsTurn // the running turn, for interrupts
+}
+
+// wsMessage is a client message waiting for the turn loop.
+type wsMessage struct {
+	data  []byte
+	epoch uint64
 }
 
 const (
@@ -140,7 +164,7 @@ type wsTurn struct {
 
 // read reads client messages: an interrupt is answered at once, anything else waits in queue
 // for the turn loop. The socket ending ends the loop.
-func (s *wsSocket) read(queue chan<- []byte, cancel context.CancelFunc) {
+func (s *wsSocket) read(queue chan<- wsMessage, cancel context.CancelFunc) {
 	defer cancel()
 	for {
 		_, data, err := s.conn.Read(s.ctx)
@@ -155,7 +179,7 @@ func (s *wsSocket) read(queue chan<- []byte, cancel context.CancelFunc) {
 			continue
 		}
 		select {
-		case queue <- data:
+		case queue <- wsMessage{data: data, epoch: s.epoch.Load()}:
 		case <-s.ctx.Done():
 			return
 		}
@@ -347,21 +371,24 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	var sess Session     // the session the last attempt ran on; nil for an HTTP attempt
 	var sessExt string
 	chosen := "" // the mode of the last attempt
+	ranOn := ""  // the account of the last attempt
 	attempted := func(m string, on Session, ext string) {
 		chosen, sess, sessExt = m, on, ext
+		if on != nil {
+			ranOn = on.AccountID()
+		}
 		s.mu.Lock()
 		turn.mode, turn.session, turn.responseID = m, on, ""
 		s.mu.Unlock()
 	}
 	rr := route.Request{LLM: sessReq, Tenant: tenant(s.r), Session: sessionKey(s.r, nativeBody), Pin: strings.TrimSpace(s.r.Header.Get(PinHeader))}
-	live := s.session != nil && !s.session.Ended()
-	if live {
-		rr.Prefer = s.session.AccountID()
+	if rr.Pin == "" {
+		rr.Pin = s.pinned
 	}
 	switch mode {
 	case wsModeSession:
 		// The response it continues is on the session: only the session's account can run it.
-		if rr.Pin == "" {
+		if rr.Pin == "" || rr.Pin == s.pinned {
 			rr.Pin = s.session.AccountID()
 		}
 		rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, _ llm.Request) route.Stream {
@@ -482,6 +509,12 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			id := turn.interrupted
 			s.mu.Unlock()
 			if id == "" {
+				if chosen == wsModeSession && ev.Error.ProviderCode == openairesponses.CodeUpstreamWebsocketLost {
+					// The next full create reconnects on the same account, and what the client
+					// sent before hearing of the loss is refused.
+					s.pinned = ranOn
+					s.epoch.Add(1)
+				}
 				return s.turnFailed(ev.Error)
 			}
 			// An HTTP turn the client interrupted: it ends for the client, and the conversation
@@ -504,6 +537,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	switch {
 	case chosen == wsModeSession:
 		s.lastMode = wsModeSession
+		s.pinned = ranOn
 		s.transcript.Reset()
 	case httpTurn.Warmup:
 		s.lastMode = wsModeHTTP

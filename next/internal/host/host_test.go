@@ -43,6 +43,10 @@ func fakeExtension(mode string) {
 		echoCredential()
 		return
 	}
+	if mode == "session-bad-frame" {
+		sessionBadFrame()
+		return
+	}
 	if mode != "sleep-child" { // the child shares its parent's folder
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
 	}

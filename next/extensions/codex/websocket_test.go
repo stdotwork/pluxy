@@ -276,3 +276,41 @@ func TestRelayEvents(t *testing.T) {
 		t.Fatalf("events %+v; want resp_1's start through its end", out.events)
 	}
 }
+
+// wsFrameError is the error relay makes of one upstream error message.
+func wsFrameError(t *testing.T, data string) *llm.Error {
+	t.Helper()
+	_, err := openairesponses.NewStreamDecoder().Decode([]byte(data))
+	if err == nil {
+		t.Fatalf("%s decoded without an error", data)
+	}
+	var e *llm.Error
+	if !errors.As(frameError([]byte(data), classify(err)), &e) {
+		t.Fatalf("%s: %v is not an llm.Error", data, err)
+	}
+	return e
+}
+
+// An error message's own status decides its meaning, as an HTTP reply's status does, whatever
+// its body's error type says; before a reply starts, a refused credential lets routing try
+// another account; a usage limit wrapped in body keeps its reset time.
+func TestFrameErrorFollowsStatus(t *testing.T) {
+	for _, c := range []struct {
+		data       string
+		code       string
+		status     int
+		retryable  bool
+		retryAfter int64
+	}{
+		{`{"type":"error","status":401,"error":{"type":"invalid_request_error","code":"invalid_api_key","message":"bad key"}}`, llm.CodeAuth, 401, true, 0},
+		{`{"type":"error","status":401,"error":{"type":"server_error","message":"no"}}`, llm.CodeAuth, 401, true, 0},
+		{`{"type":"error","status":429,"body":{"error":{"type":"usage_limit_reached","message":"limit","resets_in_seconds":3600}}}`, llm.CodeQuota, 429, true, 3600000},
+		{`{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"bad input"}}`, llm.CodeInvalidRequest, 400, false, 0},
+	} {
+		e := wsFrameError(t, c.data)
+		if e.Code != c.code || e.Status != c.status || e.Retryable != c.retryable || e.RetryAfterMS != c.retryAfter {
+			t.Errorf("%s: code %s, status %d, retryable %v, retry after %d ms; want %s, %d, %v, %d",
+				c.data, e.Code, e.Status, e.Retryable, e.RetryAfterMS, c.code, c.status, c.retryable, c.retryAfter)
+		}
+	}
+}

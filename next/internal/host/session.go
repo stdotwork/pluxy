@@ -89,7 +89,7 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 		return nil, ev.Error
 	default:
 		conn.Close()
-		return nil, e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type))
+		return nil, redacted(protocol.NewRedactor(account.Credential), e.protocolError(fmt.Sprintf("a session call was answered with %q", reply.Type)))
 	}
 	if !stop() {
 		// ctx ended just as the session opened; its conn is closed.
@@ -105,6 +105,13 @@ func (e *Extension) OpenSession(ctx context.Context, account protocol.Account, i
 
 func (e *Extension) protocolError(what string) *llm.Error {
 	return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %s", e.manifest.ID, what)}
+}
+
+// redacted removes credentials from an error core builds from what the extension sent, such as
+// a protocol error that quotes a frame's type.
+func redacted(r *protocol.Redactor, e *llm.Error) *llm.Error {
+	e.Message = r.String(e.Message)
+	return e
 }
 
 func (e *Extension) sessionReadError(ctx context.Context, err error) *llm.Error {
@@ -190,7 +197,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	case f := <-s.frames:
 		s.Close()
 		t.end()
-		t.fail(s.ext.protocolError(fmt.Sprintf("a %q frame between turns", f.reply.Type)))
+		t.fail(redacted(t.redact, s.ext.protocolError(fmt.Sprintf("a %q frame between turns", f.reply.Type))))
 		return t
 	default:
 	}
@@ -326,7 +333,7 @@ func (t *SessionStream) Next() llm.Event {
 	if err := t.seq.Check(f.reply.Event); err != nil {
 		s.Close()
 		t.end()
-		t.fail(s.ext.protocolError(err.Error()))
+		t.fail(redacted(t.redact, s.ext.protocolError(err.Error())))
 		return *t.final
 	}
 	ev := t.redact.Event(f.reply.Event)

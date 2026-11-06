@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -144,15 +145,24 @@ func (u *wsUpstream) connections() []wsUpstreamConn {
 // startWSCore runs core with a Codex account for each key; websockets turns the upstream
 // WebSocket on for all of them.
 func startWSCore(t *testing.T, u *wsUpstream, websockets bool, keys ...string) string {
+	return startWSCoreAccounts(t, u, websockets, nil, keys...)
+}
+
+// startWSCoreAccounts is startWSCore with configure changing each account before core starts.
+func startWSCoreAccounts(t *testing.T, u *wsUpstream, websockets bool, configure func(i int, acct map[string]any), keys ...string) string {
 	t.Helper()
 	var accounts []any
-	for _, k := range keys {
-		accounts = append(accounts, map[string]any{
+	for i, k := range keys {
+		acct := map[string]any{
 			"id":         "acct-" + k,
 			"models":     []string{"gpt-test"},
 			"settings":   map[string]any{"base_url": u.URL + "/v1", "websockets": websockets},
 			"credential": map[string]any{"kind": "api_key", "api_key": k},
-		})
+		}
+		if configure != nil {
+			configure(i, acct)
+		}
+		accounts = append(accounts, acct)
 	}
 	return runCore(t, map[string]any{
 		"listen":      "127.0.0.1:0",
@@ -166,11 +176,14 @@ func startWSCore(t *testing.T, u *wsUpstream, websockets bool, keys ...string) s
 }
 
 // dialResponses opens a Responses WebSocket on core.
-func dialResponses(t *testing.T, base string) *websocket.Conn {
+func dialResponses(t *testing.T, base string, headers ...string) *websocket.Conn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	h := http.Header{"Authorization": {"Bearer " + clientKey}}
+	for i := 0; i+1 < len(headers); i += 2 {
+		h.Set(headers[i], headers[i+1])
+	}
 	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(base, "http")+"/v1/responses", &websocket.DialOptions{HTTPHeader: h})
 	if err != nil {
 		t.Fatal(err)
@@ -411,5 +424,118 @@ func TestResponsesWebSocketSessionAcrossReload(t *testing.T) {
 	}
 	if conns := u.connections(); len(conns) != 2 {
 		t.Errorf("upstream sockets: %d, want 2 (one per extension process)", len(conns))
+	}
+}
+
+// Once a turn has run on a session, the socket's later turns stay on that account even when it
+// is busy: a full create waits for it or fails, and never moves to another account, as in
+// today's core.
+func TestResponsesWebSocketKeepsItsAccountWhenBusy(t *testing.T) {
+	u := newWSUpstream(t)
+	base := startWSCoreAccounts(t, u, true, func(i int, acct map[string]any) {
+		if i == 0 {
+			acct["max_concurrency"] = 1
+		}
+	}, "sk-a", "sk-b")
+
+	c := dialResponses(t, base)
+	if m := wsTurn(t, c, wsCreate("one", "")); m["type"] != "response.completed" {
+		t.Fatalf("first turn ended with %v", m)
+	}
+	if conns := u.connections(); len(conns) != 1 || conns[0].key != "sk-a" {
+		t.Fatalf("first turn's upstream sockets use keys %v, want sk-a", keysOf(conns))
+	}
+	// Another client takes sk-a's only slot and holds it for a while.
+	hold := make(chan struct{})
+	u.mu.Lock()
+	u.hold = hold
+	u.mu.Unlock()
+	busy := dialResponses(t, base, "X-Pluxy-Account", "acct-sk-a")
+	b, _ := json.Marshal(wsCreate("busy", ""))
+	if err := busy.Write(context.Background(), websocket.MessageText, b); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, data, err := busy.Read(ctx); err != nil || !strings.Contains(string(data), "response.created") {
+		t.Fatalf("busy socket's first message %q, %v", data, err)
+	}
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		close(hold)
+	}()
+
+	b, _ = json.Marshal(wsCreate("two", ""))
+	if err := c.Write(ctx, websocket.MessageText, b); err != nil {
+		t.Fatal(err)
+	}
+	// Read the turn to its end, or to the socket's end.
+	for {
+		_, data, err := c.Read(ctx)
+		if err != nil || strings.Contains(string(data), `"response.completed"`) || strings.Contains(string(data), `"type":"error"`) {
+			break
+		}
+	}
+	if keys := keysOf(u.connections()); slices.Contains(keys, "sk-b") {
+		t.Errorf("upstream sockets use keys %v; the socket moved to sk-b", keys)
+	}
+}
+
+// A message the client sent while a turn ran whose upstream socket was then lost is refused
+// with previous_response_not_found, not run, as in today's core: it was written before the
+// client knew of the loss.
+func TestResponsesWebSocketLossFencesQueuedInput(t *testing.T) {
+	u := newWSUpstream(t)
+	u.hold = make(chan struct{})
+	base := startWSCore(t, u, true, "sk-a")
+
+	c := dialResponses(t, base)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	send := func(m map[string]any) {
+		b, _ := json.Marshal(m)
+		if err := c.Write(ctx, websocket.MessageText, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func() map[string]any {
+		_, data, err := c.Read(ctx)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		var m map[string]any
+		_ = json.Unmarshal(data, &m)
+		return m
+	}
+	send(wsCreate("one", ""))
+	if m := read(); m["type"] != "response.created" {
+		t.Fatalf("first message %v, want response.created", m)
+	}
+	send(wsCreate("two", ""))
+	time.Sleep(200 * time.Millisecond) // the second create is read and queued
+	close(u.hold)                      // the upstream drops its socket mid-turn
+	code := func(m map[string]any) any {
+		e, _ := m["error"].(map[string]any)
+		return e["code"]
+	}
+	if m := read(); code(m) != "upstream_websocket_lost" {
+		t.Fatalf("after the loss: %v, want upstream_websocket_lost", m)
+	}
+	if m := read(); code(m) != "previous_response_not_found" {
+		t.Fatalf("queued create: %v, want previous_response_not_found", m)
+	}
+	if n := len(u.connections()); n != 1 {
+		t.Errorf("upstream sockets: %d, want 1", n)
+	}
+}
+
+// A client that sends its client key may upgrade from any origin, as in today's core (a web
+// page cannot set the key's header on a WebSocket, so the check guards nothing there).
+func TestResponsesWebSocketAnyOriginWithClientKey(t *testing.T) {
+	u := newWSUpstream(t)
+	base := startWSCore(t, u, true, "sk-a")
+	c := dialResponses(t, base, "Origin", "https://example.test")
+	if m := wsTurn(t, c, wsCreate("one", "")); m["type"] != "response.completed" {
+		t.Fatalf("turn ended with %v", m)
 	}
 }

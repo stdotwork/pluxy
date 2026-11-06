@@ -304,6 +304,37 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		refuse(&llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeRequest, Message: "this extension holds no sessions"})
 		return
 	}
+	// The reader runs from the start, so core closing the connection cancels the opening too.
+	// It hands turns to the loop below and interrupts to the interrupt loop, so a slow
+	// Interrupt does not stop it from seeing the connection close. Anything else, or the
+	// connection closing, ends the session.
+	turns := make(chan protocol.Call)
+	interrupts := make(chan json.RawMessage, 16)
+	go func() {
+		defer cancel()
+		for {
+			var f protocol.Call
+			if err := protocol.ReadFrame(conn, &f); err != nil {
+				return
+			}
+			switch f.Type {
+			case protocol.TypeSessionTurn:
+				select {
+				case turns <- f:
+				case <-ctx.Done():
+					return
+				}
+			case protocol.TypeSessionInterrupt:
+				select {
+				case interrupts <- f.Raw:
+				default: // a client sending interrupts faster than they are passed on loses some
+				}
+			default:
+				return
+			}
+		}
+	}()
+
 	sc := SessionCall{ID: call.ID}
 	if call.Account != nil {
 		sc.Account = *call.Account
@@ -321,33 +352,20 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		return
 	}
 
-	// The reader hands turns to the loop below and passes interrupts on while a turn runs.
-	// Anything else, or the connection closing, ends the session.
-	turns := make(chan protocol.Call)
 	var mu sync.Mutex
 	running := false
 	go func() {
-		defer cancel()
 		for {
-			var f protocol.Call
-			if err := protocol.ReadFrame(conn, &f); err != nil {
+			select {
+			case <-ctx.Done():
 				return
-			}
-			switch f.Type {
-			case protocol.TypeSessionTurn:
-				select {
-				case turns <- f:
-				case <-ctx.Done():
-					return
-				}
-			case protocol.TypeSessionInterrupt:
+			case raw := <-interrupts:
 				mu.Lock()
-				if running {
-					sess.Interrupt(f.Raw)
-				}
+				r := running
 				mu.Unlock()
-			default:
-				return
+				if r {
+					sess.Interrupt(raw)
+				}
 			}
 		}
 	}()

@@ -95,11 +95,12 @@ Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGen
 
 Responses clients may also open a WebSocket on `GET /v1/responses` ([OpenAI's WebSocket
 mode](https://developers.openai.com/api/docs/guides/websocket-mode)): each `response.create`
-message is a turn, answered with that turn's stream events, one message each. A socket stays on
-one account for all its turns. When that account's extension holds sessions (protocol 0.1, such
-as a Codex account with `"websockets": true`), the turns go to one session, so a turn can continue
-the previous response with `previous_response_id`; on any other account each turn is a request
-that carries the whole conversation so far, which core keeps for the socket. `response.append`,
+message is a turn, answered with that turn's stream events, one message each. When the chosen
+account's extension holds sessions (protocol 0.1, such as a Codex account with `"websockets":
+true`), the socket's turns go to one session on that account, so a turn can continue the previous
+response with `previous_response_id`, and later turns stay on that account. On any other account
+each turn is a request that carries the whole conversation so far, which core keeps for the
+socket. `response.append`,
 `response.interrupt` and warmups (`"generate": false`) are served as today's core serves them.
 
 Clients send the client key as a bearer token or, as Anthropic clients do, in `x-api-key`; Gemini

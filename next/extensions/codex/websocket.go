@@ -6,10 +6,13 @@ package main
 // README (Sessions, openai.responses sessions).
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -256,16 +259,24 @@ func lostError(err error) error {
 	return openairesponses.UpstreamWebsocketLost()
 }
 
-// frameError gives an upstream error message its HTTP status, which the WebSocket carries in
-// the message ("status"), where an HTTP reply carries it in the response.
+// frameError gives an upstream error message the meaning its HTTP status has, as today's core
+// does: the WebSocket carries in the message ("status", "headers", and the error in "error" or
+// "body.error") what an HTTP reply carries in its response, so the message is read as that
+// reply would be (statusError), whatever its body's error type says. A message without a status
+// keeps what its error type means (err).
 func frameError(data []byte, err error) error {
 	var e *llm.Error
 	if !errors.As(err, &e) {
 		return err
 	}
 	var f struct {
-		Status     int `json:"status"`
-		StatusCode int `json:"status_code"`
+		Status     int                        `json:"status"`
+		StatusCode int                        `json:"status_code"`
+		Headers    map[string]json.RawMessage `json:"headers"`
+		Error      json.RawMessage            `json:"error"`
+		Body       struct {
+			Error json.RawMessage `json:"error"`
+		} `json:"body"`
 	}
 	_ = json.Unmarshal(data, &f)
 	status := f.Status
@@ -275,22 +286,24 @@ func frameError(data []byte, err error) error {
 	if status < 400 || status > 599 {
 		return e
 	}
-	if e.Status == 0 {
-		e.Status = status
+	errObj := f.Body.Error
+	if len(errObj) == 0 {
+		errObj = f.Error
 	}
-	if e.Code == llm.CodeUpstream {
-		switch {
-		case status == http.StatusUnauthorized:
-			e.Code, e.Scope = llm.CodeAuth, llm.ScopeCredential
-		case status == http.StatusForbidden:
-			e.Code, e.Scope = llm.CodePermission, llm.ScopeCredential
-		case status == http.StatusTooManyRequests:
-			e.Code, e.Scope = llm.CodeRateLimit, llm.ScopeCredential
-		case status < 500:
-			e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
+	if len(errObj) == 0 {
+		errObj, _ = json.Marshal(map[string]string{"type": "server_error", "message": http.StatusText(status)})
+	}
+	body, _ := json.Marshal(map[string]json.RawMessage{"error": errObj})
+	h := http.Header{}
+	for k, v := range f.Headers {
+		var s string
+		if json.Unmarshal(v, &s) != nil {
+			s = string(v)
 		}
+		h.Set(k, s)
 	}
-	return e
+	return statusError(&http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header: h, Body: io.NopCloser(bytes.NewReader(body))}, "")
 }
 
 // dial connects the session's socket to {base_url}/responses.

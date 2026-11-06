@@ -504,14 +504,16 @@ func TestTranscriptWarmup(t *testing.T) {
 		trWantIDs(t, m, "u3")
 	})
 
-	t.Run("a warmup with the committed turn as parent merges and is marked", func(t *testing.T) {
+	// Only a warmup without a parent is answered locally; today's core sends one that names a
+	// parent upstream as a turn (its local warmup needs previous_response_id empty).
+	t.Run("a warmup with the committed turn as parent merges and goes upstream as a turn", func(t *testing.T) {
 		tr := trStarted(t)
 		turn, e := tr.Next(trParse(t, `{"type":"response.create","generate":false,"previous_response_id":"resp_1","input":[{"type":"message","role":"user","id":"u2","content":"more"}]}`))
 		if e != nil {
 			t.Fatalf("warmup: %s %q", e.Code, e.Message)
 		}
-		if !turn.Warmup {
-			t.Fatal("Warmup = false, want true")
+		if turn.Warmup {
+			t.Fatal("Warmup = true, want false")
 		}
 		trWantIDs(t, trDecode(t, turn.Body), "u1", "a1", "u2")
 	})
@@ -698,4 +700,20 @@ func TestWebsocketInterruptedMessage(t *testing.T) {
 			t.Fatalf("output = %v, want the item m1", out)
 		}
 	})
+}
+
+// A replayed item whose key is spelled with JSON escapes is cleaned like the plain spelling.
+func TestTranscriptTokenCountsEscapedKey(t *testing.T) {
+	tr := &Transcript{}
+	turn, e := tr.Next(trParse(t, trFirstCreate))
+	if e != nil {
+		t.Fatal(e)
+	}
+	tr.Commit(turn.Body, json.RawMessage(`[{"type":"message","role":"assistant","id":"a1","content":"hi","internal\u005fchat_message_metadata_passthrough":{"content_token_count":42}}]`))
+	m := trNext(t, tr, `{"type":"response.create","previous_response_id":"resp_1","input":[]}`)
+	for _, it := range m["input"].([]any) {
+		if _, ok := it.(map[string]any)["internal_chat_message_metadata_passthrough"]; ok {
+			t.Errorf("replayed item kept the output-only field: %v", it)
+		}
+	}
 }

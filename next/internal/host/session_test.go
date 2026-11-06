@@ -6,6 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,4 +204,64 @@ func TestDrainClosesSessions(t *testing.T) {
 	}
 	waitClosed(t, busy.Done(), "the busy session's end")
 	waitClosed(t, drained, "the drain")
+}
+
+// sessionBadFrame is an extension that holds sessions without the SDK and answers every turn
+// with an event of an unknown type that holds the turn's API key.
+func sessionBadFrame() {
+	socket := os.Getenv(protocol.EnvSocket)
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		os.Exit(1)
+	}
+	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			os.Exit(0)
+		}
+		go func() {
+			defer conn.Close()
+			var call protocol.Call
+			if protocol.ReadFrame(conn, &call) != nil {
+				return
+			}
+			switch call.Op {
+			case protocol.OpDescribe:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeDescribeResult},
+					Info: &protocol.Info{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0", Protocol: protocol.Version, ProtocolMinor: 1,
+						Operations: []string{protocol.OpGenerate, protocol.OpSession}}})
+			case protocol.OpSession:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeSessionReady}})
+				var turn protocol.Call
+				if protocol.ReadFrame(conn, &turn) != nil || turn.Account == nil || turn.Account.Credential == nil {
+					return
+				}
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: "leak-" + turn.Account.Credential.APIKey}})
+				_, _ = io.Copy(io.Discard, conn)
+			}
+		}()
+	}
+}
+
+// An extension that breaks the protocol with a frame holding the account's credential gets a
+// protocol error without the credential in it.
+func TestSessionProtocolErrorIsRedacted(t *testing.T) {
+	g, _ := prepareFake(t, "session-bad-frame", 0)
+	const key = "sk-session-leak-test-0123456789"
+	account := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}}
+	s, e := g.OpenSession(context.Background(), account, responsesSession)
+	if e != nil {
+		t.Fatalf("OpenSession: %+v", e)
+	}
+	defer s.Close()
+	turn := s.Turn(context.Background(), account, llm.Request{Model: "m"})
+	defer turn.Close()
+	ev := turn.Next()
+	if ev.Type != llm.EventError || ev.Error.Code != llm.CodeExtensionProtocol {
+		t.Fatalf("event %+v; want a protocol error", ev)
+	}
+	if strings.Contains(ev.Error.Message, key) {
+		t.Errorf("protocol error holds the credential: %q", ev.Error.Message)
+	}
 }

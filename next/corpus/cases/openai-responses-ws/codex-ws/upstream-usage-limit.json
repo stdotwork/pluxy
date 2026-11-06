@@ -1,5 +1,5 @@
 {
-  "description": "An upstream usage-limit error message (429 usage_limit_reached) ends the turn; the client gets a usage-limit error.",
+  "description": "An upstream usage-limit error message (429 usage_limit_reached) on the only account ends the turn, and the client socket closes without a message.",
   "source": [
     "core/sdk/api/handlers/openai/openai_responses_websocket_usage_limit_codex_test.go"
   ],

@@ -197,3 +197,78 @@ func TestSessionTurns(t *testing.T) {
 		}
 	}
 }
+
+type blockingSession struct {
+	turnEnded chan struct{}
+}
+
+func (s blockingSession) Turn(ctx context.Context, _ Call, out *Stream) error {
+	if err := out.Start(llm.ResponseInfo{ID: "r"}); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	close(s.turnEnded)
+	return ctx.Err()
+}
+func (blockingSession) Interrupt(json.RawMessage) { select {} }
+func (blockingSession) Close()                    {}
+
+// Core closing a session's connection cancels what the extension is doing for it: an opening
+// that has not finished, and a running turn while an interrupt callback blocks.
+func TestSessionNoticesCoreGoing(t *testing.T) {
+	openEnded := make(chan struct{})
+	turnEnded := make(chan struct{})
+	ext := Extension{ID: "test/sdk", Version: "0.0.0",
+		Generate: func(context.Context, Call, *Stream) error { return nil },
+		Session: func(ctx context.Context, call SessionCall) (Session, error) {
+			if call.Account.ID == "slow" {
+				<-ctx.Done()
+				close(openEnded)
+				return nil, ctx.Err()
+			}
+			return blockingSession{turnEnded: turnEnded}, nil
+		}}
+	socket, _, _ := startServe(t, ext)
+	open := func(account string) net.Conn {
+		conn := dial(t, socket)
+		a := protocol.Account{ID: account}
+		if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: "s", Op: protocol.OpSession, Account: &a,
+			Session: &protocol.SessionInfo{Format: protocol.SessionOpenAIResponses}}); err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	wait := func(c chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-c:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s did not end after core closed the connection", what)
+		}
+	}
+
+	conn := open("slow")
+	time.Sleep(100 * time.Millisecond)
+	conn.Close()
+	wait(openEnded, "the opening")
+
+	conn = open("a")
+	defer conn.Close()
+	var r protocol.Reply
+	if err := protocol.ReadFrame(conn, &r); err != nil || r.Type != protocol.TypeSessionReady {
+		t.Fatalf("session reply %+v, %v", r, err)
+	}
+	a := protocol.Account{ID: "a"}
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionTurn, Account: &a, Request: &llm.Request{Model: "m"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.ReadFrame(conn, &r); err != nil || r.Type != llm.EventResponseStart {
+		t.Fatalf("turn's first event %+v, %v", r, err)
+	}
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeSessionInterrupt, Raw: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	conn.Close()
+	wait(turnEnded, "the turn")
+}

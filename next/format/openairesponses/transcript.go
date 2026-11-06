@@ -109,8 +109,10 @@ func (t *Transcript) Next(msg map[string]json.RawMessage) (TranscriptTurn, *llm.
 	if !isArray(input) {
 		return TranscriptTurn{}, badRequest("websocket request requires array field: input")
 	}
+	// From here on the message names a parent or appends to one (a warmup without a parent is
+	// handled above): it goes upstream as a turn, warmup or not, as in today's core.
 	if replacesTranscript(typ, msg, input) {
-		return TranscriptTurn{Body: marshalObject(t.replacement(msg)), Warmup: warmup}, nil
+		return TranscriptTurn{Body: marshalObject(t.replacement(msg))}, nil
 	}
 	m := t.replacement(msg)
 	if !containsCompaction(input) {
@@ -119,7 +121,7 @@ func (t *Transcript) Next(msg map[string]json.RawMessage) (TranscriptTurn, *llm.
 	// Input with a compaction item already holds the whole conversation, compacted: merging
 	// the stale turns into it would break its tool call pairs. Today's core sends it as it is
 	// to an upstream that takes compaction items (the Codex endpoint, which made them).
-	return TranscriptTurn{Body: marshalObject(m), Warmup: warmup}, nil
+	return TranscriptTurn{Body: marshalObject(m)}, nil
 }
 
 // Commit records a turn that completed: the request sent upstream and the response's output.
@@ -310,7 +312,8 @@ func mergeInput(last map[string]json.RawMessage, output, appendInput json.RawMes
 // its internal_chat_message_metadata_passthrough objects, which only output has, and such
 // objects left empty.
 func replayItem(r json.RawMessage) json.RawMessage {
-	if !bytes.Contains(r, []byte("internal_chat_message_metadata_passthrough")) {
+	// The key may be spelled with JSON escapes, which only decoding resolves.
+	if !bytes.Contains(r, []byte("internal_chat_message_metadata_passthrough")) && !bytes.Contains(r, []byte(`\u`)) {
 		return r
 	}
 	var v any
