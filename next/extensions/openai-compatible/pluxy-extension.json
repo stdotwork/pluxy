@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/openai-compatible",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "openai-compatible",
+    "linux/arm64": "openai-compatible",
+    "darwin/amd64": "openai-compatible",
+    "darwin/arm64": "openai-compatible",
+    "windows/amd64": "openai-compatible.exe"
+  }
+}

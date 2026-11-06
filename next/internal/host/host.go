@@ -1,0 +1,362 @@
+package host
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+)
+
+// Options tune how an extension is started. The zero value uses the defaults.
+type Options struct {
+	// Versions are the protocol versions core offers. Default: protocol.Version.
+	Versions []int
+	// StartTimeout bounds the wait for the handshake line. Default 10s.
+	StartTimeout time.Duration
+	// StopTimeout bounds the wait for the program to exit after stdin closes. Default 5s.
+	StopTimeout time.Duration
+	// Log receives the program's stderr and later stdout, one prefixed line at a time.
+	// Default os.Stderr.
+	Log io.Writer
+}
+
+// Extension is a running extension program.
+type Extension struct {
+	manifest *Manifest
+	info     protocol.Info
+	opts     Options
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	socket   string
+	dir      string
+	exited   chan struct{}
+	waitErr  error
+	calls    atomic.Uint64
+	stopOnce sync.Once
+}
+
+// Start starts the extension described by the manifest at manifestPath, does the handshake and
+// checks the extension's description against the manifest.
+func Start(manifestPath string, opts Options) (*Extension, error) {
+	m, err := LoadManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(opts.Versions) == 0 {
+		opts.Versions = []int{protocol.Version}
+	}
+	if opts.StartTimeout == 0 {
+		opts.StartTimeout = 10 * time.Second
+	}
+	if opts.StopTimeout == 0 {
+		opts.StopTimeout = 5 * time.Second
+	}
+	if opts.Log == nil {
+		opts.Log = os.Stderr
+	}
+	common := false
+	for _, v := range m.Protocol {
+		common = common || slices.Contains(opts.Versions, v)
+	}
+	if !common {
+		return nil, fmt.Errorf("extension %s speaks protocol %v; core speaks %v", m.ID, m.Protocol, opts.Versions)
+	}
+	prog, err := m.Program()
+	if err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "pluxy-ext-")
+	if err != nil {
+		return nil, err
+	}
+	e := &Extension{manifest: m, opts: opts, dir: dir, socket: dir + string(os.PathSeparator) + "ext.sock", exited: make(chan struct{})}
+	if err := e.start(prog); err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	if err := e.describe(); err != nil {
+		e.Stop()
+		return nil, err
+	}
+	return e, nil
+}
+
+func (e *Extension) start(prog string) error {
+	versions := make([]string, len(e.opts.Versions))
+	for i, v := range e.opts.Versions {
+		versions[i] = strconv.Itoa(v)
+	}
+	cmd := exec.Command(prog)
+	cmd.Dir = e.manifest.dir
+	// A cleared environment: the extension gets only what it needs to run.
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		protocol.EnvProtocolVersions + "=" + strings.Join(versions, ","),
+		protocol.EnvSocket + "=" + e.socket,
+		protocol.EnvExtensionID + "=" + e.manifest.ID,
+	}
+	if runtime.GOOS == "windows" {
+		cmd.Env = append(cmd.Env, "SYSTEMROOT="+os.Getenv("SYSTEMROOT"))
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = &lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + "] "}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting extension %s: %w", e.manifest.ID, err)
+	}
+	e.cmd, e.stdin = cmd, stdin
+
+	lines := make(chan string, 1)
+	go func() {
+		r := bufio.NewReader(stdout)
+		line, err := r.ReadString('\n')
+		if err != nil {
+			close(lines)
+		} else {
+			lines <- line
+		}
+		// Keep draining stdout so the program never blocks on it.
+		_, _ = io.Copy(&lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + " stdout] "}, r)
+	}()
+	go func() {
+		e.waitErr = cmd.Wait()
+		close(e.exited)
+		os.RemoveAll(e.dir)
+	}()
+
+	timer := time.NewTimer(e.opts.StartTimeout)
+	defer timer.Stop()
+	select {
+	case line, ok := <-lines:
+		if !ok {
+			<-e.exited
+			return fmt.Errorf("extension %s exited before its handshake: %v", e.manifest.ID, e.waitErr)
+		}
+		return e.checkHandshake(line)
+	case <-timer.C:
+		e.Kill()
+		return fmt.Errorf("extension %s sent no handshake within %s", e.manifest.ID, e.opts.StartTimeout)
+	}
+}
+
+func (e *Extension) checkHandshake(line string) error {
+	version, _, addr, err := protocol.ParseHandshake(line)
+	if err == nil && !slices.Contains(e.opts.Versions, version) {
+		err = fmt.Errorf("extension chose protocol %d, which core did not offer", version)
+	}
+	if err == nil && addr != e.socket {
+		err = fmt.Errorf("extension listens on %q, not on the socket core gave it", addr)
+	}
+	if err != nil {
+		e.Kill()
+		return fmt.Errorf("extension %s: %w", e.manifest.ID, err)
+	}
+	return nil
+}
+
+func (e *Extension) describe() error {
+	conn, err := net.Dial("unix", e.socket)
+	if err != nil {
+		return fmt.Errorf("extension %s: %w", e.manifest.ID, err)
+	}
+	defer conn.Close()
+	// describe is part of starting up, so the startup limit covers it.
+	_ = conn.SetDeadline(time.Now().Add(e.opts.StartTimeout))
+	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpDescribe}); err != nil {
+		return fmt.Errorf("extension %s: describe: %w", e.manifest.ID, err)
+	}
+	var reply protocol.Reply
+	if err := protocol.ReadFrame(conn, &reply); err != nil {
+		return fmt.Errorf("extension %s: describe: %w", e.manifest.ID, err)
+	}
+	if reply.Type != protocol.TypeDescribeResult || reply.Info == nil {
+		return fmt.Errorf("extension %s: describe returned %q", e.manifest.ID, reply.Type)
+	}
+	if reply.Info.ID != e.manifest.ID {
+		return fmt.Errorf("extension %s describes itself as %q", e.manifest.ID, reply.Info.ID)
+	}
+	e.info = *reply.Info
+	return nil
+}
+
+func (e *Extension) nextID() string {
+	return "c-" + strconv.FormatUint(e.calls.Add(1), 10)
+}
+
+// Manifest returns the extension's manifest.
+func (e *Extension) Manifest() *Manifest { return e.manifest }
+
+// Info returns the extension's reply to describe.
+func (e *Extension) Info() protocol.Info { return e.info }
+
+// Exited is closed when the program has exited.
+func (e *Extension) Exited() <-chan struct{} { return e.exited }
+
+// ExitError is the program's exit result once Exited is closed: nil for a clean exit.
+func (e *Extension) ExitError() error {
+	<-e.exited
+	return e.waitErr
+}
+
+// Kill kills the program without waiting.
+func (e *Extension) Kill() {
+	if e.cmd != nil && e.cmd.Process != nil {
+		_ = e.cmd.Process.Kill()
+	}
+}
+
+// Stop asks the program to exit by closing its stdin, and kills it if it has not exited within
+// the stop timeout. It returns once the program has exited.
+func (e *Extension) Stop() {
+	e.stopOnce.Do(func() {
+		if e.stdin != nil {
+			e.stdin.Close()
+		}
+		select {
+		case <-e.exited:
+		case <-time.After(e.opts.StopTimeout):
+			e.Kill()
+			<-e.exited
+		}
+	})
+	<-e.exited
+}
+
+// Generate starts a generate call. The call is cancelled when ctx ends or the stream is closed.
+func (e *Extension) Generate(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
+	select {
+	case <-e.exited:
+		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not running", e.manifest.ID))
+	default:
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", e.socket)
+	if err != nil {
+		if ctx.Err() != nil {
+			return failed(llm.CodeCancelled, "the request was cancelled")
+		}
+		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
+	}
+	s := &Stream{conn: conn, ctx: ctx, ext: e}
+	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
+	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpGenerate, Account: &account, Request: &req}
+	if err := protocol.WriteFrame(conn, call); err != nil {
+		s.fail(s.readError(err))
+	}
+	return s
+}
+
+// Stream is the reply to a generate call. Next returns events until and including exactly one
+// terminal event (finish or error), then keeps returning that terminal event.
+type Stream struct {
+	conn  net.Conn
+	ctx   context.Context
+	ext   *Extension
+	stop  func() bool
+	seq   llm.Sequence
+	final *llm.Event
+}
+
+func failed(code, msg string) *Stream {
+	s := &Stream{}
+	s.fail(&llm.Error{Code: code, Message: msg})
+	return s
+}
+
+func (s *Stream) fail(e *llm.Error) {
+	ev := llm.Event{Type: llm.EventError, Error: e}
+	s.final = &ev
+	s.Close()
+}
+
+// Next returns the next event.
+func (s *Stream) Next() llm.Event {
+	if s.final != nil {
+		return *s.final
+	}
+	var reply protocol.Reply
+	if err := protocol.ReadFrame(s.conn, &reply); err != nil {
+		s.fail(s.readError(err))
+		return *s.final
+	}
+	if err := s.seq.Check(reply.Event); err != nil {
+		s.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)})
+		return *s.final
+	}
+	if reply.Event.Terminal() {
+		ev := reply.Event
+		s.final = &ev
+		s.Close()
+	}
+	return reply.Event
+}
+
+func (s *Stream) readError(err error) *llm.Error {
+	if s.ctx != nil && s.ctx.Err() != nil {
+		return &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
+	}
+	var se *json.SyntaxError
+	var te *json.UnmarshalTypeError
+	if errors.Is(err, protocol.ErrFrameTooLarge) || errors.As(err, &se) || errors.As(err, &te) {
+		return &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", s.ext.manifest.ID, err)}
+	}
+	return &llm.Error{Code: llm.CodeExtensionCrashed, Message: fmt.Sprintf("extension %s ended the call without finishing it", s.ext.manifest.ID)}
+}
+
+// Close ends the call; if it had not finished, the extension sees it cancelled.
+func (s *Stream) Close() {
+	if s.stop != nil {
+		s.stop()
+	}
+	if s.conn != nil {
+		s.conn.Close()
+	}
+}
+
+// lineLogger writes whole lines to w with a prefix.
+type lineLogger struct {
+	mu     sync.Mutex
+	w      io.Writer
+	prefix string
+	buf    []byte
+}
+
+func (l *lineLogger) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf = append(l.buf, p...)
+	for {
+		i := strings.IndexByte(string(l.buf), '\n')
+		if i < 0 {
+			break
+		}
+		fmt.Fprintf(l.w, "%s%s\n", l.prefix, l.buf[:i])
+		l.buf = l.buf[i+1:]
+	}
+	if len(l.buf) > 64<<10 { // never hold an unbounded partial line
+		fmt.Fprintf(l.w, "%s%s\n", l.prefix, l.buf)
+		l.buf = l.buf[:0]
+	}
+	return len(p), nil
+}
