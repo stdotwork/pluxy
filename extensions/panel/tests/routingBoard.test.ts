@@ -99,6 +99,24 @@ describe('routing board reading', () => {
     expect(readRoutingSettings({ routing: { strategy: 'bogus' } }).strategy).toBe('round-robin');
   });
 
+  test('reads only the strategy names the backend accepts', () => {
+    // The backend matches trimmed, case-insensitive names and runs anything else as round-robin;
+    // an underscore or space is not treated as a hyphen there.
+    for (const strategy of ['fill_first', 'fill first', 'weighted_round_robin']) {
+      expect(readRoutingSettings({ routing: { strategy } }).strategy).toBe('round-robin');
+    }
+    for (const [strategy, expected] of [
+      ['fill-first', 'fill-first'],
+      [' Fill-First ', 'fill-first'],
+      ['fillfirst', 'fill-first'],
+      ['ff', 'fill-first'],
+      ['weighted-round-robin', 'weighted-round-robin'],
+      ['WRR', 'weighted-round-robin'],
+    ] as const) {
+      expect(readRoutingSettings({ routing: { strategy } }).strategy).toBe(expected);
+    }
+  });
+
   test('expands groups with key overrides, compat providers and credentials', () => {
     const members = board().members;
     const byKey = new Map(members.map((member) => [member.key, member]));

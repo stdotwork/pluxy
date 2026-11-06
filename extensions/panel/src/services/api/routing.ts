@@ -92,9 +92,7 @@ const readHost = (value: unknown): string => {
 };
 
 export function normalizeRoutingStrategy(value: unknown): RoutingStrategy {
-  const text = readText(value)
-    .toLowerCase()
-    .replace(/[\s_]+/g, '-');
+  const text = readText(value).toLowerCase();
   if (['weighted-round-robin', 'weightedroundrobin', 'wrr'].includes(text)) {
     return 'weighted-round-robin';
   }
