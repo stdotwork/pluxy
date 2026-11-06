@@ -1,0 +1,401 @@
+{
+  "description": "A streamed Chat request with a system message reaches a Gemini upstream as GenerateContent (system instruction, user content); the reply's thought and text parts come back as Chat chunks with usage.",
+  "source": [
+    "core/internal/translator/gemini/openai/chat-completions/gemini_openai_request.go",
+    "core/internal/translator/gemini/openai/chat-completions/gemini_openai_response.go",
+    "core/internal/runtime/executor/gemini_executor.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gemini-corpus",
+      "stream": true,
+      "messages": [
+        {
+          "role": "system",
+          "content": "Be brief."
+        },
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "role": "model",
+                  "parts": [
+                    {
+                      "text": "thinking...",
+                      "thought": true
+                    }
+                  ]
+                },
+                "index": 0
+              }
+            ],
+            "modelVersion": "gemini-corpus-upstream",
+            "responseId": "resp-corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "role": "model",
+                  "parts": [
+                    {
+                      "text": "Hello"
+                    }
+                  ]
+                },
+                "index": 0
+              }
+            ],
+            "modelVersion": "gemini-corpus-upstream",
+            "responseId": "resp-corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "role": "model",
+                  "parts": [
+                    {
+                      "text": " world"
+                    },
+                    {
+                      "text": "",
+                      "thoughtSignature": "CiQB0e2Kb7sigA1"
+                    }
+                  ]
+                },
+                "index": 0
+              }
+            ],
+            "modelVersion": "gemini-corpus-upstream",
+            "responseId": "resp-corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "role": "model",
+                  "parts": [
+                    {
+                      "text": ""
+                    }
+                  ]
+                },
+                "index": 0,
+                "finishReason": "STOP"
+              }
+            ],
+            "modelVersion": "gemini-corpus-upstream",
+            "responseId": "resp-corpus",
+            "usageMetadata": {
+              "promptTokenCount": 40,
+              "cachedContentTokenCount": 8,
+              "candidatesTokenCount": 12,
+              "thoughtsTokenCount": 20,
+              "totalTokenCount": 72
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.created",
+    "client.events[*].data.created"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": null,
+                  "reasoning_content": "thinking...",
+                  "role": "assistant",
+                  "tool_calls": null
+                },
+                "finish_reason": null,
+                "index": 0,
+                "native_finish_reason": null
+              }
+            ],
+            "created": 0,
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "Hello",
+                  "reasoning_content": null,
+                  "role": "assistant",
+                  "tool_calls": null
+                },
+                "finish_reason": null,
+                "index": 0,
+                "native_finish_reason": null
+              }
+            ],
+            "created": 0,
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "",
+                  "reasoning_content": null,
+                  "role": "assistant",
+                  "tool_calls": null
+                },
+                "finish_reason": null,
+                "index": 0,
+                "native_finish_reason": null
+              }
+            ],
+            "created": 0,
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "",
+                  "reasoning_content": null,
+                  "role": "assistant",
+                  "tool_calls": null
+                },
+                "finish_reason": "stop",
+                "index": 0,
+                "native_finish_reason": "stop"
+              }
+            ],
+            "created": 0,
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk",
+            "usage": {
+              "completion_tokens": 32,
+              "completion_tokens_details": {
+                "reasoning_tokens": 20
+              },
+              "prompt_tokens": 40,
+              "prompt_tokens_details": {
+                "cached_tokens": 8
+              },
+              "total_tokens": 72
+            }
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [
+            {
+              "parts": [
+                {
+                  "text": "Say hello"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {
+              "category": "HARM_CATEGORY_HARASSMENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_HATE_SPEECH",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+              "threshold": "BLOCK_NONE"
+            }
+          ],
+          "systemInstruction": {
+            "parts": [
+              {
+                "text": "Be brief."
+              }
+            ],
+            "role": "user"
+          }
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:streamGenerateContent?alt=sse"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes a Chat stream from a Gemini reply as OpenAI's API does: content \"\" with the role in the first chunk, only the delta fields that are set (today's core sends content, reasoning_content and tool_calls as null and a non-standard native_finish_reason), every text part (today's core loses text that shares a chunk with a part carrying a thought signature), the finish reason in its own chunk, tool call ids as call_<n> when Gemini sends none, and usage only when the client asks for it with stream_options.include_usage (today's core always adds it).",
+      "want": [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "",
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "reasoning_content": "thinking..."
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "Hello"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": " world"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "stop",
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ]
+    },
+    {
+      "path": "upstream[0].body.systemInstruction.role",
+      "kind": "intended",
+      "reason": "Gemini's systemInstruction takes parts only; today's core adds role user to it for Chat clients (not for Responses or Messages clients), the new core leaves it out for all.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "The new core asks a streaming upstream for text/event-stream; today's Gemini provider sends no Accept header. Gemini answers alt=sse either way.",
+      "want": "text/event-stream"
+    }
+  ]
+}

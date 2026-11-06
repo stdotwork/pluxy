@@ -1,0 +1,218 @@
+{
+  "description": "Gemini client, same-format passthrough, non-stream: a history with a functionCall (id, thoughtSignature) answered by a functionResponse, with Gemini Schema parameters and a responseSchema, reaches the upstream as the client sent it, thought signature included; the text reply comes back unchanged.",
+  "source": [
+    "core/internal/translator/gemini/gemini/gemini_gemini_request.go:31-87,89-170 (parameters to parametersJsonSchema, responseSchema to responseJsonSchema, thought signatures sanitized)",
+    "core/internal/translator/gemini/gemini/gemini_gemini_request.go:174-352 (functionResponse name backfill, existing names kept)",
+    "core/internal/translator/gemini/gemini/gemini_gemini_response.go:10-30 (non-stream response returned unchanged)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gemini-corpus:generateContent",
+    "body": {
+      "contents": [
+        {"role":"user","parts":[{"text":"Weather in Paris?"}]},
+        {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {"id":"fc-1","name":"get_weather","args":{"city":"Paris"}},
+              "thoughtSignature": "CiQB0e2Kb7sigA1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [{"functionResponse":{"id":"fc-1","name":"get_weather","response":{"temp":18}}}]
+        }
+      ],
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "get_weather",
+              "description": "Get the current weather for a city",
+              "parameters": {
+                "type": "OBJECT",
+                "properties": {"city":{"type":"STRING"}},
+                "required": ["city"]
+              }
+            }
+          ]
+        }
+      ],
+      "generationConfig": {
+        "responseSchema": {
+          "type": "OBJECT",
+          "properties": {"summary":{"type":"STRING"}},
+          "required": ["summary"]
+        }
+      }
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "candidates": [
+          {
+            "content": {"role":"model","parts":[{"text":"It is 18 degrees in Paris."}]},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "usageMetadata": {
+          "promptTokenCount": 40,
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        },
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus"
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.contents[1].parts[0].thoughtSignature",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked."
+    },
+    {
+      "path": "upstream[0].body.generationConfig.responseJsonSchema",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.generationConfig.responseSchema",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked.",
+      "want": {"properties":{"summary":{"type":"STRING"}},"required":["summary"],"type":"OBJECT"}
+    },
+    {
+      "path": "upstream[0].body.model",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked."
+    },
+    {
+      "path": "upstream[0].body.safetySettings",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.tools[0].functionDeclarations",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked.",
+      "want": [
+        {
+          "description": "Get the current weather for a city",
+          "name": "get_weather",
+          "parameters": {
+            "properties": {"city":{"type":"STRING"}},
+            "required": ["city"],
+            "type": "OBJECT"
+          }
+        }
+      ]
+    },
+    {
+      "path": "upstream[0].body.tools[0].function_declarations",
+      "kind": "intended",
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "candidates": [
+          {
+            "content": {"parts":[{"text":"It is 18 degrees in Paris."}],"role":"model"},
+            "finishReason": "STOP",
+            "index": 0
+          }
+        ],
+        "modelVersion": "gemini-corpus-upstream",
+        "responseId": "resp-corpus",
+        "usageMetadata": {
+          "cachedContentTokenCount": 8,
+          "candidatesTokenCount": 12,
+          "promptTokenCount": 40,
+          "thoughtsTokenCount": 20,
+          "totalTokenCount": 72
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [
+            {"parts":[{"text":"Weather in Paris?"}],"role":"user"},
+            {
+              "parts": [
+                {
+                  "functionCall": {"args":{"city":"Paris"},"id":"fc-1","name":"get_weather"},
+                  "thoughtSignature": "skip_thought_signature_validator"
+                }
+              ],
+              "role": "model"
+            },
+            {
+              "parts": [
+                {"functionResponse":{"id":"fc-1","name":"get_weather","response":{"temp":18}}}
+              ],
+              "role": "user"
+            }
+          ],
+          "generationConfig": {
+            "responseJsonSchema": {
+              "properties": {"summary":{"type":"STRING"}},
+              "required": ["summary"],
+              "type": "OBJECT"
+            }
+          },
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},
+            {"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}
+          ],
+          "tools": [
+            {
+              "function_declarations": [
+                {
+                  "description": "Get the current weather for a city",
+                  "name": "get_weather",
+                  "parametersJsonSchema": {
+                    "properties": {"city":{"type":"STRING"}},
+                    "required": ["city"],
+                    "type": "OBJECT"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:generateContent"
+      }
+    ]
+  }
+}

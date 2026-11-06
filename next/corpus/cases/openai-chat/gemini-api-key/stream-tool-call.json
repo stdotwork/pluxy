@@ -1,0 +1,357 @@
+{
+  "description": "A Chat tool definition reaches Gemini as a function declaration; the upstream's functionCall comes back as a Chat tool call with finish_reason tool_calls.",
+  "source": [
+    "core/internal/translator/gemini/openai/chat-completions/gemini_openai_request.go",
+    "core/internal/translator/gemini/openai/chat-completions/gemini_openai_response.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "gemini-corpus",
+      "stream": true,
+      "tool_choice": "auto",
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "description": "Weather for a city",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ]
+            }
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is the weather in Oslo?"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "role": "model",
+                  "parts": [
+                    {
+                      "functionCall": {
+                        "name": "get_weather",
+                        "args": {
+                          "city": "Oslo"
+                        }
+                      },
+                      "thoughtSignature": "CiQB0e2Kb7sigA1"
+                    }
+                  ]
+                },
+                "index": 0
+              }
+            ],
+            "modelVersion": "gemini-corpus-upstream",
+            "responseId": "resp-corpus"
+          }
+        },
+        {
+          "data": {
+            "candidates": [
+              {
+                "content": {
+                  "role": "model",
+                  "parts": []
+                },
+                "index": 0,
+                "finishReason": "STOP"
+              }
+            ],
+            "modelVersion": "gemini-corpus-upstream",
+            "responseId": "resp-corpus",
+            "usageMetadata": {
+              "promptTokenCount": 40,
+              "cachedContentTokenCount": 8,
+              "candidatesTokenCount": 12,
+              "thoughtsTokenCount": 20,
+              "totalTokenCount": 72
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "client.body.created",
+    "client.events[*].data.created",
+    "client.events[*].data.choices[*].delta.tool_calls[*].id"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": null,
+                  "reasoning_content": null,
+                  "role": "assistant",
+                  "tool_calls": [
+                    {
+                      "function": {
+                        "arguments": "{\"city\":\"Oslo\"}",
+                        "name": "get_weather"
+                      },
+                      "id": "get_weather-1793994535040304079-1",
+                      "index": 0,
+                      "type": "function"
+                    }
+                  ]
+                },
+                "finish_reason": null,
+                "index": 0,
+                "native_finish_reason": null
+              }
+            ],
+            "created": 0,
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": null,
+                  "reasoning_content": null,
+                  "role": null,
+                  "tool_calls": null
+                },
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "native_finish_reason": "stop"
+              }
+            ],
+            "created": 0,
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk",
+            "usage": {
+              "completion_tokens": 32,
+              "completion_tokens_details": {
+                "reasoning_tokens": 20
+              },
+              "prompt_tokens": 40,
+              "prompt_tokens_details": {
+                "cached_tokens": 8
+              },
+              "total_tokens": 72
+            }
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [
+            {
+              "parts": [
+                {
+                  "text": "What is the weather in Oslo?"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {
+              "category": "HARM_CATEGORY_HARASSMENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_HATE_SPEECH",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+              "threshold": "BLOCK_NONE"
+            }
+          ],
+          "toolConfig": {
+            "functionCallingConfig": {
+              "mode": "AUTO"
+            }
+          },
+          "tools": [
+            {
+              "functionDeclarations": [
+                {
+                  "description": "Weather for a city",
+                  "name": "get_weather",
+                  "parametersJsonSchema": {
+                    "properties": {
+                      "city": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "city"
+                    ],
+                    "type": "object"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:streamGenerateContent?alt=sse"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "reason": "The new core asks a streaming upstream for text/event-stream; today's Gemini provider sends no Accept header. Gemini answers alt=sse either way.",
+      "want": "text/event-stream"
+    },
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core writes a Chat stream from a Gemini reply as OpenAI's API does: content \"\" with the role in the first chunk, only the delta fields that are set (today's core sends content, reasoning_content and tool_calls as null and a non-standard native_finish_reason), every text part (today's core loses text that shares a chunk with a part carrying a thought signature), the finish reason in its own chunk, tool call ids as call_<n> when Gemini sends none, and usage only when the client asks for it with stream_options.include_usage (today's core always adds it).",
+      "want": [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": "",
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "function": {
+                        "arguments": "",
+                        "name": "get_weather"
+                      },
+                      "id": "(volatile)",
+                      "index": 0,
+                      "type": "function"
+                    }
+                  ]
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "function": {
+                        "arguments": "{\"city\":\"Oslo\"}"
+                      },
+                      "index": 0
+                    }
+                  ]
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "tool_calls",
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "resp-corpus",
+            "model": "gemini-corpus-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ]
+    }
+  ]
+}

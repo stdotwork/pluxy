@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/gemini",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "gemini",
+    "linux/arm64": "gemini",
+    "darwin/amd64": "gemini",
+    "darwin/arm64": "gemini",
+    "windows/amd64": "gemini.exe"
+  }
+}

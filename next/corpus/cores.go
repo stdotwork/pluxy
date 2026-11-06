@@ -2,8 +2,12 @@ package corpus
 
 import (
 	"bufio"
+	crand "crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -309,22 +313,7 @@ var Providers = map[string]Provider{
 	// later); today's core uses a Gemini API key with a custom base URL. Both send requests to
 	// {upstream}/v1beta/models/{model}:{method}.
 	"gemini": {
-		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
-			var ms []any
-			for _, m := range models {
-				ms = append(ms, map[string]any{"name": m, "alias": m})
-			}
-			var ks []any
-			for _, k := range keys {
-				ks = append(ks, map[string]any{"api-key": k})
-			}
-			return map[string]any{"gemini": []any{map[string]any{
-				"name":     "corpus",
-				"base-url": upstreamURL,
-				"keys":     ks,
-				"models":   ms,
-			}}}
-		},
+		OldCore: oldCoreGeminiAPIKey,
 		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
 			var accounts []any
 			for i, k := range keys {
@@ -345,6 +334,134 @@ var Providers = map[string]Provider{
 			return "openai-compatible", accounts
 		},
 	},
+	// Gemini with an API key: the new core's Gemini extension against today's Gemini API-key
+	// provider, both with a custom base URL. Both send requests to
+	// {upstream}/v1beta/models/{model}:{method} with the key in x-goog-api-key.
+	"gemini-api-key": {
+		OldCore: oldCoreGeminiAPIKey,
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "gemini", accounts
+		},
+	},
+	// Vertex AI with an express mode API key: the Gemini extension with vertex settings against
+	// today's vertex-api-key entry, both with a custom base URL. Both send requests to
+	// {upstream}/v1/publishers/google/models/{model}:{method} with the key in x-goog-api-key.
+	"vertex-api-key": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			var ms []any
+			for _, m := range models {
+				ms = append(ms, map[string]any{"name": m, "alias": m})
+			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k})
+			}
+			return map[string]any{"vertex": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL,
+				"keys":     ks,
+				"models":   ms,
+			}}}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL, "vertex": map[string]any{}},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "gemini", accounts
+		},
+	},
+	// Vertex AI with a service account: the Gemini extension against a Vertex auth file in
+	// today's core. Today's core always calls https://aiplatform.googleapis.com (location global)
+	// and trades the service account's JWT at https://oauth2.googleapis.com/token, so it runs
+	// through the intercepting proxy; the new core's account points base_url and the key's
+	// token_uri at the same paths on the fake upstream, and holds only the key's secret part
+	// (the project is in its settings). The upstream's first reply in each case
+	// is therefore the token endpoint's. The key is an RSA key made for the run.
+	"vertex": {
+		Intercept: true,
+		OldCore:   func(string, []string, []string) map[string]any { return map[string]any{} },
+		OldCoreAuthFiles: func(proxyURL string, models, keys []string) map[string]any {
+			files := map[string]any{}
+			for i := range keys {
+				files[fmt.Sprintf("vertex-corpus-%d.json", i+1)] = map[string]any{
+					"type":            "vertex",
+					"project_id":      corpusVertexProject,
+					"email":           corpusServiceAccountEmail(i),
+					"location":        "global",
+					"service_account": corpusServiceAccount(i, ""),
+					"proxy_url":       proxyURL,
+				}
+			}
+			return files
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":       id,
+					"settings": map[string]any{"base_url": upstreamURL, "vertex": map[string]any{"project": corpusVertexProject}},
+					"credential": map[string]any{"kind": "service_account", "data": map[string]any{
+						"client_email": corpusServiceAccountEmail(i), "private_key": corpusRSA(), "token_uri": upstreamURL + "/token"}},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "gemini", accounts
+		},
+	},
+}
+
+// oldCoreGeminiAPIKey is today's core's Gemini API-key block, with a custom base URL.
+func oldCoreGeminiAPIKey(upstreamURL string, models, keys []string) map[string]any {
+	var ms []any
+	for _, m := range models {
+		ms = append(ms, map[string]any{"name": m, "alias": m})
+	}
+	var ks []any
+	for _, k := range keys {
+		ks = append(ks, map[string]any{"api-key": k})
+	}
+	return map[string]any{"gemini": []any{map[string]any{
+		"name":     "corpus",
+		"base-url": upstreamURL,
+		"keys":     ks,
+		"models":   ms,
+	}}}
 }
 
 // NewCoreExtensions maps an extension name to its package, relative to the next module root.
@@ -352,6 +469,7 @@ var NewCoreExtensions = map[string]string{
 	"openai-compatible": "./extensions/openai-compatible",
 	"codex":             "./extensions/codex",
 	"claude":            "./extensions/claude",
+	"gemini":            "./extensions/gemini",
 }
 
 // BuildNewCore builds the new core and its extensions into dir. moduleRoot is the next/
@@ -719,4 +837,46 @@ func corpusTokens(key string) fakeTokens {
 	t.id = jwt(map[string]any{"exp": corpusTokenExpiry, "email": t.email,
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": t.accountID, "chatgpt_plan_type": "plus"}})
 	return t
+}
+
+// corpusVertexProject is the Google Cloud project of the corpus's Vertex service accounts.
+const corpusVertexProject = "corpus-project"
+
+var (
+	corpusRSAOnce sync.Once
+	corpusRSAKey  string
+)
+
+// corpusRSA returns a PKCS #8 PEM RSA key made for this run, shared by every corpus service
+// account: making one takes a moment, and the accounts differ by email.
+func corpusRSA() string {
+	corpusRSAOnce.Do(func() {
+		k, err := rsa.GenerateKey(crand.Reader, 2048)
+		if err != nil {
+			panic(err)
+		}
+		der, _ := x509.MarshalPKCS8PrivateKey(k)
+		corpusRSAKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	})
+	return corpusRSAKey
+}
+
+func corpusServiceAccountEmail(i int) string {
+	return fmt.Sprintf("corpus-%d@%s.iam.gserviceaccount.com", i+1, corpusVertexProject)
+}
+
+// corpusServiceAccount returns service account i's whole JSON key, as today's core's auth file
+// holds it, with tokenURI as its token_uri when set (Google's default endpoint otherwise).
+func corpusServiceAccount(i int, tokenURI string) map[string]any {
+	sa := map[string]any{
+		"type":           "service_account",
+		"project_id":     corpusVertexProject,
+		"private_key_id": "corpus",
+		"private_key":    corpusRSA(),
+		"client_email":   corpusServiceAccountEmail(i),
+	}
+	if tokenURI != "" {
+		sa["token_uri"] = tokenURI
+	}
+	return sa
 }

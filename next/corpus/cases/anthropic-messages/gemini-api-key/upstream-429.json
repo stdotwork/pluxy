@@ -1,0 +1,110 @@
+{
+  "description": "A Gemini 429 reaches the Messages client as a 429.",
+  "source": [
+    "core/internal/runtime/executor/gemini_executor.go"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "body": {
+      "model": "gemini-corpus",
+      "max_tokens": 512,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {
+        "Content-Type": "application/json",
+        "Retry-After": "7"
+      },
+      "body": {
+        "error": {
+          "code": 429,
+          "message": "Resource has been exhausted (e.g. check quota).",
+          "status": "RESOURCE_EXHAUSTED"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "Resource has been exhausted (e.g. check quota).",
+          "type": "rate_limit_error"
+        },
+        "type": "error"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "upstream": [
+      {
+        "body": {
+          "contents": [
+            {
+              "parts": [
+                {
+                  "text": "Say hello"
+                }
+              ],
+              "role": "user"
+            }
+          ],
+          "model": "gemini-corpus",
+          "safetySettings": [
+            {
+              "category": "HARM_CATEGORY_HARASSMENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_HATE_SPEECH",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+              "threshold": "OFF"
+            },
+            {
+              "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+              "threshold": "BLOCK_NONE"
+            }
+          ]
+        },
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Content-Type": "application/json",
+          "User-Agent": "Go-http-client/1.1",
+          "X-Goog-Api-Key": "sk-corpus-upstream"
+        },
+        "method": "POST",
+        "path": "/v1beta/models/gemini-corpus:generateContent"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.headers.Retry-After",
+      "kind": "intended",
+      "reason": "The new core passes the upstream's Retry-After on to a rate-limited client (RFC 9110 section 10.2.3); today's Gemini path sends none.",
+      "want": "7"
+    }
+  ]
+}
