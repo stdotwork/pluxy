@@ -28,6 +28,9 @@ type Case struct {
 	// default the old core lists the request's model (it serves only listed models) and the
 	// new core lists none (it serves any model).
 	AccountModels []string `json:"account_models,omitempty"`
+	// Accounts is how many provider accounts both cores have, all pointed at the fake
+	// upstream, each with its own key (see UpstreamKeys). Default 1.
+	Accounts int `json:"accounts,omitempty"`
 	// Upstream lists the fake upstream's replies, one per upstream request, in order.
 	Upstream []Reply `json:"upstream,omitempty"`
 	// Volatile lists observation paths whose values change from run to run; they are masked
@@ -176,6 +179,9 @@ func (c *Case) validate() error {
 	}
 	if c.Client.Path == "" {
 		return fmt.Errorf("client.path is required")
+	}
+	if c.Accounts < 0 {
+		return fmt.Errorf("accounts must not be negative")
 	}
 	if len(c.Client.Body) > 0 && c.Client.BodyText != nil {
 		return fmt.Errorf("client: set body or body_text, not both")

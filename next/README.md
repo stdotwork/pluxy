@@ -51,5 +51,53 @@ go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-c
 ./pluxy -config config.json
 ```
 
-An account may list `models` it serves; without a list it serves any model. Version 0 runs one
-extension; requests go to the first account that serves the model, with no retries.
+An account may list `models` it serves; without a list it serves any model. Core runs one
+extension and spreads requests over its accounts: see [Accounts and routing](#accounts-and-routing).
+
+## Accounts and routing
+
+For each request core picks an account, sends the request to the extension with it, and reads
+the outcome. A refusal the extension reports as retry-safe (the upstream certainly did not run
+the request, for example a 429 or a 401) moves the request on to another account; any other
+failure goes to the client. Once a reply has started, nothing is retried. Extensions never
+retry on their own.
+
+An account is eligible when it serves the model, no block covers it and it is under its
+concurrency limit. Refusals block what they are about, for as long as the upstream said
+(`Retry-After`) or else by backoff: a rate limit or quota on the credential or on one model,
+a refused key for 30 minutes, a missing model for 12 hours, a failing endpoint with backoff up
+to a minute. A success clears the blocks on its account, except blocks recorded after it
+started. Among eligible accounts, core prefers the session's account (with session affinity
+on), then the highest `priority`, then picks by strategy.
+
+```json
+{
+  "routing": {
+    "strategy": "round-robin",
+    "max_attempts": 0,
+    "max_accounts": 0,
+    "max_wait_ms": 0,
+    "session_affinity": {"ttl_ms": 3600000}
+  },
+  "extension": {
+    "accounts": [
+      {"id": "a", "priority": 1, "weight": 2, "max_concurrency": 4, "endpoint": "openai", "...": "..."}
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `strategy` | `round-robin` (default; takes turns after the account picked last), `weighted` (by `weight`, interleaved), `fill-first` (first eligible account in order), `least-active` (fewest running requests). |
+| `max_attempts` | Upstream attempts per request, counting the first. 0: no fixed limit; each account is tried once per round. |
+| `max_accounts` | Distinct accounts one request may try. 0: no limit. |
+| `max_wait_ms` | Longest a request waits, in total, for a blocked account. 0 (default): never; when every account is blocked the request fails at once with a 429 and `retry_after_ms`. A request never tries an account before the time the upstream gave. |
+| `session_affinity` | When present, requests of one session go to the same account while it is eligible. The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; bindings are per client key and model. |
+| account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
+| account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
+| account `max_concurrency` | Requests running at once on the account. 0: no limit. |
+| account `endpoint` | Accounts naming the same endpoint share its outages. Default: the account's ID. |
+
+A client can pin a request to one account with the `X-Pluxy-Account: <id>` header. A pinned
+request never goes to another account.

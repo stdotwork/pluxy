@@ -25,8 +25,9 @@ func TestUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 		fmt.Fprint(w, `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}`+"\n\n")
 		fmt.Fprintf(w, `data: {"error":{"message":"Rejected %s mid-stream","code":"revoked"}}`+"\n\n", auth)
 	}
-	base, logs := startCoreLogged(t, u)
 
+	// Each case gets its own core: routing blocks an account that the upstream refused, so a
+	// shared core would answer the later cases itself without calling the upstream.
 	for _, c := range []struct {
 		name, body string
 		status     int
@@ -36,6 +37,7 @@ func TestUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 		{"mid-stream", `{"model":"midway","stream":true,"messages":[{"role":"user","content":"hi"}]}`, http.StatusOK},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			base, logs := startCoreLogged(t, u)
 			resp := post(t, context.Background(), base, clientKey, c.body)
 			raw, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -48,11 +50,11 @@ func TestUpstreamErrorDoesNotLeakCredential(t *testing.T) {
 			if strings.Contains(string(raw), upstreamKey) {
 				t.Errorf("client reply holds the account's key: %s", raw)
 			}
+			all := logs.waitFor(t, "Rejected")
+			if strings.Contains(all, upstreamKey) {
+				t.Errorf("core's log holds the account's key:\n%s", all)
+			}
 		})
-	}
-	all := logs.waitFor(t, "mid-stream")
-	if strings.Contains(all, upstreamKey) {
-		t.Errorf("core's log holds the account's key:\n%s", all)
 	}
 }
 

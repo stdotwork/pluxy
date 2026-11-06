@@ -1,0 +1,84 @@
+{
+  "description": "Two accounts: the first answers 429 with Retry-After, so the same request moves on to the second account, which answers. Which account goes first is masked: the old core's first pick between two equal accounts changes from run to run.",
+  "source": [
+    "core/sdk/cliproxy/auth/conductor_execution.go (executeMixedOnce: failover to the next credential within a round)"
+  ],
+  "accounts": 2,
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {"Retry-After":"20"},
+      "body": {
+        "error": {
+          "message": "Rate limit reached for requests",
+          "type": "requests",
+          "code": "rate_limit_exceeded"
+        }
+      }
+    },
+    {
+      "body": {
+        "id": "chatcmpl-corpus",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-test",
+        "choices": [
+          {"index":0,"message":{"role":"assistant","content":"Hello."},"finish_reason":"stop"}
+        ],
+        "usage": {"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
+      }
+    }
+  ],
+  "volatile": ["upstream[*].headers.Authorization"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "choices": [
+          {"finish_reason":"stop","index":0,"message":{"content":"Hello.","role":"assistant"}}
+        ],
+        "created": 1700000000,
+        "id": "chatcmpl-corpus",
+        "model": "gpt-test",
+        "object": "chat.completion",
+        "usage": {"completion_tokens":2,"prompt_tokens":3,"total_tokens":5}
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "(volatile)",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      },
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "(volatile)",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

@@ -8,9 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 
-	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/internal/route"
 )
 
 // Config is core's configuration file, version 0.
@@ -20,6 +19,8 @@ type Config struct {
 	// ClientKeys are the keys clients must send as a bearer token. Empty means no check.
 	ClientKeys []string        `json:"client_keys"`
 	Extension  ExtensionConfig `json:"extension"`
+	// Routing says how requests are spread over the accounts and retried.
+	Routing route.Config `json:"routing"`
 }
 
 // ExtensionConfig names the provider extension and its accounts.
@@ -30,13 +31,7 @@ type ExtensionConfig struct {
 }
 
 // Account is one upstream account served by the extension.
-type Account struct {
-	ID string `json:"id"`
-	// Models this account serves. Empty means any model.
-	Models     []string             `json:"models,omitempty"`
-	Settings   json.RawMessage      `json:"settings,omitempty"`
-	Credential *protocol.Credential `json:"credential,omitempty"`
-}
+type Account = route.Account
 
 // LoadConfig reads and validates a config file.
 func LoadConfig(path string) (*Config, error) {
@@ -60,20 +55,21 @@ func LoadConfig(path string) (*Config, error) {
 	if len(c.Extension.Accounts) == 0 {
 		return nil, errors.New("config: extension.accounts must not be empty")
 	}
+	seen := map[string]bool{}
 	for i, a := range c.Extension.Accounts {
 		if a.ID == "" {
 			return nil, fmt.Errorf("config: extension.accounts[%d].id is required", i)
 		}
-	}
-	return &c, nil
-}
-
-// accountFor returns the first account that serves model.
-func (c *Config) accountFor(model string) (Account, bool) {
-	for _, a := range c.Extension.Accounts {
-		if len(a.Models) == 0 || slices.Contains(a.Models, model) {
-			return a, true
+		if seen[a.ID] {
+			return nil, fmt.Errorf("config: extension.accounts[%d].id %q is used twice", i, a.ID)
+		}
+		seen[a.ID] = true
+		if a.MaxConcurrency < 0 {
+			return nil, fmt.Errorf("config: extension.accounts[%d].max_concurrency must not be negative", i)
 		}
 	}
-	return Account{}, false
+	if err := c.Routing.Validate(); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return &c, nil
 }

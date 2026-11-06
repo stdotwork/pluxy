@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -18,6 +19,16 @@ const ClientKey = "corpus-client-key"
 
 // UpstreamKey is the API key both cores send to the fake upstream. Not a secret.
 const UpstreamKey = "sk-corpus-upstream"
+
+// UpstreamKeys returns the keys of n accounts: UpstreamKey for the first, then
+// UpstreamKey-2, UpstreamKey-3 and so on. Not secrets.
+func UpstreamKeys(n int) []string {
+	keys := []string{UpstreamKey}
+	for i := 2; i <= n; i++ {
+		keys = append(keys, fmt.Sprintf("%s-%d", UpstreamKey, i))
+	}
+	return keys
+}
 
 // ClientUserAgent is the User-Agent the corpus client sends unless a case sets one.
 const ClientUserAgent = "pluxy-corpus/0"

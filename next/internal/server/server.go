@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/openaichat"
+	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -36,17 +37,24 @@ type Stream interface {
 // GenerateFunc starts a generate call on the provider extension.
 type GenerateFunc func(ctx context.Context, account protocol.Account, req llm.Request) Stream
 
-// New returns core's HTTP handler.
-func New(cfg *Config, generate GenerateFunc) http.Handler {
+// New returns core's HTTP handler. Requests are routed over cfg's accounts, and each attempt
+// is a call to generate.
+func New(cfg *Config, generate GenerateFunc) (http.Handler, error) {
+	router, err := route.New(cfg.Routing, cfg.Extension.Accounts, func(ctx context.Context, a protocol.Account, req llm.Request) route.Stream {
+		return generate(ctx, a, req)
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		if !authorized(cfg, r) {
 			writeError(w, &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"})
 			return
 		}
-		chat(w, r, cfg, generate)
+		chat(w, r, router)
 	})
-	return mux
+	return mux, nil
 }
 
 func authorized(cfg *Config, r *http.Request) bool {
@@ -76,7 +84,7 @@ func writeError(w http.ResponseWriter, e *llm.Error) {
 	_, _ = w.Write(body)
 }
 
-func chat(w http.ResponseWriter, r *http.Request, cfg *Config, generate GenerateFunc) {
+func chat(w http.ResponseWriter, r *http.Request, router *route.Router) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBody))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -91,12 +99,7 @@ func chat(w http.ResponseWriter, r *http.Request, cfg *Config, generate Generate
 		writeError(w, asLLMError(err))
 		return
 	}
-	acct, ok := cfg.accountFor(req.Model)
-	if !ok {
-		writeError(w, &llm.Error{Code: llm.CodeNotFound, Message: fmt.Sprintf("no account serves model %q", req.Model), ProviderCode: "model_not_found"})
-		return
-	}
-	stream := generate(r.Context(), protocol.Account{ID: acct.ID, Settings: acct.Settings, Credential: acct.Credential}, req)
+	stream := router.Generate(r.Context(), routeRequest(r, req, body))
 	defer stream.Close()
 
 	// Nothing is sent to the client until the first event, so an error before it becomes a

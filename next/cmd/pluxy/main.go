@@ -56,10 +56,14 @@ func run(configPath string) error {
 	if err != nil {
 		return err
 	}
+	handler, err := server.New(cfg, func(ctx context.Context, a protocol.Account, req llm.Request) server.Stream {
+		return ext.Generate(ctx, a, req)
+	})
+	if err != nil {
+		return err
+	}
 	srv := &http.Server{
-		Handler: server.New(cfg, func(ctx context.Context, a protocol.Account, req llm.Request) server.Stream {
-			return ext.Generate(ctx, a, req)
-		}),
+		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	fmt.Fprintf(os.Stderr, "pluxy: listening on http://%s\n", ln.Addr())
