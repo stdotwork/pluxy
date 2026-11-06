@@ -263,13 +263,23 @@ func TestStreamDecoderFailures(t *testing.T) {
 		if !ok || e.Message != "Overloaded" || e.ProviderCode != "overloaded_error" || string(e.Raw) != raw {
 			t.Errorf("got %#v", err)
 		}
+		if e, ok := err.(*llm.Error); !ok || e.Usage == nil || e.Usage.InputTokens == nil || *e.Usage.InputTokens != 1 {
+			t.Errorf("error event: usage %#v, want the 1 input token message_start reported", err)
+		}
 	})
 	t.Run("ends before message_stop", func(t *testing.T) {
 		d := NewStreamDecoder()
 		_, _ = d.Decode([]byte(start))
 		_, _ = d.Decode([]byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
-		if _, err := d.Close(); err == nil {
-			t.Error("Close after a cut-short stream: no error")
+		_, err := d.Close()
+		if err == nil {
+			t.Fatal("Close after a cut-short stream: no error")
+		}
+		if e, ok := err.(*llm.Error); !ok || e.Usage == nil || e.Usage.InputTokens == nil || *e.Usage.InputTokens != 1 {
+			t.Errorf("cut-short stream: usage %#v, want the 1 input token message_start reported", err)
+		}
+		if u := d.Usage(); u == nil || u.InputTokens == nil || *u.InputTokens != 1 {
+			t.Errorf("Usage() = %#v, want the 1 input token message_start reported", u)
 		}
 	})
 	t.Run("malformed", func(t *testing.T) {
