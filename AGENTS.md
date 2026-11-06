@@ -1,7 +1,8 @@
 # AGENTS.md
 
 pluxy is a monorepo with three parts of one product: a proxy that serves OpenAI-, Gemini-,
-Claude- and Codex-compatible APIs, a desktop app that manages it, and a web panel for it.
+Claude- and Codex-compatible APIs, a desktop app that manages it, and a web panel for it. A new
+core with provider extensions is being built from scratch in `next/`, beside today's `core/`.
 
 ## Layout
 
@@ -10,15 +11,20 @@ Claude- and Codex-compatible APIs, a desktop app that manages it, and a web pane
 | `core/` | Go proxy server | router-for-me/CLIProxyAPI |
 | `extensions/app/` | Tauri 2 desktop app (React front end, Rust back end) | router-for-me/EasyCLIProxyAPI |
 | `extensions/panel/` | React/Vite web management panel, built to one HTML file | router-for-me/Cli-Proxy-API-Management-Center |
+| `next/` | New Go core, its extension protocol and provider extensions | written for pluxy |
 
-Each folder still receives pulls from its upstream project. Keep changes inside a folder
-contained: no sweeping renames, reformatting or file moves, so later upstream merges stay easy.
-The Go module path stays `github.com/router-for-me/CLIProxyAPI/v8`.
+`core/`, `extensions/app/` and `extensions/panel/` still receive pulls from their upstream
+projects. Keep changes inside a folder contained: no sweeping renames, reformatting or file
+moves, so later upstream merges stay easy. `core/`'s Go module path stays
+`github.com/router-for-me/CLIProxyAPI/v8`. `next/` has no upstream; its module path is
+`github.com/stdotwork/pluxy/next`, and it does not import code from `core/`.
 
 ## Which rules apply
 
 A folder's own `AGENTS.md` (`core/AGENTS.md`, `extensions/panel/AGENTS.md`) holds that folder's
 coding rules and applies to work inside it. The app has no `AGENTS.md`; follow nearby code.
+`next/` has no `AGENTS.md` either: follow nearby code, prefer the standard library, and change
+the extension protocol only together with its README (`next/protocol/README.md`).
 
 The upstream process rules in those files and in upstream tooling do not apply in pluxy:
 
@@ -53,6 +59,21 @@ gofmt -l .                                                           # must not 
 unless your change touches them. Some `internal/runtime/executor` tests
 are sensitive to machine load and to repeated runs (`-count` above 1); rerun a failure there
 before assuming your change caused it.
+
+### `next/`
+
+Go version comes from `next/go.mod` (currently `go 1.26.10`). The module has no dependencies
+outside the standard library.
+
+```bash
+go build ./...
+go vet ./...
+CGO_ENABLED=1 go test -race -count=1 ./...   # -race needs cgo; includes e2e/ and the conformance kit
+gofmt -l .                                   # must print nothing
+```
+
+The `e2e` and conformance tests build `cmd/pluxy` and the extensions with `go build`, run them on
+random free ports and Unix sockets in temporary folders, and stop them when done.
 
 ### `extensions/panel/`
 
@@ -108,6 +129,7 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 | `panel-ci.yml` | PRs and pushes to `main` touching `extensions/panel/` | `bun install --frozen-lockfile`, then `bun run verify` |
 | `panel-release.yml` | `panel-v*` tags | `bun run build`, publishes `management.html` |
 | `app-ci.yml` | PRs and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
+| `next-ci.yml` | PRs and pushes to `main` touching `next/` | `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...` |
 
 When you add a workflow, add a row here.
 
@@ -116,7 +138,7 @@ When you add a workflow, add a row here.
 - `main` is the only long-lived branch. Work on a task branch and open a PR against `main`.
 - One concern per PR. A change in behaviour goes in its own PR, and the PR title says so.
 - Commit messages and PR titles use Conventional Commits, scoped by folder: `core`, `app`,
-  `panel`, or `ci` for workflows, for example `fix(core): ...` or `ci: ...`. Repo-wide docs use
+  `panel`, `next`, or `ci` for workflows, for example `fix(core): ...` or `ci: ...`. Repo-wide docs use
   `docs: ...`.
 - Open PRs ready for review, not as drafts. The owner reviews and merges.
 - Licensing: each folder keeps its upstream MIT `LICENSE`. The root license is not decided yet;

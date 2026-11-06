@@ -10,6 +10,7 @@ pluxy (plug + proxy) is a monorepo combining Soul4723's forks of router-for-me's
 | `core/` | Proxy core |
 | `extensions/app/` | Desktop app |
 | `extensions/panel/` | Web panel |
+| `next/` | New core and extension protocol (in progress) |
 
 See [AGENTS.md](AGENTS.md) for how to build and test each folder and how changes are made.
 
