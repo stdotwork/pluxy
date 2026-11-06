@@ -6,8 +6,8 @@ how core serves the pages, what a page may do, and the message channel a page ta
 panel through.
 
 The short version: a page is a document from the extension's own files, shown in a sandboxed
-frame from a **separate site**. It cannot reach the panel, core's management API, the network
-or storage. It can only ask the panel, over a message channel, for the few things its manifest
+frame from a **separate site**. It cannot reach the panel, core's management API, storage, or
+any site but the pages site. It can only ask the panel, over a message channel, for the few things its manifest
 declares. It never receives the management key.
 
 ## What a page can and cannot do
