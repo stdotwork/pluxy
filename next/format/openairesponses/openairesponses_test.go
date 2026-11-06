@@ -134,6 +134,14 @@ func TestStreamDecoderFailures(t *testing.T) {
 	if !ok || e.Message != "boom" || e.ProviderCode != "server_error" || string(e.Raw) != failed {
 		t.Errorf("response.failed gave %v", err)
 	}
+
+	// A failed Response that reports usage keeps it on the error, so the tokens the upstream
+	// counted are not lost with the reply.
+	dec = NewStreamDecoder()
+	_, err = dec.Decode([]byte(`{"type":"response.failed","response":{"id":"r","status":"failed","usage":{"input_tokens":9,"output_tokens":2},"error":{"code":"server_error","message":"boom"}}}`))
+	if e, ok := err.(*llm.Error); !ok || e.Usage == nil || e.Usage.InputTokens == nil || *e.Usage.InputTokens != 9 || e.Usage.OutputTokens == nil || *e.Usage.OutputTokens != 2 {
+		t.Errorf("response.failed with usage gave %#v, want an error carrying 9 input and 2 output tokens", err)
+	}
 }
 
 // A reply from a Chat upstream to a Responses client becomes the Responses event sequence, and
