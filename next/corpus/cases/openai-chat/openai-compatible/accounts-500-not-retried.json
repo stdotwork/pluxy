@@ -56,7 +56,8 @@
     {
       "path": "upstream[1]",
       "kind": "intended",
-      "reason": "The old core moves on to the next account after a 500. The new core retries only failures the extension reports as retry-safe (the upstream certainly did not run the request); a 500 does not show that, so trying another account could run the request twice. The client gets the 500."
+      "reason": "The old core moves on to the next account after a 500. The new core retries only failures the extension reports as retry-safe (the upstream certainly did not run the request); a 500 does not show that, so trying another account could run the request twice. The client gets the 500.",
+      "absent": true
     }
   ],
   "recorded_old_core": {
