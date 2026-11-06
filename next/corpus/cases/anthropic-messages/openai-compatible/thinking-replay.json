@@ -1,5 +1,5 @@
 {
-  "description": "History with a signed thinking block and a redacted thinking block before a tool call, and thinking enabled with a token budget of 4096. The thinking block is kept only when its signature is one the GPT provider issued; this placeholder signature is not, so today's core drops both thinking blocks, sends the tool call and its result, and maps the budget to reasoning_effort medium. The redacted block is never sent as text.",
+  "description": "History with a signed thinking block and a redacted thinking block before a tool call, and thinking enabled with a token budget of 4096 (reasoning_effort medium). The redacted block is never sent; the tool call and its result are.",
   "source": [
     "core/internal/translator/openai/claude/openai_claude_request.go (thinking and redacted_thinking handling, shouldMapClaudeThinkingToGPTReasoning, thinking budget_tokens)",
     "core/internal/thinking/convert.go (ConvertBudgetToLevel)",
@@ -129,5 +129,23 @@
         "path": "/v1/chat/completions"
       }
     ]
-  }
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages[1].content",
+      "kind": "intended",
+      "reason": "The new core sends replayed thinking text to a Chat upstream as the assistant message's reasoning_content and reports it as approximated (its signature as dropped), as it does for Responses reasoning; today's core drops thinking whose signature it cannot verify and sends empty content. An assistant message with tool calls needs no content."
+    },
+    {
+      "path": "upstream[0].body.messages[1].reasoning_content",
+      "kind": "intended",
+      "reason": "The new core sends replayed thinking text to a Chat upstream as the assistant message's reasoning_content and reports it as approximated (its signature as dropped), as it does for Responses reasoning; today's core drops thinking whose signature it cannot verify and sends empty content. An assistant message with tool calls needs no content.",
+      "want": "Need weather."
+    },
+    {
+      "path": "upstream[0].body.messages[2].name",
+      "kind": "intended",
+      "reason": "Today's core adds the function's name to each tool message; Chat Completions' tool message has no name field, so the new core leaves it out."
+    }
+  ]
 }

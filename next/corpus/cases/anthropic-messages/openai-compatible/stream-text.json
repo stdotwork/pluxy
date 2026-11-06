@@ -75,5 +75,19 @@
         "path": "/v1/chat/completions"
       }
     ]
-  }
+  },
+  "exceptions": [
+    {
+      "path": "client.events[0].data.message.usage.input_tokens",
+      "kind": "gap",
+      "reason": "Today's core puts its own local estimate of the input tokens in message_start; the new core has no tokenizer and sends 0 there, as Anthropic's message_start allows, until message_delta carries the upstream's count.",
+      "want": 0
+    },
+    {
+      "path": "upstream[0].body.messages[0].content",
+      "kind": "intended",
+      "reason": "The new core keeps a string system prompt a string in the Chat system message; today's core sends it as a list of one text part. Both mean the same to Chat Completions.",
+      "want": "You are terse."
+    }
+  ]
 }

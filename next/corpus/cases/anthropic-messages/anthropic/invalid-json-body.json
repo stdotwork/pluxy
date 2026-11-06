@@ -25,5 +25,12 @@
       "status": 400
     },
     "upstream": []
-  }
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error.message",
+      "kind": "gap",
+      "reason": "Both answer 400 with Anthropic's envelope, but the old core does not report the JSON error: it fails to find a model and says unknown provider; the new core reports that the body is not valid JSON."
+    }
+  ]
 }

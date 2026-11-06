@@ -63,5 +63,19 @@
         "path": "/v1/chat/completions"
       }
     ]
-  }
+  },
+  "exceptions": [
+    {
+      "path": "client.events[0].data.message.usage.input_tokens",
+      "kind": "gap",
+      "reason": "Today's core puts its own local estimate of the input tokens in message_start; the new core has no tokenizer and sends 0 there, as Anthropic's message_start allows, until message_delta carries the upstream's count.",
+      "want": 0
+    },
+    {
+      "path": "client.events[3].data.error.type",
+      "kind": "intended",
+      "reason": "The new core names the error with an Anthropic error type (api_error for an upstream failure); today's core passes on the Chat upstream's own type (server_error), which Anthropic clients do not know.",
+      "want": "api_error"
+    }
+  ]
 }

@@ -1,5 +1,5 @@
 {
-  "description": "Generation options together: temperature, top_p, top_k, stop_sequences, max_tokens, tool_choice any with one tool, and metadata. Each option is mapped to its Chat field or dropped as the old core does (tool_choice any becomes required; top_k and metadata have no Chat field; top_p is only sent when temperature is absent).",
+  "description": "Generation options together: temperature, top_p, top_k, stop_sequences, max_tokens, tool_choice any with one tool, and metadata. Each option is mapped to its Chat field (tool_choice any becomes required) or, with no Chat field (top_k, metadata), left out.",
   "source": [
     "core/internal/translator/openai/claude/openai_claude_request.go (max_tokens, temperature, top_p, stop_sequences, tool_choice mapping)",
     "core/internal/runtime/executor/openai_compat_executor.go (executeWithCredentials)"
@@ -102,5 +102,13 @@
         "path": "/v1/chat/completions"
       }
     ]
-  }
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.top_p",
+      "kind": "intended",
+      "reason": "The new core carries temperature and top_p over to the Chat request; today's core sends top_p only when there is no temperature. A translation in the new core carries every field the target format can take.",
+      "want": 0.8
+    }
+  ]
 }

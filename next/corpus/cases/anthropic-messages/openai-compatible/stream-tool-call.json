@@ -1,5 +1,5 @@
 {
-  "description": "Streamed tool call from a Chat upstream: the id and name arrive in the first tool_calls delta, the arguments in two pieces, then finish_reason tool_calls. The Messages stream carries a tool_use block, one input_json_delta with the complete arguments, and stop_reason tool_use.",
+  "description": "Streamed tool call from a Chat upstream: the id and name arrive in the first tool_calls delta, the arguments in two pieces, then finish_reason tool_calls. The Messages stream carries a tool_use block with the arguments as input_json_delta events, and stop_reason tool_use.",
   "source": [
     "core/internal/translator/openai/claude/openai_claude_request.go (tools: input_schema becomes function.parameters)",
     "core/internal/translator/openai/claude/openai_claude_response.go (emitToolUseStart, finalizeSingleToolCall, effectiveOpenAIFinishReason, mapOpenAIFinishReasonToAnthropic)",
@@ -96,5 +96,70 @@
         "path": "/v1/chat/completions"
       }
     ]
-  }
+  },
+  "exceptions": [
+    {
+      "path": "client.events[0].data.message.usage.input_tokens",
+      "kind": "gap",
+      "reason": "Today's core puts its own local estimate of the input tokens in message_start; the new core has no tokenizer and sends 0 there, as Anthropic's message_start allows, until message_delta carries the upstream's count.",
+      "want": 0
+    },
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "reason": "The new core streams each tool-argument fragment as its own input_json_delta as it arrives, as Anthropic's streams do; today's core buffers the arguments (a Chat upstream: one delta at the end; a Responses upstream: an empty delta first).",
+      "want": [
+        {
+          "data": {
+            "message": {
+              "content": [],
+              "id": "chatcmpl-corpus",
+              "model": "gpt-test-upstream",
+              "role": "assistant",
+              "stop_reason": null,
+              "stop_sequence": null,
+              "type": "message",
+              "usage": {"input_tokens":0,"output_tokens":0}
+            },
+            "type": "message_start"
+          },
+          "event": "message_start"
+        },
+        {
+          "data": {
+            "content_block": {"id":"call_abc","input":{},"name":"get_weather","type":"tool_use"},
+            "index": 0,
+            "type": "content_block_start"
+          },
+          "event": "content_block_start"
+        },
+        {
+          "data": {
+            "delta": {"partial_json":"{\"city\":","type":"input_json_delta"},
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {
+          "data": {
+            "delta": {"partial_json":"\"Paris\"}","type":"input_json_delta"},
+            "index": 0,
+            "type": "content_block_delta"
+          },
+          "event": "content_block_delta"
+        },
+        {"data":{"index":0,"type":"content_block_stop"},"event":"content_block_stop"},
+        {
+          "data": {
+            "delta": {"stop_reason":"tool_use","stop_sequence":null},
+            "type": "message_delta",
+            "usage": {"input_tokens":85,"output_tokens":18}
+          },
+          "event": "message_delta"
+        },
+        {"data":{"type":"message_stop"},"event":"message_stop"}
+      ]
+    }
+  ]
 }

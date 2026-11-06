@@ -1,5 +1,5 @@
 {
-  "description": "A follow-up turn with two tool calls and their results. The tool_result blocks come back out of order (toolu_01B before toolu_01A); the upstream must still get the tool messages in the order of the assistant's tool_use blocks, each with the id and name of its call, and the assistant message's text stays with its tool_calls.",
+  "description": "A follow-up turn with two tool calls and their results, the results given out of order (toolu_01B before toolu_01A). The upstream gets the assistant's text with both tool_calls, then one tool message per result with its call's id, then the user's text.",
   "source": [
     "core/internal/translator/common/claude_messages.go (AlignClaudeToolResults, ClaudeMessageAccumulator)",
     "core/internal/translator/openai/claude/openai_claude_request.go (tool_use becomes tool_calls, tool_result becomes role tool with tool_call_id and name)",
@@ -137,5 +137,41 @@
         "path": "/v1/chat/completions"
       }
     ]
-  }
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].body.messages[2].content",
+      "kind": "intended",
+      "reason": "The new core keeps tool results in the order the client sent them; today's core reorders them to the order of the tool calls. Chat Completions takes tool messages in any order after the call, each matched by tool_call_id.",
+      "want": "18C"
+    },
+    {
+      "path": "upstream[0].body.messages[2].name",
+      "kind": "intended",
+      "reason": "Today's core adds the function's name to each tool message; Chat Completions' tool message has no name field, so the new core leaves it out."
+    },
+    {
+      "path": "upstream[0].body.messages[2].tool_call_id",
+      "kind": "intended",
+      "reason": "The new core keeps tool results in the order the client sent them; today's core reorders them to the order of the tool calls. Chat Completions takes tool messages in any order after the call, each matched by tool_call_id.",
+      "want": "toolu_01B"
+    },
+    {
+      "path": "upstream[0].body.messages[3].content",
+      "kind": "intended",
+      "reason": "The new core keeps tool results in the order the client sent them; today's core reorders them to the order of the tool calls. Chat Completions takes tool messages in any order after the call, each matched by tool_call_id.",
+      "want": "21C"
+    },
+    {
+      "path": "upstream[0].body.messages[3].name",
+      "kind": "intended",
+      "reason": "Today's core adds the function's name to each tool message; Chat Completions' tool message has no name field, so the new core leaves it out."
+    },
+    {
+      "path": "upstream[0].body.messages[3].tool_call_id",
+      "kind": "intended",
+      "reason": "The new core keeps tool results in the order the client sent them; today's core reorders them to the order of the tool calls. Chat Completions takes tool messages in any order after the call, each matched by tool_call_id.",
+      "want": "toolu_01A"
+    }
+  ]
 }
