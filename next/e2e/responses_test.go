@@ -137,3 +137,33 @@ func TestNonStreamingReplyCountsTheFinalEvent(t *testing.T) {
 		t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
 	}
 }
+
+// The ids a Responses reply gives its items count toward core's 64 MiB limit on a non-streamed
+// reply: each message and reasoning item's id holds the upstream's response id. This is the
+// reviewer's case: a 1 MiB response id and 65 items of each kind came back as a 200 of
+// 69,213,758 bytes.
+func TestNonStreamingResponsesCountsItemIDs(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		head := fmt.Sprintf(`"id":%q,"object":"chat.completion.chunk","created":1,"model":"m"`, strings.Repeat("i", 1<<20))
+		write := func(delta string) bool {
+			_, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":%s}]}\n\n", head, delta)
+			w.(http.Flusher).Flush()
+			return err == nil && r.Context().Err() == nil
+		}
+		for range 65 {
+			if !write(`{"reasoning_content":"r"}`) || !write(`{"content":"t"}`) {
+				return
+			}
+		}
+		fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", head)
+	}
+	base := startCore(t, u)
+	resp := postPath(t, context.Background(), base, "/v1/responses", clientKey, `{"model":"gpt-test","input":"hi"}`)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+		t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+	}
+}

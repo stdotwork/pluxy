@@ -467,12 +467,14 @@ func (a *Aggregator) Add(ev llm.Event) {
 	switch ev.Type {
 	case llm.EventResponseStart:
 		b.start(ev.Response)
+		a.size += len(b.id)
 		if b.upFormat == format {
 			a.final = finalResponse(ev.Raw) // a stream that opened with its terminal event
 		}
 	case llm.EventItemStart:
-		a.size += len(ev.Item.CallID) + len(ev.Item.Name) + itemOverhead
-		b.open(ev.Index, ev.Item)
+		// An item's id holds the response id or the call id.
+		it := b.open(ev.Index, ev.Item)
+		a.size += len(it.id) + len(ev.Item.CallID) + len(ev.Item.Name) + itemOverhead
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		b.items[ev.Index].text.WriteString(ev.Delta)
 	case llm.EventItemEnd:
@@ -496,9 +498,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 // itemOverhead is about the JSON an output item adds around its ID, call ID, name and text.
 const itemOverhead = len(`{"id":"","type":"function_call","status":"completed","call_id":"","name":"","arguments":""},`)
 
-// Size is about how many bytes of content the response holds so far: text, reasoning, tool
-// calls, the upstream's final Response object and what it reports as lost, before JSON escaping. Callers use it to bound
-// what they collect.
+// Size is about how many bytes of content the response holds so far: its id, the text,
+// reasoning and tool calls of its items with their ids, the upstream's final Response object and
+// what it reports as lost, before JSON escaping. Callers use it to bound what they collect.
 func (a *Aggregator) Size() int { return a.size + len(a.final) + a.b.lossSize }
 
 // finalResponse returns the Response object in a terminal event's raw: the response of a
