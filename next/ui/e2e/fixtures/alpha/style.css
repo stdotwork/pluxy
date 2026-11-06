@@ -1,0 +1,6 @@
+/* A benign test page: it follows the panel's theme through the --px-* tokens. */
+body {
+  background: var(--px-color-bg);
+  color: var(--px-color-text);
+  font-family: var(--px-font-body);
+}
