@@ -191,8 +191,8 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, malformed("upstream sent a malformed stream chunk", data)
 	}
-	if len(c.Error) > 0 && string(c.Error) != "null" {
-		return nil, upstreamStreamError(c.Error)
+	if hasError(c.Error) {
+		return nil, upstreamErrorObject(c.Error, "upstream reported an error mid-stream")
 	}
 	choices := make([]streamChoice, len(c.Choices))
 	var others []json.RawMessage
@@ -293,7 +293,12 @@ func (d *StreamDecoder) unfinished() *llm.Error {
 	return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"}
 }
 
-func upstreamStreamError(raw json.RawMessage) *llm.Error {
+// hasError reports whether an error field holds an error.
+func hasError(raw json.RawMessage) bool { return len(raw) > 0 && string(raw) != "null" }
+
+// upstreamErrorObject turns an error object an upstream sent in place of a reply into an
+// *llm.Error; fallback is the message when the object has none.
+func upstreamErrorObject(raw json.RawMessage, fallback string) *llm.Error {
 	var e struct {
 		Message string `json:"message"`
 		Code    any    `json:"code"`
@@ -301,7 +306,7 @@ func upstreamStreamError(raw json.RawMessage) *llm.Error {
 	_ = json.Unmarshal(raw, &e)
 	out := &llm.Error{Code: llm.CodeUpstream, Message: e.Message, Raw: append(json.RawMessage(nil), raw...)}
 	if out.Message == "" {
-		out.Message = "upstream reported an error mid-stream"
+		out.Message = fallback
 	}
 	if e.Code != nil {
 		out.ProviderCode = fmt.Sprint(e.Code)
@@ -315,11 +320,12 @@ type completion struct {
 	Created int64             `json:"created"`
 	Choices []json.RawMessage `json:"choices"`
 	Usage   json.RawMessage   `json:"usage"`
+	Error   json.RawMessage   `json:"error"`
 }
 
 type completionChoice struct {
 	Index   int `json:"index"`
-	Message struct {
+	Message *struct {
 		Content          *string        `json:"content"`
 		ReasoningContent *string        `json:"reasoning_content"`
 		ToolCalls        []chatToolCall `json:"tool_calls"`
@@ -329,21 +335,31 @@ type completionChoice struct {
 
 // DecodeResponse turns an upstream non-streamed Chat Completions response into the events a
 // stream of it would have produced. The first choice becomes items; other choices are passed on
-// in a native event.
+// in a native event. A body holding an error object, or without choice 0 and its message, is an
+// error: it is not an answer, even with status 200.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
 	var c completion
 	if err := json.Unmarshal(body, &c); err != nil {
 		return nil, malformed("upstream sent a malformed response", body)
 	}
+	if hasError(c.Error) {
+		return nil, upstreamErrorObject(c.Error, "upstream reported an error")
+	}
 	choices := make([]completionChoice, len(c.Choices))
 	var others []json.RawMessage
+	first := false
 	for i, raw := range c.Choices {
 		if err := json.Unmarshal(raw, &choices[i]); err != nil {
 			return nil, malformed("upstream sent a malformed response", body)
 		}
 		if choices[i].Index != 0 {
 			others = append(others, raw)
+		} else if choices[i].Message != nil {
+			first = true
 		}
+	}
+	if !first {
+		return nil, malformed("upstream sent a response without a completion", body)
 	}
 	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{
 		ID: c.ID, Model: c.Model, Created: c.Created, Format: llm.FormatOpenAIChat, Raw: replyFields(body),
@@ -359,7 +375,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	}
 	finish := llm.Finish{Reason: llm.FinishOther}
 	for _, ch := range choices {
-		if ch.Index != 0 {
+		if ch.Index != 0 || ch.Message == nil {
 			continue
 		}
 		m := ch.Message
