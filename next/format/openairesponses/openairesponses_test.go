@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -331,5 +332,52 @@ func TestStreamWriterBoundsLosses(t *testing.T) {
 	want := llm.Loss{Kind: llm.LossDropped, Path: "...", Detail: "more losses not listed"}
 	if got := losses[len(losses)-1]; got != want {
 		t.Errorf("last loss is %+v, want %+v", got, want)
+	}
+}
+
+// Decoding a non-streamed reply takes work in proportion to its bytes: joining each text part onto
+// the text so far copies about 200 MiB for 2,000 parts of 100 bytes, where the joined text is
+// 200 KB.
+func TestDecodeResponseJoinsTextPartsInLinearBytes(t *testing.T) {
+	const parts, size = 2000, 100
+	const maxAlloc = 32 << 20
+	part := func(i int) string { return fmt.Sprintf("%0*d", size, i) }
+	var joined strings.Builder
+	list := make([]string, parts)
+	for i := range parts {
+		joined.WriteString(part(i))
+		list[i] = fmt.Sprintf(`{"type":"output_text","text":%q}`, part(i))
+	}
+	want := joined.String()
+	summaries := strings.ReplaceAll(strings.Join(list, ","), "output_text", "summary_text")
+	cases := map[string]struct{ item, delta string }{
+		"message":   {`{"type":"message","role":"assistant","content":[` + strings.Join(list, ",") + `]}`, llm.EventTextDelta},
+		"reasoning": {`{"type":"reasoning","summary":[` + summaries + `]}`, llm.EventReasoningDelta},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			body := []byte(`{"id":"r1","status":"completed","model":"m","output":[` + c.item + `]}`)
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			evs, err := DecodeResponse(body)
+			runtime.ReadMemStats(&after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			alloc := after.TotalAlloc - before.TotalAlloc
+			t.Logf("allocated %d bytes for %d parts of %d bytes", alloc, parts, size)
+			var got string
+			for _, ev := range evs {
+				if ev.Type == c.delta {
+					got = ev.Delta
+				}
+			}
+			if got != want {
+				t.Errorf("delta is %d bytes, want the %d joined bytes", len(got), len(want))
+			}
+			if alloc > maxAlloc {
+				t.Errorf("allocated %d bytes (over the %d limit) for %d parts of %d bytes; the joined text is %d bytes", alloc, maxAlloc, parts, size, len(want))
+			}
+		})
 	}
 }

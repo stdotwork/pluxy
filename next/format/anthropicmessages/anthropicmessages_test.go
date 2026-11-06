@@ -1019,3 +1019,33 @@ func TestStreamWriterBoundsLosses(t *testing.T) {
 		t.Errorf("last loss is %+v, want %+v", got, want)
 	}
 }
+
+// A Messages upstream's stream with more distinct events the Message cannot be put together from
+// than llm.MaxLosses lists the first MaxLosses, then one entry that says more were left out, and
+// nothing after it; what the losses add to the size stops growing there too.
+func TestAggregatorBoundsLosses(t *testing.T) {
+	feed := func(n int) *Aggregator {
+		a := NewAggregator()
+		a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "msg_1", Model: "up", Format: llm.FormatAnthropicMessages}})
+		for i := range n {
+			a.Add(llm.Event{Type: llm.EventNative, Raw: json.RawMessage(fmt.Sprintf(`{"type":"vendor_event_%03d"}`, i))})
+		}
+		return a
+	}
+	a, more := feed(150), feed(300)
+	losses := a.Losses()
+	if len(losses) != llm.MaxLosses+1 {
+		t.Fatalf("got %d losses, want %d: %d listed and one saying more were left out", len(losses), llm.MaxLosses+1, llm.MaxLosses)
+	}
+	if losses[0].Path != "vendor_event_000" {
+		t.Errorf("first loss is at %q, want vendor_event_000", losses[0].Path)
+	}
+	want := llm.Loss{Kind: llm.LossDropped, Path: "...", Detail: "more losses not listed"}
+	if got := losses[len(losses)-1]; got != want {
+		t.Errorf("last loss is %+v, want %+v", got, want)
+	}
+	if len(more.Losses()) != len(losses) || more.acc.lossSize != a.acc.lossSize {
+		t.Errorf("300 events give %d losses counting %d bytes, 150 give %d counting %d: the list or its size still grows",
+			len(more.Losses()), more.acc.lossSize, len(losses), a.acc.lossSize)
+	}
+}

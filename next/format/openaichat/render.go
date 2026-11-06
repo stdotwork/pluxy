@@ -319,7 +319,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventReasoningDelta:
 		a.reasoning.WriteString(ev.Delta)
 	case llm.EventToolInputDelta:
-		a.toolArgs[a.toolIdx[ev.Index]].WriteString(ev.Delta)
+		// Input for an index no tool call opened has no call to join.
+		if i, ok := a.toolIdx[ev.Index]; ok {
+			a.toolArgs[i].WriteString(ev.Delta)
+		}
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
 		if ev.Finish != nil {

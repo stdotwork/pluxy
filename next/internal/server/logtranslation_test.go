@@ -72,3 +72,21 @@ func TestLogTranslationCutsOnRuneBoundary(t *testing.T) {
 		t.Errorf("log line holds 67 runes of the path, more than 200 bytes")
 	}
 }
+
+// The request path is client input too, so the log line cuts it like a loss's path: to 200 bytes
+// on a UTF-8 boundary.
+func TestLogTranslationCutsThePath(t *testing.T) {
+	out := captureLog(t)
+	r := httptest.NewRequest(http.MethodPost, "/v1/"+strings.Repeat("€", 5000), nil)
+	logTranslation(r, &llm.Translation{Losses: []llm.Loss{{Kind: llm.LossDropped, Path: "p", Detail: "d"}}}, nil)
+	line := strings.TrimSuffix(out.String(), "\n")
+	if len(line) >= 1024 {
+		t.Fatalf("log line is %d bytes, want under 1024", len(line))
+	}
+	if !utf8.ValidString(line) {
+		t.Errorf("log line is not valid UTF-8")
+	}
+	if !strings.Contains(line, "POST /v1/€") || !strings.Contains(line, "…: translation: request dropped p (d)") {
+		t.Errorf("log line does not hold the cut path and the loss: %q", line)
+	}
+}

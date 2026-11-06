@@ -579,10 +579,11 @@ type accBlock struct {
 	inputs  bool
 }
 
-// lose records a loss once per path. lossSize counts what the losses hold, which comes from
-// upstream data, so an aggregator can bound it with the reply.
+// lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
+// its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
+// from upstream data, so an aggregator can bound it with the reply.
 func (a *accumulator) lose(path, detail string) {
-	if a.lost[path] {
+	if a.lost[path] || len(a.losses) > llm.MaxLosses {
 		return
 	}
 	if a.lost == nil {
@@ -590,7 +591,7 @@ func (a *accumulator) lose(path, detail string) {
 	}
 	a.lost[path] = true
 	a.lossSize += len(path) + len(detail)
-	a.losses = append(a.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
+	a.losses = llm.AddLoss(a.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
 func (a *accumulator) add(raw json.RawMessage) {

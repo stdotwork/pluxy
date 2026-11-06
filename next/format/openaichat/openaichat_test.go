@@ -588,3 +588,49 @@ type respBody struct {
 		} `json:"message"`
 	} `json:"choices"`
 }
+
+// A tool-input delta for an index no tool call opened must not crash core or end up in another
+// call's arguments: the aggregator leaves it out, as the Gemini aggregator does.
+func TestAggregatorLeavesOutToolInputForUnknownIndex(t *testing.T) {
+	start := llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "m", Format: llm.FormatOpenAIChat}}
+	finish := llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishToolCalls}}
+	tool := llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "call_a", Name: "f"}}
+	cases := map[string][]llm.Event{
+		"no tool call open": {
+			start,
+			{Type: llm.EventToolInputDelta, Index: 3, Delta: `{"x":1}`},
+			finish,
+		},
+		"a tool call at another index": {
+			start, tool,
+			{Type: llm.EventToolInputDelta, Index: 0, Delta: `{"a":`},
+			{Type: llm.EventToolInputDelta, Index: 3, Delta: `{"x":1}`},
+			{Type: llm.EventToolInputDelta, Index: 0, Delta: `1}`},
+			finish,
+		},
+	}
+	wantArgs := map[string][]string{"no tool call open": nil, "a tool call at another index": {`{"a":1}`}}
+	for name, evs := range cases {
+		t.Run(name, func(t *testing.T) {
+			a := NewAggregator()
+			for _, ev := range evs {
+				a.Add(ev)
+			}
+			b, err := a.Response()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body respBody
+			if err := json.Unmarshal(b, &body); err != nil {
+				t.Fatalf("response is not JSON: %v\n%s", err, b)
+			}
+			var got []string
+			for _, c := range body.Choices[0].Message.ToolCalls {
+				got = append(got, c.Function.Arguments)
+			}
+			if !reflect.DeepEqual(got, wantArgs[name]) {
+				t.Errorf("tool call arguments %q, want %q", got, wantArgs[name])
+			}
+		})
+	}
+}
