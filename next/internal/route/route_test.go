@@ -62,7 +62,7 @@ func newHarness(t *testing.T, cfg Config, accounts ...Account) *harness {
 	return h
 }
 
-func (h *harness) attempt(_ context.Context, a protocol.Account, _ llm.Request) Stream {
+func (h *harness) attempt(_ context.Context, _ string, a protocol.Account, _ llm.Request) Stream {
 	h.attempts = append(h.attempts, a.ID)
 	if h.onAttempt != nil {
 		h.onAttempt(a.ID)
@@ -509,7 +509,7 @@ func (s *heldStream) Close() { s.closed.Do(s.onClose) }
 func TestConcurrencyLimitHoldsUnderRace(t *testing.T) {
 	var mu sync.Mutex
 	active, peak := map[string]int{}, map[string]int{}
-	attempt := func(_ context.Context, a protocol.Account, _ llm.Request) Stream {
+	attempt := func(_ context.Context, _ string, a protocol.Account, _ llm.Request) Stream {
 		mu.Lock()
 		active[a.ID]++
 		peak[a.ID] = max(peak[a.ID], active[a.ID])
@@ -605,7 +605,7 @@ func TestModelStateIsBounded(t *testing.T) {
 // refused credential is renewed.
 type fakeCredentials struct{ version uint64 }
 
-func (f *fakeCredentials) Credential(context.Context, string) (*protocol.Credential, uint64, *llm.Error) {
+func (f *fakeCredentials) Credential(context.Context, string, string) (*protocol.Credential, uint64, *llm.Error) {
 	return &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: fmt.Sprint("access-", f.version)}, f.version, nil
 }
 

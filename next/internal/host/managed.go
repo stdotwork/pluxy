@@ -100,7 +100,9 @@ func Fingerprint(manifestPath string) (string, error) {
 // over.
 //
 // Callers hold a lease (Acquire, Release) for the whole of each request that may call the
-// extension; Generate, Login and Refresh must only be called while holding one.
+// extension; Generate, Login and Refresh must only be called while holding one. A lease keeps a
+// replaced generation from finishing its drain; only running calls keep the program from its
+// idle stop, so a request may hold leases on several extensions and use one.
 type Managed struct {
 	path        string
 	fingerprint string
@@ -115,7 +117,8 @@ type Managed struct {
 	ext       *Extension
 	state     string
 	starting  chan struct{} // closed when the start in progress ends
-	leases    int
+	leases    int           // held by requests (Acquire)
+	calls     int           // calls running on the program (Generate until its stream closes, Login, Refresh)
 	idleSeq   uint64
 	idle      *time.Timer
 	restart   *time.Timer
@@ -191,7 +194,6 @@ func (g *Managed) Acquire() bool {
 		return false
 	}
 	g.leases++
-	g.idleSeq++ // cancels a pending idle stop
 	return true
 }
 
@@ -200,45 +202,66 @@ func (g *Managed) Release() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.leases--
-	if g.leases > 0 {
-		return
+	if g.leases == 0 && g.draining && g.drained != nil {
+		close(g.drained)
+		g.drained = nil
 	}
-	if g.draining {
-		if g.drained != nil {
-			close(g.drained)
-			g.drained = nil
-		}
-		return
-	}
-	g.armIdle()
 }
 
-// Generate starts a generate call, starting the program first if it is idle.
+// beginCall counts a call from before its program is started, so an idle stop cannot take the
+// program away under it; the returned func ends the call once.
+func (g *Managed) beginCall() func() {
+	g.mu.Lock()
+	g.calls++
+	g.idleSeq++ // cancels a pending idle stop
+	g.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			g.calls--
+			g.armIdle()
+		})
+	}
+}
+
+// Generate starts a generate call, starting the program first if it is idle. The call runs
+// until its stream is closed.
 func (g *Managed) Generate(ctx context.Context, account protocol.Account, req llm.Request) *Stream {
+	end := g.beginCall()
 	ext, e := g.ensure(ctx)
 	if e != nil {
+		end()
 		s := &Stream{}
 		s.fail(e)
 		return s
 	}
-	return ext.Generate(ctx, account, req)
+	s := ext.Generate(ctx, account, req)
+	s.onClose = end
+	return s
 }
 
 // Login starts a login call, starting the program first if it is idle. The caller holds a
 // lease until the call is closed.
 func (g *Managed) Login(ctx context.Context, account protocol.Account, login protocol.Login) *LoginCall {
+	end := g.beginCall()
 	ext, e := g.ensure(ctx)
 	if e != nil {
+		end()
 		l := &LoginCall{ctx: ctx}
 		l.fail(e)
 		return l
 	}
-	return ext.Login(ctx, account, login)
+	l := ext.Login(ctx, account, login)
+	l.onClose = end
+	return l
 }
 
 // Refresh runs a refresh call, starting the program first if it is idle. The caller holds a
 // lease for the call.
 func (g *Managed) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
+	defer g.beginCall()()
 	ext, e := g.ensure(ctx)
 	if e != nil {
 		return nil, e
@@ -424,7 +447,7 @@ func (g *Managed) armIdle() {
 		g.idle.Stop()
 		g.idle = nil
 	}
-	if g.policy.IdleStop <= 0 || g.ext == nil || g.leases > 0 || g.draining || g.retired {
+	if g.policy.IdleStop <= 0 || g.ext == nil || g.calls > 0 || g.draining || g.retired {
 		return
 	}
 	seq := g.idleSeq
@@ -433,7 +456,7 @@ func (g *Managed) armIdle() {
 
 func (g *Managed) idleStop(seq uint64) {
 	g.mu.Lock()
-	if seq != g.idleSeq || g.leases > 0 || g.ext == nil || g.draining || g.retired {
+	if seq != g.idleSeq || g.calls > 0 || g.ext == nil || g.draining || g.retired {
 		g.mu.Unlock()
 		return
 	}
@@ -545,7 +568,7 @@ func (g *Managed) Status() Status {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	s := Status{ID: g.manifest.ID, Version: g.manifest.Version, Generation: g.generation, State: g.state,
-		Restarts: g.restarts, Crashes: g.crashes, LastError: g.lastErr, ActiveRequests: g.leases}
+		Restarts: g.restarts, Crashes: g.crashes, LastError: g.lastErr, ActiveRequests: g.calls}
 	if g.ext != nil {
 		s.PID = g.ext.PID()
 	}

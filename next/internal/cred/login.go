@@ -7,6 +7,7 @@ import (
 	"log"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/route"
@@ -27,6 +28,9 @@ type LoginRequest struct {
 	// Account is the account to add: its ID, routing fields and settings. For a new login to an
 	// existing account (Reauth) only the ID is read; the account keeps its fields.
 	Account route.Account
+	// Extension is the ID of the extension that signs in and owns the account. Empty: the one
+	// extension that runs (for a reauth, the account's own).
+	Extension string
 	// Method is one of the provider's login methods.
 	Method string
 	// Input is what the user entered when starting the login.
@@ -37,16 +41,18 @@ type LoginRequest struct {
 
 // LoginView is a login as the management API shows it.
 type LoginView struct {
-	ID      string           `json:"id"`
-	Account string           `json:"account"`
-	Method  string           `json:"method"`
-	State   string           `json:"state"`
-	Prompt  *protocol.Prompt `json:"prompt,omitempty"`
-	Error   *llm.Error       `json:"error,omitempty"`
+	ID        string           `json:"id"`
+	Account   string           `json:"account"`
+	Extension string           `json:"extension"`
+	Method    string           `json:"method"`
+	State     string           `json:"state"`
+	Prompt    *protocol.Prompt `json:"prompt,omitempty"`
+	Error     *llm.Error       `json:"error,omitempty"`
 }
 
 type login struct {
 	id, account, method string
+	extension           string
 	reauth              bool
 	registration        string // the account's, for a reauth
 	fields              route.Account
@@ -63,7 +69,7 @@ type login struct {
 }
 
 func (l *login) view() LoginView {
-	return LoginView{ID: l.id, Account: l.account, Method: l.method, State: l.state, Prompt: l.prompt, Error: l.err}
+	return LoginView{ID: l.id, Account: l.account, Extension: l.extension, Method: l.method, State: l.state, Prompt: l.prompt, Error: l.err}
 }
 
 // notifyFirst marks the first frame seen. Call with Manager.mu held.
@@ -84,14 +90,33 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	if m.reserved(id) {
 		return LoginView{}, fmt.Errorf("%w: account %q is set in core's config", ErrConflict, id)
 	}
-	info := m.prov.Info()
+	ext := req.Extension
+	if rec, ok := m.store.Get(id); ok && req.Reauth && ext == "" {
+		ext = rec.Extension
+	}
+	if ext == "" {
+		running := m.provs.Running()
+		switch len(running) {
+		case 0:
+			return LoginView{}, fmt.Errorf("%w: no extension runs to log in with", ErrConflict)
+		case 1:
+			ext = running[0]
+		default:
+			return LoginView{}, fmt.Errorf("%w: name the extension to log in with (extension): %s run", ErrInvalid, strings.Join(running, ", "))
+		}
+	}
+	prov := m.provs.Provider(ext)
+	if prov == nil {
+		return LoginView{}, fmt.Errorf("%w: extension %s does not run", ErrConflict, ext)
+	}
+	info := prov.Info()
 	if !slices.Contains(info.Operations, protocol.OpLogin) {
 		return LoginView{}, fmt.Errorf("%w: extension %s does not log in", ErrConflict, info.ID)
 	}
 	if !slices.ContainsFunc(info.LoginMethods, func(lm protocol.LoginMethod) bool { return lm.Method == req.Method }) {
 		return LoginView{}, fmt.Errorf("%w: extension %s has no login method %q", ErrInvalid, info.ID, req.Method)
 	}
-	l := &login{account: id, method: req.Method, reauth: req.Reauth, fields: req.Account, first: make(chan struct{}), state: LoginPending}
+	l := &login{account: id, extension: ext, method: req.Method, reauth: req.Reauth, fields: req.Account, first: make(chan struct{}), state: LoginPending}
 	m.mu.Lock()
 	m.dropOldLogins()
 	for _, o := range m.logins {
@@ -108,7 +133,7 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	case !exists && req.Reauth:
 		m.mu.Unlock()
 		return LoginView{}, ErrNotFound
-	case exists && rec.Extension != m.provID:
+	case exists && rec.Extension != ext:
 		m.mu.Unlock()
 		return LoginView{}, fmt.Errorf("%w: account %q belongs to extension %s", ErrConflict, id, rec.Extension)
 	case exists:
@@ -122,7 +147,7 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	m.wg.Add(1)
 	m.mu.Unlock()
 
-	call := m.prov.Login(lctx, protocol.Account{ID: id, Settings: l.fields.Settings}, protocol.Login{Method: req.Method, Input: req.Input})
+	call := prov.Login(lctx, protocol.Account{ID: id, Settings: l.fields.Settings}, protocol.Login{Method: req.Method, Input: req.Input})
 	m.mu.Lock()
 	l.call = call
 	m.mu.Unlock()
@@ -213,7 +238,7 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 	if m.reserved(l.account) {
 		return fmt.Errorf("account %q is now set in core's config", l.account)
 	}
-	_, err := m.store.Create(Record{ID: l.account, Extension: m.provID, State: StateActive, Label: g.Label, Account: l.fields, Credential: *g.Credential})
+	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: g.Label, Account: l.fields, Credential: *g.Credential})
 	if err != nil {
 		return err
 	}

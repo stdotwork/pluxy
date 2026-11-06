@@ -117,7 +117,9 @@ index. Unknown fields are ignored, so later versions of the format can add optio
 A registry earns trust by what it lists, not by where it is: the curated registry lists releases
 its maintainers reviewed, each pinned by digest, and a local or private registry is used only when
 core's config names it. A digest pins the archive the registry listed; it does not prove who built
-it. Version 0 has no signatures.
+it. Version 0 has no signatures, so nothing stops a registry, or whoever controls it, from
+listing an older release or a changed digest; core refuses a changed digest only for a version it
+has installed.
 
 ## Starting and the handshake
 

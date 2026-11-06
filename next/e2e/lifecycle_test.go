@@ -329,14 +329,27 @@ func TestFailedReloadKeepsActiveConfig(t *testing.T) {
 	writeConfig(t, path, moved)
 	check("listen address change", 4, "listen")
 
-	// Accounts added by login belong to one extension: switching to another one takes a restart.
-	writeConfig(t, path, lifecycleConfig(testPackageID(t, "test/other", "0.1.0"), g, nil))
-	check("another extension", 5, "extension")
-
 	elsewhere := lifecycleConfig(v1, g, nil)
 	elsewhere["credentials_dir"] = filepath.Join(t.TempDir(), "elsewhere")
 	writeConfig(t, path, elsewhere)
-	check("credentials folder change", 6, "credentials_dir")
+	check("credentials folder change", 5, "credentials_dir")
+}
+
+// A reload may switch the config's extension to another one: the new one serves new requests
+// and the old one drains, without a restart.
+func TestReloadSwitchesToAnotherExtension(t *testing.T) {
+	g := newGate(t)
+	base, path, _ := runCoreArgs(t, lifecycleConfig(testPackage(t, "0.1.0"), g, nil), noWatch...)
+	writeConfig(t, path, lifecycleConfig(testPackageID(t, "test/other", "0.2.0"), g, nil))
+	if code, s := reload(t, base); code != http.StatusOK {
+		t.Fatalf("reload: status %d, %+v", code, s)
+	}
+	if body := askOK(t, base, "plain"); !strings.Contains(body, "v=0.2.0") {
+		t.Errorf("after the switch the request was answered with %s; want the other extension", body)
+	}
+	waitStatus(t, base, "only the other extension", func(s coreStatus) bool {
+		return len(s.Extensions) == 1 && s.Extensions[0].ID == "test/other" && s.Extensions[0].Current
+	})
 }
 
 // A crashed extension is restarted after a backoff; one that keeps crashing is quarantined, and

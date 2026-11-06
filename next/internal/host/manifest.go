@@ -27,7 +27,16 @@ type Manifest struct {
 	dir string
 }
 
-var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*/[a-z0-9][a-z0-9.-]*$`)
+var (
+	idPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*/[a-z0-9][a-z0-9.-]*$`)
+	versionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
+)
+
+// ValidID reports whether id is a publisher-qualified extension ID, publisher/name.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
+
+// ValidVersion reports whether v may be a package version: it names a folder.
+func ValidVersion(v string) bool { return versionPattern.MatchString(v) }
 
 // LoadManifest reads and validates the manifest at path.
 func LoadManifest(path string) (*Manifest, error) {
@@ -57,8 +66,8 @@ func (m *Manifest) validate() error {
 	if !idPattern.MatchString(m.ID) {
 		return fmt.Errorf("id %q is not of the form publisher/name", m.ID)
 	}
-	if m.Version == "" {
-		return errors.New("version is required")
+	if !ValidVersion(m.Version) {
+		return fmt.Errorf("version %q is not 1 to 64 letters, digits, '.', '+', '_' and '-' starting with a letter or digit", m.Version)
 	}
 	if len(m.Protocol) == 0 {
 		return errors.New("protocol must list at least one version")

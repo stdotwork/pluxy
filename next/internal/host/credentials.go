@@ -46,6 +46,7 @@ type LoginCall struct {
 	secrets map[string]string
 	redact  *protocol.Redactor
 	final   *protocol.Reply
+	onClose func() // ends the call on its managed generation; safe to call more than once
 }
 
 // addSecrets adds what the user entered to what is removed from the frames the call returns.
@@ -107,6 +108,9 @@ func (l *LoginCall) Send(input map[string]string) error {
 
 // Close ends the login; if it had not finished, the extension sees it cancelled.
 func (l *LoginCall) Close() {
+	if l.onClose != nil {
+		defer l.onClose()
+	}
 	if l.stop != nil {
 		l.stop()
 	}

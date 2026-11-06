@@ -98,11 +98,12 @@ func (m *Management) configured(id string) (route.Account, bool) {
 }
 
 func configured(cfg *Config, id string) (route.Account, bool) {
-	i := slices.IndexFunc(cfg.Extension.Accounts, func(a route.Account) bool { return a.ID == id })
+	accounts := cfg.Accounts()
+	i := slices.IndexFunc(accounts, func(a route.Account) bool { return a.ID == id })
 	if i < 0 {
 		return route.Account{}, false
 	}
-	return cfg.Extension.Accounts[i], true
+	return accounts[i], true
 }
 
 func (m *Management) view(r cred.Record) AccountView {
@@ -117,8 +118,8 @@ func (m *Management) view(r cred.Record) AccountView {
 func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 	cfg := m.cfg()
 	views := []AccountView{}
-	for _, a := range cfg.Extension.Accounts {
-		v := AccountView{ID: a.ID, Source: "config", State: cred.StateActive}
+	for _, a := range cfg.Accounts() {
+		v := AccountView{ID: a.ID, Source: "config", Extension: a.Extension, State: cred.StateActive}
 		if a.Credential != nil {
 			v.Kind = a.Credential.Kind
 		}
@@ -136,8 +137,10 @@ func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 // credential) and how to log in.
 type addRequest struct {
 	route.Account
-	Method string            `json:"method"`
-	Input  map[string]string `json:"input,omitempty"`
+	// Extension names the extension that signs in; empty while only one runs.
+	Extension string            `json:"extension"`
+	Method    string            `json:"method"`
+	Input     map[string]string `json:"input,omitempty"`
 }
 
 func (m *Management) add(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +156,7 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", "max_concurrency must not be negative")
 		return
 	}
-	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Method: req.Method, Input: req.Input})
+	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input})
 }
 
 func (m *Management) reauth(w http.ResponseWriter, r *http.Request) {

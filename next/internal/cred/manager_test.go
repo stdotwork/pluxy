@@ -75,6 +75,18 @@ func (p *fakeProvider) Refresh(ctx context.Context, a protocol.Account) (*protoc
 		RefreshToken: fmt.Sprintf("refresh-%d", p.calls), ExpiresAt: time.Now().Add(ttl).Unix()}, nil
 }
 
+// single is the one provider extension that runs.
+type single struct{ p Provider }
+
+func (s single) Provider(id string) Provider {
+	if id == provID {
+		return s.p
+	}
+	return nil
+}
+
+func (s single) Running() []string { return []string{provID} }
+
 func (p *fakeProvider) refreshCalls() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -94,7 +106,7 @@ func newManager(t *testing.T, p *fakeProvider, expiresIn time.Duration) (*Manage
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(store, p, Options{})
+	m := NewManager(store, single{p}, Options{})
 	t.Cleanup(m.Close)
 	return m, store
 }
@@ -121,7 +133,7 @@ func TestConcurrentRequestsShareOneRenewal(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c, _, e := m.Credential(context.Background(), "acct")
+			c, _, e := m.Credential(context.Background(), provID, "acct")
 			errs[i] = e
 			if c != nil {
 				got[i] = c.AccessToken
@@ -142,7 +154,7 @@ func TestConcurrentRequestsShareOneRenewal(t *testing.T) {
 		}
 	}
 	// Later requests use the renewed credential without renewing again.
-	if c, v, e := m.Credential(context.Background(), "acct"); e != nil || c.AccessToken != "access-1" || v != 2 {
+	if c, v, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken != "access-1" || v != 2 {
 		t.Errorf("after the renewal: %v version %d %v, want access-1 at version 2", c, v, e)
 	}
 	if c := p.refreshCalls(); c != 1 {
@@ -158,7 +170,7 @@ func TestRenewalOfReplacedCredentialIsRefused(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		m.Credential(context.Background(), "acct")
+		m.Credential(context.Background(), provID, "acct")
 	}()
 	wait(t, p.started)
 	cur, _ := store.Get("acct")
@@ -190,7 +202,7 @@ func TestRenewalOfRemovedAccountIsRefused(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		m.Credential(context.Background(), "acct")
+		m.Credential(context.Background(), provID, "acct")
 	}()
 	wait(t, p.started)
 	if err := m.Remove("acct"); err != nil {
@@ -260,7 +272,7 @@ func TestRejectedGrantNeedsLogin(t *testing.T) {
 	m, store := newManager(t, p, time.Minute)
 	changed := 0
 	m.OnChange(func() { changed++ })
-	if _, _, e := m.Credential(context.Background(), "acct"); e == nil || e.Code != llm.CodeAuth {
+	if _, _, e := m.Credential(context.Background(), provID, "acct"); e == nil || e.Code != llm.CodeAuth {
 		t.Fatalf("Credential = %v, want code auth", e)
 	}
 	rec, _ := store.Get("acct")
@@ -270,7 +282,7 @@ func TestRejectedGrantNeedsLogin(t *testing.T) {
 	if len(m.Accounts()) != 0 || changed != 1 {
 		t.Errorf("routable accounts %v, change notices %d; want none and 1", m.Accounts(), changed)
 	}
-	if _, _, e := m.Credential(context.Background(), "acct"); e == nil || e.Code != llm.CodeAuth {
+	if _, _, e := m.Credential(context.Background(), provID, "acct"); e == nil || e.Code != llm.CodeAuth {
 		t.Errorf("Credential after the refusal = %v, want code auth", e)
 	}
 	// Enabling is about the user's disable, not the refusal.
@@ -285,7 +297,7 @@ func TestFailedRenewalBacksOff(t *testing.T) {
 	p := &fakeProvider{fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "token endpoint down"}}
 	m, store := newManager(t, p, -time.Minute)
 	for range 3 {
-		_, _, e := m.Credential(context.Background(), "acct")
+		_, _, e := m.Credential(context.Background(), provID, "acct")
 		if e == nil || e.Code != llm.CodeUnavailable || !e.Retryable || e.Scope != llm.ScopeCredential || e.RetryAfterMS <= 0 {
 			t.Errorf("Credential = %+v, want a retryable credential-scoped unavailable with retry_after_ms", e)
 		}
@@ -310,7 +322,7 @@ func TestIneffectiveRenewalBacksOff(t *testing.T) {
 	p := &fakeProvider{ttl: time.Minute}
 	m, _ := newManager(t, p, time.Minute)
 	for range 3 {
-		if _, _, e := m.Credential(context.Background(), "acct"); e != nil {
+		if _, _, e := m.Credential(context.Background(), provID, "acct"); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -327,7 +339,7 @@ func TestRenewalOutlivesItsCaller(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan *llm.Error, 1)
 	go func() {
-		_, _, e := m.Credential(ctx, "acct")
+		_, _, e := m.Credential(ctx, provID, "acct")
 		done <- e
 	}()
 	wait(t, p.started)
@@ -360,24 +372,26 @@ func TestOnlyOwnCredentials(t *testing.T) {
 		Credential: protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k", ExpiresAt: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	if c, _, e := m.Credential(context.Background(), "other"); e == nil || c != nil {
+	if c, _, e := m.Credential(context.Background(), provID, "other"); e == nil || c != nil {
 		t.Errorf("another extension's credential was handed out: %v %v", c, e)
 	}
-	if c, _, e := m.Credential(context.Background(), "key"); e != nil || c.APIKey != "k" {
+	if c, _, e := m.Credential(context.Background(), provID, "key"); e != nil || c.APIKey != "k" {
 		t.Errorf("api key: %v %v", c, e)
 	}
 	if c := p.refreshCalls(); c != 0 {
 		t.Errorf("refresh calls = %d, want 0", c)
 	}
+	// Every usable account is routable, each tagged with its own extension: routing sends it
+	// only there.
 	var ids []string
 	for _, a := range m.Accounts() {
-		ids = append(ids, a.ID)
+		ids = append(ids, a.ID+"@"+a.Extension)
 		if !a.Managed || a.Credential != nil {
 			t.Errorf("routable account %+v must be managed and carry no credential", a)
 		}
 	}
-	if fmt.Sprint(ids) != "[acct key]" {
-		t.Errorf("routable accounts = %v, want [acct key]", ids)
+	if fmt.Sprint(ids) != "[acct@test/oauth key@test/oauth other@someone/else]" {
+		t.Errorf("routable accounts = %v", ids)
 	}
 }
 
@@ -427,7 +441,7 @@ func TestRefreshAtSetsRenewalTime(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if c, _, e := m.Credential(context.Background(), "acct"); e != nil || c.AccessToken != "access-1" {
+	if c, _, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken != "access-1" {
 		t.Errorf("Credential = %v, %v; want the renewed access-1", c, e)
 	}
 }
@@ -440,7 +454,7 @@ func TestDisableDuringRenewalKeepsRotatedToken(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		m.Credential(context.Background(), "acct")
+		m.Credential(context.Background(), provID, "acct")
 	}()
 	wait(t, p.started)
 	if _, err := m.SetDisabled("acct", true); err != nil {
@@ -470,7 +484,7 @@ func TestStaleFailureLeavesNewCredentialAlone(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		m.Credential(context.Background(), "acct")
+		m.Credential(context.Background(), provID, "acct")
 	}()
 	wait(t, p.started)
 	cur, _ := store.Get("acct")
@@ -486,7 +500,7 @@ func TestStaleFailureLeavesNewCredentialAlone(t *testing.T) {
 	p.mu.Unlock()
 	close(p.gate)
 	// The new credential is due for renewal: it is renewed, not held back by the old failure.
-	if c, _, e := m.Credential(context.Background(), "acct"); e != nil || c.AccessToken != "access-2" {
+	if c, _, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken != "access-2" {
 		t.Errorf("Credential = %v, %v; want the renewed access-2", c, e)
 	}
 }
@@ -517,14 +531,14 @@ func TestRejectedGrantSaveFailureIsReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &fakeProvider{fail: &llm.Error{Code: llm.CodeAuth, Scope: llm.ScopeCredential, Message: "invalid_grant"}}
-	m := NewManager(store, p, Options{})
+	m := NewManager(store, single{p}, Options{})
 	t.Cleanup(m.Close)
 	b.fail.Store(true)
 	if _, err := m.Refresh(context.Background(), "acct"); err == nil {
 		t.Error("Refresh succeeded although the provider refused the grant")
 	}
 	// The refused credential is not handed out afterwards either.
-	if c, _, e := m.Credential(context.Background(), "acct"); e == nil || e.Code != llm.CodeAuth {
+	if c, _, e := m.Credential(context.Background(), provID, "acct"); e == nil || e.Code != llm.CodeAuth {
 		t.Errorf("Credential after the unrecorded refusal = %v, %v; want code auth", c, e)
 	}
 }
@@ -534,7 +548,7 @@ func TestRejectedGrantSaveFailureIsReported(t *testing.T) {
 func TestFailureBacksOffOnlyItsCredential(t *testing.T) {
 	p := &fakeProvider{fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Message: "old grant failed"}}
 	m, store := newManager(t, p, time.Minute)
-	if _, _, e := m.Credential(context.Background(), "acct"); e != nil {
+	if _, _, e := m.Credential(context.Background(), provID, "acct"); e != nil {
 		t.Fatalf("Credential = %v; the old credential still works", e)
 	}
 	cur, _ := store.Get("acct")
@@ -546,7 +560,7 @@ func TestFailureBacksOffOnlyItsCredential(t *testing.T) {
 	p.mu.Lock()
 	p.fail = nil
 	p.mu.Unlock()
-	if c, _, e := m.Credential(context.Background(), "acct"); e != nil || c.AccessToken != "access-2" {
+	if c, _, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken != "access-2" {
 		t.Errorf("Credential = %v, %v; want the replacement renewed (access-2)", c, e)
 	}
 }
@@ -605,7 +619,7 @@ func TestInputWhileLoginStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(store, p, Options{})
+	m := NewManager(store, single{p}, Options{})
 	t.Cleanup(m.Close)
 	started := make(chan error, 1)
 	go func() {

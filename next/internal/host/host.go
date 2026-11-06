@@ -325,6 +325,8 @@ type Stream struct {
 	stop   func() bool
 	seq    llm.Sequence
 	final  *llm.Event
+	// onClose ends the call on its managed generation; safe to call more than once.
+	onClose func()
 }
 
 func failed(code, msg string) *Stream {
@@ -375,6 +377,9 @@ func (s *Stream) readError(err error) *llm.Error {
 
 // Close ends the call; if it had not finished, the extension sees it cancelled.
 func (s *Stream) Close() {
+	if s.onClose != nil {
+		defer s.onClose()
+	}
 	if s.stop != nil {
 		s.stop()
 	}
