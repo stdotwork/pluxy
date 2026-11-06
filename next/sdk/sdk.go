@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -62,7 +63,7 @@ func serve(ext Extension, stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	s := &server{ext: ext, calls: map[*callState]struct{}{}}
+	s := &server{ext: ext, conns: map[net.Conn]*callState{}}
 	if _, err := io.WriteString(stdout, protocol.HandshakeLine(protocol.Version, socket)); err != nil {
 		ln.Close()
 		return err
@@ -77,38 +78,69 @@ func serve(ext Extension, stdin io.Reader, stdout io.Writer) error {
 		if err != nil {
 			break
 		}
+		if !s.track(conn) {
+			conn.Close()
+			continue
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
 			s.handle(conn)
 		}()
 	}
-	s.cancelAll()
+	s.shutdown()
 	s.wg.Wait()
 	return nil
 }
+
+// shutdownGrace is how long a cancelled call has to send its last frame at shutdown before its
+// connection is cut, so a handler blocked writing to core still returns.
+const shutdownGrace = time.Second
 
 type server struct {
 	ext   Extension
 	wg    sync.WaitGroup
 	mu    sync.Mutex
-	calls map[*callState]struct{}
+	conns map[net.Conn]*callState // every open connection; nil until it runs a generate call
 	done  bool
 }
 
 type callState struct{ cancel context.CancelFunc }
 
-func (s *server) cancelAll() {
+// track records an accepted connection, unless shutdown has begun.
+func (s *server) track(conn net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done {
+		return false
+	}
+	s.conns[conn] = nil
+	return true
+}
+
+// shutdown cancels running calls, gives them shutdownGrace to send their last frame, and closes
+// every other connection at once, including ones still waiting for their first frame.
+func (s *server) shutdown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.done = true
-	for c := range s.calls {
-		c.cancel()
+	for conn, st := range s.conns {
+		if st == nil {
+			conn.Close()
+			continue
+		}
+		st.cancel()
+		_ = conn.SetDeadline(time.Now().Add(shutdownGrace))
 	}
 }
 
 func (s *server) handle(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		s.mu.Lock()
+		delete(s.conns, conn)
+		s.mu.Unlock()
+		conn.Close()
+	}()
 	var call protocol.Call
 	if err := protocol.ReadFrame(conn, &call); err != nil {
 		return
@@ -134,19 +166,13 @@ func (s *server) handle(conn net.Conn) {
 func (s *server) generate(conn net.Conn, call protocol.Call) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	st := &callState{cancel: cancel}
 	s.mu.Lock()
 	if s.done {
 		s.mu.Unlock()
 		return
 	}
-	s.calls[st] = struct{}{}
+	s.conns[conn] = &callState{cancel: cancel}
 	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.calls, st)
-		s.mu.Unlock()
-	}()
 
 	// Core sends nothing after the call frame; the read ends when core closes the connection,
 	// which is how it cancels.

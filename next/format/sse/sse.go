@@ -27,8 +27,9 @@ type Event struct {
 
 // Reader reads events from a stream.
 type Reader struct {
-	r   *bufio.Reader
-	max int
+	r       *bufio.Reader
+	max     int
+	afterCR bool // the last line ended with CR, so a following LF belongs to it
 }
 
 // NewReader returns a Reader with the MaxEvent limit.
@@ -48,7 +49,10 @@ func (r *Reader) Next() (Event, error) {
 		}
 		if line == "" {
 			if !hasData {
+				// An event with no data (only comments or other fields) dispatches nothing,
+				// and its bytes do not count toward the next event.
 				ev = Event{}
+				size = 0
 				continue
 			}
 			ev.Data = data.String()
@@ -74,27 +78,46 @@ func (r *Reader) Next() (Event, error) {
 	}
 }
 
-// readLine reads one line without its terminator (LF, CRLF or CR followed by LF), counting bytes
-// against the event limit.
+// readLine reads one line without its terminator (CRLF, LF or CR), counting bytes against the
+// event limit. A line ended by CR returns at once; an LF that follows it is skipped on the next
+// read, so a live stream never waits for a byte to tell CR from CRLF.
 func (r *Reader) readLine(size *int) (string, error) {
-	var buf []byte
+	var line []byte
 	for {
-		chunk, err := r.r.ReadSlice('\n')
-		*size += len(chunk)
+		if r.r.Buffered() == 0 {
+			if _, err := r.r.Peek(1); err != nil {
+				if err == io.EOF && len(line) > 0 {
+					return "", io.ErrUnexpectedEOF
+				}
+				return "", err
+			}
+		}
+		buf, _ := r.r.Peek(r.r.Buffered())
+		if r.afterCR {
+			r.afterCR = false
+			if buf[0] == '\n' {
+				_, _ = r.r.Discard(1)
+				continue
+			}
+		}
+		i := bytes.IndexAny(buf, "\r\n")
+		if i < 0 {
+			*size += len(buf)
+			if *size > r.max {
+				return "", ErrEventTooLarge
+			}
+			line = append(line, buf...)
+			_, _ = r.r.Discard(len(buf))
+			continue
+		}
+		*size += i + 1
 		if *size > r.max {
 			return "", ErrEventTooLarge
 		}
-		buf = append(buf, chunk...)
-		if err == bufio.ErrBufferFull {
-			continue
-		}
-		if err != nil {
-			if err == io.EOF && len(buf) > 0 {
-				return "", io.ErrUnexpectedEOF
-			}
-			return "", err
-		}
-		return strings.TrimRight(string(buf), "\r\n"), nil
+		line = append(line, buf[:i]...)
+		r.afterCR = buf[i] == '\r'
+		_, _ = r.r.Discard(i + 1)
+		return string(line), nil
 	}
 }
 

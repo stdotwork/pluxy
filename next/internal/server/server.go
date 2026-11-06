@@ -20,6 +20,11 @@ import (
 // frame, as parsed items plus the original body, so this stays well under protocol.MaxFrame.
 const MaxRequestBody = 24 << 20
 
+// MaxResponseBody limits what core collects for a non-streamed reply; streamed replies are not
+// collected, so they have no limit. It matches what the provider extension reads of a plain
+// JSON upstream body (protocol.MaxFrame).
+const MaxResponseBody = 64 << 20
+
 // Stream is the reply to a generate call: events until one terminal event.
 type Stream interface {
 	Next() llm.Event
@@ -106,6 +111,13 @@ func chat(w http.ResponseWriter, r *http.Request, cfg *Config, generate Generate
 			agg.Add(ev)
 			if ev.Terminal() {
 				break
+			}
+			if agg.Size() > MaxResponseBody {
+				// Returning closes the stream, which cancels the call and the upstream request.
+				e := &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream reply is larger than %d MiB, the limit for a non-streamed response; send the request with \"stream\": true", MaxResponseBody>>20)}
+				logFailure(r, e)
+				writeError(w, e)
+				return
 			}
 			ev = stream.Next()
 		}

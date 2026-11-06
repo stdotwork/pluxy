@@ -22,11 +22,19 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
+// waitDelay bounds how long collecting an exited program waits for a child process of it that
+// holds its stdout or stderr open.
+const waitDelay = time.Second
+
+// maxHandshakeLine bounds the handshake line, newline included.
+const maxHandshakeLine = 4096
+
 // Options tune how an extension is started. The zero value uses the defaults.
 type Options struct {
 	// Versions are the protocol versions core offers. Default: protocol.Version.
 	Versions []int
-	// StartTimeout bounds the wait for the handshake line. Default 10s.
+	// StartTimeout bounds startup: the handshake line and describe. A failed start is killed
+	// and collected before Start returns. Default 10s.
 	StartTimeout time.Duration
 	// StopTimeout bounds the wait for the program to exit after stdin closes. Default 5s.
 	StopTimeout time.Duration
@@ -85,18 +93,25 @@ func Start(manifestPath string, opts Options) (*Extension, error) {
 		return nil, err
 	}
 	e := &Extension{manifest: m, opts: opts, dir: dir, socket: dir + string(os.PathSeparator) + "ext.sock", exited: make(chan struct{})}
-	if err := e.start(prog); err != nil {
+	deadline := time.Now().Add(opts.StartTimeout)
+	if err := e.start(prog, deadline); err != nil {
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	if err := e.describe(); err != nil {
-		e.Stop()
+	if err := e.describe(deadline); err != nil {
+		e.abort()
 		return nil, err
 	}
 	return e, nil
 }
 
-func (e *Extension) start(prog string) error {
+// abort kills a program that failed to start and waits until it is collected.
+func (e *Extension) abort() {
+	e.Kill()
+	<-e.exited
+}
+
+func (e *Extension) start(prog string, deadline time.Time) error {
 	versions := make([]string, len(e.opts.Versions))
 	for i, v := range e.opts.Versions {
 		versions[i] = strconv.Itoa(v)
@@ -122,20 +137,21 @@ func (e *Extension) start(prog string) error {
 		return err
 	}
 	cmd.Stderr = &lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + "] "}
+	cmd.WaitDelay = waitDelay
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting extension %s: %w", e.manifest.ID, err)
 	}
 	e.cmd, e.stdin = cmd, stdin
 
-	lines := make(chan string, 1)
+	type handshake struct {
+		line string
+		err  error
+	}
+	lines := make(chan handshake, 1)
 	go func() {
-		r := bufio.NewReader(stdout)
-		line, err := r.ReadString('\n')
-		if err != nil {
-			close(lines)
-		} else {
-			lines <- line
-		}
+		r := bufio.NewReaderSize(stdout, maxHandshakeLine)
+		line, err := r.ReadSlice('\n')
+		lines <- handshake{string(line), err}
 		// Keep draining stdout so the program never blocks on it.
 		_, _ = io.Copy(&lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + " stdout] "}, r)
 	}()
@@ -145,17 +161,31 @@ func (e *Extension) start(prog string) error {
 		os.RemoveAll(e.dir)
 	}()
 
-	timer := time.NewTimer(e.opts.StartTimeout)
+	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	select {
-	case line, ok := <-lines:
-		if !ok {
-			<-e.exited
-			return fmt.Errorf("extension %s exited before its handshake: %v", e.manifest.ID, e.waitErr)
+	case h := <-lines:
+		switch {
+		case h.err == nil:
+			if err := e.checkHandshake(h.line); err != nil {
+				e.abort()
+				return err
+			}
+			return nil
+		case errors.Is(h.err, bufio.ErrBufferFull):
+			e.abort()
+			return fmt.Errorf("extension %s: handshake line is longer than %d bytes", e.manifest.ID, maxHandshakeLine)
 		}
-		return e.checkHandshake(line)
+		// stdout ended without a handshake: wait for the program to exit, within the deadline.
+		select {
+		case <-e.exited:
+			return fmt.Errorf("extension %s exited before its handshake: %v", e.manifest.ID, e.waitErr)
+		case <-timer.C:
+			e.abort()
+			return fmt.Errorf("extension %s closed its stdout without a handshake and did not exit within %s", e.manifest.ID, e.opts.StartTimeout)
+		}
 	case <-timer.C:
-		e.Kill()
+		e.abort()
 		return fmt.Errorf("extension %s sent no handshake within %s", e.manifest.ID, e.opts.StartTimeout)
 	}
 }
@@ -169,20 +199,20 @@ func (e *Extension) checkHandshake(line string) error {
 		err = fmt.Errorf("extension listens on %q, not on the socket core gave it", addr)
 	}
 	if err != nil {
-		e.Kill()
 		return fmt.Errorf("extension %s: %w", e.manifest.ID, err)
 	}
 	return nil
 }
 
-func (e *Extension) describe() error {
-	conn, err := net.Dial("unix", e.socket)
+func (e *Extension) describe(deadline time.Time) error {
+	d := net.Dialer{Deadline: deadline}
+	conn, err := d.Dial("unix", e.socket)
 	if err != nil {
-		return fmt.Errorf("extension %s: %w", e.manifest.ID, err)
+		return fmt.Errorf("extension %s: describe: %w", e.manifest.ID, err)
 	}
 	defer conn.Close()
-	// describe is part of starting up, so the startup limit covers it.
-	_ = conn.SetDeadline(time.Now().Add(e.opts.StartTimeout))
+	// describe is part of starting up, so the startup deadline covers it.
+	_ = conn.SetDeadline(deadline)
 	if err := protocol.WriteFrame(conn, protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpDescribe}); err != nil {
 		return fmt.Errorf("extension %s: describe: %w", e.manifest.ID, err)
 	}
