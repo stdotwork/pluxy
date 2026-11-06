@@ -30,9 +30,10 @@ func routeRequest(r *http.Request, req llm.Request, body []byte) route.Request {
 }
 
 // tenant identifies the caller by a digest of its client key, so session bindings of one
-// client key never route another's requests.
+// client key never route another's requests. It reads every header a client key may come in:
+// where authorization reads fewer, the ones it reads come first, so the key is the same.
 func tenant(r *http.Request) string {
-	token := clientToken(r)
+	token := clientToken(r, true)
 	if token == "" {
 		return ""
 	}
