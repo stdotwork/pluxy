@@ -1947,6 +1947,8 @@
     "connection_required": "Please establish connection first",
     "refresh_failed": "Refresh failed",
     "update_failed": "Update failed",
+    "load_failed": "Load failed",
+    "save_failed": "Save failed",
     "add_failed": "Add failed",
     "delete_failed": "Delete failed",
     "upload_failed": "Upload failed",

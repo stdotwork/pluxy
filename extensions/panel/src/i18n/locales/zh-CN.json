@@ -1946,6 +1946,8 @@
     "connection_required": "请先建立连接",
     "refresh_failed": "刷新失败",
     "update_failed": "更新失败",
+    "load_failed": "加载失败",
+    "save_failed": "保存失败",
     "add_failed": "添加失败",
     "delete_failed": "删除失败",
     "upload_failed": "上传失败",
