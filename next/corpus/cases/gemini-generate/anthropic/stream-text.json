@@ -26,6 +26,7 @@
       ]
     }
   ],
+  "volatile": ["client.events[*].data.createTime"],
   "exceptions": [
     {
       "path": "client.events",
