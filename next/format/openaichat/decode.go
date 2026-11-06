@@ -137,13 +137,14 @@ type StreamDecoder struct {
 	reasoning int // open reasoning item, or -1
 	tools     map[int]int
 	extra     map[int]json.RawMessage // extra_content that came after a tool call opened, by item
+	choices   map[int]bool            // every choice index seen, true once it carried a finish reason
 	finish    *llm.Finish
 	usage     *llm.Usage
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]int{}, extra: map[int]json.RawMessage{}}
+	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]int{}, extra: map[int]json.RawMessage{}, choices: map[int]bool{}}
 }
 
 func (d *StreamDecoder) open(kind string, ev *[]llm.Event, item llm.ItemStart) int {
@@ -178,15 +179,15 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 }
 
 // Decode takes the data of one SSE event and returns the events it produces. After "[DONE]" it
-// returns the finish event and the decoder is done; a "[DONE]" before any finish reason is an
-// error, because the reply may have been cut short. An upstream error object becomes an
+// returns the finish event and the decoder is done; a "[DONE]" before every choice the upstream
+// returned carried a finish reason is an error, because the reply may have been cut short. An upstream error object becomes an
 // *llm.Error. Errors that end the stream carry the usage the upstream reported before them.
 func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if d.done {
 		return nil, fmt.Errorf("openaichat: data after the end of the stream")
 	}
 	if string(data) == "[DONE]" {
-		if d.finish == nil {
+		if !d.finished() {
 			return nil, d.unfinished()
 		}
 		return d.end(), nil
@@ -209,6 +210,11 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		if choices[i].Index != 0 {
 			others = append(others, raw)
+		}
+		if f := choices[i].FinishReason; f != nil && *f != "" {
+			d.choices[choices[i].Index] = true
+		} else if _, ok := d.choices[choices[i].Index]; !ok {
+			d.choices[choices[i].Index] = false
 		}
 	}
 	var out []llm.Event
@@ -294,15 +300,30 @@ func (d *StreamDecoder) end() []llm.Event {
 }
 
 // Close is called when the upstream stream ends. A stream that ended without "[DONE]" counts
-// as finished only if the upstream already sent a finish reason; otherwise it is an error.
+// as finished only if every choice the upstream returned already carried a finish reason;
+// otherwise it is an error.
 func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	if d.done {
 		return nil, nil
 	}
-	if d.finish == nil {
+	if !d.finished() {
 		return nil, d.unfinished()
 	}
 	return d.end(), nil
+}
+
+// finished reports whether choice 0 and every other choice the upstream returned carried a
+// finish reason.
+func (d *StreamDecoder) finished() bool {
+	if d.finish == nil {
+		return false
+	}
+	for _, done := range d.choices {
+		if !done {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *StreamDecoder) unfinished() *llm.Error {

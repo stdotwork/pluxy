@@ -254,6 +254,49 @@ func TestStreamDecoderEndsEarly(t *testing.T) {
 	}
 }
 
+// A reply with several choices is finished only when every choice it returned carried a finish
+// reason: an unfinished choice after the first may have been cut short as much as the first.
+func TestStreamDecoderWaitsForEveryChoice(t *testing.T) {
+	const (
+		both      = `{"id":"x","model":"m","choices":[{"index":0,"delta":{"content":"A"}},{"index":1,"delta":{"content":"B"}}]}`
+		firstDone = `{"id":"x","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
+		otherDone = `{"id":"x","model":"m","choices":[{"index":1,"delta":{},"finish_reason":"stop"}]}`
+	)
+	for _, c := range []struct {
+		name   string
+		chunks []string
+		end    string // "[DONE]", or "" for the stream closing without it
+		ok     bool
+	}{
+		{"choice 1 unfinished at [DONE]", []string{both, firstDone}, "[DONE]", false},
+		{"choice 1 unfinished at EOF", []string{both, firstDone}, "", false},
+		{"choice 0 unfinished at [DONE]", []string{both, otherDone}, "[DONE]", false},
+		{"both finished", []string{both, firstDone, otherDone}, "[DONE]", true},
+		{"both finished, other first", []string{both, otherDone, firstDone}, "", true},
+	} {
+		d := NewStreamDecoder()
+		for _, ch := range c.chunks {
+			if _, err := d.Decode([]byte(ch)); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+		}
+		var evs []llm.Event
+		var err error
+		if c.end == "[DONE]" {
+			evs, err = d.Decode([]byte(c.end))
+		} else {
+			evs, err = d.Close()
+		}
+		var le *llm.Error
+		switch {
+		case c.ok && (err != nil || len(evs) == 0 || evs[len(evs)-1].Type != llm.EventFinish):
+			t.Errorf("%s: events %+v, err %v; want a finish", c.name, evs, err)
+		case !c.ok && (!errors.As(err, &le) || le.Code != llm.CodeUpstream):
+			t.Errorf("%s: events %+v, err %v; want an upstream error", c.name, evs, err)
+		}
+	}
+}
+
 // Upstream bytes that are not JSON become an upstream error that can still be sent to core: the
 // error event must encode, with the bytes kept in raw.
 func TestMalformedUpstreamGivesError(t *testing.T) {
