@@ -181,7 +181,13 @@ export function ExtensionsPage() {
           }
           detail={
             chosen && (
-              <PackageDetail p={chosen} onClose={() => setSelected(undefined)} onChanged={packages.reload} />
+              // Keyed by state, so the running generations shown reload when the package changes.
+              <PackageDetail
+                key={`${chosen.id} ${chosen.state}`}
+                p={chosen}
+                onClose={() => setSelected(undefined)}
+                onChanged={packages.reload}
+              />
             )
           }
         />
