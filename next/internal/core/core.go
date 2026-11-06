@@ -1,15 +1,18 @@
 // Package core holds core's live state: the published config snapshot, the extension
-// generation it names, and the reload transaction that replaces them.
+// generations it names (the extension the config runs from a manifest path and every enabled
+// installed package), and the reload transaction that replaces them.
 //
 // A reload reads the config file, validates it, prepares what it needs (starting a new
-// extension generation when the extension's manifest or program changed) and only then
-// publishes the new snapshot in one step. Each request keeps the snapshot and extension
-// generation it started with. A reload that fails at any step leaves the active snapshot in
-// place and records why. A replaced extension generation drains: it finishes the requests that
-// started on it, until its deadline, and then stops.
+// generation of each extension whose manifest or program changed) and only then publishes the
+// new snapshot in one step. Each request keeps the snapshot and extension generations it
+// started with. A reload that fails at any step leaves the active snapshot in place and
+// records why. A replaced or removed extension generation drains: it finishes the requests
+// that started on it, until its deadline, and then stops. Installing, enabling, disabling and
+// removing a package are reloads with the package change applied (see packages.go).
 //
 // Accounts added by login live in one credential store for core's whole run; each published
-// router routes over the config's accounts and those the store holds for its extension.
+// router routes over the config's accounts and those the store holds, for the extensions that
+// run.
 package core
 
 import (
@@ -21,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -30,6 +34,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/host"
+	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -44,6 +49,10 @@ type Options struct {
 	SafeMode bool
 	// Host tunes how extension programs are started.
 	Host host.Options
+	// Bundled is the index of the registry of packages this install ships with (absolute), or
+	// empty for none. On the first start with a packages folder that has no record yet, every
+	// package it lists is installed and enabled.
+	Bundled string
 }
 
 // Revision describes one version of the config file core has seen.
@@ -62,14 +71,20 @@ type Revision struct {
 type snapshot struct {
 	server.Generation
 	revision uint64
-	ext      *host.Managed // nil in safe mode
+	// exts are the extension generations that run, by extension ID; empty in safe mode.
+	exts map[string]*host.Managed
+	// pkgs is the record of installed packages the snapshot was prepared with.
+	pkgs packages.State
+	// failed holds the enabled packages that could not start, by ID: why.
+	failed map[string]string
 }
 
 // Core is core's live state.
 type Core struct {
-	opts  Options
-	state *route.State
-	creds *cred.Manager // opened by the first load
+	opts   Options
+	state  *route.State
+	creds  *cred.Manager // opened by the first load
+	pkgDir string        // the packages folder, fixed for core's run
 
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
@@ -78,17 +93,29 @@ type Core struct {
 	reloading sync.Mutex // one reload at a time
 	stopped   bool       // set by Stop under reloading: no reload after it
 	cur       atomic.Pointer[snapshot]
+	initial   packages.State // the record read at start, for the first load
+
+	pkgOps sync.Mutex // one package change at a time
 
 	mu       sync.Mutex
 	desired  Revision
 	active   Revision
 	draining []*host.Managed
+	retired  []packages.Installed // removed or replaced package versions whose files go once unused
 }
 
 // Start loads the config file and publishes it as revision 1. Unless in safe mode, it starts
-// the extension's program to check it; the program then runs only while it is needed.
+// each extension's program to check it; the program then runs only while it is needed.
 func Start(opts Options) (*Core, error) {
 	c := &Core{opts: opts, state: route.NewState()}
+	cfg, err := server.LoadConfig(opts.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	c.pkgDir = cfg.Packages.Dir
+	if c.initial, err = c.loadPackages(cfg); err != nil {
+		return nil, err
+	}
 	if err := c.reload(true, "start"); err != nil {
 		if c.creds != nil {
 			c.creds.Close()
@@ -109,20 +136,52 @@ func (c *Core) Acquire() (*server.Generation, func()) {
 	return &s.Generation, release
 }
 
-// acquire returns the current snapshot with a lease on its extension generation.
+// acquire returns the current snapshot with a lease on each of its extension generations. A
+// lease only keeps a replaced generation from finishing its drain; the request calls the one
+// its account needs.
 func (c *Core) acquire() (*snapshot, func()) {
 	for {
 		s := c.cur.Load()
-		if s.ext == nil {
-			return s, func() {}
+		held := make([]*host.Managed, 0, len(s.exts))
+		ok := true
+		for _, g := range s.exts {
+			if !g.Acquire() {
+				ok = false
+				break
+			}
+			held = append(held, g)
 		}
-		if s.ext.Acquire() {
-			return s, s.ext.Release
+		release := func() {
+			for _, g := range held {
+				g.Release()
+			}
 		}
+		if ok {
+			return s, release
+		}
+		release()
 		if c.cur.Load() == s {
 			// Stopped and not replaced: core is shutting down. The request fails in the
 			// extension call.
 			return s, func() {}
+		}
+	}
+}
+
+// lease returns the current generation of extension id with a lease on it, or nil when it does
+// not run.
+func (c *Core) lease(id string) (*host.Managed, func()) {
+	for {
+		s := c.cur.Load()
+		if s == nil || s.exts[id] == nil {
+			return nil, nil
+		}
+		g := s.exts[id]
+		if g.Acquire() {
+			return g, g.Release
+		}
+		if c.cur.Load() == s {
+			return nil, nil
 		}
 	}
 }
@@ -136,6 +195,14 @@ func (c *Core) Reload(why string) error { return c.reload(true, why) }
 func (c *Core) reload(force bool, why string) error {
 	c.reloading.Lock()
 	defer c.reloading.Unlock()
+	return c.transact(force, why, nil, nil)
+}
+
+// transact runs one reload transaction with c.reloading held. change, when set, is applied to
+// a copy of the package record before preparing; the record is saved only when everything is
+// prepared, just before publishing. Packages in strict that fail to start fail the
+// transaction; other enabled packages that fail are skipped and shown as failed.
+func (c *Core) transact(force bool, why string, change func(packages.State), strict map[string]bool) error {
 	if c.stopped {
 		return errors.New("core is stopping")
 	}
@@ -166,9 +233,23 @@ func (c *Core) reload(force bool, why string) error {
 	c.desired = Revision{Revision: rev, Hash: hash, At: time.Now()}
 	c.mu.Unlock()
 
+	pkgs := c.initial
+	if prev != nil {
+		pkgs = prev.pkgs
+	}
+	if change != nil {
+		pkgs = pkgs.Clone()
+		change(pkgs)
+	}
 	var next *snapshot
 	if err == nil {
-		next, err = c.prepare(rev, b, prev)
+		next, err = c.prepare(rev, b, prev, pkgs, strict)
+	}
+	if err == nil && change != nil {
+		if err = packages.SaveState(c.pkgDir, pkgs); err != nil {
+			err = fmt.Errorf("saving the package record: %w", err)
+			c.discard(next, prev)
+		}
 	}
 	if err != nil {
 		c.mu.Lock()
@@ -184,9 +265,18 @@ func (c *Core) reload(force bool, why string) error {
 	return nil
 }
 
+// extensionSpec is one extension a snapshot runs.
+type extensionSpec struct {
+	manifest string
+	cfg      server.ExtensionConfig
+	pkg      *packages.Installed // nil for the config's extension
+}
+
 // prepare validates the config and builds everything the snapshot needs, without changing
-// what is live. A new extension generation it starts is stopped again if prepare fails.
-func (c *Core) prepare(rev uint64, b []byte, prev *snapshot) (*snapshot, error) {
+// what is live. A new extension generation it starts is stopped again if prepare fails. An
+// enabled package that cannot be prepared fails prepare when it is in strict or runs in prev;
+// otherwise it is left out and recorded in failed.
+func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State, strict map[string]bool) (*snapshot, error) {
 	cfg, err := server.ParseConfig(b, c.opts.ConfigPath)
 	if err != nil {
 		return nil, err
@@ -197,70 +287,132 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot) (*snapshot, error) 
 	if prev != nil && cfg.CredentialsDir != prev.Config.CredentialsDir {
 		return nil, fmt.Errorf("config: credentials_dir cannot change while core runs (%q to %q); restart core to apply it", prev.Config.CredentialsDir, cfg.CredentialsDir)
 	}
-	next := &snapshot{revision: rev}
-	attempt := func(ctx context.Context, a protocol.Account, req llm.Request) route.Stream {
-		if next.ext == nil {
-			return failed(&llm.Error{Code: llm.CodeExtensionUnavailable, Message: "core is in safe mode: no extension runs"})
-		}
-		return next.ext.Generate(ctx, a, req)
+	if cfg.Packages.Dir != c.pkgDir {
+		return nil, fmt.Errorf("config: packages.dir cannot change while core runs (%q to %q); restart core to apply it", c.pkgDir, cfg.Packages.Dir)
 	}
-	router, err := route.New(cfg.Routing, cfg.Extension.Accounts, attempt, c.state)
+
+	next := &snapshot{revision: rev, exts: map[string]*host.Managed{}, pkgs: pkgs, failed: map[string]string{}}
+	want := map[string]extensionSpec{}
+	if cfg.Extension.Manifest != "" {
+		m, err := host.LoadManifest(cfg.Extension.Manifest)
+		if err != nil && !c.opts.SafeMode {
+			return nil, err
+		}
+		if err == nil {
+			cfg.Extension.ID = m.ID
+			want[m.ID] = extensionSpec{manifest: cfg.Extension.Manifest, cfg: cfg.Extension}
+		}
+	}
+	for _, in := range pkgs.Sorted() {
+		if !in.Enabled {
+			continue
+		}
+		if _, dup := want[in.ID]; dup {
+			err := fmt.Errorf("extension %s already runs from the config's extension.manifest; remove one of the two", in.ID)
+			if strict[in.ID] {
+				return nil, err
+			}
+			next.failed[in.ID] = err.Error()
+			continue
+		}
+		x := cfg.Extensions[in.ID]
+		x.ID = in.ID
+		want[in.ID] = extensionSpec{manifest: in.Manifest(c.pkgDir), cfg: x, pkg: &in}
+	}
+
+	if !c.opts.SafeMode {
+		for _, id := range slices.Sorted(maps.Keys(want)) {
+			spec := want[id]
+			g, err := c.prepareExtension(id, spec, rev, prev)
+			switch {
+			case err == nil:
+				next.exts[id] = g
+			case spec.pkg != nil && !strict[id] && (prev == nil || prev.exts[id] == nil):
+				// It does not run now (core is starting, or it failed before): skip it rather than
+				// refuse the reload. A package that runs now keeps running: the reload is refused.
+				log.Printf("package %s %s not started: %v", id, spec.pkg.Version, err)
+				next.failed[id] = err.Error()
+			default:
+				c.discard(next, prev)
+				return nil, err
+			}
+		}
+	}
+
+	attempt := func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
+		if c.opts.SafeMode {
+			return failed(safeModeEvent().Error)
+		}
+		g := next.exts[ext]
+		if g == nil {
+			return failed(&llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s does not run", ext)})
+		}
+		return g.Generate(ctx, a, req)
+	}
+	next.Generation = server.Generation{Config: cfg}
+	router, err := route.New(cfg.Routing, c.configured(next), attempt, c.state)
 	if err != nil {
+		c.discard(next, prev)
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	next.Generation = server.Generation{Config: cfg, Router: router}
-	if !c.opts.SafeMode {
-		if next.ext, err = c.prepareExtension(cfg, rev, prev); err != nil {
-			return nil, err
-		}
-	}
+	next.Router = router
 	if c.creds == nil { // the first load: nothing is live yet
-		var info protocol.Info
-		if next.ext != nil {
-			info = next.ext.Info()
-		}
 		store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
 		if err != nil {
-			if next.ext != nil {
-				next.ext.Stop()
-			}
+			c.discard(next, prev)
 			return nil, err
 		}
-		c.creds = cred.NewManager(store, provider{c: c, first: info}, cred.Options{Reserved: c.reserved})
+		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved})
 	}
 	router.UseCredentials(c.creds)
 	return next, nil
 }
 
-// prepareExtension returns the extension generation cfg names: prev's when its code has not
-// changed, else a new one, started and handshaken.
-//
-// The extension's ID cannot change: the credential store holds accounts for the one extension
-// that logged them in, and requests and logins in flight on the old generation still use its
-// accounts. shortcut: switching to another extension takes a restart; extension packages
-// (installing and removing several extensions) will lift this.
-func (c *Core) prepareExtension(cfg *server.Config, rev uint64, prev *snapshot) (*host.Managed, error) {
-	fp, err := host.Fingerprint(cfg.Extension.Manifest)
+// prepareExtension returns the generation of extension id the snapshot runs: prev's when its
+// code has not changed, else a new one, started and handshaken. An installed package's files
+// must still have the fingerprint recorded when it was installed.
+func (c *Core) prepareExtension(id string, spec extensionSpec, rev uint64, prev *snapshot) (*host.Managed, error) {
+	fp, err := host.Fingerprint(spec.manifest)
 	if err != nil {
 		return nil, err
 	}
-	if prev != nil && prev.ext != nil {
-		if prev.ext.Path() == cfg.Extension.Manifest && prev.ext.Fingerprint() == fp && prev.ext.State() != host.StateQuarantined {
-			return prev.ext, nil // same code: keep the running generation
-		}
-		m, err := host.LoadManifest(cfg.Extension.Manifest)
-		if err != nil {
-			return nil, err
-		}
-		if was := prev.ext.Manifest().ID; m.ID != was {
-			return nil, fmt.Errorf("config: the extension cannot change from %s to %s while core runs (accounts added by login belong to one extension); restart core to switch", was, m.ID)
+	if spec.pkg != nil && fp != spec.pkg.Fingerprint {
+		return nil, fmt.Errorf("package %s %s: its files changed since it was installed; install it again", id, spec.pkg.Version)
+	}
+	if prev != nil {
+		if g := prev.exts[id]; g != nil && g.Path() == spec.manifest && g.Fingerprint() == fp && g.State() != host.StateQuarantined {
+			return g, nil // same code: keep the running generation
 		}
 	}
-	return host.Prepare(cfg.Extension.Manifest, rev, policy(cfg.Extension), c.opts.Host)
+	g, err := host.Prepare(spec.manifest, rev, policy(spec.cfg), c.opts.Host)
+	if err != nil {
+		return nil, err
+	}
+	if g.Manifest().ID != id {
+		g.Stop()
+		return nil, fmt.Errorf("the manifest at %s is for %s, not %s", spec.manifest, g.Manifest().ID, id)
+	}
+	if spec.pkg != nil && g.Fingerprint() != spec.pkg.Fingerprint {
+		g.Stop()
+		return nil, fmt.Errorf("package %s %s: its files changed while it started; install it again", id, spec.pkg.Version)
+	}
+	return g, nil
+}
+
+// discard stops the generations next started that prev does not run.
+func (c *Core) discard(next, prev *snapshot) {
+	if next == nil {
+		return
+	}
+	for id, g := range next.exts {
+		if prev == nil || prev.exts[id] != g {
+			g.Stop()
+		}
+	}
 }
 
 // publish makes next the snapshot new requests get, carries routing state over, and drains the
-// extension generation it replaces.
+// extension generations it replaces or no longer runs.
 func (c *Core) publish(next, prev *snapshot, hash string) {
 	c.accounts.Lock()
 	defer c.accounts.Unlock()
@@ -268,45 +420,68 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		log.Printf("updating accounts: %v", err)
 	}
 	if prev != nil {
-		c.state.Retain(prev.Router, next.Router, sameAccount(prev, next))
+		c.state.Retain(prev.Router, next.Router, sameAccount)
 	}
-	if next.ext != nil {
-		next.ext.SetPolicy(policy(next.Config.Extension))
+	for id, g := range next.exts {
+		g.SetPolicy(policy(c.extensionConfig(next, id)))
 	}
 	c.mu.Lock()
 	c.cur.Store(next)
 	c.active = Revision{Revision: next.revision, Hash: hash, At: time.Now()}
 	c.desired.Error = ""
-	var old *host.Managed
-	if prev != nil && prev.ext != nil && prev.ext != next.ext {
-		old = prev.ext
-		c.draining = append(c.draining, old)
-	}
-	c.mu.Unlock()
-	if old != nil {
-		old.Drain(func() {
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			for i, g := range c.draining {
-				if g == old {
-					c.draining = append(c.draining[:i], c.draining[i+1:]...)
-					break
-				}
+	var old []*host.Managed
+	if prev != nil {
+		for id, g := range prev.exts {
+			if next.exts[id] != g {
+				old = append(old, g)
 			}
+		}
+	}
+	c.draining = append(c.draining, old...)
+	c.mu.Unlock()
+	for _, g := range old {
+		g.Drain(func() {
+			c.mu.Lock()
+			if i := slices.Index(c.draining, g); i >= 0 {
+				c.draining = slices.Delete(c.draining, i, i+1)
+			}
+			c.mu.Unlock()
+			c.sweep()
 		})
 	}
+	c.sweep()
+}
+
+// extensionConfig returns the config section of extension id in s.
+func (c *Core) extensionConfig(s *snapshot, id string) server.ExtensionConfig {
+	if s.Config.Extension.ID == id {
+		return s.Config.Extension
+	}
+	return s.Config.Extensions[id]
+}
+
+// configured returns the config's accounts of the extensions s runs, each tagged with its
+// extension; in safe mode, every config account (requests to them fail).
+func (c *Core) configured(s *snapshot) []route.Account {
+	var out []route.Account
+	for _, a := range s.Config.Accounts() {
+		if c.opts.SafeMode || s.exts[a.Extension] != nil {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // routed returns the accounts s routes over: the config's, then those the credential store
-// holds for the extension. A stored account whose ID the config also uses is left out.
+// holds, for the extensions s runs. A stored account whose ID the config also uses is left out.
 func (c *Core) routed(s *snapshot) []route.Account {
-	cfg := s.Config.Extension.Accounts
-	accounts := slices.Clone(cfg)
-	if s.ext == nil {
-		return accounts
-	}
+	accounts := c.configured(s)
+	all := s.Config.Accounts()
 	for _, a := range c.creds.Accounts() {
-		if slices.ContainsFunc(cfg, func(x route.Account) bool { return x.ID == a.ID }) {
+		if s.exts[a.Extension] == nil {
+			continue
+		}
+		if slices.ContainsFunc(all, func(x route.Account) bool { return x.ID == a.ID }) {
 			log.Printf("account %q is both in the config and added by login; using the config's", a.ID)
 			continue
 		}
@@ -329,17 +504,14 @@ func (c *Core) accountsChanged() {
 // then not take.
 func (c *Core) reserved(id string) bool {
 	s := c.cur.Load()
-	return s != nil && slices.ContainsFunc(s.Config.Extension.Accounts, func(a route.Account) bool { return a.ID == id })
+	return s != nil && slices.ContainsFunc(s.Config.Accounts(), func(a route.Account) bool { return a.ID == id })
 }
 
-// sameAccount reports whether an account with one ID is the same upstream account in both
-// snapshots: the same extension (by ID; a new version of it is the same provider) and the same
+// sameAccount reports whether an account with one ID is the same upstream account in two
+// routers: the same extension (by ID; a new version of it is the same provider) and the same
 // settings. Its credential may change: a credential is the account's, not its identity.
-func sameAccount(prev, next *snapshot) func(old, cur *route.Account) bool {
-	sameExt := prev.ext == nil || next.ext == nil || prev.ext.Manifest().ID == next.ext.Manifest().ID
-	return func(old, cur *route.Account) bool {
-		return sameExt && sameJSON(old.Settings, cur.Settings)
-	}
+func sameAccount(old, cur *route.Account) bool {
+	return old.Extension == cur.Extension && sameJSON(old.Settings, cur.Settings)
 }
 
 // sameJSON compares two JSON values by meaning, not spelling: object key order and spacing do
@@ -362,7 +534,7 @@ func sameJSON(a, b json.RawMessage) bool {
 	return okx && oky && reflect.DeepEqual(x, y)
 }
 
-// policy resolves the extension's run policy from its config section.
+// policy resolves an extension's run policy from its config section.
 func policy(x server.ExtensionConfig) host.Policy {
 	p := host.DefaultPolicy()
 	ms := func(v int64) time.Duration { return time.Duration(v) * time.Millisecond }
@@ -396,8 +568,10 @@ func (c *Core) Stop() {
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
 	c.mu.Unlock()
-	if s := c.cur.Load(); s != nil && s.ext != nil {
-		gens = append(gens, s.ext)
+	if s := c.cur.Load(); s != nil {
+		for _, g := range s.exts {
+			gens = append(gens, g)
+		}
 	}
 	var wg sync.WaitGroup
 	for _, g := range gens {
@@ -410,7 +584,7 @@ func (c *Core) Stop() {
 // ExtensionStatus is a generation's status as management shows it.
 type ExtensionStatus struct {
 	host.Status
-	// Current is true for the generation new requests go to.
+	// Current is true for a generation new requests go to.
 	Current bool `json:"current"`
 }
 
@@ -430,8 +604,10 @@ func (c *Core) Status() Status {
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()
 	c.mu.Unlock()
-	if cur != nil && cur.ext != nil {
-		s.Extensions = append(s.Extensions, ExtensionStatus{Status: cur.ext.Status(), Current: true})
+	if cur != nil {
+		for _, id := range slices.Sorted(maps.Keys(cur.exts)) {
+			s.Extensions = append(s.Extensions, ExtensionStatus{Status: cur.exts[id].Status(), Current: true})
+		}
 	}
 	for _, g := range draining {
 		s.Extensions = append(s.Extensions, ExtensionStatus{Status: g.Status()})
@@ -449,41 +625,62 @@ func failed(e *llm.Error) route.Stream {
 func (s *failedStream) Next() llm.Event { return s.ev }
 func (s *failedStream) Close()          {}
 
-// provider is the credential manager's view of the extension: each call goes to the extension
-// generation that is current when it starts and holds a lease on it until it ends. Every
-// generation has the same ID (see prepareExtension).
+// providers is the credential manager's view of the extensions that run.
+type providers struct{ c *Core }
+
+func (p providers) Running() []string {
+	s := p.c.cur.Load()
+	if s == nil {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(s.exts))
+}
+
+func (p providers) Provider(id string) cred.Provider {
+	if s := p.c.cur.Load(); s == nil || s.exts[id] == nil {
+		return nil
+	}
+	return provider{c: p.c, id: id}
+}
+
+// provider is one extension as the credential manager calls it: each call goes to the
+// extension's generation that is current when it starts and holds a lease on it until it ends,
+// so a login or refresh runs on one version from start to end.
 type provider struct {
-	c     *Core
-	first protocol.Info // the first generation's, until it is published; empty in safe mode
+	c  *Core
+	id string
 }
 
 func (p provider) Info() protocol.Info {
-	if s := p.c.cur.Load(); s != nil && s.ext != nil {
-		return s.ext.Info()
+	if s := p.c.cur.Load(); s != nil && s.exts[p.id] != nil {
+		return s.exts[p.id].Info()
 	}
-	return p.first
+	return protocol.Info{ID: p.id}
 }
 
 func (p provider) Login(ctx context.Context, account protocol.Account, login protocol.Login) cred.LoginCall {
-	s, release := p.c.acquire()
-	if s.ext == nil {
-		release()
-		return &failedLogin{protocol.Reply{Event: safeModeEvent()}}
+	g, release := p.c.lease(p.id)
+	if g == nil {
+		return &failedLogin{protocol.Reply{Event: unavailableEvent(p.id)}}
 	}
-	return &leasedLogin{LoginCall: s.ext.Login(ctx, account, login), release: release}
+	return &leasedLogin{LoginCall: g.Login(ctx, account, login), release: release}
 }
 
 func (p provider) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
-	s, release := p.c.acquire()
-	defer release()
-	if s.ext == nil {
-		return nil, safeModeEvent().Error
+	g, release := p.c.lease(p.id)
+	if g == nil {
+		return nil, unavailableEvent(p.id).Error
 	}
-	return s.ext.Refresh(ctx, account)
+	defer release()
+	return g.Refresh(ctx, account)
 }
 
 func safeModeEvent() llm.Event {
 	return llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeExtensionUnavailable, Message: "core is in safe mode: no extension runs"}}
+}
+
+func unavailableEvent(id string) llm.Event {
+	return llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s does not run", id)}}
 }
 
 // leasedLogin is a login call that returns its lease on the extension generation when closed.

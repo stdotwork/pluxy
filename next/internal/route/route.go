@@ -75,8 +75,9 @@ type Stream interface {
 	Close()
 }
 
-// AttemptFunc runs one attempt: a generate call on the provider extension with one account.
-type AttemptFunc func(ctx context.Context, account protocol.Account, req llm.Request) Stream
+// AttemptFunc runs one attempt: a generate call with one account on extension, the provider
+// extension that serves it (Account.Extension).
+type AttemptFunc func(ctx context.Context, extension string, account protocol.Account, req llm.Request) Stream
 
 // Request is one client request to route.
 type Request struct {
@@ -94,10 +95,11 @@ type Request struct {
 // Credentials supplies the credentials of managed accounts (Account.Managed): core's
 // credential store, which renews them through the provider extension.
 type Credentials interface {
-	// Credential returns the credential an attempt on the account presents, and its version.
-	// It renews the credential first when it is about to expire, sharing the renewal with
-	// concurrent callers. An error is the attempt's outcome: the account cannot be used now.
-	Credential(ctx context.Context, accountID string) (*protocol.Credential, uint64, *llm.Error)
+	// Credential returns the credential an attempt on the account presents to extension, and
+	// its version: only when the account belongs to extension. It renews the credential first
+	// when it is about to expire, sharing the renewal with concurrent callers. An error is the
+	// attempt's outcome: the account cannot be used now.
+	Credential(ctx context.Context, extension, accountID string) (*protocol.Credential, uint64, *llm.Error)
 	// Rejected reports that the upstream refused the credential at version. It renews the
 	// credential (shared with concurrent callers) and reports whether a newer one is ready.
 	Rejected(ctx context.Context, accountID string, version uint64) bool
@@ -449,7 +451,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 		if c.creds == nil {
 			e = &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeCredential, Message: fmt.Sprintf("account %q has no credential store", a.ID)}
 		} else {
-			call.Credential, version, e = c.creds.Credential(c.ctx, a.ID)
+			call.Credential, version, e = c.creds.Credential(c.ctx, a.Extension, a.ID)
 		}
 		if e != nil {
 			r.state.failure(a, c.req.LLM.Model, e, r.now())
@@ -457,7 +459,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 			return errorEvent(e), false
 		}
 	}
-	s := r.attempt(c.ctx, call, c.req.LLM)
+	s := r.attempt(c.ctx, a.Extension, call, c.req.LLM)
 	ev = s.Next()
 	if ev.Type == llm.EventError {
 		s.Close()

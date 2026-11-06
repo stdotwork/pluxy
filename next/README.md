@@ -26,6 +26,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
 | `internal/cred` | Core's credential store and renewal of accounts added by login. |
+| `internal/packages` | Registries, release archives and the record of installed packages. |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
 | `corpus/` | Differential test corpus: cases replayed against this core and today's `core/`, with listed exceptions ([README](corpus/README.md)). |
 
@@ -60,8 +61,9 @@ go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-c
 ./pluxy -config config.json
 ```
 
-An account may list `models` it serves; without a list it serves any model. Core runs one
-extension and spreads requests over its accounts: see [Accounts and routing](#accounts-and-routing).
+An account may list `models` it serves; without a list it serves any model. Core runs the
+extension the config names and every [installed package](#packages) that is enabled, and spreads
+requests over all their accounts: see [Accounts and routing](#accounts-and-routing).
 
 An account's `settings` may set `"wire_api": "responses"` for an upstream that speaks OpenAI
 Responses (`POST {base_url}/responses`), or `"wire_api": "messages"` for one that speaks Anthropic
@@ -185,12 +187,12 @@ account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
 
 The management API is served under `/v0/management` when the config sets `management_key`;
-send it as a bearer token. With a management key set, `extension.accounts` may be empty.
+send it as a bearer token. With a management key set, the config may set no accounts.
 
 | Request | Does |
 | --- | --- |
 | `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at` and the last renewal error. Never a secret. |
-| `POST /accounts` | Starts a login that adds an account: `{"id": "work", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
+| `POST /accounts` | Starts a login that adds an account: `{"id": "work", "extension": "pluxy/codex", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). `extension` names the extension that signs in and owns the account; it may be left out while only one extension runs. Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
 | `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
 | `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |
 | `DELETE /logins/{id}` | Cancels the login. |
@@ -210,8 +212,8 @@ then switches to it in one step; requests that already started finish on the con
 extension version they started with. A file core has already seen, or an empty one (an editor
 in the middle of saving), is skipped; the file watcher waits until the file has stopped changing.
 A reload that fails at any step, from broken JSON to an extension that does not start, leaves
-the running config in place, and management shows why. `listen`, `credentials_dir` and the
-extension's ID (switching to another extension) cannot change without a restart.
+the running config in place, and management shows why. `listen`, `credentials_dir` and
+`packages.dir` cannot change without a restart.
 
 When the extension's manifest or program changes, a reload starts the new version and waits for
 its handshake before switching. The old version then drains: it finishes the requests that
@@ -262,3 +264,73 @@ needs `Authorization: Bearer <management_key>`.
 | --- | --- |
 | `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`. |
 | `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |
+
+## Packages
+
+Extensions are installed as packages: a release archive from a registry, checked against the
+digest the registry pins, unpacked and checked, then kept in its own folder and run like the
+extension the config names. The package and registry formats are in the
+[protocol README](protocol/README.md#release-archives). A package is **installed** (its files
+are in the packages folder), **enabled** (core runs it), and **configured** when it has accounts:
+in the config, or added by login. Removing a package keeps its accounts: they serve again if it
+is installed again.
+
+```json
+{
+  "management_key": "choose-a-management-key",
+  "packages": {
+    "dir": "packages",
+    "registries": [{"name": "mine", "url": "https://example.com/pluxy/index.json"}]
+  },
+  "extensions": {
+    "pluxy/codex": {
+      "accounts": [{"id": "openai", "credential": {"kind": "api_key", "api_key": "sk-..."}}],
+      "idle_stop_ms": 600000
+    }
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `packages.dir` | Where packages are kept, relative to the config file. Default `packages` beside it. Each release has its own folder, `{dir}/{publisher}/{name}/{version}`, and `{dir}/packages.json` records what is installed: each package's version, registry, archive URL and digest, the digest of its unpacked manifest and program, and whether it is enabled. |
+| `packages.registries` | Registries to install from, searched in order and before `bundled`: `name` and `url` (an `https://` URL or a path relative to the config file). |
+| `extensions` | Settings of installed packages, by package ID: `accounts`, `idle_stop_ms`, `drain_timeout_ms` and `restart`, as in `extension`. They apply while the package is enabled. |
+
+`extension` (the extension run from a manifest path) is optional once packages are used. Account
+IDs are unique across `extension` and every `extensions` entry.
+
+An enabled package's program runs only while it is needed, as any extension does. Each time core
+starts it, core checks its manifest and program still have the digest recorded at install; one
+that changed is not run. An enabled package that cannot start when core starts (its files
+changed, or it needs a protocol version this core does not speak) is skipped, and management
+shows why; core serves with the rest. A reload that cannot prepare a package that runs now is
+refused, and the running version stays. Installing the same release again replaces files that
+changed. Management never shows a registry or archive URL's user name, password or query.
+
+### Bundled packages
+
+The packages a pluxy install ships with are a registry like any other, named `bundled`: by
+default `bundled/index.json` beside the `pluxy` program, or the index `-bundled` names. On its
+first start with a packages folder that has no `packages.json`, core installs and enables every
+package the bundled registry lists, through the same steps as any install. Bundled packages are
+removed like any other, and stay removed; installing one again takes it from `bundled`.
+
+### Package management API
+
+Every call needs `Authorization: Bearer <management_key>`. `{id}` is the package ID,
+`publisher/name`.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v0/management/packages` | Installed packages: `id`, `version`, `registry`, `url`, `sha256`, `enabled`, `installed_at`, and `state`: `disabled`, the running extension's state (`active`, `idle`, `starting`, `crashed`, `quarantined`), `failed` with `error` when it is enabled but could not start, or `stopped` when it is enabled in safe mode. |
+| `GET /v0/management/registries` | Each registry's `name`, `url` and what it offers: `packages`, each with its `releases` (`version`, `protocol`, `platforms`); or `error` when it could not be read. |
+| `POST /v0/management/packages` | Installs a package: `{"id": "pluxy/codex", "version": "0.1.0", "registry": "mine", "enable": true}`. Only `id` is required: without `version`, the first release listed that runs here; without `registry`, the first registry listing the package. Installing another version of an installed package replaces it; when it is enabled, the new version starts before the old one drains, and if the new one fails to start the old one stays. 200 with the package; 404 when no registry has it; 422 when the archive or its manifest fails a check (nothing is installed) or it does not start (it stays installed, disabled); 502 when the registry or archive could not be fetched. |
+| `POST /v0/management/packages/{id}/enable` | Starts the package and routes to its accounts. 200 with the package; 422 when it did not start (it stays disabled). |
+| `POST /v0/management/packages/{id}/disable` | Stops routing to it; requests already running on it finish, up to its drain timeout. Its files stay. |
+| `DELETE /v0/management/packages/{id}` | Disables the package and removes its files once its requests have finished. Its accounts stay. 204. |
+
+Package changes go through the same reload transaction as a config change: core reads the
+config file, prepares everything with the package change applied, and switches in one step, so
+a config file that does not load also refuses the package change. One package change runs at a
+time.

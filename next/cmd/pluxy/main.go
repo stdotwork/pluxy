@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -25,15 +26,34 @@ func main() {
 	configPath := flag.String("config", "config.json", "path to the config file")
 	safeMode := flag.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
 	watch := flag.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
+	bundled := flag.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
 	flag.Parse()
-	if err := run(*configPath, *safeMode, *watch); err != nil {
+	if err := run(*configPath, *safeMode, *watch, *bundled); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
 }
 
-func run(configPath string, safeMode bool, watch time.Duration) error {
-	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode})
+// defaultBundled returns bundled/index.json beside the running program when it exists.
+func defaultBundled() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(filepath.Dir(exe), "bundled", "index.json")
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
+func run(configPath string, safeMode bool, watch time.Duration, bundled string) error {
+	if bundled == "" {
+		bundled = defaultBundled()
+	} else if abs, err := filepath.Abs(bundled); err == nil {
+		bundled = abs
+	}
+	c, err := core.Start(core.Options{ConfigPath: configPath, SafeMode: safeMode, Bundled: bundled})
 	if err != nil {
 		if !safeMode {
 			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)

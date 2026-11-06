@@ -33,6 +33,9 @@ type Account struct {
 	// Managed marks an account whose credential core's credential store keeps: each attempt
 	// asks the router's Credentials for it instead of using Credential.
 	Managed bool `json:"-"`
+	// Extension is the ID of the extension that serves the account, set by core. Attempts on
+	// the account go to that extension, and only its credentials are fetched for them.
+	Extension string `json:"-"`
 
 	// gen is the generation of the router that holds this copy (see State.Retain).
 	gen uint64

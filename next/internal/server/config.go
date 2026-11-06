@@ -6,9 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
+	"github.com/stdotwork/pluxy/next/internal/host"
+	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -18,8 +23,15 @@ type Config struct {
 	// Listen is the TCP address to serve on, for example 127.0.0.1:8400.
 	Listen string `json:"listen"`
 	// ClientKeys are the keys clients must send as a bearer token. Empty means no check.
-	ClientKeys []string        `json:"client_keys"`
-	Extension  ExtensionConfig `json:"extension"`
+	ClientKeys []string `json:"client_keys"`
+	// Extension is the extension run from a manifest path, with its accounts. Optional once
+	// packages are used.
+	Extension ExtensionConfig `json:"extension"`
+	// Extensions are the settings of installed packages, by package ID. They apply while the
+	// package is enabled.
+	Extensions map[string]ExtensionConfig `json:"extensions,omitempty"`
+	// Packages says where installed packages are kept and where they are installed from.
+	Packages PackagesConfig `json:"packages"`
 	// Routing says how requests are spread over the accounts and retried.
 	Routing route.Config `json:"routing"`
 	// DropPolicy says what happens when translating a request to the upstream's format would
@@ -34,11 +46,26 @@ type Config struct {
 	CredentialsDir string `json:"credentials_dir,omitempty"`
 }
 
-// ExtensionConfig names the provider extension and its accounts, and how its program is run.
+// PackagesConfig is the packages section of the config.
+type PackagesConfig struct {
+	// Dir is the packages folder, relative to the config file. Default: "packages" beside it.
+	Dir string `json:"dir,omitempty"`
+	// Registries are searched in order when an install names none.
+	Registries []packages.Registry `json:"registries,omitempty"`
+}
+
+// BundledRegistry is the name of the registry of the packages a pluxy install ships with.
+const BundledRegistry = "bundled"
+
+// ExtensionConfig is one extension's accounts and how its program is run.
 type ExtensionConfig struct {
-	// Manifest is the path of the extension's manifest, relative to the config file.
-	Manifest string    `json:"manifest"`
+	// Manifest is the path of the extension's manifest, relative to the config file. Only for
+	// the extension run from a path (Config.Extension).
+	Manifest string    `json:"manifest,omitempty"`
 	Accounts []Account `json:"accounts"`
+	// ID is the extension's ID: the key in Config.Extensions; for Config.Extension, the
+	// manifest's, set by core once it has read the manifest.
+	ID string `json:"-"`
 	// IdleStopMS stops the program after this long without requests; the next request starts
 	// it again. Absent: 10 minutes. 0: keep it running.
 	IdleStopMS *int64 `json:"idle_stop_ms,omitempty"`
@@ -71,6 +98,48 @@ type Account = route.Account
 // below what a time.Duration holds, even doubled.
 const maxTimingMS = 30 * 24 * 60 * 60 * 1000
 
+// validate checks the section called name; seen collects account IDs across sections.
+func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
+	for i, a := range x.Accounts {
+		if a.ID == "" {
+			return fmt.Errorf("config: %s.accounts[%d].id is required", name, i)
+		}
+		if seen[a.ID] {
+			return fmt.Errorf("config: %s.accounts[%d].id %q is used twice", name, i, a.ID)
+		}
+		seen[a.ID] = true
+		if a.MaxConcurrency < 0 {
+			return fmt.Errorf("config: %s.accounts[%d].max_concurrency must not be negative", name, i)
+		}
+	}
+	for _, ms := range []*int64{x.IdleStopMS, x.DrainTimeoutMS, &x.Restart.BackoffMS, &x.Restart.MaxBackoffMS, &x.Restart.StableMS} {
+		if ms != nil && (*ms < 0 || *ms > maxTimingMS) {
+			return fmt.Errorf("config: %s timings must be between 0 and %d ms (30 days)", name, maxTimingMS)
+		}
+	}
+	if x.Restart.QuarantineAfter < 0 {
+		return fmt.Errorf("config: %s.restart.quarantine_after must not be negative", name)
+	}
+	return nil
+}
+
+// Accounts returns every account the config sets, in every section, each with the ID of its
+// section's extension (empty for Config.Extension until core has read its manifest).
+func (c *Config) Accounts() []Account {
+	var out []Account
+	sections := []ExtensionConfig{c.Extension}
+	for _, id := range slices.Sorted(maps.Keys(c.Extensions)) {
+		sections = append(sections, c.Extensions[id])
+	}
+	for _, x := range sections {
+		for _, a := range x.Accounts {
+			a.Extension = x.ID
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // LoadConfig reads and validates a config file.
 func LoadConfig(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
@@ -90,11 +159,40 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	if c.Listen == "" {
 		return nil, errors.New("config: listen is required")
 	}
-	if c.Extension.Manifest == "" {
-		return nil, errors.New("config: extension.manifest is required")
+	base := filepath.Dir(path)
+	if abs, err := filepath.Abs(base); err == nil {
+		base = abs
 	}
-	if !filepath.IsAbs(c.Extension.Manifest) {
-		c.Extension.Manifest = filepath.Join(filepath.Dir(path), c.Extension.Manifest)
+	rel := func(p string) string {
+		if p == "" || filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(base, p)
+	}
+	if c.Extension.Manifest == "" && len(c.Extension.Accounts) > 0 {
+		return nil, errors.New("config: extension.accounts needs extension.manifest; accounts of an installed package go in extensions.<id>.accounts")
+	}
+	c.Extension.Manifest = rel(c.Extension.Manifest)
+	if c.Packages.Dir == "" {
+		c.Packages.Dir = "packages"
+	}
+	c.Packages.Dir = rel(c.Packages.Dir)
+	names := map[string]bool{BundledRegistry: true}
+	for i := range c.Packages.Registries {
+		r := &c.Packages.Registries[i]
+		if r.Name == "" || names[r.Name] {
+			return nil, fmt.Errorf("config: packages.registries[%d].name must be set, unique and not %q", i, BundledRegistry)
+		}
+		names[r.Name] = true
+		if strings.Contains(r.URL, "://") && !strings.HasPrefix(strings.ToLower(r.URL), "https://") {
+			return nil, fmt.Errorf("config: packages.registries[%d].url: only https:// URLs and local paths are allowed", i)
+		}
+		if !strings.HasPrefix(strings.ToLower(r.URL), "https://") {
+			r.URL = rel(r.URL)
+		}
+		if err := packages.CheckLocation(r.URL); err != nil {
+			return nil, fmt.Errorf("config: packages.registries[%d]: %w", i, err)
+		}
 	}
 	switch c.DropPolicy {
 	case "", llm.DropReport, llm.DropReject:
@@ -107,30 +205,26 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	if !filepath.IsAbs(c.CredentialsDir) {
 		c.CredentialsDir = filepath.Join(filepath.Dir(path), c.CredentialsDir)
 	}
-	if len(c.Extension.Accounts) == 0 && c.ManagementKey == "" {
-		return nil, errors.New("config: extension.accounts must not be empty unless management_key is set (accounts can then be added by login)")
-	}
 	seen := map[string]bool{}
-	for i, a := range c.Extension.Accounts {
-		if a.ID == "" {
-			return nil, fmt.Errorf("config: extension.accounts[%d].id is required", i)
-		}
-		if seen[a.ID] {
-			return nil, fmt.Errorf("config: extension.accounts[%d].id %q is used twice", i, a.ID)
-		}
-		seen[a.ID] = true
-		if a.MaxConcurrency < 0 {
-			return nil, fmt.Errorf("config: extension.accounts[%d].max_concurrency must not be negative", i)
-		}
+	if err := c.Extension.validate("extension", seen); err != nil {
+		return nil, err
 	}
-	x := c.Extension
-	for _, ms := range []*int64{x.IdleStopMS, x.DrainTimeoutMS, &x.Restart.BackoffMS, &x.Restart.MaxBackoffMS, &x.Restart.StableMS} {
-		if ms != nil && (*ms < 0 || *ms > maxTimingMS) {
-			return nil, fmt.Errorf("config: extension timings must be between 0 and %d ms (30 days)", maxTimingMS)
+	for id, x := range c.Extensions {
+		name := fmt.Sprintf("extensions[%q]", id)
+		if !host.ValidID(id) {
+			return nil, fmt.Errorf("config: %s: %q is not a package ID of the form publisher/name", name, id)
 		}
+		if x.Manifest != "" {
+			return nil, fmt.Errorf("config: %s.manifest: extensions holds settings of installed packages; an extension run from a manifest path goes in extension", name)
+		}
+		if err := x.validate(name, seen); err != nil {
+			return nil, err
+		}
+		x.ID = id
+		c.Extensions[id] = x
 	}
-	if x.Restart.QuarantineAfter < 0 {
-		return nil, errors.New("config: extension.restart.quarantine_after must not be negative")
+	if len(seen) == 0 && c.ManagementKey == "" {
+		return nil, errors.New("config: set at least one account unless management_key is set (accounts can then be added by login)")
 	}
 	if err := c.Routing.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)

@@ -15,7 +15,16 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// Provider is the provider extension accounts log in and renew through.
+// Providers are the provider extensions accounts log in and renew through, by extension ID.
+type Providers interface {
+	// Provider returns the extension with ID id while it runs, else nil. Each call on it goes
+	// to one version of the extension, the one current when the call starts.
+	Provider(id string) Provider
+	// Running returns the IDs of the extensions that run now.
+	Running() []string
+}
+
+// Provider is one provider extension accounts log in and renew through.
 type Provider interface {
 	Info() protocol.Info
 	Login(ctx context.Context, account protocol.Account, login protocol.Login) LoginCall
@@ -58,13 +67,13 @@ var (
 	ErrConflict = errors.New("conflict")
 )
 
-// Manager is core's credential authority for one provider extension: it hands credentials to
-// routing, renews them (one renewal per credential at a time, shared by every caller, applied
-// only to the version it renewed), and runs logins. It is safe for concurrent use.
+// Manager is core's credential authority: it hands credentials to routing, renews them (one
+// renewal per credential at a time, shared by every caller, applied only to the version it
+// renewed) through the extension that owns the account, and runs logins. It is safe for
+// concurrent use.
 type Manager struct {
 	store    *Store
-	prov     Provider
-	provID   string
+	provs    Providers
 	reserved func(id string) bool
 	now      func() time.Time
 
@@ -110,10 +119,10 @@ type Options struct {
 	Reserved func(id string) bool
 }
 
-// NewManager returns the manager for store's accounts on prov.
-func NewManager(store *Store, prov Provider, opts Options) *Manager {
+// NewManager returns the manager for store's accounts on provs.
+func NewManager(store *Store, provs Providers, opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{store: store, prov: prov, provID: prov.Info().ID, reserved: opts.Reserved,
+	m := &Manager{store: store, provs: provs, reserved: opts.Reserved,
 		now: time.Now, ctx: ctx, cancel: cancel,
 		flights: map[string]*flight{}, renewals: map[string]*renewal{}, logins: map[string]*login{}}
 	if m.reserved == nil {
@@ -144,20 +153,20 @@ func (m *Manager) Close() {
 	m.wg.Wait()
 }
 
-// Accounts returns the usable accounts of this provider, for routing.
+// Accounts returns the usable accounts, for routing, each with the extension it belongs to.
 func (m *Manager) Accounts() []route.Account {
 	var out []route.Account
 	for _, r := range m.store.List() {
-		if r.Extension == m.provID && r.Usable() {
+		if r.Usable() {
 			a := r.Account
-			a.ID, a.Credential, a.Managed = r.ID, nil, true
+			a.ID, a.Credential, a.Managed, a.Extension = r.ID, nil, true, r.Extension
 			out = append(out, a)
 		}
 	}
 	return out
 }
 
-// Records returns every stored account, including other providers' and unusable ones.
+// Records returns every stored account, including unusable ones.
 func (m *Manager) Records() []Record { return m.store.List() }
 
 // LastRenewalError returns why the last automatic renewal of r's credential failed, while
@@ -181,23 +190,27 @@ func (m *Manager) renewalFor(r Record) *renewal {
 	return rn
 }
 
-// Refreshable reports whether core renews r's credential: it belongs to this provider, is not
-// a static key, and the provider can refresh.
+// Refreshable reports whether core renews r's credential: it is not a static key, and the
+// extension it belongs to runs and can refresh.
 func (m *Manager) Refreshable(r Record) bool {
-	return r.Extension == m.provID && r.Credential.Kind != protocol.CredentialAPIKey &&
-		slices.Contains(m.prov.Info().Operations, protocol.OpRefresh)
+	if r.Credential.Kind == protocol.CredentialAPIKey {
+		return false
+	}
+	p := m.provs.Provider(r.Extension)
+	return p != nil && slices.Contains(p.Info().Operations, protocol.OpRefresh)
 }
 
 func credentialError(code, msg string) *llm.Error {
 	return &llm.Error{Code: code, Scope: llm.ScopeCredential, Retryable: true, Message: msg}
 }
 
-// Credential returns the credential an attempt on account id presents, renewing it first when
-// it expires within refreshLead.
-func (m *Manager) Credential(ctx context.Context, id string) (*protocol.Credential, uint64, *llm.Error) {
+// Credential returns the credential an attempt on account id presents to extension, renewing
+// it first when it expires within refreshLead. An account of another extension is refused:
+// its credential never reaches extension.
+func (m *Manager) Credential(ctx context.Context, extension, id string) (*protocol.Credential, uint64, *llm.Error) {
 	rec, ok := m.store.Get(id)
-	if !ok || rec.Extension != m.provID {
-		return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q is not in the credential store", id))
+	if !ok || rec.Extension != extension {
+		return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q of extension %s is not in the credential store", id, extension))
 	}
 	if !rec.Usable() {
 		return nil, 0, credentialError(llm.CodeAuth, fmt.Sprintf("account %q is %s", id, describeState(rec)))
@@ -226,6 +239,10 @@ func (m *Manager) Credential(ctx context.Context, id string) (*protocol.Credenti
 		r, e := m.renew(ctx, rec, false)
 		now = m.now()
 		switch {
+		case e == nil && (r.Registration != rec.Registration || r.Extension != extension):
+			// Removed during the renewal, and maybe added again for another extension: the
+			// record is not the account this attempt asked for.
+			return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", id))
 		case e == nil:
 			rec = r
 			if !rec.Usable() {
@@ -386,8 +403,13 @@ func (m *Manager) runRenewal(seen Record, f *flight) {
 	case cur.Version != seen.Version:
 		rec = cur
 	default:
+		p := m.provs.Provider(cur.Extension)
+		if p == nil {
+			rec, e = cur, credentialError(llm.CodeExtensionUnavailable, fmt.Sprintf("account %q: extension %s does not run", cur.ID, cur.Extension))
+			break
+		}
 		acct := protocol.Account{ID: cur.ID, Settings: cur.Account.Settings, Credential: &cur.Credential}
-		cred, perr := m.prov.Refresh(m.ctx, acct)
+		cred, perr := p.Refresh(m.ctx, acct)
 		rec, e = m.apply(cur, cred, perr)
 	}
 	m.mu.Lock()
