@@ -245,15 +245,18 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 	if !req.Stream {
 		agg := f.aggregate(req)
 		defer func() { logTranslation(r, request, agg) }()
+		tooLarge := func() {
+			e := &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream reply is larger than %d MiB, the limit for a non-streamed response; send the request with \"stream\": true", MaxResponseBody>>20)}
+			logFailure(r, e)
+			f.writeError(w, e)
+		}
 		for {
 			agg.Add(ev)
 			// The terminal event counts too: it can carry content, such as a Responses
 			// upstream's final Response object.
 			if agg.Size() > MaxResponseBody {
 				// Returning closes the stream, which cancels the call and the upstream request.
-				e := &llm.Error{Code: llm.CodeUpstream, Message: fmt.Sprintf("the upstream reply is larger than %d MiB, the limit for a non-streamed response; send the request with \"stream\": true", MaxResponseBody>>20)}
-				logFailure(r, e)
-				f.writeError(w, e)
+				tooLarge()
 				return
 			}
 			if ev.Terminal() {
@@ -269,6 +272,13 @@ func serve(w http.ResponseWriter, r *http.Request, cfg *Config, router *route.Ro
 		out, err := agg.Response()
 		if err != nil {
 			f.writeError(w, &llm.Error{Code: llm.CodeInternal, Message: err.Error()})
+			return
+		}
+		// Rendering can add to what the reply holds, such as losses that name each tool call.
+		// shortcut: until then it can hold up to about twice the limit; record those losses as
+		// events arrive if that memory matters.
+		if agg.Size() > MaxResponseBody {
+			tooLarge()
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

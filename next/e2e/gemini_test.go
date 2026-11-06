@@ -255,3 +255,29 @@ func TestGeminiNonStreamingReplyCountsLosses(t *testing.T) {
 		t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
 	}
 }
+
+// What a reply reports as lost while it is rendered counts toward core's 64 MiB limit on a
+// non-streamed reply too. This is the reviewer's case: 60 calls with 1 MiB ids and arguments that
+// are not a JSON object; each loss names its call, which doubled what the reply held, after the
+// last size check.
+func TestGeminiNonStreamingReplyCountsLossesWhileRendering(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		const head = `"id":"c1","object":"chat.completion.chunk","created":1,"model":"m"`
+		id := strings.Repeat("i", 1<<20)
+		for i := range 60 {
+			if _, err := fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":%d,\"id\":\"%d%s\",\"type\":\"function\",\"function\":{\"name\":\"f\",\"arguments\":\"[\"}}]}}]}\n\n", head, i, i, id); err != nil {
+				return
+			}
+		}
+		fmt.Fprintf(w, "data: {%s,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", head)
+	}
+	base := startCore(t, u)
+	resp := postPath(t, context.Background(), base, "/v1beta/models/gpt-test:generateContent", clientKey, `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "64 MiB") {
+		t.Fatalf("status %d, want 502 naming the 64 MiB limit; body starts %.200s", resp.StatusCode, raw)
+	}
+}
