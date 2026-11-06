@@ -24,6 +24,7 @@ working as the UI changes. Custom CSS can only rely on the hooks listed under
   "id": "example/paper",
   "name": "Paper",
   "description": "Warm light theme with the navigation on top.",
+  "appearance": "both",
   "tokens": {
     "color.bg": "#f6f1e7",
     "color.accent": "#9a3412",
@@ -48,8 +49,9 @@ working as the UI changes. Custom CSS can only rely on the hooks listed under
 | `id` | yes | `publisher/name`. Each part is 1 to 64 characters from `a-z`, `0-9` and `-`. |
 | `name` | yes | The name people see. 1 to 64 characters. |
 | `description` | no | One line, up to 200 characters. |
+| `appearance` | no | `both` (the default), `light` or `dark`: the appearances the theme offers. See [Appearance](#appearance). |
 | `tokens` | no | Token values, by token name. Missing tokens keep the UI's default value. |
-| `dark` | no | Token values that replace `tokens` while the appearance is dark. A theme without `dark` looks the same in both appearances. |
+| `dark` | no | Token values that replace `tokens` while the appearance is dark. |
 | `layout` | no | The theme's layout options. Missing options keep the UI's default. |
 | `css` | no | Custom CSS, up to 128 KiB. |
 
@@ -61,8 +63,8 @@ A theme file is at most 256 KiB.
   has a `theme_version` newer than the UI supports, or has a missing or invalid `id` or `name`.
 - **Used, with a warning shown on the Themes page:** an unknown field, token or layout option is
   ignored; a token value that breaks the rules below is ignored and the default is kept; a layout
-  value the UI does not offer falls back to that option's default; custom CSS containing
-  `@import` is dropped as a whole.
+  value the UI does not offer falls back to that option's default; an unknown `appearance` falls
+  back to `both`; custom CSS containing `@import` is dropped as a whole.
 
 So a theme written for a later version 0 UI, with tokens this UI does not know yet, still loads.
 
@@ -155,9 +157,17 @@ features on, changes permissions, or overrides a choice the person made.
 
 ## Appearance
 
-The UI is light or dark: the person picks light, dark, or "system", which follows the operating
-system. In dark, the UI uses `tokens` with `dark` applied over them, on top of the UI's dark
-defaults. The root element carries `data-appearance="light"` or `data-appearance="dark"`.
+The UI is light or dark. What decides it is the theme's `appearance`:
+
+| `appearance` | Light | Dark | The person's choice |
+| --- | --- | --- | --- |
+| `both` | light defaults, then `tokens` | dark defaults, then `tokens`, then `dark` | light, dark, or "system", which follows the operating system |
+| `light` | light defaults, then `tokens` | not offered | has no effect |
+| `dark` | not offered | dark defaults, then `tokens`, then `dark` | has no effect |
+
+A `light` theme with a `dark` field gets a warning, and its `dark` is ignored. The root element
+carries `data-appearance="light"` or `data-appearance="dark"`, and the UI sets the CSS
+`color-scheme` to match, so form controls and scroll bars follow.
 
 ## Custom CSS
 
@@ -187,7 +197,7 @@ These stay stable within a theme contract version:
 | `data-part="main"` | The page area |
 | `data-part="page-title"` | A page's title |
 | `data-part="list"` | A list of items, whichever `list` layout it uses |
-| `data-part="item"` | One item in a list; a selected one has `aria-selected="true"` |
+| `data-part="item"` | One item in a list; a selected one has `aria-current="true"` |
 | `data-part="detail"` | The detail pane |
 | `data-part="card"` | A card or panel grouping related content |
 | `data-part="button"` | A button; `data-variant` is `primary`, `quiet` or `danger` |

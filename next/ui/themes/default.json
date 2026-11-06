@@ -1,0 +1,7 @@
+{
+  "theme_version": 0,
+  "id": "pluxy/default",
+  "name": "Default",
+  "description": "Neutral light and dark, with the navigation at the side.",
+  "appearance": "both"
+}

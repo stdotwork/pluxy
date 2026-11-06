@@ -1,0 +1,23 @@
+{
+  "name": "pluxy-ui",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.3",
+  "scripts": {
+    "build": "bun build.ts",
+    "check": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "bun test tests",
+    "test:browser": "bun run build && playwright test",
+    "verify": "bun run check && bun run lint && bun run test && bun run build"
+  },
+  "dependencies": {
+    "preact": "11.0.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@playwright/test": "1.65.0",
+    "@types/bun": "1.4.3",
+    "typescript": "7.0.2"
+  }
+}

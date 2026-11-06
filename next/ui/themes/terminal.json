@@ -1,0 +1,30 @@
+{
+  "theme_version": 0,
+  "id": "pluxy/terminal",
+  "name": "Terminal",
+  "description": "Dark, monospaced and compact, with a narrow navigation rail.",
+  "appearance": "dark",
+  "tokens": {
+    "color.bg": "#0b0f0c",
+    "color.surface": "#0f1511",
+    "color.surface-raised": "#16201a",
+    "color.text": "#c8f0d2",
+    "color.text-muted": "#6f9a7b",
+    "color.border": "#1f3326",
+    "color.accent": "#3ddc84",
+    "color.accent-text": "#04140a",
+    "color.ok": "#3ddc84",
+    "color.warn": "#e5c07b",
+    "color.danger": "#ff6b6b",
+    "color.focus": "#3ddc84",
+    "font.body": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
+    "font.size": "13px",
+    "font.size-title": "16px",
+    "density": "0.75",
+    "shape.radius": "0px",
+    "shadow.raised": "none",
+    "motion.duration": "0ms"
+  },
+  "layout": { "nav": "rail" },
+  "css": "[data-part=\"page-title\"]::before { content: \"$ \"; color: var(--px-color-accent); }"
+}
