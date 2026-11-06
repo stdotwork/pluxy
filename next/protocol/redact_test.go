@@ -1,7 +1,9 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
+	"runtime"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -94,14 +96,14 @@ func TestRedactorRawDecodesEscapes(t *testing.T) {
 	}
 }
 
-// A credential made only of digits can sit in a JSON number; the number is replaced by the
-// redacted string and the JSON keeps its shape, whatever else the data holds.
+// A credential made only of digits can sit in a JSON number; the number is replaced by 0, so the
+// JSON keeps its shape and the value stays a number, whatever else the data holds.
 func TestRedactorRawNumericCredential(t *testing.T) {
 	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "12345678"})
 	for _, c := range []struct{ in, want string }{
-		{`{"n":12345678}`, `{"n":"[redacted]"}`},
-		{`{"n":12345678,"s":"\u0061"}`, `{"n":"[redacted]","s":"\u0061"}`},
-		{`[1,-12345678.5e3,"a"]`, `[1,"[redacted]","a"]`},
+		{`{"n":12345678}`, `{"n":0}`},
+		{`{"n":12345678,"s":"\u0061"}`, `{"n":0,"s":"\u0061"}`},
+		{`[1,-12345678.5e3,"a"]`, `[1,0,"a"]`},
 		{`{"n":1234567}`, `{"n":1234567}`},
 	} {
 		ev := r.Event(llm.Event{Type: llm.EventNative, Raw: json.RawMessage(c.in)})
@@ -121,5 +123,140 @@ func TestRedactorErrorTextDecodesEscapes(t *testing.T) {
 	}})
 	if ev.Error.Message != `Rejected {"key":"[redacted]"}` || ev.Error.ProviderCode != `"[redacted]"` {
 		t.Errorf("message %q, provider code %q", ev.Error.Message, ev.Error.ProviderCode)
+	}
+}
+
+// Review probes of the layered redaction. Expected values were written by hand.
+func TestRedactorKeepsWhatIsNotTheCredential(t *testing.T) {
+	raw := func(key, in string) string {
+		r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: key})
+		return string(r.Event(llm.Event{Type: llm.EventNative, Raw: json.RawMessage(in)}).Raw)
+	}
+	for _, c := range []struct{ name, key, in, want string }{
+		// Only the escaped characters that spell the credential are decoded and replaced: the
+		// other escapes keep their bytes (\t stays \t, not a tab).
+		{"other escapes", "sk-test/key+42",
+			`{"m":"failed opening C:\\temp and key \\u0073k-test/key+42"}`,
+			`{"m":"failed opening C:\\temp and key [redacted]"}`},
+		// A credential in a number is replaced by a number, so typed readers still read it.
+		{"number stays a number", "4242",
+			`{"usage":{"input_tokens":4242,"output_tokens":7}}`,
+			`{"usage":{"input_tokens":0,"output_tokens":7}}`},
+		// JSON inside a string stays valid JSON.
+		{"number in quoted JSON", "12345678", `{"m":"{\"n\":12345678}"}`, `{"m":"{\"n\":0}"}`},
+		// A surrogate pair decodes to one character, as a client reads it.
+		{"surrogate pair", "pa😀ss", `{"m":"upstream: pa\\ud83d\\ude00ss"}`, `{"m":"upstream: [redacted]"}`},
+	} {
+		if got := raw(c.key, c.in); got != c.want {
+			t.Errorf("%s: raw %s\n got %s\nwant %s", c.name, c.in, got, c.want)
+		}
+	}
+	var typed struct {
+		Usage struct{ InputTokens, OutputTokens int } `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(raw("4242", `{"usage":{"input_tokens":4242,"output_tokens":7}}`)), &typed); err != nil {
+		t.Errorf("redacted usage no longer reads as typed usage: %v", err)
+	}
+}
+
+// Percent-encoding in any case, and encoded twice, as a URL quoted in a URL is.
+func TestRedactorPercentEncodings(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "sk-test/key+42"})
+	for _, c := range []struct{ in, want string }{
+		{"key=sk-test%2fkey%2b42", "key=[redacted]"},
+		{"key=sk-test%252Fkey%252B42", "key=[redacted]"},
+		{"key=sk-test%252fkey%252b42&next=%2Fhome", "key=[redacted]&next=%2Fhome"},
+	} {
+		if got := r.String(c.in); got != c.want {
+			t.Errorf("String(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// Data without the credential comes back with the same bytes, escapes and all.
+func TestRedactorLeavesOtherDataAlone(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "sk-test/key+42"})
+	for _, in := range []string{
+		`{"a":"C:\\temp\t\u00e9 \ud83d\ude00 \/ %2F%2b","n":[42,-1.5e3],"s":"sk-test/key+4"}`,
+		`{"m":"{\"key\":\"\\u0073k-test/key+41\"}"}`,
+		`"sk-test%2Fkey%2B43"`,
+	} {
+		ev := r.Event(llm.Event{Type: llm.EventNative, Raw: json.RawMessage(in)})
+		if string(ev.Raw) != in {
+			t.Errorf("raw %s\n got %s", in, ev.Raw)
+		}
+		if got := r.String(in); got != in {
+			t.Errorf("String(%s) = %s", in, got)
+		}
+	}
+}
+
+// Redacting a large reply that does not hold the credential neither copies nor decodes it.
+func TestRedactorLargeReplyWithoutCredentialIsCheap(t *testing.T) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "sk-test/key+42"})
+	for name, body := range map[string][]byte{
+		"plain":   largeBody(`{"type":"text","text":"Hello there, a long reply.","n":12345}`),
+		"escapes": largeBody(`{"type":"text","text":"line\none \"quoted\" caf\u00e9\ttab","n":-1.5e3}`),
+	} {
+		var got json.RawMessage
+		if n := allocated(func() { got = r.raw(body) }); n > uint64(len(body))/16 {
+			t.Errorf("%s: redacting a %d-byte body allocated %d bytes", name, len(body), n)
+		}
+		if string(got) != string(body) {
+			t.Fatalf("%s: body changed", name)
+		}
+		text := string(body)
+		if n := allocated(func() { _ = r.String(text) }); n > uint64(len(body))/16 {
+			t.Errorf("%s: redacting %d bytes of text allocated %d bytes", name, len(body), n)
+		}
+	}
+}
+
+// allocated returns how many bytes f allocates.
+func allocated(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// largeBody returns a JSON array of item, repeated to about 4 MiB.
+func largeBody(item string) []byte {
+	var b bytes.Buffer
+	b.WriteByte('[')
+	for b.Len() < 4<<20 {
+		if b.Len() > 1 {
+			b.WriteByte(',')
+		}
+		b.WriteString(item)
+	}
+	b.WriteByte(']')
+	return b.Bytes()
+}
+
+// BenchmarkRedactorLargeReply redacts about 4 MiB of reply data that does not hold the
+// credential: plain JSON, JSON with ordinary escapes, and JSON with escaped backslashes (code).
+func BenchmarkRedactorLargeReply(b *testing.B) {
+	r := NewRedactor(&Credential{Kind: CredentialAPIKey, APIKey: "sk-test/key+42"})
+	for _, c := range []struct{ name, item string }{
+		{"plain", `{"type":"text","text":"Hello there, a long reply.","n":12345}`},
+		{"escapes", `{"type":"text","text":"line\none \"quoted\" caf\u00e9\ttab","n":-1.5e3}`},
+		{"backslashes", `{"type":"text","text":"printf(\"%d\\n\", x); // C:\\temp"}`},
+	} {
+		body := largeBody(c.item)
+		b.Run("raw/"+c.name, func(b *testing.B) {
+			b.SetBytes(int64(len(body)))
+			for range b.N {
+				_ = r.raw(body)
+			}
+		})
+		text := string(body)
+		b.Run("string/"+c.name, func(b *testing.B) {
+			b.SetBytes(int64(len(text)))
+			for range b.N {
+				_ = r.String(text)
+			}
+		})
 	}
 }
