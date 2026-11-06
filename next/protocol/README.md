@@ -355,7 +355,7 @@ with deltas and closed, then one terminal event.
 | `text.delta` | `index`, `delta` | Text for an open `message` item. |
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
 | `tool_input.delta` | `index`, `delta` | A fragment of the argument string for an open `tool_call` item. |
-| `item.end` | `index`; for a reasoning item, optional `opaque`: `format` and `data` | Closes item `index`. `opaque` is the provider's opaque record of the reasoning, which it needs back to continue from it (for `anthropic.messages`, the thinking block's signature). A client format with a place for it carries it: a Responses client gets it as the reasoning item's `encrypted_content`, and when the client replays that item, the Messages request builder turns it back into the thinking block. |
+| `item.end` | `index`; for a reasoning item, optional `opaque`: `format` and `data` | Closes item `index`. `opaque` is the provider's opaque record of the reasoning, which it needs back to continue from it (for `anthropic.messages`, the thinking block's signature; for `openai.responses`, the reasoning item's `encrypted_content`). A client format with a place for it carries it: a Responses client gets a thinking signature as the reasoning item's `encrypted_content`, and a Messages client gets a Responses reasoning item's encrypted content as the thinking block's signature. When the client replays that item or block, the request builder for the provider's format turns it back into the provider's own. |
 | `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. For `openai.responses` and `anthropic.messages` it is an upstream stream event the model has no event for (for example `response.in_progress`, or `ping`, `message_delta` and a thinking block's `signature_delta`). For `gemini.generate_content` it is a stream chunk that produced no other event. |
 | `finish` | `finish`: `reason`, `raw_reason`; optional `usage` | Terminal: success. |
 | `error` | `error` (below) | Terminal: failure. |
@@ -367,9 +367,7 @@ and the usage `raw` (so fields such as a vendor cost survive); other clients do 
 
 For `openai.responses` and `anthropic.messages`, every event carries the upstream stream event it
 came from in `raw` (an `error` carries it in `error.raw`), and the `finish` of a non-streamed reply
-carries the whole Response or Message object. In a non-streamed `openai.responses` reply, each
-`item.end` carries its output item, so a client in another format can keep what the item holds
-(such as a reasoning item's encrypted content). A client in that format gets those upstream events
+carries the whole Response or Message object. A client in that format gets those upstream events
 and that object unchanged; events an extension adds itself (such as closing an item the upstream
 left open) carry no `raw` and are not written to it.
 

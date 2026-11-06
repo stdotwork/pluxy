@@ -273,8 +273,9 @@ type Event struct {
 	Item     *ItemStart    `json:"item,omitempty"`     // item.start
 	// Opaque, on the item.end of a reasoning item, is the provider's opaque record of that
 	// reasoning, which the provider needs back to continue from it (an Anthropic thinking
-	// signature). A client format with a place for it (a Responses reasoning item's
-	// encrypted_content) carries it, so the client can replay it.
+	// signature, a Responses reasoning item's encrypted_content). A client format with a place
+	// for it (a Responses reasoning item's encrypted_content, a thinking block's signature)
+	// carries it, so the client can replay it.
 	Opaque *Opaque `json:"opaque,omitempty"`
 	Finish *Finish `json:"finish,omitempty"` // finish
 	Usage  *Usage  `json:"usage,omitempty"`  // finish
@@ -313,13 +314,13 @@ const (
 	ItemToolCall  = "tool_call"
 )
 
-// ItemStart describes an output item when it opens.
 // Opaque is reasoning state only its provider can read, with the format it came from.
 type Opaque struct {
 	Format string `json:"format"`
 	Data   string `json:"data"`
 }
 
+// ItemStart describes an output item when it opens.
 type ItemStart struct {
 	Kind   string `json:"kind"`
 	CallID string `json:"call_id,omitempty"`

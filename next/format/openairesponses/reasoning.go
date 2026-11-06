@@ -50,21 +50,9 @@ func routerTag(s string) bool {
 	return true
 }
 
-// ReasoningSignature returns the encrypted content of the reasoning item in raw, an upstream
-// response.output_item.done event or an output item, when it has the shape IsEncryptedReasoning
-// checks; otherwise "".
-func ReasoningSignature(raw json.RawMessage) string {
-	var ev struct {
-		Type string          `json:"type"`
-		Item json.RawMessage `json:"item"`
-	}
-	if json.Unmarshal(raw, &ev) != nil {
-		return ""
-	}
-	item := raw
-	if ev.Type == "response.output_item.done" {
-		item = ev.Item
-	}
+// reasoningSignature returns the encrypted content of item, an output item, when it is a reasoning
+// item whose encrypted content has the shape IsEncryptedReasoning checks; otherwise "".
+func reasoningSignature(item json.RawMessage) string {
 	var it struct {
 		Type             string `json:"type"`
 		EncryptedContent string `json:"encrypted_content"`
@@ -75,13 +63,13 @@ func ReasoningSignature(raw json.RawMessage) string {
 	return it.EncryptedContent
 }
 
-// ReasoningSignatures returns what ReasoningSignature returns for each reasoning item in raw (an
-// output_item.done event, a terminal event or a Response object) that has one, by the path
-// OpaqueOutput reports its encrypted content under.
+// ReasoningSignatures returns, for each reasoning item in raw (an output_item.done event, a
+// terminal event or a Response object) whose encrypted content has the shape IsEncryptedReasoning
+// checks, that content, by the path OpaqueOutput reports it under.
 func ReasoningSignatures(raw json.RawMessage) map[string]string {
 	out := map[string]string{}
 	outputItems(raw, func(i int, item json.RawMessage) {
-		if s := ReasoningSignature(item); s != "" {
+		if s := reasoningSignature(item); s != "" {
 			out[fmt.Sprintf("output[%d].encrypted_content", i)] = s
 		}
 	})

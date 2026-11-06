@@ -180,15 +180,15 @@ func (b *builder) start(r *llm.ResponseInfo) {
 // what a thinking block's signature holds (signature). It returns the signature for the block
 // an item.end event closes.
 func (b *builder) upstreamData(ev llm.Event) string {
-	if b.upFormat != llm.FormatOpenAIResponses || len(ev.Raw) == 0 {
-		return ""
-	}
-	sig := b.signature(ev)
+	sig := signature(ev)
 	if sig != "" {
 		if b.carried == nil {
 			b.carried = map[string]bool{}
 		}
 		b.carried[sig] = true
+	}
+	if b.upFormat != llm.FormatOpenAIResponses || len(ev.Raw) == 0 {
+		return sig
 	}
 	sigs := openairesponses.ReasoningSignatures(ev.Raw)
 	for _, p := range openairesponses.OpaqueOutput(ev.Raw) {
@@ -201,14 +201,15 @@ func (b *builder) upstreamData(ev llm.Event) string {
 }
 
 // signature returns the signature for the thinking block an item.end event closes: a Responses
-// upstream's encrypted reasoning, which a Messages client keeps in the block's signature and
-// replays with it, so the reasoning carries over to the next turn (see
-// openairesponses.IsEncryptedReasoning). It is "" for any other event or upstream.
-func (b *builder) signature(ev llm.Event) string {
-	if b.upFormat != llm.FormatOpenAIResponses || ev.Type != llm.EventItemEnd {
+// upstream's encrypted reasoning (the event's opaque data), which a Messages client keeps in the
+// block's signature and replays with it, so the reasoning carries over to the next turn (see
+// openairesponses.IsEncryptedReasoning). It is "" for any other event or opaque data.
+func signature(ev llm.Event) string {
+	o := ev.Opaque
+	if ev.Type != llm.EventItemEnd || o == nil || o.Format != llm.FormatOpenAIResponses || !openairesponses.IsEncryptedReasoning(o.Data) {
 		return ""
 	}
-	return openairesponses.ReasoningSignature(ev.Raw)
+	return o.Data
 }
 
 func (b *builder) native() {
