@@ -1,0 +1,72 @@
+{
+  "description": "An upstream stream that ends cleanly after a text delta, with no message_delta and no message_stop, is reported to the client as an incomplete stream rather than a finished message.",
+  "source": [
+    "core/internal/runtime/executor/claude_executor_stream_truncation_test.go (TestClaudeExecutorStreamTruncationReportsError)",
+    "core/sdk/api/handlers/claude/code_handlers_error_test.go (TestClaudeMessagesHandlerTruncatedStreamWithoutMessageStopWritesSSEError)"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "auth": "none",
+    "headers": {"x-api-key":"corpus-client-key","anthropic-version":"2023-06-01"},
+    "body": {
+      "model": "claude-test",
+      "max_tokens": 256,
+      "stream": true,
+      "messages": [{"role":"user","content":"Say hello"}]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}}
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"message":{"content":[],"id":"msg_corpus","model":"claude-test-upstream","role":"assistant","stop_reason":null,"stop_sequence":null,"type":"message","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":12,"output_tokens":1}},"type":"message_start"},"event":"message_start"},
+        {"data":{"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"},"event":"content_block_start"},
+        {"data":{"delta":{"text":"Hello","type":"text_delta"},"index":0,"type":"content_block_delta"},"event":"content_block_delta"},
+        {"data":{"error":{"message":"upstream stream closed before message_stop","type":"api_error"},"type":"error"},"event":"error"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 256,
+          "messages": [
+            {
+              "content": [{"cache_control":{"type":"ephemeral"},"text":"Say hello","type":"text"}],
+              "role": "user"
+            }
+          ],
+          "model": "claude-test",
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}
