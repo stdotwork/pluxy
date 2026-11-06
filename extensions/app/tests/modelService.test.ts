@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   mergeModelOptions,
+  normalizeBaseUrl,
   modelSearchText,
   modelsFromDiscoveredPayload,
   modelsFromRecord,
@@ -110,5 +111,21 @@ describe('model catalog parsing', () => {
       { name: 'gpt-test' },
       { name: 'gpt-alias', alias: 'review-alias' },
     ]);
+  });
+});
+
+describe('normalizeBaseUrl', () => {
+  it('removes a trailing endpoint path, with or without trailing slashes', () => {
+    for (const suffix of ['/chat/completions', '/messages', '/responses', '/generateContent']) {
+      expect(normalizeBaseUrl(`https://api.example.com/v1${suffix}`)).toBe('https://api.example.com/v1');
+      expect(normalizeBaseUrl(`https://api.example.com/v1${suffix}/`)).toBe('https://api.example.com/v1');
+      expect(normalizeBaseUrl(`https://api.example.com/v1${suffix}//`)).toBe('https://api.example.com/v1');
+    }
+  });
+
+  it('keeps a plain base URL, dropping only the trailing slash, query and hash', () => {
+    expect(normalizeBaseUrl('https://api.example.com/v1/')).toBe('https://api.example.com/v1');
+    expect(normalizeBaseUrl('api.example.com/v1?key=1#top')).toBe('https://api.example.com/v1');
+    expect(normalizeBaseUrl('')).toBe('');
   });
 });
