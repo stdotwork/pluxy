@@ -1,0 +1,148 @@
+{
+  "description": "A non-streamed Responses request on a Kimi subscription.",
+  "source": [
+    "core/internal/runtime/executor/kimi_executor.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "kimi-k3",
+      "input": "Say hello"
+    }
+  },
+  "upstream": [
+    {
+      "body": {
+        "id": "resp_corpus",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-test-upstream",
+        "output": [
+          {
+            "id": "msg_corpus",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "Hello there",
+                "annotations": []
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 2,
+          "total_tokens": 7,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "instructions": "Be brief.",
+        "x_vendor_field": "kept"
+      }
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Msh-Device-Name",
+    "client.body.created_at",
+    "client.events[*].data.response.created_at"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "created_at": "(volatile)",
+        "id": "resp_corpus",
+        "instructions": "Be brief.",
+        "model": "gpt-test-upstream",
+        "object": "response",
+        "output": [
+          {
+            "content": [
+              {
+                "annotations": [],
+                "text": "Hello there",
+                "type": "output_text"
+              }
+            ],
+            "id": "msg_corpus",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          }
+        ],
+        "status": "completed",
+        "usage": {
+          "input_tokens": 5,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens": 2,
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "total_tokens": 7
+        },
+        "x_vendor_field": "kept"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "input": "Say hello",
+          "model": "k3",
+          "stream": false
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "CLIProxyAPI/dev",
+          "X-Msh-Device-Id": "corpus-device-0001",
+          "X-Msh-Device-Model": "linux amd64",
+          "X-Msh-Device-Name": "(volatile)",
+          "X-Msh-Platform": "CLIProxyAPI",
+          "X-Msh-Version": "dev"
+        },
+        "method": "POST",
+        "path": "/coding/v1/responses"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "upstream[0].headers.X-Msh-Device-Name",
+      "kind": "intended",
+      "reason": "The Kimi extension leaves out the device name header: today's core sends the machine's host name, which names the user's computer to Kimi. Kimi's other device headers (platform, version, model, device ID) are still sent.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Platform",
+      "kind": "intended",
+      "reason": "The Kimi extension names itself in Kimi's device headers (platform pluxy, its own version); today's core names itself CLIProxyAPI with its build version. Neither poses as Kimi's own CLI.",
+      "want": "pluxy"
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Version",
+      "kind": "intended",
+      "reason": "The Kimi extension names itself in Kimi's device headers (platform pluxy, its own version); today's core names itself CLIProxyAPI with its build version. Neither poses as Kimi's own CLI.",
+      "want": "0.1.0"
+    }
+  ]
+}

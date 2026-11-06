@@ -1,0 +1,361 @@
+{
+  "description": "A Chat tool reaches Kimi with its schema; a $ref schema is inlined.",
+  "source": [
+    "core/internal/runtime/executor/kimi_executor.go:1376-1499"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "kimi-k3",
+      "stream": true,
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "parameters": {
+              "$defs": {
+                "City": {
+                  "type": "string"
+                }
+              },
+              "properties": {
+                "city": {
+                  "$ref": "#/$defs/City"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is the weather in Oslo?"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "role": "assistant",
+                  "content": null
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "index": 0,
+                      "id": "call_abc",
+                      "type": "function",
+                      "function": {
+                        "name": "get_weather",
+                        "arguments": ""
+                      }
+                    }
+                  ]
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "index": 0,
+                      "function": {
+                        "arguments": "{\"city\":"
+                      }
+                    }
+                  ]
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "index": 0,
+                      "function": {
+                        "arguments": "\"Paris\"}"
+                      }
+                    }
+                  ]
+                },
+                "finish_reason": null
+              }
+            ]
+          }
+        },
+        {
+          "data": {
+            "id": "chatcmpl-corpus",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-test-upstream",
+            "choices": [
+              {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "tool_calls"
+              }
+            ]
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ]
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Msh-Device-Name",
+    "client.body.created",
+    "client.events[*].data.created"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "content": null,
+                  "role": "assistant"
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "function": {
+                        "arguments": "",
+                        "name": "get_weather"
+                      },
+                      "id": "call_abc",
+                      "index": 0,
+                      "type": "function"
+                    }
+                  ]
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "function": {
+                        "arguments": "{\"city\":"
+                      },
+                      "index": 0
+                    }
+                  ]
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {
+                  "tool_calls": [
+                    {
+                      "function": {
+                        "arguments": "\"Paris\"}"
+                      },
+                      "index": 0
+                    }
+                  ]
+                },
+                "finish_reason": null,
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [
+              {
+                "delta": {},
+                "finish_reason": "tool_calls",
+                "index": 0
+              }
+            ],
+            "created": "(volatile)",
+            "id": "chatcmpl-corpus",
+            "model": "gpt-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": "[DONE]"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": "What is the weather in Oslo?",
+              "role": "user"
+            }
+          ],
+          "model": "k3",
+          "stream": true,
+          "stream_options": {
+            "include_usage": true
+          },
+          "tools": [
+            {
+              "function": {
+                "name": "get_weather",
+                "parameters": {
+                  "properties": {
+                    "city": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "CLIProxyAPI/dev",
+          "X-Msh-Device-Id": "corpus-device-0001",
+          "X-Msh-Device-Model": "linux amd64",
+          "X-Msh-Device-Name": "(volatile)",
+          "X-Msh-Platform": "CLIProxyAPI",
+          "X-Msh-Version": "dev"
+        },
+        "method": "POST",
+        "path": "/coding/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.events[0].data.choices[0].delta.content",
+      "kind": "gap",
+      "reason": "The old core passes the upstream chunk through (content null); the new core re-renders the first chunk from its internal model with content \"\".",
+      "want": ""
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Device-Name",
+      "kind": "intended",
+      "reason": "The Kimi extension leaves out the device name header: today's core sends the machine's host name, which names the user's computer to Kimi. Kimi's other device headers (platform, version, model, device ID) are still sent.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Platform",
+      "kind": "intended",
+      "reason": "The Kimi extension names itself in Kimi's device headers (platform pluxy, its own version); today's core names itself CLIProxyAPI with its build version. Neither poses as Kimi's own CLI.",
+      "want": "pluxy"
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Version",
+      "kind": "intended",
+      "reason": "The Kimi extension names itself in Kimi's device headers (platform pluxy, its own version); today's core names itself CLIProxyAPI with its build version. Neither poses as Kimi's own CLI.",
+      "want": "0.1.0"
+    }
+  ]
+}

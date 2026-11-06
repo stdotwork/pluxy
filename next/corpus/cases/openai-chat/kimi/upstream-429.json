@@ -1,0 +1,120 @@
+{
+  "description": "A Kimi 429 reaches the Chat client as a 429.",
+  "source": [
+    "core/internal/runtime/executor/kimi_executor.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "kimi-k3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Say hello"
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {
+        "Content-Type": "application/json",
+        "Retry-After": "7"
+      },
+      "body": {
+        "error": {
+          "message": "Rate limit reached",
+          "type": "rate_limit_reached_error"
+        }
+      }
+    }
+  ],
+  "volatile": [
+    "upstream[*].headers.X-Msh-Device-Name",
+    "client.body.created",
+    "client.events[*].data.created"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "Rate limit reached",
+          "type": "rate_limit_reached_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [
+            {
+              "content": "Say hello",
+              "role": "user"
+            }
+          ],
+          "model": "k3"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "CLIProxyAPI/dev",
+          "X-Msh-Device-Id": "corpus-device-0001",
+          "X-Msh-Device-Model": "linux amd64",
+          "X-Msh-Device-Name": "(volatile)",
+          "X-Msh-Platform": "CLIProxyAPI",
+          "X-Msh-Version": "dev"
+        },
+        "method": "POST",
+        "path": "/coding/v1/chat/completions"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {
+        "code": "rate_limit_reached_error",
+        "message": "Rate limit reached",
+        "type": "rate_limit_error"
+      }
+    },
+    {
+      "path": "client.headers.Retry-After",
+      "kind": "intended",
+      "reason": "The new core passes the upstream's Retry-After on to a rate-limited client (RFC 9110 section 10.2.3); today's Kimi path sends none.",
+      "want": "7"
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Device-Name",
+      "kind": "intended",
+      "reason": "The Kimi extension leaves out the device name header: today's core sends the machine's host name, which names the user's computer to Kimi. Kimi's other device headers (platform, version, model, device ID) are still sent.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Platform",
+      "kind": "intended",
+      "reason": "The Kimi extension names itself in Kimi's device headers (platform pluxy, its own version); today's core names itself CLIProxyAPI with its build version. Neither poses as Kimi's own CLI.",
+      "want": "pluxy"
+    },
+    {
+      "path": "upstream[0].headers.X-Msh-Version",
+      "kind": "intended",
+      "reason": "The Kimi extension names itself in Kimi's device headers (platform pluxy, its own version); today's core names itself CLIProxyAPI with its build version. Neither poses as Kimi's own CLI.",
+      "want": "0.1.0"
+    }
+  ]
+}
