@@ -228,6 +228,9 @@ type Error struct {
 	Scope        string          `json:"scope,omitempty"`
 	RetryAfterMS int64           `json:"retry_after_ms,omitempty"`
 	Raw          json.RawMessage `json:"raw,omitempty"`
+	// Usage is what the upstream reported using before the failure, when it reported any: a
+	// reply that fails partway may still have cost tokens.
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // RawJSON returns upstream bytes for a Raw field, which must hold valid JSON: b itself when it is

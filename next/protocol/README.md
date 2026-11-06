@@ -293,6 +293,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). |
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. |
 | `raw` | The upstream's error body, unchanged. |
+| `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
 
 Codes an extension sends:
 

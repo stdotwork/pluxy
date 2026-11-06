@@ -137,6 +137,7 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		e.Message = r.String(e.Message)
 		e.ProviderCode = r.String(e.ProviderCode)
 		e.Raw = r.raw(e.Raw)
+		e.Usage = r.usage(e.Usage)
 		ev.Error = &e
 	}
 	return ev

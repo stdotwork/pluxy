@@ -147,7 +147,7 @@ func relayStream(ctx context.Context, body io.Reader, out *sdk.Stream) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream broke: " + err.Error(), Scope: llm.ScopeEndpoint}
+			return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream broke: " + err.Error(), Scope: llm.ScopeEndpoint, Usage: dec.Usage()}
 		default:
 			events, err = dec.Decode([]byte(e.Data))
 			if err != nil {

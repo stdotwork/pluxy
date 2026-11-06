@@ -176,7 +176,7 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 // Decode takes the data of one SSE event and returns the events it produces. After "[DONE]" it
 // returns the finish event and the decoder is done; a "[DONE]" before any finish reason is an
 // error, because the reply may have been cut short. An upstream error object becomes an
-// *llm.Error.
+// *llm.Error. Errors that end the stream carry the usage the upstream reported before them.
 func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if d.done {
 		return nil, fmt.Errorf("openaichat: data after the end of the stream")
@@ -189,16 +189,19 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	}
 	var c streamChunk
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, malformed("upstream sent a malformed stream chunk", data)
+		return nil, d.withUsage(malformed("upstream sent a malformed stream chunk", data))
+	}
+	if u := decodeUsage(c.Usage); u != nil {
+		d.usage = u
 	}
 	if hasError(c.Error) {
-		return nil, upstreamErrorObject(c.Error, "upstream reported an error mid-stream")
+		return nil, d.withUsage(upstreamErrorObject(c.Error, "upstream reported an error mid-stream"))
 	}
 	choices := make([]streamChoice, len(c.Choices))
 	var others []json.RawMessage
 	for i, raw := range c.Choices {
 		if err := json.Unmarshal(raw, &choices[i]); err != nil {
-			return nil, malformed("upstream sent a malformed stream chunk", data)
+			return nil, d.withUsage(malformed("upstream sent a malformed stream chunk", data))
 		}
 		if choices[i].Index != 0 {
 			others = append(others, raw)
@@ -256,10 +259,17 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if ev := otherChoices(others); ev != nil {
 		out = append(out, *ev)
 	}
-	if u := decodeUsage(c.Usage); u != nil {
-		d.usage = u
-	}
 	return out, nil
+}
+
+// Usage returns the latest usage the upstream reported, or nil. A caller that fails the stream
+// for its own reasons (the connection broke, say) puts it on the error.
+func (d *StreamDecoder) Usage() *llm.Usage { return d.usage }
+
+// withUsage puts the usage reported so far on an error that ends the stream.
+func (d *StreamDecoder) withUsage(e *llm.Error) *llm.Error {
+	e.Usage = d.usage
+	return e
 }
 
 func (d *StreamDecoder) end() []llm.Event {
@@ -290,7 +300,7 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 
 func (d *StreamDecoder) unfinished() *llm.Error {
 	d.done = true
-	return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"}
+	return d.withUsage(&llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"})
 }
 
 // hasError reports whether an error field holds an error.
