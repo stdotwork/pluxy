@@ -75,6 +75,15 @@ gofmt -l .                                   # must print nothing
 The `e2e` and conformance tests build `cmd/pluxy` and the extensions with `go build`, run them on
 random free ports and Unix sockets in temporary folders, and stop them when done.
 
+`corpus/` is the differential test corpus (see `next/corpus/README.md`). By default it compares
+the new core with the old core's recorded replies. To run today's core live as well, or to
+re-record after changing a case:
+
+```bash
+PLUXY_CORPUS_OLD_CORE=1 go test -count=1 -v -run TestCorpus ./corpus   # builds core/ with cgo
+PLUXY_CORPUS_RECORD=1 go test -count=1 -run TestCorpus ./corpus        # rewrites recorded_old_core
+```
+
 ### `extensions/panel/`
 
 Bun `1.4.3` (`packageManager` in `package.json`); CI also sets up Node.js 24.
@@ -130,6 +139,7 @@ Workflows live in `.github/workflows/`, one set per folder, each limited to its 
 | `panel-release.yml` | `panel-v*` tags | `bun run build`, publishes `management.html` |
 | `app-ci.yml` | PRs and pushes to `main` touching `extensions/app/` | Front end: `bun run check`, `bun test`, `bun run build`; Rust: `cargo check --locked`, `cargo test --locked` |
 | `next-ci.yml` | PRs and pushes to `main` touching `next/` | `gofmt -l .`, `go build ./...`, `go vet ./...`, `go test -race ./...` |
+| `next-corpus.yml` | PRs and pushes to `main` touching `next/` or `core/` | Builds `core/` and runs the corpus against both cores live; the report is in the job summary |
 
 When you add a workflow, add a row here.
 

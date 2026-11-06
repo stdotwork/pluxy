@@ -19,6 +19,7 @@ Completions (streamed and not) through the OpenAI-compatible API-key provider.
 | `examples/scripted` | The tutorial's example extension. |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API. |
 | `e2e/` | Black-box tests that drive the built core over HTTP. |
+| `corpus/` | Differential test corpus: cases replayed against this core and today's `core/`, with listed exceptions ([README](corpus/README.md)). |
 
 ## Run it
 

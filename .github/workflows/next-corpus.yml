@@ -1,0 +1,60 @@
+name: Next corpus
+
+# Runs the differential test corpus against both cores live: today's core is built from core/
+# and the new one from next/. Next CI already runs the corpus against the recorded old-core
+# replies; this job also catches a change in core/ that the recordings no longer match.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'next/**'
+      - 'core/**'
+      - '.github/workflows/next-corpus.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'next/**'
+      - 'core/**'
+      - '.github/workflows/next-corpus.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: 1
+
+defaults:
+  run:
+    working-directory: next
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: |
+            next/go.mod
+            core/go.sum
+      - name: Corpus against both cores
+        env:
+          PLUXY_CORPUS_OLD_CORE: '1'
+          PLUXY_CORPUS_REPORT: ${{ runner.temp }}/corpus-report.txt
+        run: go test -count=1 -v -run TestCorpus ./corpus
+      - name: Report
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/corpus-report.txt" ]; then
+            { echo '```'; cat "$RUNNER_TEMP/corpus-report.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
