@@ -148,12 +148,14 @@
     {
       "path": "client.events[5].data.usage.output_tokens_details",
       "kind": "gap",
-      "reason": "Today's core adds a non-standard usage.output_tokens_details.thinking_tokens to Messages usage from a Responses upstream; Anthropic's usage object has no such field and the new core leaves it out. Whether to keep it is open."
+      "reason": "Today's core adds a non-standard usage.output_tokens_details.thinking_tokens to Messages usage from a Responses upstream; Anthropic's usage object has no such field and the new core leaves it out. Whether to keep it is open.",
+      "absent": true
     },
     {
       "path": "upstream[0].body.include",
       "kind": "intended",
-      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension.",
+      "absent": true
     },
     {
       "path": "upstream[0].body.input",
@@ -207,7 +209,8 @@
     {
       "path": "upstream[0].body.tools[1]",
       "kind": "intended",
-      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension."
+      "reason": "Today's core reaches a Responses upstream only through its Codex API-key provider, which reshapes the request for the Codex endpoint (system as developer, empty instructions, include, store false, parallel_tool_calls, tool_choice auto, strict false on tools, prompt_cache_key and Session-Id, an image_generation tool, every request streamed). The new core's generic Responses upstream gets the translated request without them; Codex endpoint rules belong to the Codex provider extension.",
+      "absent": true
     },
     {
       "path": "upstream[0].headers.Accept-Encoding",
