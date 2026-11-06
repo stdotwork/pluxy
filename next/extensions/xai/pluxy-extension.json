@@ -1,0 +1,13 @@
+{
+  "manifest_version": 0,
+  "id": "pluxy/xai",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "xai",
+    "linux/arm64": "xai",
+    "darwin/amd64": "xai",
+    "darwin/arm64": "xai",
+    "windows/amd64": "xai.exe"
+  }
+}

@@ -1,0 +1,368 @@
+{
+  "description": "A custom tool is sent as a function tool, and its call and output items as a function call and output.",
+  "source": [
+    "core/internal/runtime/executor/xai_executor_request.go",
+    "core/internal/runtime/executor/xai_executor_execute.go",
+    "core/internal/runtime/executor/xai_executor_response.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "grok-4.6",
+      "stream": true,
+      "input": [
+        {
+          "role": "user",
+          "content": "Patch the file."
+        },
+        {
+          "type": "custom_tool_call",
+          "call_id": "call_p",
+          "name": "run_shell",
+          "input": "ls -la"
+        },
+        {
+          "type": "custom_tool_call_output",
+          "call_id": "call_p",
+          "output": "patched"
+        }
+      ],
+      "tools": [
+        {
+          "type": "custom",
+          "name": "run_shell",
+          "description": "run a shell command",
+          "format": {
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "start: /.+/"
+          }
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "grok-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.output_item.added",
+          "data": {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "in_progress",
+              "role": "assistant",
+              "content": []
+            }
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 2,
+            "item_id": "msg_corpus",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Patched."
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 3,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Patched.",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "response.completed",
+          "data": {
+            "type": "response.completed",
+            "sequence_number": 4,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "completed",
+              "model": "grok-test-upstream",
+              "output": [
+                {
+                  "id": "msg_corpus",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "Patched.",
+                      "annotations": []
+                    }
+                  ]
+                }
+              ],
+              "usage": {
+                "input_tokens": 11,
+                "output_tokens": 7,
+                "total_tokens": 18
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "gap",
+      "reason": "Today's core derives a session ID per conversation and sends it as prompt_cache_key; the extension has no session identity to derive from, so it sends only the client's own prompt_cache_key.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Conv-Id",
+      "kind": "gap",
+      "reason": "Today's core sends its session ID as the x-grok-conv-id header; the extension sends the header only when the client's body carries a prompt_cache_key, since it has no session identity of its own.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The xAI extension names itself in its User-Agent (pluxy-xai and its version) and does not copy the Grok CLI's identity; today's core sends the Grok workspace's User-Agent unless the client sent one.",
+      "want": "pluxy-xai/0.1.0"
+    },
+    {
+      "path": "client.events[*].data.response.usage.input_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.events[*].data.response.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "resp_corpus",
+              "model": "grok-test-upstream",
+              "object": "response",
+              "output": [],
+              "status": "in_progress",
+              "usage": null
+            },
+            "sequence_number": 0,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [],
+              "id": "msg_corpus",
+              "role": "assistant",
+              "status": "in_progress",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 1,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "Patched.",
+            "item_id": "msg_corpus",
+            "output_index": 0,
+            "sequence_number": 2,
+            "type": "response.output_text.delta"
+          },
+          "event": "response.output_text.delta"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [
+                {
+                  "annotations": [],
+                  "text": "Patched.",
+                  "type": "output_text"
+                }
+              ],
+              "id": "msg_corpus",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "resp_corpus",
+              "model": "grok-test-upstream",
+              "object": "response",
+              "output": [
+                {
+                  "content": [
+                    {
+                      "annotations": [],
+                      "text": "Patched.",
+                      "type": "output_text"
+                    }
+                  ],
+                  "id": "msg_corpus",
+                  "role": "assistant",
+                  "status": "completed",
+                  "type": "message"
+                }
+              ],
+              "status": "completed",
+              "usage": {
+                "input_tokens": 11,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 7,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 18
+              }
+            },
+            "sequence_number": 4,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": "Patch the file.",
+              "role": "user"
+            },
+            {
+              "arguments": "{\"input\":\"ls -la\"}",
+              "call_id": "call_p",
+              "name": "run_shell",
+              "type": "function_call"
+            },
+            {
+              "call_id": "call_p",
+              "output": "patched",
+              "type": "function_call_output"
+            }
+          ],
+          "instructions": "",
+          "model": "grok-4.6",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "ed33f4fa-3479-5a47-a44e-e7521d026ed1",
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "description": "run a shell command",
+              "format": {
+                "definition": "start: /.+/",
+                "syntax": "lark",
+                "type": "grammar"
+              },
+              "name": "run_shell",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Grok-Conv-Id": "ed33f4fa-3479-5a47-a44e-e7521d026ed1"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}
