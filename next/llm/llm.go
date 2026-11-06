@@ -59,6 +59,23 @@ type Loss struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// MaxLosses is how many losses a translation lists in full. A stream can produce losses without
+// end (one per upstream field or content type), so past MaxLosses one more entry says that more
+// were left out, and nothing after it is listed.
+const MaxLosses = 100
+
+// AddLoss appends l to losses. The loss that would be the one past MaxLosses gets one entry in its
+// place, of its kind, that says more were left out; the list does not grow after that.
+func AddLoss(losses []Loss, l Loss) []Loss {
+	switch {
+	case len(losses) < MaxLosses:
+		return append(losses, l)
+	case len(losses) == MaxLosses:
+		return append(losses, Loss{Kind: l.Kind, Path: "...", Detail: "more losses not listed"})
+	}
+	return losses
+}
+
 // Translation reports how an upstream request was built from the client's request. When
 // Passthrough is true the client's body was sent unchanged and nothing was lost; otherwise the
 // body was rebuilt from the model in format To, and Losses lists what did not carry over.

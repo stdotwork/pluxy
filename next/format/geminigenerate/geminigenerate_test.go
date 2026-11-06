@@ -647,3 +647,32 @@ func TestLateChatSignatureReachesTheCall(t *testing.T) {
 		t.Errorf("aggregated reply %s has no thoughtSignature", body)
 	}
 }
+
+// A reply with more distinct losses than llm.MaxLosses lists the first MaxLosses, then one entry
+// that says more were left out, and nothing after it.
+func TestStreamWriterBoundsLosses(t *testing.T) {
+	raw := map[string]int{}
+	for i := range 150 {
+		raw[fmt.Sprintf("k%03d", i)] = i
+	}
+	rb, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	w := NewStreamWriter(&out)
+	if err := w.Write(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r1", Model: "m", Format: llm.FormatOpenAIChat, Raw: rb}}); err != nil {
+		t.Fatal(err)
+	}
+	losses := w.Losses()
+	if len(losses) != llm.MaxLosses+1 {
+		t.Fatalf("got %d losses, want %d: %d listed and one saying more were left out", len(losses), llm.MaxLosses+1, llm.MaxLosses)
+	}
+	if losses[0].Path != "response.k000" {
+		t.Errorf("first loss is at %q, want response.k000", losses[0].Path)
+	}
+	want := llm.Loss{Kind: llm.LossDropped, Path: "...", Detail: "more losses not listed"}
+	if got := losses[len(losses)-1]; got != want {
+		t.Errorf("last loss is %+v, want %+v", got, want)
+	}
+}

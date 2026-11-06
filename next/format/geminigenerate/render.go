@@ -116,10 +116,11 @@ type builder struct {
 	lossSize  int
 }
 
-// lose records a loss once per path. lossSize counts what the losses hold, which comes from
-// upstream data, so an aggregator can bound it with the reply.
+// lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
+// its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
+// from upstream data, so an aggregator can bound it with the reply.
 func (b *builder) lose(path, detail string) {
-	if b.lost[path] {
+	if b.lost[path] || len(b.losses) > llm.MaxLosses {
 		return
 	}
 	if b.lost == nil {
@@ -127,7 +128,7 @@ func (b *builder) lose(path, detail string) {
 	}
 	b.lost[path] = true
 	b.lossSize += len(path) + len(detail)
-	b.losses = append(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
+	b.losses = llm.AddLoss(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
 func (b *builder) start(r *llm.ResponseInfo) {
