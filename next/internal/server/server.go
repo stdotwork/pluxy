@@ -367,7 +367,7 @@ func logTranslation(r *http.Request, request *llm.Translation, reply any) {
 		if n > len(parts) {
 			line += fmt.Sprintf("; and %d more", n-len(parts))
 		}
-		log.Printf("%s %s: translation: %s", r.Method, r.URL.Path, line)
+		log.Printf("%s %s: translation: %s", r.Method, logField(r.URL.Path), line)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -334,19 +335,19 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		}
 		switch kindOf(it) {
 		case llm.ItemMessage:
-			text := ""
+			var text strings.Builder
 			for _, c := range it.Content {
 				if c.Type == "output_text" {
-					text += c.Text
+					text.WriteString(c.Text)
 				}
 			}
-			add(llm.ItemStart{Kind: llm.ItemMessage}, llm.EventTextDelta, text, nil)
+			add(llm.ItemStart{Kind: llm.ItemMessage}, llm.EventTextDelta, text.String(), nil)
 		case llm.ItemReasoning:
-			text := ""
+			var text strings.Builder
 			for _, s := range it.Summary {
-				text += s.Text
+				text.WriteString(s.Text)
 			}
-			add(llm.ItemStart{Kind: llm.ItemReasoning}, llm.EventReasoningDelta, text, opaque(it))
+			add(llm.ItemStart{Kind: llm.ItemReasoning}, llm.EventReasoningDelta, text.String(), opaque(it))
 		case llm.ItemToolCall:
 			if it.CallID == "" || it.Name == "" {
 				out = append(out, llm.Event{Type: llm.EventNative, Raw: raw})
