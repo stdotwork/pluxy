@@ -92,11 +92,16 @@ type flight struct {
 	err     *llm.Error
 }
 
-// renewal is what the last renewal of an account left behind.
+// renewal is what the last renewal of an account left behind. It is about one credential
+// (reg, cred): once the account holds another, it no longer applies.
 type renewal struct {
-	at    time.Time  // when it ended
-	until time.Time  // no automatic renewal before this
-	err   *llm.Error // the failure that set until, if it failed
+	reg  string
+	cred protocol.Credential
+	// refused: the provider refused this credential's grant, and recording that failed.
+	refused bool
+	at      time.Time  // when it ended
+	until   time.Time  // no automatic renewal before this
+	err     *llm.Error // the failure that set until, if it failed
 }
 
 // Options configure a Manager.
@@ -155,15 +160,25 @@ func (m *Manager) Accounts() []route.Account {
 // Records returns every stored account, including other providers' and unusable ones.
 func (m *Manager) Records() []Record { return m.store.List() }
 
-// LastRenewalError returns why the last automatic renewal of id failed, while automatic
-// renewal is waiting because of it.
-func (m *Manager) LastRenewalError(id string) *llm.Error {
+// LastRenewalError returns why the last automatic renewal of r's credential failed, while
+// automatic renewal is waiting because of it.
+func (m *Manager) LastRenewalError(r Record) *llm.Error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if rn := m.renewals[id]; rn != nil && rn.err != nil && rn.until.After(m.now()) {
+	if rn := m.renewalFor(r); rn != nil && rn.err != nil && rn.until.After(m.now()) {
 		return rn.err
 	}
 	return nil
+}
+
+// renewalFor returns what the last renewal of r's current credential left behind, or nil.
+// Call with m.mu held.
+func (m *Manager) renewalFor(r Record) *renewal {
+	rn := m.renewals[r.ID]
+	if rn == nil || rn.reg != r.Registration || !sameCredential(rn.cred, r.Credential) {
+		return nil
+	}
+	return rn
 }
 
 // Refreshable reports whether core renews r's credential: it belongs to this provider, is not
@@ -187,16 +202,22 @@ func (m *Manager) Credential(ctx context.Context, id string) (*protocol.Credenti
 	if !rec.Usable() {
 		return nil, 0, credentialError(llm.CodeAuth, fmt.Sprintf("account %q is %s", id, describeState(rec)))
 	}
+	m.mu.Lock()
+	rn := m.renewalFor(rec)
+	m.mu.Unlock()
+	if rn != nil && rn.refused {
+		return nil, 0, credentialError(llm.CodeAuth, fmt.Sprintf("account %q: the provider refused the grant; it needs a new login", id))
+	}
 	now := m.now()
 	expired := rec.Credential.ExpiresAt != 0 && rec.Credential.ExpiresAt <= now.Unix()
 	if !m.due(rec) && expired && m.Refreshable(rec) {
 		// Renewal is waiting after a failure, and the credential no longer works.
 		msg := fmt.Sprintf("account %q: the credential has expired and renewal is waiting after a failure", id)
-		if last := m.LastRenewalError(id); last != nil {
+		if last := m.LastRenewalError(rec); last != nil {
 			msg += ": " + last.Message
 		}
 		out := credentialError(llm.CodeUnavailable, msg)
-		if until := m.retryAt(id); until.After(now) {
+		if until := m.retryAt(rec); until.After(now) {
 			out.RetryAfterMS = until.Sub(now).Milliseconds()
 		}
 		return nil, 0, out
@@ -218,7 +239,7 @@ func (m *Manager) Credential(ctx context.Context, id string) (*protocol.Credenti
 			out := credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q: the credential has expired and renewing it failed: %s", id, e.Message))
 			if rejectedGrant(e) {
 				out.Code = llm.CodeAuth
-			} else if until := m.retryAt(id); until.After(now) {
+			} else if until := m.retryAt(rec); until.After(now) {
 				out.RetryAfterMS = until.Sub(now).Milliseconds()
 			}
 			return nil, 0, out
@@ -239,7 +260,7 @@ func (m *Manager) Rejected(ctx context.Context, id string, version uint64) bool 
 		return rec.Usable() // renewed (or replaced) since that attempt began
 	}
 	m.mu.Lock()
-	rn := m.renewals[id]
+	rn := m.renewalFor(rec)
 	recent := rn != nil && rn.err == nil && m.now().Sub(rn.at) < renewedRecently
 	m.mu.Unlock()
 	if recent {
@@ -291,14 +312,14 @@ func (m *Manager) due(rec Record) bool {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	rn := m.renewals[rec.ID]
+	rn := m.renewalFor(rec)
 	return rn == nil || !rn.until.After(now)
 }
 
-func (m *Manager) retryAt(id string) time.Time {
+func (m *Manager) retryAt(r Record) time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if rn := m.renewals[id]; rn != nil {
+	if rn := m.renewalFor(r); rn != nil {
 		return rn.until
 	}
 	return time.Time{}
@@ -331,7 +352,7 @@ func (m *Manager) renew(ctx context.Context, seen Record, force bool) (Record, *
 			}
 		}
 		if f == nil {
-			if rn := m.renewals[seen.ID]; !force && rn != nil && rn.until.After(m.now()) {
+			if rn := m.renewalFor(cur); !force && rn != nil && rn.until.After(m.now()) {
 				m.mu.Unlock()
 				return cur, rn.err
 			}
@@ -409,7 +430,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 			// Ineffective: the new credential is already due for renewal again.
 			rn.until = now.Add(ineffectiveBackoff)
 		}
-		m.setRenewal(cur.ID, rn)
+		m.setRenewal(next, rn)
 		return next, nil
 	case rejectedGrant(perr):
 		next, err := m.updateRenewed(cur, func(r *Record) {
@@ -423,11 +444,11 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 			return next, nil
 		case err != nil:
 			log.Printf("credentials: account %q: the provider refused the grant, and saving that failed: %v", cur.ID, err)
-			m.setRenewal(cur.ID, &renewal{at: now, until: now.Add(failedBackoff), err: perr})
+			m.setRenewal(cur, &renewal{at: now, until: now.Add(failedBackoff), err: perr, refused: true})
 			return cur, perr
 		}
 		log.Printf("credentials: account %q needs a new login: %s", cur.ID, perr.Message)
-		m.setRenewal(cur.ID, &renewal{at: now, err: perr})
+		m.setRenewal(next, &renewal{at: now, err: perr})
 		m.changed()
 		return next, perr
 	case perr.Code == llm.CodeCancelled:
@@ -445,7 +466,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 			wait = time.Duration(perr.RetryAfterMS) * time.Millisecond
 		}
 		log.Printf("credentials: account %q: renewing the credential failed (next try in %s): %s", cur.ID, wait.Round(time.Second), perr.Message)
-		m.setRenewal(cur.ID, &renewal{at: now, until: now.Add(wait), err: perr})
+		m.setRenewal(cur, &renewal{at: now, until: now.Add(wait), err: perr})
 		return cur, perr
 	}
 }
@@ -473,10 +494,12 @@ func sameCredential(a, b protocol.Credential) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-func (m *Manager) setRenewal(id string, rn *renewal) {
+// setRenewal records what a renewal left behind for r's credential.
+func (m *Manager) setRenewal(r Record, rn *renewal) {
+	rn.reg, rn.cred = r.Registration, r.Credential
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.renewals[id] = rn
+	m.renewals[r.ID] = rn
 }
 
 func describeState(r Record) string {

@@ -95,7 +95,7 @@ func (m *management) configured(id string) (route.Account, bool) {
 func (m *management) view(r cred.Record) AccountView {
 	v := AccountView{ID: r.ID, Source: "login", Extension: r.Extension, Kind: r.Credential.Kind, State: r.State,
 		Disabled: r.Disabled, Reason: r.Reason, Label: r.Label, Version: r.Version, ExpiresAt: r.Credential.ExpiresAt,
-		Refreshable: m.creds.Refreshable(r), RenewalError: m.creds.LastRenewalError(r.ID)}
+		Refreshable: m.creds.Refreshable(r), RenewalError: m.creds.LastRenewalError(r)}
 	created, updated := r.CreatedAt, r.UpdatedAt
 	v.CreatedAt, v.UpdatedAt = &created, &updated
 	return v

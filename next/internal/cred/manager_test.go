@@ -523,6 +523,32 @@ func TestRejectedGrantSaveFailureIsReported(t *testing.T) {
 	if _, err := m.Refresh(context.Background(), "acct"); err == nil {
 		t.Error("Refresh succeeded although the provider refused the grant")
 	}
+	// The refused credential is not handed out afterwards either.
+	if c, _, e := m.Credential(context.Background(), "acct"); e == nil || e.Code != llm.CodeAuth {
+		t.Errorf("Credential after the unrecorded refusal = %v, %v; want code auth", c, e)
+	}
+}
+
+// A failure recorded against one credential does not hold back another that replaced it,
+// however the replacement got there.
+func TestFailureBacksOffOnlyItsCredential(t *testing.T) {
+	p := &fakeProvider{fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Message: "old grant failed"}}
+	m, store := newManager(t, p, time.Minute)
+	if _, _, e := m.Credential(context.Background(), "acct"); e != nil {
+		t.Fatalf("Credential = %v; the old credential still works", e)
+	}
+	cur, _ := store.Get("acct")
+	if _, err := store.Update("acct", cur.Registration, cur.Version, func(r *Record) {
+		r.Credential = protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "access-login", RefreshToken: "refresh-login", ExpiresAt: time.Now().Add(time.Minute).Unix()}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.fail = nil
+	p.mu.Unlock()
+	if c, _, e := m.Credential(context.Background(), "acct"); e != nil || c.AccessToken != "access-2" {
+		t.Errorf("Credential = %v, %v; want the replacement renewed (access-2)", c, e)
+	}
 }
 
 // IDs that differ only in case would share a file on macOS and Windows, so the second is
