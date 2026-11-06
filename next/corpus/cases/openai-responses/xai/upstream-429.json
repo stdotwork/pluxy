@@ -1,0 +1,135 @@
+{
+  "description": "xAI's rate limit reply (429 with Retry-After) reaches the client as a rate limit.",
+  "source": [
+    "core/internal/runtime/executor/xai_executor_request.go",
+    "core/internal/runtime/executor/xai_executor_execute.go",
+    "core/internal/runtime/executor/xai_executor_response.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "grok-4.6",
+      "stream": true,
+      "input": "Say hello"
+    }
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {
+        "Retry-After": "20",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "code": "Too many requests",
+        "error": "Rate limit reached for requests"
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "gap",
+      "reason": "Today's core derives a session ID per conversation and sends it as prompt_cache_key; the extension has no session identity to derive from, so it sends only the client's own prompt_cache_key.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Conv-Id",
+      "kind": "gap",
+      "reason": "Today's core sends its session ID as the x-grok-conv-id header; the extension sends the header only when the client's body carries a prompt_cache_key, since it has no session identity of its own.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.input",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator writes a Responses input as a list of messages; the extension sends a plain string input as the client wrote it.",
+      "want": "Say hello"
+    },
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The xAI extension names itself in its User-Agent (pluxy-xai and its version) and does not copy the Grok CLI's identity; today's core sends the Grok workspace's User-Agent unless the client sent one.",
+      "want": "pluxy-xai/0.1.0"
+    },
+    {
+      "path": "client.body.error",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "want": {
+        "code": "Too many requests",
+        "message": "Rate limit reached for requests",
+        "type": "rate_limit_error"
+      }
+    },
+    {
+      "path": "client.body.code",
+      "kind": "intended",
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
+      "absent": true
+    },
+    {
+      "path": "client.headers.Retry-After",
+      "kind": "intended",
+      "reason": "The new core sends xAI's Retry-After on to the client; today's core does not send it on this error."
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "code": "Too many requests",
+        "error": "Rate limit reached for requests"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 429
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Say hello",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "model": "grok-4.6",
+          "prompt_cache_key": "06900b83-7dc3-595f-b42d-b429ae5f4c0b",
+          "store": false,
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Grok-Conv-Id": "06900b83-7dc3-595f-b42d-b429ae5f4c0b"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

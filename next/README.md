@@ -25,6 +25,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/claude` | Provider extension for Anthropic's Claude, with an API key or a Claude subscription login; `claudetest` is a fake Anthropic for its tests. |
 | `extensions/gemini` | Provider extension for Google's Gemini: the Gemini API with an API key, and Vertex AI with a service account or an express mode key; `geminitest` is a fake Google for its tests. |
 | `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
+| `extensions/xai` | Provider extension for xAI's Grok models with an API key; `xaitest` is a fake xAI for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
@@ -260,6 +261,70 @@ each Chat tool call, and a Responses batch of function call outputs moved next t
 request names pluxy in Kimi's device headers, with the device ID made at login (none for a key); the device's host
 name, which Kimi's CLI also sends, is left out. A 429 that says the quota is used up is reported
 as a used-up quota, not a rate limit.
+
+## xAI
+
+The xAI extension (`extensions/xai`) serves xAI's Grok models with an xAI API key. Point
+`extension.manifest` at `extensions/xai/pluxy-extension.json`. Accounts come from the config, with
+the key as the credential. The extension has no login method:
+
+```json
+{"id": "xai", "credential": {"kind": "api_key", "api_key": "xai-..."}}
+```
+
+It does not build Grok CLI's OAuth login or its `cli-chat-proxy.grok.com` endpoint. That path
+reaches xAI only by sending the Grok CLI's client ID and identity headers, which this extension
+does not send.
+
+| Setting | Meaning |
+| --- | --- |
+| `base_url` | Where xAI's API lives. Default `https://api.x.ai/v1`; requests go to `{base_url}/responses`. |
+
+Every client format goes to xAI's Responses API. A Responses client's request passes through with
+the changes listed below. Chat Completions, Messages and Gemini clients are translated to
+Responses, and what the translation cannot carry is reported with the reply. The User-Agent is
+`pluxy-xai/<version>`, and no Grok CLI header is sent.
+
+What changes in a request:
+
+- The stream flag follows the client's: a request that is not streamed is sent to xAI with
+  `"stream": false`, and its reply is read as one response.
+- `stop`, `previous_response_id`, `prompt_cache_retention`, `safety_identifier` and
+  `stream_options` are removed. Today's core removes them on this path too; it does not record why.
+- A custom tool is sent as a function tool, keeping its other fields. A function's local `$ref`
+  references are inlined and its `$defs` and `definitions` are removed. A function without
+  parameters gets an empty object schema. A request with more than 200 tools keeps the first 200,
+  the most xAI accepts in one request.
+- A custom tool call and its output are sent as a function call and a function call output.
+- `store` is false unless the client set it: xAI keeps responses by default, and with
+  `previous_response_id` removed a kept response is never used again. `include` asks for
+  `reasoning.encrypted_content`, which carries a reasoning model's thinking to the next turn
+  without stored responses.
+- The `x-grok-conv-id` header is set to the request's `prompt_cache_key`, when the request has one.
+
+Errors: 401, and a 403 whose body says the credential is bad, are authentication errors. Other 403
+replies are permission errors. A 429 that says the free usage is used up is a quota error, which
+holds the account back for 24 hours. Other 429 replies are rate limits and keep xAI's `Retry-After`.
+A 404 is a model error, and a 5xx is an upstream error.
+
+Not built, and why:
+
+- Namespace tools (from the Codex app) are sent as the client wrote them. Today's core folds them
+  into functions and restores the names in the reply. That needs the reply side, which this
+  extension does not have yet.
+- An `apply_patch` custom tool is not wrapped in an `input` field, and its call is not restored
+  on the way back. Today's core does both, so a Codex `apply_patch` tool does not work through this
+  extension yet.
+- Today's core sends an empty `instructions`, a string input as a list, and tool defaults
+  (`tool_choice`, `parallel_tool_calls`, `strict`, `additionalProperties`) on every Responses
+  request, through its Codex translator. These are not rules about xAI, so this extension does not
+  send them. Whether xAI needs any of them is not verified: the tests do not reach xAI.
+- A session ID for `prompt_cache_key` and `x-grok-conv-id` when the client sends none. Today's
+  core derives one. This extension has no session identity to derive it from.
+- Checking the reasoning effort against each model's levels, and a default effort. Both need
+  today's model catalog.
+- Image references, encrypted reasoning content, websockets, text to speech, image and video
+  generation, `/responses/compact`, and the optional `x_search` tool.
 
 ## Accounts and routing
 

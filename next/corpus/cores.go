@@ -488,6 +488,45 @@ var Providers = map[string]Provider{
 			return "kimi", accounts
 		},
 	},
+	// An xAI API key: the xAI provider extension in the new core, an xai group in today's core.
+	// Both send Responses requests to {base_url}/responses with the key as a bearer token.
+	"xai": {
+		OldCore: func(upstreamURL string, models, keys []string) map[string]any {
+			var ms []any
+			for _, m := range models {
+				ms = append(ms, map[string]any{"name": m})
+			}
+			var ks []any
+			for _, k := range keys {
+				ks = append(ks, map[string]any{"api-key": k})
+			}
+			return map[string]any{"xai": []any{map[string]any{
+				"name":     "corpus",
+				"base-url": upstreamURL + "/v1",
+				"keys":     ks,
+				"models":   ms,
+			}}}
+		},
+		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
+			var accounts []any
+			for i, k := range keys {
+				id := "corpus"
+				if i > 0 {
+					id = fmt.Sprintf("corpus-%d", i+1)
+				}
+				acct := map[string]any{
+					"id":         id,
+					"settings":   map[string]any{"base_url": upstreamURL + "/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": k},
+				}
+				if len(models) > 0 {
+					acct["models"] = models
+				}
+				accounts = append(accounts, acct)
+			}
+			return "xai", accounts
+		},
+	},
 }
 
 // oldCoreGeminiAPIKey is today's core's Gemini API-key block, with a custom base URL.
@@ -515,6 +554,7 @@ var NewCoreExtensions = map[string]string{
 	"claude":            "./extensions/claude",
 	"gemini":            "./extensions/gemini",
 	"kimi":              "./extensions/kimi",
+	"xai":               "./extensions/xai",
 }
 
 // BuildNewCore builds the new core and its extensions into dir. moduleRoot is the next/

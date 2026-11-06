@@ -1,0 +1,3537 @@
+{
+  "description": "A request with 201 tools reaches xAI with the first 200; xAI takes at most 200 tools in one request.",
+  "source": [
+    "core/internal/runtime/executor/xai_executor_request.go",
+    "core/internal/runtime/executor/xai_executor_execute.go",
+    "core/internal/runtime/executor/xai_executor_response.go"
+  ],
+  "client": {
+    "path": "/v1/responses",
+    "body": {
+      "model": "grok-4.6",
+      "stream": true,
+      "input": "Use a tool.",
+      "tools": [
+        {
+          "type": "function",
+          "name": "tool_0",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_1",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_2",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_3",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_4",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_5",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_6",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_7",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_8",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_9",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_10",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_11",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_12",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_13",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_14",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_15",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_16",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_17",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_18",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_19",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_20",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_21",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_22",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_23",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_24",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_25",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_26",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_27",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_28",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_29",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_30",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_31",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_32",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_33",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_34",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_35",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_36",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_37",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_38",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_39",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_40",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_41",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_42",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_43",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_44",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_45",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_46",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_47",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_48",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_49",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_50",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_51",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_52",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_53",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_54",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_55",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_56",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_57",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_58",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_59",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_60",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_61",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_62",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_63",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_64",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_65",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_66",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_67",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_68",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_69",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_70",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_71",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_72",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_73",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_74",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_75",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_76",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_77",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_78",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_79",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_80",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_81",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_82",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_83",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_84",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_85",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_86",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_87",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_88",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_89",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_90",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_91",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_92",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_93",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_94",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_95",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_96",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_97",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_98",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_99",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_100",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_101",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_102",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_103",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_104",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_105",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_106",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_107",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_108",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_109",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_110",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_111",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_112",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_113",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_114",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_115",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_116",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_117",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_118",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_119",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_120",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_121",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_122",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_123",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_124",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_125",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_126",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_127",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_128",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_129",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_130",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_131",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_132",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_133",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_134",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_135",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_136",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_137",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_138",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_139",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_140",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_141",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_142",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_143",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_144",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_145",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_146",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_147",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_148",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_149",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_150",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_151",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_152",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_153",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_154",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_155",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_156",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_157",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_158",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_159",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_160",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_161",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_162",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_163",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_164",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_165",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_166",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_167",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_168",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_169",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_170",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_171",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_172",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_173",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_174",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_175",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_176",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_177",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_178",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_179",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_180",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_181",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_182",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_183",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_184",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_185",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_186",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_187",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_188",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_189",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_190",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_191",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_192",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_193",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_194",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_195",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_196",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_197",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_198",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_199",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "type": "function",
+          "name": "tool_200",
+          "parameters": {
+            "type": "object",
+            "properties": {}
+          }
+        }
+      ]
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {
+          "event": "response.created",
+          "data": {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "in_progress",
+              "model": "grok-test-upstream",
+              "output": [],
+              "usage": null
+            }
+          }
+        },
+        {
+          "event": "response.output_item.added",
+          "data": {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "in_progress",
+              "role": "assistant",
+              "content": []
+            }
+          }
+        },
+        {
+          "event": "response.output_text.delta",
+          "data": {
+            "type": "response.output_text.delta",
+            "sequence_number": 2,
+            "item_id": "msg_corpus",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Ok."
+          }
+        },
+        {
+          "event": "response.output_item.done",
+          "data": {
+            "type": "response.output_item.done",
+            "sequence_number": 3,
+            "output_index": 0,
+            "item": {
+              "id": "msg_corpus",
+              "type": "message",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "Ok.",
+                  "annotations": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "event": "response.completed",
+          "data": {
+            "type": "response.completed",
+            "sequence_number": 4,
+            "response": {
+              "id": "resp_corpus",
+              "object": "response",
+              "created_at": 1700000000,
+              "status": "completed",
+              "model": "grok-test-upstream",
+              "output": [
+                {
+                  "id": "msg_corpus",
+                  "type": "message",
+                  "status": "completed",
+                  "role": "assistant",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "text": "Ok.",
+                      "annotations": []
+                    }
+                  ]
+                }
+              ],
+              "usage": {
+                "input_tokens": 11,
+                "output_tokens": 7,
+                "total_tokens": 18
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[0].body.instructions",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator sends empty instructions on every Responses request; the extension sends the request's instructions as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.parallel_tool_calls",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator adds this default to every Responses request with tools (tool_choice, parallel_tool_calls, strict false, additionalProperties false); the extension sends the client's tools and choices as the client wrote them.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.prompt_cache_key",
+      "kind": "gap",
+      "reason": "Today's core derives a session ID per conversation and sends it as prompt_cache_key; the extension has no session identity to derive from, so it sends only the client's own prompt_cache_key.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Grok-Conv-Id",
+      "kind": "gap",
+      "reason": "Today's core sends its session ID as the x-grok-conv-id header; the extension sends the header only when the client's body carries a prompt_cache_key, since it has no session identity of its own.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].body.input",
+      "kind": "intended",
+      "reason": "Today's core's Codex translator writes a Responses input as a list of messages; the extension sends a plain string input as the client wrote it.",
+      "want": "Use a tool."
+    },
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The xAI extension names itself in its User-Agent (pluxy-xai and its version) and does not copy the Grok CLI's identity; today's core sends the Grok workspace's User-Agent unless the client sent one.",
+      "want": "pluxy-xai/0.1.0"
+    },
+    {
+      "path": "client.events[*].data.response.usage.input_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    },
+    {
+      "path": "client.events[*].data.response.usage.output_tokens_details",
+      "kind": "gap",
+      "reason": "Today's core fills in zero cached and reasoning token counts when the upstream reports usage without them (EnsureResponsesUsageDetails); the new core reports xAI's usage as it comes. Whether to keep it is open.",
+      "absent": true
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "resp_corpus",
+              "model": "grok-test-upstream",
+              "object": "response",
+              "output": [],
+              "status": "in_progress",
+              "usage": null
+            },
+            "sequence_number": 0,
+            "type": "response.created"
+          },
+          "event": "response.created"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [],
+              "id": "msg_corpus",
+              "role": "assistant",
+              "status": "in_progress",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 1,
+            "type": "response.output_item.added"
+          },
+          "event": "response.output_item.added"
+        },
+        {
+          "data": {
+            "content_index": 0,
+            "delta": "Ok.",
+            "item_id": "msg_corpus",
+            "output_index": 0,
+            "sequence_number": 2,
+            "type": "response.output_text.delta"
+          },
+          "event": "response.output_text.delta"
+        },
+        {
+          "data": {
+            "item": {
+              "content": [
+                {
+                  "annotations": [],
+                  "text": "Ok.",
+                  "type": "output_text"
+                }
+              ],
+              "id": "msg_corpus",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            },
+            "output_index": 0,
+            "sequence_number": 3,
+            "type": "response.output_item.done"
+          },
+          "event": "response.output_item.done"
+        },
+        {
+          "data": {
+            "response": {
+              "created_at": 1700000000,
+              "id": "resp_corpus",
+              "model": "grok-test-upstream",
+              "object": "response",
+              "output": [
+                {
+                  "content": [
+                    {
+                      "annotations": [],
+                      "text": "Ok.",
+                      "type": "output_text"
+                    }
+                  ],
+                  "id": "msg_corpus",
+                  "role": "assistant",
+                  "status": "completed",
+                  "type": "message"
+                }
+              ],
+              "status": "completed",
+              "usage": {
+                "input_tokens": 11,
+                "input_tokens_details": {
+                  "cached_tokens": 0
+                },
+                "output_tokens": 7,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 18
+              }
+            },
+            "sequence_number": 4,
+            "type": "response.completed"
+          },
+          "event": "response.completed"
+        }
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "input": [
+            {
+              "content": [
+                {
+                  "text": "Use a tool.",
+                  "type": "input_text"
+                }
+              ],
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "instructions": "",
+          "model": "grok-4.6",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "d700834f-4420-55eb-9eee-2328e665f7b3",
+          "store": false,
+          "stream": true,
+          "tools": [
+            {
+              "name": "tool_0",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_1",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_2",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_3",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_4",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_5",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_6",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_7",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_8",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_9",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_10",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_11",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_12",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_13",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_14",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_15",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_16",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_17",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_18",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_19",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_20",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_21",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_22",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_23",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_24",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_25",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_26",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_27",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_28",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_29",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_30",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_31",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_32",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_33",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_34",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_35",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_36",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_37",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_38",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_39",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_40",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_41",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_42",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_43",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_44",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_45",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_46",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_47",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_48",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_49",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_50",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_51",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_52",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_53",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_54",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_55",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_56",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_57",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_58",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_59",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_60",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_61",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_62",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_63",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_64",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_65",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_66",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_67",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_68",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_69",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_70",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_71",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_72",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_73",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_74",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_75",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_76",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_77",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_78",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_79",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_80",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_81",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_82",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_83",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_84",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_85",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_86",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_87",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_88",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_89",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_90",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_91",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_92",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_93",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_94",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_95",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_96",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_97",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_98",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_99",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_100",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_101",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_102",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_103",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_104",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_105",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_106",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_107",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_108",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_109",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_110",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_111",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_112",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_113",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_114",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_115",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_116",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_117",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_118",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_119",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_120",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_121",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_122",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_123",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_124",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_125",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_126",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_127",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_128",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_129",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_130",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_131",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_132",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_133",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_134",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_135",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_136",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_137",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_138",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_139",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_140",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_141",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_142",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_143",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_144",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_145",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_146",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_147",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_148",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_149",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_150",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_151",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_152",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_153",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_154",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_155",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_156",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_157",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_158",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_159",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_160",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_161",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_162",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_163",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_164",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_165",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_166",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_167",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_168",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_169",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_170",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_171",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_172",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_173",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_174",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_175",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_176",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_177",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_178",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_179",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_180",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_181",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_182",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_183",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_184",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_185",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_186",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_187",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_188",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_189",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_190",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_191",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_192",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_193",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_194",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_195",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_196",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_197",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_198",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            },
+            {
+              "name": "tool_199",
+              "parameters": {
+                "properties": {},
+                "type": "object"
+              },
+              "type": "function"
+            }
+          ]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-corpus-upstream",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0",
+          "X-Grok-Conv-Id": "d700834f-4420-55eb-9eee-2328e665f7b3"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}
