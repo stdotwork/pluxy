@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -501,4 +502,89 @@ func TestAggregatorMergesExtraChoicesInLinearWork(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Joining streamed text or tool arguments takes work in proportion to the bytes. Joining each
+// delta onto the string so far copies about 190 MiB for 2,000 deltas of 100 bytes, where the
+// joined text is 200 KB.
+func TestAggregatorJoinsStreamedStringsInLinearBytes(t *testing.T) {
+	const deltas, size = 2000, 100
+	const maxAlloc = 32 << 20
+	piece := func(i int) string { return fmt.Sprintf("%0*d", size, i) }
+	var joined strings.Builder
+	for i := range deltas {
+		joined.WriteString(piece(i))
+	}
+	want := joined.String()
+	start := llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Model: "m", Format: llm.FormatOpenAIChat}}
+	// feed adds the events and returns the response body and the bytes the Add calls allocated.
+	feed := func(t *testing.T, evs []llm.Event) (respBody, uint64) {
+		t.Helper()
+		a := NewAggregator()
+		a.Add(start)
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		for _, ev := range evs {
+			a.Add(ev)
+		}
+		runtime.ReadMemStats(&after)
+		b, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body respBody
+		if err := json.Unmarshal(b, &body); err != nil {
+			t.Fatalf("response is not JSON: %v\n%s", err, b)
+		}
+		return body, after.TotalAlloc - before.TotalAlloc
+	}
+	check := func(t *testing.T, alloc uint64) {
+		t.Helper()
+		t.Logf("allocated %d bytes for %d deltas of %d bytes", alloc, deltas, size)
+		if alloc > maxAlloc {
+			t.Errorf("allocated %d bytes (over the %d limit) for %d deltas of %d bytes; the joined text is %d bytes", alloc, maxAlloc, deltas, size, len(want))
+		}
+	}
+	t.Run("tool arguments", func(t *testing.T) {
+		evs := []llm.Event{{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemToolCall, CallID: "call_a", Name: "f"}}}
+		for i := range deltas {
+			evs = append(evs, llm.Event{Type: llm.EventToolInputDelta, Index: 0, Delta: piece(i)})
+		}
+		body, alloc := feed(t, evs)
+		if len(body.Choices) != 1 || len(body.Choices[0].Message.ToolCalls) != 1 {
+			t.Fatalf("want one choice with one tool call, got %+v", body.Choices)
+		}
+		if got := body.Choices[0].Message.ToolCalls[0].Function.Arguments; got != want {
+			t.Errorf("arguments are %d bytes, want the %d joined bytes", len(got), len(want))
+		}
+		check(t, alloc)
+	})
+	t.Run("extra choice text", func(t *testing.T) {
+		var evs []llm.Event
+		for i := range deltas {
+			evs = append(evs, llm.Event{Type: llm.EventNative, Raw: json.RawMessage(`{"choices":[{"index":1,"delta":{"content":"` + piece(i) + `"}}]}`)})
+		}
+		body, alloc := feed(t, evs)
+		if len(body.Choices) != 2 || body.Choices[1].Message.Content == nil {
+			t.Fatalf("want an extra choice with content, got %+v", body.Choices)
+		}
+		if got := *body.Choices[1].Message.Content; got != want {
+			t.Errorf("extra choice content is %d bytes, want the %d joined bytes", len(got), len(want))
+		}
+		check(t, alloc)
+	})
+}
+
+// respBody is the part of a Chat Completions response the aggregator tests read.
+type respBody struct {
+	Choices []struct {
+		Message struct {
+			Content   *string `json:"content"`
+			ToolCalls []struct {
+				Function struct {
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"message"`
+	} `json:"choices"`
 }

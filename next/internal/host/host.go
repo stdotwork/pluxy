@@ -2,6 +2,7 @@ package host
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,8 +40,8 @@ type Options struct {
 	StartTimeout time.Duration
 	// StopTimeout bounds the wait for the program to exit after stdin closes. Default 5s.
 	StopTimeout time.Duration
-	// Log receives the program's stderr and later stdout, one prefixed line at a time.
-	// Default os.Stderr.
+	// Log receives the program's stderr and later stdout, one prefixed line at a time, with
+	// the credentials the extension holds removed (protocol.Redactor). Default os.Stderr.
 	Log io.Writer
 }
 
@@ -57,6 +58,60 @@ type Extension struct {
 	waitErr  error
 	calls    atomic.Uint64
 	stopOnce sync.Once
+	held     held
+}
+
+// held are the credentials core has given the extension or got back from it, so that its output
+// is logged without them: for each account the latest two (after a refresh the extension may
+// still write the one it replaced), and what a user entered during a login. Accounts are not
+// forgotten while the extension runs, so this grows only with the accounts it has served.
+//
+// shortcut: a credential the extension creates (a refresh or login result) and writes out before
+// core has it is logged as written; the redaction catches it only once the result arrives.
+type held struct {
+	mu     sync.Mutex
+	by     map[string][]heldCredential
+	redact *protocol.Redactor
+}
+
+type heldCredential struct {
+	key string // the credential as JSON, to tell whether it changed
+	c   *protocol.Credential
+}
+
+// add records that the extension holds c for owner (an account ID).
+func (h *held) add(owner string, c *protocol.Credential) {
+	if c == nil {
+		return
+	}
+	b, _ := json.Marshal(c)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	list := h.by[owner]
+	if len(list) > 0 && list[len(list)-1].key == string(b) {
+		return
+	}
+	if h.by == nil {
+		h.by = map[string][]heldCredential{}
+	}
+	cc := *c
+	list = append(list, heldCredential{string(b), &cc})
+	h.by[owner] = list[max(0, len(list)-2):]
+	var all []*protocol.Credential
+	for _, l := range h.by {
+		for _, hc := range l {
+			all = append(all, hc.c)
+		}
+	}
+	h.redact = protocol.NewRedactor(all...)
+}
+
+// String returns s without the credentials the extension holds.
+func (h *held) String(s string) string {
+	h.mu.Lock()
+	r := h.redact
+	h.mu.Unlock()
+	return r.String(s)
 }
 
 // Start starts the extension described by the manifest at manifestPath, does the handshake and
@@ -137,7 +192,7 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 	if err != nil {
 		return err
 	}
-	cmd.Stderr = &lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + "] "}
+	cmd.Stderr = &lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + "] ", redact: e.held.String}
 	cmd.WaitDelay = waitDelay
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting extension %s: %w", e.manifest.ID, err)
@@ -154,7 +209,7 @@ func (e *Extension) start(prog string, deadline time.Time) error {
 		line, err := r.ReadSlice('\n')
 		lines <- handshake{string(line), err}
 		// Keep draining stdout so the program never blocks on it.
-		_, _ = io.Copy(&lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + " stdout] "}, r)
+		_, _ = io.Copy(&lineLogger{w: e.opts.Log, prefix: "[" + e.manifest.ID + " stdout] ", redact: e.held.String}, r)
 	}()
 	go func() {
 		e.waitErr = cmd.Wait()
@@ -291,6 +346,7 @@ func (e *Extension) Generate(ctx context.Context, account protocol.Account, req 
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not running", e.manifest.ID))
 	default:
 	}
+	e.held.add(account.ID, account.Credential)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
 	if err != nil {
@@ -388,12 +444,19 @@ func (s *Stream) Close() {
 	}
 }
 
-// lineLogger writes whole lines to w with a prefix.
+// maxLogLine bounds a line of extension output that is logged.
+const maxLogLine = 64 << 10
+
+// lineLogger writes whole lines to w with a prefix, each passed through redact. A line longer
+// than maxLogLine is left out, with a note: cut into parts, a credential split between two of
+// them would not be recognised.
 type lineLogger struct {
 	mu     sync.Mutex
 	w      io.Writer
 	prefix string
+	redact func(string) string
 	buf    []byte
+	skip   bool // dropping the rest of a line longer than maxLogLine
 }
 
 func (l *lineLogger) Write(p []byte) (int, error) {
@@ -401,16 +464,30 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 	defer l.mu.Unlock()
 	l.buf = append(l.buf, p...)
 	for {
-		i := strings.IndexByte(string(l.buf), '\n')
+		i := bytes.IndexByte(l.buf, '\n')
 		if i < 0 {
 			break
 		}
-		fmt.Fprintf(l.w, "%s%s\n", l.prefix, l.buf[:i])
+		switch {
+		case l.skip:
+		case i > maxLogLine:
+			l.longLine()
+		default:
+			fmt.Fprintf(l.w, "%s%s\n", l.prefix, l.redact(string(l.buf[:i])))
+		}
+		l.skip = false
 		l.buf = l.buf[i+1:]
 	}
-	if len(l.buf) > 64<<10 { // never hold an unbounded partial line
-		fmt.Fprintf(l.w, "%s%s\n", l.prefix, l.buf)
+	if len(l.buf) > maxLogLine { // never hold an unbounded partial line
+		if !l.skip {
+			l.longLine()
+		}
+		l.skip = true
 		l.buf = l.buf[:0]
 	}
 	return len(p), nil
+}
+
+func (l *lineLogger) longLine() {
+	fmt.Fprintf(l.w, "%s(a line longer than %d bytes, not logged)\n", l.prefix, maxLogLine)
 }

@@ -3,6 +3,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -37,6 +39,10 @@ func TestMain(m *testing.M) {
 // fakeExtension misbehaves during startup. It writes its process ID to the file "pid" in its
 // working folder (the package folder) so the test can check it was reaped.
 func fakeExtension(mode string) {
+	if mode == "echo-credential" {
+		echoCredential()
+		return
+	}
 	if mode != "sleep-child" { // the child shares its parent's folder
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
 	}
@@ -196,5 +202,151 @@ func killFromFile(path string) {
 		if pid, err := strconv.Atoi(string(b)); err == nil {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
+	}
+}
+
+// echoCredential is an extension that writes the credentials it gets to stderr and stdout, as a
+// careless provider's debug output would. A generate call without a credential writes the access
+// token its last refresh returned.
+func echoCredential() {
+	var mu sync.Mutex
+	var refreshed string
+	err := sdk.Serve(sdk.Extension{
+		ID:      "hosttest/echo-credential",
+		Version: "0.0.0",
+		Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+			mu.Lock()
+			secret := refreshed
+			mu.Unlock()
+			if c := call.Account.Credential; c != nil {
+				secret = c.APIKey + c.AccessToken
+			}
+			fmt.Fprintf(os.Stderr, "stderr holds %s\nstderr done %s\n", secret, call.Account.ID)
+			fmt.Fprintf(os.Stdout, "stdout holds %s\nstdout done %s\n", secret, call.Account.ID)
+			if err := out.Start(llm.ResponseInfo{ID: "r"}); err != nil {
+				return err
+			}
+			return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+		},
+		Refresh: func(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, error) {
+			fmt.Fprintf(os.Stderr, "refreshing with %s\n", call.Account.Credential.RefreshToken)
+			mu.Lock()
+			refreshed = "new-access-token-5678"
+			mu.Unlock()
+			return &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "new-access-token-5678", RefreshToken: "new-refresh-token-5678"}, nil
+		},
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// What an extension writes to stderr and stdout is logged without the credentials core gave it
+// or got back from it, including one a refresh replaced.
+func TestExtensionOutputIsRedacted(t *testing.T) {
+	const (
+		apiKey     = "sk-log-secret-1234"
+		oldRefresh = "old-refresh-token-1234"
+		newAccess  = "new-access-token-5678"
+	)
+	log := &syncBuffer{}
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-credential"), ManifestFile), Options{Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	ctx := context.Background()
+	generate := func(a protocol.Account) {
+		s := ext.Generate(ctx, a, llm.Request{Model: "m"})
+		defer s.Close()
+		for ev := s.Next(); !ev.Terminal(); ev = s.Next() {
+		}
+		log.waitFor(t, "stderr done "+a.ID, "stdout done "+a.ID)
+	}
+	generate(protocol.Account{ID: "key", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: apiKey}})
+	if _, e := ext.Refresh(ctx, protocol.Account{ID: "oauth", Credential: &protocol.Credential{
+		Kind: protocol.CredentialOAuth, AccessToken: "old-access-token-1234", RefreshToken: oldRefresh}}); e != nil {
+		t.Fatal(e)
+	}
+	generate(protocol.Account{ID: "oauth"})
+	out := log.String()
+	for _, secret := range []string{apiKey, oldRefresh, newAccess} {
+		if strings.Contains(out, secret) {
+			t.Errorf("the log holds %q:\n%s", secret, out)
+		}
+	}
+	if n := strings.Count(out, protocol.Redacted); n != 5 {
+		t.Errorf("want 5 redacted credentials in the log, got %d:\n%s", n, out)
+	}
+}
+
+// syncBuffer is a log both of an extension's output streams write to.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitFor waits until the log holds every line in lines: the output streams are read on their
+// own, so a line can arrive after the call that wrote it has finished.
+func (b *syncBuffer) waitFor(t *testing.T, lines ...string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, missing := b.String(), ""
+		for _, l := range lines {
+			if !strings.Contains(out, l) {
+				missing = l
+			}
+		}
+		if missing == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the log never got %q:\n%s", missing, out)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A line too long to log is left out rather than logged in parts: a credential split between
+// two parts would not be recognised by the redaction.
+func TestLongOutputLineIsNotSplit(t *testing.T) {
+	const secret = "sk-split-secret-1234"
+	var out bytes.Buffer
+	l := &lineLogger{w: &out, prefix: "[x] ", redact: func(s string) string { return strings.ReplaceAll(s, secret, "[redacted]") }}
+	// The first write passes the limit in the middle of the credential.
+	half := len(secret) / 2
+	for _, chunk := range []string{strings.Repeat("a", maxLogLine) + secret[:half], secret[half:] + "b\nshort " + secret + "\n"} {
+		if _, err := l.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := out.String()
+	if strings.Contains(got, secret[:half]) || strings.Contains(got, secret[half:]) {
+		t.Errorf("part of the credential was logged")
+	}
+	if want := "[x] short [redacted]\n"; !strings.HasSuffix(got, want) || strings.Count(got, "\n") != 2 {
+		t.Errorf("log = %.200q..., want a note for the long line, then %q", got, want)
+	}
+	// A long line that ends within one write is left out too.
+	out.Reset()
+	if _, err := l.Write([]byte(strings.Repeat("x", maxLogLine+1) + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); strings.Contains(got, "xxxx") || !strings.Contains(got, "not logged") {
+		t.Errorf("log = %.200q..., want only a note", got)
 	}
 }

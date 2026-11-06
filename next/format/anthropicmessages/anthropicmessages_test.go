@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -961,7 +962,8 @@ func TestStreamDecoderBoundsSignature(t *testing.T) {
 }
 
 // What the reply reports as lost counts toward its size, so core's limit on a non-streamed reply
-// bounds it: each reasoning item of a Responses upstream adds a loss of its own.
+// bounds it: each reasoning item of a Responses upstream adds a loss of its own, until llm.MaxLosses
+// are listed and one entry says more were left out.
 func TestAggregatorSizeCountsLosses(t *testing.T) {
 	const n = 1000
 	items := make([]string, n)
@@ -976,14 +978,44 @@ func TestAggregatorSizeCountsLosses(t *testing.T) {
 	for _, ev := range evs {
 		a.Add(ev)
 	}
-	if len(a.Losses()) != n {
-		t.Fatalf("%d losses, want %d", len(a.Losses()), n)
+	if len(a.Losses()) != llm.MaxLosses+1 {
+		t.Fatalf("%d losses, want %d", len(a.Losses()), llm.MaxLosses+1)
 	}
+	// The entry that says more were left out is not a loss the size counts.
 	want := 0
-	for _, l := range a.Losses() {
+	for _, l := range a.Losses()[:llm.MaxLosses] {
 		want += len(l.Path) + len(l.Detail)
 	}
 	if got := a.Size(); got < want {
 		t.Errorf("Size() = %d, want at least the %d bytes of the paths and details it reports lost", got, want)
+	}
+}
+
+// A reply with more distinct losses than llm.MaxLosses lists the first MaxLosses, then one entry
+// that says more were left out, and nothing after it.
+func TestStreamWriterBoundsLosses(t *testing.T) {
+	raw := map[string]int{}
+	for i := range 150 {
+		raw[fmt.Sprintf("k%03d", i)] = i
+	}
+	rb, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	w := NewStreamWriter(&out)
+	if err := w.Write(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r1", Model: "m", Format: llm.FormatOpenAIChat, Raw: rb}}); err != nil {
+		t.Fatal(err)
+	}
+	losses := w.Losses()
+	if len(losses) != llm.MaxLosses+1 {
+		t.Fatalf("got %d losses, want %d: %d listed and one saying more were left out", len(losses), llm.MaxLosses+1, llm.MaxLosses)
+	}
+	if losses[0].Path != "response.k000" {
+		t.Errorf("first loss is at %q, want response.k000", losses[0].Path)
+	}
+	want := llm.Loss{Kind: llm.LossDropped, Path: "...", Detail: "more losses not listed"}
+	if got := losses[len(losses)-1]; got != want {
+		t.Errorf("last loss is %+v, want %+v", got, want)
 	}
 }

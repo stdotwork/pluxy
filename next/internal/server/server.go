@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
@@ -321,22 +322,52 @@ func asLLMError(err error) *llm.Error {
 	return &llm.Error{Code: llm.CodeInternal, Message: err.Error()}
 }
 
+// logLossLimit is how many losses one translation log line names; the rest are counted.
+const logLossLimit = 20
+
+// logFieldLimit is how many bytes of a loss's path or detail a translation log line keeps.
+const logFieldLimit = 200
+
+// logField cuts s to logFieldLimit bytes, on a UTF-8 boundary, and adds an ellipsis when it cuts.
+func logField(s string) string {
+	if len(s) <= logFieldLimit {
+		return s
+	}
+	cut := logFieldLimit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
 // logTranslation logs what translation lost on the way to the upstream (request) and back to
-// the client (reply), when anything was lost.
+// the client (reply), when anything was lost. The line names at most logLossLimit losses, with
+// their paths and details cut by logField, and says how many more there were.
 func logTranslation(r *http.Request, request *llm.Translation, reply any) {
 	var parts []string
+	n := 0
+	add := func(side string, l llm.Loss) {
+		n++
+		if len(parts) < logLossLimit {
+			parts = append(parts, fmt.Sprintf("%s %s %s (%s)", side, l.Kind, logField(l.Path), logField(l.Detail)))
+		}
+	}
 	if request != nil && !request.Passthrough {
 		for _, l := range request.Losses {
-			parts = append(parts, fmt.Sprintf("request %s %s (%s)", l.Kind, l.Path, l.Detail))
+			add("request", l)
 		}
 	}
 	if lr, ok := reply.(lossReporter); ok {
 		for _, l := range lr.Losses() {
-			parts = append(parts, fmt.Sprintf("reply %s %s (%s)", l.Kind, l.Path, l.Detail))
+			add("reply", l)
 		}
 	}
-	if len(parts) > 0 {
-		log.Printf("%s %s: translation: %s", r.Method, r.URL.Path, strings.Join(parts, "; "))
+	if n > 0 {
+		line := strings.Join(parts, "; ")
+		if n > len(parts) {
+			line += fmt.Sprintf("; and %d more", n-len(parts))
+		}
+		log.Printf("%s %s: translation: %s", r.Method, r.URL.Path, line)
 	}
 }
 

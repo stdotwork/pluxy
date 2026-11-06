@@ -280,6 +280,7 @@ type Aggregator struct {
 	text      strings.Builder
 	reasoning strings.Builder
 	tools     []outToolCall
+	toolArgs  []*strings.Builder // the arguments of each tool call, as they streamed, by position in tools
 	toolIdx   map[int]int
 	finish    *llm.Finish
 	usage     *llm.Usage
@@ -311,13 +312,14 @@ func (a *Aggregator) Add(ev llm.Event) {
 			tc := outToolCall{ID: ev.Item.CallID, Type: "function"}
 			tc.Function.Name = ev.Item.Name
 			a.tools = append(a.tools, tc)
+			a.toolArgs = append(a.toolArgs, new(strings.Builder))
 		}
 	case llm.EventTextDelta:
 		a.text.WriteString(ev.Delta)
 	case llm.EventReasoningDelta:
 		a.reasoning.WriteString(ev.Delta)
 	case llm.EventToolInputDelta:
-		a.tools[a.toolIdx[ev.Index]].Function.Arguments += ev.Delta
+		a.toolArgs[a.toolIdx[ev.Index]].WriteString(ev.Delta)
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
 		if ev.Finish != nil {
@@ -432,7 +434,14 @@ func mergeDelta(acc, delta map[string]any) map[string]any {
 			switch a := av.(type) {
 			case string:
 				if d, ok := dv.(string); ok {
-					acc[k] = a + d
+					b := new(strings.Builder)
+					b.WriteString(a)
+					b.WriteString(d)
+					acc[k] = b
+				}
+			case *strings.Builder:
+				if d, ok := dv.(string); ok {
+					a.WriteString(d)
 				}
 			case map[string]any:
 				if d, ok := dv.(map[string]any); ok {
@@ -506,6 +515,8 @@ func plain(v any) any {
 			x.entries[i] = plain(e)
 		}
 		return x.entries
+	case *strings.Builder:
+		return x.String()
 	case []any:
 		for i, e := range x {
 			x[i] = plain(e)
@@ -524,6 +535,9 @@ func (a *Aggregator) Size() int { return a.size }
 
 // Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {
+	for i := range a.tools {
+		a.tools[i].Function.Arguments = a.toolArgs[i].String()
+	}
 	msg := &outMsg{Role: llm.RoleAssistant, ToolCalls: a.tools}
 	if a.text.Len() > 0 || len(a.tools) == 0 {
 		t := a.text.String()
