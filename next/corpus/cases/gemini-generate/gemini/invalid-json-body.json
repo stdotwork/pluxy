@@ -32,7 +32,8 @@
     {
       "path": "upstream[0]",
       "kind": "intended",
-      "reason": "The new core rejects a body that is not JSON with 400 before anything reaches the upstream; today's core sends it to the upstream as it is."
+      "reason": "The new core rejects a body that is not JSON with 400 before anything reaches the upstream; today's core sends it to the upstream as it is.",
+      "absent": true
     }
   ],
   "recorded_old_core": {

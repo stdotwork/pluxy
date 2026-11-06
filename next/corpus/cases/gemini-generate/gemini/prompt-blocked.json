@@ -26,7 +26,8 @@
     {
       "path": "client.body.error",
       "kind": "intended",
-      "reason": "The new core passes the upstream's reply through unchanged, as it does every same-format reply: a 200 with promptFeedback.blockReason and no candidates, which Gemini clients read as a blocked prompt. Today's core turns it into a 502 with its own error body."
+      "reason": "The new core passes the upstream's reply through unchanged, as it does every same-format reply: a 200 with promptFeedback.blockReason and no candidates, which Gemini clients read as a blocked prompt. Today's core turns it into a 502 with its own error body.",
+      "absent": true
     },
     {
       "path": "client.body.modelVersion",
@@ -65,7 +66,8 @@
     {
       "path": "upstream[0].body.safetySettings",
       "kind": "intended",
-      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked."
+      "reason": "A request in the upstream's own format passes through unchanged (the plan's same-format passthrough). Today's core rewrites it: it adds model and default safetySettings that turn every filter off, renames functionDeclarations to function_declarations, parameters to parametersJsonSchema and responseSchema to responseJsonSchema, fills in empty functionResponse names, and replaces a thoughtSignature it does not recognise as one Gemini issued (as with this case's synthetic signature) with skip_thought_signature_validator, which throws that reasoning state away. The new core keeps every thought signature on the part it came with, unchecked.",
+      "absent": true
     }
   ],
   "recorded_old_core": {

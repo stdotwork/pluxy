@@ -24,7 +24,8 @@
     {
       "path": "client.body.promptTokensDetails",
       "kind": "gap",
-      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404."
+      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404.",
+      "absent": true
     },
     {
       "path": "client.body.totalTokens",
@@ -40,7 +41,8 @@
     {
       "path": "upstream[0]",
       "kind": "gap",
-      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404."
+      "reason": "countTokens is not served yet: the corpus inventory shows no client relying on it. Today's core passes it to the upstream; the new core answers 404.",
+      "absent": true
     }
   ],
   "recorded_old_core": {
