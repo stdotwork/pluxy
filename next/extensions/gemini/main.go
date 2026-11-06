@@ -122,6 +122,10 @@ func method(stream bool) string {
 type target struct {
 	url       string
 	authorize func(http.Header)
+	// token and sa are set for a service account: the access token fetched for this request, which
+	// core does not know to redact, and the key it came from.
+	token string
+	sa    *serviceAccount
 }
 
 // resolve returns where an account's request for model goes.
@@ -139,7 +143,7 @@ func resolve(ctx context.Context, s settings, cred *protocol.Credential, model s
 	}, nil
 }
 
-func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return err
@@ -152,6 +156,16 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
 	if err != nil {
 		return err
+	}
+	if t.token != "" {
+		// Core redacts what the credential holds; the fetched access token is redacted here, in
+		// case an upstream or a proxy between echoes it.
+		send.redact = protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})
+		defer func() {
+			if e, ok := err.(*llm.Error); ok {
+				err = send.redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
+			}
+		}()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url, bytes.NewReader(body))
 	if err != nil {
@@ -175,7 +189,11 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return upstreamError(resp, call.Request.Model)
+		e := upstreamError(resp, call.Request.Model)
+		if t.sa != nil && resp.StatusCode == http.StatusUnauthorized {
+			tokens.invalidate(t.sa, t.token)
+		}
+		return e
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return relayStream(ctx, resp.Body, send)
@@ -263,7 +281,8 @@ func dropLoss(losses []llm.Loss, path string) []llm.Loss {
 // reporting adds the translation report to the reply's response.start event.
 type reporting struct {
 	*sdk.Stream
-	tr *llm.Translation
+	tr     *llm.Translation
+	redact *protocol.Redactor // nil, or what else to remove from upstream data
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -272,7 +291,7 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
-	return r.Stream.Send(ev)
+	return r.Stream.Send(r.redact.Event(ev))
 }
 
 // relayStream decodes the upstream GenerateContent stream and sends each event as soon as it is

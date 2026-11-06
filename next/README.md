@@ -195,11 +195,12 @@ API key:
 ```
 
 The service account's credential holds the secret part of the JSON key Google Cloud gives you
-(`client_email`, `private_key`, and `token_uri` if the key names another token endpoint). The
+(`client_email`, `private_key`, and `token_uri` if the key names another token endpoint; it must
+be https, or plain http only to this machine, since the signed assertion goes there). The
 whole key file works too, but core removes every string of a credential from replies, so its
 project ID and other plain fields would be cut out of model output; keep them in settings. The
 extension signs a JWT with the key, trades it for an access token at Google's token endpoint and
-keeps the token until five minutes before it expires. Accounts can also be added by login
+keeps the token until five minutes before it expires, or until Vertex refuses it. Accounts can also be added by login
 (management API, below) with method `api_key` (a Gemini API key, checked by listing a model, or a
 Vertex express key) or `service_account` (the JSON key; the account's settings must name
 `vertex.project`).

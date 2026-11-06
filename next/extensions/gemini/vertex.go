@@ -132,7 +132,7 @@ func (v *vertexSettings) resolve(ctx context.Context, base string, cred *protoco
 			return target{}, err
 		}
 		u := fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models/%s%s", base, url.PathEscape(project), location, m, method(stream))
-		return target{url: u, authorize: func(h http.Header) { h.Set("Authorization", "Bearer "+token) }}, nil
+		return target{url: u, authorize: func(h http.Header) { h.Set("Authorization", "Bearer "+token) }, token: token, sa: sa}, nil
 	}
 	return target{}, &llm.Error{Code: llm.CodeAuth, Message: "the Vertex account has neither an API key nor a service account key", Scope: llm.ScopeCredential}
 }
@@ -167,8 +167,9 @@ func readServiceAccount(raw json.RawMessage) (*serviceAccount, error) {
 	if sa.TokenURI == "" {
 		sa.TokenURI = defaultTokenURI
 	}
-	if u, err := url.Parse(sa.TokenURI); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return nil, bad("has a token_uri that is not an http(s) URL")
+	if u, err := url.Parse(sa.TokenURI); err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) {
+		// The signed assertion goes to token_uri, so it must not cross a network in the clear.
+		return nil, bad("has a token_uri that is not an https URL (plain http only to this machine)")
 	}
 	// Keys pasted through forms often have their newlines escaped.
 	block, _ := pem.Decode([]byte(strings.ReplaceAll(sa.PrivateKey, `\n`, "\n")))
@@ -196,14 +197,17 @@ func (sa *serviceAccount) cacheKey() string {
 }
 
 // tokenCache keeps each service account's access token until shortly before it expires, and lets
-// one call at a time fetch a new one per key.
+// one call at a time fetch a new one per key. A call waiting for another's fetch can still be
+// cancelled. Entries without a usable token are dropped, so failed logins and removed keys do not
+// pile up.
 type tokenCache struct {
 	mu      sync.Mutex
 	entries map[string]*tokenEntry
 }
 
 type tokenEntry struct {
-	mu      sync.Mutex // held while fetching
+	users   int           // calls that have the entry; guarded by tokenCache.mu
+	turn    chan struct{} // holds one value while a call fetches or reads the token
 	token   string
 	expires time.Time
 }
@@ -214,25 +218,63 @@ var tokens = &tokenCache{entries: map[string]*tokenEntry{}}
 const tokenLead = 5 * time.Minute
 
 func (c *tokenCache) get(ctx context.Context, sa *serviceAccount) (string, error) {
-	c.mu.Lock()
-	e := c.entries[sa.cacheKey()]
-	if e == nil {
-		e = &tokenEntry{}
-		c.entries[sa.cacheKey()] = e
+	e := c.enter(sa)
+	defer c.leave(e)
+	select {
+	case e.turn <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
 	}
-	c.mu.Unlock()
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	defer func() { <-e.turn }()
 	if e.token != "" && time.Until(e.expires) > tokenLead {
 		return e.token, nil
 	}
 	token, expires, err := fetchToken(ctx, sa)
 	if err != nil {
+		e.token = ""
 		return "", err
 	}
 	e.token, e.expires = token, expires
 	return token, nil
+}
+
+// invalidate forgets token if it is still the one cached for sa: the upstream refused it, so the
+// next call fetches a new one. A newer token fetched meanwhile is kept.
+func (c *tokenCache) invalidate(sa *serviceAccount, token string) {
+	e := c.enter(sa)
+	defer c.leave(e)
+	e.turn <- struct{}{}
+	if e.token == token {
+		e.token = ""
+	}
+	<-e.turn
+}
+
+// enter returns sa's entry, made if needed, counted as in use until leave.
+func (c *tokenCache) enter(sa *serviceAccount) *tokenEntry {
+	key := sa.cacheKey()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.entries[key]
+	if e == nil {
+		e = &tokenEntry{turn: make(chan struct{}, 1)}
+		c.entries[key] = e
+	}
+	e.users++
+	return e
+}
+
+// leave ends a call's use of e and drops every entry no call has whose token is gone or expired.
+func (c *tokenCache) leave(e *tokenEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e.users--
+	now := time.Now()
+	for k, e := range c.entries {
+		if e.users == 0 && (e.token == "" || !now.Before(e.expires)) {
+			delete(c.entries, k)
+		}
+	}
 }
 
 // tokenClient fetches tokens. A token endpoint gets the same no-timeout-after-connect client as
@@ -324,3 +366,12 @@ func signAssertion(sa *serviceAccount, now time.Time) (string, error) {
 
 // errNoServiceAccount is returned by a service account login without a key.
 var errNoServiceAccount = errors.New("no service account key given")
+
+// loopback reports whether host names this machine.
+func loopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
