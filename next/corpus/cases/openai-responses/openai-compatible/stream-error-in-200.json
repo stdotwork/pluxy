@@ -137,6 +137,21 @@
       "kind": "intended",
       "reason": "The new core gives the closing error event the next sequence number; today's core repeats the previous event's number. Each Responses stream event's sequence_number is meant to increase.",
       "want": 3
+    },
+    {
+      "path": "client.events[2].data.code",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
+    },
+    {
+      "path": "client.events[2].data.message",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
+    },
+    {
+      "path": "client.events[2].data.param",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
     }
   ]
 }

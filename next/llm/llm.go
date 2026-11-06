@@ -132,6 +132,9 @@ type Item struct {
 	// tool_call
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	// Custom marks a call to a custom (freeform) tool: Arguments is the tool's raw input, not
+	// JSON.
+	Custom bool `json:"custom,omitempty"`
 	// tool_result
 	Output string `json:"output,omitempty"`
 	// reasoning: the reasoning text or summary the client replayed. Opaque reasoning data, such

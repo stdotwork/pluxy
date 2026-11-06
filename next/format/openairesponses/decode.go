@@ -208,19 +208,36 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		_ = json.Unmarshal(ev.Response, &r)
 	}
 	if !d.started {
+		info := llm.ResponseInfo{ID: r.ID, Model: r.Model, Created: r.CreatedAt}
 		if ev.Type == "response.created" {
-			return d.start(out, llm.ResponseInfo{ID: r.ID, Model: r.Model, Created: r.CreatedAt}, raw), nil
+			return d.start(out, info, raw), nil
 		}
-		out = d.start(out, llm.ResponseInfo{ID: r.ID, Model: r.Model, Created: r.CreatedAt}, nil)
+		switch ev.Type {
+		case "response.completed", "response.incomplete", "response.failed":
+			// The terminal event keeps its own raw.
+			out = d.start(out, info, nil)
+		default:
+			// The stream did not open with response.created. The first event's raw goes on
+			// response.start, so a Responses client still gets every upstream event once.
+			out = d.start(out, info, raw)
+			raw = nil
+		}
 	}
-	native := llm.Event{Type: llm.EventNative, Raw: raw}
+	// native passes on an upstream event the model has no place for, unless its raw already went
+	// on response.start.
+	native := func() []llm.Event {
+		if raw == nil {
+			return out
+		}
+		return append(out, llm.Event{Type: llm.EventNative, Raw: raw})
+	}
 	switch ev.Type {
 	case "response.output_item.added":
 		var it outputItem
 		_ = json.Unmarshal(ev.Item, &it)
 		kind := kindOf(it)
 		if kind == "" || (kind == llm.ItemToolCall && (it.CallID == "" || it.Name == "")) {
-			return append(out, native), nil
+			return native(), nil
 		}
 		if _, open := d.items[ev.OutputIndex]; open {
 			return nil, malformed("upstream opened output item twice", data)
@@ -236,7 +253,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	case "response.output_text.delta", "response.reasoning_summary_text.delta", "response.reasoning_text.delta", "response.function_call_arguments.delta":
 		idx, open := d.items[ev.OutputIndex]
 		if !open {
-			return append(out, native), nil
+			return native(), nil
 		}
 		t := map[string]string{
 			"response.output_text.delta":             llm.EventTextDelta,
@@ -248,7 +265,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	case "response.output_item.done":
 		idx, open := d.items[ev.OutputIndex]
 		if !open {
-			return append(out, native), nil
+			return native(), nil
 		}
 		delete(d.items, ev.OutputIndex)
 		return append(out, llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: raw}), nil
@@ -261,7 +278,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		d.done = true
 		return out, failure(r, data)
 	}
-	return append(out, native), nil
+	return native(), nil
 }
 
 // Usage returns the usage the upstream reported before the stream failed. A Responses stream

@@ -103,6 +103,40 @@ func TestParseThenEncodeKeepsUnmodelledFields(t *testing.T) {
 	}
 }
 
+// More shapes survive a Chat round trip: an empty text part keeps its text field, fields inside
+// stream_options, response_format and a custom tool call are kept, and an assistant message that
+// only carries tool calls keeps its own fields.
+func TestParseThenEncodeKeepsNestedFields(t *testing.T) {
+	in := `{"model":"m","stream":true,"stream_options":{"include_usage":true,"include_obfuscation":false},
+	"response_format":{"type":"json_schema","json_schema":{"name":"r","schema":{"type":"object"},"x_schema":1}},
+	"messages":[
+	 {"role":"user","content":[{"type":"text","text":""},{"type":"text","text":"hi"}]},
+	 {"role":"assistant","name":"bot","tool_calls":[{"id":"c1","type":"custom","custom":{"name":"patch","input":"*** Begin"}}]},
+	 {"role":"tool","tool_call_id":"c1","content":"ok"}
+	]}`
+	req, err := ParseRequest([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(losses) != 0 {
+		t.Errorf("same-format encode reported losses: %+v", losses)
+	}
+	var got, want any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(in), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("encoded:\n got %s\nwant %s", out, compactJSON(t, in))
+	}
+}
+
 func TestParseRequestRejects(t *testing.T) {
 	for name, body := range map[string]string{
 		"not JSON":      `{`,

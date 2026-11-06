@@ -402,6 +402,21 @@
       "path": "client.events[9].data.error",
       "kind": "gap",
       "reason": "Both cores end the stream with an error event; the error's message and code differ."
+    },
+    {
+      "path": "client.events[9].data.code",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
+    },
+    {
+      "path": "client.events[9].data.message",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
+    },
+    {
+      "path": "client.events[9].data.param",
+      "kind": "intended",
+      "reason": "The new core's error event also carries code, message and param at its top level, where OpenAI's Responses error event has them; it keeps the nested error object today's core writes."
     }
   ]
 }

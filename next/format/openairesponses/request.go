@@ -76,7 +76,14 @@ func ParseRequest(body []byte) (llm.Request, error) {
 		m := rawjson.Object(raw)
 		if rf := parseTextFormat(m["format"]); rf != nil {
 			req.Options.ResponseFormat = rf
-			nested["text"] = rawjson.Rest(m, "format")
+			rest := rawjson.Object(rawjson.Rest(m, "format"))
+			if f := rawjson.Rest(rawjson.Object(m["format"]), "type", "name", "description", "schema", "strict"); f != nil {
+				if rest == nil {
+					rest = map[string]json.RawMessage{}
+				}
+				rest["format"] = f
+			}
+			nested["text"] = rawjson.Encode(rest)
 		} else {
 			nested["text"] = raw
 		}

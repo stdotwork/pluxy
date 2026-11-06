@@ -15,6 +15,7 @@ import (
 // place for, by its path in the client's body, and carries over what it can.
 func TestTranslationToChatReportsLosses(t *testing.T) {
 	in := `{"model":"m","previous_response_id":"resp_1","store":true,"metadata":{"k":"v"},
+	"text":{"format":{"type":"json_schema","name":"r","schema":{"type":"object"},"x_schema":true}},
 	"tools":[{"type":"function","name":"f","parameters":{"type":"object"},"strict":true},{"type":"web_search"}],
 	"input":[
 	 {"type":"message","role":"user","content":[{"type":"input_text","text":"Read this."},{"type":"input_file","file_url":"https://example.com/a.pdf"}]},
@@ -44,6 +45,7 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 		"dropped metadata",
 		"dropped previous_response_id",
 		"dropped store",
+		"dropped text",     // x_schema inside text.format
 		"dropped tools[1]", // a hosted tool
 	}
 	slices.Sort(want)
@@ -54,7 +56,8 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 	 {"role":"user","content":[{"type":"text","text":"Read this."}]},
 	 {"role":"assistant","reasoning_content":"Use f.","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
 	 {"role":"tool","content":"ok","tool_call_id":"call_1"}],
-	 "stream":false,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"},"strict":true}}]}`
+	 "stream":false,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"},"strict":true}}],
+	 "response_format":{"type":"json_schema","json_schema":{"name":"r","schema":{"type":"object"}}}}`
 	var g, w any
 	_ = json.Unmarshal(body, &g)
 	_ = json.Unmarshal([]byte(wantBody), &w)
@@ -168,5 +171,76 @@ func TestStreamWriterRebuildsEvents(t *testing.T) {
 	}
 	if l := w.Losses(); len(l) != 1 || l[0].Path != "response.system_fingerprint" {
 		t.Errorf("losses %+v, want system_fingerprint dropped", l)
+	}
+}
+
+// A failure after the reply started reaches a Responses client as an error event with code,
+// message and param at its top level, as OpenAI's error event has them.
+func TestStreamWriterErrorEvent(t *testing.T) {
+	req, _ := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
+	var out strings.Builder
+	w := NewStreamWriter(&out, req)
+	for _, ev := range []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "c1", Format: llm.FormatOpenAIChat}},
+		{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUpstream, Message: "boom", ProviderCode: "server_error"}},
+	} {
+		if err := w.Write(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	data, _ := strings.CutPrefix(lines[len(lines)-1], "data: ")
+	var e struct {
+		Type    string  `json:"type"`
+		Code    string  `json:"code"`
+		Message string  `json:"message"`
+		Param   *string `json:"param"`
+	}
+	if err := json.Unmarshal([]byte(data), &e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Type != "error" || e.Message != "boom" || e.Code != "server_error" || !strings.Contains(data, `"param":null`) {
+		t.Errorf("error event %s", data)
+	}
+}
+
+// A Responses client gets an upstream Responses stream's events unchanged, also when the stream
+// does not open with response.created and carries items the model has no place for.
+func TestNativeStreamPassesThrough(t *testing.T) {
+	stream := []string{
+		`{"type":"response.in_progress","sequence_number":0,"response":{"id":"r","status":"in_progress","output":[]}}`,
+		`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"in_progress"}}`,
+		`{"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"completed"}}`,
+		`{"type":"response.completed","sequence_number":3,"response":{"id":"r","status":"completed","output":[{"id":"ws_1","type":"web_search_call","status":"completed"}]}}`,
+	}
+	req, _ := ParseRequest([]byte(`{"model":"m","input":"hi","stream":true}`))
+	var out strings.Builder
+	w := NewStreamWriter(&out, req)
+	dec := NewStreamDecoder()
+	var seq llm.Sequence
+	for _, data := range stream {
+		evs, err := dec.Decode([]byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			if err := seq.Check(ev); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Write(ev); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var want strings.Builder
+	for _, data := range stream {
+		var e struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal([]byte(data), &e)
+		want.WriteString("event: " + e.Type + "\ndata: " + data + "\n\n")
+	}
+	if out.String() != want.String() {
+		t.Errorf("client got:\n%s\nwant:\n%s", out.String(), want.String())
 	}
 }

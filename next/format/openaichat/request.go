@@ -66,6 +66,16 @@ type chatToolCall struct {
 	} `json:"function"`
 }
 
+// customToolCall is a call to a custom (freeform) tool.
+type customToolCall struct {
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Custom struct {
+		Name  string `json:"name"`
+		Input string `json:"input"`
+	} `json:"custom"`
+}
+
 type chatPart struct {
 	Type     string `json:"type"`
 	Text     string `json:"text"`
@@ -122,8 +132,12 @@ func ParseRequest(body []byte) (llm.Request, error) {
 			return llm.Request{}, invalid("stop must be a string or a list of strings")
 		}
 	}
-	// Request fields the model reads but whose shape it does not know stay in Origin.Raw.
+	// Request fields the model reads but whose shape it does not know stay in Origin.Raw, and
+	// so do the fields it does not read inside the ones it does.
 	nested := map[string]json.RawMessage{}
+	if raw, ok := top["stream_options"]; ok {
+		nested["stream_options"] = rawjson.Rest(rawjson.Object(raw), "include_usage")
+	}
 	if raw, ok := top["tool_choice"]; ok {
 		if tc := parseToolChoice(raw); tc != nil {
 			req.Options.ToolChoice = tc
@@ -134,6 +148,15 @@ func ParseRequest(body []byte) (llm.Request, error) {
 	if raw, ok := top["response_format"]; ok {
 		if rf := parseResponseFormat(raw); rf != nil {
 			req.Options.ResponseFormat = rf
+			m := rawjson.Object(raw)
+			rest := rawjson.Object(rawjson.Rest(m, "type", "json_schema"))
+			if js := rawjson.Rest(rawjson.Object(m["json_schema"]), "name", "description", "schema", "strict"); js != nil {
+				if rest == nil {
+					rest = map[string]json.RawMessage{}
+				}
+				rest["json_schema"] = js
+			}
+			nested["response_format"] = rawjson.Encode(rest)
 		} else {
 			nested["response_format"] = raw
 		}
@@ -188,7 +211,8 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 			Name string `json:"name"`
 		} `json:"function"`
 	}
-	if json.Unmarshal(raw, &o) == nil && o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 {
+	if json.Unmarshal(raw, &o) == nil && o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 &&
+		len(rawjson.Object(rawjson.Object(raw)["function"])) == 1 {
 		return &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: o.Function.Name}
 	}
 	return nil
@@ -247,19 +271,41 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		items = append(items, llm.Item{Type: llm.ItemTypeReasoning, Text: *m.ReasoningContent,
 			Origin: &llm.Origin{Format: format, Path: path + ".reasoning_content"}})
 	}
-	if len(parts) > 0 || len(m.ToolCalls) == 0 {
-		items = append(items, llm.Item{Type: llm.ItemTypeMessage, Role: m.Role, Content: parts, TextContent: textContent,
-			Origin: rawjson.Origin(format, path, obj, []string{"role", "content", "tool_calls", "tool_call_id", "reasoning_content"}, nil)})
+	origin := rawjson.Origin(format, path, obj, []string{"role", "content", "tool_calls", "tool_call_id", "reasoning_content"}, nil)
+	// A message that only carries tool calls still becomes an item when it has fields of its
+	// own (such as name), so they survive; its tool calls are written back onto it.
+	if len(parts) > 0 || len(m.ToolCalls) == 0 || len(origin.Raw) > 0 {
+		items = append(items, llm.Item{Type: llm.ItemTypeMessage, Role: m.Role, Content: parts, TextContent: textContent, Origin: origin})
 	}
 	for j, rawCall := range m.ToolCalls {
-		var tc chatToolCall
-		if err := json.Unmarshal(rawCall, &tc); err != nil {
+		cp := fmt.Sprintf("%s.tool_calls[%d]", path, j)
+		co := rawjson.Object(rawCall)
+		var head struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(rawCall, &head); err != nil {
 			return nil, err
 		}
-		co := rawjson.Object(rawCall)
-		fn := rawjson.Rest(rawjson.Object(co["function"]), "name", "arguments")
-		items = append(items, llm.Item{Type: llm.ItemTypeToolCall, CallID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
-			Origin: rawjson.Origin(format, fmt.Sprintf("%s.tool_calls[%d]", path, j), co, []string{"id", "type", "function"}, map[string]json.RawMessage{"function": fn})})
+		switch head.Type {
+		case "", "function":
+			var tc chatToolCall
+			if err := json.Unmarshal(rawCall, &tc); err != nil {
+				return nil, err
+			}
+			fn := rawjson.Rest(rawjson.Object(co["function"]), "name", "arguments")
+			items = append(items, llm.Item{Type: llm.ItemTypeToolCall, CallID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+				Origin: rawjson.Origin(format, cp, co, []string{"id", "type", "function"}, map[string]json.RawMessage{"function": fn})})
+		case "custom":
+			var tc customToolCall
+			if err := json.Unmarshal(rawCall, &tc); err != nil {
+				return nil, err
+			}
+			cu := rawjson.Rest(rawjson.Object(co["custom"]), "name", "input")
+			items = append(items, llm.Item{Type: llm.ItemTypeToolCall, CallID: tc.ID, Name: tc.Custom.Name, Arguments: tc.Custom.Input, Custom: true,
+				Origin: rawjson.Origin(format, cp, co, []string{"id", "type", "custom"}, map[string]json.RawMessage{"custom": cu})})
+		default:
+			return nil, fmt.Errorf("tool_calls[%d]: unsupported tool call type %q", j, head.Type)
+		}
 	}
 	return items, nil
 }
@@ -334,8 +380,8 @@ type outMessage struct {
 }
 
 type outPart struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
+	Type     string  `json:"type"`
+	Text     *string `json:"text,omitempty"` // set for text parts, even when empty
 	ImageURL *struct {
 		URL    string `json:"url"`
 		Detail string `json:"detail,omitempty"`
@@ -492,6 +538,13 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			if reasoning != "" {
 				last.ReasoningContent, reasoning = reasoning, ""
 			}
+			if it.Custom {
+				var tc customToolCall
+				tc.ID, tc.Type = it.CallID, "custom"
+				tc.Custom.Name, tc.Custom.Input = it.Name, it.Arguments
+				last.ToolCalls = append(last.ToolCalls, marshal(tc, e.kept(it.Origin)))
+				break
+			}
 			var tc chatToolCall
 			tc.ID, tc.Type = it.CallID, "function"
 			tc.Function.Name, tc.Function.Arguments = it.Name, it.Arguments
@@ -555,6 +608,9 @@ func encodeResponseFormat(rf *llm.ResponseFormat) any {
 func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, dropped bool, err error) {
 	parts := it.Content
 	if len(parts) == 0 {
+		if it.Role == llm.RoleAssistant && !it.TextContent {
+			return nil, false, false, nil // an assistant message that only carries tool calls
+		}
 		return "", false, false, nil
 	}
 	if len(parts) == 1 && parts[0].Type == llm.PartText && (it.TextContent || it.Origin == nil) && (parts[0].Origin == nil || len(parts[0].Origin.Raw) == 0) {
@@ -565,7 +621,8 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 		pp := path(p.Origin, fmt.Sprintf("%s.content[%d]", msgPath, i))
 		switch p.Type {
 		case llm.PartText:
-			out = append(out, marshal(outPart{Type: "text", Text: p.Text}, e.kept(p.Origin)))
+			text := p.Text
+			out = append(out, marshal(outPart{Type: "text", Text: &text}, e.kept(p.Origin)))
 			if p.Text != "" {
 				sendable = true
 			}

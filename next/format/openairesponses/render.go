@@ -245,14 +245,16 @@ func unmodelledUsage(raw json.RawMessage) []string {
 	return out
 }
 
-// errorObject is the error a Responses client gets when the reply fails after it started.
-func errorObject(e *llm.Error) obj {
+// errorFields are the fields of the error event a Responses client gets when the reply fails
+// after it started: code, message and param, as OpenAI's error event has them, and the same
+// error nested under error, as today's core writes it.
+func errorFields(e *llm.Error) obj {
 	_, body := openaichat.ErrorResponse(e)
 	var b struct {
 		Error obj `json:"error"`
 	}
 	_ = json.Unmarshal(body, &b)
-	return b.Error
+	return obj{"code": b.Error["code"], "message": b.Error["message"], "param": nil, "error": b.Error}
 }
 
 // StreamWriter writes events to a client as a Responses stream. When the reply came from a
@@ -299,7 +301,7 @@ func (s *StreamWriter) passthrough(typ string, raw json.RawMessage) error {
 // Write writes the stream events for one model event.
 func (s *StreamWriter) Write(ev llm.Event) error {
 	if ev.Type == llm.EventResponseStart {
-		s.native = ev.Response.Format == format && upstreamEvent(ev.Raw) == "response.created"
+		s.native = ev.Response.Format == format && upstreamEvent(ev.Raw) != ""
 	}
 	if s.native {
 		raw := ev.Raw
@@ -311,7 +313,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			return s.passthrough(typ, raw)
 		}
 		if ev.Type == llm.EventError {
-			return s.emit("error", obj{"error": errorObject(ev.Error)})
+			return s.emit("error", errorFields(ev.Error))
 		}
 		return nil
 	}
@@ -373,7 +375,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		return s.emit(typ, obj{"response": b.response(true)})
 	case llm.EventError:
-		return s.emit("error", obj{"error": errorObject(ev.Error)})
+		return s.emit("error", errorFields(ev.Error))
 	}
 	return nil
 }
