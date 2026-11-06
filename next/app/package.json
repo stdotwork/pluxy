@@ -7,8 +7,9 @@
     "build": "bun build.ts",
     "check": "tsc --noEmit",
     "lint": "biome check .",
+    "test": "bun test tests",
     "test:native": "bun native/run.ts",
-    "verify": "bun run check && bun run lint && bun run build"
+    "verify": "bun run check && bun run lint && bun run test && bun run build"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4"

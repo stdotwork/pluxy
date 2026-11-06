@@ -63,6 +63,8 @@ jobs:
         run: bun run check
       - name: Lint
         run: bun run lint
+      - name: Unit tests
+        run: bun run test
       - name: Build the window
         run: bun run build
       - name: Rust format

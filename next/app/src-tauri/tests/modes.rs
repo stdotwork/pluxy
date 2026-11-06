@@ -125,7 +125,7 @@ fn managed_runs_its_own_core_and_stops_it() {
     let program: Value = serde_json::from_slice(&out.stdout).unwrap();
     let program = program["core"].as_str().unwrap().to_string();
 
-    let mut c = Connection::open(dirs(&root));
+    let mut c = Connection::open(dirs(&root), None);
     assert_eq!(c.view().mode, None);
     c.change(Change {
         mode: Some(Mode::Managed),
@@ -149,7 +149,7 @@ fn managed_runs_its_own_core_and_stops_it() {
     c.stop_core();
     assert!(!alive(pid), "core {pid} still runs");
     drop(c);
-    let mut c = Connection::open(dirs(&root));
+    let mut c = Connection::open(dirs(&root), None);
     assert_eq!(c.view().target.as_deref(), Some(target.as_str()));
     assert_eq!(c.caller().call("GET", "/status", None).status, 200);
     // Another mode stops the app's core too.
@@ -171,7 +171,7 @@ fn managed_runs_its_own_core_and_stops_it() {
 fn local_connects_to_a_running_core_and_leaves_it_running() {
     let core = Core::start(false);
     let root = temp("local");
-    let mut c = Connection::open(dirs(&root));
+    let mut c = Connection::open(dirs(&root), None);
     // Only this computer, and only a key core accepts.
     let refused = c.change(Change {
         mode: Some(Mode::Local),
@@ -212,12 +212,12 @@ fn local_connects_to_a_running_core_and_leaves_it_running() {
 
     // Not remembered: a new start asks for the key; signing in with remember keeps it.
     drop(c);
-    let mut c = Connection::open(dirs(&root));
+    let mut c = Connection::open(dirs(&root), None);
     assert!(!c.view().signed_in);
     assert_eq!(c.caller().call("GET", "/status", None).status, 401);
     c.sign_in(&core.key, true).unwrap();
     drop(c);
-    let mut c = Connection::open(dirs(&root));
+    let mut c = Connection::open(dirs(&root), None);
     assert!(c.view().signed_in && c.view().remembered);
     c.sign_out().unwrap();
     assert!(!c.view().signed_in && !c.view().remembered);
@@ -234,7 +234,7 @@ fn remote_needs_https_and_trusts_the_given_authority_only() {
     let ca = core.ca.clone().unwrap();
     assert!(core.base.starts_with("https://"));
     let root = temp("remote");
-    let mut c = Connection::open(dirs(&root));
+    let mut c = Connection::open(dirs(&root), None);
 
     let http = core.base.replacen("https://", "http://", 1);
     let refused = c.change(Change {
@@ -271,7 +271,7 @@ fn remote_needs_https_and_trusts_the_given_authority_only() {
     assert!(page_extensions(&c).contains(&"test/alpha".to_string()));
     drop(c);
     // Kept: a new start connects with it.
-    let c = Connection::open(dirs(&root));
+    let c = Connection::open(dirs(&root), None);
     assert_eq!(c.caller().call("GET", "/status", None).status, 200);
     drop(c);
 }

@@ -2,8 +2,9 @@
 // same places, then the app's own Connection page. Extension pages open in webviews of their
 // own (nativePage.tsx).
 
+import { listen } from "@tauri-apps/api/event";
 import { render } from "preact";
-import { useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { AccountsPage } from "../../ui/kit/pages/accounts";
 import { ExtensionsPage } from "../../ui/kit/pages/extensions";
 import { StatusPage } from "../../ui/kit/pages/status";
@@ -28,7 +29,17 @@ function App(props: { initial: Connection }) {
     setConn(c);
     setGeneration((n) => n + 1);
   };
-  const host = useMemo(() => appHost(conn), [conn]);
+  const host = useMemo(() => appHost(conn, changed), [conn]);
+  // The app's own core exited: show it.
+  useEffect(() => {
+    const off = listen("pluxy-connection", () => connectionGet().then(changed, () => {}));
+    return () => {
+      off.then(
+        (f) => f(),
+        () => {},
+      );
+    };
+  }, []);
   const themes = useMemo(() => new ThemeState(host, document, [defaultTheme, terminal, paper]), [host]);
   const pages: PageDef[] = useMemo(
     () => [
@@ -46,8 +57,9 @@ function App(props: { initial: Connection }) {
     [conn],
   );
 
-  // Not connected yet (or the app's own core did not start): only the Connection page.
-  if (!conn.target) {
+  // Not connected or not signed in (or the app's own core did not start): only the Connection
+  // page, where the person can fix the address or give the key.
+  if (!conn.target || !conn.signed_in) {
     return (
       <div class="shell" data-part="shell">
         <main class="main" data-part="main">

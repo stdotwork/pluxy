@@ -56,7 +56,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
   const [mode, setMode] = useState<Mode | undefined>(c.mode);
   const [url, setUrl] = useState(c.url ?? "");
   const [key, setKey] = useState("");
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(c.remembered);
   const [caFile, setCaFile] = useState(c.ca_file ?? "");
   const [corePath, setCorePath] = useState(c.core_path ?? "");
   const [busy, setBusy] = useState(false);
@@ -68,6 +68,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
     try {
       const next = await run();
       if (next.error) setError(next.error);
+      else setKey(""); // the native side has it now
       props.onChange(next);
     } catch (e) {
       setError(String(e));
@@ -94,6 +95,9 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
         <Card title="Now">
           <Facts rows={describe(c)} />
           {c.error && <Notice tone="danger">{c.error}</Notice>}
+          {c.target && !c.signed_in && (
+            <Notice tone="warn">Not signed in to this core: give its management key below.</Notice>
+          )}
           {c.mode === "managed" && (
             <div class="actions">
               <Button disabled={busy} onClick={() => apply(coreRestart)}>

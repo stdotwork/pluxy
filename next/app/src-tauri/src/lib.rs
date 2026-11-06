@@ -408,7 +408,20 @@ pub fn run() {
         .setup(|app| {
             let config = app.path().app_config_dir()?;
             let core = app.path().app_data_dir()?.join("core");
-            let conn = Connection::open(Dirs { config, core });
+            // When the app's core exits, the tray and the window show it. Off this thread: the
+            // exit may come while a connection change holds the connection.
+            let handle = app.handle().clone();
+            let on_exit: managed::OnExit = std::sync::Arc::new(move || {
+                let app = handle.clone();
+                std::thread::spawn(move || {
+                    if let Some(st) = app.try_state::<App>() {
+                        let v = st.conn.lock().unwrap().view();
+                        show_status(&app, &v);
+                    }
+                    let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-connection", ());
+                });
+            });
+            let conn = Connection::open(Dirs { config, core }, Some(on_exit));
             // The page webviews keep nothing from one run to the next.
             let pages_dir = app.path().app_cache_dir()?.join("pages");
             let _ = std::fs::remove_dir_all(&pages_dir);

@@ -59,8 +59,14 @@ pub fn path_problem(path: &str) -> Option<String> {
     if !path.starts_with('/') || path.starts_with("//") {
         return bad();
     }
+    // No dot segments, also percent-encoded: a server or proxy that decodes and normalises the
+    // path would take the call outside the management API.
     let bare = path.split('?').next().unwrap_or("");
-    if bare.split('/').any(|s| s == "..") {
+    if bare
+        .split('/')
+        .map(|s| s.to_ascii_lowercase().replace("%2e", "."))
+        .any(|s| s == "." || s == "..")
+    {
         return bad();
     }
     if !path
@@ -97,7 +103,16 @@ impl Client {
             Some(c) => RootCerts::Specific(Arc::new(c)),
             None => RootCerts::WebPki,
         };
+        // A core on this computer is reached directly: a proxy from the environment would see
+        // the key. Others honour the proxy settings; over https a proxy sees no key.
+        let direct = url::Url::parse(base).is_ok_and(|u| crate::conn::is_loopback(&u));
+        let proxy = if direct {
+            None
+        } else {
+            ureq::Proxy::try_from_env()
+        };
         let agent: ureq::Agent = ureq::Agent::config_builder()
+            .proxy(proxy)
             .http_status_as_error(false)
             .max_redirects(0)
             .timeout_connect(Some(Duration::from_secs(5)))
@@ -201,6 +216,10 @@ mod tests {
             "//evil.example/x",
             "/../panel",
             "/a/../../x",
+            "/%2e%2e/%2E%2e/public",
+            "/a/.%2e/x",
+            "/a/%2e/x",
+            "/a/./x",
             "/a#frag",
             "/a\\b",
             "/a b",
@@ -213,15 +232,22 @@ mod tests {
 
     #[test]
     fn a_core_that_cannot_be_reached_is_status_0() {
-        // Port 9 (discard) on loopback: nothing listens there in the test environment.
-        let r = Client::new("http://127.0.0.1:9", None).call("k", "GET", "/status", None);
+        // A port that was free a moment ago: nothing listens there.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let r = Client::new(&format!("http://127.0.0.1:{port}"), None)
+            .call("k", "GET", "/status", None);
         assert_eq!(r.status, 0);
         assert_eq!(r.error.unwrap().code, "unavailable");
     }
 
     #[test]
     fn bad_methods_and_pem_are_refused() {
-        let c = Client::new("http://127.0.0.1:9", None);
+        // Refused before anything is sent.
+        let c = Client::new("http://127.0.0.1:1", None);
         assert_eq!(c.call("k", "PUT", "/status", None).status, 400);
         assert!(certificates(b"not a pem").is_err());
     }

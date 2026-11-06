@@ -1,6 +1,6 @@
-// The kit's host in the desktop app. The management key never reaches this webview: every
-// management call goes to the app's native side (the core_call command), which adds the key and
-// sends the call to the core the app is connected to.
+// The kit's host in the desktop app. The native side holds the management key: every management
+// call goes to it (the core_call command), and it adds the key and sends the call to the core
+// the app is connected to. A key the person types passes through here once, to the native side.
 
 import { invoke } from "@tauri-apps/api/core";
 import type { Feature, Host, Method, Reply } from "../../ui/kit/host";
@@ -56,8 +56,11 @@ function write(name: string, value: string | null) {
   }
 }
 
-/** The host for one connection; the app makes a new one when the connection changes. */
-export function appHost(conn: Connection): Host {
+/**
+ * The host for one connection; the app makes a new one when the connection changes. changed
+ * gets the connection after signing out (also when core refused the key), with any error.
+ */
+export function appHost(conn: Connection, changed: (c: Connection) => void): Host {
   let signed = conn.signed_in;
   const features = new Set<Feature>();
   if (conn.mode === "local" || conn.mode === "remote") features.add("signOut");
@@ -74,14 +77,17 @@ export function appHost(conn: Connection): Host {
       try {
         const r = await invoke<Connection>("sign_in", { key, remember });
         signed = r.signed_in;
-        return r.signed_in ? undefined : (r.error ?? "core refused this key");
+        // Also when signed in: keeping the key may have failed.
+        return r.error ?? (r.signed_in ? undefined : "core refused this key");
       } catch (e) {
         return String(e);
       }
     },
     signOut() {
       signed = false;
-      invoke("sign_out").catch(() => {});
+      invoke<Connection>("sign_out").then(changed, (e) =>
+        changed({ ...conn, signed_in: false, error: `signing out: ${e}` }),
+      );
     },
     prefs: {
       get: (name) => read(`pluxy.${name}`),

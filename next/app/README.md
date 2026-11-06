@@ -26,9 +26,15 @@ Addresses are origins only (scheme, host and port). A key you give is checked ag
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
-The management key never reaches the window's webview. The window calls core through the
+The native side holds the management key. A key you type on the Connection page passes through
+the window once, to the native side, and the window keeps no copy; the managed core's key never
+reaches any webview, and no extension page ever gets a key. The window calls core through the
 `core_call` command, and the native side adds the key and sends the call to
-`<core>/v0/management/...` only, following no redirects.
+`<core>/v0/management/...` only, following no redirects and, for a core on this computer, no
+proxy from the environment. Path segments that are, or decode to, `.` or `..` are refused.
+
+Until the app is connected and signed in, the window shows only the Connection page, so a wrong
+address or key can always be fixed there.
 
 ## The window and the tray
 
@@ -90,6 +96,7 @@ that first. From this folder:
 bun install --frozen-lockfile
 bun run check          # tsc --noEmit
 bun run lint           # Biome
+bun run test           # unit tests
 bun run build          # the window, into dist/, which the native build embeds
 cd src-tauri
 cargo test --locked    # unit tests, and each mode against a real core (needs Go)
@@ -114,8 +121,12 @@ for that test alone; release builds never have it.
 - Tested on Linux only. On Windows the page document's address is
   `http://pluxy-page.localhost/`; neither Windows nor macOS has been run.
 - No installer or bundled core yet (`bundle.active` is off).
-- In managed mode the app does not restart a core that stops; the Connection page shows why it
-  stopped and offers to start it.
+- In managed mode the app does not restart a core that stops; the tray and the Connection page
+  show that it stopped and why, and the page offers to start it. A supervisor thread starts the
+  core and stays until it exits, since on Linux the parent-death signal follows the thread that
+  started it.
+- Keys are typed into the window, which holds them until it hands them to the native side; a
+  native entry dialog would keep them out of the webview entirely.
 - A kept key is stored in `connection.json`, not in the system keyring.
 - Whether a desktop shows the tray icon is not checked: on a desktop with no tray host, closing
   the window leaves the app running with no way back to it but quitting it.

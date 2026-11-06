@@ -12,28 +12,18 @@ import { type Channel, isHello, pickVersion, serve } from "../../ui/kit/extensio
 import { type ExtensionPageProps, settingsOutcome, themeSnapshot } from "../../ui/kit/extensions/page";
 import { pageProblem } from "../../ui/kit/extensions/site";
 import { Button, Notice, PageHead, useKit } from "../../ui/kit/ui";
+import { type PageMessage, PageRouter } from "./pageEvents";
 
-/** What the native side passes on from a page's webview, tagged with the webview it came from. */
-export interface PageMessage {
-  label: string;
-  type: "hello" | "call" | "closed";
-  data?: unknown;
-}
+const router = new PageRouter();
+let listening: Promise<unknown> | undefined;
 
-type Listener = (m: PageMessage) => void;
-const listeners = new Map<string, Listener>();
-let listening = false;
-
-/** One listener for every page webview; each message goes to the page that opened its webview. */
-function onPageMessage(label: string, fn: Listener): () => void {
-  if (!listening) {
-    listening = true;
-    listen<PageMessage>("pluxy-page", (e) => listeners.get(e.payload.label)?.(e.payload)).catch(() => {
-      listening = false;
-    });
-  }
-  listeners.set(label, fn);
-  return () => listeners.delete(label);
+/** One listener for every page webview, in place before any page webview opens. */
+function listenOnce(): Promise<unknown> {
+  listening ??= listen<PageMessage>("pluxy-page", (e) => router.deliver(e.payload)).catch((e) => {
+    listening = undefined;
+    throw e;
+  });
+  return listening;
 }
 
 interface Rect {
@@ -131,31 +121,36 @@ export function NativeExtensionPage(props: ExtensionPageProps) {
       if (label && area.current) invoke("page_place", { label, rect: rectOf(area.current) }).catch(() => {});
     };
     const resize = new ResizeObserver(place);
-    invoke<string>("page_open", {
-      extension: ext.id,
-      page: page.id,
-      title: page.title,
-      url: page.url,
-      pagesOrigin: props.pagesOrigin,
-      rect: rectOf(el),
-    }).then(
-      (l) => {
-        if (!live) {
-          invoke("page_close", { label: l }).catch(() => {});
-          return;
-        }
-        label = l;
-        stopListening = onPageMessage(l, onMessage);
-        resize.observe(el);
-        window.addEventListener("resize", place);
-        window.addEventListener("scroll", place, true);
-      },
-      (e) => {
-        if (!live) return;
-        setPhase("failed");
-        setError(String(e));
-      },
-    );
+    listenOnce()
+      .then(() =>
+        invoke<string>("page_open", {
+          extension: ext.id,
+          page: page.id,
+          title: page.title,
+          url: page.url,
+          pagesOrigin: props.pagesOrigin,
+          rect: rectOf(el),
+        }),
+      )
+      .then(
+        (l) => {
+          if (!live) {
+            router.drop(l);
+            invoke("page_close", { label: l }).catch(() => {});
+            return;
+          }
+          label = l;
+          stopListening = router.claim(l, onMessage);
+          resize.observe(el);
+          window.addEventListener("resize", place);
+          window.addEventListener("scroll", place, true);
+        },
+        (e) => {
+          if (!live) return;
+          setPhase("failed");
+          setError(String(e));
+        },
+      );
     const unsubscribe = themes.subscribe(() => channel?.event("theme", themeSnapshot(themes.resolved)));
     return () => {
       live = false;

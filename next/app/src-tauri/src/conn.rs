@@ -9,7 +9,7 @@
 //! Nothing in this module needs Tauri, so the tests drive it against a real core.
 
 use crate::client::{certificates, Client, Reply};
-use crate::managed::{core_program, write_private, ManagedCore};
+use crate::managed::{core_program, write_private, ManagedCore, OnExit};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -130,7 +130,8 @@ fn origin_of(u: &Url) -> String {
     u.origin().ascii_serialization()
 }
 
-fn is_loopback(u: &Url) -> bool {
+/// Whether u's host is on this computer.
+pub fn is_loopback(u: &Url) -> bool {
     match u.host() {
         Some(Host::Ipv4(ip)) => IpAddr::V4(ip).is_loopback(),
         Some(Host::Ipv6(ip)) => IpAddr::V6(ip).is_loopback(),
@@ -182,6 +183,7 @@ pub struct Connection {
     client: Option<Client>,
     key: Option<String>,
     managed: Option<ManagedCore>,
+    on_core_exit: Option<OnExit>,
     error: Option<String>,
 }
 
@@ -204,7 +206,8 @@ impl Caller {
 
 impl Connection {
     /// The connection the saved settings describe; in managed mode this starts the app's core.
-    pub fn open(dirs: Dirs) -> Connection {
+    /// on_core_exit runs whenever a core the app started exits.
+    pub fn open(dirs: Dirs, on_core_exit: Option<OnExit>) -> Connection {
         let (settings, error) = match Settings::load(&dirs.settings()) {
             Ok(s) => (s, None),
             Err(e) => (Settings::default(), Some(e)),
@@ -215,6 +218,7 @@ impl Connection {
             client: None,
             key: None,
             managed: None,
+            on_core_exit,
             error,
         };
         if c.error.is_none() {
@@ -268,7 +272,7 @@ impl Connection {
 
     fn start_core(&mut self) -> Result<(), String> {
         let program = core_program(self.settings.core_path.as_deref())?;
-        let core = ManagedCore::start(&program, &self.dirs.core)?;
+        let core = ManagedCore::start(&program, &self.dirs.core, self.on_core_exit.clone())?;
         self.client = Some(Client::new(core.base(), None));
         self.key = Some(core.key().to_string());
         self.managed = Some(core);
@@ -332,12 +336,8 @@ impl Connection {
                     None if same => self.key.clone(),
                     None => None,
                 };
-                next.key = match key {
-                    Some(k) if ch.remember => Some(k),
-                    Some(_) => None,
-                    None if same => self.settings.key.clone(),
-                    None => None,
-                };
+                // The key the app will have, kept only when the person asks.
+                next.key = session.clone().filter(|_| ch.remember);
                 next.save(&self.dirs.settings())?;
                 self.settings = next;
                 self.connect();
@@ -378,8 +378,12 @@ impl Connection {
             return Ok(());
         }
         self.key = None;
-        if self.settings.key.take().is_some() {
-            self.settings.save(&self.dirs.settings())?;
+        if let Some(kept) = self.settings.key.take() {
+            if let Err(e) = self.settings.save(&self.dirs.settings()) {
+                // Still on disk: say so, and try again on the next sign-out.
+                self.settings.key = Some(kept);
+                return Err(format!("the kept key could not be removed: {e}"));
+            }
         }
         Ok(())
     }
@@ -402,7 +406,7 @@ impl Connection {
 
     pub fn view(&mut self) -> View {
         let core = if self.settings.mode == Some(Mode::Managed) {
-            Some(match self.managed.as_mut() {
+            Some(match self.managed.as_ref() {
                 Some(m) => match m.exited() {
                     None => CoreView {
                         state: "running",
@@ -525,6 +529,80 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// With no new key, "keep the key" still decides whether the key the app has is kept.
+    #[test]
+    fn keeping_the_key_follows_remember_without_a_new_key() {
+        let dir =
+            std::env::temp_dir().join(format!("pluxy-app-keep-{}", crate::managed::random_key()));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        let url = "http://127.0.0.1:1";
+        Settings {
+            mode: Some(Mode::Local),
+            url: Some(url.into()),
+            key: Some("kept-key".into()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open(dirs.clone(), None);
+        let same = |remember| Change {
+            mode: Some(Mode::Local),
+            url: Some(url.into()),
+            remember,
+            ..Change::default()
+        };
+        c.change(same(false)).unwrap();
+        assert!(c.view().signed_in, "the session keeps the key");
+        assert!(!c.view().remembered);
+        assert_eq!(Settings::load(&dirs.settings()).unwrap().key, None);
+        c.change(same(true)).unwrap();
+        assert!(c.view().remembered);
+        assert_eq!(
+            Settings::load(&dirs.settings()).unwrap().key.as_deref(),
+            Some("kept-key")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A sign-out whose save fails says so, and keeps the kept key in view, so it can be retried.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_sign_out_keeps_the_kept_key() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "pluxy-app-signout-{}",
+            crate::managed::random_key()
+        ));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+        };
+        Settings {
+            mode: Some(Mode::Local),
+            url: Some("http://127.0.0.1:1".into()),
+            key: Some("kept-key".into()),
+            ..Settings::default()
+        }
+        .save(&dirs.settings())
+        .unwrap();
+        let mut c = Connection::open(dirs.clone(), None);
+        fs::set_permissions(&dirs.config, fs::Permissions::from_mode(0o500)).unwrap();
+        let r = c.sign_out();
+        fs::set_permissions(&dirs.config, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(r.is_err());
+        assert!(
+            c.view().remembered,
+            "the key is still on disk, and the view must say so"
+        );
+        c.sign_out().unwrap();
+        assert!(!c.view().remembered);
+        assert_eq!(Settings::load(&dirs.settings()).unwrap().key, None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn the_view_never_holds_the_key() {
         let dir =
@@ -535,13 +613,13 @@ mod tests {
         };
         Settings {
             mode: Some(Mode::Local),
-            url: Some("http://127.0.0.1:9".into()),
+            url: Some("http://127.0.0.1:1".into()),
             key: Some("secret-key-123".into()),
             ..Settings::default()
         }
         .save(&dirs.settings())
         .unwrap();
-        let mut c = Connection::open(dirs);
+        let mut c = Connection::open(dirs, None);
         let v = c.view();
         assert!(v.signed_in && v.remembered);
         assert!(!serde_json::to_string(&v)

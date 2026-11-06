@@ -8,7 +8,7 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -104,18 +104,30 @@ pub fn core_program(chosen: Option<&str>) -> Result<PathBuf, String> {
     }
 }
 
-/// A running core of the app's own.
+/// Called when the app's core exits, whatever the reason.
+pub type OnExit = Arc<dyn Fn() + Send + Sync>;
+
+/// A running core of the app's own. A supervisor thread starts it and stays until it exits:
+/// on Linux the parent-death signal follows the thread that started the process, and the
+/// threads the app's commands run on end when idle.
 pub struct ManagedCore {
-    child: Child,
+    child: Arc<Mutex<Child>>,
+    pid: u32,
     base: String,
     key: String,
     tail: Arc<Mutex<VecDeque<String>>>,
+    status: Arc<Mutex<Option<ExitStatus>>>,
 }
 
 impl ManagedCore {
     /// Starts program with the config in dir (made if missing) and waits until core says where it
-    /// listens. Core's log goes to the app's stderr, each line prefixed `core: `.
-    pub fn start(program: &Path, dir: &Path) -> Result<ManagedCore, String> {
+    /// listens. Core's log goes to the app's stderr, each line prefixed `core: `. on_exit runs
+    /// once core has exited.
+    pub fn start(
+        program: &Path,
+        dir: &Path,
+        on_exit: Option<OnExit>,
+    ) -> Result<ManagedCore, String> {
         let cfg = ensure_config(dir)?;
         let key = management_key(&cfg)?;
         let mut cmd = Command::new(program);
@@ -138,10 +150,40 @@ impl ManagedCore {
                 });
             }
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("starting {}: {e}", program.display()))?;
-        let stderr = child.stderr.take().expect("piped stderr");
+        let status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
+        let (started_tx, started_rx) = mpsc::channel();
+        let st = Arc::clone(&status);
+        let name = program.display().to_string();
+        std::thread::spawn(move || {
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = started_tx.send(Err(format!("starting {name}: {e}")));
+                    return;
+                }
+            };
+            let stderr = child.stderr.take().expect("piped stderr");
+            let child = Arc::new(Mutex::new(child));
+            let _ = started_tx.send(Ok((Arc::clone(&child), stderr)));
+            // Reaped only here, under the lock stop() kills under, so a signal never reaches a
+            // process that has already gone.
+            loop {
+                let done = child.lock().unwrap().try_wait();
+                match done {
+                    Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                    Ok(Some(s)) => {
+                        *st.lock().unwrap() = Some(s);
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+            if let Some(f) = on_exit {
+                f();
+            }
+        });
+        let (child, stderr) = started_rx.recv().map_err(|e| e.to_string())??;
+        let pid = child.lock().unwrap().id();
         let tail = Arc::new(Mutex::new(VecDeque::with_capacity(TAIL)));
         let (tx, rx) = mpsc::channel::<String>();
         let lines = Arc::clone(&tail);
@@ -162,40 +204,50 @@ impl ManagedCore {
                 t.push_back(line);
             }
         });
+        let mut core = ManagedCore {
+            child,
+            pid,
+            base: String::new(),
+            key,
+            tail,
+            status,
+        };
         let deadline = Instant::now() + START_TIMEOUT;
-        let base = loop {
+        let mut gone: Option<Instant> = None;
+        loop {
             match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(addr) => break addr,
+                Ok(addr) => {
+                    core.base = addr;
+                    return Ok(core);
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {
-                    if let Ok(Some(status)) = child.try_wait() {
-                        return Err(Self::exit_message(status, &tail));
+                    // Exited: give its last log lines a moment to arrive, to say why.
+                    if core.exited().is_some() {
+                        let since = *gone.get_or_insert_with(Instant::now);
+                        if since.elapsed() > Duration::from_secs(1) {
+                            return Err(core.exited().unwrap_or_default());
+                        }
                     }
                 }
                 Err(_) => {
-                    let _ = child.kill();
-                    let status = child.wait();
-                    return Err(match status {
-                        Ok(s) if Instant::now() >= deadline => format!(
-                            "core did not say where it listens within {}s ({s})",
+                    let timed_out = Instant::now() >= deadline;
+                    // Its log ended: it is exiting, or has.
+                    if !timed_out {
+                        core.wait(Duration::from_secs(2));
+                    }
+                    core.kill();
+                    let why = core.exited().unwrap_or_default();
+                    return Err(if timed_out {
+                        format!(
+                            "core did not say where it listens within {}s ({why})",
                             START_TIMEOUT.as_secs()
-                        ),
-                        Ok(s) => Self::exit_message(s, &tail),
-                        Err(e) => e.to_string(),
+                        )
+                    } else {
+                        why
                     });
                 }
             }
-        };
-        Ok(ManagedCore {
-            child,
-            base,
-            key,
-            tail,
-        })
-    }
-
-    fn exit_message(status: std::process::ExitStatus, tail: &Mutex<VecDeque<String>>) -> String {
-        let last = tail.lock().unwrap().back().cloned().unwrap_or_default();
-        format!("core exited ({status}): {last}")
+        }
     }
 
     /// Where core listens, such as `http://127.0.0.1:8400`.
@@ -208,38 +260,64 @@ impl ManagedCore {
     }
 
     pub fn pid(&self) -> u32 {
-        self.child.id()
+        self.pid
     }
 
     /// None while core runs; why it stopped once it has.
-    pub fn exited(&mut self) -> Option<String> {
-        match self.child.try_wait() {
-            Ok(Some(status)) => Some(Self::exit_message(status, &self.tail)),
-            Ok(None) => None,
-            Err(e) => Some(e.to_string()),
+    pub fn exited(&self) -> Option<String> {
+        let status = (*self.status.lock().unwrap())?;
+        let last = self
+            .tail
+            .lock()
+            .unwrap()
+            .back()
+            .cloned()
+            .unwrap_or_default();
+        Some(format!("core exited ({status}): {last}"))
+    }
+
+    /// Waits up to t for core to have exited.
+    fn wait(&self, t: Duration) -> bool {
+        let deadline = Instant::now() + t;
+        while Instant::now() < deadline {
+            if self.status.lock().unwrap().is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
+        self.status.lock().unwrap().is_some()
+    }
+
+    fn kill(&self) {
+        {
+            let mut c = self.child.lock().unwrap();
+            if !matches!(c.try_wait(), Ok(None)) {
+                return;
+            }
+            let _ = c.kill();
+        }
+        self.wait(STOP_TIMEOUT);
     }
 
     /// Asks core to stop (SIGTERM, so it drains), and kills it if it has not within 10 seconds.
     pub fn stop(&mut self) {
-        if self.exited().is_some() {
-            return;
-        }
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM);
-        }
-        #[cfg(not(unix))]
-        let _ = self.child.kill();
-        let deadline = Instant::now() + STOP_TIMEOUT;
-        while Instant::now() < deadline {
-            if let Ok(Some(_)) = self.child.try_wait() {
+        {
+            let mut c = self.child.lock().unwrap();
+            if !matches!(c.try_wait(), Ok(None)) {
+                drop(c);
+                self.wait(Duration::from_secs(1));
                 return;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(c.id() as libc::pid_t, libc::SIGTERM);
+            }
+            #[cfg(not(unix))]
+            let _ = c.kill();
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if !self.wait(STOP_TIMEOUT) {
+            self.kill();
+        }
     }
 }
 
@@ -307,6 +385,41 @@ mod tests {
         assert!(core_program(None).unwrap_err().contains("no core program"));
     }
 
+    fn script(dir: &Path, body: &str) -> PathBuf {
+        let script = dir.join("core.sh");
+        fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        script
+    }
+
+    /// Commands start the core from worker threads that end when idle; the core must outlive
+    /// the thread that started it (on Linux the parent-death signal follows that thread).
+    #[test]
+    fn the_core_outlives_the_thread_that_started_it() {
+        let dir = temp("thread");
+        let program = script(
+            &dir,
+            "echo 'pluxy: listening on http://127.0.0.1:1' >&2\nexec sleep 30",
+        );
+        let d = dir.clone();
+        let mut core = std::thread::spawn(move || ManagedCore::start(&program, &d, None).unwrap())
+            .join()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            core.exited(),
+            None,
+            "the core stopped when its thread ended"
+        );
+        core.stop();
+        assert!(core.exited().is_some());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn a_core_that_exits_at_start_says_why() {
         let dir = temp("exit");
@@ -321,7 +434,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let err = ManagedCore::start(&script, &dir).err().unwrap();
+        let err = ManagedCore::start(&script, &dir, None).err().unwrap();
         assert!(err.contains("listen is required"), "{err}");
         fs::remove_dir_all(dir).unwrap();
     }
