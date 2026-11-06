@@ -357,6 +357,25 @@ func TestStreamDecoderFailures(t *testing.T) {
 	if e.Code != llm.CodeRateLimit || e.ProviderCode != "RESOURCE_EXHAUSTED" {
 		t.Errorf("error = code %q provider code %q, want rate_limit and RESOURCE_EXHAUSTED", e.Code, e.ProviderCode)
 	}
+
+	// A stream that fails after reporting usage keeps it on the error, whether the upstream sends
+	// an error chunk or the stream ends without a finish reason.
+	const withUsage = `{"candidates":[{"content":{"parts":[{"text":"Hi"}]},"index":0}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":2}}`
+	d = NewStreamDecoder()
+	_, _ = d.Decode([]byte(withUsage))
+	_, err = d.Decode([]byte(`{"error":{"code":500,"message":"m","status":"INTERNAL"}}`))
+	if !errors.As(err, &e) || e.Usage == nil || e.Usage.InputTokens == nil || *e.Usage.InputTokens != 9 {
+		t.Errorf("error chunk after usage: %#v, want an error carrying 9 input tokens", err)
+	}
+	d = NewStreamDecoder()
+	_, _ = d.Decode([]byte(withUsage))
+	_, err = d.Close()
+	if !errors.As(err, &e) || e.Usage == nil || e.Usage.InputTokens == nil || *e.Usage.InputTokens != 9 {
+		t.Errorf("cut-short stream after usage: %#v, want an error carrying 9 input tokens", err)
+	}
+	if u := d.Usage(); u == nil || u.InputTokens == nil || *u.InputTokens != 9 {
+		t.Errorf("Usage() = %#v, want 9 input tokens", u)
+	}
 }
 
 // A blocked prompt in a non-streamed reply ends with a content_filter finish, and the whole body

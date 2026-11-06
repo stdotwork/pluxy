@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -96,5 +97,55 @@ func TestUpstreamRedirectToAnotherHostIsNotFollowed(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("status %d: %s; want 502", resp.StatusCode, raw)
+	}
+}
+
+// Errors a Gemini upstream sends reach a Gemini client as the upstream sent them, so they must
+// lose the account's credential on the way like every other extension error. The upstream echoes
+// its key in an error chunk mid-stream and in an unstreamed error body.
+func TestGeminiUpstreamErrorDoesNotLeakCredential(t *testing.T) {
+	u := newUpstream(t)
+	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("X-Goog-Api-Key")
+		if strings.HasSuffix(r.URL.Path, "/models/error-chunk:streamGenerateContent") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hi\"}]},\"index\":0}]}\n\n")
+			fmt.Fprintf(w, "data: {\"error\":{\"code\":403,\"message\":\"Rejected %s in error-chunk\",\"status\":\"PERMISSION_DENIED\"}}\n\n", key)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/models/error-body:generateContent") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintf(w, `{"error":{"code":403,"message":"Rejected %s in error-body","status":"PERMISSION_DENIED"}}`, key)
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	// Each case gets its own core: an upstream error blocks the only account for later requests.
+	for _, c := range []struct{ model, path string }{
+		{"error-chunk", "/v1beta/models/error-chunk:streamGenerateContent?alt=sse"},
+		{"error-body", "/v1beta/models/error-body:generateContent"},
+	} {
+		t.Run(c.model, func(t *testing.T) {
+			base, logs := startCoreLogged(t, u, func(cfg map[string]any) {
+				acct := cfg["extension"].(map[string]any)["accounts"].([]any)[0].(map[string]any)
+				acct["settings"].(map[string]any)["wire_api"] = "gemini"
+				acct["settings"].(map[string]any)["base_url"] = u.URL + "/v1beta"
+			})
+			resp := postPath(t, context.Background(), base, c.path, clientKey, `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`)
+			raw, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if !strings.Contains(string(raw), "Rejected") {
+				t.Errorf("the upstream's message did not reach the client (status %d): %s", resp.StatusCode, raw)
+			}
+			if strings.Contains(string(raw), upstreamKey) {
+				t.Errorf("client reply holds the account's key: %s", raw)
+			}
+			all := logs.waitFor(t, "in "+c.model)
+			if strings.Contains(all, upstreamKey) {
+				t.Errorf("core's log holds the account's key:\n%s", all)
+			}
+		})
 	}
 }
